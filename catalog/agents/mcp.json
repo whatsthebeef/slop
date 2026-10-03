@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "slop": {
+      "type": "http",
+      "url": "{{SLOP_URL}}/mcp",
+      "oauth": {
+        "clientId": "{{COGNITO_CLAUDE_CODE_CLIENT_ID}}"
+      }
+    }
+  }
+}
