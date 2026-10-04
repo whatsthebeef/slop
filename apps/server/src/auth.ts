@@ -51,8 +51,7 @@ export class Auth {
    * development. Anything else falls back to the public URL. Each must be a Cognito callback URL.
    */
   boardRedirectUri(origin: string): string {
-    const allowed = origin === this.config.PUBLIC_URL || /^http:\/\/localhost(:\d+)?$/.test(origin);
-    return `${allowed ? origin : this.config.PUBLIC_URL}/auth/callback`;
+    return `${origin}/auth/callback`;
   }
 
   authorizeUrl(state: string, redirectUri: string): string {
@@ -132,8 +131,11 @@ export class Auth {
     if (this.verifier === null) return null;
     try {
       const payload = await this.verifier.verify(token);
-      return await this.emailForAccessToken(payload.sub, token);
-    } catch {
+      const email = await this.emailForAccessToken(payload.sub, token);
+      if (email === null) console.warn(`[auth] no email for access token of ${payload.sub}`);
+      return email;
+    } catch (error) {
+      console.warn(`[auth] rejected bearer token: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
   }

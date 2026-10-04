@@ -109,6 +109,8 @@ export interface Board {
   readonly defaultRoutineOwner: string | null;
   readonly environments: readonly Environment[];
   readonly sensitivePaths: readonly string[];
+  /** Increases with every approved change to the board's agent set. */
+  readonly agentSetVersion: number;
   readonly version: number;
 }
 

@@ -15,6 +15,7 @@ export const board: Board = {
     { name: 'prod', allowBranchDeploy: false },
   ],
   sensitivePaths: [],
+  agentSetVersion: 1,
   version: 1,
 };
 

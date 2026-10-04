@@ -3,12 +3,14 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { BoardService, GlobService } from '@slop/core';
+import { ArtifactService, BoardService, GlobService, KnowledgeService } from '@slop/core';
 import { Auth } from './auth.js';
+import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
 import * as schema from './db/schema.js';
 import { connect, PgStore, runMigrations } from './db/store.js';
 import { createApp } from './http/app.js';
+import { mountKnowledge } from './http/knowledge.js';
 import { OutboxRunner } from './jobs/outbox.js';
 import { mountMcp } from './mcp/server.js';
 import { GitHub } from './github/client.js';
@@ -18,6 +20,7 @@ import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
 import { HintHub } from './notifier.js';
+import { SignedLinks } from './signed-links.js';
 
 const config = loadConfig();
 await runMigrations(config.DATABASE_URL, config.MIGRATIONS_DIR);
@@ -47,8 +50,54 @@ const github = new GitHub(githubCredentials);
 const boardOf = (id: number) => store.transaction((tx) => tx.getBoard(id));
 const outbox = new OutboxRunner(db, { globs }, codeHostExecutors(github, boardOf), logError);
 
-const app = createApp({ auth, boards, globs, hub, outbox });
-mountMcp(app, { auth, boards, globs, outbox, publicUrl: config.PUBLIC_URL });
+const catalog = new FsCatalog(config.CATALOG_DIR);
+const clock = { now: () => new Date().toISOString() };
+const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub });
+const artifacts = new ArtifactService({ store, clock });
+
+const app = createApp({
+  auth,
+  boards,
+  globs,
+  hub,
+  outbox,
+  onBoardCreated: async (email, boardId) => {
+    const forked = await knowledge.forkAgentSet(email, boardId);
+    if (!forked.ok) logError('board created', `Agent set fork failed for board ${boardId}: ${forked.error.message}`);
+  },
+});
+mountKnowledge(app, { knowledge, artifacts, catalog });
+
+// Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
+const links = new SignedLinks(config.SIGNING_SECRET);
+const agentSetValues = { SLOP_URL: config.PUBLIC_URL, COGNITO_CLAUDE_CODE_CLIENT_ID: config.CLAUDE_CODE_CLIENT_ID };
+app.get('/downloads/agent-set/:board', async (c) => {
+  const boardId = Number(c.req.param('board'));
+  if (!links.verify(c.req.path, Number(c.req.query('expires')), c.req.query('signature') ?? '')) {
+    return c.json({ error: 'This download link is invalid or has expired' }, 403);
+  }
+  const files = await store.transaction(async (tx) => {
+    const board = await tx.getBoard(boardId);
+    if (board === null) return null;
+    const docs = (await tx.listKnowledge(boardId)).filter((d) => d.kind !== 'doc');
+    return {
+      version: board.agentSetVersion,
+      files: docs.map((d) => ({ path: d.name, content: renderAgentSetFile(d.content, agentSetValues) })),
+    };
+  });
+  return files === null ? c.json({ error: 'No such board' }, 404) : c.json(files);
+});
+mountMcp(app, {
+  auth,
+  boards,
+  globs,
+  outbox,
+  knowledge,
+  artifacts,
+  publicUrl: config.PUBLIC_URL,
+  agentSetValues,
+  links,
+});
 
 mountGitHubSetup(app, {
   auth,

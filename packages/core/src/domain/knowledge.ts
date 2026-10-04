@@ -1,0 +1,112 @@
+/**
+ * The board's knowledge base: documents (conventions, build commands, architecture, review
+ * checklists) and the agent-set files that `sstor init` writes into a checkout.
+ */
+export const KNOWLEDGE_KINDS = ['doc', 'agent', 'command', 'hook', 'settings', 'mcp', 'claude_md'] as const;
+export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
+
+/** Everything except documents belongs to the agent set and changes its version. */
+export const isAgentSetKind = (kind: KnowledgeKind): boolean => kind !== 'doc';
+
+export interface KnowledgeDoc {
+  readonly boardId: number;
+  readonly kind: KnowledgeKind;
+  /** Documents: a short name (`build_test_lint`). Agent-set files: their path (`agents/orchestrator.md`). */
+  readonly name: string;
+  readonly area: string | null;
+  /** The agents that must always be given this document. */
+  readonly audience: readonly string[];
+  readonly description: string;
+  readonly content: string;
+  readonly version: number;
+  /** Where it came from: `catalog:<id>@<version>`, `upload`, `import`, or `edit`. */
+  readonly source: string;
+  readonly updatedBy: string;
+  readonly updatedAt: string;
+}
+
+export interface Frontmatter {
+  readonly area: string | null;
+  readonly audience: readonly string[];
+  readonly description: string;
+  readonly catalog: string | null;
+  readonly catalogVersion: number | null;
+  /** The document without its frontmatter block. */
+  readonly body: string;
+}
+
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+
+const parseList = (value: string): string[] =>
+  value
+    .replace(/^\[|\]$/g, '')
+    .split(',')
+    .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
+    .filter((s) => s !== '');
+
+const unquote = (value: string) => value.trim().replace(/^['"]|['"]$/g, '');
+
+/**
+ * Reads the small frontmatter block knowledge documents use (`key: value` lines and `[a, b]`
+ * lists). Agent definitions keep their own frontmatter (`name`, `description`) and are stored as is.
+ */
+export const parseFrontmatter = (text: string): Frontmatter => {
+  const match = FRONTMATTER.exec(text);
+  if (match === null) {
+    return { area: null, audience: [], description: '', catalog: null, catalogVersion: null, body: text };
+  }
+  const fields = new Map<string, string>();
+  for (const line of (match[1] ?? '').split(/\r?\n/)) {
+    const colon = line.indexOf(':');
+    if (colon > 0) fields.set(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+  }
+  const version = Number(fields.get('version'));
+  return {
+    area: fields.has('area') ? unquote(fields.get('area') ?? '') || null : null,
+    audience: parseList(fields.get('audience') ?? ''),
+    description: unquote(fields.get('description') ?? ''),
+    catalog: fields.has('catalog') ? unquote(fields.get('catalog') ?? '') || null : null,
+    catalogVersion: Number.isInteger(version) ? version : null,
+    body: text.slice(match[0].length),
+  };
+};
+
+/** A document's name from a file name: `.sstor/docs/build_test_lint.md` → `build_test_lint`. */
+export const docName = (fileName: string): string =>
+  (fileName.split('/').pop() ?? fileName).replace(/\.md$/i, '').trim();
+
+/** Maps a path inside the agent set to its kind. */
+export const agentSetKind = (path: string): KnowledgeKind | null => {
+  if (path.startsWith('agents/') && path.endsWith('.md')) return 'agent';
+  if (path.startsWith('commands/') && path.endsWith('.md')) return 'command';
+  if (path.startsWith('hooks/')) return 'hook';
+  if (path === 'settings.json') return 'settings';
+  if (path === 'mcp.json') return 'mcp';
+  if (path === 'claude_md.md') return 'claude_md';
+  return null;
+};
+
+export const ARTIFACT_KINDS = ['plan', 'implementation_plan', 'postplan', 'local_review', 'attachment'] as const;
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+
+/** Who produced an artifact: a person, sessionator, or a model with its prompt and agent-set version. */
+export interface Provenance {
+  readonly by: 'human' | 'sessionator' | 'routine';
+  readonly actor: string;
+  readonly runId: string | null;
+  readonly agentSetVersion: number | null;
+}
+
+export interface Artifact {
+  readonly id: number;
+  readonly globId: string;
+  readonly kind: ArtifactKind;
+  /** Attachments: their label. Other kinds: empty. */
+  readonly label: string;
+  readonly version: number;
+  readonly content: string;
+  readonly link: string | null;
+  readonly commitSha: string | null;
+  readonly provenance: Provenance;
+  readonly createdAt: string;
+}

@@ -15,6 +15,13 @@
       "when": 1791077152273,
       "tag": "0001_deliveries",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791080180131,
+      "tag": "0002_knowledge",
+      "breakpoints": true
     }
   ]
 }

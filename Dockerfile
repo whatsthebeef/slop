@@ -14,10 +14,11 @@ RUN pnpm deploy --filter @slop/server --prod --legacy /out
 
 FROM node:24-slim
 WORKDIR /app
-ENV NODE_ENV=production WEB_DIST=/app/web MIGRATIONS_DIR=/app/drizzle PORT=3000
+ENV NODE_ENV=production WEB_DIST=/app/web MIGRATIONS_DIR=/app/drizzle CATALOG_DIR=/app/catalog PORT=3000
 COPY --from=build /out .
 COPY --from=build /app/apps/server/drizzle ./drizzle
 COPY --from=build /app/apps/web/dist ./web
+COPY catalog ./catalog
 USER node
 EXPOSE 3000
 CMD ["node", "dist/main.js"]

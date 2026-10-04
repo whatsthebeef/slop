@@ -1,5 +1,6 @@
-import type { Board, Glob, GlobFilter, Member, Store, Tx, User } from '@slop/core';
-import { and, eq, inArray, or, sql } from 'drizzle-orm';
+import type { Artifact, Board, Glob, GlobFilter, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, KNOWLEDGE_KINDS } from '@slop/core';
+import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type { PostgresJsDatabase, PostgresJsQueryResultHKT } from 'drizzle-orm/postgres-js';
@@ -39,7 +40,27 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   defaultRoutineOwner: row.defaultRoutineOwner,
   environments: row.environments,
   sensitivePaths: row.sensitivePaths,
+  agentSetVersion: row.agentSetVersion,
   version: row.version,
+});
+
+/** Narrows a stored string to one of a fixed set of values; a mismatch means a corrupt row. */
+const oneOf = <T extends string>(values: readonly T[], value: string): T => {
+  const found = values.find((v) => v === value);
+  if (found === undefined) throw new Error(`Unexpected stored value: ${value}`);
+  return found;
+};
+
+const toKnowledge = (row: typeof schema.knowledge.$inferSelect): KnowledgeDoc => ({
+  ...row,
+  kind: oneOf(KNOWLEDGE_KINDS, row.kind),
+  updatedAt: row.updatedAt.toISOString(),
+});
+
+const toArtifact = (row: typeof schema.artifacts.$inferSelect): Artifact => ({
+  ...row,
+  kind: oneOf(ARTIFACT_KINDS, row.kind),
+  createdAt: row.createdAt.toISOString(),
 });
 
 const globColumns = (glob: Glob) => ({
@@ -85,6 +106,7 @@ export class PgStore implements Store {
         return rows.length === 1;
       },
       deleteGlob: async (id) => {
+        await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
         await t.delete(schema.globs).where(eq(schema.globs.id, id));
       },
       findGlobByCreationKey: async (boardId, key) => {
@@ -146,6 +168,7 @@ export class PgStore implements Store {
             defaultRoutineOwner: board.defaultRoutineOwner,
             environments: [...board.environments],
             sensitivePaths: [...board.sensitivePaths],
+            agentSetVersion: board.agentSetVersion,
             version: board.version,
           })
           .where(and(eq(schema.boards.id, board.id), eq(schema.boards.version, expectedVersion)))
@@ -193,6 +216,79 @@ export class PgStore implements Store {
           .insert(schema.users)
           .values(user)
           .onConflictDoUpdate({ target: schema.users.email, set: { name: user.name, active: user.active } });
+      },
+
+      listKnowledge: async (boardId, kinds) => {
+        const conditions = [eq(schema.knowledge.boardId, boardId)];
+        if (kinds !== undefined) conditions.push(inArray(schema.knowledge.kind, [...kinds]));
+        const rows = await t.select().from(schema.knowledge).where(and(...conditions)).orderBy(asc(schema.knowledge.name));
+        return rows.map(toKnowledge);
+      },
+      getKnowledge: async (boardId, kind, name) => {
+        const [row] = await t
+          .select()
+          .from(schema.knowledge)
+          .where(and(eq(schema.knowledge.boardId, boardId), eq(schema.knowledge.kind, kind), eq(schema.knowledge.name, name)));
+        return row === undefined ? null : toKnowledge(row);
+      },
+      saveKnowledge: async (doc) => {
+        const key = and(
+          eq(schema.knowledge.boardId, doc.boardId),
+          eq(schema.knowledge.kind, doc.kind),
+          eq(schema.knowledge.name, doc.name),
+        );
+        const [previous] = await t.select().from(schema.knowledge).where(key);
+        if (previous !== undefined) {
+          const { boardId, kind, name, version, area, audience, description, content, source, updatedBy, updatedAt } = previous;
+          await t
+            .insert(schema.knowledgeHistory)
+            .values({ boardId, kind, name, version, area, audience, description, content, source, updatedBy, updatedAt });
+        }
+        const values = { ...doc, audience: [...doc.audience], updatedAt: new Date(doc.updatedAt) };
+        await t
+          .insert(schema.knowledge)
+          .values(values)
+          .onConflictDoUpdate({ target: [schema.knowledge.boardId, schema.knowledge.kind, schema.knowledge.name], set: values });
+      },
+      deleteKnowledge: async (boardId, kind, name) => {
+        await t
+          .delete(schema.knowledge)
+          .where(and(eq(schema.knowledge.boardId, boardId), eq(schema.knowledge.kind, kind), eq(schema.knowledge.name, name)));
+      },
+
+      insertArtifact: async (input) => {
+        // Serialise versions per glob so concurrent writers get distinct numbers.
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${input.globId}))`);
+        const [last] = await t
+          .select({ version: schema.artifacts.version })
+          .from(schema.artifacts)
+          .where(and(eq(schema.artifacts.globId, input.globId), eq(schema.artifacts.kind, input.kind), eq(schema.artifacts.label, input.label)))
+          .orderBy(desc(schema.artifacts.version))
+          .limit(1);
+        const [row] = await t
+          .insert(schema.artifacts)
+          .values({ ...input, version: (last?.version ?? 0) + 1, createdAt: new Date(input.createdAt) })
+          .returning();
+        if (row === undefined) throw new Error('Artifact insert returned nothing');
+        return toArtifact(row);
+      },
+      listArtifacts: async (globId, kind) => {
+        const conditions = [eq(schema.artifacts.globId, globId)];
+        if (kind !== undefined) conditions.push(eq(schema.artifacts.kind, kind));
+        const rows = await t
+          .selectDistinctOn([schema.artifacts.kind, schema.artifacts.label])
+          .from(schema.artifacts)
+          .where(and(...conditions))
+          .orderBy(schema.artifacts.kind, schema.artifacts.label, desc(schema.artifacts.version));
+        return rows.map(toArtifact).sort((a, b) => b.id - a.id);
+      },
+      artifactVersions: async (globId, kind, label) => {
+        const rows = await t
+          .select()
+          .from(schema.artifacts)
+          .where(and(eq(schema.artifacts.globId, globId), eq(schema.artifacts.kind, kind), eq(schema.artifacts.label, label)))
+          .orderBy(asc(schema.artifacts.version));
+        return rows.map(toArtifact);
       },
 
       appendEvents: async (events) => {

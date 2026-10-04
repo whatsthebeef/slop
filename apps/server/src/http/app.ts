@@ -10,6 +10,7 @@ import type { Auth } from '../auth.js';
 import { SESSION_COOKIE } from '../auth.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
 import type { HintHub } from '../notifier.js';
+import { requestOrigin } from './origin.js';
 import { errorBody, globView, globViewFor, onBoard, statusOf } from './views.js';
 
 export interface AppDeps {
@@ -18,6 +19,8 @@ export interface AppDeps {
   readonly globs: GlobService;
   readonly hub: HintHub;
   readonly outbox: OutboxRunner;
+  /** Runs after a board is created (forks the catalog's agent set into it). */
+  readonly onBoardCreated: (email: string, boardId: number) => Promise<void>;
 }
 
 export type Env = { Variables: { email: string } };
@@ -99,12 +102,7 @@ export const createApp = (deps: AppDeps) => {
     });
   }
 
-  /** The origin the browser used (ngrok and other proxies forward the original host and scheme). */
-  const originOf = (c: Context<Env>) => {
-    const url = new URL(c.req.url);
-    const proto = c.req.header('x-forwarded-proto') ?? url.protocol.replace(':', '');
-    return `${proto}://${c.req.header('host') ?? url.host}`;
-  };
+  const originOf = (c: Context<Env>) => requestOrigin(c, auth.config.PUBLIC_URL);
 
   if (auth.config.AUTH_MODE === 'cognito') {
     app.get('/auth/login', (c) => {
@@ -167,7 +165,9 @@ export const createApp = (deps: AppDeps) => {
   app.post('/api/boards', async (c) => {
     const body = await parse(c, createBoardSchema);
     if (body instanceof Response) return body;
-    return send(c, await boards.create(c.get('email'), body));
+    const created = await boards.create(c.get('email'), body);
+    if (created.ok) await deps.onBoardCreated(c.get('email'), created.value.id);
+    return send(c, created);
   });
 
   app.get('/api/boards/:b', async (c) =>
