@@ -1,6 +1,6 @@
 # Slop agent system
 
-Work on this repo is planned and tracked in **slop**. Each unit of work is a **glob** with an ID such as `s1t4` (board 1, task 4; `f` feature, `t` task, `b` bug). Slop's MCP tools (`mcp__slop__*`) give you the glob, its plan and its context. This section and the files it mentions are installed by `sstor init`; don't edit them here. Propose changes with `submit_learning` instead.
+Work on this repo is planned and tracked in **slop**. Each unit of work is a **glob** with an ID such as `s1t4` (board 1, task 4; `f` feature, `t` task, `b` bug). Slop's MCP tools give you the glob, its plan and its context: `mcp__slop__*` in local sessions, or the claude.ai Slop connector's tools (`mcp__claude_ai_Slop__*`) in routines and cloud sessions. They are the same tools; use whichever is available. This section and the files it mentions are installed by `sstor init`; don't edit them here. Propose changes with `submit_learning` instead.
 
 ## Running
 

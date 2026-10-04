@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { ArtifactService, BoardService, GlobService, KnowledgeService } from '@slop/core';
+import { ArtifactService, BoardService, GlobService, IntakeService, KnowledgeService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -20,7 +20,10 @@ import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
 import { HintHub } from './notifier.js';
+import { BedrockLlm } from './llm.js';
+import { FileRoutines } from './routines.js';
 import { SignedLinks } from './signed-links.js';
+import { RunWatch } from './jobs/run-watch.js';
 
 const config = loadConfig();
 await runMigrations(config.DATABASE_URL, config.MIGRATIONS_DIR);
@@ -33,6 +36,7 @@ const logError = (task: string, message: string) => {
 };
 
 const store = new PgStore(db);
+const routines = new FileRoutines(config.ROUTINES_FILE);
 const hub = new HintHub();
 const auth = new Auth(db, config);
 const boards = new BoardService({ store, notifier: hub });
@@ -41,19 +45,24 @@ const globs = new GlobService({
   notifier: hub,
   clock: { now: () => new Date().toISOString() },
   ids: { runId: () => randomUUID() },
-  // Routine registration arrives in slice 4; until then every run falls back to the board default.
-  routines: { hasRoutine: () => Promise.resolve(false) },
+  routines,
 });
 const githubCredentials = new AppCredentialsStore(config.GITHUB_APP_FILE);
 await githubCredentials.load();
 const github = new GitHub(githubCredentials);
 const boardOf = (id: number) => store.transaction((tx) => tx.getBoard(id));
-const outbox = new OutboxRunner(db, { globs }, codeHostExecutors(github, boardOf), logError);
+const outbox = new OutboxRunner(db, { globs }, codeHostExecutors(github, boardOf, routines), logError);
 
 const catalog = new FsCatalog(config.CATALOG_DIR);
 const clock = { now: () => new Date().toISOString() };
 const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub });
 const artifacts = new ArtifactService({ store, clock });
+const intake = new IntakeService({
+  store,
+  llm: new BedrockLlm(config.INTAKE_MODEL, config.BEDROCK_REGION, (u) =>
+    console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`),
+  ),
+});
 
 const app = createApp({
   auth,
@@ -66,7 +75,7 @@ const app = createApp({
     if (!forked.ok) logError('board created', `Agent set fork failed for board ${boardId}: ${forked.error.message}`);
   },
 });
-mountKnowledge(app, { knowledge, artifacts, catalog });
+mountKnowledge(app, { knowledge, artifacts, catalog, intake });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
 const links = new SignedLinks(config.SIGNING_SECRET);
@@ -125,12 +134,15 @@ if (config.WEB_DIST !== undefined) {
 }
 
 outbox.start();
+const runWatch = new RunWatch(store, globs, logError);
+runWatch.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
 
 const shutdown = () => {
   outbox.stop();
+  runWatch.stop();
   server.close();
   void database.close();
 };

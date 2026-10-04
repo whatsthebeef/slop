@@ -1,5 +1,5 @@
 import { App } from '@octokit/app';
-import type { Glob } from '@slop/core';
+import type { DiffSummary, Glob } from '@slop/core';
 import type { CodeHost, MergeResult, MergeState, Repo } from '../codehost.js';
 import type { AppCredentialsStore } from './credentials.js';
 
@@ -239,6 +239,21 @@ export class GitHub implements CodeHost {
       }
       throw error;
     }
+  }
+
+  async diffSummary(repo: Repo, sha: string): Promise<DiffSummary> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+      owner: repo.owner,
+      repo: repo.name,
+      basehead: `${repo.base}...${sha}`,
+      per_page: 300,
+    });
+    const files = data.files ?? [];
+    return {
+      changedLines: files.reduce((sum, f) => sum + f.additions + f.deletions, 0),
+      files: files.map((f) => f.filename),
+    };
   }
 
   private async branchHead(repo: Repo, branch: string): Promise<string | null> {

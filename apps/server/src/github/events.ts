@@ -33,9 +33,20 @@ const pullRequestPayload = z.object({
 
 const checkPayload = z.object({
   check_suite: z.object({ head_branch: z.string().nullable() }).optional(),
-  check_run: z.object({ check_suite: z.object({ head_branch: z.string().nullable() }) }).optional(),
+  check_run: z
+    .object({
+      name: z.string(),
+      head_sha: z.string(),
+      status: z.string(),
+      conclusion: z.string().nullable(),
+      check_suite: z.object({ head_branch: z.string().nullable() }),
+    })
+    .optional(),
   repository,
 });
+
+/** The check run the sub gate's GitHub Action reports as. */
+const SUB_GATE_CHECK = 'sub-gate';
 
 const SLOP_RUN = /^Slop-Run:\s*(\S+)\s*$/m;
 
@@ -152,7 +163,13 @@ const handle = async (
       const event = checkPayload.parse(delivery.payload);
       const branch = event.check_suite?.head_branch ?? event.check_run?.check_suite.head_branch;
       const glob = await globFor(branch, event.repository.full_name);
-      if (glob !== null) await apply(glob, (g, ctx) => machine.checksChanged(g, ctx));
+      if (glob === null) return true;
+      await apply(glob, (g, ctx) => machine.checksChanged(g, ctx));
+      const run = event.check_run;
+      if (run?.name === SUB_GATE_CHECK && run.status === 'completed') {
+        const passed = run.conclusion === 'success';
+        await apply(glob, (g, ctx) => machine.subGateCheckCompleted(g, { sha: run.head_sha, passed }, ctx));
+      }
       return true;
     }
 

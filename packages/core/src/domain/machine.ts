@@ -156,6 +156,8 @@ class Builder {
       lastProgressAt: null,
       endedAt: null,
       failureReason: null,
+      sessionId: null,
+      sessionUrl: null,
     };
     this.set({ runs: [...this.glob.runs, run] });
     this.event('RunTriggered', {
@@ -568,6 +570,38 @@ export const commitPushed = (
   return b.event('CommitPushed', { sha: push.sha, runId: push.runId, fromSupersededRun: superseded }).done();
 };
 
+/** The routine was fired: records its cloud session (if the fire response returned one). */
+export const runFired = (
+  glob: Glob,
+  fired: { runId: string; sessionId: string | null; sessionUrl: string | null },
+  ctx: Context,
+): Result<Transition> => {
+  const run = currentRun(glob);
+  if (run === null || run.id !== fired.runId || run.state === 'ended') return unchanged(glob);
+  return new Builder(glob, ctx)
+    .updateRun({ sessionId: fired.sessionId ?? run.sessionId, sessionUrl: fired.sessionUrl ?? run.sessionUrl })
+    .event('RunTriggered', { runId: run.id, fired: true, sessionUrl: fired.sessionUrl })
+    .done();
+};
+
+/**
+ * Run failure detection: a run with no progress (no slop call or push) for too long, or that
+ * has not marked its PR ready in time, is failed like a `report_failure` (rows 17 and 25).
+ */
+export const runTimeoutReason = (glob: Glob, board: Pick<Board, 'runNoProgressHours' | 'runReadyHours'>, now: string): string | null => {
+  const run = currentRun(glob);
+  if (run === null || run.state === 'ended' || run.state === 'queued') return null;
+  const hours = (from: string | null) => (from === null ? 0 : (Date.parse(now) - Date.parse(from)) / 3_600_000);
+  const lastProgress = run.lastProgressAt ?? run.startedAt ?? run.queuedAt;
+  if (hours(lastProgress) >= board.runNoProgressHours) {
+    return `No progress for ${String(board.runNoProgressHours)} hours`;
+  }
+  if (run.state === 'active' && hours(run.startedAt ?? run.queuedAt) >= board.runReadyHours) {
+    return `PR not marked ready within ${String(board.runReadyHours)} hours`;
+  }
+  return null;
+};
+
 /** A routine's slop call: marks the run active and records progress. Superseded runs are ignored. */
 export const runProgress = (glob: Glob, runId: string, ctx: Context): Result<Transition> => {
   const run = currentRun(glob);
@@ -633,6 +667,20 @@ export const checksCompleted = (
     b.effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: checks.sha });
   }
   return b.done();
+};
+
+/** The `sub-gate` check finished: on success, slop applies the board's policy before merging. */
+export const subGateCheckCompleted = (
+  glob: Glob,
+  check: { sha: string; passed: boolean },
+  ctx: Context,
+): Result<Transition> => {
+  if (glob.status !== 'pr_open' || glob.type !== 'sub' || glob.pr?.headSha !== check.sha) return unchanged(glob);
+  // Failing checks are left to the routine's auto-fix; only policy flags convert a sub.
+  if (!check.passed) return unchanged(glob);
+  return new Builder(glob, ctx)
+    .effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha: check.sha })
+    .done();
 };
 
 /** Rows 12–13: the sub gate's verdict on a commit. */

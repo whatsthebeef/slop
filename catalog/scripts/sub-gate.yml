@@ -1,0 +1,31 @@
+# Slop sub gate: the repo's own checks for subs, reported as the `sub-gate` check run.
+# Slop applies the board's policy (size, sensitive paths) when this passes on the PR's head,
+# then merges the sub or converts it to a same. Copy to .github/workflows/sub-gate.yml and
+# adjust the check steps to the project's build doc.
+name: sub-gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  sub-gate:
+    if: ${{ !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'slop:sub') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install
+        run: if [ -f package-lock.json ]; then npm ci; elif [ -f package.json ]; then npm install --no-audit --no-fund; fi
+      - name: Lint
+        run: npm run lint --if-present
+      - name: Type check
+        run: npm run typecheck --if-present
+      - name: Test
+        run: npm test --if-present

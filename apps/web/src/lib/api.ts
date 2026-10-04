@@ -134,6 +134,8 @@ export const api = {
   deleteGlob: (id: string, version: number) => request<object>('DELETE', `/api/globs/${id}`, { version }),
   action: (id: string, action: ActionPath, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, { version }),
+  intake: (boardId: number, text: string) =>
+    request<NewGlob & { autoTriggerReason: string | null }>('POST', `/api/boards/${boardId}/intake`, { text }),
   knowledge: (boardId: number) => request<KnowledgeIndex>('GET', `/api/boards/${boardId}/kb`),
   knowledgeDoc: (boardId: number, name: string) =>
     request<{ name: string; content: string; version: number }[]>('GET', `/api/boards/${boardId}/kb/docs/${encodeURIComponent(name)}`),

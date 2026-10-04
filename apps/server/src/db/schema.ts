@@ -31,6 +31,9 @@ export const boards = pgTable('boards', {
   environments: jsonb('environments').$type<Environment[]>().notNull(),
   sensitivePaths: jsonb('sensitive_paths').$type<string[]>().notNull(),
   agentSetVersion: integer('agent_set_version').notNull().default(0),
+  runNoProgressHours: integer('run_no_progress_hours').notNull().default(2),
+  runReadyHours: integer('run_ready_hours').notNull().default(8),
+  subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(300),
   version: integer('version').notNull(),
 });
 

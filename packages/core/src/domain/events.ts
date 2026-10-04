@@ -64,6 +64,8 @@ export type Effect =
   | { readonly kind: 'delete_glob_data'; readonly globId: string; readonly boardId: number; readonly prNumber: number | null }
   /** Re-read whether the PR's current head can merge (required checks, conflicts). */
   | { readonly kind: 'refresh_checks'; readonly globId: string; readonly generation: number }
+  /** Apply the board's sub-gate policy (size, sensitive paths) to the PR's head after its checks passed. */
+  | { readonly kind: 'evaluate_sub_gate'; readonly globId: string; readonly generation: number; readonly sha: string }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
   | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number };
 

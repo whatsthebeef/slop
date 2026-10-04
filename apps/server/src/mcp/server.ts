@@ -116,8 +116,15 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
 
   server.registerTool(
     'get_glob',
-    { description: 'Everything about a glob: status, version, fields, labels, PR, runs and flags.', inputSchema: { id: z.string() } },
-    async ({ id }) => reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions)),
+    {
+      description:
+        'Everything about a glob: status, version, fields, labels, PR, runs and flags. Routines pass their run ID, which records the run as making progress.',
+      inputSchema: { id: z.string(), runId: z.string().optional() },
+    },
+    async ({ id, runId }) => {
+      if (runId !== undefined) await globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
+      return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions));
+    },
   );
 
   server.registerTool(
@@ -271,9 +278,12 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     {
       description:
         "The glob's context bundle: its fields, plan.md (the postplan for supers), the implementation plan, attachments, and the board's repo and base branch.",
-      inputSchema: { id: z.string() },
+      inputSchema: { id: z.string(), runId: z.string().optional() },
     },
-    async ({ id }) => reply(await artifacts.context(email, id)),
+    async ({ id, runId }) => {
+      if (runId !== undefined) await deps.globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
+      return reply(await artifacts.context(email, id));
+    },
   );
 
   server.registerTool(

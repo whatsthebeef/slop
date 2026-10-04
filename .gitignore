@@ -10,3 +10,5 @@ test-results/
 .claude/.cc-writes/
 cdk.out/
 .github-app.json
+.routines.json
+.slop-dev

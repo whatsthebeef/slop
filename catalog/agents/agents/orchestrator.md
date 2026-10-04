@@ -7,7 +7,7 @@ description: Main workflow instructions that run in the primary session. Reads a
 
 You follow the orchestrator workflow directly in the main session. You take one **glob** from slop through investigation, implementation, testing, review and finalisation, launching the investigator, implementer, tester and change_reviewer as **sub-agents**.
 
-Slop is the board. Everything about the glob (its plan, context, status and run) comes from slop's MCP tools (`mcp__slop__*`). There is no Jira and no local learnings file.
+Slop is the board. Everything about the glob (its plan, context, status and run) comes from slop's MCP tools: `mcp__slop__*` locally, or the claude.ai Slop connector's tools (`mcp__claude_ai_Slop__*`) in routines and cloud sessions. There is no Jira and no local learnings file.
 
 ## Inputs
 
@@ -41,7 +41,7 @@ When a run ID is given:
 - Never call `AskUserQuestion` and never wait for a person. Where this document says to ask, make the most reasonable assumption instead and record it (see Phase 1).
 - **Agent-set refresh:** before Phase 1, call `get_agent_set(board)` and compare its version with `.claude/slop-agent-set.json`. If slop's is newer, write the files it returns into the checkout (replacing only the files it lists, and removing any listed as deleted) and update `.claude/slop-agent-set.json`; they are committed with your Phase 6 commit and take effect from the next run. Carry on with the instructions already loaded.
 - Do **not** call `pick_up`: routines never record a human implementer.
-- Pass the run ID to every `put_artifact` and `report_failure` call.
+- Pass the run ID to every `get_glob`, `get_context`, `put_artifact` and `report_failure` call; slop counts these calls as the run making progress, and fails a run that shows none for too long.
 - Every commit carries the trailer `Slop-Run: <runId>`.
 - **Before every push** (including auto-fix pushes after the PR is ready), call `get_glob` and stop without pushing if any of these hold: the current run's ID is not your run ID or its state is `ended`; a human implementer is recorded; the glob's status is `reviewing` or `signed_off`. Report nothing further in that case; the run has been superseded.
 - Pick the investigator's recommended proposal.

@@ -1,5 +1,7 @@
 import type { Board, EffectKind } from '@slop/core';
-import { machine } from '@slop/core';
+import { fireRoutine, runInstructions } from './routines.js';
+import type { FileRoutines } from './routines.js';
+import { machine, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import { repoOf } from './codehost.js';
@@ -11,6 +13,7 @@ import { repoOf } from './codehost.js';
 export const codeHostExecutors = (
   host: CodeHost,
   boardOf: (id: number) => Promise<Board | null>,
+  routines: FileRoutines,
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -107,6 +110,42 @@ export const codeHostExecutors = (
           await globs.applyEvent(glob.id, (g, ctx) => machine.mergeFailed(g, result.reason, ctx));
           break;
       }
+      return 'done';
+    },
+
+    evaluate_sub_gate: async (effect, glob, { globs }) => {
+      if (effect.kind !== 'evaluate_sub_gate' || glob === null) return 'dropped';
+      if (glob.status !== 'pr_open' || glob.type !== 'sub' || glob.pr?.headSha !== effect.sha) return 'dropped';
+      const board = await boardOf(glob.boardId);
+      const repo = board === null ? null : repoOf(board);
+      if (board === null || repo === null) return 'dropped';
+      const verdict = subGatePolicy(await host.diffSummary(repo, effect.sha), board);
+      await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCompleted(g, { sha: effect.sha, ...verdict }, ctx));
+      return 'done';
+    },
+
+    fire_routine: async (effect, glob, { globs }) => {
+      if (effect.kind !== 'fire_routine' || glob === null) return 'dropped';
+      const run = machine.currentRun(glob);
+      if (run?.id !== effect.runId || run.state !== 'queued') return 'dropped';
+      // A routine works on the glob's branch, so it is only fired once that exists.
+      if (glob.provisioning !== 'ok') throw new Error(`${glob.id} is not provisioned yet`);
+      const secret = await routines.secretFor(effect.routineOwner);
+      if (secret === null) {
+        await globs.applyEvent(glob.id, (g, ctx) =>
+          machine.reportFailure(g, { reason: `${effect.routineOwner} has no routine set up`, runId: effect.runId }, ctx),
+        );
+        return 'done';
+      }
+      const result = await fireRoutine(secret, runInstructions(glob, effect.runId));
+      if (result.outcome === 'retry') throw new Error(result.reason);
+      if (result.outcome === 'failed') {
+        await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));
+        return 'done';
+      }
+      await globs.applyEvent(glob.id, (g, ctx) =>
+        machine.runFired(g, { runId: effect.runId, sessionId: result.sessionId, sessionUrl: result.sessionUrl }, ctx),
+      );
       return 'done';
     },
 

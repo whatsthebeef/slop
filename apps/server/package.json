@@ -12,6 +12,7 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1146.0",
     "@hono/node-server": "^2.1.3",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@octokit/app": "^16.1.4",
