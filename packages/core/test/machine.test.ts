@@ -443,6 +443,16 @@ describe('aging', () => {
   });
 });
 
+describe('mark ready', () => {
+  it('queues marking the draft PR ready for the current run only', () => {
+    const g = glob({ status: 'implementing', runs: [run()] });
+    expect(effectKinds(value(m.readyRequested(g, 'run-0', ctx(null))))).toEqual(['mark_pr_ready']);
+    expect(errorCode(m.readyRequested(g, 'old', ctx(null)))).toBe('invalid_transition');
+    expect(errorCode(m.readyRequested(glob({ status: 'planning' }), null, ctx()))).toBe('invalid_transition');
+    expect(effectKinds(value(m.readyRequested(glob({ status: 'in_progress' }), null, ctx())))).toEqual(['mark_pr_ready']);
+  });
+});
+
 describe('run sessions and timeouts', () => {
   it('records the cloud session of the current run only', () => {
     const g = glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null })] });

@@ -170,6 +170,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `start_glob` | id, version | updated glob (same: `planning` → `implementing`) | Claude app |
 | `pick_up` | id, version; optional takeOver | updated glob, or `run_active` if a run is active or watching and takeOver is not set | Sessionator, Claude app |
 | `put_artifact` | id, kind (`implementation_plan`, `postplan`, `local_review`), content; optional commitSha, runId | artifact version (ignored if runId is superseded) | Routines, sessionator |
+| `mark_ready` | id; runId for routines | updated glob (moves to `pr_open` when GitHub confirms) | Routines, sessionator |
 | `report_failure` | id, reason; runId for routines | updated glob | Routines, sessionator |
 | `get_board` | board | board settings: repo, base branch, environments, enabled integrations | Agents, sessionator |
 | `get_agent_set` | board | the board's agent set (agents, commands, hooks, settings, CLAUDE.md section) with its version | Sessionator (`sstor init` via headless Claude), routines |
@@ -221,7 +222,7 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 
 **Implementation tool contracts**
 
-- **Routine (sub, same):** call `get_context`; implement on the glob's branch; `put_artifact` the implementation plan with its amendments section; mark the glob's draft PR ready for review, titled `<id>: <title>`; call `report_failure` if it cannot finish. It passes its run ID with every artifact and failure, adds a Slop-Run: \<runId> trailer to every commit, and checks the glob through the MCP before each push.
+- **Routine (sub, same):** call `get_context`; check out the glob's branch from origin (cloud sessions start on the default branch) and push only to it; `put_artifact` the implementation plan with its amendments section; call `mark_ready` (slop marks the glob's draft PR ready through its GitHub App, so the routine needs no `gh`); call `report_failure` if it cannot finish. It passes its run ID with every artifact and failure, adds a Slop-Run: \<runId> trailer to every commit, and checks the glob through the MCP before each push.
 - **Sessionator (super):** `whoami`, then `create_glob` (type super) and check out the returned branch. On each push to the feature branch, `put_artifact` the postplan with the commit SHA. After local review, `put_artifact` the local review. Mark the PR ready for review in GitHub (no slop call). Submit learnings with `submit_learning`.
 
 ## Implementation and agents

@@ -113,6 +113,14 @@ export const codeHostExecutors = (
       return 'done';
     },
 
+    mark_pr_ready: async (_effect, glob) => {
+      if (glob?.pr == null) return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      await host.markReady(repo, glob.pr.number);
+      return 'done';
+    },
+
     evaluate_sub_gate: async (effect, glob, { globs }) => {
       if (effect.kind !== 'evaluate_sub_gate' || glob === null) return 'dropped';
       if (glob.status !== 'pr_open' || glob.type !== 'sub' || glob.pr?.headSha !== effect.sha) return 'dropped';

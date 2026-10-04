@@ -81,4 +81,5 @@ export const runInstructions = (glob: { id: string; title: string }, runId: stri
     '',
     `Run /run-glob ${glob.id} --run ${runId}. If that command is not available, read .claude/agents/orchestrator.md and follow it for glob ${glob.id} in unattended mode with run ID ${runId}.`,
     "Start by calling slop's get_glob and get_context for the glob, passing the run ID.",
+    `When the work is pushed, call slop's mark_ready for ${glob.id} with the run ID (do not use gh). If you cannot finish, call report_failure with the run ID.`,
   ].join('\n');

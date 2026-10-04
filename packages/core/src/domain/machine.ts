@@ -669,6 +669,24 @@ export const checksCompleted = (
   return b.done();
 };
 
+/**
+ * `mark_ready`: the implementer is done and asks slop to mark the draft PR ready. The status
+ * changes when GitHub confirms (row 11); a routine passes its run ID, which must be current.
+ */
+export const readyRequested = (glob: Glob, runId: string | null, ctx: Context): Result<Transition> => {
+  if (glob.status !== 'implementing' && glob.status !== 'in_progress') {
+    return invalidTransition(glob, ctx.actor, `A glob in ${glob.status} has no draft PR to mark ready`);
+  }
+  if (glob.pr === null) return invalidTransition(glob, ctx.actor, 'The glob has no PR yet');
+  const run = currentRun(glob);
+  if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
+    return invalidTransition(glob, ctx.actor, `Run ${runId} is not the glob's current run`);
+  }
+  return new Builder(glob, ctx)
+    .effect({ kind: 'mark_pr_ready', globId: glob.id, generation: glob.generation })
+    .done();
+};
+
 /** The `sub-gate` check finished: on success, slop applies the board's policy before merging. */
 export const subGateCheckCompleted = (
   glob: Glob,

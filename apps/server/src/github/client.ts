@@ -241,6 +241,20 @@ export class GitHub implements CodeHost {
     }
   }
 
+  async markReady(repo: Repo, prNumber: number): Promise<void> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner: repo.owner,
+      repo: repo.name,
+      pull_number: prNumber,
+    });
+    if (!data.draft) return;
+    // REST has no endpoint for this; GraphQL does.
+    await gh.graphql('mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }', {
+      id: data.node_id,
+    });
+  }
+
   async diffSummary(repo: Repo, sha: string): Promise<DiffSummary> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/compare/{basehead}', {

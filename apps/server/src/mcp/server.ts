@@ -207,6 +207,21 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
   );
 
   server.registerTool(
+    'mark_ready',
+    {
+      description:
+        "Mark the glob's draft PR ready for review when the work is pushed. slop does it through its GitHub App; the glob moves to pr_open when GitHub confirms. Routines pass their run ID.",
+      inputSchema: { id: z.string(), runId: z.string().optional() },
+    },
+    async ({ id, runId }) => {
+      if (runId !== undefined) await globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
+      const result = await globs.requestReady(email, id, runId ?? null);
+      if (result.ok) await deps.outbox.drain(id);
+      return reply(result, (g) => ({ id: g.id, status: g.status, pr: g.pr, note: 'The PR is being marked ready; the glob moves to pr_open when GitHub confirms.' }));
+    },
+  );
+
+  server.registerTool(
     'report_failure',
     {
       description: 'Report that the glob cannot be finished. Routines pass their run ID.',
