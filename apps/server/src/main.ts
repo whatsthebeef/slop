@@ -103,6 +103,7 @@ mountMcp(app, {
   outbox,
   knowledge,
   artifacts,
+  intake,
   publicUrl: config.PUBLIC_URL,
   agentSetValues,
   links,

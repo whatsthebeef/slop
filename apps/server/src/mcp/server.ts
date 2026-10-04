@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, GlobService, KnowledgeService, Result } from '@slop/core';
+import type { ArtifactService, BoardService, GlobService, IntakeService, KnowledgeService, Result } from '@slop/core';
 import { machine } from '@slop/core';
 import { CATEGORIES, SLOP_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -21,6 +21,7 @@ export interface McpDeps {
   readonly outbox: OutboxRunner;
   readonly knowledge: KnowledgeService;
   readonly artifacts: ArtifactService;
+  readonly intake: IntakeService;
   readonly publicUrl: string;
   /** Public values filled into agent-set files when served (slop's URL, the Claude Code client ID). */
   readonly agentSetValues: Record<string, string>;
@@ -72,11 +73,12 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work) on a board. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work) on a board. Pass the request as `input` and slop proposes the title, summary, type, category and group (intake); explicit fields win. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
-        title: z.string().min(1),
+        input: z.string().optional().describe('The request in free text; used for intake when no title is given'),
+        title: z.string().min(1).optional(),
         summary: z.string().optional().describe('What the work is and why; becomes the start of plan.md'),
         type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing)'),
         category: z.enum(CATEGORIES).optional(),
@@ -86,15 +88,34 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
       },
     },
     async (input) => {
+      let fields = {
+        title: input.title ?? '',
+        summary: input.summary ?? '',
+        type: input.type ?? ('same' as const),
+        category: input.category ?? ('task' as const),
+        group: input.group ?? null,
+        autoTrigger: input.autoTrigger ?? false,
+      };
+      if (input.title === undefined) {
+        if (input.input === undefined || input.input.trim() === '') {
+          return { ...json({ code: 'invalid_input', message: 'Pass a title, or the request as input' }), isError: true };
+        }
+        const proposal = await deps.intake.propose(email, input.board, {
+          text: input.input,
+          explicit: {
+            ...(input.summary === undefined ? {} : { summary: input.summary }),
+            ...(input.type === undefined ? {} : { type: input.type }),
+            ...(input.category === undefined ? {} : { category: input.category }),
+            ...(input.group === undefined ? {} : { group: input.group }),
+          },
+        });
+        if (!proposal.ok) return reply(proposal);
+        fields = { ...proposal.value, autoTrigger: input.autoTrigger ?? proposal.value.autoTrigger };
+      }
       const created = await globs.create(email, {
         boardId: input.board,
-        title: input.title,
-        summary: input.summary ?? '',
-        type: input.type ?? 'same',
-        category: input.category ?? 'task',
-        group: input.group ?? null,
+        ...fields,
         environment: input.environment ?? null,
-        autoTrigger: input.autoTrigger ?? false,
         idempotencyKey: input.idempotencyKey,
       });
       if (!created.ok) return reply(created);
