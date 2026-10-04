@@ -1,4 +1,5 @@
 import type { DomainEvent, Effect } from '../domain/events.js';
+import type { Artifact, KnowledgeDoc } from '../domain/knowledge.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
 
@@ -11,6 +12,9 @@ interface State {
   events: DomainEvent[];
   outbox: Effect[];
   nextBoardId: number;
+  knowledge: Map<string, KnowledgeDoc>;
+  knowledgeHistory: KnowledgeDoc[];
+  artifacts: Artifact[];
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -24,7 +28,12 @@ const clone = (state: State): State => ({
   events: [...state.events],
   outbox: [...state.outbox],
   nextBoardId: state.nextBoardId,
+  knowledge: new Map(state.knowledge),
+  knowledgeHistory: [...state.knowledgeHistory],
+  artifacts: [...state.artifacts],
 });
+
+const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
 
 /** An in-memory Store for core tests. A transaction commits only if `work` resolves. */
 export class MemoryStore implements Store {
@@ -37,6 +46,9 @@ export class MemoryStore implements Store {
     events: [],
     outbox: [],
     nextBoardId: 1,
+    knowledge: new Map(),
+    knowledgeHistory: [],
+    artifacts: [],
   };
 
   async transaction<T>(work: (tx: Tx) => Promise<T>): Promise<T> {
@@ -92,7 +104,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, version: 1 };
+        const board: Board = { ...input, id: s.nextBoardId++, version: 1, agentSetVersion: 0 };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -122,6 +134,39 @@ export class MemoryStore implements Store {
         s.users.set(user.email, user);
         return Promise.resolve();
       },
+      listKnowledge: (boardId, kinds) =>
+        Promise.resolve(
+          [...s.knowledge.values()]
+            .filter((d) => d.boardId === boardId && (kinds === undefined || kinds.includes(d.kind)))
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        ),
+      getKnowledge: (boardId, kind, name) => Promise.resolve(s.knowledge.get(knowledgeKey(boardId, kind, name)) ?? null),
+      saveKnowledge: (doc) => {
+        const key = knowledgeKey(doc.boardId, doc.kind, doc.name);
+        const previous = s.knowledge.get(key);
+        if (previous !== undefined) s.knowledgeHistory.push(previous);
+        s.knowledge.set(key, doc);
+        return Promise.resolve();
+      },
+      deleteKnowledge: (boardId, kind, name) => {
+        s.knowledge.delete(knowledgeKey(boardId, kind, name));
+        return Promise.resolve();
+      },
+      insertArtifact: (input) => {
+        const versions = s.artifacts.filter((a) => a.globId === input.globId && a.kind === input.kind && a.label === input.label);
+        const artifact: Artifact = { ...input, id: s.artifacts.length + 1, version: versions.length + 1 };
+        s.artifacts.push(artifact);
+        return Promise.resolve(artifact);
+      },
+      listArtifacts: (globId, kind) => {
+        const latest = new Map<string, Artifact>();
+        for (const a of s.artifacts) {
+          if (a.globId === globId && (kind === undefined || a.kind === kind)) latest.set(`${a.kind}:${a.label}`, a);
+        }
+        return Promise.resolve([...latest.values()].sort((a, b) => b.id - a.id));
+      },
+      artifactVersions: (globId, kind, label) =>
+        Promise.resolve(s.artifacts.filter((a) => a.globId === globId && a.kind === kind && a.label === label)),
       appendEvents: (events) => {
         s.events.push(...events);
         return Promise.resolve();

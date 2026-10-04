@@ -90,6 +90,42 @@ describe('PgStore', () => {
     expect(again.id).toBe(first.id);
   });
 
+  it('versions artifacts per glob, kind and label, and lists the latest of each', async () => {
+    const glob = unwrap(await create());
+    const provenance = { by: 'human' as const, actor: 'dev@example.com', runId: null, agentSetVersion: null };
+    const put = (kind: 'plan' | 'attachment', label: string, content: string) =>
+      store.transaction((tx) =>
+        tx.insertArtifact({ globId: glob.id, kind, label, content, link: null, commitSha: null, provenance, createdAt: new Date().toISOString() }),
+      );
+    await Promise.all([put('plan', '', 'v1'), put('plan', '', 'v2')]);
+    await put('attachment', 'Notes', 'n1');
+    const latest = await store.transaction((tx) => tx.listArtifacts(glob.id));
+    expect(latest.map((a) => `${a.kind}:${a.version}`).sort()).toEqual(['attachment:1', 'plan:2']);
+    const versions = await store.transaction((tx) => tx.artifactVersions(glob.id, 'plan', ''));
+    expect(versions.map((v) => v.version)).toEqual([1, 2]);
+  });
+
+  it('keeps earlier knowledge versions as history', async () => {
+    const doc = {
+      boardId: 1,
+      kind: 'doc' as const,
+      name: 'build',
+      area: 'build',
+      audience: ['implementer'],
+      description: '',
+      content: 'one',
+      version: 1,
+      source: 'upload',
+      updatedBy: 'dev@example.com',
+      updatedAt: new Date().toISOString(),
+    };
+    await store.transaction((tx) => tx.saveKnowledge(doc));
+    await store.transaction((tx) => tx.saveKnowledge({ ...doc, content: 'two', version: 2 }));
+    expect((await store.transaction((tx) => tx.getKnowledge(1, 'doc', 'build')))?.content).toBe('two');
+    const history = await database.db.execute(sql`select version from knowledge_history where name = 'build'`);
+    expect(history.map((r) => r.version)).toEqual([1]);
+  });
+
   it('rolls back everything a failed transaction wrote', async () => {
     await expect(
       store.transaction(async (tx) => {

@@ -1,5 +1,6 @@
 import type { DomainEvent, Effect } from './domain/events.js';
 import type { IdLetter } from './domain/ids.js';
+import type { Artifact, ArtifactKind, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
 export interface GlobFilter {
@@ -23,7 +24,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   listBoards(email: string): Promise<Board[]>;
 
@@ -34,6 +35,18 @@ export interface Tx {
 
   getUser(email: string): Promise<User | null>;
   upsertUser(user: User): Promise<void>;
+
+  listKnowledge(boardId: number, kinds?: readonly KnowledgeKind[]): Promise<KnowledgeDoc[]>;
+  getKnowledge(boardId: number, kind: KnowledgeKind, name: string): Promise<KnowledgeDoc | null>;
+  /** Writes the document's current version and keeps the previous ones as history. */
+  saveKnowledge(doc: KnowledgeDoc): Promise<void>;
+  deleteKnowledge(boardId: number, kind: KnowledgeKind, name: string): Promise<void>;
+
+  /** Appends an artifact; its version is the next for the glob, kind and label. */
+  insertArtifact(artifact: Omit<Artifact, 'id' | 'version'>): Promise<Artifact>;
+  /** Latest version of each artifact (per kind and label), optionally of one kind. */
+  listArtifacts(globId: string, kind?: ArtifactKind): Promise<Artifact[]>;
+  artifactVersions(globId: string, kind: ArtifactKind, label: string): Promise<Artifact[]>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
@@ -53,6 +66,12 @@ export type Hint =
 /** Publishes small change hints to open boards after a commit. */
 export interface Notifier {
   publish(hint: Hint): void;
+}
+
+/** The generic catalog shipped with slop (`catalog/`): starter KB entries and the agent set. */
+export interface Catalog {
+  kbEntries(): Promise<{ id: string; version: number; fileName: string; content: string }[]>;
+  agentSet(): Promise<{ path: string; content: string }[]>;
 }
 
 export interface Clock {

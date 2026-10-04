@@ -140,6 +140,9 @@ export const BoardPage = () => {
           <Link className='text-sm hover:underline' to={`/boards/${boardId}/signed-off`}>
             Signed off
           </Link>
+          <Link className='text-sm hover:underline' to={`/boards/${boardId}/knowledge`}>
+            Knowledge
+          </Link>
           <Link className='text-sm hover:underline' to={`/boards/${boardId}/settings`}>
             Settings
           </Link>

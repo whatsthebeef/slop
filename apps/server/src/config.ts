@@ -21,6 +21,12 @@ const schema = z.object({
   GITHUB_APP_FILE: z.string().default('.github-app.json'),
   /** The GitHub App's name; GitHub app names are global, so include an owner or stage. */
   GITHUB_APP_NAME: z.string().default('slop-dev'),
+  /** slop's generic catalog (`catalog/` in the repo). */
+  CATALOG_DIR: z.string().default('../../catalog'),
+  /** The Cognito app client Claude Code uses; filled into the agent set's `.mcp.json`. */
+  CLAUDE_CODE_CLIENT_ID: z.string().default(''),
+  /** Signs short-lived download links (agent-set bundles). Random per process if unset. */
+  SIGNING_SECRET: z.string().optional(),
 });
 
 export type Config = z.infer<typeof schema>;

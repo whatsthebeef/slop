@@ -8,6 +8,7 @@ import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
 import { GroupChip } from './glob-card';
 import { LabelSwitches } from './labels';
+import { PlanEditor } from './plan-editor';
 
 const STATUS_TEXT: Record<GlobView['status'], string> = {
   planning: 'Planning',
@@ -174,6 +175,8 @@ export const GlobDialog = ({
               </div>
             )}
           </div>
+
+          <PlanEditor globId={glob.id} summary={glob.summary} />
 
           <dl className='grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground'>
             <dt>Planner</dt>

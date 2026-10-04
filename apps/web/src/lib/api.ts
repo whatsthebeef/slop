@@ -24,6 +24,43 @@ export interface BoardView extends Board {
   readonly role: Role;
 }
 
+export interface KnowledgeIndex {
+  readonly documents: readonly {
+    readonly name: string;
+    readonly area: string | null;
+    readonly audience: readonly string[];
+    readonly description: string;
+    readonly version: number;
+    readonly source: string;
+  }[];
+  readonly agentSet: { readonly version: number; readonly files: readonly string[] };
+}
+
+export interface CatalogEntry {
+  readonly id: string;
+  readonly version: number;
+  readonly area: string | null;
+  readonly audience: readonly string[];
+  readonly description: string;
+}
+
+export interface ImportResult {
+  readonly created: readonly string[];
+  readonly updated: readonly string[];
+  readonly unchanged: readonly string[];
+}
+
+export interface ArtifactView {
+  readonly id: number;
+  readonly kind: string;
+  readonly label: string;
+  readonly version: number;
+  readonly content: string;
+  readonly link: string | null;
+  readonly createdAt: string;
+  readonly provenance: { readonly by: string; readonly actor: string };
+}
+
 export interface ApiError {
   readonly code: string;
   readonly message: string;
@@ -97,6 +134,22 @@ export const api = {
   deleteGlob: (id: string, version: number) => request<object>('DELETE', `/api/globs/${id}`, { version }),
   action: (id: string, action: ActionPath, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, { version }),
+  knowledge: (boardId: number) => request<KnowledgeIndex>('GET', `/api/boards/${boardId}/kb`),
+  knowledgeDoc: (boardId: number, name: string) =>
+    request<{ name: string; content: string; version: number }[]>('GET', `/api/boards/${boardId}/kb/docs/${encodeURIComponent(name)}`),
+  catalog: () => request<CatalogEntry[]>('GET', '/api/catalog/kb'),
+  importCatalog: (boardId: number, ids: string[]) =>
+    request<ImportResult>('POST', `/api/boards/${boardId}/kb/catalog-imports`, { ids }),
+  upload: (boardId: number, documents: { fileName: string; content: string }[]) =>
+    request<ImportResult>('POST', `/api/boards/${boardId}/kb/uploads`, { documents }),
+  forkAgentSet: (boardId: number) => request<ImportResult>('POST', `/api/boards/${boardId}/kb/agent-set/fork`),
+  plan: (id: string) =>
+    request<{ current: ArtifactView | null; versions: { version: number; createdAt: string; by: string }[] }>(
+      'GET',
+      `/api/globs/${id}/plan`,
+    ),
+  savePlan: (id: string, content: string) => request<ArtifactView>('PUT', `/api/globs/${id}/plan`, { content }),
+  artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
   setLabel: (id: string, label: LabelName, state: LabelState, version: number) =>
     request<GlobView>('PUT', `/api/globs/${id}/labels/${label}`, { state, version }),
 };

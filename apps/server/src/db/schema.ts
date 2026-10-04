@@ -1,4 +1,4 @@
-import type { DomainEvent, Effect, Environment, Glob } from '@slop/core';
+import type { DomainEvent, Effect, Environment, Glob, Provenance } from '@slop/core';
 import {
   bigserial,
   boolean,
@@ -30,6 +30,7 @@ export const boards = pgTable('boards', {
   defaultRoutineOwner: text('default_routine_owner'),
   environments: jsonb('environments').$type<Environment[]>().notNull(),
   sensitivePaths: jsonb('sensitive_paths').$type<string[]>().notNull(),
+  agentSetVersion: integer('agent_set_version').notNull().default(0),
   version: integer('version').notNull(),
 });
 
@@ -137,3 +138,62 @@ export const deliveries = pgTable('deliveries', {
   event: text('event').notNull(),
   receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** Current version of each knowledge document and agent-set file, per board. */
+export const knowledge = pgTable(
+  'knowledge',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    name: text('name').notNull(),
+    area: text('area'),
+    audience: jsonb('audience').$type<string[]>().notNull(),
+    description: text('description').notNull(),
+    content: text('content').notNull(),
+    version: integer('version').notNull(),
+    source: text('source').notNull(),
+    updatedBy: text('updated_by').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.kind, t.name] })],
+);
+
+/** Every earlier version of knowledge documents. */
+export const knowledgeHistory = pgTable(
+  'knowledge_history',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id').notNull(),
+    kind: text('kind').notNull(),
+    name: text('name').notNull(),
+    version: integer('version').notNull(),
+    area: text('area'),
+    audience: jsonb('audience').$type<string[]>().notNull(),
+    description: text('description').notNull(),
+    content: text('content').notNull(),
+    source: text('source').notNull(),
+    updatedBy: text('updated_by').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [index('knowledge_history_doc_idx').on(t.boardId, t.kind, t.name, t.version)],
+);
+
+/** Glob artifacts as versioned text records (binaries will go to S3). */
+export const artifacts = pgTable(
+  'artifacts',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    globId: text('glob_id').notNull(),
+    kind: text('kind').notNull(),
+    label: text('label').notNull(),
+    version: integer('version').notNull(),
+    content: text('content').notNull(),
+    link: text('link'),
+    commitSha: text('commit_sha'),
+    provenance: jsonb('provenance').$type<Provenance>().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [uniqueIndex('artifacts_version_idx').on(t.globId, t.kind, t.label, t.version)],
+);

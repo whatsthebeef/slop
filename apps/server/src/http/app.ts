@@ -18,6 +18,8 @@ export interface AppDeps {
   readonly globs: GlobService;
   readonly hub: HintHub;
   readonly outbox: OutboxRunner;
+  /** Runs after a board is created (forks the catalog's agent set into it). */
+  readonly onBoardCreated: (email: string, boardId: number) => Promise<void>;
 }
 
 export type Env = { Variables: { email: string } };
@@ -167,7 +169,9 @@ export const createApp = (deps: AppDeps) => {
   app.post('/api/boards', async (c) => {
     const body = await parse(c, createBoardSchema);
     if (body instanceof Response) return body;
-    return send(c, await boards.create(c.get('email'), body));
+    const created = await boards.create(c.get('email'), body);
+    if (created.ok) await deps.onBoardCreated(c.get('email'), created.value.id);
+    return send(c, created);
   });
 
   app.get('/api/boards/:b', async (c) =>

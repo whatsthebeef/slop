@@ -6,6 +6,7 @@ import { BrowserRouter, Route, Routes, useNavigate } from 'react-router';
 import './index.css';
 import { RequestError } from './lib/api';
 import { BoardPage } from './pages/board';
+import { KnowledgePage } from './pages/knowledge';
 import { HomePage, LoginPage } from './pages/home';
 import { SettingsPage, SignedOffPage } from './pages/settings';
 import { ToastProvider } from './toast';
@@ -48,6 +49,7 @@ createRoot(root).render(
               <Route path='/boards/:boardId' element={<BoardPage />} />
               <Route path='/boards/:boardId/signed-off' element={<SignedOffPage />} />
               <Route path='/boards/:boardId/settings' element={<SettingsPage />} />
+              <Route path='/boards/:boardId/knowledge' element={<KnowledgePage />} />
             </Routes>
           </RequireSession>
         </BrowserRouter>
