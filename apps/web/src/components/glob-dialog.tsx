@@ -215,6 +215,15 @@ export const GlobDialog = ({
                 <div key={run.id} className='flex justify-between gap-2 rounded bg-muted px-2 py-1 text-xs'>
                   <span>
                     {run.state === 'ended' ? (run.outcome ?? 'ended') : run.state} · owner {run.routineOwner}
+                    {run.sessionUrl !== null && (
+                      <>
+                        {' · '}
+                        <a className='underline' href={run.sessionUrl} target='_blank' rel='noreferrer'>
+                          Open in Claude
+                        </a>
+                      </>
+                    )}
+                    {run.failureReason !== null && <span className='block text-red'>{run.failureReason}</span>}
                   </span>
                   <span className='text-muted-foreground'>
                     queued {when(run.queuedAt)}

@@ -7,7 +7,7 @@ description: Main workflow instructions that run in the primary session. Reads a
 
 You follow the orchestrator workflow directly in the main session. You take one **glob** from slop through investigation, implementation, testing, review and finalisation, launching the investigator, implementer, tester and change_reviewer as **sub-agents**.
 
-Slop is the board. Everything about the glob (its plan, context, status and run) comes from slop's MCP tools (`mcp__slop__*`). There is no Jira and no local learnings file.
+Slop is the board. Everything about the glob (its plan, context, status and run) comes from slop's MCP tools: `mcp__slop__*` locally, or the claude.ai Slop connector's tools (`mcp__claude_ai_Slop__*`) in routines and cloud sessions. There is no Jira and no local learnings file.
 
 ## Inputs
 
@@ -41,9 +41,10 @@ When a run ID is given:
 - Never call `AskUserQuestion` and never wait for a person. Where this document says to ask, make the most reasonable assumption instead and record it (see Phase 1).
 - **Agent-set refresh:** before Phase 1, call `get_agent_set(board)` and compare its version with `.claude/slop-agent-set.json`. If slop's is newer, write the files it returns into the checkout (replacing only the files it lists, and removing any listed as deleted) and update `.claude/slop-agent-set.json`; they are committed with your Phase 6 commit and take effect from the next run. Carry on with the instructions already loaded.
 - Do **not** call `pick_up`: routines never record a human implementer.
-- Pass the run ID to every `put_artifact` and `report_failure` call.
+- Pass the run ID to every `get_glob`, `get_context`, `put_artifact` and `report_failure` call; slop counts these calls as the run making progress, and fails a run that shows none for too long.
 - Every commit carries the trailer `Slop-Run: <runId>`.
 - **Before every push** (including auto-fix pushes after the PR is ready), call `get_glob` and stop without pushing if any of these hold: the current run's ID is not your run ID or its state is `ended`; a human implementer is recorded; the glob's status is `reviewing` or `signed_off`. Report nothing further in that case; the run has been superseded.
+- **Branch:** a routine's checkout starts on the default branch, not the glob's. Before Phase 1 run `git fetch origin <id> && git checkout -B <id> origin/<id>`, and push only with `git push origin <id>`. Never create or push a `claude/` branch and never open a PR: the glob's draft PR already exists.
 - Pick the investigator's recommended proposal.
 
 ## Interactive start
@@ -187,7 +188,7 @@ For each round (up to 3):
 
    Skip trivial or glob-specific details; most globs produce 0–3. For each one call `submit_learning(board, sourceGlobId: id, type, statement, evidence, suggestedTarget?)`. Evidence names the glob, the files and the review findings or test failures behind it. Never edit `.sstor/docs/`, `.claude/` or any knowledge directly: slop deduplicates, drafts the change and queues it for human approval.
 6. **Push and mark ready:**
-   - **Unattended:** run the pre-push check (see Unattended mode), `git push origin <id>`, then mark the glob's draft PR ready for review (`gh pr ready <id>`, or the GitHub tools available in the session). The PR title is already `<id>: <title>`; do not change it. Your cloud session then watches the PR for auto-fix; apply the pre-push check before every auto-fix push.
+   - **Unattended:** run the pre-push check (see Unattended mode), `git push origin <id>`, then call slop's `mark_ready` with the glob ID and your run ID; slop marks the draft PR ready through its GitHub App. Do not use `gh` or open a PR. The PR title is already `<id>: <title>`; do not change it. The run is not finished until `mark_ready` succeeds; if it fails, call `report_failure`. Your cloud session then watches the PR for auto-fix; apply the pre-push check before every auto-fix push.
    - **Interactive:** `git push origin <id>`. Then ask the developer whether to mark the PR ready for review now. If yes, run `/finalise <requestId>` (generate the request ID with `uuidgen`; local review and learnings are already submitted for this commit, so /finalise will skip them), then run `sstor --ready --finalised <requestId>`. If not, tell them to run `sstor --ready` when they are.
 
 There are no board transitions to make: slop learns about pushes, the ready PR and the merge from GitHub.

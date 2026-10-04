@@ -104,7 +104,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, version: 1, agentSetVersion: 0 };
+        const board: Board = { ...input, id: s.nextBoardId++, version: 1, agentSetVersion: 0, runNoProgressHours: 2, runReadyHours: 8, subMaxChangedLines: 300 };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -118,6 +118,7 @@ export class MemoryStore implements Store {
         Promise.resolve(
           [...s.boards.values()].filter((b) => s.members.has(memberKey(b.id, email))),
         ),
+      listAllBoards: () => Promise.resolve([...s.boards.values()]),
       getMember: (boardId, email) => Promise.resolve(s.members.get(memberKey(boardId, email)) ?? null),
       listMembers: (boardId) =>
         Promise.resolve([...s.members.values()].filter((m) => m.boardId === boardId)),

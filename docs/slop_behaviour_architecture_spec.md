@@ -170,6 +170,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `start_glob` | id, version | updated glob (same: `planning` → `implementing`) | Claude app |
 | `pick_up` | id, version; optional takeOver | updated glob, or `run_active` if a run is active or watching and takeOver is not set | Sessionator, Claude app |
 | `put_artifact` | id, kind (`implementation_plan`, `postplan`, `local_review`), content; optional commitSha, runId | artifact version (ignored if runId is superseded) | Routines, sessionator |
+| `mark_ready` | id; runId for routines | updated glob (moves to `pr_open` when GitHub confirms) | Routines, sessionator |
 | `report_failure` | id, reason; runId for routines | updated glob | Routines, sessionator |
 | `get_board` | board | board settings: repo, base branch, environments, enabled integrations | Agents, sessionator |
 | `get_agent_set` | board | the board's agent set (agents, commands, hooks, settings, CLAUDE.md section) with its version | Sessionator (`sstor init` via headless Claude), routines |
@@ -221,7 +222,7 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 
 **Implementation tool contracts**
 
-- **Routine (sub, same):** call `get_context`; implement on the glob's branch; `put_artifact` the implementation plan with its amendments section; mark the glob's draft PR ready for review, titled `<id>: <title>`; call `report_failure` if it cannot finish. It passes its run ID with every artifact and failure, adds a Slop-Run: \<runId> trailer to every commit, and checks the glob through the MCP before each push.
+- **Routine (sub, same):** call `get_context`; check out the glob's branch from origin (cloud sessions start on the default branch) and push only to it; `put_artifact` the implementation plan with its amendments section; call `mark_ready` (slop marks the glob's draft PR ready through its GitHub App, so the routine needs no `gh`); call `report_failure` if it cannot finish. It passes its run ID with every artifact and failure, adds a Slop-Run: \<runId> trailer to every commit, and checks the glob through the MCP before each push.
 - **Sessionator (super):** `whoami`, then `create_glob` (type super) and check out the returned branch. On each push to the feature branch, `put_artifact` the postplan with the commit SHA. After local review, `put_artifact` the local review. Mark the PR ready for review in GitHub (no slop call). Submit learnings with `submit_learning`.
 
 ## Implementation and agents
@@ -599,7 +600,7 @@ No open questions block the first build. These are later considerations:
 
 - [x] Claude app connector logs in through Cognito with a pre-registered client and calls an MCP tool (verified 2026-10-03). Two things were needed: the connector client allows both `https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback` (claude.ai now uses the latter), and slop publishes its own authorization-server metadata pointing at Cognito's endpoints, because Cognito's discovery document omits `code_challenge_methods_supported`.
 - [x] A routine calls the same tool through the account's connector (verified 2026-10-03: `list_globs`).
-- [ ] The routine fire response returns the cloud session ID and URL (check in slice 4 when slop fires routines; fallback: the routine reports them on its first MCP call).
+- [x] The routine fire response returns the cloud session ID and URL (`claude_code_session_id`, `claude_code_session_url`; verified 2026-10-04 when slop fired a routine).
 - [x] Claude Code completes OAuth against Cognito with `--client-id` and `--callback-port` (verified 2026-10-03 against the dev pool: `whoami` over MCP).
 - [x] A headless `claude -p` call to `create_glob` works with that login (covers sessionator; verified 2026-10-03, and a repeated idempotency key returns the same glob).
 - [x] Cognito accepts the `resource` parameter MCP clients send, and slop accepts the resulting tokens by client ID (verified with Claude Code).
@@ -609,4 +610,4 @@ No open questions block the first build. These are later considerations:
 - [x] Slop's GitHub App can create a branch with an empty first commit and open a draft PR with labels (verified 2026-10-04 on a sandbox repo, through to an observed merge moving the glob to Reviewing).
 - [ ] Run one test restore of the nightly Postgres backup.
 - [ ] Search quality on a sample of real meetings and globs.
-- [ ] Bedrock: Haiku 4.5 available in the region and reliable for structured intake output.
+- [x] Bedrock: Haiku 4.5 available in the region and reliable for structured intake output (verified 2026-10-04: valid JSON in 2–4 s, about 500 tokens per intake).

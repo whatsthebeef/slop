@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatId, letterOf, parseId } from '../src/domain/ids.js';
 import { isValidCombination, listOf } from '../src/domain/matrix.js';
+import { matchesGlob, subGatePolicy } from '../src/domain/sub-gate.js';
 
 describe('type/category matrix', () => {
   it.each([
@@ -26,6 +27,23 @@ describe('IDs', () => {
     expect(parseId('s1x4')).toBeNull();
     expect(parseId('s0t4')).toBeNull();
     expect(parseId('feature/s1t4')).toBeNull();
+  });
+});
+
+describe('sub gate policy', () => {
+  const board = { subMaxChangedLines: 100, sensitivePaths: ['infra/**', '**/*.sql', '.github/workflows/*'] };
+
+  it('matches sensitive path globs', () => {
+    expect(matchesGlob('infra/lib/stack.ts', 'infra/**')).toBe(true);
+    expect(matchesGlob('db/migrations/001.sql', '**/*.sql')).toBe(true);
+    expect(matchesGlob('.github/workflows/ci.yml', '.github/workflows/*')).toBe(true);
+    expect(matchesGlob('src/infra.ts', 'infra/**')).toBe(false);
+  });
+
+  it('passes small changes outside sensitive paths and flags the rest', () => {
+    expect(subGatePolicy({ changedLines: 40, files: ['src/a.ts'] }, board)).toEqual({ passed: true, reason: null });
+    expect(subGatePolicy({ changedLines: 400, files: ['src/a.ts'] }, board).reason).toMatch(/400 lines/);
+    expect(subGatePolicy({ changedLines: 5, files: ['infra/x.ts', 'src/a.ts'] }, board).reason).toMatch(/infra\/x.ts/);
   });
 });
 

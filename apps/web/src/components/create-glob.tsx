@@ -5,6 +5,7 @@ import type { SyntheticEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
+import { api } from '@/lib/api';
 import type { BoardView, NewGlob } from '@/lib/api';
 
 const empty = (): NewGlob => ({
@@ -35,12 +36,38 @@ export const CreateGlobDialog = ({
   onCreate: (input: NewGlob) => Promise<void>;
 }) => {
   const [form, setForm] = useState<NewGlob>(empty);
+  const [request, setRequest] = useState('');
+  const [processing, setProcessing] = useState(false);
+  const [reason, setReason] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const restricted = board.role === 'qa' || board.role === 'po';
   const types = SLOP_TYPES.filter((t) => !(restricted && t === 'super'));
   const valid = isValidCombination(form.type, form.category) && form.title.trim() !== '';
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
+
+  /** Intake: the LLM proposes the fields from free text; the person checks them before Create. */
+  const processRequest = async () => {
+    setProcessing(true);
+    setError(null);
+    try {
+      const proposal = await api.intake(board.id, request);
+      setForm({
+        title: proposal.title,
+        summary: proposal.summary,
+        type: restricted && proposal.type === 'super' ? 'same' : proposal.type,
+        category: proposal.category,
+        group: proposal.group,
+        environment: form.environment,
+        autoTrigger: proposal.autoTrigger,
+      });
+      setReason(proposal.autoTriggerReason);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not process the request');
+    } finally {
+      setProcessing(false);
+    }
+  };
 
   const submit = async (event: SyntheticEvent) => {
     event.preventDefault();
@@ -49,6 +76,8 @@ export const CreateGlobDialog = ({
     try {
       await onCreate({ ...form, group: form.group?.trim() === '' ? null : form.group });
       setForm(empty());
+      setRequest('');
+      setReason(null);
       onOpenChange(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create the glob');
@@ -60,6 +89,26 @@ export const CreateGlobDialog = ({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title='New glob'>
+        <div className='mb-4 grid gap-2 border-b pb-4'>
+          <Label>
+            Describe the work (optional)
+            <Textarea
+              value={request}
+              onChange={(e) => setRequest(e.target.value)}
+              placeholder='Paste a request, notes or a thread; Process fills in the form below.'
+            />
+          </Label>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='w-fit'
+            disabled={request.trim() === '' || processing}
+            onClick={() => void processRequest()}
+          >
+            {processing ? 'Processing…' : 'Process'}
+          </Button>
+        </div>
         <form className='grid gap-3' onSubmit={(e) => void submit(e)}>
           <Label>
             Title
@@ -126,6 +175,9 @@ export const CreateGlobDialog = ({
               />
               Start a routine run straight away
             </label>
+          )}
+          {form.type === 'same' && form.autoTrigger && reason !== null && (
+            <p className='text-xs text-muted-foreground'>{reason}</p>
           )}
           {!isValidCombination(form.type, form.category) && (
             <p className='text-xs text-red'>

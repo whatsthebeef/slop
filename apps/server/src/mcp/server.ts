@@ -116,8 +116,15 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
 
   server.registerTool(
     'get_glob',
-    { description: 'Everything about a glob: status, version, fields, labels, PR, runs and flags.', inputSchema: { id: z.string() } },
-    async ({ id }) => reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions)),
+    {
+      description:
+        'Everything about a glob: status, version, fields, labels, PR, runs and flags. Routines pass their run ID, which records the run as making progress.',
+      inputSchema: { id: z.string(), runId: z.string().optional() },
+    },
+    async ({ id, runId }) => {
+      if (runId !== undefined) await globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
+      return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions));
+    },
   );
 
   server.registerTool(
@@ -200,6 +207,21 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
   );
 
   server.registerTool(
+    'mark_ready',
+    {
+      description:
+        "Mark the glob's draft PR ready for review when the work is pushed. slop does it through its GitHub App; the glob moves to pr_open when GitHub confirms. Routines pass their run ID.",
+      inputSchema: { id: z.string(), runId: z.string().optional() },
+    },
+    async ({ id, runId }) => {
+      if (runId !== undefined) await globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
+      const result = await globs.requestReady(email, id, runId ?? null);
+      if (result.ok) await deps.outbox.drain(id);
+      return reply(result, (g) => ({ id: g.id, status: g.status, pr: g.pr, note: 'The PR is being marked ready; the glob moves to pr_open when GitHub confirms.' }));
+    },
+  );
+
+  server.registerTool(
     'report_failure',
     {
       description: 'Report that the glob cannot be finished. Routines pass their run ID.',
@@ -271,9 +293,12 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     {
       description:
         "The glob's context bundle: its fields, plan.md (the postplan for supers), the implementation plan, attachments, and the board's repo and base branch.",
-      inputSchema: { id: z.string() },
+      inputSchema: { id: z.string(), runId: z.string().optional() },
     },
-    async ({ id }) => reply(await artifacts.context(email, id)),
+    async ({ id, runId }) => {
+      if (runId !== undefined) await deps.globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
+      return reply(await artifacts.context(email, id));
+    },
   );
 
   server.registerTool(

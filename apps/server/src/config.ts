@@ -27,6 +27,11 @@ const schema = z.object({
   CLAUDE_CODE_CLIENT_ID: z.string().default(''),
   /** Signs short-lived download links (agent-set bundles). Random per process if unset. */
   SIGNING_SECRET: z.string().optional(),
+  /** Each developer's routine fire URL and token, keyed by email (gitignored; Secrets Manager in production). */
+  ROUTINES_FILE: z.string().default('.routines.json'),
+  BEDROCK_REGION: z.string().default('us-east-1'),
+  /** Haiku 4.5 for intake and classification. */
+  INTAKE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
 });
 
 export type Config = z.infer<typeof schema>;

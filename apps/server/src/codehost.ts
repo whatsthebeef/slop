@@ -1,4 +1,4 @@
-import type { Board, Glob } from '@slop/core';
+import type { Board, DiffSummary, Glob } from '@slop/core';
 
 /** A board's repository on its code host. */
 export interface Repo {
@@ -38,6 +38,10 @@ export interface CodeHost {
   deleteBranch(repo: Repo, branch: string): Promise<void>;
   reopenPr(repo: Repo, prNumber: number, branch: string): Promise<'reopened' | 'missing'>;
   mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState }>;
+  /** Marks a draft PR ready for review. */
+  markReady(repo: Repo, prNumber: number): Promise<void>;
+  /** Lines changed and files touched between the base branch and `sha`. */
+  diffSummary(repo: Repo, sha: string): Promise<DiffSummary>;
   /** Squash-merges at exactly `sha` as `<id>: <title>`, or updates a branch that is behind. */
   squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult>;
 }

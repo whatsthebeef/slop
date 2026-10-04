@@ -41,6 +41,9 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   environments: row.environments,
   sensitivePaths: row.sensitivePaths,
   agentSetVersion: row.agentSetVersion,
+  runNoProgressHours: row.runNoProgressHours,
+  runReadyHours: row.runReadyHours,
+  subMaxChangedLines: row.subMaxChangedLines,
   version: row.version,
 });
 
@@ -169,12 +172,16 @@ export class PgStore implements Store {
             environments: [...board.environments],
             sensitivePaths: [...board.sensitivePaths],
             agentSetVersion: board.agentSetVersion,
+            runNoProgressHours: board.runNoProgressHours,
+            runReadyHours: board.runReadyHours,
+            subMaxChangedLines: board.subMaxChangedLines,
             version: board.version,
           })
           .where(and(eq(schema.boards.id, board.id), eq(schema.boards.version, expectedVersion)))
           .returning({ id: schema.boards.id });
         return rows.length === 1;
       },
+      listAllBoards: async () => (await t.select().from(schema.boards).orderBy(schema.boards.id)).map(toBoard),
       listBoards: async (email) => {
         const rows = await t
           .select({ board: schema.boards })

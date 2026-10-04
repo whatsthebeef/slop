@@ -16,6 +16,9 @@ export const board: Board = {
   ],
   sensitivePaths: [],
   agentSetVersion: 1,
+  runNoProgressHours: 2,
+  runReadyHours: 8,
+  subMaxChangedLines: 300,
   version: 1,
 };
 
@@ -73,5 +76,7 @@ export const run = (patch: Partial<Run> = {}): Run => ({
   lastProgressAt: NOW,
   endedAt: null,
   failureReason: null,
+  sessionId: null,
+  sessionUrl: null,
   ...patch,
 });

@@ -443,6 +443,38 @@ describe('aging', () => {
   });
 });
 
+describe('mark ready', () => {
+  it('queues marking the draft PR ready for the current run only', () => {
+    const g = glob({ status: 'implementing', runs: [run()] });
+    expect(effectKinds(value(m.readyRequested(g, 'run-0', ctx(null))))).toEqual(['mark_pr_ready']);
+    expect(errorCode(m.readyRequested(g, 'old', ctx(null)))).toBe('invalid_transition');
+    expect(errorCode(m.readyRequested(glob({ status: 'planning' }), null, ctx()))).toBe('invalid_transition');
+    expect(effectKinds(value(m.readyRequested(glob({ status: 'in_progress' }), null, ctx())))).toEqual(['mark_pr_ready']);
+  });
+});
+
+describe('run sessions and timeouts', () => {
+  it('records the cloud session of the current run only', () => {
+    const g = glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null })] });
+    const t = value(m.runFired(g, { runId: 'run-0', sessionId: 'sess', sessionUrl: 'https://claude.ai/code/sess' }, ctx(null)));
+    expect(m.currentRun(t.glob)).toMatchObject({ sessionId: 'sess', sessionUrl: 'https://claude.ai/code/sess' });
+    expect(value(m.runFired(g, { runId: 'old', sessionId: 'x', sessionUrl: null }, ctx(null))).changed).toBe(false);
+  });
+
+  it('times out a run with no progress, or one that never marks its PR ready', () => {
+    const limits = { runNoProgressHours: 2, runReadyHours: 8 };
+    const at = (hours: number) => new Date(Date.parse('2026-10-05T00:00:00.000Z') + hours * 3_600_000).toISOString();
+    const active = (lastProgress: number) =>
+      glob({ status: 'implementing', runs: [run({ state: 'active', startedAt: at(0), lastProgressAt: at(lastProgress) })] });
+    expect(m.runTimeoutReason(active(0), limits, at(1))).toBeNull();
+    expect(m.runTimeoutReason(active(0), limits, at(3))).toMatch(/No progress/);
+    expect(m.runTimeoutReason(active(8.5), limits, at(9))).toMatch(/not marked ready/);
+    const watching = glob({ status: 'pr_open', runs: [run({ state: 'watching', startedAt: at(0), lastProgressAt: at(8.5) })] });
+    expect(m.runTimeoutReason(watching, limits, at(9))).toBeNull();
+    expect(m.runTimeoutReason(glob({ runs: [run({ state: 'queued' })] }), limits, at(30))).toBeNull();
+  });
+});
+
 describe('runs', () => {
   it('a slop call marks a queued run active; superseded runs are ignored', () => {
     const g = glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null })] });

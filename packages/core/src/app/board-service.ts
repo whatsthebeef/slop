@@ -14,7 +14,16 @@ export interface CreateBoardInput {
 export type BoardSettings = Partial<
   Pick<
     Board,
-    'name' | 'repo' | 'baseBranch' | 'timeZone' | 'defaultRoutineOwner' | 'environments' | 'sensitivePaths'
+    | 'name'
+    | 'repo'
+    | 'baseBranch'
+    | 'timeZone'
+    | 'defaultRoutineOwner'
+    | 'environments'
+    | 'sensitivePaths'
+    | 'runNoProgressHours'
+    | 'runReadyHours'
+    | 'subMaxChangedLines'
   >
 >;
 
@@ -38,6 +47,10 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
   if (settings.name?.trim() === '') return invalidInput('A board needs a name');
   if (settings.timeZone !== undefined && !isTimeZone(settings.timeZone)) {
     return invalidInput(`Unknown time zone ${settings.timeZone}`);
+  }
+  for (const key of ['runNoProgressHours', 'runReadyHours', 'subMaxChangedLines'] as const) {
+    const value = settings[key];
+    if (value !== undefined && (!Number.isFinite(value) || value <= 0)) return invalidInput(`${key} must be positive`);
   }
   if (settings.environments !== undefined) {
     const names = settings.environments.map((e) => e.name.trim());

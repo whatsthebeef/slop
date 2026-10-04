@@ -42,6 +42,9 @@ export interface Run {
   readonly lastProgressAt: string | null;
   readonly endedAt: string | null;
   readonly failureReason: string | null;
+  /** The cloud session started by the fire request, for Open in Claude and Continue locally. */
+  readonly sessionId: string | null;
+  readonly sessionUrl: string | null;
 }
 
 export type PrState = 'draft' | 'ready' | 'closed' | 'merged';
@@ -111,6 +114,12 @@ export interface Board {
   readonly sensitivePaths: readonly string[];
   /** Increases with every approved change to the board's agent set. */
   readonly agentSetVersion: number;
+  /** A run with no slop call or push for this long is failed. */
+  readonly runNoProgressHours: number;
+  /** A run that has not marked its PR ready for review within this long is failed. */
+  readonly runReadyHours: number;
+  /** Sub gate: subs changing more lines than this convert to sames. */
+  readonly subMaxChangedLines: number;
   readonly version: number;
 }
 

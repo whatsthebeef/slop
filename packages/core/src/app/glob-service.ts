@@ -126,6 +126,11 @@ export class GlobService {
     return this.command(email, id, version, (glob, ctx) => machine.setLabel(glob, name, state, ctx));
   }
 
+  /** `mark_ready`: ask slop to mark the glob's draft PR ready for review. */
+  requestReady(email: string, id: string, runId: string | null) {
+    return this.command(email, id, null, (glob, ctx) => machine.readyRequested(glob, runId, ctx));
+  }
+
   /** `report_failure` from a person's interactive session (no run ID). */
   reportFailure(email: string, id: string, reason: string, runId: string | null) {
     return this.command(email, id, null, (glob, ctx) =>
