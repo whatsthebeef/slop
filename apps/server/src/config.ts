@@ -10,7 +10,7 @@ const schema = z.object({
   COGNITO_USER_POOL_ID: z.string().optional(),
   COGNITO_REGION: z.string().optional(),
   COGNITO_DOMAIN: z.string().optional(),
-  /** App client IDs whose access tokens slop accepts (board, Claude connector, Claude Code). */
+  /** App client IDs whose access tokens slop accepts (board, Claude connector, Claude Code, sstor). */
   COGNITO_CLIENT_IDS: z.string().optional(),
   COGNITO_BOARD_CLIENT_ID: z.string().optional(),
   COGNITO_BOARD_CLIENT_SECRET: z.string().optional(),

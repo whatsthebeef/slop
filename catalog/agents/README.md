@@ -13,7 +13,7 @@ Agent definitions hold short rules that always apply to that agent; bulky or sit
 | `agents/*.md` | `.claude/agents/` |
 | `commands/*.md` (`/run-glob`, `/finalise`) | `.claude/commands/` |
 | `hooks/*` | `.claude/hooks/` |
-| `settings.json` | merged into `.claude/settings.json` |
+| `settings.json` | merged into `.claude/settings.json` (list values such as permissions and `sandbox.network.allowedDomains` are combined; the sandbox domains are the ones the agents' own commands need, `github.com` for `git fetch` and `git push`) |
 | `mcp.json` (`{{SLOP_URL}}` and the Claude Code client ID filled from sstor's config) | merged into `.mcp.json` |
 | `claude_md.md` | `CLAUDE.md`, between the `<!-- implementation-agent-system -->` markers |
 
@@ -30,7 +30,7 @@ Agent definitions hold short rules that always apply to that agent; bulky or sit
 - Phase 6 commits as `<id>: <title>`, pushes the glob branch and marks the PR ready (routines) or hands over to `sstor --ready` (interactive).
 - `qa` is renamed `tester`. The OpenAI cross-review, the Codex mirrors (`.codex/`, `AGENTS.md`) and the Google Sheet memory are dropped.
 - Project rules (quotes, template formatting, typing, package manager commands) left the agents; each board's knowledge base holds them.
-- The agent set is board knowledge in slop, fetched by `sstor init` through headless Claude (`get_agent_set`) and committed in each project repo, so cloud checkouts register it at startup. Routines refresh it at the start of each run; changes show up as small diffs in whichever glob's commit picks them up.
+- The agent set is board knowledge in slop, fetched by `sstor init` (`get_agent_set`, with sstor's own slop sign-in) and committed in each project repo, so cloud checkouts register it at startup. Routines refresh it at the start of each run; changes show up as small diffs in whichever glob's commit picks them up.
 - Every artifact, failure and learning records the agent-set version (`.claude/slop-agent-set.json`), so slop can check whether a change to the agents helped.
 - The slop MCP server is declared in `.mcp.json`. Claude Code ignores `mcpServers` in `.claude/settings.json`, where sessionator used to merge them.
 

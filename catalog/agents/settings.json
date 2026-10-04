@@ -1,7 +1,12 @@
 {
   "sandbox": {
     "enabled": true,
-    "autoAllowBashIfSandboxed": true
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowedDomains": [
+        "github.com"
+      ]
+    }
   },
   "permissions": {
     "allow": [
