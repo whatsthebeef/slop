@@ -596,7 +596,8 @@ No open questions block the first build. These are later considerations:
 **Verify while building slice 1 (each becomes an early implementation task)**
 
 - [x] Claude app connector logs in through Cognito with a pre-registered client and calls an MCP tool (verified 2026-10-03). Two things were needed: the connector client allows both `https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback` (claude.ai now uses the latter), and slop publishes its own authorization-server metadata pointing at Cognito's endpoints, because Cognito's discovery document omits `code_challenge_methods_supported`.
-- [ ] A routine calls the same tool through the account's connector, and the routine fire response returns the cloud session ID and URL.
+- [x] A routine calls the same tool through the account's connector (verified 2026-10-03: `list_globs`).
+- [ ] The routine fire response returns the cloud session ID and URL (check in slice 4 when slop fires routines; fallback: the routine reports them on its first MCP call).
 - [x] Claude Code completes OAuth against Cognito with `--client-id` and `--callback-port` (verified 2026-10-03 against the dev pool: `whoami` over MCP).
 - [x] A headless `claude -p` call to `create_glob` works with that login (covers sessionator; verified 2026-10-03, and a repeated idempotency key returns the same glob).
 - [x] Cognito accepts the `resource` parameter MCP clients send, and slop accepts the resulting tokens by client ID (verified with Claude Code).
