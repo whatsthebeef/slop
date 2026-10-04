@@ -99,11 +99,18 @@ export const createApp = (deps: AppDeps) => {
     });
   }
 
+  /** The origin the browser used (ngrok and other proxies forward the original host and scheme). */
+  const originOf = (c: Context<Env>) => {
+    const url = new URL(c.req.url);
+    const proto = c.req.header('x-forwarded-proto') ?? url.protocol.replace(':', '');
+    return `${proto}://${c.req.header('host') ?? url.host}`;
+  };
+
   if (auth.config.AUTH_MODE === 'cognito') {
     app.get('/auth/login', (c) => {
       const state = randomBytes(16).toString('base64url');
       setCookie(c, STATE_COOKIE, state, { httpOnly: true, sameSite: 'Lax', path: '/auth', maxAge: 600 });
-      return c.redirect(auth.authorizeUrl(state));
+      return c.redirect(auth.authorizeUrl(state, auth.boardRedirectUri(originOf(c))));
     });
 
     app.get('/auth/callback', async (c) => {
@@ -113,10 +120,10 @@ export const createApp = (deps: AppDeps) => {
       if (expected === undefined || c.req.query('state') !== expected || code === undefined) {
         return c.text('Sign-in failed: the request did not match. Try again.', 400);
       }
-      const identity = await auth.completeSignIn(code);
+      const identity = await auth.completeSignIn(code, auth.boardRedirectUri(originOf(c)));
       if (identity === null) return c.text('Sign-in failed.', 401);
       const session = await auth.createSession(identity);
-      setCookie(c, SESSION_COOKIE, session, { httpOnly: true, sameSite: 'Lax', path: '/', secure: auth.config.PUBLIC_URL.startsWith('https:') });
+      setCookie(c, SESSION_COOKIE, session, { httpOnly: true, sameSite: 'Lax', path: '/', secure: originOf(c).startsWith('https:') });
       return c.redirect('/');
     });
   }

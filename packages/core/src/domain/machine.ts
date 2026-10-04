@@ -98,7 +98,15 @@ class Builder {
       status: to,
       doingSince: entersDoing ? this.ctx.now : leavesDoing ? null : this.glob.doingSince,
     });
-    return this.event('StatusChanged', { from, to });
+    this.event('StatusChanged', { from, to });
+    return listOf(to) === 'doing' ? this.ensureProvisioned() : this;
+  }
+
+  /** A glob gets its branch and draft PR when it enters Doing; queued before any routine run. */
+  ensureProvisioned(): this {
+    if (this.glob.provisioning !== 'none') return this;
+    this.set({ provisioning: 'pending' });
+    return this.effect({ kind: 'provision', globId: this.glob.id, generation: this.glob.generation });
   }
 
   event(type: DomainEventType, data: { readonly [key: string]: JsonValue } = {}): this {
@@ -240,21 +248,21 @@ export const create = (input: CreateInput, board: Board, ctx: Context): Result<T
     headChecks: null,
     runs: [],
     failure: null,
-    provisioning: 'pending',
+    provisioning: 'none',
     createdAt: ctx.now,
     updatedAt: ctx.now,
     signedOffAt: null,
     doingSince: listOf(status) === 'doing' ? ctx.now : null,
   };
-  const b = new Builder(glob, ctx)
-    .event('GlobCreated', {
-      type: glob.type,
-      category: glob.category,
-      group: glob.group,
-      environment: glob.environment,
-      status,
-    })
-    .effect({ kind: 'provision', globId: glob.id, generation: glob.generation });
+  const b = new Builder(glob, ctx).event('GlobCreated', {
+    type: glob.type,
+    category: glob.category,
+    group: glob.group,
+    environment: glob.environment,
+    status,
+  });
+  // Subs, supers and auto-started sames start in Doing, so they provision now.
+  if (listOf(status) === 'doing') b.ensureProvisioned();
   if (input.type === 'sub' || autoStart) b.queueRun(actor.email);
   return b.done();
 };
@@ -369,12 +377,13 @@ export const startAgain = (glob: Glob, ctx: Context): Result<Transition> => {
     failure: null,
     pr: null,
     headChecks: null,
-    provisioning: 'pending',
+    provisioning: 'none',
   })
-    .effect({ kind: 'close_pr', globId: glob.id, generation })
+    .effect({ kind: 'close_pr', globId: glob.id, generation, prNumber: glob.pr?.number ?? null })
     .effect({ kind: 'delete_branch', globId: glob.id, generation })
-    .effect({ kind: 'provision', globId: glob.id, generation })
     .status(initialStatus(glob.type));
+  // A sub or super starts again in Doing with a fresh branch; a same waits for its next start.
+  if (listOf(initialStatus(glob.type)) === 'doing') b.ensureProvisioned();
   if (glob.type === 'sub') b.queueRun(actor.email);
   return b.done();
 };
@@ -400,7 +409,7 @@ export const remove = (glob: Glob, ctx: Context): Result<Transition> =>
   new Builder(glob, ctx)
     .endRun('superseded')
     .event('GlobDeleted', { status: glob.status })
-    .effect({ kind: 'delete_glob_data', globId: glob.id })
+    .effect({ kind: 'delete_glob_data', globId: glob.id, boardId: glob.boardId, prNumber: glob.pr?.number ?? null })
     .done();
 
 /** Rows 21–22: FR, CR and QA switches. */
@@ -470,6 +479,9 @@ export const changeFields = (
   if (Object.keys(diff).length === 0) return unchanged(glob);
 
   const b = new Builder(glob, ctx).set(patch).event('FieldsChanged', diff);
+  if (('type' in diff || 'environment' in diff) && glob.pr !== null) {
+    b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  }
   if (glob.type === 'same' && type === 'sub') {
     b.status('implementing').queueRun(actor.email);
   }
@@ -550,6 +562,9 @@ export const commitPushed = (
   if (!superseded && run !== null && run.state !== 'ended' && push.runId === run.id) {
     b.updateRun({ lastProgressAt: ctx.now, state: run.state === 'queued' ? 'active' : run.state });
   }
+  if (glob.status === 'pr_open' || glob.status === 'merging') {
+    b.set({ headChecks: null }).effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+  }
   return b.event('CommitPushed', { sha: push.sha, runId: push.runId, fromSupersededRun: superseded }).done();
 };
 
@@ -582,7 +597,18 @@ export const prReadyForReview = (
   if (run !== null && (run.state === 'active' || run.state === 'queued')) {
     b.updateRun({ state: 'watching', lastProgressAt: ctx.now, startedAt: run.startedAt ?? ctx.now });
   }
-  return b.status('pr_open').done();
+  return b
+    .status('pr_open')
+    .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation })
+    .done();
+};
+
+/** A check suite or run changed on the glob's branch: re-read the head's merge state. */
+export const checksChanged = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (glob.pr === null || (glob.status !== 'pr_open' && glob.status !== 'merging')) return unchanged(glob);
+  return new Builder(glob, ctx)
+    .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation })
+    .done();
 };
 
 /** Required checks finished on a commit; only the PR's current head counts. */
@@ -592,10 +618,21 @@ export const checksCompleted = (
   ctx: Context,
 ): Result<Transition> => {
   if (glob.pr?.headSha !== checks.sha) return unchanged(glob);
-  return new Builder(glob, ctx)
+  const b = new Builder(glob, ctx)
     .set({ headChecks: { sha: checks.sha, state: checks.passed ? 'passed' : 'failed' } })
-    .event('BuildCompleted', { sha: checks.sha, passed: checks.passed })
-    .done();
+    .event('BuildCompleted', { sha: checks.sha, passed: checks.passed });
+  // Slop updated the branch while merging: the checks on the new head decide (rows 12, 14, 16).
+  if (glob.status === 'merging') {
+    if (!checks.passed) {
+      return b
+        .set({ failure: { reason: 'Checks failed after updating the branch', at: ctx.now } })
+        .event('MergeFailed', { reason: 'checks failed after update' })
+        .status('failed')
+        .done();
+    }
+    b.effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: checks.sha });
+  }
+  return b.done();
 };
 
 /** Rows 12–13: the sub gate's verdict on a commit. */
@@ -618,15 +655,17 @@ export const subGateCompleted = (
       .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: gate.sha })
       .done();
   }
-  return b.set({ type: 'same' }).event('FieldsChanged', { type: { from: 'sub', to: 'same' } }).done();
+  return b
+    .set({ type: 'same' })
+    .event('FieldsChanged', { type: { from: 'sub', to: 'same' } })
+    .effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation })
+    .done();
 };
 
 /** Row 15: the merge was observed (slop's own merge response or the merged event). */
 export const merged = (glob: Glob, merge: { sha: string }, ctx: Context): Result<Transition> => {
+  // GitHub is the source of truth for merges, so any status before merging moves to reviewing.
   if (glob.status === 'reviewing' || glob.status === 'signed_off') return unchanged(glob);
-  if (glob.status === 'planning') {
-    return invalidTransition(glob, null, 'Merge observed for a glob still in planning');
-  }
   return new Builder(glob, ctx)
     .endRun('completed')
     .set({

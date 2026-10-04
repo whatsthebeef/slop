@@ -46,15 +46,20 @@ export class Auth {
   // ---------------------------------------------------------------------------
   // Board sign-in through Cognito's hosted UI (authorization code flow)
 
-  get boardRedirectUri(): string {
-    return `${this.config.PUBLIC_URL}/auth/callback`;
+  /**
+   * The callback on the origin the person signed in from: the public URL, or localhost during
+   * development. Anything else falls back to the public URL. Each must be a Cognito callback URL.
+   */
+  boardRedirectUri(origin: string): string {
+    const allowed = origin === this.config.PUBLIC_URL || /^http:\/\/localhost(:\d+)?$/.test(origin);
+    return `${allowed ? origin : this.config.PUBLIC_URL}/auth/callback`;
   }
 
-  authorizeUrl(state: string): string {
+  authorizeUrl(state: string, redirectUri: string): string {
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: this.config.COGNITO_BOARD_CLIENT_ID ?? '',
-      redirect_uri: this.boardRedirectUri,
+      redirect_uri: redirectUri,
       scope: 'openid email profile',
       state,
     });
@@ -62,7 +67,7 @@ export class Auth {
   }
 
   /** Exchanges the authorization code and returns the verified person, or null. */
-  async completeSignIn(code: string): Promise<Identity | null> {
+  async completeSignIn(code: string, redirectUri: string): Promise<Identity | null> {
     if (this.idVerifier === null) return null;
     const { COGNITO_BOARD_CLIENT_ID: id = '', COGNITO_BOARD_CLIENT_SECRET: secret = '' } = this.config;
     const response = await fetch(`https://${this.config.COGNITO_DOMAIN ?? ''}/oauth2/token`, {
@@ -71,7 +76,7 @@ export class Auth {
         'content-type': 'application/x-www-form-urlencoded',
         authorization: `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`,
       },
-      body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: this.boardRedirectUri }),
+      body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri }),
     });
     if (!response.ok) return null;
     const tokens = (await response.json()) as { id_token?: unknown };

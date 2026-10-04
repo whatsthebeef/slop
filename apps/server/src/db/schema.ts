@@ -129,3 +129,11 @@ export const errors = pgTable('errors', {
   task: text('task').notNull(),
   message: text('message').notNull(),
 });
+
+/** Inbound webhook deliveries already handled, for deduplication (GitHub delivery IDs, source event IDs). */
+export const deliveries = pgTable('deliveries', {
+  id: text('id').primaryKey(),
+  source: text('source').notNull(),
+  event: text('event').notNull(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+});

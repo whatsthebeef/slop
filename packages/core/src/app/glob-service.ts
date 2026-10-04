@@ -197,6 +197,7 @@ export class GlobService {
         const { changed, events, effects } = transition.value;
         if (!changed) {
           await tx.appendEvents(events);
+          await tx.enqueueEffects(effects);
           return ok(glob);
         }
         const next = { ...transition.value.glob, version: glob.version + 1 };

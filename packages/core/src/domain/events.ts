@@ -58,8 +58,13 @@ export type Effect =
     }
   | { readonly kind: 'squash_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
   | { readonly kind: 'reopen_pr'; readonly globId: string; readonly generation: number }
-  | { readonly kind: 'close_pr'; readonly globId: string; readonly generation: number }
+  | { readonly kind: 'close_pr'; readonly globId: string; readonly generation: number; readonly prNumber: number | null }
   | { readonly kind: 'delete_branch'; readonly globId: string; readonly generation: number }
-  | { readonly kind: 'delete_glob_data'; readonly globId: string };
+  /** Runs after the glob is gone, so it carries what the clean-up needs. */
+  | { readonly kind: 'delete_glob_data'; readonly globId: string; readonly boardId: number; readonly prNumber: number | null }
+  /** Re-read whether the PR's current head can merge (required checks, conflicts). */
+  | { readonly kind: 'refresh_checks'; readonly globId: string; readonly generation: number }
+  /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
+  | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number };
 
 export type EffectKind = Effect['kind'];

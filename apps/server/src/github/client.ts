@@ -1,0 +1,279 @@
+import { App } from '@octokit/app';
+import type { Glob } from '@slop/core';
+import type { CodeHost, MergeResult, MergeState, Repo } from '../codehost.js';
+import type { AppCredentialsStore } from './credentials.js';
+
+type Octokit = Awaited<ReturnType<App['getInstallationOctokit']>>;
+
+const status = (error: unknown): number | null =>
+  typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number'
+    ? error.status
+    : null;
+
+const isStatus = (error: unknown, ...codes: number[]) => {
+  const code = status(error);
+  return code !== null && codes.includes(code);
+};
+
+/**
+ * slop's GitHub operations, acting as the GitHub App (`slop[bot]`) with installation tokens.
+ * Every glob's branch is its ID, created by slop with an empty first commit so a draft PR can
+ * be opened before any work exists.
+ */
+export class GitHub implements CodeHost {
+  private readonly installations = new Map<string, Octokit>();
+  private app: App | null = null;
+  private appId: number | null = null;
+
+  constructor(private readonly credentials: AppCredentialsStore) {}
+
+  get configured(): boolean {
+    return this.credentials.get() !== null;
+  }
+
+  private getApp(): App {
+    const credentials = this.credentials.get();
+    if (credentials === null) throw new Error('The GitHub App is not set up (/setup/github-app)');
+    if (this.app === null || this.appId !== credentials.id) {
+      this.app = new App({ appId: credentials.id, privateKey: credentials.pem });
+      this.appId = credentials.id;
+      this.installations.clear();
+    }
+    return this.app;
+  }
+
+  private async octokit(repo: Repo): Promise<Octokit> {
+    const key = `${repo.owner}/${repo.name}`;
+    const cached = this.installations.get(key);
+    if (cached !== undefined) return cached;
+    const app = this.getApp();
+    const { data } = await app.octokit.request('GET /repos/{owner}/{repo}/installation', {
+      owner: repo.owner,
+      repo: repo.name,
+    });
+    const octokit = await app.getInstallationOctokit(data.id);
+    this.installations.set(key, octokit);
+    return octokit;
+  }
+
+  /**
+   * Creates the glob's branch with an empty `<id>: start` commit and opens its draft PR with
+   * labels. Idempotent: an existing branch or open PR is reused, so retries are safe.
+   */
+  async provision(repo: Repo, glob: Glob): Promise<{ branch: string; pr: { number: number; headSha: string } }> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name };
+    let headSha = await this.branchHead(repo, glob.id);
+    if (headSha === null) {
+      const { data: base } = await gh.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+        ...r,
+        ref: `heads/${repo.base}`,
+      });
+      const { data: baseCommit } = await gh.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', {
+        ...r,
+        commit_sha: base.object.sha,
+      });
+      const { data: start } = await gh.request('POST /repos/{owner}/{repo}/git/commits', {
+        ...r,
+        message: `${glob.id}: start`,
+        tree: baseCommit.tree.sha,
+        parents: [base.object.sha],
+      });
+      try {
+        await gh.request('POST /repos/{owner}/{repo}/git/refs', { ...r, ref: `refs/heads/${glob.id}`, sha: start.sha });
+        headSha = start.sha;
+      } catch (error) {
+        // A concurrent attempt created it first.
+        if (!isStatus(error, 422)) throw error;
+        headSha = await this.branchHead(repo, glob.id);
+        if (headSha === null) throw error;
+      }
+    }
+
+    let pr = await this.openPr(repo, glob.id);
+    if (pr === null) {
+      const { data } = await gh.request('POST /repos/{owner}/{repo}/pulls', {
+        ...r,
+        title: `${glob.id}: ${glob.title}`,
+        head: glob.id,
+        base: repo.base,
+        draft: true,
+        body: this.prBody(glob),
+      });
+      pr = { number: data.number, headSha: data.head.sha };
+    }
+    await this.syncLabels(repo, glob, pr.number);
+    return { branch: glob.id, pr: { number: pr.number, headSha: pr.headSha } };
+  }
+
+  async syncLabels(repo: Repo, glob: Glob, prNumber: number): Promise<void> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name };
+    const wanted = [`slop:${glob.type}`, ...(glob.environment === null ? [] : [`env:${glob.environment}`])];
+    const { data: current } = await gh.request('GET /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+      ...r,
+      issue_number: prNumber,
+    });
+    for (const label of current) {
+      const name = label.name;
+      if ((name.startsWith('slop:') || name.startsWith('env:')) && !wanted.includes(name)) {
+        await gh.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+          ...r,
+          issue_number: prNumber,
+          name,
+        });
+      }
+    }
+    // Labels that don't exist yet are created by GitHub.
+    await gh.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+      ...r,
+      issue_number: prNumber,
+      labels: wanted,
+    });
+  }
+
+  async closePr(repo: Repo, prNumber: number): Promise<void> {
+    const gh = await this.octokit(repo);
+    try {
+      await gh.request('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', {
+        owner: repo.owner,
+        repo: repo.name,
+        pull_number: prNumber,
+        state: 'closed',
+      });
+    } catch (error) {
+      if (!isStatus(error, 404, 422)) throw error;
+    }
+  }
+
+  async deleteBranch(repo: Repo, branch: string): Promise<void> {
+    const gh = await this.octokit(repo);
+    try {
+      await gh.request('DELETE /repos/{owner}/{repo}/git/refs/{ref}', {
+        owner: repo.owner,
+        repo: repo.name,
+        ref: `heads/${branch}`,
+      });
+    } catch (error) {
+      if (!isStatus(error, 404, 422)) throw error;
+    }
+  }
+
+  /** Reopens the glob's closed PR, or reports that it must be provisioned again. */
+  async reopenPr(repo: Repo, prNumber: number, branch: string): Promise<'reopened' | 'missing'> {
+    if ((await this.branchHead(repo, branch)) === null) return 'missing';
+    const gh = await this.octokit(repo);
+    try {
+      await gh.request('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', {
+        owner: repo.owner,
+        repo: repo.name,
+        pull_number: prNumber,
+        state: 'open',
+      });
+      return 'reopened';
+    } catch (error) {
+      if (isStatus(error, 422)) return 'missing';
+      throw error;
+    }
+  }
+
+  /** GitHub's view of whether the PR's head can merge: required checks, conflicts, up to date. */
+  async mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState }> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner: repo.owner,
+      repo: repo.name,
+      pull_number: prNumber,
+    });
+    const state: MergeState = ((): MergeState => {
+      switch (data.mergeable_state) {
+        case 'clean':
+        case 'unstable':
+        case 'has_hooks':
+          return 'passed';
+        case 'blocked':
+          return 'pending';
+        case 'behind':
+          return 'behind';
+        case 'dirty':
+          return 'conflict';
+        case 'draft':
+          return 'pending';
+        default:
+          return 'unknown';
+      }
+    })();
+    return { sha: data.head.sha, state };
+  }
+
+  /**
+   * Squash-merges the PR at exactly `sha` with the title `<id>: <title>`. If the branch is
+   * behind the base, slop updates it instead and the merge resumes when the new head's checks pass.
+   */
+  async squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name, pull_number: prNumber };
+    const { state } = await this.mergeState(repo, prNumber);
+    if (state === 'conflict') return { outcome: 'conflict' };
+    if (state === 'behind') {
+      try {
+        await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', { ...r, expected_head_sha: sha });
+        return { outcome: 'updating' };
+      } catch (error) {
+        if (isStatus(error, 422)) return { outcome: 'conflict' };
+        throw error;
+      }
+    }
+    try {
+      const { data } = await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', {
+        ...r,
+        sha,
+        merge_method: 'squash',
+        commit_title: `${glob.id}: ${glob.title}`,
+        commit_message: '',
+      });
+      return { outcome: 'merged', sha: data.sha };
+    } catch (error) {
+      if (isStatus(error, 405, 409)) {
+        return { outcome: 'refused', reason: error instanceof Error ? error.message : 'GitHub refused the merge' };
+      }
+      throw error;
+    }
+  }
+
+  private async branchHead(repo: Repo, branch: string): Promise<string | null> {
+    const gh = await this.octokit(repo);
+    try {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+        owner: repo.owner,
+        repo: repo.name,
+        ref: `heads/${branch}`,
+      });
+      return data.object.sha;
+    } catch (error) {
+      if (isStatus(error, 404)) return null;
+      throw error;
+    }
+  }
+
+  private async openPr(repo: Repo, branch: string): Promise<{ number: number; headSha: string } | null> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls', {
+      owner: repo.owner,
+      repo: repo.name,
+      head: `${repo.owner}:${branch}`,
+      state: 'open',
+    });
+    const [pr] = data;
+    return pr === undefined ? null : { number: pr.number, headSha: pr.head.sha };
+  }
+
+  private prBody(glob: Glob): string {
+    const summary = glob.summary.trim();
+    return [
+      summary === '' ? '_No summary yet._' : summary,
+      '',
+      `Slop glob **${glob.id}** (${glob.type}, ${glob.category}). Merge from the glob or here; squash merge only.`,
+    ].join('\n');
+  }
+}

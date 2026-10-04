@@ -9,3 +9,4 @@ test-results/
 .reviews/
 .claude/.cc-writes/
 cdk.out/
+.github-app.json

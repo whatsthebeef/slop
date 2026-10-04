@@ -1,5 +1,4 @@
 import type { Effect, EffectKind, Glob, GlobService } from '@slop/core';
-import { machine } from '@slop/core';
 import { and, asc, eq, lte, sql } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/store.js';
@@ -13,35 +12,10 @@ export interface ExecutorDeps {
 
 export type Executor = (effect: Effect, glob: Glob | null, deps: ExecutorDeps) => Promise<Outcome>;
 
-/** Repository integrations that later slices replace (GitHub App in slice 2, routines in slice 4). */
-export interface Provisioner {
-  provision(glob: Glob): Promise<{ branch: string; pr: { number: number; headSha: string | null } | null }>;
-}
-
-/** Slice 1: no repository integration yet. The branch name is reserved and no PR is opened. */
-export const noRepositoryProvisioner: Provisioner = {
-  provision: (glob) => Promise.resolve({ branch: glob.id, pr: null }),
-};
-
 const MAX_ATTEMPTS = 8;
 const POLL_MS = 2_000;
 
 const backoffSeconds = (attempts: number) => Math.min(2 ** attempts * 5, 3_600);
-
-export const defaultExecutors = (provisioner: Provisioner): Partial<Record<EffectKind, Executor>> => ({
-  provision: async (_effect, glob, { globs }) => {
-    if (glob === null) return 'dropped';
-    try {
-      const result = await provisioner.provision(glob);
-      await globs.applyEvent(glob.id, (g, ctx) => machine.provisioned(g, result, ctx));
-      return 'done';
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      await globs.applyEvent(glob.id, (g, ctx) => machine.provisioningFailed(g, reason, ctx));
-      throw error;
-    }
-  },
-});
 
 /**
  * Executes outbox effects with retries. Every effect is re-checked against the glob's current

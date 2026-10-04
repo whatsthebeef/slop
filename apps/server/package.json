@@ -14,6 +14,8 @@
   "dependencies": {
     "@hono/node-server": "^2.1.3",
     "@modelcontextprotocol/sdk": "^1.32.0",
+    "@octokit/app": "^16.1.4",
+    "@octokit/webhooks-methods": "^6.0.0",
     "@slop/core": "workspace:*",
     "aws-jwt-verify": "^5.2.1",
     "drizzle-orm": "^0.45.3",

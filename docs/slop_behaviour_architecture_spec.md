@@ -62,7 +62,7 @@ Globs move through four lists: Planning, Doing, Reviewing, Signed Off. Reviewing
 
 **Sub to same conversion** happens when the sub review flags the change; the branch, work and PR are kept, and the developer merges it once satisfied. A sub whose rebase hits a conflict does not convert: it stays in Doing as failed, and the planner finds a human implementer.
 
-**Start again** returns a glob to its starting status (sub: Doing with a new routine run; same: Planning; super: Doing with its creator), closing its PR and re-provisioning the branch; see the transition table for everything it resets. **Delete** shows a strong warning, then removes the glob, its branch, its S3 artifacts and its events (so its time leaves the reports). No archive.
+**Start again** returns a glob to its starting status (sub: Doing with a new routine run; same: Planning; super: Doing with its creator), closing its PR and deleting its branch (a sub or super is re-provisioned at once; a same gets a new branch when it next starts); see the transition table for everything it resets. **Delete** shows a strong warning, then removes the glob, its branch, its S3 artifacts and its events (so its time leaves the reports). No archive.
 
 **Signed Off** globs drop off the board after 2 weeks (computed on display) and remain in a paginated list view.
 
@@ -93,12 +93,12 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 
 | # | From | To | Trigger | Types | Guard | Side effects |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | — | `planning` | Create (board, MCP or sstor) | Same | Valid type/category | Provision branch, empty first commit and draft PR with labels; intake; planner recorded |
-| 2 | — | `implementing` | Create | Sub | Valid type/category | Provision as 1; queue a routine run for the triggerer (fallback: default routine owner) |
-| 3 | — | `in_progress` | Create (`sstor --new --super` or MCP) | Super | Valid type/category | Provision as 1; implementer = creator |
+| 1 | — | `planning` | Create (board, MCP or sstor) | Same | Valid type/category | Intake; planner recorded. No branch yet: it is provisioned when the glob enters Doing |
+| 2 | — | `implementing` | Create | Sub | Valid type/category | Provision branch, empty first commit and draft PR with labels; queue a routine run for the triggerer (fallback: default routine owner) |
+| 3 | — | `in_progress` | Create (`sstor --new --super` or MCP) | Super | Valid type/category | Provision as 2; implementer = creator |
 | 4 | — | `implementing` | Create with explicit auto-trigger or `runRoutine` | Same | Instruction explicit | As 2 |
-| 5 | `planning` | `implementing` | Start (button or `start_glob`) | Same | — | Queue a routine run |
-| 6 | `planning`, `failed` | `in_progress` | Pick up | All | No run active or watching | Implementer = picker; a queued run is cancelled together with its launch job |
+| 5 | `planning` | `implementing` | Start (button or `start_glob`) | Same | — | Provision as 2; queue a routine run |
+| 6 | `planning`, `failed` | `in_progress` | Pick up | All | No run active or watching | Implementer = picker; provision as 2 if the glob has no branch yet; a queued run is cancelled together with its launch job |
 | 7 | `pr_open` | `pr_open` | Pick up | All | No run active or watching | Implementer = picker; status unchanged; a queued run is cancelled with its launch job |
 | 8 | `in_progress`, `pr_open` | unchanged | Pick up by the current implementer | All | — | No-op (idempotent) |
 | 9 | `in_progress`, `pr_open` | unchanged | Pick up by someone else | All | No run active or watching | Implementer changes; a queued run is cancelled with its launch job |
@@ -107,7 +107,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 | 12 | `pr_open` | `merging` | Sub gate passes on the current head commit | Sub | Type is still sub | Slop squash-merges |
 | 13 | `pr_open` | `pr_open` | Sub gate flags the change | Sub | — | Type becomes same; the developer now merges |
 | 14 | `pr_open` | `merging` | Merge button on the glob | Same, super | Checks pass on the current head | Slop squash-merges |
-| 15 | `merging`, `pr_open`, `in_progress`, `implementing`, `failed` | `reviewing` | Merge observed (slop's own merge response or the `merged` event, whichever arrives first; the second is a no-op) | All | Glob's PR merged | Labels set Required (sub: QA; same/super: FR, CR, QA); run ended |
+| 15 | `planning`, `merging`, `pr_open`, `in_progress`, `implementing`, `failed` | `reviewing` | Merge observed (slop's own merge response or the `merged` event, whichever arrives first; the second is a no-op) | All | Glob's PR merged | Labels set Required (sub: QA; same/super: FR, CR, QA); run ended |
 | 16 | `merging` | `failed` | Conflict, or checks fail after update | All | No merge observed | Failure reason recorded |
 | 17 | `implementing` | `failed` | `report_failure` with the current run ID, or run timeout | Sub, same | Run ID is current | Run failed; reason recorded |
 | 18 | `in_progress` | `failed` | `report_failure` from an interactive session | All | — | Reason recorded |
@@ -115,10 +115,10 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 | 20 | `failed` | `implementing` | Re-trigger | Sub, same | No run queued, active or watching | Generation increased; human implementer cleared; closed PR reopened (or a new draft PR opened if the branch was deleted); new run queued on the existing branch |
 | 21 | `reviewing` | `signed_off` | Last required label switched to Added | All | All required labels Added | Signed-off date recorded |
 | 22 | `signed_off` | `reviewing` | A label switched back to Required | All | — | — |
-| 23 | Any except `reviewing`, `signed_off` | `implementing` (sub), `planning` (same), `in_progress` (super) | Start again | All | — | Generation increased; current run superseded; pending jobs of the old generation cancelled; human implementer cleared (super: reset to the creator); PR closed, branch deleted and re-provisioned; sub queues a new run |
+| 23 | Any except `reviewing`, `signed_off` | `implementing` (sub), `planning` (same), `in_progress` (super) | Start again | All | — | Generation increased; current run superseded; pending jobs of the old generation cancelled; human implementer cleared (super: reset to the creator); PR closed and branch deleted; a sub or super is re-provisioned at once, a same when it next enters Doing; sub queues a new run |
 | 24 | Any | deleted | Delete, after warning | All | — | Run superseded; pending jobs cancelled; branch, PR, S3 artifacts and events deleted |
 | 25 | `pr_open` | `pr_open` | `report_failure` with the current run ID, or watching timeout | Sub, same | Run is watching; run ID is current | Run failed and auto-fix ended; failure shown on the card; status unchanged |
-| 26 | `planning` | `implementing` | Type changed from same to sub | Same | Valid category for sub | Type becomes sub; queue a routine run (acts as Start) |
+| 26 | `planning` | `implementing` | Type changed from same to sub | Same | Valid category for sub | Type becomes sub; provision as 2; queue a routine run (acts as Start) |
 
 **Rules across all transitions**
 
@@ -130,7 +130,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 
 **Provisioning and reliability**
 
-- **Provisioning:** every glob gets its branch, empty first commit and draft PR at creation. `create_glob` takes an idempotency key and returns once they exist. If GitHub fails, the glob is still saved with a provisioning-failed flag and the response returns its ID and provisioning status, so a retry with the same key never creates a second glob; a background job retries, and sstor reports the problem instead of checking anything out.
+- **Provisioning:** a glob gets its branch, empty first commit and draft PR when it enters Doing: at creation for subs, supers and auto-started sames; on Start or Pick up for a same in Planning. Planning stays free of GitHub, and nobody can work on a branch before the glob is started or picked up. Provisioning is queued before any routine run, and a routine is only fired once its glob is provisioned. `create_glob` takes an idempotency key and returns once provisioning has been attempted (`provisioning: none` for a same in Planning). If GitHub fails, the glob is still saved with a provisioning-failed flag and the response returns its ID and provisioning status, so a retry with the same key never creates a second glob; a background job retries, and sstor reports the problem instead of checking anything out.
 - **Routine runs** have their own lifecycle, independent of the glob's status: queued → active (the routine has called slop) → watching (its PR is ready and auto-fix is running) → ended (completed, failed, superseded). A run ends when the glob is merged, picked up, taken over, started again, closed or deleted. Each run has a run ID, passed in the fire payload and returned with its artifacts and `report_failure`; results carrying a superseded run ID are recorded but ignored.
 - **Generation:** each glob has a generation number, increased by re-trigger, take over and start again. Every outbox job carries the generation it was queued under and is re-checked before it executes; jobs from an older generation are cancelled.
 - **Commit-specific results:** check, review, build and ATF results are tied to a commit SHA; results for commits that are no longer the branch head do not drive transitions.
@@ -160,7 +160,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | Tool | Input | Returns | Used by |
 | --- | --- | --- | --- |
 | `whoami` | — | user, boards, role per board | Sessionator, Claude app |
-| `create_glob` | board, input, idempotencyKey; optional title, summary, type, category, group, environment, runRoutine, links, autoTrigger | `{ id, version, branch, provisioning: ok \| failed, status, type, category, group, environment, summary }` (same glob returned for a repeated key) | All |
+| `create_glob` | board, input, idempotencyKey; optional title, summary, type, category, group, environment, runRoutine, links, autoTrigger | `{ id, version, branch, provisioning: none \| ok \| failed, status, type, category, group, environment, summary }` (same glob returned for a repeated key) | All |
 | `get_glob` | id | full glob: status, version, generation, fields, labels, PR, current run (state, runId, owner, triggeredBy, started, last progress, cloud session ID and URL), run history, flags, artifact list | All |
 | `get_context` | id | assembled context bundle with citations | Routines, sessionator |
 | `list_globs` | board; optional status, type, group, person | glob summaries | Claude app |
@@ -291,6 +291,8 @@ From now on the team works with a branch and PR per glob, replacing direct commi
 
 **GitHub App**
 
+- Slop reaches the repository through a `CodeHost` port (provision, labels, close, reopen, delete branch, merge state, squash merge); the GitHub App is its only adapter, and a host-specific webhook adapter turns deliveries into the same state-machine events. Another host (GitLab, Forgejo) would mean a new adapter pair, but routines and Claude's auto-fix only work with GitHub today, so that is the real lock-in.
+
 - Slop's GitHub operations (branches, PRs, merges, check results) use the app's installation tokens, acting as `slop[bot]`. The private key lives in Secrets Manager.
 - The app is allowed by branch protection to merge subs to master once required checks pass.
 - One board maps to one repo.
@@ -301,7 +303,7 @@ From now on the team works with a branch and PR per glob, replacing direct commi
 
 ## Review and testing
 
-The repo's build scripts decide which checks run, using the PR labels; slop displays results on the glob. Every glob has a PR, opened as a draft at the start by slop's GitHub App so CI, reviewers, labels and auto-fix can attach. Because GitHub cannot open a PR on a branch identical to master, slop creates each glob's branch with an empty first commit (\<id>: start), which the squash merge removes.
+The repo's build scripts decide which checks run, using the PR labels; slop displays results on the glob. Every glob in Doing has a PR, opened as a draft by slop's GitHub App when the glob enters Doing, so CI, reviewers, labels and auto-fix can attach. Because GitHub cannot open a PR on a branch identical to master, slop creates each glob's branch with an empty first commit (\<id>: start), which the squash merge removes.
 
 | # | Stage | Where | Sub | Same | Super | Blocks merge? |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -435,7 +437,7 @@ Pairing work is at the developer's discretion, including up to 2 days before mar
 
 - The developer works on the glob's own branch throughout. Each push deploys it to the glob's environment (normally a branch-deploy environment the developer uses), started by slop.
 - The local review runs in sessionator using the slop-delivered agents and is pushed to slop as the `local_review` artifact.
-- The glob's draft PR exists from creation. Marking it ready for review (`sstor --ready`) triggers ATF and the remote review; results reach slop through the existing webhooks and EventBridge.
+- The glob's draft PR exists from creation (supers start in Doing). Marking it ready for review (`sstor --ready`) triggers ATF and the remote review; results reach slop through the existing webhooks and EventBridge.
 - Developers choose the glob's environment from the board's branch-deploy environments. Slop tracks no environment claims; the card shows when another glob's deploy has replaced this one in a shared environment.
 - **Branches:** every glob has its own branch, always created from master. No stacking: if reviews send back serious problems, work does not continue on a new glob until they are resolved.
 - `sstor --new --super` creates the glob (through a headless Claude call to `create_glob`, which returns `{ id, branch }`) and opens a session on its branch.
@@ -575,7 +577,7 @@ Slop is a context manager: it holds what is known about the work, decides what i
 Slop is built in vertical slices, each usable on its own. The checks above are verified as part of slice 1, and board mockups (card, glob view, System page) are produced at the start.
 
 1. **Foundation and board:** Docker Compose with Postgres, Cognito sign-in, the MCP connector auth checks, globs, the state machine, manual moves and SSE live updates. *Done when:* a signed-in user creates a glob on the board, moves it, and a second browser sees the move live; the Claude app lists it through the MCP.
-2. **GitHub App:** provisioning (branch, empty commit, draft PR with labels), webhooks with deduplication, PR and commit awareness, aging, observed merges, the outbox. *Done when:* creating a glob produces a draft PR, and merging it in GitHub moves the glob to Reviewing.
+2. **GitHub App:** provisioning (branch, empty commit, draft PR with labels), webhooks with deduplication, PR and commit awareness, aging, observed merges, the outbox. *Done when:* a glob entering Doing gets a draft PR, and merging it in GitHub moves the glob to Reviewing.
 3. **Minimal knowledge delivery:** `get_agent_set`, `sstor init`, the agent set imported from `catalog/agents/`, the knowledge base with the KB catalog, uploads and `import_knowledge` (a project's existing reference docs as the first import), `get_board`, `get_conventions` and a basic `get_context` (plan and attachments only). *Done when:* `sstor init` installs the agents into a fresh checkout and an agent reads a glob's plan and the board's build doc through MCP.
 4. **Subs end to end:** intake, routine trigger with run IDs, the routines' agent-set refresh, sub gate, auto-merge, Reviewing with QA. *Done when:* a sub created from the board is implemented by a routine, passes the gate, merges and shows QA Required.
 5. **Sames and sessionator:** start and pick-up rules, take over, `sstor --glob` / `--new` / `--ready` / `--merge`, local reviews, KB items, `/kb-bootstrap`. *Done when:* a same is picked up with sstor, implemented, marked ready and merged.
