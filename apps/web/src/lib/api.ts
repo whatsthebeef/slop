@@ -136,6 +136,11 @@ export const api = {
     request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, { version }),
   intake: (boardId: number, text: string) =>
     request<NewGlob & { autoTriggerReason: string | null }>('POST', `/api/boards/${boardId}/intake`, { text }),
+  repoConnection: (boardId: number) =>
+    request<{ repo: string | null; configured: boolean; connected: boolean; installUrl: string | null; appName: string | null }>(
+      'GET',
+      `/api/boards/${boardId}/repo-connection`,
+    ),
   knowledge: (boardId: number) => request<KnowledgeIndex>('GET', `/api/boards/${boardId}/kb`),
   knowledgeDoc: (boardId: number, name: string) =>
     request<{ name: string; content: string; version: number }[]>('GET', `/api/boards/${boardId}/kb/docs/${encodeURIComponent(name)}`),

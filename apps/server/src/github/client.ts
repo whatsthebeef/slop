@@ -1,6 +1,6 @@
 import { App } from '@octokit/app';
 import type { DiffSummary, Glob } from '@slop/core';
-import type { CodeHost, MergeResult, MergeState, Repo } from '../codehost.js';
+import type { CodeHost, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
 import type { AppCredentialsStore } from './credentials.js';
 
 type Octokit = Awaited<ReturnType<App['getInstallationOctokit']>>;
@@ -40,6 +40,23 @@ export class GitHub implements CodeHost {
       this.installations.clear();
     }
     return this.app;
+  }
+
+  async connection(repo: Repo): Promise<RepoConnection> {
+    const credentials = this.credentials.get();
+    if (credentials === null) return { configured: false, connected: false, installUrl: null, appName: null };
+    const installUrl = `https://github.com/apps/${credentials.slug}/installations/new`;
+    try {
+      // 404 when the app is not installed on the account, or the installation excludes the repo.
+      await this.getApp().octokit.request('GET /repos/{owner}/{repo}/installation', { owner: repo.owner, repo: repo.name });
+      const octokit = await this.octokit(repo);
+      await octokit.request('GET /repos/{owner}/{repo}', { owner: repo.owner, repo: repo.name });
+      return { configured: true, connected: true, installUrl, appName: credentials.slug };
+    } catch (error) {
+      if (!isStatus(error, 404)) throw error;
+      this.installations.delete(`${repo.owner}/${repo.name}`);
+      return { configured: true, connected: false, installUrl, appName: credentials.slug };
+    }
   }
 
   private async octokit(repo: Repo): Promise<Octokit> {
