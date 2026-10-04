@@ -8,6 +8,8 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
+# One Compose project for every checkout (main or worktree), so they share Postgres and its data.
+export COMPOSE_PROJECT_NAME=slop
 session=slop-dev
 action="${1:-start}"
 
