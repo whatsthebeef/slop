@@ -16,8 +16,8 @@ export const appManifest = (publicUrl: string, name: string) => ({
   url: publicUrl,
   hook_attributes: { url: `${publicUrl}/webhooks/github`, active: true },
   redirect_url: `${publicUrl}/setup/github-app/callback`,
-  // After installing, GitHub sends the person back to the board.
-  setup_url: `${publicUrl}/`,
+  // After installing, GitHub sends the person back to the board they started from.
+  setup_url: `${publicUrl}/setup/github-app/installed`,
   setup_on_update: true,
   public: false,
   default_permissions: {
@@ -96,6 +96,13 @@ export const mountGitHubSetup = (
           </form>`,
       ),
     );
+  });
+
+  // The app's Setup URL: GitHub sends people here after installing or configuring the app,
+  // with the `state` the install link carried (the board ID). Only a redirect, so no sign-in.
+  app.get('/setup/github-app/installed', (c) => {
+    const board = c.req.query('state') ?? '';
+    return c.redirect(/^\d+$/.test(board) ? `/boards/${board}/settings` : '/');
   });
 
   app.get('/setup/github-app/callback', async (c) => {
