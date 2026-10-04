@@ -599,7 +599,7 @@ No open questions block the first build. These are later considerations:
 
 - [x] Claude app connector logs in through Cognito with a pre-registered client and calls an MCP tool (verified 2026-10-03). Two things were needed: the connector client allows both `https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback` (claude.ai now uses the latter), and slop publishes its own authorization-server metadata pointing at Cognito's endpoints, because Cognito's discovery document omits `code_challenge_methods_supported`.
 - [x] A routine calls the same tool through the account's connector (verified 2026-10-03: `list_globs`).
-- [ ] The routine fire response returns the cloud session ID and URL (check in slice 4 when slop fires routines; fallback: the routine reports them on its first MCP call).
+- [x] The routine fire response returns the cloud session ID and URL (`claude_code_session_id`, `claude_code_session_url`; verified 2026-10-04 when slop fired a routine).
 - [x] Claude Code completes OAuth against Cognito with `--client-id` and `--callback-port` (verified 2026-10-03 against the dev pool: `whoami` over MCP).
 - [x] A headless `claude -p` call to `create_glob` works with that login (covers sessionator; verified 2026-10-03, and a repeated idempotency key returns the same glob).
 - [x] Cognito accepts the `resource` parameter MCP clients send, and slop accepts the resulting tokens by client ID (verified with Claude Code).
@@ -609,4 +609,4 @@ No open questions block the first build. These are later considerations:
 - [x] Slop's GitHub App can create a branch with an empty first commit and open a draft PR with labels (verified 2026-10-04 on a sandbox repo, through to an observed merge moving the glob to Reviewing).
 - [ ] Run one test restore of the nightly Postgres backup.
 - [ ] Search quality on a sample of real meetings and globs.
-- [ ] Bedrock: Haiku 4.5 available in the region and reliable for structured intake output.
+- [x] Bedrock: Haiku 4.5 available in the region and reliable for structured intake output (verified 2026-10-04: valid JSON in 2–4 s, about 500 tokens per intake).
