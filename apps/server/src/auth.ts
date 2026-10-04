@@ -131,8 +131,11 @@ export class Auth {
     if (this.verifier === null) return null;
     try {
       const payload = await this.verifier.verify(token);
-      return await this.emailForAccessToken(payload.sub, token);
-    } catch {
+      const email = await this.emailForAccessToken(payload.sub, token);
+      if (email === null) console.warn(`[auth] no email for access token of ${payload.sub}`);
+      return email;
+    } catch (error) {
+      console.warn(`[auth] rejected bearer token: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
   }
