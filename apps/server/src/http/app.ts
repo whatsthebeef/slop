@@ -1,5 +1,6 @@
 import type { BoardService, GlobService, Result } from '@slop/core';
 import { CATEGORIES, LABEL_NAMES, ROLES, SLOP_TYPES, STATUSES } from '@slop/core';
+import { randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -20,6 +21,8 @@ export interface AppDeps {
 }
 
 export type Env = { Variables: { email: string } };
+
+const STATE_COOKIE = 'slop_oauth_state';
 
 const environmentSchema = z.object({ name: z.string().min(1), allowBranchDeploy: z.boolean() });
 
@@ -93,6 +96,28 @@ export const createApp = (deps: AppDeps) => {
       const session = await auth.createSession({ email, name: body.name ?? email });
       setCookie(c, SESSION_COOKIE, session, { httpOnly: true, sameSite: 'Lax', path: '/' });
       return c.json({ email });
+    });
+  }
+
+  if (auth.config.AUTH_MODE === 'cognito') {
+    app.get('/auth/login', (c) => {
+      const state = randomBytes(16).toString('base64url');
+      setCookie(c, STATE_COOKIE, state, { httpOnly: true, sameSite: 'Lax', path: '/auth', maxAge: 600 });
+      return c.redirect(auth.authorizeUrl(state));
+    });
+
+    app.get('/auth/callback', async (c) => {
+      const expected = getCookie(c, STATE_COOKIE);
+      deleteCookie(c, STATE_COOKIE, { path: '/auth' });
+      const code = c.req.query('code');
+      if (expected === undefined || c.req.query('state') !== expected || code === undefined) {
+        return c.text('Sign-in failed: the request did not match. Try again.', 400);
+      }
+      const identity = await auth.completeSignIn(code);
+      if (identity === null) return c.text('Sign-in failed.', 401);
+      const session = await auth.createSession(identity);
+      setCookie(c, SESSION_COOKIE, session, { httpOnly: true, sameSite: 'Lax', path: '/', secure: auth.config.PUBLIC_URL.startsWith('https:') });
+      return c.redirect('/');
     });
   }
 

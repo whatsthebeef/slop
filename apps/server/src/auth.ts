@@ -16,6 +16,7 @@ export interface Identity {
 /** Turns credentials into a person. Users are created on first sign-in; roles live on board memberships. */
 export class Auth {
   private readonly verifier: ReturnType<typeof CognitoJwtVerifier.create> | null;
+  private readonly idVerifier: ReturnType<typeof CognitoJwtVerifier.create> | null;
   private readonly emailBySub = new Map<string, string>();
 
   constructor(
@@ -30,6 +31,61 @@ export class Auth {
             clientId: (config.COGNITO_CLIENT_IDS ?? '').split(',').map((s) => s.trim()),
           })
         : null;
+    this.idVerifier =
+      config.AUTH_MODE === 'cognito' &&
+      config.COGNITO_USER_POOL_ID !== undefined &&
+      config.COGNITO_BOARD_CLIENT_ID !== undefined
+        ? CognitoJwtVerifier.create({
+            userPoolId: config.COGNITO_USER_POOL_ID,
+            tokenUse: 'id',
+            clientId: config.COGNITO_BOARD_CLIENT_ID,
+          })
+        : null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Board sign-in through Cognito's hosted UI (authorization code flow)
+
+  get boardRedirectUri(): string {
+    return `${this.config.PUBLIC_URL}/auth/callback`;
+  }
+
+  authorizeUrl(state: string): string {
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: this.config.COGNITO_BOARD_CLIENT_ID ?? '',
+      redirect_uri: this.boardRedirectUri,
+      scope: 'openid email profile',
+      state,
+    });
+    return `https://${this.config.COGNITO_DOMAIN ?? ''}/oauth2/authorize?${params.toString()}`;
+  }
+
+  /** Exchanges the authorization code and returns the verified person, or null. */
+  async completeSignIn(code: string): Promise<Identity | null> {
+    if (this.idVerifier === null) return null;
+    const { COGNITO_BOARD_CLIENT_ID: id = '', COGNITO_BOARD_CLIENT_SECRET: secret = '' } = this.config;
+    const response = await fetch(`https://${this.config.COGNITO_DOMAIN ?? ''}/oauth2/token`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        authorization: `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`,
+      },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: this.boardRedirectUri }),
+    });
+    if (!response.ok) return null;
+    const tokens = (await response.json()) as { id_token?: unknown };
+    if (typeof tokens.id_token !== 'string') return null;
+    try {
+      const claims = await this.idVerifier.verify(tokens.id_token);
+      if (typeof claims.email !== 'string') return null;
+      const email = claims.email.toLowerCase();
+      const name = typeof claims.name === 'string' ? claims.name : email;
+      await this.ensureUser({ email, name }, claims.sub);
+      return { email, name };
+    } catch {
+      return null;
+    }
   }
 
   // ---------------------------------------------------------------------------
