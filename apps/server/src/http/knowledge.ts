@@ -44,7 +44,10 @@ export const mountKnowledge = (
     if (!membership.ok) return send(c, membership);
     const repo = repoOf(membership.value.board);
     if (repo === null) return c.json({ repo: null, configured: deps.host.configured, connected: false, installUrl: null, appName: null });
-    return c.json({ repo: `${repo.owner}/${repo.name}`, ...(await deps.host.connection(repo)) });
+    const connection = await deps.host.connection(repo);
+    // The install link carries the board, so GitHub's redirect brings the person back to it.
+    const installUrl = connection.installUrl === null ? null : `${connection.installUrl}?state=${String(membership.value.board.id)}`;
+    return c.json({ repo: `${repo.owner}/${repo.name}`, ...connection, installUrl });
   });
 
   app.get('/api/boards/:b/kb', async (c) => {
