@@ -10,6 +10,7 @@ import type { Auth } from '../auth.js';
 import type { Env } from '../http/app.js';
 import { renderAgentSetFile } from '../catalog.js';
 import type { SignedLinks } from '../signed-links.js';
+import { requestOrigin } from '../http/origin.js';
 import { errorBody, globView, onBoard } from '../http/views.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
 
@@ -36,7 +37,8 @@ const reply = <T>(result: Result<T>, map: (value: T) => unknown = (v) => v): Cal
     : { ...json(errorBody(result.error)), isError: true };
 
 /** The private MCP tools, acting as the signed-in person with their board role. */
-const buildServer = (deps: McpDeps, email: string): McpServer => {
+/** `origin` is the address the client used, so links it receives point back the same way. */
+const buildServer = (deps: McpDeps, email: string, origin: string): McpServer => {
   const { boards, globs } = deps;
   const server = new McpServer({ name: 'slop', version: '0.1.0' });
 
@@ -225,7 +227,7 @@ const buildServer = (deps: McpDeps, email: string): McpServer => {
           const { expires, signature } = deps.links.sign(path, 300);
           return {
             version: set.version,
-            url: `${deps.publicUrl}${path}?expires=${String(expires)}&signature=${signature}`,
+            url: `${origin}${path}?expires=${String(expires)}&signature=${signature}`,
             expiresAt: new Date(expires * 1000).toISOString(),
           };
         }
@@ -329,15 +331,13 @@ const buildServer = (deps: McpDeps, email: string): McpServer => {
 };
 
 export const mountMcp = (app: Hono<Env>, deps: McpDeps) => {
-  const resourceMetadataUrl = `${deps.publicUrl}/.well-known/oauth-protected-resource`;
-
   const scopes = ['openid', 'email', 'profile', 'slop/mcp'];
 
   // Protected-resource discovery: points MCP clients at the authorization server.
   app.get('/.well-known/oauth-protected-resource', (c) =>
     c.json({
-      resource: `${deps.publicUrl}/mcp`,
-      authorization_servers: [deps.publicUrl],
+      resource: `${requestOrigin(c, deps.publicUrl)}/mcp`,
+      authorization_servers: [requestOrigin(c, deps.publicUrl)],
       scopes_supported: scopes,
       bearer_methods_supported: ['header'],
     }),
@@ -350,8 +350,8 @@ export const mountMcp = (app: Hono<Env>, deps: McpDeps) => {
   if (config.AUTH_MODE === 'cognito') {
     const domain = `https://${config.COGNITO_DOMAIN ?? ''}`;
     const pool = `https://cognito-idp.${config.COGNITO_REGION ?? ''}.amazonaws.com/${config.COGNITO_USER_POOL_ID ?? ''}`;
-    const metadata = {
-      issuer: deps.publicUrl,
+    const metadata = (issuer: string) => ({
+      issuer,
       authorization_endpoint: `${domain}/oauth2/authorize`,
       token_endpoint: `${domain}/oauth2/token`,
       revocation_endpoint: `${domain}/oauth2/revoke`,
@@ -362,9 +362,9 @@ export const mountMcp = (app: Hono<Env>, deps: McpDeps) => {
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
       scopes_supported: scopes,
-    };
-    app.get('/.well-known/oauth-authorization-server', (c) => c.json(metadata));
-    app.get('/.well-known/openid-configuration', (c) => c.json(metadata));
+    });
+    app.get('/.well-known/oauth-authorization-server', (c) => c.json(metadata(requestOrigin(c, deps.publicUrl))));
+    app.get('/.well-known/openid-configuration', (c) => c.json(metadata(requestOrigin(c, deps.publicUrl))));
   }
 
   app.all('/mcp', async (c) => {
@@ -372,10 +372,10 @@ export const mountMcp = (app: Hono<Env>, deps: McpDeps) => {
     const email = header?.startsWith('Bearer ') === true ? await deps.auth.bearerEmail(header.slice(7)) : null;
     if (email === null) {
       return c.json({ error: 'unauthorized' }, 401, {
-        'WWW-Authenticate': `Bearer resource_metadata="${resourceMetadataUrl}"`,
+        'WWW-Authenticate': `Bearer resource_metadata="${requestOrigin(c, deps.publicUrl)}/.well-known/oauth-protected-resource"`,
       });
     }
-    const server = buildServer(deps, email);
+    const server = buildServer(deps, email, requestOrigin(c, deps.publicUrl));
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

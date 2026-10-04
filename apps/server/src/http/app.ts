@@ -10,6 +10,7 @@ import type { Auth } from '../auth.js';
 import { SESSION_COOKIE } from '../auth.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
 import type { HintHub } from '../notifier.js';
+import { requestOrigin } from './origin.js';
 import { errorBody, globView, globViewFor, onBoard, statusOf } from './views.js';
 
 export interface AppDeps {
@@ -101,12 +102,7 @@ export const createApp = (deps: AppDeps) => {
     });
   }
 
-  /** The origin the browser used (ngrok and other proxies forward the original host and scheme). */
-  const originOf = (c: Context<Env>) => {
-    const url = new URL(c.req.url);
-    const proto = c.req.header('x-forwarded-proto') ?? url.protocol.replace(':', '');
-    return `${proto}://${c.req.header('host') ?? url.host}`;
-  };
+  const originOf = (c: Context<Env>) => requestOrigin(c, auth.config.PUBLIC_URL);
 
   if (auth.config.AUTH_MODE === 'cognito') {
     app.get('/auth/login', (c) => {

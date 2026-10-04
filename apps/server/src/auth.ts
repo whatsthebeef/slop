@@ -51,8 +51,7 @@ export class Auth {
    * development. Anything else falls back to the public URL. Each must be a Cognito callback URL.
    */
   boardRedirectUri(origin: string): string {
-    const allowed = origin === this.config.PUBLIC_URL || /^http:\/\/localhost(:\d+)?$/.test(origin);
-    return `${allowed ? origin : this.config.PUBLIC_URL}/auth/callback`;
+    return `${origin}/auth/callback`;
   }
 
   authorizeUrl(state: string, redirectUri: string): string {
