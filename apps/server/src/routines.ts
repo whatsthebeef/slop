@@ -77,6 +77,8 @@ export const runInstructions = (glob: { id: string; title: string }, runId: stri
     `Slop glob ${glob.id}: ${glob.title}`,
     `Run ID: ${runId}`,
     '',
+    `Work on the glob's branch, ${glob.id}, which already exists on origin with an open draft PR: run \`git fetch origin ${glob.id} && git checkout -B ${glob.id} origin/${glob.id}\` first. Push only to ${glob.id} (\`git push origin ${glob.id}\`); never create or push a claude/ branch, and never open a new PR.`,
+    '',
     `Run /run-glob ${glob.id} --run ${runId}. If that command is not available, read .claude/agents/orchestrator.md and follow it for glob ${glob.id} in unattended mode with run ID ${runId}.`,
     "Start by calling slop's get_glob and get_context for the glob, passing the run ID.",
   ].join('\n');

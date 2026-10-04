@@ -44,6 +44,7 @@ When a run ID is given:
 - Pass the run ID to every `get_glob`, `get_context`, `put_artifact` and `report_failure` call; slop counts these calls as the run making progress, and fails a run that shows none for too long.
 - Every commit carries the trailer `Slop-Run: <runId>`.
 - **Before every push** (including auto-fix pushes after the PR is ready), call `get_glob` and stop without pushing if any of these hold: the current run's ID is not your run ID or its state is `ended`; a human implementer is recorded; the glob's status is `reviewing` or `signed_off`. Report nothing further in that case; the run has been superseded.
+- **Branch:** a routine's checkout starts on the default branch, not the glob's. Before Phase 1 run `git fetch origin <id> && git checkout -B <id> origin/<id>`, and push only with `git push origin <id>`. Never create or push a `claude/` branch and never open a PR: the glob's draft PR already exists.
 - Pick the investigator's recommended proposal.
 
 ## Interactive start
