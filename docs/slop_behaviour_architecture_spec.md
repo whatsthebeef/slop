@@ -606,7 +606,7 @@ No open questions block the first build. These are later considerations:
 - [ ] Cowork works with a pre-registered client, if Cowork will be used.
 - [ ] CodeRabbit connects to slop's MCP through its OAuth connector and calls the review-guide tool during reviews.
 - [ ] A routine's cloud checkout registers the committed agent set at the start of its session, and the orchestrator's `get_agent_set` refresh writes and commits a newer version.
-- [ ] Slop's GitHub App can create a branch with an empty first commit and open a draft PR with labels.
+- [x] Slop's GitHub App can create a branch with an empty first commit and open a draft PR with labels (verified 2026-10-04 on a sandbox repo, through to an observed merge moving the glob to Reviewing).
 - [ ] Run one test restore of the nightly Postgres backup.
 - [ ] Search quality on a sample of real meetings and globs.
 - [ ] Bedrock: Haiku 4.5 available in the region and reliable for structured intake output.
