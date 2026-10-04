@@ -103,7 +103,7 @@ export class AuthStack extends Stack {
     });
     const connector = client('ClaudeConnector', {
       secret: true,
-      callbacks: ['https://claude.ai/api/mcp/auth_callback'],
+      callbacks: ['https://claude.ai/api/mcp/auth_callback', 'https://claude.com/api/mcp/auth_callback'],
       mcp: true,
     });
     const claudeCode = client('ClaudeCode', { secret: false, callbacks: props.claudeCodeCallbackUrls, mcp: true });

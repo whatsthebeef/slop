@@ -204,19 +204,41 @@ const buildServer = (deps: McpDeps, email: string): McpServer => {
 export const mountMcp = (app: Hono<Env>, deps: McpDeps) => {
   const resourceMetadataUrl = `${deps.publicUrl}/.well-known/oauth-protected-resource`;
 
+  const scopes = ['openid', 'email', 'profile', 'slop/mcp'];
+
   // Protected-resource discovery: points MCP clients at the authorization server.
-  app.get('/.well-known/oauth-protected-resource', (c) => {
-    const { config } = deps.auth;
-    const issuer =
-      config.AUTH_MODE === 'cognito'
-        ? `https://cognito-idp.${config.COGNITO_REGION ?? ''}.amazonaws.com/${config.COGNITO_USER_POOL_ID ?? ''}`
-        : deps.publicUrl;
-    return c.json({
+  app.get('/.well-known/oauth-protected-resource', (c) =>
+    c.json({
       resource: `${deps.publicUrl}/mcp`,
-      authorization_servers: [issuer],
+      authorization_servers: [deps.publicUrl],
+      scopes_supported: scopes,
       bearer_methods_supported: ['header'],
-    });
-  });
+    }),
+  );
+
+  // Authorization-server metadata for Cognito. Cognito's own discovery document omits
+  // `code_challenge_methods_supported`, and MCP clients must refuse to proceed without it,
+  // so slop publishes the metadata itself; sign-in and tokens still come from Cognito.
+  const { config } = deps.auth;
+  if (config.AUTH_MODE === 'cognito') {
+    const domain = `https://${config.COGNITO_DOMAIN ?? ''}`;
+    const pool = `https://cognito-idp.${config.COGNITO_REGION ?? ''}.amazonaws.com/${config.COGNITO_USER_POOL_ID ?? ''}`;
+    const metadata = {
+      issuer: deps.publicUrl,
+      authorization_endpoint: `${domain}/oauth2/authorize`,
+      token_endpoint: `${domain}/oauth2/token`,
+      revocation_endpoint: `${domain}/oauth2/revoke`,
+      userinfo_endpoint: `${domain}/oauth2/userInfo`,
+      jwks_uri: `${pool}/.well-known/jwks.json`,
+      response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'],
+      token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+      scopes_supported: scopes,
+    };
+    app.get('/.well-known/oauth-authorization-server', (c) => c.json(metadata));
+    app.get('/.well-known/openid-configuration', (c) => c.json(metadata));
+  }
 
   app.all('/mcp', async (c) => {
     const header = c.req.header('authorization');
