@@ -189,7 +189,7 @@ For each round (up to 3):
    Skip trivial or glob-specific details; most globs produce 0–3. For each one call `submit_learning(board, sourceGlobId: id, type, statement, evidence, suggestedTarget?)`. Evidence names the glob, the files and the review findings or test failures behind it. Never edit `.sstor/docs/`, `.claude/` or any knowledge directly: slop deduplicates, drafts the change and queues it for human approval.
 6. **Push and mark ready:**
    - **Unattended:** run the pre-push check (see Unattended mode), `git push origin <id>`, then call slop's `mark_ready` with the glob ID and your run ID; slop marks the draft PR ready through its GitHub App. Do not use `gh` or open a PR. The PR title is already `<id>: <title>`; do not change it. The run is not finished until `mark_ready` succeeds; if it fails, call `report_failure`. Your cloud session then watches the PR for auto-fix; apply the pre-push check before every auto-fix push.
-   - **Interactive:** `git push origin <id>`. Then ask the developer whether to mark the PR ready for review now. If yes, run `/finalise <requestId>` (generate the request ID with `uuidgen`; local review and learnings are already submitted for this commit, so /finalise will skip them), then run `sstor --ready --finalised <requestId>`. If not, tell them to run `sstor --ready` when they are.
+   - **Interactive:** `git push origin <id>`. Then ask the developer whether to mark the PR ready for review now. If yes, run `/finalise <requestId>` (generate the request ID with `uuidgen`; local review and learnings are already submitted for this commit, so /finalise will skip them), then call slop's `mark_ready` with the glob ID. If not, tell them to run `sstor --ready` from a terminal when they are. Never run `sstor` yourself: it is the developer's terminal tool, it drives this session, and it cannot run inside the sandbox.
 
 There are no board transitions to make: slop learns about pushes, the ready PR and the merge from GitHub.
 
@@ -208,7 +208,7 @@ Supers are pairing sessions between a developer and the PO. The developer drives
   ## Deviations        from the original intent, and why
   ## Open items        anything left for later or for another glob
   ```
-- **Ready for review:** run the change_reviewer, then `/finalise <requestId>` followed by `sstor --ready --finalised <requestId>` (or the developer runs `sstor --ready` from a terminal, which sends `/finalise` to this session itself). Never mark the PR ready without finalising.
+- **Ready for review:** run the change_reviewer, then `/finalise <requestId>` followed by `mark_ready` with the glob ID (or the developer runs `sstor --ready` from a terminal, which sends `/finalise` to this session itself). Never run `sstor` yourself. Never mark the PR ready without finalising.
 - **Commits** use `<id>: <title>` with bullets, as in Phase 6. Push only the glob's branch.
 
 ---

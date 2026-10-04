@@ -10,7 +10,7 @@ user_invocable: true
 /finalise <requestId>
 ```
 
-`sstor --ready` and `sstor --derge` only continue once this has succeeded for the current request and head commit. sstor sends `/finalise <requestId>` to this session itself when run from a terminal; when you run sstor yourself, run `/finalise <requestId>` first (generate the ID with `uuidgen`), then `sstor --ready --finalised <requestId>` (or `--derge`).
+`sstor --ready` and `sstor --derge` only continue once this has succeeded for the current request and head commit. sstor sends `/finalise <requestId>` to this session itself when the developer runs it from a terminal. When you mark the PR ready yourself, run `/finalise <requestId>` first (generate the ID with `uuidgen`), then call slop's `mark_ready` with the glob ID. Never run `sstor` yourself: it is the developer's terminal tool, it drives this session, and it cannot run inside the sandbox.
 
 ## Instructions
 

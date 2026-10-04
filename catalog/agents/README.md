@@ -27,7 +27,7 @@ Agent definitions hold short rules that always apply to that agent; bulky or sit
 - `.sstor/docs/learnings.md` is replaced by `get_conventions` (read) and `submit_learning` (write).
 - Phase 2 pushes the chosen proposal as the `implementation_plan` artifact, with an Amendments section kept up to date.
 - The local review is pushed in Phase 6, after the commit, so it carries the commit SHA.
-- Phase 6 commits as `<id>: <title>`, pushes the glob branch and marks the PR ready (routines) or hands over to `sstor --ready` (interactive).
+- Phase 6 commits as `<id>: <title>`, pushes the glob branch and marks the PR ready with slop's `mark_ready` (routines, and interactive sessions once the developer agrees). Agents never run `sstor`; the developer runs `sstor --ready` from a terminal.
 - `qa` is renamed `tester`. The OpenAI cross-review, the Codex mirrors (`.codex/`, `AGENTS.md`) and the Google Sheet memory are dropped.
 - Project rules (quotes, template formatting, typing, package manager commands) left the agents; each board's knowledge base holds them.
 - The agent set is board knowledge in slop, fetched by `sstor init` (`get_agent_set`, with sstor's own slop sign-in) and committed in each project repo, so cloud checkouts register it at startup. Routines refresh it at the start of each run; changes show up as small diffs in whichever glob's commit picks them up.

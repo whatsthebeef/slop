@@ -12,9 +12,7 @@
     "allow": [
       "mcp__slop__*",
       "mcp__claude_ai_Slop__*",
-      "Bash(git push origin s*)",
-      "Bash(gh pr ready:*)",
-      "Bash(gh pr view:*)"
+      "Bash(git push origin s*)"
     ],
     "deny": [
       "Bash(git push --force*)",
