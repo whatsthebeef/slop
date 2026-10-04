@@ -9,18 +9,22 @@ interface Hint {
   readonly version?: number;
 }
 
+export type LiveState = 'connecting' | 'live' | 'reconnecting' | 'paused';
+
 export const globsKey = (boardId: number) => ['globs', boardId] as const;
 
 /**
- * Keeps the board's glob list live: each hint refetches only that glob, and a reconnect
- * reloads the whole board in case hints were missed.
+ * Keeps the board's glob list live: each hint refetches only that glob, and every reconnect
+ * reloads the whole board in case hints were missed. The stream is closed while the tab is
+ * hidden, so background tabs don't hold one of the browser's few connections to the server
+ * (over HTTP/1.1, Chrome allows six per host and long-lived streams count against them).
  */
-export const useLiveBoard = (boardId: number): 'connecting' | 'live' | 'reconnecting' => {
+export const useLiveBoard = (boardId: number): LiveState => {
   const client = useQueryClient();
-  const [state, setState] = useState<'connecting' | 'live' | 'reconnecting'>('connecting');
+  const [state, setState] = useState<LiveState>('connecting');
 
   useEffect(() => {
-    const source = new EventSource(`/api/boards/${boardId}/events`);
+    let source: EventSource | null = null;
     let connectedBefore = false;
 
     const replace = (glob: GlobView | null, id: string) =>
@@ -29,12 +33,7 @@ export const useLiveBoard = (boardId: number): 'connecting' | 'live' | 'reconnec
         return glob === null ? rest : [...rest, glob];
       });
 
-    source.addEventListener('ready', () => {
-      setState('live');
-      if (connectedBefore) void client.invalidateQueries({ queryKey: globsKey(boardId) });
-      connectedBefore = true;
-    });
-    source.addEventListener('hint', (event: MessageEvent<string>) => {
+    const onHint = (event: MessageEvent<string>) => {
       const hint = JSON.parse(event.data) as Hint;
       if (hint.kind === 'board.changed') {
         void client.invalidateQueries({ queryKey: ['board', boardId] });
@@ -42,11 +41,11 @@ export const useLiveBoard = (boardId: number): 'connecting' | 'live' | 'reconnec
       }
       const id = hint.globId;
       if (id === undefined) return;
-      const known = client.getQueryData<GlobView[]>(globsKey(boardId))?.find((g) => g.id === id);
       if (hint.kind === 'glob.deleted') {
         replace(null, id);
         return;
       }
+      const known = client.getQueryData<GlobView[]>(globsKey(boardId))?.find((g) => g.id === id);
       if (known !== undefined && hint.version !== undefined && known.version >= hint.version) return;
       api
         .glob(id)
@@ -54,10 +53,43 @@ export const useLiveBoard = (boardId: number): 'connecting' | 'live' | 'reconnec
         .catch((error: unknown) => {
           if (error instanceof RequestError && error.status === 404) replace(null, id);
         });
-      void client.invalidateQueries({ queryKey: ['glob', id] });
-    });
-    source.onerror = () => setState('reconnecting');
-    return () => source.close();
+    };
+
+    const open = () => {
+      if (source !== null) return;
+      const next = new EventSource(`/api/boards/${boardId}/events`);
+      next.addEventListener('ready', () => {
+        setState('live');
+        // Hints may have been missed while disconnected or hidden: reload the board.
+        if (connectedBefore) void client.invalidateQueries({ queryKey: globsKey(boardId) });
+        connectedBefore = true;
+      });
+      next.addEventListener('hint', onHint);
+      next.onerror = () => setState('reconnecting');
+      source = next;
+    };
+
+    const close = () => {
+      source?.close();
+      source = null;
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        close();
+        setState('paused');
+      } else {
+        open();
+      }
+    };
+
+    if (document.visibilityState === 'hidden') setState('paused');
+    else open();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      close();
+    };
   }, [boardId, client]);
 
   return state;
