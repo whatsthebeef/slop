@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: slop
+      POSTGRES_PASSWORD: slop
+      POSTGRES_DB: slop
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U slop -d slop']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build: .
+    profiles: [app]
+    environment:
+      DATABASE_URL: postgres://slop:slop@postgres:5432/slop
+      PUBLIC_URL: http://localhost:3000
+      AUTH_MODE: ${AUTH_MODE:-dev}
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
