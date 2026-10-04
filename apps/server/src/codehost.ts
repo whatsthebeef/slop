@@ -28,9 +28,20 @@ export type MergeResult =
  * implementation today; GitLab merge requests or Forgejo would implement the same operations,
  * with a webhook adapter translating their events into the same state-machine events.
  */
+/** Whether slop's integration can reach a repo, and where a person installs it if not. */
+export interface RepoConnection {
+  readonly configured: boolean;
+  readonly connected: boolean;
+  /** The page where a person installs or configures slop's integration for the repo. */
+  readonly installUrl: string | null;
+  readonly appName: string | null;
+}
+
 export interface CodeHost {
   /** True once the host integration is configured (e.g. the GitHub App exists). */
   readonly configured: boolean;
+  /** Checks whether slop can reach the repo right now. */
+  connection(repo: Repo): Promise<RepoConnection>;
   /** Creates the glob's branch (empty `<id>: start` commit) and draft review with labels. Idempotent. */
   provision(repo: Repo, glob: Glob): Promise<{ branch: string; pr: { number: number; headSha: string } }>;
   syncLabels(repo: Repo, glob: Glob, prNumber: number): Promise<void>;

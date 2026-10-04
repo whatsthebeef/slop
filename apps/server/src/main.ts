@@ -75,7 +75,7 @@ const app = createApp({
     if (!forked.ok) logError('board created', `Agent set fork failed for board ${boardId}: ${forked.error.message}`);
   },
 });
-mountKnowledge(app, { knowledge, artifacts, catalog, intake });
+mountKnowledge(app, { knowledge, artifacts, catalog, intake, boards, host: github });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
 const links = new SignedLinks(config.SIGNING_SECRET);

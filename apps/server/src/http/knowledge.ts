@@ -1,4 +1,6 @@
-import type { ArtifactService, Catalog, IntakeService, KnowledgeService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, IntakeService, KnowledgeService } from '@slop/core';
+import type { CodeHost } from '../codehost.js';
+import { repoOf } from '../codehost.js';
 import { CATEGORIES, SLOP_TYPES } from '@slop/core';
 import { parseFrontmatter } from '@slop/core';
 import type { Context, Hono } from 'hono';
@@ -22,12 +24,28 @@ const parse = async <S extends z.ZodType>(c: Context<Env>, schema: S): Promise<z
 /** REST for the board's knowledge base and glob artifacts. */
 export const mountKnowledge = (
   app: Hono<Env>,
-  deps: { knowledge: KnowledgeService; artifacts: ArtifactService; catalog: Catalog; intake: IntakeService },
+  deps: {
+    knowledge: KnowledgeService;
+    artifacts: ArtifactService;
+    catalog: Catalog;
+    intake: IntakeService;
+    boards: BoardService;
+    host: CodeHost;
+  },
 ) => {
   const { knowledge, artifacts, catalog } = deps;
   type Settled<T> = { ok: true; value: T } | { ok: false; error: Parameters<typeof statusOf>[0] };
   const send = <T>(c: Context<Env>, result: Settled<T>) =>
     result.ok ? c.json(result.value as object) : c.json(errorBody(result.error), statusOf(result.error));
+
+  // Whether slop's GitHub App can reach the board's repo, with the install link if not.
+  app.get('/api/boards/:b/repo-connection', async (c) => {
+    const membership = await deps.boards.get(c.get('email'), Number(c.req.param('b')));
+    if (!membership.ok) return send(c, membership);
+    const repo = repoOf(membership.value.board);
+    if (repo === null) return c.json({ repo: null, configured: deps.host.configured, connected: false, installUrl: null, appName: null });
+    return c.json({ repo: `${repo.owner}/${repo.name}`, ...(await deps.host.connection(repo)) });
+  });
 
   app.get('/api/boards/:b/kb', async (c) => {
     const boardId = Number(c.req.param('b'));

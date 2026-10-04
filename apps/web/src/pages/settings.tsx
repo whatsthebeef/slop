@@ -17,6 +17,13 @@ export const SettingsPage = () => {
   const toast = useToast();
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
   const members = useQuery({ queryKey: ['members', boardId], queryFn: () => api.members(boardId) });
+  // Re-checked when the tab regains focus, so returning from GitHub's install page updates it.
+  const connection = useQuery({
+    queryKey: ['repo-connection', boardId],
+    queryFn: () => api.repoConnection(boardId),
+    refetchOnWindowFocus: true,
+  });
+  const [repo, setRepo] = useState('');
   const [envs, setEnvs] = useState<Environment[]>([]);
   const [timeZone, setTimeZone] = useState('');
   const [baseBranch, setBaseBranch] = useState('');
@@ -28,16 +35,23 @@ export const SettingsPage = () => {
     setEnvs([...board.data.environments]);
     setTimeZone(board.data.timeZone);
     setBaseBranch(board.data.baseBranch);
+    setRepo(board.data.repo ?? '');
   }, [board.data]);
 
   const save = useMutation({
     mutationFn: () => {
       if (board.data === undefined) throw new Error('No board');
-      return api.updateSettings(boardId, board.data.version, { environments: envs, timeZone, baseBranch });
+      return api.updateSettings(boardId, board.data.version, {
+        environments: envs,
+        timeZone,
+        baseBranch,
+        repo: repo.trim() === '' ? null : repo.trim(),
+      });
     },
     onSuccess: () => {
       toast('Settings saved');
       void client.invalidateQueries({ queryKey: ['board', boardId] });
+      void client.invalidateQueries({ queryKey: ['repo-connection', boardId] });
     },
     onError: (e) => toast(message(e)),
   });
@@ -69,8 +83,53 @@ export const SettingsPage = () => {
         <h1 className='font-semibold'>Settings</h1>
       </header>
 
+      <section className='grid gap-2'>
+        <h2 className='text-sm font-semibold'>Repository</h2>
+        {connection.data === undefined ? (
+          <p className='text-sm text-muted-foreground'>Checking…</p>
+        ) : connection.data.repo === null ? (
+          <p className='text-sm text-muted-foreground'>No repository set. Add one below (owner/name).</p>
+        ) : !connection.data.configured ? (
+          <p className='text-sm'>
+            slop's GitHub App isn't set up yet. An admin creates it at <a className='underline' href='/setup/github-app'>/setup/github-app</a>.
+          </p>
+        ) : (
+          <div className='flex flex-wrap items-center gap-3 text-sm'>
+            <span className='font-mono'>{connection.data.repo}</span>
+            {connection.data.connected ? (
+              <span className='rounded bg-emerald-600 px-2 py-0.5 text-xs text-white'>Connected</span>
+            ) : (
+              <span className='rounded bg-amber px-2 py-0.5 text-xs text-black'>Not installed</span>
+            )}
+            {!connection.data.connected && connection.data.installUrl !== null && (
+              <a
+                className='rounded-md bg-primary px-3 py-1 text-xs text-primary-foreground'
+                href={connection.data.installUrl}
+                target='_blank'
+                rel='noreferrer'
+              >
+                Install {connection.data.appName} on GitHub
+              </a>
+            )}
+            <Button variant='ghost' size='sm' onClick={() => void connection.refetch()}>
+              Check again
+            </Button>
+          </div>
+        )}
+        {connection.data !== undefined && !connection.data.connected && connection.data.configured && connection.data.repo !== null && (
+          <p className='text-xs text-muted-foreground'>
+            On GitHub, choose the repository's account, then "Only select repositories" and add {connection.data.repo}. This page
+            updates when you come back.
+          </p>
+        )}
+      </section>
+
       <section className='grid gap-3'>
         <h2 className='text-sm font-semibold'>Board</h2>
+        <Label>
+          Repository (owner/name)
+          <Input value={repo} disabled={!admin} onChange={(e) => setRepo(e.target.value)} />
+        </Label>
         <div className='grid grid-cols-2 gap-3'>
           <Label>
             Base branch
