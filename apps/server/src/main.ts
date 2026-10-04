@@ -9,8 +9,14 @@ import { loadConfig } from './config.js';
 import * as schema from './db/schema.js';
 import { connect, PgStore, runMigrations } from './db/store.js';
 import { createApp } from './http/app.js';
-import { defaultExecutors, noRepositoryProvisioner, OutboxRunner } from './jobs/outbox.js';
+import { OutboxRunner } from './jobs/outbox.js';
 import { mountMcp } from './mcp/server.js';
+import { GitHub } from './github/client.js';
+import { AppCredentialsStore } from './github/credentials.js';
+import { githubDeliveryHandler } from './github/events.js';
+import { codeHostExecutors } from './codehost-executors.js';
+import { mountGitHubSetup } from './github/setup.js';
+import { mountGitHubWebhooks } from './github/webhooks.js';
 import { HintHub } from './notifier.js';
 
 const config = loadConfig();
@@ -35,10 +41,26 @@ const globs = new GlobService({
   // Routine registration arrives in slice 4; until then every run falls back to the board default.
   routines: { hasRoutine: () => Promise.resolve(false) },
 });
-const outbox = new OutboxRunner(db, { globs }, defaultExecutors(noRepositoryProvisioner), logError);
+const githubCredentials = new AppCredentialsStore(config.GITHUB_APP_FILE);
+await githubCredentials.load();
+const github = new GitHub(githubCredentials);
+const boardOf = (id: number) => store.transaction((tx) => tx.getBoard(id));
+const outbox = new OutboxRunner(db, { globs }, codeHostExecutors(github, boardOf), logError);
 
 const app = createApp({ auth, boards, globs, hub, outbox });
 mountMcp(app, { auth, boards, globs, outbox, publicUrl: config.PUBLIC_URL });
+
+mountGitHubSetup(app, {
+  auth,
+  credentials: githubCredentials,
+  publicUrl: config.PUBLIC_URL,
+  appName: config.GITHUB_APP_NAME,
+});
+mountGitHubWebhooks(app, {
+  credentials: githubCredentials,
+  log: logError,
+  handle: githubDeliveryHandler({ db, globs, github, boardOf }),
+});
 
 app.onError((error, c) => {
   logError(`http ${c.req.method} ${c.req.path}`, error.stack ?? error.message);

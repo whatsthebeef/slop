@@ -76,7 +76,8 @@ describe('services', () => {
   it('writes events and effects with the state change and publishes a hint', async () => {
     const glob = unwrap(await globs.create(DEV, input()));
     expect(store.state.events.map((e) => e.type)).toEqual(['GlobCreated']);
-    expect(store.state.outbox.map((e) => e.kind)).toEqual(['provision']);
+    // A same in Planning has no branch yet; it provisions when work starts.
+    expect(store.state.outbox.map((e) => e.kind)).toEqual([]);
     expect(notifier.hints).toContainEqual({ kind: 'glob.changed', boardId, globId: glob.id, version: 1 });
   });
 
@@ -123,7 +124,7 @@ describe('services', () => {
     unwrap(await globs.delete(PO, glob.id, 1));
     expect(store.state.globs.size).toBe(0);
     expect(store.state.events).toEqual([]);
-    expect(store.state.outbox.map((e) => e.kind)).toEqual(['provision', 'delete_glob_data']);
+    expect(store.state.outbox.map((e) => e.kind)).toEqual(['delete_glob_data']);
     expect(notifier.hints.at(-1)).toMatchObject({ kind: 'glob.deleted', globId: glob.id });
   });
 

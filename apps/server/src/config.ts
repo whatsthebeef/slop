@@ -17,6 +17,10 @@ const schema = z.object({
   /** Folder with the built web app, served by the same container. */
   WEB_DIST: z.string().optional(),
   MIGRATIONS_DIR: z.string().default('drizzle'),
+  /** Where the manifest flow stores the GitHub App's credentials locally (gitignored). */
+  GITHUB_APP_FILE: z.string().default('.github-app.json'),
+  /** The GitHub App's name; GitHub app names are global, so include an owner or stage. */
+  GITHUB_APP_NAME: z.string().default('slop-dev'),
 });
 
 export type Config = z.infer<typeof schema>;

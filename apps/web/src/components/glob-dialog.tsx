@@ -183,7 +183,26 @@ export const GlobDialog = ({
             <dt>Created</dt>
             <dd>{when(glob.createdAt)}</dd>
             <dt>Pull request</dt>
-            <dd>{glob.pr === null ? 'not opened yet' : `#${glob.pr.number} (${glob.pr.state})`}</dd>
+            <dd>
+              {glob.pr === null ? (
+                glob.provisioning === 'failed'
+                  ? 'provisioning failed; retrying'
+                  : glob.provisioning === 'none'
+                    ? 'opened when work starts'
+                    : 'opening…'
+              ) : board.repo === null ? (
+                `#${glob.pr.number} (${glob.pr.state})`
+              ) : (
+                <a
+                  className='underline'
+                  href={`https://github.com/${board.repo}/pull/${glob.pr.number}`}
+                  target='_blank'
+                  rel='noreferrer'
+                >
+                  #{glob.pr.number} ({glob.pr.state})
+                </a>
+              )}
+            </dd>
           </dl>
 
           {glob.runs.length > 0 && (

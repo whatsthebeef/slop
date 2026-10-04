@@ -58,7 +58,8 @@ export interface HeadChecks {
   readonly state: 'pending' | 'passed' | 'failed';
 }
 
-export type ProvisioningState = 'pending' | 'ok' | 'failed';
+/** `none` until the glob first enters Doing: branches and draft PRs are created when work starts. */
+export type ProvisioningState = 'none' | 'pending' | 'ok' | 'failed';
 
 export interface Failure {
   readonly reason: string;

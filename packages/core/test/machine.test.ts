@@ -30,12 +30,13 @@ const createInput = (patch: Partial<m.CreateInput> = {}): m.CreateInput => ({
 });
 
 describe('create (rows 1–4)', () => {
-  it('row 1: a same starts in planning, provisioned, with the creator as planner', () => {
+  it('row 1: a same starts in planning, unprovisioned, with the creator as planner', () => {
     const t = value(m.create(createInput(), board, ctx()));
     expect(t.glob.status).toBe('planning');
     expect(t.glob.planner).toBe(dev.email);
     expect(t.glob.implementer).toBeNull();
-    expect(effectKinds(t)).toEqual(['provision']);
+    expect(t.glob.provisioning).toBe('none');
+    expect(effectKinds(t)).toEqual([]);
   });
 
   it('row 2: a sub starts implementing with a queued run', () => {
@@ -212,6 +213,13 @@ describe('PR and merge events (rows 11–16)', () => {
     expect(same.glob.labels).toEqual({ FR: 'required', CR: 'required', QA: 'required' });
   });
 
+  it('row 15: a merge observed for a planning glob still moves it to reviewing', () => {
+    expect(errorCode(m.prReadyForReview(glob(), { number: 7, headSha: 'bbb' }, ctx(null)))).toBe('invalid_transition');
+    const mergedFromPlanning = value(m.merged(glob(), { sha: 'm' }, ctx(null)));
+    expect(mergedFromPlanning.glob.status).toBe('reviewing');
+    expect(mergedFromPlanning.glob.labels).toEqual({ FR: 'required', CR: 'required', QA: 'required' });
+  });
+
   it('row 15: the second merge observation is a no-op', () => {
     const t = value(m.merged(glob({ status: 'reviewing' }), { sha: 'm' }, ctx(null)));
     expect(t.changed).toBe(false);
@@ -331,7 +339,7 @@ describe('field changes and type changes (row 26)', () => {
   it('row 26: same to sub from planning starts work', () => {
     const t = value(m.changeFields(glob(), { type: 'sub' }, board, ctx()));
     expect(t.glob.status).toBe('implementing');
-    expect(effectKinds(t)).toEqual(['fire_routine']);
+    expect(effectKinds(t)).toEqual(['sync_pr_labels', 'fire_routine']);
   });
 
   it('sub to same is allowed before merge only', () => {
@@ -355,6 +363,72 @@ describe('field changes and type changes (row 26)', () => {
     expect(errorCode(m.changeFields(glob({ type: 'super', status: 'in_progress' }), { type: 'sub' }, board, ctx()))).toBe(
       'invalid_transition',
     );
+  });
+});
+
+describe('provisioning when a glob enters Doing', () => {
+  const planning = glob({ provisioning: 'none', pr: null });
+
+  it('start and pick-up provision before any routine run', () => {
+    const started = value(m.start(planning, ctx()));
+    expect(started.glob.provisioning).toBe('pending');
+    expect(effectKinds(started)).toEqual(['provision', 'fire_routine']);
+    expect(effectKinds(value(m.pickUp(planning, ctx(), { takeOver: false })))).toEqual(['provision']);
+  });
+
+  it('subs, supers and auto-started sames provision at creation', () => {
+    for (const input of [createInput({ type: 'sub' }), createInput({ type: 'super' }), createInput({ autoTrigger: true })]) {
+      expect(effectKinds(value(m.create(input, board, ctx())))[0]).toBe('provision');
+    }
+  });
+
+  it('same to sub from planning provisions as it starts work', () => {
+    expect(effectKinds(value(m.changeFields(planning, { type: 'sub' }, board, ctx())))).toEqual(['provision', 'fire_routine']);
+  });
+
+  it('start again leaves a same unprovisioned and re-provisions a sub', () => {
+    const same = value(m.startAgain(glob({ status: 'in_progress' }), ctx()));
+    expect(same.glob.provisioning).toBe('none');
+    expect(effectKinds(same)).toEqual(['close_pr', 'delete_branch']);
+    const sub = value(m.startAgain(glob({ type: 'sub', status: 'failed' }), ctx()));
+    expect(effectKinds(sub)).toEqual(['close_pr', 'delete_branch', 'provision', 'fire_routine']);
+  });
+
+  it('an already provisioned glob is not provisioned again', () => {
+    expect(effectKinds(value(m.start(glob(), ctx())))).toEqual(['fire_routine']);
+  });
+});
+
+describe('checks and merging (slice 2)', () => {
+  const ready = glob({ status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } });
+
+  it('PR ready and pushes to an open PR refresh the head checks', () => {
+    const t = value(m.prReadyForReview(glob({ status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+    expect(effectKinds(t)).toEqual(['refresh_checks']);
+    const pushed = value(m.commitPushed({ ...ready, headChecks: { sha: 'bbb', state: 'passed' } }, { sha: 'ccc', runId: null }, ctx(null)));
+    expect(pushed.glob.headChecks).toBeNull();
+    expect(effectKinds(pushed)).toEqual(['refresh_checks']);
+  });
+
+  it('a check change queues a refresh without changing the glob', () => {
+    const t = value(m.checksChanged(ready, ctx(null)));
+    expect(t.changed).toBe(false);
+    expect(effectKinds(t)).toEqual(['refresh_checks']);
+    expect(effectKinds(value(m.checksChanged(glob(), ctx(null))))).toEqual([]);
+  });
+
+  it('while merging, passing checks on the updated head merge it and failing ones fail it', () => {
+    const merging = { ...ready, status: 'merging' as const };
+    const pass = value(m.checksCompleted(merging, { sha: 'bbb', passed: true }, ctx(null)));
+    expect(pass.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: 'bbb' }]);
+    const fail = value(m.checksCompleted(merging, { sha: 'bbb', passed: false }, ctx(null)));
+    expect(fail.glob.status).toBe('failed');
+  });
+
+  it('type and environment changes sync the PR labels', () => {
+    const t = value(m.changeFields(glob({ status: 'in_progress' }), { environment: 'dev' }, board, ctx()));
+    expect(effectKinds(t)).toEqual(['sync_pr_labels']);
+    expect(effectKinds(value(m.changeFields(glob(), { group: 'x' }, board, ctx())))).toEqual([]);
   });
 });
 
