@@ -11,7 +11,7 @@ Agent definitions hold short rules that always apply to that agent; bulky or sit
 | Path | Written into a checkout (and committed) by `sstor init`, from the board's copy, as |
 | --- | --- |
 | `agents/*.md` | `.claude/agents/` |
-| `commands/*.md` (`/run-glob`, `/finalise`) | `.claude/commands/` |
+| `commands/*.md` (`/run-glob`, `/finalise`, `/kb-bootstrap`) | `.claude/commands/` |
 | `hooks/*` | `.claude/hooks/` |
 | `settings.json` | merged into `.claude/settings.json` (list values such as permissions and `sandbox.network.allowedDomains` are combined; the sandbox domains are the ones the agents' own commands need, `github.com` for `git fetch` and `git push`) |
 | `mcp.json` (`{{SLOP_URL}}` and the Claude Code client ID filled from sstor's config) | merged into `.mcp.json` |
@@ -23,7 +23,7 @@ Agent definitions hold short rules that always apply to that agent; bulky or sit
 - `/run-task --task|--bug|--prompt` is replaced by `/run-glob <id>`. Category and slop type come from the glob; prompt mode is replaced by `sstor --new`, which creates a glob first.
 - Reference docs no longer sit in `.sstor/docs/`. The orchestrator fetches the board's knowledge from slop in Phase 1, saves it under `.reviews/<id>-docs/` and passes the paths to sub-agents. Each knowledge document carries an audience (the agents that must always get it), which replaces the hard-coded "always pass X to Y" rules.
 - Unattended mode for routines (`--run <runId>`): no questions, recommended proposal, assumptions recorded on the glob, run ID on every artifact and commit trailer, glob check before every push.
-- Super mode and `/finalise` are new.
+- Super mode, `/finalise` and `/kb-bootstrap` (drafts the documents a board is missing from the code and submits them as proposals) are new.
 - `.sstor/docs/learnings.md` is replaced by `get_conventions` (read) and `submit_learning` (write).
 - Phase 2 pushes the chosen proposal as the `implementation_plan` artifact, with an Amendments section kept up to date.
 - The local review is pushed in Phase 6, after the commit, so it carries the commit SHA.

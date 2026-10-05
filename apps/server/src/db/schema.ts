@@ -1,4 +1,4 @@
-import type { DomainEvent, Effect, Environment, Glob, Provenance } from '@slop/core';
+import type { DomainEvent, Effect, Environment, Glob, KbOutcome, Provenance, ProposedDocument } from '@slop/core';
 import { LEARNING_TYPES } from '@slop/core';
 import {
   bigserial,
@@ -223,6 +223,10 @@ export const kbProposals = pgTable(
     decidedBy: text('decided_by'),
     decidedAt: timestamp('decided_at', { withTimezone: true }),
     decisionReason: text('decision_reason'),
+    /** A whole-document proposal (`/kb-bootstrap`). */
+    document: jsonb('document').$type<ProposedDocument>(),
+    /** What approving it did: kept as a learning, or applied to a document or agent file (with the version written). */
+    outcome: jsonb('outcome').$type<KbOutcome>(),
     version: integer('version').notNull(),
   },
   (t) => [index('kb_proposals_board_status_idx').on(t.boardId, t.status)],

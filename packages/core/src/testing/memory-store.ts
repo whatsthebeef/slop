@@ -203,6 +203,11 @@ export class MemoryStore implements Store {
         Promise.resolve(
           [...s.kbItems.values()].filter((i) => i.boardId === boardId && (status === undefined || i.status === status)),
         ),
+      updateKbItem: (item, expectedVersion) => {
+        if (s.kbItems.get(item.id)?.version !== expectedVersion) return Promise.resolve(false);
+        s.kbItems.set(item.id, item);
+        return Promise.resolve(true);
+      },
       appendEvents: (events) => {
         s.events.push(...events);
         return Promise.resolve();

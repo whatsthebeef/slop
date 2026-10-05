@@ -86,7 +86,7 @@ describe('services', () => {
     unwrap(await globs.update(DEV, glob.id, 1, { group: 'Sync' }));
     const stale = await globs.start(DEV, glob.id, 1);
     expect(stale.ok).toBe(false);
-    if (!stale.ok && stale.error.code === 'version_conflict') {
+    if (!stale.ok && stale.error.code === 'version_conflict' && 'current' in stale.error) {
       expect(stale.error.current.version).toBe(2);
     }
     expect(unwrap(await globs.start(DEV, glob.id, 2)).status).toBe('implementing');

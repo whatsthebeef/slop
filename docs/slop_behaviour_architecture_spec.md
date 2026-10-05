@@ -184,7 +184,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `get_build_results` | glob, commit or environment | build failures | Agents, chat |
 | `get_test_results` | glob, commit or environment | test runs and failures | Agents, chat |
 | `import_knowledge` | board, documents (name, content, optional frontmatter) | imported document ids; admins only | Claude in a session |
-| `submit_learning` | board, source glob id, type (decision, gotcha, pattern, agent-behaviour), statement, evidence; optional suggested target, agentSetVersion, runId | KB item id (`s1k3`) | Agents |
+| `submit_learning` | board, source glob id, type (decision, gotcha, pattern, agent-behaviour), statement, evidence; optional suggested target, agentSetVersion, runId, and `document` (name, area, audience, description, content: a whole new-document proposal from `/kb-bootstrap`, for which the source glob is optional) | KB item id (`s1k3`) | Agents |
 | `get_review_guide` | repo | the board's review guide | CodeRabbit, review agents |
 
 All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Claude app, Claude Code and routines all connect through the OAuth connector.
@@ -201,11 +201,11 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 | Labels | `PUT /globs/{id}/labels/{FR, CR, QA}` with state `required` or `added` |
 | Artifacts | `GET /globs/{id}/artifacts`, `GET /globs/{id}/artifacts/{kind}?label=` (every version of one artifact, for the viewer), `GET /artifacts/{artifactId}` (presigned URL), `POST /globs/{id}/attachments` (text or link), `POST /globs/{id}/uploads` (presigned upload URL) |
 | Signed Off | `GET /boards/{b}/signed-off?cursor=` |
-| KB | `GET /boards/{b}/kb`, `GET /catalog/kb` (catalog entries), `POST /boards/{b}/kb/catalog-imports` (import chosen catalog entries), `POST /boards/{b}/kb/uploads` (upload docs or a folder) |
+| KB | `GET /boards/{b}/kb`, `GET /catalog/kb` (catalog entries), `POST /boards/{b}/kb/catalog-imports` (import chosen catalog entries), `POST /boards/{b}/kb/uploads` (upload docs or a folder), `GET /boards/{b}/kb/proposals?status=` (KB items), `GET /boards/{b}/kb/agent-set/file?path=` (one agent-set file's stored content, for editing it while applying a KB item) |
 | Inbox | `GET /inbox`, `POST /inbox/{meetingId}/attach`, `POST /inbox/{meetingId}/create-glob`, `POST /inbox/{meetingId}/discard` |
 | Reports | `GET /boards/{b}/reports?period=2026-09` — presigned CSV URL |
 
-**Further write endpoints:** `POST /globs/{id}/actions/merge` (Merge button), `POST /globs/{id}/actions/deploy-now`, `POST /globs/{id}/actions/take-over`, `PUT /globs/{id}/plan` (edit plan.md), `POST /kb/{itemId}/approve` and `POST /kb/{itemId}/reject` (admins). Every write, through REST or MCP, carries the glob or item `version` it read.
+**Further write endpoints:** `POST /globs/{id}/actions/merge` (Merge button), `POST /globs/{id}/actions/deploy-now`, `POST /globs/{id}/actions/take-over`, `PUT /globs/{id}/plan` (edit plan.md), `POST /kb/{itemId}/approve` (as a learning, as an edit to a document or agent-set file, or as the proposed document) and `POST /kb/{itemId}/reject` (with a reason) (admins). Every write, through REST or MCP, carries the glob or item `version` it read.
 
 **Inbound**
 

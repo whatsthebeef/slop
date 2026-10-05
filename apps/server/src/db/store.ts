@@ -368,6 +368,23 @@ export class PgStore implements Store {
           .orderBy(asc(schema.kbProposals.createdAt), asc(schema.kbProposals.id));
         return rows.map(toKbItem);
       },
+      updateKbItem: async (item, expectedVersion) => {
+        const rows = await t
+          .update(schema.kbProposals)
+          .set({
+            status: item.status,
+            statement: item.statement,
+            sourceGlobIds: [...item.sourceGlobIds],
+            decidedBy: item.decidedBy,
+            decidedAt: item.decidedAt === null ? null : new Date(item.decidedAt),
+            decisionReason: item.decisionReason,
+            outcome: item.outcome,
+            version: item.version,
+          })
+          .where(and(eq(schema.kbProposals.id, item.id), eq(schema.kbProposals.version, expectedVersion)))
+          .returning({ id: schema.kbProposals.id });
+        return rows.length === 1;
+      },
 
       appendEvents: async (events) => {
         if (events.length === 0) return;

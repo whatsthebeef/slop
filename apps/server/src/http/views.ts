@@ -51,7 +51,7 @@ export const statusOf = (error: DomainError): ContentfulStatusCode => {
 };
 
 export const errorBody = (error: DomainError) =>
-  error.code === 'version_conflict' ? { ...error, current: globView(error.current) } : error;
+  error.code === 'version_conflict' && 'current' in error ? { ...error, current: globView(error.current) } : error;
 
 const SIGNED_OFF_VISIBLE_MS = 14 * 86_400_000;
 

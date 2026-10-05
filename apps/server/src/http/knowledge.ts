@@ -1,7 +1,7 @@
 import type { ArtifactService, BoardService, Catalog, IntakeService, KnowledgeService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
-import { ARTIFACT_KINDS, CATEGORIES, SLOP_TYPES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
 import { parseFrontmatter } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -14,6 +14,21 @@ const documentsSchema = z.object({
     .min(1)
     .max(200),
 });
+
+const version = z.number().int().positive();
+
+/** How an admin approves a KB item (see `Approval` in core). */
+const approvalSchema = z.discriminatedUnion('as', [
+  z.object({ as: z.literal('learning'), version, statement: z.string().max(4000).optional() }),
+  z.object({
+    as: z.literal('edit'),
+    version,
+    target: z.object({ kind: z.enum(KNOWLEDGE_KINDS), name: z.string().min(1) }),
+    content: z.string().min(1).max(500_000),
+    statement: z.string().max(4000).optional(),
+  }),
+  z.object({ as: z.literal('document'), version, content: z.string().min(1).max(500_000).optional() }),
+]);
 
 const parse = async <S extends z.ZodType>(c: Context<Env>, schema: S): Promise<z.infer<S> | Response> => {
   const body: unknown = await c.req.json().catch(() => ({}));
@@ -88,6 +103,34 @@ export const mountKnowledge = (
   app.post('/api/boards/:b/kb/agent-set/fork', async (c) =>
     send(c, await knowledge.forkAgentSet(c.get('email'), Number(c.req.param('b')))),
   );
+
+  // One agent-set file as stored (placeholders unfilled), for editing it while applying a KB item.
+  app.get('/api/boards/:b/kb/agent-set/file', async (c) => {
+    const set = await knowledge.agentSet(c.get('email'), Number(c.req.param('b')));
+    if (!set.ok) return send(c, set);
+    const file = set.value.files.find((f) => f.path === c.req.query('path'));
+    return file === undefined ? c.json({ code: 'not_found', message: 'No such agent-set file' }, 404) : c.json(file);
+  });
+
+  // KB items (proposals); members read them, admins decide them.
+  app.get('/api/boards/:b/kb/proposals', async (c) => {
+    const status = c.req.query('status');
+    const parsed = z.enum(KB_ITEM_STATUSES).optional().safeParse(status === '' ? undefined : status);
+    if (!parsed.success) return c.json({ code: 'invalid_input', message: 'status is open, approved or rejected' }, 422);
+    return send(c, await knowledge.proposals(c.get('email'), Number(c.req.param('b')), parsed.data));
+  });
+
+  app.post('/api/kb/:itemId/approve', async (c) => {
+    const body = await parse(c, approvalSchema);
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.approve(c.get('email'), c.req.param('itemId'), body.version, body));
+  });
+
+  app.post('/api/kb/:itemId/reject', async (c) => {
+    const body = await parse(c, z.object({ version, reason: z.string().min(1).max(4000) }));
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.reject(c.get('email'), c.req.param('itemId'), body.version, body.reason));
+  });
 
   // Intake: proposes fields from free text without saving anything.
   app.post('/api/boards/:b/intake', async (c) => {

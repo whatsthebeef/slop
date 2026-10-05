@@ -58,6 +58,8 @@ export interface Tx {
   getKbItem(id: string): Promise<KbItem | null>;
   /** A board's KB items, oldest first, optionally with one status. */
   listKbItems(boardId: number, status?: KbItemStatus): Promise<KbItem[]>;
+  /** Writes `item` if the stored version is still `expectedVersion`; returns false otherwise. */
+  updateKbItem(item: KbItem, expectedVersion: number): Promise<boolean>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;

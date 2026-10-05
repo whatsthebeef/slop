@@ -1,11 +1,14 @@
 import type {
   Action,
+  Approval,
   ArtifactKind,
   ArtifactSummary,
   Board,
   Category,
   Environment,
   Glob,
+  KbItem,
+  KbItemStatus,
   LabelName,
   LabelState,
   List,
@@ -72,6 +75,8 @@ export interface ApiError {
   readonly code: string;
   readonly message: string;
   readonly current?: GlobView;
+  /** A KB item's version conflict carries the item as it is now. */
+  readonly currentItem?: KbItem;
   readonly allowedActions?: readonly string[];
 }
 
@@ -157,6 +162,14 @@ export const api = {
   upload: (boardId: number, documents: { fileName: string; content: string }[]) =>
     request<ImportResult>('POST', `/api/boards/${boardId}/kb/uploads`, { documents }),
   forkAgentSet: (boardId: number) => request<ImportResult>('POST', `/api/boards/${boardId}/kb/agent-set/fork`),
+  agentSetFile: (boardId: number, path: string) =>
+    request<{ path: string; content: string }>('GET', `/api/boards/${boardId}/kb/agent-set/file?path=${encodeURIComponent(path)}`),
+  proposals: (boardId: number, status?: KbItemStatus) =>
+    request<KbItem[]>('GET', `/api/boards/${boardId}/kb/proposals${status === undefined ? '' : `?status=${status}`}`),
+  approveProposal: (id: string, version: number, approval: Approval) =>
+    request<KbItem>('POST', `/api/kb/${id}/approve`, { ...approval, version }),
+  rejectProposal: (id: string, version: number, reason: string) =>
+    request<KbItem>('POST', `/api/kb/${id}/reject`, { version, reason }),
   plan: (id: string) =>
     request<{ current: ArtifactView | null; versions: { version: number; createdAt: string; by: string }[] }>(
       'GET',

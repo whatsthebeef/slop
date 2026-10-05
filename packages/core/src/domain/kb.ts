@@ -1,3 +1,5 @@
+import type { KnowledgeKind } from './knowledge.js';
+
 /**
  * KB items (`s<board>k<n>`): proposed changes to a board's knowledge base or agent set. Nothing
  * reaches either without an admin's approval; rejected items are kept to suppress repeats.
@@ -31,9 +33,39 @@ export interface KbItem {
   readonly decidedBy: string | null;
   readonly decidedAt: string | null;
   readonly decisionReason: string | null;
+  /** A whole-document proposal (`/kb-bootstrap`); null for a statement. */
+  readonly document: ProposedDocument | null;
+  /** Set when approved. */
+  readonly outcome: KbOutcome | null;
   /** For conditional writes (approve, reject). */
   readonly version: number;
 }
 
 export const isLearningType = (value: string): value is LearningType =>
   LEARNING_TYPES.some((t) => t === value);
+
+/**
+ * A whole document proposed through `submit_learning` (`/kb-bootstrap`). Approving it creates or
+ * updates the board document `name`, with this frontmatter.
+ */
+export interface ProposedDocument {
+  readonly name: string;
+  readonly area: string;
+  readonly audience: readonly string[];
+  readonly description: string;
+  /** The document body, without frontmatter. */
+  readonly content: string;
+}
+
+/**
+ * What an approval did: kept the statement as an approved learning (served by `get_conventions`),
+ * or wrote a document or agent-set file, recording the version it created.
+ */
+export type KbOutcome =
+  | { readonly kind: 'learning' }
+  | {
+      readonly kind: 'applied';
+      readonly target: KnowledgeKind;
+      readonly name: string;
+      readonly version: number;
+    };

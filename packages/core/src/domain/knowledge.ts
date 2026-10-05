@@ -71,6 +71,23 @@ export const parseFrontmatter = (text: string): Frontmatter => {
   };
 };
 
+/** Whether a text starts with a frontmatter block. */
+export const hasFrontmatter = (text: string): boolean => FRONTMATTER.test(text);
+
+/** The frontmatter block `parseFrontmatter` reads back (area, audience, description); empty without any. */
+export const renderFrontmatter = (meta: {
+  readonly area: string | null;
+  readonly audience: readonly string[];
+  readonly description: string;
+}): string => {
+  const lines = [
+    ...(meta.area === null ? [] : [`area: ${meta.area}`]),
+    ...(meta.audience.length === 0 ? [] : [`audience: [${meta.audience.join(', ')}]`]),
+    ...(meta.description === '' ? [] : [`description: ${meta.description}`]),
+  ];
+  return lines.length === 0 ? '' : ['---', ...lines, '---', ''].join('\n');
+};
+
 /** A document's name from a file name: `.sstor/docs/build_test_lint.md` → `build_test_lint`. */
 export const docName = (fileName: string): string =>
   (fileName.split('/').pop() ?? fileName).replace(/\.md$/i, '').trim();

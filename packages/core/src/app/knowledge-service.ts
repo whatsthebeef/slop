@@ -1,8 +1,16 @@
-import { invalidInput, notFound, ok } from '../domain/errors.js';
+import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
 import { isLearningType } from '../domain/kb.js';
-import { agentSetKind, docName, isAgentSetKind, parseFrontmatter } from '../domain/knowledge.js';
+import type { KbItem, KbItemStatus, KbOutcome, LearningType, ProposedDocument } from '../domain/kb.js';
+import {
+  agentSetKind,
+  docName,
+  hasFrontmatter,
+  isAgentSetKind,
+  parseFrontmatter,
+  renderFrontmatter,
+} from '../domain/knowledge.js';
 import type { KnowledgeDoc, KnowledgeKind } from '../domain/knowledge.js';
 import type { Board } from '../domain/types.js';
 import type { Catalog, Clock, Notifier, Store, Tx } from '../ports.js';
@@ -29,14 +37,75 @@ export interface ImportResult {
 }
 
 export interface NewLearning {
-  readonly sourceGlobId: string;
+  /** Required for statements; a document proposal (`/kb-bootstrap`) may come from outside any glob. */
+  readonly sourceGlobId: string | null;
   /** Checked against `LEARNING_TYPES`; a string because it arrives from agents. */
   readonly type: string;
   readonly statement: string;
   readonly evidence: string;
   readonly suggestedTarget?: string | null;
   readonly agentSetVersion?: number | null;
+  /** A whole document to propose (`/kb-bootstrap`); approving it creates or updates that document. */
+  readonly document?: ProposedDocument | null;
 }
+
+/**
+ * How an admin approves a KB item: keep the statement as an approved learning, apply it by hand as
+ * new content for an existing document or agent-set file, or (document proposals) create or update
+ * the proposed document. The statement or content may be edited first.
+ */
+export type Approval =
+  | { readonly as: 'learning'; readonly statement?: string }
+  | {
+      readonly as: 'edit';
+      readonly target: { readonly kind: KnowledgeKind; readonly name: string };
+      readonly content: string;
+      readonly statement?: string;
+    }
+  | { readonly as: 'document'; readonly content?: string };
+
+/** An approved learning as `get_conventions(board)` serves it. */
+export interface ApprovedLearning {
+  readonly id: string;
+  readonly type: LearningType;
+  readonly statement: string;
+  readonly sourceGlobIds: readonly string[];
+  readonly approvedAt: string;
+}
+
+/** The board (its agent-set version) changed while documents were written; thrown so the writes roll back. */
+class BoardChanged extends Error {
+  constructor(boardId: number) {
+    super(`Board ${boardId} changed during the write; retry`);
+  }
+}
+
+/** A decision's conditional write lost to a concurrent one; thrown so the transaction rolls back. */
+class StaleKbItem extends Error {
+  constructor(id: string) {
+    super(`KB item ${id} changed during the decision`);
+  }
+}
+
+const SINGLE_LINE = /^[^\r\n]*$/;
+const PLAIN_NAME = /^[\w.-]+$/;
+
+/** Checks a proposed document's frontmatter fields, and strips any frontmatter from its body. */
+const checkDocument = (document: ProposedDocument): Result<ProposedDocument> => {
+  const name = docName(document.name);
+  const area = document.area.trim();
+  const description = document.description.trim();
+  const audience = document.audience.map((a) => a.trim()).filter((a) => a !== '');
+  const body = (hasFrontmatter(document.content) ? parseFrontmatter(document.content).body : document.content).trim();
+  if (!PLAIN_NAME.test(name)) return invalidInput('A proposed document needs a name of letters, digits, _, . or -');
+  if (area === '' || !SINGLE_LINE.test(area)) return invalidInput('A proposed document needs an area (one line)');
+  if (description === '' || !SINGLE_LINE.test(description)) {
+    return invalidInput('A proposed document needs a description (one line)');
+  }
+  if (!audience.every((a) => PLAIN_NAME.test(a))) return invalidInput('Audience entries are agent names');
+  if (body === '') return invalidInput('A proposed document needs content');
+  return ok({ name, area, audience, description, content: `${body}\n` });
+};
 
 export interface NewDocument {
   /** A file name or path; documents are named after it, agent-set files keep their path. */
@@ -170,12 +239,24 @@ export class KnowledgeService {
     if (agentSetVersion !== null && (!Number.isInteger(agentSetVersion) || agentSetVersion < 0)) {
       return invalidInput('agentSetVersion must be a whole number');
     }
+    let document: ProposedDocument | null = null;
+    if (learning.document !== undefined && learning.document !== null) {
+      const checked = checkDocument(learning.document);
+      if (!checked.ok) return checked;
+      document = checked.value;
+    }
+    const sourceGlobId = learning.sourceGlobId?.trim() ?? '';
+    if (sourceGlobId === '' && document === null) return invalidInput('A learning needs its source glob');
     const { type } = learning;
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
-      const glob = await tx.getGlob(learning.sourceGlobId);
-      if (glob?.boardId !== boardId) return notFound(`No glob ${learning.sourceGlobId} on board ${boardId}`);
+      const sourceGlobIds: string[] = [];
+      if (sourceGlobId !== '') {
+        const glob = await tx.getGlob(sourceGlobId);
+        if (glob?.boardId !== boardId) return notFound(`No glob ${sourceGlobId} on board ${boardId}`);
+        sourceGlobIds.push(glob.id);
+      }
       const id = formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
       const inserted = await tx.insertKbItem({
         id,
@@ -185,7 +266,7 @@ export class KnowledgeService {
         statement,
         evidence,
         suggestedTarget: suggestedTarget === '' ? null : suggestedTarget,
-        sourceGlobIds: [glob.id],
+        sourceGlobIds,
         source: 'submitted',
         agentSetVersion,
         submittedBy: email,
@@ -193,12 +274,137 @@ export class KnowledgeService {
         decidedBy: null,
         decidedAt: null,
         decisionReason: null,
+        document,
+        outcome: null,
         version: 1,
       });
       // The counter is atomic, so a clash means the counter and the table disagree.
       if (!inserted) throw new Error(`KB item ${id} already exists`);
       return ok({ id });
     });
+  }
+
+  /** The board's KB items, oldest first, optionally with one status. Members may read them. */
+  async proposals(email: string, boardId: number, status?: KbItemStatus): Promise<Result<KbItem[]>> {
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      return ok(await tx.listKbItems(boardId, status));
+    });
+  }
+
+  /** Items approved as learnings (not applied to a document), for `get_conventions(board)`. */
+  async approvedLearnings(email: string, boardId: number): Promise<Result<ApprovedLearning[]>> {
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      const items = await tx.listKbItems(boardId, 'approved');
+      return ok(
+        items
+          .filter((i) => i.outcome?.kind === 'learning')
+          .map((i) => ({
+            id: i.id,
+            type: i.type,
+            statement: i.statement,
+            sourceGlobIds: i.sourceGlobIds,
+            approvedAt: i.decidedAt ?? i.createdAt,
+          })),
+      );
+    });
+  }
+
+  /**
+   * Admins approve an open KB item, conditional on the version they read. Edits and documents are
+   * written through `write` in the same transaction as the decision, so they version the document,
+   * and an agent-set file bumps the board's agent-set version.
+   */
+  async approve(email: string, itemId: string, version: number, approval: Approval): Promise<Result<KbItem>> {
+    return this.decide(email, itemId, version, async (tx, item) => {
+      if (approval.as === 'document') {
+        if (item.document === null) return invalidInput(`${item.id} is not a document proposal`);
+        const document = checkDocument({ ...item.document, content: approval.content ?? item.document.content });
+        if (!document.ok) return document;
+        const { name, content } = document.value;
+        const outcome = await this.apply(tx, email, item, 'doc', name, renderFrontmatter(document.value) + content);
+        return outcome.ok ? ok({ statement: item.statement, outcome: outcome.value }) : outcome;
+      }
+      if (item.document !== null) return invalidInput(`${item.id} proposes a document; approve it as that document`);
+      const statement = approval.statement?.trim() ?? item.statement;
+      if (statement === '') return invalidInput('A learning needs a statement');
+      if (approval.as === 'learning') return ok({ statement, outcome: { kind: 'learning' } });
+
+      const { kind, name } = approval.target;
+      const existing = await tx.getKnowledge(item.boardId, kind, name);
+      if (existing === null) {
+        return notFound(`No ${kind === 'doc' ? 'document' : 'agent-set file'} ${name} on board ${item.boardId}`);
+      }
+      if (approval.content.trim() === '') return invalidInput('The new content is empty');
+      // A document edited without frontmatter keeps its area, audience and description.
+      const content =
+        kind === 'doc' && !hasFrontmatter(approval.content) ? renderFrontmatter(existing) + approval.content : approval.content;
+      const outcome = await this.apply(tx, email, item, kind, name, content);
+      return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
+    });
+  }
+
+  /** Admins reject an open KB item with a reason; it is kept so repeats can be suppressed later. */
+  async reject(email: string, itemId: string, version: number, reason: string): Promise<Result<KbItem>> {
+    const trimmed = reason.trim();
+    if (trimmed === '') return invalidInput('Rejecting needs a reason');
+    return this.decide(email, itemId, version, () => Promise.resolve(ok({ reason: trimmed })));
+  }
+
+  /** A decision: the item exists, the caller is an admin of its board, it is unchanged since read and still open. */
+  private async decide(
+    email: string,
+    itemId: string,
+    version: number,
+    decision: (tx: Tx, item: KbItem) => Promise<Result<{ statement: string; outcome: KbOutcome } | { reason: string }>>,
+  ): Promise<Result<KbItem>> {
+    const stale = (item: KbItem) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
+    try {
+      return await this.deps.store.transaction(async (tx) => {
+        const item = await tx.getKbItem(itemId);
+        if (item === null) return notFound(`No KB item ${itemId}`);
+        const actor = await adminOf(tx, email, item.boardId);
+        if (!actor.ok) return actor;
+        if (item.version !== version) return stale(item);
+        if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
+        const decided = await decision(tx, item);
+        if (!decided.ok) return decided;
+        const base = { ...item, decidedBy: email, decidedAt: this.deps.clock.now(), version: item.version + 1 };
+        const next: KbItem =
+          'reason' in decided.value
+            ? { ...base, status: 'rejected', decisionReason: decided.value.reason }
+            : { ...base, status: 'approved', statement: decided.value.statement, outcome: decided.value.outcome };
+        if (!(await tx.updateKbItem(next, item.version))) throw new StaleKbItem(item.id);
+        return ok(next);
+      });
+    } catch (error) {
+      // A concurrent agent-set change (another approval or import) is a conflict to retry, like a stale item.
+      if (!(error instanceof StaleKbItem || error instanceof BoardChanged)) throw error;
+      const current = await this.deps.store.transaction((tx) => tx.getKbItem(itemId));
+      if (current === null) return notFound(`No KB item ${itemId}`);
+      return error instanceof BoardChanged
+        ? err({ code: 'version_conflict', message: 'The board changed meanwhile; try again', currentItem: current })
+        : stale(current);
+    }
+  }
+
+  /** Writes an approved change to a document or agent-set file and returns the outcome with its new version. */
+  private async apply(
+    tx: Tx,
+    email: string,
+    item: KbItem,
+    kind: KnowledgeKind,
+    name: string,
+    content: string,
+  ): Promise<Result<KbOutcome>> {
+    const written = await this.write(tx, email, item.boardId, [{ kind, name, content, source: `kb:${item.id}` }]);
+    if (!written.ok) return written;
+    const saved = await tx.getKnowledge(item.boardId, kind, name);
+    if (saved === null) throw new Error(`${name} was not saved`);
+    return ok({ kind: 'applied', target: kind, name, version: saved.version });
   }
 
   /** Writes documents, versioning only real changes; any agent-set change bumps the set's version. */
@@ -252,7 +458,7 @@ export class KnowledgeService {
 
     if (agentSetChanged) {
       const next: Board = { ...board, agentSetVersion: board.agentSetVersion + 1, version: board.version + 1 };
-      if (!(await tx.updateBoard(next, board.version))) throw new Error('Board changed during import; retry');
+      if (!(await tx.updateBoard(next, board.version))) throw new BoardChanged(boardId);
     }
     if (created.length + updated.length > 0) this.deps.notifier.publish({ kind: 'board.changed', boardId });
     return ok({ created, updated, unchanged });
