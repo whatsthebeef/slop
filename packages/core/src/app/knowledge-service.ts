@@ -1,5 +1,7 @@
 import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import { formatId } from '../domain/ids.js';
+import { isLearningType } from '../domain/kb.js';
 import { agentSetKind, docName, isAgentSetKind, parseFrontmatter } from '../domain/knowledge.js';
 import type { KnowledgeDoc, KnowledgeKind } from '../domain/knowledge.js';
 import type { Board } from '../domain/types.js';
@@ -24,6 +26,16 @@ export interface ImportResult {
   readonly created: readonly string[];
   readonly updated: readonly string[];
   readonly unchanged: readonly string[];
+}
+
+export interface NewLearning {
+  readonly sourceGlobId: string;
+  /** Checked against `LEARNING_TYPES`; a string because it arrives from agents. */
+  readonly type: string;
+  readonly statement: string;
+  readonly evidence: string;
+  readonly suggestedTarget?: string | null;
+  readonly agentSetVersion?: number | null;
 }
 
 export interface NewDocument {
@@ -138,6 +150,54 @@ export class KnowledgeService {
         if (kind !== null) items.push({ kind, name: file.path, content: file.content, source: 'catalog:agents' });
       }
       return this.write(tx, email, boardId, items);
+    });
+  }
+
+  /**
+   * `submit_learning`: records an agent's learning as an open KB item (`s<board>k<n>`) for admins
+   * to review. Capture only: nothing reaches the knowledge base until it is approved.
+   */
+  async submitLearning(email: string, boardId: number, learning: NewLearning): Promise<Result<{ id: string }>> {
+    const statement = learning.statement.trim();
+    const evidence = learning.evidence.trim();
+    const suggestedTarget = learning.suggestedTarget?.trim() ?? '';
+    const agentSetVersion = learning.agentSetVersion ?? null;
+    if (!isLearningType(learning.type)) {
+      return invalidInput(`Unknown learning type "${learning.type}"; use decision, gotcha, pattern or agent-behaviour`);
+    }
+    if (statement === '') return invalidInput('A learning needs a statement');
+    if (evidence === '') return invalidInput('A learning needs evidence');
+    if (agentSetVersion !== null && (!Number.isInteger(agentSetVersion) || agentSetVersion < 0)) {
+      return invalidInput('agentSetVersion must be a whole number');
+    }
+    const { type } = learning;
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      const glob = await tx.getGlob(learning.sourceGlobId);
+      if (glob?.boardId !== boardId) return notFound(`No glob ${learning.sourceGlobId} on board ${boardId}`);
+      const id = formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
+      const inserted = await tx.insertKbItem({
+        id,
+        boardId,
+        status: 'open',
+        type,
+        statement,
+        evidence,
+        suggestedTarget: suggestedTarget === '' ? null : suggestedTarget,
+        sourceGlobIds: [glob.id],
+        source: 'submitted',
+        agentSetVersion,
+        submittedBy: email,
+        createdAt: this.deps.clock.now(),
+        decidedBy: null,
+        decidedAt: null,
+        decisionReason: null,
+        version: 1,
+      });
+      // The counter is atomic, so a clash means the counter and the table disagree.
+      if (!inserted) throw new Error(`KB item ${id} already exists`);
+      return ok({ id });
     });
   }
 

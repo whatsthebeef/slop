@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Result } from '../src/domain/errors.js';
 import * as m from '../src/domain/machine.js';
 import type { Transition } from '../src/domain/machine.js';
-import { board, ctx, dev, glob, other, po, run } from './fixtures.js';
+import { NOW, board, ctx, dev, glob, other, po, run } from './fixtures.js';
 
 const value = (result: Result<Transition>): Transition => {
   if (!result.ok) throw new Error(`Expected ok, got ${result.error.code}: ${result.error.message}`);
@@ -248,6 +248,41 @@ describe('failures (rows 17–19, 25)', () => {
   it('row 18: an interactive session fails an in-progress glob', () => {
     const t = value(m.reportFailure(glob({ status: 'in_progress' }), { reason: 'blocked', runId: null }, ctx()));
     expect(t.glob.status).toBe('failed');
+  });
+
+  it('records the agent-set version a failure report gives', () => {
+    const failed = value(m.reportFailure(glob({ status: 'in_progress' }), { reason: 'blocked', runId: null, agentSetVersion: 4 }, ctx()));
+    expect(failed.glob.failure).toEqual({ reason: 'blocked', at: NOW, agentSetVersion: 4 });
+    const ignored = value(m.reportFailure(glob({ status: 'implementing', runs: [run()] }), { reason: 'stuck', runId: 'old', agentSetVersion: 4 }, ctx(null)));
+    expect(ignored.events[0]?.data).toMatchObject({ ignored: true, agentSetVersion: 4 });
+  });
+
+  // The glob's failure is cleared by pick-up and start-again, so the event log keeps the version.
+  it('row 18: the StatusChanged event carries the reason and agent-set version', () => {
+    const t = value(m.reportFailure(glob({ status: 'in_progress' }), { reason: 'blocked', runId: null, agentSetVersion: 4 }, ctx()));
+    expect(t.events.find((e) => e.type === 'StatusChanged')?.data).toEqual({
+      from: 'in_progress',
+      to: 'failed',
+      reason: 'blocked',
+      agentSetVersion: 4,
+    });
+  });
+
+  it('rows 17 and 25: the RunFailed event carries the agent-set version', () => {
+    const implementing = value(
+      m.reportFailure(glob({ status: 'implementing', runs: [run()] }), { reason: 'stuck', runId: 'run-0', agentSetVersion: 4 }, ctx(null)),
+    );
+    expect(implementing.events.find((e) => e.type === 'RunFailed')?.data).toEqual({ runId: 'run-0', reason: 'stuck', agentSetVersion: 4 });
+    const watching = value(
+      m.reportFailure(glob({ status: 'pr_open', runs: [run({ state: 'watching' })] }), { reason: 'gave up', runId: 'run-0', agentSetVersion: 4 }, ctx(null)),
+    );
+    expect(watching.events.find((e) => e.type === 'RunFailed')?.data).toEqual({ runId: 'run-0', reason: 'gave up', agentSetVersion: 4 });
+  });
+
+  it('records a null agent-set version when a failure report gives none', () => {
+    const t = value(m.reportFailure(glob({ status: 'implementing', runs: [run()] }), { reason: 'stuck', runId: 'run-0' }, ctx(null)));
+    expect(t.events.find((e) => e.type === 'RunFailed')?.data).toMatchObject({ agentSetVersion: null });
+    expect(t.glob.failure).toEqual({ reason: 'stuck', at: NOW });
   });
 
   it('row 19: closing the PR unmerged fails a pr_open glob', () => {

@@ -29,6 +29,13 @@
       "when": 1791082992355,
       "tag": "0003_run_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791158719175,
+      "tag": "0004_kb_proposals",
+      "breakpoints": true
     }
   ]
 }

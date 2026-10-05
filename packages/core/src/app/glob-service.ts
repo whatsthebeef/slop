@@ -132,9 +132,9 @@ export class GlobService {
   }
 
   /** `report_failure` from a person's interactive session (no run ID). */
-  reportFailure(email: string, id: string, reason: string, runId: string | null) {
+  reportFailure(email: string, id: string, reason: string, runId: string | null, agentSetVersion: number | null = null) {
     return this.command(email, id, null, (glob, ctx) =>
-      machine.reportFailure(glob, { reason, runId }, ctx),
+      machine.reportFailure(glob, { reason, runId, agentSetVersion }, ctx),
     );
   }
 

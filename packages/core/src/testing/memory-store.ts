@@ -1,4 +1,5 @@
 import type { DomainEvent, Effect } from '../domain/events.js';
+import type { KbItem } from '../domain/kb.js';
 import type { Artifact, KnowledgeDoc } from '../domain/knowledge.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
@@ -15,6 +16,7 @@ interface State {
   knowledge: Map<string, KnowledgeDoc>;
   knowledgeHistory: KnowledgeDoc[];
   artifacts: Artifact[];
+  kbItems: Map<string, KbItem>;
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -31,6 +33,7 @@ const clone = (state: State): State => ({
   knowledge: new Map(state.knowledge),
   knowledgeHistory: [...state.knowledgeHistory],
   artifacts: [...state.artifacts],
+  kbItems: new Map(state.kbItems),
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -49,6 +52,7 @@ export class MemoryStore implements Store {
     knowledge: new Map(),
     knowledgeHistory: [],
     artifacts: [],
+    kbItems: new Map(),
   };
 
   async transaction<T>(work: (tx: Tx) => Promise<T>): Promise<T> {
@@ -168,6 +172,16 @@ export class MemoryStore implements Store {
       },
       artifactVersions: (globId, kind, label) =>
         Promise.resolve(s.artifacts.filter((a) => a.globId === globId && a.kind === kind && a.label === label)),
+      insertKbItem: (item) => {
+        if (s.kbItems.has(item.id)) return Promise.resolve(false);
+        s.kbItems.set(item.id, item);
+        return Promise.resolve(true);
+      },
+      getKbItem: (id) => Promise.resolve(s.kbItems.get(id) ?? null),
+      listKbItems: (boardId, status) =>
+        Promise.resolve(
+          [...s.kbItems.values()].filter((i) => i.boardId === boardId && (status === undefined || i.status === status)),
+        ),
       appendEvents: (events) => {
         s.events.push(...events);
         return Promise.resolve();

@@ -96,7 +96,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 | 1 | — | `planning` | Create (board, MCP or sstor) | Same | Valid type/category | Intake; planner recorded. No branch yet: it is provisioned when the glob enters Doing |
 | 2 | — | `implementing` | Create | Sub | Valid type/category | Provision branch, empty first commit and draft PR with labels; queue a routine run for the triggerer (fallback: default routine owner) |
 | 3 | — | `in_progress` | Create (`sstor --new --super` or MCP) | Super | Valid type/category | Provision as 2; implementer = creator |
-| 4 | — | `implementing` | Create with explicit auto-trigger or `runRoutine` | Same | Instruction explicit | As 2 |
+| 4 | — | `implementing` | Create with `autoTrigger` | Same | Instruction explicit | As 2 |
 | 5 | `planning` | `implementing` | Start (button or `start_glob`) | Same | — | Provision as 2; queue a routine run |
 | 6 | `planning`, `failed` | `in_progress` | Pick up | All | No run active or watching | Implementer = picker; provision as 2 if the glob has no branch yet; a queued run is cancelled together with its launch job |
 | 7 | `pr_open` | `pr_open` | Pick up | All | No run active or watching | Implementer = picker; status unchanged; a queued run is cancelled with its launch job |
@@ -160,7 +160,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | Tool | Input | Returns | Used by |
 | --- | --- | --- | --- |
 | `whoami` | — | user, boards, role per board | Sessionator, Claude app |
-| `create_glob` | board, input, idempotencyKey; optional title, summary, type, category, group, environment, runRoutine, links, autoTrigger | `{ id, version, branch, provisioning: none \| ok \| failed, status, type, category, group, environment, summary }` (same glob returned for a repeated key) | All |
+| `create_glob` | board, input, idempotencyKey; optional title, summary, type, category, group, environment, links, autoTrigger | `{ id, version, branch, provisioning: none \| ok \| failed, status, type, category, group, environment, summary }` (same glob returned for a repeated key) | All |
 | `get_glob` | id | full glob: status, version, generation, fields, labels, PR, current run (state, runId, owner, triggeredBy, started, last progress, cloud session ID and URL), run history, flags, artifact list | All |
 | `get_context` | id | assembled context bundle with citations | Routines, sessionator |
 | `list_globs` | board; optional status, type, group, person | glob summaries | Claude app |
@@ -171,7 +171,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `pick_up` | id, version; optional takeOver | updated glob, or `run_active` if a run is active or watching and takeOver is not set | Sessionator, Claude app |
 | `put_artifact` | id, kind (`implementation_plan`, `postplan`, `local_review`), content; optional commitSha, runId | artifact version (ignored if runId is superseded) | Routines, sessionator |
 | `mark_ready` | id; runId for routines | updated glob (moves to `pr_open` when GitHub confirms) | Routines, sessionator |
-| `report_failure` | id, reason; runId for routines | updated glob | Routines, sessionator |
+| `report_failure` | id, reason; runId for routines; optional agentSetVersion | updated glob | Routines, sessionator |
 | `get_board` | board | board settings: repo, base branch, environments, enabled integrations | Agents, sessionator |
 | `get_agent_set` | board | the board's agent set (agents, commands, hooks, settings, CLAUDE.md section) with its version | Sessionator (`sstor init`), routines |
 | `get_conventions` | board; optional area | without an area: the knowledge index (each document's title, area, description and audience, meaning the agents that must always be given it) plus approved learnings; with an area: that area's documents | Agents |
@@ -183,7 +183,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `get_build_results` | glob, commit or environment | build failures | Agents, chat |
 | `get_test_results` | glob, commit or environment | test runs and failures | Agents, chat |
 | `import_knowledge` | board, documents (name, content, optional frontmatter) | imported document ids; admins only | Claude in a session |
-| `submit_learning` | board, source glob id, type (decision, gotcha, pattern, agent-behaviour), statement, evidence; optional suggested target | KB item id (`s1k3`) | Agents |
+| `submit_learning` | board, source glob id, type (decision, gotcha, pattern, agent-behaviour), statement, evidence; optional suggested target, agentSetVersion, runId | KB item id (`s1k3`) | Agents |
 | `get_review_guide` | repo | the board's review guide | CodeRabbit, review agents |
 
 All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Claude app, Claude Code and routines all connect through the OAuth connector.

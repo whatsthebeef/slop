@@ -1,4 +1,5 @@
 import type { DomainEvent, Effect, Environment, Glob, Provenance } from '@slop/core';
+import { LEARNING_TYPES } from '@slop/core';
 import {
   bigserial,
   boolean,
@@ -199,4 +200,30 @@ export const artifacts = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
   (t) => [uniqueIndex('artifacts_version_idx').on(t.globId, t.kind, t.label, t.version)],
+);
+
+/** KB items (`s<board>k<n>`): learnings submitted by agents (later also mined), awaiting an admin's decision. */
+export const kbProposals = pgTable(
+  'kb_proposals',
+  {
+    id: text('id').primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: ['open', 'approved', 'rejected'] }).notNull(),
+    type: text('type', { enum: LEARNING_TYPES }).notNull(),
+    statement: text('statement').notNull(),
+    evidence: text('evidence').notNull(),
+    suggestedTarget: text('suggested_target'),
+    sourceGlobIds: jsonb('source_glob_ids').$type<string[]>().notNull(),
+    source: text('source', { enum: ['submitted', 'mined'] }).notNull(),
+    agentSetVersion: integer('agent_set_version'),
+    submittedBy: text('submitted_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    decidedBy: text('decided_by'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    decisionReason: text('decision_reason'),
+    version: integer('version').notNull(),
+  },
+  (t) => [index('kb_proposals_board_status_idx').on(t.boardId, t.status)],
 );

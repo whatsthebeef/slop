@@ -1,6 +1,6 @@
 import type { ArtifactService, BoardService, GlobService, IntakeService, KnowledgeService, Result } from '@slop/core';
 import { machine } from '@slop/core';
-import { CATEGORIES, SLOP_TYPES, STATUSES } from '@slop/core';
+import { CATEGORIES, LEARNING_TYPES, SLOP_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -245,10 +245,17 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
   server.registerTool(
     'report_failure',
     {
-      description: 'Report that the glob cannot be finished. Routines pass their run ID.',
-      inputSchema: { id: z.string(), reason: z.string().min(1), runId: z.string().optional() },
+      description:
+        'Report that the glob cannot be finished. Routines pass their run ID; pass the agent-set version from .claude/slop-agent-set.json.',
+      inputSchema: {
+        id: z.string(),
+        reason: z.string().min(1),
+        runId: z.string().optional(),
+        agentSetVersion: z.number().int().nonnegative().optional(),
+      },
     },
-    async ({ id, reason, runId }) => reply(await globs.reportFailure(email, id, reason, runId ?? null), (g) => globView(g)),
+    async ({ id, reason, runId, agentSetVersion }) =>
+      reply(await globs.reportFailure(email, id, reason, runId ?? null, agentSetVersion ?? null), (g) => globView(g)),
   );
 
   // ---------------------------------------------------------------------------
@@ -310,6 +317,39 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
   );
 
   server.registerTool(
+    'submit_learning',
+    {
+      description:
+        "Submit one learning from a run (orchestrator phase 6, /finalise) as a KB item for the board's admins to review; nothing changes the knowledge base until it is approved. Returns its ID (s1k3). Pass the agent-set version from .claude/slop-agent-set.json; routines pass their run ID.",
+      inputSchema: {
+        board: z.number().int(),
+        sourceGlobId: z.string().min(1).describe('The glob the learning came from'),
+        type: z
+          .enum(LEARNING_TYPES)
+          .describe('decision, gotcha, pattern, or agent-behaviour (something an instruction would have prevented)'),
+        statement: z.string().min(1).describe('The learning, as one rule or fact'),
+        evidence: z.string().min(1).describe('What showed it: files, review findings, failures, a developer correction'),
+        suggestedTarget: z.string().optional().describe('Where it belongs: a document, area or agent definition'),
+        agentSetVersion: z.number().int().nonnegative().optional(),
+        runId: z.string().optional(),
+      },
+    },
+    async ({ board, sourceGlobId, type, statement, evidence, suggestedTarget, agentSetVersion, runId }) => {
+      if (runId !== undefined) await deps.globs.applyEvent(sourceGlobId, (g, ctx) => machine.runProgress(g, runId, ctx));
+      return reply(
+        await knowledge.submitLearning(email, board, {
+          sourceGlobId,
+          type,
+          statement,
+          evidence,
+          suggestedTarget: suggestedTarget ?? null,
+          agentSetVersion: agentSetVersion ?? null,
+        }),
+      );
+    },
+  );
+
+  server.registerTool(
     'get_context',
     {
       description:
@@ -354,7 +394,7 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
         content: z.string().min(1),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
-        agentSetVersion: z.number().int().optional(),
+        agentSetVersion: z.number().int().nonnegative().optional(),
       },
     },
     async ({ id, kind, content, commitSha, runId, agentSetVersion }) => {

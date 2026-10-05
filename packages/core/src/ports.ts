@@ -1,5 +1,6 @@
 import type { DomainEvent, Effect } from './domain/events.js';
 import type { IdLetter } from './domain/ids.js';
+import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
@@ -49,6 +50,12 @@ export interface Tx {
   /** Latest version of each artifact (per kind and label), optionally of one kind. */
   listArtifacts(globId: string, kind?: ArtifactKind): Promise<Artifact[]>;
   artifactVersions(globId: string, kind: ArtifactKind, label: string): Promise<Artifact[]>;
+
+  /** Inserts a new KB item; returns false if the ID already exists. */
+  insertKbItem(item: KbItem): Promise<boolean>;
+  getKbItem(id: string): Promise<KbItem | null>;
+  /** A board's KB items, oldest first, optionally with one status. */
+  listKbItems(boardId: number, status?: KbItemStatus): Promise<KbItem[]>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;

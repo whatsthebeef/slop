@@ -1,5 +1,5 @@
-import type { Artifact, Board, Glob, GlobFilter, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, KNOWLEDGE_KINDS } from '@slop/core';
+import type { Artifact, Board, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, LEARNING_TYPES } from '@slop/core';
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -64,6 +64,15 @@ const toArtifact = (row: typeof schema.artifacts.$inferSelect): Artifact => ({
   ...row,
   kind: oneOf(ARTIFACT_KINDS, row.kind),
   createdAt: row.createdAt.toISOString(),
+});
+
+const toKbItem = (row: typeof schema.kbProposals.$inferSelect): KbItem => ({
+  ...row,
+  status: oneOf(KB_ITEM_STATUSES, row.status),
+  type: oneOf(LEARNING_TYPES, row.type),
+  source: oneOf(KB_ITEM_SOURCES, row.source),
+  createdAt: row.createdAt.toISOString(),
+  decidedAt: row.decidedAt?.toISOString() ?? null,
 });
 
 const globColumns = (glob: Glob) => ({
@@ -296,6 +305,34 @@ export class PgStore implements Store {
           .where(and(eq(schema.artifacts.globId, globId), eq(schema.artifacts.kind, kind), eq(schema.artifacts.label, label)))
           .orderBy(asc(schema.artifacts.version));
         return rows.map(toArtifact);
+      },
+
+      insertKbItem: async (item) => {
+        const rows = await t
+          .insert(schema.kbProposals)
+          .values({
+            ...item,
+            sourceGlobIds: [...item.sourceGlobIds],
+            createdAt: new Date(item.createdAt),
+            decidedAt: item.decidedAt === null ? null : new Date(item.decidedAt),
+          })
+          .onConflictDoNothing()
+          .returning({ id: schema.kbProposals.id });
+        return rows.length === 1;
+      },
+      getKbItem: async (id) => {
+        const [row] = await t.select().from(schema.kbProposals).where(eq(schema.kbProposals.id, id));
+        return row === undefined ? null : toKbItem(row);
+      },
+      listKbItems: async (boardId, status) => {
+        const conditions = [eq(schema.kbProposals.boardId, boardId)];
+        if (status !== undefined) conditions.push(eq(schema.kbProposals.status, status));
+        const rows = await t
+          .select()
+          .from(schema.kbProposals)
+          .where(and(...conditions))
+          .orderBy(asc(schema.kbProposals.createdAt), asc(schema.kbProposals.id));
+        return rows.map(toKbItem);
       },
 
       appendEvents: async (events) => {
