@@ -58,7 +58,8 @@ export const CreateGlobDialog = ({
         type: restricted && proposal.type === 'super' ? 'same' : proposal.type,
         category: proposal.category,
         group: proposal.group,
-        environment: form.environment,
+        // An environment the person already chose wins over one the request names.
+        environment: form.environment ?? proposal.environment,
         autoTrigger: proposal.autoTrigger,
       });
       setReason(proposal.autoTriggerReason);

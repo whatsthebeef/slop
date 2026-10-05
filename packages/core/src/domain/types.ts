@@ -103,6 +103,8 @@ export interface Glob {
 export interface Environment {
   readonly name: string;
   readonly allowBranchDeploy: boolean;
+  /** At most one per board: the environment a sub gets when it is created without one. */
+  readonly subDefault?: true;
 }
 
 export interface Board {

@@ -140,8 +140,11 @@ export class GlobService {
     return this.command(email, id, version, (glob, ctx) => machine.start(glob, ctx));
   }
 
-  pickUp(email: string, id: string, version: number, takeOver: boolean) {
-    return this.command(email, id, version, (glob, ctx) => machine.pickUp(glob, ctx, { takeOver }));
+  /** `environment` (optional) is chosen at pick-up; leaving it out keeps the glob's environment. */
+  pickUp(email: string, id: string, version: number, takeOver: boolean, environment?: string | null) {
+    return this.command(email, id, version, (glob, ctx, board) =>
+      machine.pickUp(glob, ctx, board, environment === undefined ? { takeOver } : { takeOver, environment }),
+    );
   }
 
   retrigger(email: string, id: string, version: number) {

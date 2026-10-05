@@ -83,7 +83,13 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
         type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing)'),
         category: z.enum(CATEGORIES).optional(),
         group: z.string().optional(),
-        environment: z.string().optional(),
+        environment: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "One of the board's environments that allows branch deploys. Without one, intake suggests an environment the request targets (\"deploy to staging\"), and a sub gets the board's default for subs",
+          ),
         autoTrigger: z.boolean().optional().describe('Same only: start a routine run straight away'),
       },
     },
@@ -96,6 +102,8 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
         group: input.group ?? null,
         autoTrigger: input.autoTrigger ?? false,
       };
+      // Intake suggests an environment the request names; an explicit one wins.
+      let suggestedEnvironment: string | null = null;
       if (input.title === undefined) {
         if (input.input === undefined || input.input.trim() === '') {
           return { ...json({ code: 'invalid_input', message: 'Pass a title, or the request as input' }), isError: true };
@@ -107,15 +115,18 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
             ...(input.type === undefined ? {} : { type: input.type }),
             ...(input.category === undefined ? {} : { category: input.category }),
             ...(input.group === undefined ? {} : { group: input.group }),
+            ...(input.environment === undefined ? {} : { environment: input.environment }),
           },
         });
         if (!proposal.ok) return reply(proposal);
-        fields = { ...proposal.value, autoTrigger: input.autoTrigger ?? proposal.value.autoTrigger };
+        const { environment, ...proposed } = proposal.value;
+        fields = { ...proposed, autoTrigger: input.autoTrigger ?? proposal.value.autoTrigger };
+        suggestedEnvironment = environment;
       }
       const created = await globs.create(email, {
         boardId: input.board,
         ...fields,
-        environment: input.environment ?? null,
+        environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
       });
       if (!created.ok) return reply(created);
@@ -221,11 +232,16 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'pick_up',
     {
       description:
-        'Become the glob\'s human implementer. Refused with run_active while a routine run is active or watching, unless takeOver is set.',
-      inputSchema: { id: z.string(), version: z.number().int(), takeOver: z.boolean().optional() },
+        'Become the glob\'s human implementer, optionally choosing its environment (one of the board\'s that allows branch deploys; leave it out to keep the current one). Refused with run_active while a routine run is active or watching, unless takeOver is set. QA and PO members can only pick up subs.',
+      inputSchema: {
+        id: z.string(),
+        version: z.number().int(),
+        takeOver: z.boolean().optional(),
+        environment: z.string().min(1).optional().describe("The environment this glob's branch deploys to"),
+      },
     },
-    async ({ id, version, takeOver }) => {
-      const result = await globs.pickUp(email, id, version, takeOver ?? false);
+    async ({ id, version, takeOver, environment }) => {
+      const result = await globs.pickUp(email, id, version, takeOver ?? false, environment);
       // Run the jobs it queued (a super's provisioning) now, as the REST action does.
       if (result.ok) await deps.outbox.drain(id);
       return reply(result, (g) => globView(g));

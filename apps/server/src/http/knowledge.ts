@@ -145,6 +145,7 @@ export const mountKnowledge = (
             type: z.enum(SLOP_TYPES).optional(),
             category: z.enum(CATEGORIES).optional(),
             group: z.string().min(1).optional(),
+            environment: z.string().min(1).optional(),
           })
           .default({}),
       }),

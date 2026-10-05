@@ -213,7 +213,8 @@ There are no board transitions to make: slop learns about pushes, the ready PR a
 
 Supers are pairing sessions between a developer and the PO. The developer drives; you do not run the phases.
 
-- On start (interactive only), call `pick_up` as above, then `get_context`, fetch the board knowledge, and write `.reviews/<id>-context.md` as in Phase 1 steps 1–4. Supers use the **postplan** rather than plan.md as the living record.
+- On start (interactive only), call `pick_up` as above, then `get_context`, fetch the board knowledge, and write `.reviews/<id>-context.md` as in Phase 1 steps 1–4. Supers use the **postplan** rather than plan.md as the living record; until the first postplan exists, `get_context` gives plan.md as the starting intent.
+- **Environment:** note the glob's `environment` from `get_glob` in the context file and tell the developer which environment the branch deploys to (or that none is set; they choose one with `sstor --glob <id> --env <name>`, `slop pick-up <id> --env <name>` or the glob view). Never change it yourself.
 - Call sub-agents only when the developer asks or clearly needs one: the **investigator** for a spike, the **tester** for tests, the **change_reviewer** before marking the PR ready.
 - **Postplan:** keep `.reviews/<id>-postplan.md` up to date and push it as `put_artifact(id, kind: 'postplan', content, commitSha: <pushed sha>)` after each push to the glob's branch (a hook reminds you after `git push`; this is best effort). Build it from the session conversation and `git diff <base>...HEAD`. Use this structure:
   ```

@@ -77,6 +77,22 @@ describe('create (rows 1–4)', () => {
     expect(errorCode(m.create(createInput({ environment: 'prod' }), board, ctx()))).toBe('invalid_input');
     expect(errorCode(m.create(createInput({ environment: 'nope' }), board, ctx()))).toBe('invalid_input');
   });
+
+  it("gives a new sub without an environment the board's default for subs, and nothing else", () => {
+    const withDefault = {
+      ...board,
+      environments: [
+        { name: 'dev', allowBranchDeploy: true },
+        { name: 'qa', allowBranchDeploy: true, subDefault: true as const },
+      ],
+    };
+    const sub = createInput({ type: 'sub' });
+    expect(value(m.create(sub, withDefault, ctx())).glob.environment).toBe('qa');
+    expect(value(m.create({ ...sub, environment: 'dev' }, withDefault, ctx())).glob.environment).toBe('dev');
+    expect(value(m.create(createInput(), withDefault, ctx())).glob.environment).toBeNull();
+    expect(value(m.create(createInput({ type: 'super', category: 'feature' }), withDefault, ctx())).glob.environment).toBeNull();
+    expect(value(m.create(sub, board, ctx())).glob.environment).toBeNull();
+  });
 });
 
 describe('start (row 5)', () => {
@@ -99,7 +115,7 @@ describe('start (row 5)', () => {
 describe('pick up (rows 6–10)', () => {
   it('row 6: from planning, the picker becomes implementer and a queued run is cancelled', () => {
     const t = value(
-      m.pickUp(glob({ runs: [run({ state: 'queued', startedAt: null })] }), ctx(), { takeOver: false }),
+      m.pickUp(glob({ runs: [run({ state: 'queued', startedAt: null })] }), ctx(), board, { takeOver: false }),
     );
     expect(t.glob.status).toBe('in_progress');
     expect(t.glob.implementer).toBe(dev.email);
@@ -108,28 +124,28 @@ describe('pick up (rows 6–10)', () => {
 
   it('row 6: from failed, clears the failure', () => {
     const t = value(
-      m.pickUp(glob({ status: 'failed', failure: { reason: 'x', at: 'y' } }), ctx(), { takeOver: false }),
+      m.pickUp(glob({ status: 'failed', failure: { reason: 'x', at: 'y' } }), ctx(), board, { takeOver: false }),
     );
     expect(t.glob.status).toBe('in_progress');
     expect(t.glob.failure).toBeNull();
   });
 
   it('row 7: from pr_open, status is unchanged', () => {
-    const t = value(m.pickUp(glob({ status: 'pr_open' }), ctx(), { takeOver: false }));
+    const t = value(m.pickUp(glob({ status: 'pr_open' }), ctx(), board, { takeOver: false }));
     expect(t.glob.status).toBe('pr_open');
     expect(t.glob.implementer).toBe(dev.email);
   });
 
   it('row 8: the current implementer picking up again is a no-op', () => {
     const t = value(
-      m.pickUp(glob({ status: 'in_progress', implementer: dev.email }), ctx(), { takeOver: false }),
+      m.pickUp(glob({ status: 'in_progress', implementer: dev.email }), ctx(), board, { takeOver: false }),
     );
     expect(t.changed).toBe(false);
   });
 
   it('row 9: someone else picking up changes the implementer', () => {
     const t = value(
-      m.pickUp(glob({ status: 'in_progress', implementer: dev.email }), ctx(other), { takeOver: false }),
+      m.pickUp(glob({ status: 'in_progress', implementer: dev.email }), ctx(other), board, { takeOver: false }),
     );
     expect(t.glob.implementer).toBe(other.email);
   });
@@ -137,28 +153,80 @@ describe('pick up (rows 6–10)', () => {
   it('is refused while a run is active or watching', () => {
     for (const state of ['active', 'watching'] as const) {
       const g = glob({ status: 'pr_open', runs: [run({ state })] });
-      expect(errorCode(m.pickUp(g, ctx(), { takeOver: false }))).toBe('run_active');
+      expect(errorCode(m.pickUp(g, ctx(), board, { takeOver: false }))).toBe('run_active');
     }
   });
 
   it('row 10: take over supersedes the run and bumps the generation', () => {
     const t = value(
-      m.pickUp(glob({ status: 'implementing', runs: [run()] }), ctx(), { takeOver: true }),
+      m.pickUp(glob({ status: 'implementing', runs: [run()] }), ctx(), board, { takeOver: true }),
     );
     expect(t.glob.status).toBe('in_progress');
     expect(t.glob.generation).toBe(2);
     expect(m.currentRun(t.glob)?.outcome).toBe('superseded');
 
     const watching = value(
-      m.pickUp(glob({ status: 'pr_open', runs: [run({ state: 'watching' })] }), ctx(), { takeOver: true }),
+      m.pickUp(glob({ status: 'pr_open', runs: [run({ state: 'watching' })] }), ctx(), board, { takeOver: true }),
     );
     expect(watching.glob.status).toBe('pr_open');
   });
 
   it('QA and PO cannot pick up or take over sames', () => {
-    expect(errorCode(m.pickUp(glob(), ctx(po), { takeOver: false }))).toBe('forbidden');
+    expect(errorCode(m.pickUp(glob(), ctx(po), board, { takeOver: false }))).toBe('forbidden');
     const sub = glob({ type: 'sub', status: 'failed' });
-    expect(value(m.pickUp(sub, ctx(po), { takeOver: false })).glob.implementer).toBe(po.email);
+    expect(value(m.pickUp(sub, ctx(po), board, { takeOver: false })).glob.implementer).toBe(po.email);
+  });
+
+  it('QA and PO cannot pick up supers, and are not offered it', () => {
+    const qa = { email: 'qa@example.com', role: 'qa' } as const;
+    const superGlob = glob({ type: 'super', category: 'feature', status: 'in_progress', implementer: dev.email });
+    for (const actor of [po, qa]) {
+      expect(errorCode(m.pickUp(superGlob, ctx(actor), board, { takeOver: false }))).toBe('forbidden');
+      expect(m.allowedActions(superGlob, actor)).not.toContain('pick_up');
+    }
+    expect(m.allowedActions(superGlob, other)).toContain('pick_up');
+  });
+});
+
+describe('environment at pick-up', () => {
+  it('sets a valid environment, records the change and relabels the PR', () => {
+    const t = value(m.pickUp(glob({ status: 'pr_open' }), ctx(), board, { takeOver: false, environment: 'dev' }));
+    expect(t.glob.environment).toBe('dev');
+    expect(t.glob.implementer).toBe(dev.email);
+    expect(t.events.find((e) => e.type === 'FieldsChanged')?.data).toEqual({ environment: { from: null, to: 'dev' } });
+    expect(effectKinds(t)).toEqual(['sync_pr_labels']);
+  });
+
+  it('does not queue a label sync before the glob has a PR', () => {
+    const t = value(m.pickUp(glob({ pr: null }), ctx(), board, { takeOver: false, environment: 'dev' }));
+    expect(t.glob.environment).toBe('dev');
+    expect(effectKinds(t)).not.toContain('sync_pr_labels');
+  });
+
+  it('refuses an environment the board lacks or that does not allow branch deploys', () => {
+    const g = glob({ status: 'pr_open' });
+    expect(errorCode(m.pickUp(g, ctx(), board, { takeOver: false, environment: 'nope' }))).toBe('invalid_input');
+    expect(errorCode(m.pickUp(g, ctx(), board, { takeOver: false, environment: 'prod' }))).toBe('invalid_input');
+  });
+
+  it('row 8 with a changed environment applies it; with the same one it stays a no-op', () => {
+    const mine = glob({ type: 'super', category: 'feature', status: 'in_progress', implementer: dev.email });
+    const t = value(m.pickUp(mine, ctx(), board, { takeOver: false, environment: 'dev' }));
+    expect(t.changed).toBe(true);
+    expect(t.glob.environment).toBe('dev');
+    expect(t.events.map((e) => e.type)).toEqual(['FieldsChanged']);
+    expect(effectKinds(t)).toEqual(['sync_pr_labels']);
+
+    const same = value(m.pickUp({ ...mine, environment: 'dev' }, ctx(), board, { takeOver: false, environment: 'dev' }));
+    expect(same.changed).toBe(false);
+  });
+
+  it('take over can set the environment, labelled at the new generation', () => {
+    const t = value(
+      m.pickUp(glob({ status: 'implementing', runs: [run()] }), ctx(), board, { takeOver: true, environment: 'dev' }),
+    );
+    expect(t.glob.environment).toBe('dev');
+    expect(t.effects).toContainEqual({ kind: 'sync_pr_labels', globId: 's1t1', generation: 2 });
   });
 });
 
@@ -408,7 +476,7 @@ describe('provisioning when a glob enters Doing', () => {
     const started = value(m.start(planning, ctx()));
     expect(started.glob.provisioning).toBe('pending');
     expect(effectKinds(started)).toEqual(['provision', 'fire_routine']);
-    expect(effectKinds(value(m.pickUp(planning, ctx(), { takeOver: false })))).toEqual(['provision']);
+    expect(effectKinds(value(m.pickUp(planning, ctx(), board, { takeOver: false })))).toEqual(['provision']);
   });
 
   it('subs, supers and auto-started sames provision at creation', () => {

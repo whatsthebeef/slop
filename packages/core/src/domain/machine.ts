@@ -226,7 +226,10 @@ export const create = (input: CreateInput, board: Board, ctx: Context): Result<T
     return forbidden('QA and PO members cannot create supers');
   }
   if (input.title.trim() === '') return invalidInput('A glob needs a title');
-  const envCheck = checkEnvironment(board, input.environment);
+  // A sub created without an environment gets the board's default for subs, if it has one.
+  const environment =
+    input.environment ?? (input.type === 'sub' ? (board.environments.find((e) => e.subDefault === true)?.name ?? null) : null);
+  const envCheck = checkEnvironment(board, environment);
   if (!envCheck.ok) return envCheck;
 
   const autoStart = input.type === 'same' && input.autoTrigger;
@@ -239,7 +242,7 @@ export const create = (input: CreateInput, board: Board, ctx: Context): Result<T
     type: input.type,
     category: input.category,
     group: input.group,
-    environment: input.environment,
+    environment,
     status,
     version: 0,
     generation: 1,
@@ -292,24 +295,37 @@ export const start = (glob: Glob, ctx: Context): Result<Transition> => {
   return new Builder(glob, ctx).status('implementing').queueRun(actor.email).done();
 };
 
-/** Rows 6–10: pick up, optionally taking over a routine run. */
-export const pickUp = (
-  glob: Glob,
-  ctx: Context,
-  options: { readonly takeOver: boolean },
-): Result<Transition> => {
-  const actor = requireActor(ctx);
-  if ((actor.role === 'qa' || actor.role === 'po') && glob.type === 'same') {
-    return forbidden('QA and PO members cannot pick up sames');
-  }
+/** Supers and sames are picked up by developers; QA and PO members only pick up subs. */
+const restrictedFrom = (actor: Actor, glob: Glob): boolean =>
+  (actor.role === 'qa' || actor.role === 'po') && glob.type !== 'sub';
 
-  // Row 8: the current implementer picking up again is a no-op.
+export interface PickUpOptions {
+  readonly takeOver: boolean;
+  /** Chosen at pick-up: must exist on the board and allow branch deploys. */
+  readonly environment?: string | null;
+}
+
+/** Rows 6–10: pick up, optionally taking over a routine run, optionally choosing the environment. */
+export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOptions): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (restrictedFrom(actor, glob)) {
+    return forbidden(`QA and PO members cannot pick up ${glob.type}s`);
+  }
+  const environment = options.environment;
+  if (environment !== undefined) {
+    const envCheck = checkEnvironment(board, environment);
+    if (!envCheck.ok) return envCheck;
+  }
+  const environmentChanged = environment !== undefined && environment !== glob.environment;
+
+  // Row 8: the current implementer picking up again is a no-op, unless it changes the environment.
   if (
     (glob.status === 'in_progress' || glob.status === 'pr_open') &&
     glob.implementer === actor.email &&
     !hasLiveRun(glob)
   ) {
-    return unchanged(glob);
+    if (!environmentChanged) return unchanged(glob);
+    return setEnvironment(new Builder(glob, ctx), environment).done();
   }
 
   if (options.takeOver) {
@@ -326,6 +342,7 @@ export const pickUp = (
       .set({ implementer: actor.email })
       .event('PickedUp', { takeOver: true });
     if (glob.status === 'implementing') b.status('in_progress');
+    if (environmentChanged) setEnvironment(b, environment);
     return b.done();
   }
 
@@ -348,7 +365,17 @@ export const pickUp = (
     default:
       return invalidTransition(glob, actor, `A glob in ${glob.status} cannot be picked up`);
   }
-  return b.event('PickedUp', { takeOver: false }).done();
+  b.event('PickedUp', { takeOver: false });
+  if (environmentChanged) setEnvironment(b, environment);
+  return b.done();
+};
+
+/** Records an environment chosen at pick-up as a field change, and relabels the PR (`env:<name>`). */
+const setEnvironment = (b: Builder, environment: string | null): Builder => {
+  const glob = b.current;
+  b.set({ environment }).event('FieldsChanged', { environment: { from: glob.environment, to: environment } });
+  if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  return b;
 };
 
 /** Row 20: re-trigger a failed sub or same on its existing branch. */
@@ -818,10 +845,10 @@ export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
 
 export const allowedActions = (glob: Glob, actor: Actor): Action[] => {
   const actions: Action[] = [];
-  const restricted = actor.role === 'qa' || actor.role === 'po';
+  const restricted = restrictedFrom(actor, glob);
   if (glob.status === 'planning' && glob.type === 'same') actions.push('start');
   const canPickUp =
-    !(restricted && glob.type === 'same') &&
+    !restricted &&
     !hasBusyRun(glob) &&
     (glob.status === 'planning' ||
       glob.status === 'failed' ||
@@ -829,7 +856,7 @@ export const allowedActions = (glob: Glob, actor: Actor): Action[] => {
         glob.implementer !== actor.email));
   if (canPickUp) actions.push('pick_up');
   if (
-    !(restricted && glob.type === 'same') &&
+    !restricted &&
     glob.type !== 'super' &&
     hasLiveRun(glob) &&
     (glob.status === 'implementing' || glob.status === 'pr_open')

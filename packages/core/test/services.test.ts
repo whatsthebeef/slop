@@ -157,4 +157,34 @@ describe('services', () => {
     expect(demote.ok).toBe(false);
     expect((await boards.memberships(DEV)).map((m) => m.role)).toEqual(['dev']);
   });
+
+  it("allows at most one subs' default environment, and only one that allows branch deploys", async () => {
+    const two = await boards.updateSettings(ADMIN, boardId, 1, {
+      environments: [
+        { name: 'a', allowBranchDeploy: true, subDefault: true },
+        { name: 'b', allowBranchDeploy: true, subDefault: true },
+      ],
+    });
+    expect(two.ok).toBe(false);
+    const locked = await boards.updateSettings(ADMIN, boardId, 1, {
+      environments: [{ name: 'a', allowBranchDeploy: false, subDefault: true }],
+    });
+    expect(locked.ok).toBe(false);
+    const board = unwrap(
+      await boards.updateSettings(ADMIN, boardId, 1, {
+        environments: [{ name: 'a', allowBranchDeploy: true, subDefault: true }, { name: 'b', allowBranchDeploy: true }],
+      }),
+    );
+    expect(board.environments[0]?.subDefault).toBe(true);
+  });
+
+  it('pick-up takes an optional environment and keeps the current one when it is left out', async () => {
+    unwrap(await boards.updateSettings(ADMIN, boardId, 1, { environments: [{ name: 'dev', allowBranchDeploy: true }] }));
+    const glob = unwrap(await globs.create(DEV, input()));
+    const picked = unwrap(await globs.pickUp(DEV, glob.id, glob.version, false, 'dev'));
+    expect(picked.environment).toBe('dev');
+    const again = unwrap(await globs.pickUp(DEV, picked.id, picked.version, false));
+    expect(again.environment).toBe('dev');
+    expect(again.version).toBe(picked.version);
+  });
 });

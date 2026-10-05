@@ -21,9 +21,9 @@ export interface GlobDeps {
 }
 
 export const GLOB_USAGE = 'glob <id> [--json]';
-export const PICK_UP_USAGE = 'pick-up <id> [--take-over] [--json]';
+export const PICK_UP_USAGE = 'pick-up <id> [--take-over] [--env <name>] [--json]';
 export const NEW_USAGE =
-  'new [--same|--sub|--super] [--feature|--task|--bug] [--routine] [--json] <prompt...>';
+  'new [--same|--sub|--super] [--feature|--task|--bug] [--routine] [--env <name>] [--json] <prompt...>';
 export const READY_USAGE = 'ready [<id>] [--json]';
 export const MERGE_USAGE = 'merge [<id>] [--json]';
 
@@ -58,6 +58,7 @@ const globSchema = z.object({
   branch: z.string(),
   implementer: z.string().nullable(),
   provisioning: z.string(),
+  environment: z.string().nullable().default(null),
   pr: prSchema.nullable(),
   currentRun: runSchema.nullable(),
 });
@@ -77,15 +78,36 @@ const markedReadySchema = z.object({ id: z.string(), status: z.string(), pr: prS
 
 interface ParsedArgs {
   readonly flags: ReadonlySet<string>;
+  /** Options that take a value (`--env dev` or `--env=dev`). */
+  readonly values: ReadonlyMap<string, string>;
   readonly positionals: readonly string[];
 }
 
-/** Splits flags from positionals; a flag outside `allowed` is a usage error. */
-function parseArgs(args: readonly string[], allowed: readonly string[], usage: string): ParsedArgs {
+/**
+ * Splits flags from positionals; a flag outside `allowed` (or `valued`, for options that take a
+ * value) is a usage error.
+ */
+function parseArgs(
+  args: readonly string[],
+  allowed: readonly string[],
+  usage: string,
+  valued: readonly string[] = [],
+): ParsedArgs {
   const flags = new Set<string>();
+  const values = new Map<string, string>();
   const positionals: string[] = [];
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? '';
     if (arg.startsWith('--')) {
+      const eq = arg.indexOf('=');
+      const name = eq < 0 ? arg : arg.slice(0, eq);
+      if (valued.includes(name)) {
+        const value = eq < 0 ? args[++i] : arg.slice(eq + 1);
+        if (value === undefined || value === '' || value.startsWith('--'))
+          throw new UsageError(`${name} needs a value\nusage: slop ${usage}`);
+        values.set(name, value);
+        continue;
+      }
       if (!allowed.includes(arg))
         throw new UsageError(`unknown option ${arg}\nusage: slop ${usage}`);
       flags.add(arg);
@@ -93,7 +115,7 @@ function parseArgs(args: readonly string[], allowed: readonly string[], usage: s
       positionals.push(arg);
     }
   }
-  return { flags, positionals };
+  return { flags, values, positionals };
 }
 
 function requireGlobId(id: string, usage: string): string {
@@ -158,6 +180,7 @@ function summary(glob: GlobView): Record<string, unknown> {
     branch: glob.branch,
     implementer: glob.implementer,
     provisioning: glob.provisioning,
+    environment: glob.environment,
     currentRun: glob.currentRun,
     pr: glob.pr,
   };
@@ -169,7 +192,8 @@ function describeGlob(glob: GlobView): string {
   const pr = glob.pr === null ? 'none' : `#${glob.pr.number} ${glob.pr.state}`;
   return (
     `${glob.id} [${glob.type} ${glob.category}] ${glob.status}: ${glob.title}` +
-    ` (branch ${glob.branch}; implementer ${glob.implementer ?? 'none'}; run ${run}; PR ${pr})`
+    ` (branch ${glob.branch}; ${glob.environment === null ? '' : `environment ${glob.environment}; `}` +
+    `implementer ${glob.implementer ?? 'none'}; run ${run}; PR ${pr})`
   );
 }
 
@@ -194,12 +218,15 @@ export async function globCommand(args: readonly string[], deps: GlobDeps): Prom
  * re-picking your own glob as a no-op (and it moves your own failed glob back to in_progress).
  */
 export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
-  const { flags, positionals } = parseArgs(args, ['--take-over', '--json'], PICK_UP_USAGE);
+  const { flags, values, positionals } = parseArgs(args, ['--take-over', '--json'], PICK_UP_USAGE, [
+    '--env',
+  ]);
   const [given] = positionals;
   if (given === undefined || positionals.length !== 1)
     throw new UsageError(`usage: slop ${PICK_UP_USAGE}`);
   const id = requireGlobId(given, PICK_UP_USAGE);
   const takeOver = flags.has('--take-over');
+  const environment = values.get('--env');
 
   const glob = await getGlob(deps, id);
   if (MERGED_STATUSES.has(glob.status))
@@ -218,6 +245,7 @@ export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Pr
       id,
       version: glob.version,
       ...(takeOver && run !== null ? { takeOver: true } : {}),
+      ...(environment === undefined ? {} : { environment }),
     }),
     'pick_up',
   );
@@ -285,11 +313,13 @@ function boardSetting(settings: Settings): number {
 
 /** `slop new`: create a glob through intake on the configured board. */
 export async function newCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
-  const { flags, positionals } = parseArgs(
+  const { flags, values, positionals } = parseArgs(
     args,
     [...Object.keys(TYPE_FLAGS), ...Object.keys(CATEGORY_FLAGS), '--routine', '--json'],
     NEW_USAGE,
+    ['--env'],
   );
+  const environment = values.get('--env');
   const type = oneOf(flags, TYPE_FLAGS);
   const category = oneOf(flags, CATEGORY_FLAGS);
   const routine = flags.has('--routine');
@@ -307,6 +337,7 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
       ...(type === undefined ? {} : { type }),
       ...(category === undefined ? {} : { category }),
       ...(routine ? { autoTrigger: true } : {}),
+      ...(environment === undefined ? {} : { environment }),
     }),
   );
   if (!created.success) throw new SlopError('create_glob: unexpected response from slop');
