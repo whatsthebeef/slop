@@ -179,7 +179,7 @@ foreground() {
   local env_file=()
   [[ -f "$root/apps/server/.env.cognito" ]] && env_file=(--env-file=.env.cognito)
   cd "$root/apps/server"
-  LOCAL_SIGN_IN_WITHOUT_COOKIE=true node ${env_file[@]+"${env_file[@]}"} --conditions=development --import tsx src/main.ts
+  LOCAL_SIGN_IN_WITHOUT_COOKIE=true node ${env_file[@]+"${env_file[@]}"} --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts
 }
 
 list_snapshots() {
