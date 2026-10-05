@@ -7,9 +7,9 @@ import './index.css';
 import { RequestError } from './lib/api';
 import { BoardPage } from './pages/board';
 import { KnowledgePage } from './pages/knowledge';
-import { HomePage, LoginPage } from './pages/home';
+import { BoardsPage, HomePage, LoginPage } from './pages/home';
 import { SettingsPage, SignedOffPage } from './pages/settings';
-import { ThemeToggle } from './components/theme-toggle';
+import { BoardShell } from './components/board-shell';
 import { ToastProvider } from './toast';
 
 const client = new QueryClient({
@@ -47,14 +47,16 @@ createRoot(root).render(
             <Routes>
               <Route path='/login' element={<LoginPage />} />
               <Route path='/' element={<HomePage />} />
-              <Route path='/boards/:boardId' element={<BoardPage />} />
-              <Route path='/boards/:boardId/signed-off' element={<SignedOffPage />} />
-              <Route path='/boards/:boardId/settings' element={<SettingsPage />} />
-              <Route path='/boards/:boardId/knowledge' element={<KnowledgePage />} />
+              <Route path='/boards' element={<BoardsPage />} />
+              <Route path='/boards/:boardId' element={<BoardShell />}>
+                <Route index element={<BoardPage />} />
+                <Route path='signed-off' element={<SignedOffPage />} />
+                <Route path='settings' element={<SettingsPage />} />
+                <Route path='knowledge' element={<KnowledgePage />} />
+              </Route>
             </Routes>
           </RequireSession>
         </BrowserRouter>
-        <ThemeToggle />
       </ToastProvider>
     </QueryClientProvider>
   </StrictMode>,

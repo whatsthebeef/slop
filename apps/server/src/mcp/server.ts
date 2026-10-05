@@ -1,6 +1,6 @@
 import type { ArtifactService, BoardService, GlobService, IntakeService, KnowledgeService, Result } from '@slop/core';
-import { machine } from '@slop/core';
-import { CATEGORIES, LEARNING_TYPES, SLOP_TYPES, STATUSES } from '@slop/core';
+import { invalidInput, machine } from '@slop/core';
+import { CATEGORIES, LABEL_NAMES, LEARNING_TYPES, SLOP_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -10,6 +10,7 @@ import type { Auth } from '../auth.js';
 import type { Env } from '../http/app.js';
 import { renderAgentSetFile } from '../catalog.js';
 import type { SignedLinks } from '../signed-links.js';
+import { parseLabelCommand } from '../http/labels.js';
 import { requestOrigin } from '../http/origin.js';
 import { errorBody, globView, onBoard } from '../http/views.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
@@ -260,6 +261,34 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
       // Run the squash_merge job now and answer with the glob as it then is, as the REST action does.
       await deps.outbox.drain(id);
       return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
+    },
+  );
+
+  /** Approve and reopen are sign-off decisions, made on the board, not through MCP. */
+  const MCP_LABEL_COMMAND_KINDS = ['submit_items', 'tick', 'resubmit'] as const;
+
+  server.registerTool(
+    'review_label',
+    {
+      description:
+        "Work on a merged glob's sign-off label (FR, CR or QA) and its review checklist. Reviewer: submit_items (items: one or more texts; label required → added). Developer: tick (itemId, done) while items are added, or resubmit (added → required, items and ticks kept). Approving and re-opening a review are human decisions made on the board, so this tool refuses them. Pass the version you read.",
+      inputSchema: {
+        id: z.string(),
+        version: z.number().int(),
+        label: z.enum(LABEL_NAMES),
+        kind: z.enum(MCP_LABEL_COMMAND_KINDS),
+        items: z.array(z.string()).optional().describe('submit_items: the items to add'),
+        itemId: z.string().optional().describe('tick: the item'),
+        done: z.boolean().optional().describe('tick: true to tick, false to untick'),
+      },
+    },
+    async ({ id, version, label, ...input }) => {
+      // Sign-off stays human (like merging): slop can't tell an agent from its developer over MCP.
+      const command = parseLabelCommand(input);
+      if (command === null) {
+        return reply(invalidInput('submit_items needs items; tick needs itemId and done'));
+      }
+      return reply(await globs.reviewLabel(email, id, version, label, command), (g) => globView(g));
     },
   );
 

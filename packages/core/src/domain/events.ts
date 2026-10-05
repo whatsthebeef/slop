@@ -23,6 +23,7 @@ export const DOMAIN_EVENT_TYPES = [
   'Merged',
   'MergeFailed',
   'LabelChanged',
+  'LabelItemTicked',
   'PickedUp',
   'ArtifactAdded',
   'DeployStarted',

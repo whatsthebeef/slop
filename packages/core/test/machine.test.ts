@@ -334,26 +334,127 @@ describe('re-trigger, start again, delete (rows 20, 23, 24)', () => {
   });
 });
 
-describe('labels (rows 21–22)', () => {
-  const reviewing = glob({ status: 'reviewing', labels: { FR: 'added', CR: 'added', QA: 'required' } });
+describe('labels and review checklists (rows 21, 22, 27–30)', () => {
+  const reviewing = glob({ status: 'reviewing', labels: { FR: 'approved', CR: 'approved', QA: 'required' } });
+  const items = (t: m.Transition, name: 'FR' | 'CR' | 'QA' = 'QA') => t.glob.checklists[name] ?? [];
 
-  it('row 21: the last required label switched to Added signs off', () => {
-    const t = value(m.setLabel(reviewing, 'QA', 'added', ctx()));
-    expect(t.glob.status).toBe('signed_off');
-    expect(t.glob.signedOffAt).not.toBeNull();
-  });
-
-  it('row 22: switching back to Required returns to reviewing', () => {
-    const signedOff = value(m.setLabel(reviewing, 'QA', 'added', ctx())).glob;
-    const t = value(m.setLabel(signedOff, 'FR', 'required', ctx()));
+  it('row 27: the reviewer submits items on a required label', () => {
+    const t = value(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: [' Fix copy ', '', 'Add test'] }, ctx()));
+    expect(t.glob.labels.QA).toBe('added');
     expect(t.glob.status).toBe('reviewing');
-    expect(t.glob.signedOffAt).toBeNull();
+    expect(items(t)).toEqual([
+      { id: '1', text: 'Fix copy', done: false, addedBy: dev.email, addedAt: NOW, doneBy: null, doneAt: null },
+      { id: '2', text: 'Add test', done: false, addedBy: dev.email, addedAt: NOW, doneBy: null, doneAt: null },
+    ]);
+    expect(t.events[0]).toMatchObject({
+      type: 'LabelChanged',
+      actor: dev.email,
+      data: { label: 'QA', from: 'required', to: 'added', items: ['Fix copy', 'Add test'] },
+    });
   });
 
-  it('labels that are not required cannot be switched', () => {
-    expect(errorCode(m.setLabel(glob({ status: 'reviewing', labels: { QA: 'required' } }), 'FR', 'added', ctx()))).toBe(
+  it('submitting needs at least one item and a required label', () => {
+    expect(errorCode(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: [' ', ''] }, ctx()))).toBe(
+      'invalid_input',
+    );
+    expect(errorCode(m.reviewLabel(reviewing, 'FR', { kind: 'submit_items', items: ['x'] }, ctx()))).toBe(
       'invalid_transition',
     );
+  });
+
+  it('row 28 and row 21: approving the last label without items signs off', () => {
+    const t = value(m.reviewLabel(reviewing, 'QA', { kind: 'approve' }, ctx()));
+    expect(t.glob.labels.QA).toBe('approved');
+    expect(t.glob.status).toBe('signed_off');
+    expect(t.glob.signedOffAt).toBe(NOW);
+    expect(t.events.map((e) => e.type)).toEqual(['LabelChanged', 'StatusChanged']);
+  });
+
+  it('row 28: approving a label with items keeps them, ticked or not, and signs off', () => {
+    const added = value(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: ['a', 'b'] }, ctx())).glob;
+    const ticked = value(m.reviewLabel(added, 'QA', { kind: 'tick', itemId: '1', done: true }, ctx())).glob;
+    const t = value(m.reviewLabel(ticked, 'QA', { kind: 'approve' }, ctx()));
+    expect(t.glob.status).toBe('signed_off');
+    expect(items(t).map((i) => i.done)).toEqual([true, false]);
+    expect(t.events[0]?.data).toMatchObject({ from: 'added', to: 'approved', open: 1 });
+  });
+
+  it('approving while other labels are open does not sign off; approving twice is a no-op', () => {
+    const open = glob({ status: 'reviewing', labels: { FR: 'required', CR: 'added', QA: 'required' } });
+    const t = value(m.reviewLabel(open, 'QA', { kind: 'approve' }, ctx()));
+    expect(t.glob.status).toBe('reviewing');
+    expect(value(m.reviewLabel(t.glob, 'QA', { kind: 'approve' }, ctx())).changed).toBe(false);
+  });
+
+  it('row 29: the developer ticks and unticks items while the label has items added', () => {
+    const added = value(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: ['a'] }, ctx())).glob;
+    const ticked = value(m.reviewLabel(added, 'QA', { kind: 'tick', itemId: '1', done: true }, ctx(other)));
+    expect(ticked.glob.labels.QA).toBe('added');
+    expect(items(ticked)[0]).toMatchObject({ done: true, doneBy: other.email, doneAt: NOW });
+    expect(ticked.events).toMatchObject([{ type: 'LabelItemTicked', data: { label: 'QA', item: '1', done: true } }]);
+    expect(value(m.reviewLabel(ticked.glob, 'QA', { kind: 'tick', itemId: '1', done: true }, ctx())).changed).toBe(false);
+    const unticked = value(m.reviewLabel(ticked.glob, 'QA', { kind: 'tick', itemId: '1', done: false }, ctx()));
+    expect(items(unticked)[0]).toMatchObject({ done: false, doneBy: null, doneAt: null });
+    expect(errorCode(m.reviewLabel(added, 'QA', { kind: 'tick', itemId: '9', done: true }, ctx()))).toBe('invalid_input');
+  });
+
+  it('items cannot be ticked while the label waits for its reviewer', () => {
+    const added = value(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: ['a'] }, ctx())).glob;
+    const resubmitted = value(m.reviewLabel(added, 'QA', { kind: 'resubmit' }, ctx())).glob;
+    expect(errorCode(m.reviewLabel(resubmitted, 'QA', { kind: 'tick', itemId: '1', done: true }, ctx()))).toBe(
+      'invalid_transition',
+    );
+  });
+
+  it('row 30: resubmitting with items unticked returns the label to required, keeping items and ticks', () => {
+    const added = value(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: ['a', 'b'] }, ctx())).glob;
+    const ticked = value(m.reviewLabel(added, 'QA', { kind: 'tick', itemId: '2', done: true }, ctx())).glob;
+    const t = value(m.reviewLabel(ticked, 'QA', { kind: 'resubmit' }, ctx()));
+    expect(t.glob.labels.QA).toBe('required');
+    expect(items(t).map((i) => [i.text, i.done])).toEqual([
+      ['a', false],
+      ['b', true],
+    ]);
+    expect(t.events[0]?.data).toMatchObject({ from: 'added', to: 'required', open: 1 });
+    // The reviewer's next round adds to the same list.
+    const again = value(m.reviewLabel(t.glob, 'QA', { kind: 'submit_items', items: ['c'] }, ctx()));
+    expect(items(again).map((i) => i.id)).toEqual(['1', '2', '3']);
+    expect(errorCode(m.reviewLabel(t.glob, 'QA', { kind: 'resubmit' }, ctx()))).toBe('invalid_transition');
+  });
+
+  it('row 22: re-opening an approved label returns a signed-off glob to reviewing, keeping its items', () => {
+    const added = value(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: ['a'] }, ctx())).glob;
+    const signedOff = value(m.reviewLabel(added, 'QA', { kind: 'approve' }, ctx())).glob;
+    const t = value(m.reviewLabel(signedOff, 'FR', { kind: 'reopen' }, ctx()));
+    expect(t.glob.status).toBe('reviewing');
+    expect(t.glob.signedOffAt).toBeNull();
+    expect(t.glob.labels.FR).toBe('required');
+    expect(t.glob.checklists.QA).toHaveLength(1);
+    expect(errorCode(m.reviewLabel(t.glob, 'FR', { kind: 'reopen' }, ctx()))).toBe('invalid_transition');
+  });
+
+  it("a signed-off glob's checklists are read-only", () => {
+    const added = value(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: ['a'] }, ctx())).glob;
+    const signedOff = value(m.reviewLabel(added, 'QA', { kind: 'approve' }, ctx())).glob;
+    expect(signedOff.status).toBe('signed_off');
+    expect(errorCode(m.reviewLabel(signedOff, 'QA', { kind: 'tick', itemId: '1', done: true }, ctx()))).toBe(
+      'invalid_transition',
+    );
+    expect(errorCode(m.reviewLabel(signedOff, 'QA', { kind: 'submit_items', items: ['b'] }, ctx()))).toBe(
+      'invalid_transition',
+    );
+    expect(errorCode(m.reviewLabel(signedOff, 'QA', { kind: 'resubmit' }, ctx()))).toBe('invalid_transition');
+  });
+
+  it('labels that are not required cannot be acted on', () => {
+    expect(
+      errorCode(m.reviewLabel(glob({ status: 'reviewing', labels: { QA: 'required' } }), 'FR', { kind: 'approve' }, ctx())),
+    ).toBe('invalid_transition');
+  });
+
+  it('a merge starts with fresh labels and empty checklists', () => {
+    const t = value(m.merged(glob({ status: 'merging', checklists: { QA: [] } }), { sha: 'abc' }, ctx()));
+    expect(t.glob.checklists).toEqual({});
   });
 });
 
