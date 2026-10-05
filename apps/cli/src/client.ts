@@ -68,6 +68,41 @@ export class SlopClient {
     return value;
   }
 
+  /**
+   * Calls slop's REST API (the board's own API) with the CLI's sign-in: `path` starts with /api/.
+   * Returns the JSON response; a non-2xx status throws with slop's message.
+   */
+  async rest(method: string, path: string, body?: unknown): Promise<unknown> {
+    if (!path.startsWith('/api/')) throw new SlopError(`${path}: slop's REST paths start with /api/`);
+    const send = async (token: string): Promise<RawResponse> => {
+      const url = `${this.deps.slopUrl}${path}`;
+      try {
+        const response = await this.deps.fetch(url, {
+          method,
+          headers: {
+            authorization: `Bearer ${token}`,
+            ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+        });
+        return { status: response.status, contentType: response.headers.get('content-type') ?? '', text: await response.text() };
+      } catch (error) {
+        throw new SlopError(`could not reach ${url}: ${describeError(error)}`);
+      }
+    };
+    let response = await send(await this.deps.accessToken(false));
+    if (response.status === 401) response = await send(await this.deps.accessToken(true));
+    const value = parseJsonOrUndefined(response.text);
+    if (response.status < 200 || response.status >= 300) {
+      const domainError = domainErrorSchema.safeParse(value);
+      throw new SlopError(
+        `${method} ${path} failed (${String(response.status)}): ${domainError.success ? domainError.data.message : response.text.slice(0, 200)}`,
+      );
+    }
+    return value ?? null;
+  }
+
   private async post(body: string, token: string): Promise<RawResponse> {
     const endpoint = `${this.deps.slopUrl}/mcp`;
     try {
