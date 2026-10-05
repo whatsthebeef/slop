@@ -11,7 +11,9 @@ export interface RoutineSecret {
 
 /**
  * Each developer's routine fire URL and token. Locally a gitignored file keyed by email
- * (`.routines.json`); in production Secrets Manager at `slop/routines/<email>`.
+ * (`.routines.json`); in production Secrets Manager at `slop/routines/<email>`. A routine's cloud
+ * environment has a fixed set of repositories, so a developer can add one per board under
+ * `<email>#<boardId>`; a board without its own entry uses the developer's default.
  */
 export class FileRoutines implements RoutineDirectory {
   constructor(private readonly file: string) {}
@@ -29,8 +31,10 @@ export class FileRoutines implements RoutineDirectory {
     return (await this.secretFor(email)) !== null;
   }
 
-  async secretFor(email: string): Promise<RoutineSecret | null> {
-    return (await this.all())[email.toLowerCase()] ?? null;
+  async secretFor(email: string, boardId?: number): Promise<RoutineSecret | null> {
+    const all = await this.all();
+    const key = email.toLowerCase();
+    return (boardId === undefined ? undefined : all[`${key}#${String(boardId)}`]) ?? all[key] ?? null;
   }
 }
 
@@ -71,11 +75,16 @@ export const fireRoutine = async (secret: RoutineSecret, text: string): Promise<
     : { outcome: 'failed', reason: message };
 };
 
-/** The text a routine run receives: which glob, which run, and how to start. */
-export const runInstructions = (glob: { id: string; title: string }, runId: string): string =>
+/** The text a routine run receives: which glob, which run, which repository, and how to start. */
+export const runInstructions = (glob: { id: string; title: string }, runId: string, repo: string | null): string =>
   [
     `Slop glob ${glob.id}: ${glob.title}`,
     `Run ID: ${runId}`,
+    ...(repo === null
+      ? []
+      : [
+          `Repository: ${repo}. Work in that repository's checkout. If this session doesn't have it, or can't push to it, call slop's report_failure with the run ID saying so (the routine's environment needs ${repo} and the Claude GitHub App installed on it); don't work in another repository.`,
+        ]),
     '',
     `Work on the glob's branch, ${glob.id}, which already exists on origin with an open draft PR: run \`git fetch origin ${glob.id} && git checkout -B ${glob.id} origin/${glob.id}\` first. Push only to ${glob.id} (\`git push origin ${glob.id}\`); never create or push a claude/ branch, and never open a new PR.`,
     '',

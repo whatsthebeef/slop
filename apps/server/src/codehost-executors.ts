@@ -138,14 +138,15 @@ export const codeHostExecutors = (
       if (run?.id !== effect.runId || run.state !== 'queued') return 'dropped';
       // A routine works on the glob's branch, so it is only fired once that exists.
       if (glob.provisioning !== 'ok') throw new Error(`${glob.id} is not provisioned yet`);
-      const secret = await routines.secretFor(effect.routineOwner);
+      const secret = await routines.secretFor(effect.routineOwner, glob.boardId);
       if (secret === null) {
         await globs.applyEvent(glob.id, (g, ctx) =>
           machine.reportFailure(g, { reason: `${effect.routineOwner} has no routine set up`, runId: effect.runId }, ctx),
         );
         return 'done';
       }
-      const result = await fireRoutine(secret, runInstructions(glob, effect.runId));
+      const repo = await repoFor(glob.boardId);
+      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`));
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));
