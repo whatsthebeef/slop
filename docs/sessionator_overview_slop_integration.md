@@ -103,6 +103,7 @@ The five agents and the `/run-task` command leave the sessionator repo and becom
 1. `sstor --new --super "<prompt>"` (or `--glob` for a super created elsewhere); the glob appears in Doing with the developer as implementer.
 2. The developer works with Claude in super mode, pushing regularly to the glob's branch. Slop starts a CodeBuild deploy to the glob's environment (a branch-deploy environment) on each push.
 3. Each push also updates the postplan from the session conversation and the diff (`put_artifact`, kind `postplan`).
+   Finished pieces land mid-way with Merge and continue (board, or `slop merge --continue`, once the PR is ready and the postplan is at its head): slop squash-merges, the glob stays in Doing and the next push opens a fresh draft PR. Related work stays in the one super; Claude never creates a super from inside a super. Unrelated work wanted now becomes its own glob with a handover in its summary, started in its own session with `sstor --glob <id>`, never by switching the super's worktree.
 4. When ready: the change\_reviewer runs locally, the review is pushed as `local_review`, and `sstor --ready` marks the PR ready, triggering ATF and the remote review.
 5. When the meeting's Gemini notes arrive in slop, they are merged into the postplan.
 6. `sstor --derge` squash-merges the PR and cleans up; the next super always starts from master.
