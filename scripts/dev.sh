@@ -48,7 +48,8 @@ start() {
   local env_file=""
   [[ -f "$root/apps/server/.env.cognito" ]] && env_file="--env-file=.env.cognito"
   # tmux sessions inherit the tmux server's environment, so pass what the server needs.
-  local env_args=()
+  # LOCAL_SIGN_IN_WITHOUT_COOKIE: Chrome drops the sign-in state cookie on plain-http localhost.
+  local env_args=(-e "LOCAL_SIGN_IN_WITHOUT_COOKIE=true")
   [[ -n "${AWS_PROFILE:-}" ]] && env_args+=(-e "AWS_PROFILE=$AWS_PROFILE")
   tmux new-session -d -s "$session" ${env_args[@]+"${env_args[@]}"} -n server -c "$root/apps/server" \
     "node $env_file --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts; read"
@@ -70,7 +71,7 @@ foreground() {
   local env_file=()
   [[ -f "$root/apps/server/.env.cognito" ]] && env_file=(--env-file=.env.cognito)
   cd "$root/apps/server"
-  node ${env_file[@]+"${env_file[@]}"} --conditions=development --import tsx src/main.ts
+  LOCAL_SIGN_IN_WITHOUT_COOKIE=true node ${env_file[@]+"${env_file[@]}"} --conditions=development --import tsx src/main.ts
 }
 
 case "$action" in

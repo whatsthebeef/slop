@@ -124,7 +124,8 @@ export const createApp = (deps: AppDeps) => {
       deleteCookie(c, STATE_COOKIE, { path: '/auth' });
       const code = c.req.query('code');
       const local = originOf(c).startsWith('http://localhost');
-      const check = checkSignInState(deps.links, c.req.query('state'), cookie, !local);
+      const cookieOptional = local && auth.config.LOCAL_SIGN_IN_WITHOUT_COOKIE;
+      const check = checkSignInState(deps.links, c.req.query('state'), cookie, !cookieOptional);
       if (!check.ok || code === undefined) {
         // Which check failed, and which cookies arrived (names only), so a failed sign-in can be diagnosed.
         const cookieNames = (c.req.header('cookie') ?? '').split(';').map((p) => p.split('=')[0]?.trim()).filter(Boolean).join(',');
