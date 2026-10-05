@@ -23,7 +23,7 @@ new AuthStack(app, `slop-${stage}-auth`, {
   ],
   boardLogoutUrls: [...csv('boardLogoutUrls', ['http://localhost:3000/', 'http://localhost:5173/']), ...extraOrigins.map((o) => `${o}/`)],
   claudeCodeCallbackUrls: csv('claudeCodeCallbackUrls', ['http://localhost:7779/callback']),
-  sstorCallbackUrls: csv('sstorCallbackUrls', ['http://localhost:7780/callback']),
+  cliCallbackUrls: csv('cliCallbackUrls', ['http://localhost:7780/callback']),
   identityCenterMetadataUrl: (app.node.tryGetContext('identityCenterMetadataUrl') as string | undefined) ?? null,
   tags: { project: 'slop', stage },
 });
