@@ -34,17 +34,39 @@ const ACTION_TIPS: Partial<Record<Action, string>> = {
 
 const { POSTPLAN_NOT_AT_HEAD } = machine;
 
+/** Why an action the glob is heading for isn't available yet. */
+interface Waiting {
+  readonly action: Action;
+  readonly reason: string;
+}
+
 /**
- * A super's actions that need the latest postplan at the PR head, shown disabled with the reason
- * while they would otherwise apply.
+ * Actions the glob is heading for but can't take yet, shown disabled with the reason: merging
+ * waits for the checks on the PR head, and a super's Merge and continue and Ready for review wait
+ * for the latest postplan at the head.
  */
-const waitingOnPostplan = (glob: GlobView, actions: readonly Action[], role: Role): Action[] => {
-  // QA and PO can't take these actions at all, so a postplan reason would mislead them.
-  if (glob.type !== 'super' || role === 'qa' || role === 'po') return [];
-  const waiting: Action[] = [];
-  if (actions.includes('merge') && !actions.includes('merge_continue')) waiting.push('merge_continue');
+const waitingFor = (glob: GlobView, actions: readonly Action[], role: Role): Waiting[] => {
+  // QA and PO can't take these actions at all, so a reason would mislead them.
+  if (role === 'qa' || role === 'po') return [];
+  const waiting: Waiting[] = [];
+  if (glob.status === 'pr_open' && glob.type !== 'sub' && !actions.includes('merge')) {
+    const head = glob.pr?.headSha ?? null;
+    const checks = glob.headChecks;
+    const reason =
+      head === null
+        ? 'Waiting for the PR head'
+        : checks?.sha === head && checks.state === 'failed'
+          ? `Checks failed on ${head.slice(0, 7)}; push a fix`
+          : `Waiting for the checks on ${head.slice(0, 7)} to pass`;
+    waiting.push({ action: 'merge', reason });
+    if (glob.type === 'super') waiting.push({ action: 'merge_continue', reason });
+  }
+  if (glob.type !== 'super') return waiting;
+  if (actions.includes('merge') && !actions.includes('merge_continue')) {
+    waiting.push({ action: 'merge_continue', reason: POSTPLAN_NOT_AT_HEAD });
+  }
   if (glob.status === 'in_progress' && glob.pr?.state === 'draft' && !actions.includes('mark_ready')) {
-    waiting.push('mark_ready');
+    waiting.push({ action: 'mark_ready', reason: POSTPLAN_NOT_AT_HEAD });
   }
   return waiting;
 };
@@ -65,7 +87,8 @@ export const GlobDialog = ({
   initialArtifact: ArtifactRef | null;
   onClose: () => void;
   onUpdate: (changes: GlobChanges) => Promise<void>;
-  onAction: (action: Action) => Promise<void>;
+  /** Resolves false when the action failed. */
+  onAction: (action: Action) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
   onDelete: () => Promise<void>;
 }) => {
@@ -79,7 +102,10 @@ export const GlobDialog = ({
   const merged = { ...glob, ...draft };
   const dirty = Object.keys(draft).length > 0;
   const actions = (glob.allowedActions ?? []).filter((a) => a !== 'delete');
-  const disabled = waitingOnPostplan(glob, actions, board.role);
+  const disabled = waitingFor(glob, actions, board.role);
+  // Ready for review changes nothing until GitHub confirms, so say it was asked for meanwhile.
+  const [readyAsked, setReadyAsked] = useState(false);
+  const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
 
   const run = async (work: () => Promise<void>) => {
@@ -141,7 +167,12 @@ export const GlobDialog = ({
                       variant={action === 'start_again' ? 'outline' : 'default'}
                       size='sm'
                       disabled={busy}
-                      onClick={() => void run(() => onAction(action))}
+                      onClick={() =>
+                        void run(async () => {
+                          const done = await onAction(action);
+                          if (done && action === 'mark_ready') setReadyAsked(true);
+                        })
+                      }
                     >
                       {ACTION_LABELS[action]}
                     </Button>
@@ -155,17 +186,26 @@ export const GlobDialog = ({
                     </Tip>
                   );
                 })}
-                {disabled.map((action) => (
-                  <Tip key={action} text={POSTPLAN_NOT_AT_HEAD}>
+                {disabled.map(({ action, reason }) => (
+                  <Tip key={action} text={reason}>
                     <Button variant='outline' size='sm' disabled>
                       {ACTION_LABELS[action]}
                     </Button>
                   </Tip>
                 ))}
               </div>
-              {disabled.length > 0 && (
-                <p className='text-xs text-muted-foreground'>
-                  {disabled.map((a) => ACTION_LABELS[a]).join(' and ')}: {POSTPLAN_NOT_AT_HEAD}
+              {[...new Set(disabled.map((w) => w.reason))].map((reason) => (
+                <p key={reason} className='text-xs text-muted-foreground'>
+                  {disabled
+                    .filter((w) => w.reason === reason)
+                    .map((w) => ACTION_LABELS[w.action])
+                    .join(' and ')}
+                  : {reason}
+                </p>
+              ))}
+              {readyPending && (
+                <p role='status' className='text-xs text-muted-foreground'>
+                  Asked GitHub to mark PR #{glob.pr.number} ready; the glob moves to PR open when GitHub confirms.
                 </p>
               )}
             </div>

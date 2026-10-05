@@ -261,10 +261,14 @@ export const BoardPage = () => {
     onError: fail,
   });
 
-  const act = async (glob: GlobView, action: Action) => {
+  /** Runs an action; false when it failed (the failure is already shown). */
+  const act = async (glob: GlobView, action: Action): Promise<boolean> => {
     const path = ACTION_PATHS[action];
-    if (path === null) return;
-    await mutation.mutateAsync(() => api.action(glob.id, path, glob.version)).catch(() => undefined);
+    if (path === null) return false;
+    return mutation.mutateAsync(() => api.action(glob.id, path, glob.version)).then(
+      () => true,
+      () => false,
+    );
   };
 
   const reviewLabel = (glob: GlobView) => (label: LabelName, command: LabelCommand) =>
