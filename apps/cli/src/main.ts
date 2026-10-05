@@ -3,11 +3,16 @@ import { accessToken, login, logout, type AuthDeps } from './auth.js';
 import { SlopClient, type ToolArguments } from './client.js';
 import { insecureUrlWarning, requireSetting, userConfigPath } from './config.js';
 import { SlopError, UsageError } from './errors.js';
+import { resolveBoard, resolveMcpServer, runInit } from './init.js';
 import { describeError, parseJsonOrUndefined } from './util.js';
 
 /** Everything a command needs from the outside world; bin.ts wires the real ones. */
 export interface CliContext extends AuthDeps {
   readonly stdout: (text: string) => void;
+  /** The enclosing git checkout's root, or undefined outside one. */
+  readonly gitRoot: () => string | undefined;
+  /** Whether the developer already has this MCP server configured in Claude Code. */
+  readonly isMcpServerConfigured: (server: string, root: string) => Promise<boolean>;
 }
 
 interface Command {
@@ -33,6 +38,7 @@ function expectArgs(args: readonly string[], min: number, max: number, usage: st
 }
 
 const CALL_USAGE = "call <tool> ['<json arguments>']";
+const INIT_USAGE = 'init [board]';
 
 const whoamiResultSchema = z.object({ email: z.string() });
 
@@ -86,6 +92,30 @@ const COMMANDS: Readonly<Record<string, Command>> = {
       context.stdout(`${JSON.stringify(value)}\n`);
     },
   },
+  init: {
+    usage: INIT_USAGE,
+    summary: "Install the board's agent set into this git checkout",
+    run: async (args, context) => {
+      expectArgs(args, 0, 1, INIT_USAGE);
+      const board = resolveBoard(args[0], context.settings);
+      const root = context.gitRoot();
+      if (root === undefined) throw new SlopError('init: run this inside a git checkout');
+      await runInit({
+        root,
+        board,
+        server: resolveMcpServer(context.settings),
+        connect: () => ({
+          client: clientFor(context),
+          slopUrl: requireSetting(context.settings, 'SLOP_URL'),
+        }),
+        fetch: context.fetch,
+        isMcpServerConfigured: context.isMcpServerConfigured,
+        now: context.now,
+        log: context.log,
+        stdout: context.stdout,
+      });
+    },
+  },
 };
 
 export function helpText(): string {
@@ -105,6 +135,8 @@ export function helpText(): string {
     '  SLOP_URL        slop server, e.g. https://slop.example.com',
     '  SLOP_CLIENT_ID  the Cognito app client for the CLI',
     '  SLOP_DEV_EMAIL  sign in as this person against a server with AUTH_MODE=dev',
+    '  SLOP_BOARD      the board slop init installs when none is given',
+    "  SLOP_MCP_SERVER slop's MCP server name in Claude Code (default slop)",
     '',
     'Exit codes: 0 ok, 1 slop or sign-in error, 2 usage error.',
     '',

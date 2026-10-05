@@ -1,6 +1,7 @@
 import { isatty } from 'node:tty';
 import { openInBrowser } from './auth.js';
-import { defaultConfigSources, loadSettings } from './config.js';
+import { defaultConfigSources, findGitRoot, loadSettings } from './config.js';
+import { claudeHasMcpServer } from './init.js';
 import { EXIT_FAILURE, main } from './main.js';
 import { defaultTokenStore } from './token-store.js';
 import { describeError } from './util.js';
@@ -21,6 +22,8 @@ try {
     openBrowser: openInBrowser,
     log,
     stdout: (text) => process.stdout.write(text),
+    gitRoot: () => findGitRoot(process.cwd()),
+    isMcpServerConfigured: claudeHasMcpServer,
   });
 } catch (error) {
   // Reading the config files or finding the token store failed before any command ran.

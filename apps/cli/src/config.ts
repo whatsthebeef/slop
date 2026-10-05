@@ -5,7 +5,13 @@ import { join } from 'node:path';
 import { SlopError } from './errors.js';
 
 /** The settings the CLI reads; the names are shared with sstor's config. */
-export const SETTING_KEYS = ['SLOP_URL', 'SLOP_CLIENT_ID', 'SLOP_DEV_EMAIL'] as const;
+export const SETTING_KEYS = [
+  'SLOP_URL',
+  'SLOP_CLIENT_ID',
+  'SLOP_DEV_EMAIL',
+  'SLOP_BOARD',
+  'SLOP_MCP_SERVER',
+] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
 export type Settings = Readonly<Partial<Record<SettingKey, string>>>;

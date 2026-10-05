@@ -29,6 +29,8 @@ describe('main', () => {
         openBrowser: () => undefined,
         log: (message) => err.push(message),
         stdout: (text) => out.push(text),
+        gitRoot: () => undefined,
+        isMcpServerConfigured: () => Promise.resolve(false),
       },
     };
   }
