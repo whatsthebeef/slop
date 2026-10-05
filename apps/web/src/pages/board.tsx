@@ -159,6 +159,9 @@ const Unavailable = ({ boardId, error }: { boardId: number; error: unknown }) =>
   );
 };
 
+/** How often the board re-reads deploy state while a deploy is in progress (a safety net for missed hints). */
+const DEPLOY_POLL_MS = 15_000;
+
 /** How long a first connection may take before the board says it isn't live. */
 const CONNECT_GRACE_MS = 3000;
 
@@ -214,6 +217,9 @@ export const BoardPage = () => {
     queryKey: [...deploysKey(boardId), boardGlobIds.join(',')],
     queryFn: () => api.boardDeploys(boardId, boardGlobIds),
     enabled: boardGlobIds.length > 0,
+    // Hints normally refresh it; while something is deploying, also check now and then.
+    refetchInterval: (query) =>
+      Object.values(query.state.data?.indicators ?? {}).some((i) => i.state === 'deploying') ? DEPLOY_POLL_MS : false,
   });
 
   // The status bar's counts include this board; refresh them when its globs change, at most every

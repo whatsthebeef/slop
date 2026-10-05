@@ -38,7 +38,12 @@ export const DeploysSection = ({ board, glob }: { board: BoardView; glob: GlobVi
   const client = useQueryClient();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const history = useQuery({ queryKey: globDeploysKey(glob.id), queryFn: () => api.globDeploys(glob.id) });
+  const history = useQuery({
+    queryKey: globDeploysKey(glob.id),
+    queryFn: () => api.globDeploys(glob.id),
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((d) => d.state === 'waiting' || d.state === 'running') ? 15_000 : false,
+  });
   const state = useQuery({
     queryKey: [...deploysKey(board.id), 'running'],
     queryFn: () => api.boardDeploys(board.id, []),

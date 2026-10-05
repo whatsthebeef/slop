@@ -82,7 +82,13 @@ export const useLiveBoard = (boardId: number): LiveState => {
       next.addEventListener('ready', () => {
         setState('live');
         // Hints may have been missed while disconnected or hidden: reload the board.
-        if (connectedBefore) void client.invalidateQueries({ queryKey: globsKey(boardId) });
+        if (connectedBefore) {
+          void client.invalidateQueries({ queryKey: globsKey(boardId) });
+          // Deploys and readiness live beside the globs, so missed deploy hints need their own refresh.
+          void client.invalidateQueries({ queryKey: deploysKey(boardId) });
+          void client.invalidateQueries({ queryKey: ['glob-deploys'] });
+          void client.invalidateQueries({ queryKey: ['readiness', boardId] });
+        }
         connectedBefore = true;
       });
       next.addEventListener('hint', onHint);
