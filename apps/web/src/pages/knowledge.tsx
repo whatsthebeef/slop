@@ -75,7 +75,7 @@ export const KnowledgePage = () => {
   const imported = new Set(kb.data.documents.map((d) => d.source.replace(/^catalog:|@\d+$/g, '')));
 
   return (
-    <main className='mx-auto grid max-w-3xl gap-8 p-6'>
+    <main className='mx-auto grid w-full max-w-[63rem] gap-8 p-6'>
       <header className='flex items-center gap-3'>
         <Link className='text-sm text-muted-foreground hover:underline' to={`/boards/${boardId}`}>
           ← {board.data.name}

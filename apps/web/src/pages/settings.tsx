@@ -4,9 +4,11 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { GroupChip } from '@/components/glob-card';
+import { GlobDialog } from '@/components/glob-dialog';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
-import { api, RequestError } from '@/lib/api';
+import { ACTION_PATHS, api, RequestError } from '@/lib/api';
+import type { GlobView } from '@/lib/api';
 import { useToast } from '@/toast';
 
 const message = (error: unknown) => (error instanceof RequestError ? error.body.message : 'Something went wrong');
@@ -261,6 +263,25 @@ export const SignedOffPage = () => {
     getNextPageParam: (last) => last.next,
   });
   const globs = pages.data?.pages.flatMap((p) => p.globs) ?? [];
+  const client = useQueryClient();
+  const toast = useToast();
+  const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
+  const [open, setOpen] = useState<GlobView | null>(null);
+
+  /** Runs a change from the glob view; the view shows the glob as it is afterwards. */
+  const change = async (work: () => Promise<unknown>): Promise<boolean> => {
+    if (open === null) return false;
+    try {
+      await work();
+      setOpen(await api.glob(open.id));
+      void client.invalidateQueries({ queryKey: ['signed-off', boardId] });
+      return true;
+    } catch (error) {
+      toast(error instanceof RequestError ? error.body.message : 'Something went wrong');
+      return false;
+    }
+  };
+
   return (
     <main className='mx-auto grid w-full max-w-[63rem] gap-4 p-6'>
       <header className='flex items-center gap-3'>
@@ -271,19 +292,51 @@ export const SignedOffPage = () => {
       </header>
       {globs.length === 0 && !pages.isLoading && <p className='text-sm text-muted-foreground'>Nothing signed off yet.</p>}
       {globs.map((g) => (
-        <div key={g.id} className='flex items-center gap-2 rounded-md border bg-card p-2 text-sm'>
+        <button
+          key={g.id}
+          type='button'
+          // The list item has no actions; the glob view (fetched fresh) has them.
+          onClick={() => void api.glob(g.id).then(setOpen, () => toast(`Couldn't open ${g.id}`))}
+          className='flex items-center gap-2 rounded-md border bg-card p-2 text-left text-sm hover:bg-muted'
+          data-testid={`signed-off-${g.id}`}
+        >
           <span className='font-mono text-xs text-muted-foreground'>{g.id}</span>
           <span className='flex-1'>{g.title}</span>
           {g.group !== null && <GroupChip name={g.group} />}
           <span className='text-xs text-muted-foreground'>
             {g.signedOffAt === null ? '' : new Date(g.signedOffAt).toLocaleDateString()}
           </span>
-        </div>
+        </button>
       ))}
       {pages.hasNextPage && (
         <Button variant='outline' onClick={() => void pages.fetchNextPage()}>
           Load more
         </Button>
+      )}
+      {open !== null && board.data !== undefined && (
+        <GlobDialog
+          board={board.data}
+          glob={open}
+          initialArtifact={null}
+          onClose={() => setOpen(null)}
+          onUpdate={async (changes) => {
+            await change(() => api.updateGlob(open.id, open.version, changes));
+          }}
+          onAction={(action) => {
+            const path = ACTION_PATHS[action];
+            return path === null ? Promise.resolve(false) : change(() => api.action(open.id, path, open.version));
+          }}
+          onReviewLabel={(label, command) => change(() => api.reviewLabel(open.id, label, command, open.version))}
+          onDelete={async () => {
+            try {
+              await api.deleteGlob(open.id, open.version);
+              setOpen(null);
+              void client.invalidateQueries({ queryKey: ['signed-off', boardId] });
+            } catch (error) {
+              toast(error instanceof RequestError ? error.body.message : 'Something went wrong');
+            }
+          }}
+        />
       )}
     </main>
   );
