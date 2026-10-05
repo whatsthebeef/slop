@@ -1,10 +1,25 @@
 import { deploys as deployRules } from '@slop/core';
-import type { Board, DeployService, EffectKind } from '@slop/core';
+import type { Board, Deploy, DeployService, EffectKind } from '@slop/core';
 import type { Deployer, StartedDeploy } from './deployer.js';
+import { callbackPath } from './http/deploys.js';
 import type { Executor } from './jobs/outbox.js';
+import type { SignedLinks } from './signed-links.js';
 
-/** How long a deploy's signed callback URL stays valid. */
+/** How long a deploy's signed callback URL stays valid, from when the deploy was requested. */
 export const CALLBACK_TTL_SECONDS = 24 * 3600;
+
+/**
+ * A deploy's signed callback URL. It expires a fixed time after the request, so every start of the
+ * same deploy sends the job identical parameters (CodeBuild's idempotency token needs that).
+ */
+export const deployCallbackUrl =
+  (links: SignedLinks, baseUrl: string) =>
+  (deploy: Deploy): string => {
+    const path = callbackPath(deploy.id);
+    const expires = Math.floor(Date.parse(deploy.requestedAt) / 1000) + CALLBACK_TTL_SECONDS;
+    const { signature } = links.signUntil(path, expires);
+    return `${baseUrl}${path}?expires=${String(expires)}&sig=${signature}`;
+  };
 
 /**
  * Outbox executors for branch deploys. A push's deploy request goes through the deploy service's
@@ -15,7 +30,7 @@ export const deployExecutors = (
   deploys: DeployService,
   deployer: Deployer,
   boardOf: (id: number) => Promise<Board | null>,
-  callbackUrl: (deployId: string) => string,
+  callbackUrl: (deploy: Deploy) => string,
   log: (task: string, message: string) => void,
 ): Partial<Record<EffectKind, Executor>> => ({
   request_deploy: async (effect, glob) => {
@@ -43,7 +58,7 @@ export const deployExecutors = (
     if (blocked !== null) return fail(`Not started: ${blocked}`);
     let started: StartedDeploy;
     try {
-      started = await deployer.start({ board, deploy, branch: glob.id, callbackUrl: callbackUrl(deploy.id) });
+      started = await deployer.start({ board, deploy, branch: glob.id, callbackUrl: callbackUrl(deploy) });
     } catch (error) {
       return fail(`Couldn't start the deploy: ${error instanceof Error ? error.message : String(error)}`);
     }

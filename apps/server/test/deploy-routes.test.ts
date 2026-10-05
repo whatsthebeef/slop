@@ -3,7 +3,7 @@ import type { Board, Effect, Glob } from '@slop/core';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PgStore } from '../src/db/store.js';
-import { deployExecutors } from '../src/deploy-executors.js';
+import { deployCallbackUrl, deployExecutors } from '../src/deploy-executors.js';
 import type { Deployer, DeployJob } from '../src/deployer.js';
 import type { Env } from '../src/http/app.js';
 import { callbackPath, mountDeploys } from '../src/http/deploys.js';
@@ -73,7 +73,7 @@ describe('deploy results and executors', () => {
       deploys,
       deployer,
       (id) => store.transaction((tx) => tx.getBoard(id)),
-      (id) => `https://slop.example${callbackPath(id)}`,
+      (d) => `https://slop.example${callbackPath(d.id)}`,
       (_task, message) => logged.push(message),
     );
     const rows = await store.transaction(async (tx) => {
@@ -285,5 +285,16 @@ describe('deploy results and executors', () => {
     });
     await drain();
     expect(await deploys.get(id)).toMatchObject({ state: 'failed', error: "Not started: dev1 doesn't take branch deploys" });
+  });
+
+  it('gives every start of a deploy the same callback URL, which verifies', async () => {
+    const stored = await deploys.get('dep-1');
+    if (stored === null) throw new Error('expected dep-1');
+    // Requested now, so the link hasn't expired whenever the test runs.
+    const d = { ...stored, requestedAt: new Date().toISOString() };
+    const url = deployCallbackUrl(links, 'https://slop.example');
+    expect(url(d)).toBe(url(d));
+    const parsed = new URL(url(d));
+    expect(links.verify(parsed.pathname, Number(parsed.searchParams.get('expires')), parsed.searchParams.get('sig') ?? '')).toBe(true);
   });
 });

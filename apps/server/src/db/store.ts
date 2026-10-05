@@ -61,6 +61,7 @@ const toDeploy = (row: typeof schema.deploys.$inferSelect): Deploy => ({
   state: oneOf(DEPLOY_STATES, row.state),
   trigger: oneOf(DEPLOY_TRIGGERS, row.trigger),
   requestedAt: row.requestedAt.toISOString(),
+  runningSince: row.runningSince?.toISOString() ?? null,
   startedAt: row.startedAt?.toISOString() ?? null,
   finishedAt: row.finishedAt?.toISOString() ?? null,
 });
@@ -68,6 +69,7 @@ const toDeploy = (row: typeof schema.deploys.$inferSelect): Deploy => ({
 const deployRow = (d: Deploy): typeof schema.deploys.$inferInsert => ({
   ...d,
   requestedAt: new Date(d.requestedAt),
+  runningSince: d.runningSince === null ? null : new Date(d.runningSince),
   startedAt: d.startedAt === null ? null : new Date(d.startedAt),
   finishedAt: d.finishedAt === null ? null : new Date(d.finishedAt),
 });

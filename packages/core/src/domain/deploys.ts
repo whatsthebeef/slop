@@ -27,6 +27,8 @@ export interface Deploy {
   /** Who pressed Deploy now; null for pushes. */
   readonly requestedBy: string | null;
   readonly requestedAt: string;
+  /** When it became the environment's running deploy (at once, or promoted from waiting); null while waiting. */
+  readonly runningSince: string | null;
   /** When the provider accepted it; null while waiting, or running but not yet accepted. */
   readonly startedAt: string | null;
   readonly finishedAt: string | null;
@@ -71,7 +73,7 @@ export const request = (active: readonly Deploy[], deploy: Deploy, now: string):
   const replaced = active
     .filter((d) => d.state === 'waiting')
     .map((d): Deploy => ({ ...d, state: 'replaced', finishedAt: now }));
-  const next: Deploy = { ...deploy, state: running ? 'waiting' : 'running' };
+  const next: Deploy = running ? { ...deploy, state: 'waiting' } : { ...deploy, state: 'running', runningSince: now };
   return {
     writes: [...replaced, next],
     events: [
@@ -107,7 +109,7 @@ export const finished = (
     error: outcome.succeeded ? null : (outcome.error ?? 'The deploy failed'),
   };
   const waiting = active.find((d) => d.state === 'waiting' && d.id !== deploy.id);
-  const next: Deploy | null = waiting === undefined ? null : { ...waiting, state: 'running' };
+  const next: Deploy | null = waiting === undefined ? null : { ...waiting, state: 'running', runningSince: now };
   return {
     writes: next === null ? [done] : [done, next],
     events: [
@@ -132,7 +134,8 @@ export const staleReason = (deploy: Deploy, now: string): string | null => {
   if (deploy.state !== 'running') return null;
   const minutesSince = (iso: string) => (Date.parse(now) - Date.parse(iso)) / 60_000;
   if (deploy.startedAt === null) {
-    return minutesSince(deploy.requestedAt) >= START_TIMEOUT_MINUTES
+    // From when it began running, not when it was requested: a deploy may queue for a long time.
+    return minutesSince(deploy.runningSince ?? deploy.requestedAt) >= START_TIMEOUT_MINUTES
       ? `The deploy job didn't start within ${String(START_TIMEOUT_MINUTES)} minutes`
       : null;
   }

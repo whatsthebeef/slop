@@ -8,6 +8,7 @@ const EVERY_MS = 2 * 60_000;
  */
 export class DeployWatch {
   private timer: NodeJS.Timeout | null = null;
+  private sweeping = false;
 
   constructor(
     private readonly deploys: DeployService,
@@ -15,7 +16,20 @@ export class DeployWatch {
   ) {}
 
   start(): void {
-    this.timer = setInterval(() => void this.deploys.sweep().catch((e: unknown) => this.log('deploy-watch', String(e))), EVERY_MS);
+    this.timer = setInterval(() => void this.sweep(), EVERY_MS);
+  }
+
+  /** One sweep at a time: a slow one isn't overlapped by the next tick. */
+  private async sweep(): Promise<void> {
+    if (this.sweeping) return;
+    this.sweeping = true;
+    try {
+      await this.deploys.sweep();
+    } catch (error) {
+      this.log('deploy-watch', String(error));
+    } finally {
+      this.sweeping = false;
+    }
   }
 
   stop(): void {

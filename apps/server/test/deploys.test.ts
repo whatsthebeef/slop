@@ -1,7 +1,10 @@
 import { DeployService } from '@slop/core';
 import type { Board, Glob, Result } from '@slop/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { sql } from 'drizzle-orm';
 import { PgStore } from '../src/db/store.js';
+import type { Database } from '../src/db/store.js';
 import { createTestDatabase } from './support/database.js';
 
 const unwrap = <T>(result: Result<T>): T => {
@@ -43,6 +46,7 @@ const glob = (id: string, boardId: number, environment = 'dev1'): Glob => ({
 
 describe('deploys in Postgres', () => {
   let drop: () => Promise<void>;
+  let database: Database;
   let store: PgStore;
   let service: DeployService;
   let board: Board;
@@ -52,6 +56,7 @@ describe('deploys in Postgres', () => {
   beforeAll(async () => {
     const test = await createTestDatabase('deploys');
     drop = test.drop;
+    database = test.database;
     store = new PgStore(test.database.db);
     service = new DeployService({
       store,
@@ -157,5 +162,36 @@ describe('deploys in Postgres', () => {
   it("reads each glob's latest deploy", async () => {
     const latest = await store.transaction((tx) => tx.latestDeploys(board.id, ['s9f1', 's9f4', 'nope']));
     expect(new Map(latest.map((d) => [d.globId, d.sha]))).toEqual(new Map([['s9f1', 'a1'], ['s9f4', 'd2']]));
+  });
+
+  it("migration 0011 resolves duplicate active deploys from before the lock, keeping the newest", async () => {
+    // Recreate the pre-lock state: no unique indexes and two running and two waiting deploys in one environment.
+    await database.db.execute(sql.raw('drop index deploys_one_running_idx; drop index deploys_one_waiting_idx'));
+    const row = (id: string, state: string, at: string) =>
+      `('${id}', ${String(board.id)}, 'dup', 's9f1', 'x', '${state}', 'push', '${at}')`;
+    await database.db.execute(
+      sql.raw(
+        `insert into deploys (id, board_id, environment, glob_id, sha, state, trigger, requested_at) values ` +
+          [
+            row('old-run', 'running', '2026-10-01T00:00:00Z'),
+            row('new-run', 'running', '2026-10-02T00:00:00Z'),
+            row('old-wait', 'waiting', '2026-10-01T00:00:00Z'),
+            row('new-wait', 'waiting', '2026-10-02T00:00:00Z'),
+          ].join(', '),
+      ),
+    );
+    const migration = readFileSync(new URL('../drizzle/0011_deploy_queue.sql', import.meta.url), 'utf8')
+      .split('--> statement-breakpoint')
+      .filter((statement) => !statement.includes('ADD COLUMN'));
+    for (const statement of migration) await database.db.execute(sql.raw(statement));
+    const states = await store.transaction((tx) => tx.listDeploys(board.id, { environment: 'dup' }));
+    expect(new Map(states.map((d) => [d.id, d.state]))).toEqual(
+      new Map([
+        ['new-run', 'running'],
+        ['old-run', 'failed'],
+        ['new-wait', 'waiting'],
+        ['old-wait', 'replaced'],
+      ]),
+    );
   });
 });

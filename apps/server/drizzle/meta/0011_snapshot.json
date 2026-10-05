@@ -1,5 +1,5 @@
 {
-  "id": "fb9c679c-32e6-4400-8916-a4265318351a",
+  "id": "80f28cd1-3b99-4c2f-9ac9-43c5a34164a0",
   "prevId": "bdd1c4d1-8e57-41ea-8b7d-d2249289f6bf",
   "version": "7",
   "dialect": "postgresql",
@@ -325,6 +325,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "running_since": {
+          "name": "running_since",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "started_at": {
           "name": "started_at",

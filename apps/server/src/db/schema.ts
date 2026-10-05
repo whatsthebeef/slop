@@ -252,6 +252,7 @@ export const deploys = pgTable(
     trigger: text('trigger', { enum: DEPLOY_TRIGGERS }).notNull(),
     requestedBy: text('requested_by'),
     requestedAt: timestamp('requested_at', { withTimezone: true }).notNull(),
+    runningSince: timestamp('running_since', { withTimezone: true }),
     startedAt: timestamp('started_at', { withTimezone: true }),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
     providerRef: text('provider_ref'),

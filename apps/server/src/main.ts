@@ -20,8 +20,8 @@ import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
-import { CALLBACK_TTL_SECONDS, deployExecutors } from './deploy-executors.js';
-import { callbackPath, mountDeploys } from './http/deploys.js';
+import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
+import { mountDeploys } from './http/deploys.js';
 import { mountReadiness } from './http/readiness.js';
 import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
@@ -64,18 +64,19 @@ const deploys = new DeployService({
   clock: { now: () => new Date().toISOString() },
   newDeployId: () => `dep_${randomUUID()}`,
 });
-const webhookBase = config.WEBHOOK_BASE_URL ?? config.PUBLIC_URL;
-const deployCallbackUrl = (deployId: string) => {
-  const path = callbackPath(deployId);
-  const { expires, signature } = links.sign(path, CALLBACK_TTL_SECONDS);
-  return `${webhookBase}${path}?expires=${String(expires)}&sig=${signature}`;
-};
+
 const outbox = new OutboxRunner(
   db,
   { globs },
   {
     ...codeHostExecutors(github, boardOf, routines),
-    ...deployExecutors(deploys, new Deployers({ codebuild: new CodeBuildDeployer() }), boardOf, deployCallbackUrl, logError),
+    ...deployExecutors(
+      deploys,
+      new Deployers({ codebuild: new CodeBuildDeployer() }),
+      boardOf,
+      deployCallbackUrl(links, config.WEBHOOK_BASE_URL ?? config.PUBLIC_URL),
+      logError,
+    ),
   },
   logError,
 );

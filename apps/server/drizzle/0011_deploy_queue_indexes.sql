@@ -1,3 +1,0 @@
--- The deploy queue invariant as a backstop to the per-environment lock: at most one running and one waiting deploy per environment.
-CREATE UNIQUE INDEX "deploys_one_running_idx" ON "deploys" USING btree ("board_id","environment") WHERE "deploys"."state" = 'running';--> statement-breakpoint
-CREATE UNIQUE INDEX "deploys_one_waiting_idx" ON "deploys" USING btree ("board_id","environment") WHERE "deploys"."state" = 'waiting';

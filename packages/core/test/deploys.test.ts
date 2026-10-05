@@ -23,6 +23,7 @@ const deploy = (patch: Partial<Deploy> = {}): Deploy => ({
   trigger: 'push',
   requestedBy: null,
   requestedAt: NOW,
+  runningSince: null,
   startedAt: null,
   finishedAt: null,
   providerRef: null,
@@ -110,6 +111,18 @@ describe('stale and blocked deploys', () => {
     expect(deploys.staleReason(started, minutes(59))).toBeNull();
     expect(deploys.staleReason(started, minutes(60))).toMatch(/No result .* after 60 minutes/);
     expect(deploys.staleReason(deploy({ state: 'waiting' }), minutes(600))).toBeNull();
+  });
+
+  it('counts the start timeout from when a deploy began running, not when it was queued', () => {
+    const running = deploy({ id: 'd1', state: 'running', runningSince: NOW, startedAt: NOW });
+    const waiting = deploy({ id: 'd2', globId: 's1t2', state: 'waiting' });
+    const promotedAt = minutes(15);
+    const change = deploys.finished([running, waiting], running, { succeeded: true, error: null }, promotedAt);
+    const promoted = change.writes.find((d) => d.id === 'd2');
+    expect(promoted).toMatchObject({ state: 'running', runningSince: promotedAt });
+    if (promoted === undefined) throw new Error('expected the waiting deploy to run');
+    expect(deploys.staleReason(promoted, minutes(16))).toBeNull();
+    expect(deploys.staleReason(promoted, minutes(25))).toMatch(/didn't start/);
   });
 
   it('refuses to start a deploy whose environment changed while it waited', () => {

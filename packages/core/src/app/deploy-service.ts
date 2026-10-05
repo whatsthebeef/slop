@@ -89,6 +89,8 @@ export class DeployService {
       const board = await tx.getBoard(glob.boardId);
       if (board === null) return notFound(`No board ${glob.boardId}`);
       if (deploys.deployBlocked(board, glob.environment) !== null || glob.environment === null) return ok(null);
+      // Under the queue lock, so two deliveries of the same push can't both pass the duplicate check.
+      await tx.lockDeployQueue(board.id, glob.environment);
       const [latest] = await tx.listDeploys(board.id, { globIds: [globId], limit: 1 });
       if (latest?.sha === sha && latest.trigger === 'push' && latest.state !== 'replaced') return ok(null);
       return ok(await this.enqueue(dtx, glob, glob.environment, sha, 'push', null));
@@ -169,8 +171,28 @@ export class DeployService {
       }
       return found;
     });
-    for (const { id, reason } of stale) await this.finished(id, { succeeded: false, error: reason });
-    return stale.length;
+    let gaveUp = 0;
+    for (const { id } of stale) if (await this.giveUp(id, now)) gaveUp++;
+    return gaveUp;
+  }
+
+  /**
+   * Fails a stale running deploy, re-checking under the queue lock that it is still stale (it may have
+   * started, or its result arrived, since the sweep looked). True if it gave up on it.
+   */
+  private async giveUp(id: string, now: string): Promise<boolean> {
+    const result = await this.change(async (dtx) => {
+      const { tx } = dtx;
+      const found = await tx.getDeploy(id);
+      if (found === null) return ok(false);
+      await tx.lockDeployQueue(found.boardId, found.environment);
+      const deploy = await tx.getDeploy(id);
+      const reason = deploy === null ? null : deploys.staleReason(deploy, now);
+      if (deploy === null || reason === null) return ok(false);
+      await this.finish(dtx, deploy, { succeeded: false, error: reason });
+      return ok(true);
+    });
+    return result.ok && result.value;
   }
 
   // -------------------------------------------------------------------------
@@ -208,6 +230,7 @@ export class DeployService {
       trigger,
       requestedBy,
       requestedAt: now,
+      runningSince: null,
       startedAt: null,
       finishedAt: null,
       providerRef: null,
