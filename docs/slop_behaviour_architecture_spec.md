@@ -38,9 +38,9 @@ The matrix is a core invariant. Sub-to-same conversion is always valid.
 
 **Group** is a plain string attribute, given in the MCP message or inferred by slop from the input. Inference prefers existing group names. Names are normalised for matching; the label colour is derived from a hash of the name.
 
-**Sign-off labels** FR (Functional Review), CR (Code Review) and QA are set to Required automatically when a glob moves to Reviewing: subs get QA, sames and supers get FR, CR and QA. After that, only humans change them, via a clear coloured switch (popover on the card, no need to open the glob view). The glob lights up when a label is switched to Added. Who changed a label and when goes in the event log.
+**Sign-off labels** FR (Functional Review), CR (Code Review) and QA are set to Required automatically when a glob moves to Reviewing: subs get QA, sames and supers get FR, CR and QA. After that, only humans change them. Each label has three states and carries a review checklist: **Required** (waiting for the reviewer, initially and whenever the developer resubmits), **Added** (the reviewer added checklist items for the developer to work through) and **Approved** (the reviewer is satisfied, with or without items). The reviewer either submits one or more items (Required → Added) or approves (Required or Added → Approved); the developer ticks and unticks items while the label is Added and resubmits it for review at any time, even with items unticked (Added → Required, items and ticks kept). Items are never removed, so each review round adds to the same list; once the glob is signed off they are read-only. An approved label can be re-opened (→ Required). Anyone on the board may act on a label for now. The card shows each label as a coloured chip (Required outlined brown, Added clay, Approved green) with a popover for a quick Approve or Re-open; the glob view holds the checklists. The glob lights up when its last label is approved. Who did what and when goes in the event log.
 
-Labels only appear on a card once they are Required or Added. Anyone on the board can switch them.
+Labels only appear on a card once the glob is merged (Required, Added or Approved).
 
 **Artifacts** (plan.md, postplan.md, local review.md, context attachments) live in slop as versioned records with glob ID, type, version, commit SHA where relevant, and provenance (human, sessionator, or model + prompt version). Binaries go to S3; the glob holds references.
 
@@ -52,9 +52,9 @@ Globs move through four lists: Planning, Doing, Reviewing, Signed Off. Reviewing
 
 |  | Planning | Doing | Reviewing | Signed Off |
 | --- | --- | --- | --- | --- |
-| Sub | Skipped | Automatic on creation; routine starts | Automatic when sub review passes and it merges; QA Required | Automatic when all labels are Added |
-| Same | Starts here | Start button or pick-up (glob view or sstor); a routine runs if chosen | Automatic when the developer merges the PR; FR, CR, QA Required | Automatic when all labels are Added |
-| Super | Skipped | On creation | Automatic when the developer merges the PR; FR, CR, QA Required | Automatic when all labels are Added |
+| Sub | Skipped | Automatic on creation; routine starts | Automatic when sub review passes and it merges; QA Required | Automatic when all labels are Approved |
+| Same | Starts here | Start button or pick-up (glob view or sstor); a routine runs if chosen | Automatic when the developer merges the PR; FR, CR, QA Required | Automatic when all labels are Approved |
+| Super | Skipped | On creation | Automatic when the developer merges the PR; FR, CR, QA Required | Automatic when all labels are Approved |
 
 **Moves** happen through buttons in the glob view, enabled only where a manual move makes sense. Everything else is driven by events, including human events outside slop (a developer merging a PR in GitHub). Manual and automated moves go through the same core transitions.
 
@@ -87,7 +87,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 | `pr_open` | Doing | The PR is ready for review, awaiting the sub gate or the developer's merge |
 | `merging` | Doing | Slop is rebasing, rerunning checks and squash-merging |
 | `reviewing` | Reviewing | On master, awaiting FR/CR/QA sign-off |
-| `signed_off` | Signed Off | All required labels Added |
+| `signed_off` | Signed Off | All required labels Approved |
 
 **Transitions**
 
@@ -113,12 +113,16 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 | 18 | `in_progress` | `failed` | `report_failure` from an interactive session | All | — | Reason recorded |
 | 19 | `pr_open` | `failed` | PR closed without merging | All | — | Run ended; reason recorded |
 | 20 | `failed` | `implementing` | Re-trigger | Sub, same | No run queued, active or watching | Generation increased; human implementer cleared; closed PR reopened (or a new draft PR opened if the branch was deleted); new run queued on the existing branch |
-| 21 | `reviewing` | `signed_off` | Last required label switched to Added | All | All required labels Added | Signed-off date recorded |
-| 22 | `signed_off` | `reviewing` | A label switched back to Required | All | — | — |
+| 21 | `reviewing` | `signed_off` | Last required label approved | All | All required labels Approved | Signed-off date recorded |
+| 22 | `signed_off` | `reviewing` | An approved label re-opened (→ Required) | All | — | Signed-off date cleared; checklist items kept (re-opening while `reviewing` only changes the label) |
 | 23 | Any except `reviewing`, `signed_off` | `implementing` (sub), `planning` (same), `in_progress` (super) | Start again | All | — | Generation increased; current run superseded; pending jobs of the old generation cancelled; human implementer cleared (super: reset to the creator); PR closed and branch deleted; a sub or super is re-provisioned at once, a same when it next enters Doing; sub queues a new run |
 | 24 | Any | deleted | Delete, after warning | All | — | Run superseded; pending jobs cancelled; branch, PR, S3 artifacts and events deleted |
 | 25 | `pr_open` | `pr_open` | `report_failure` with the current run ID, or watching timeout | Sub, same | Run is watching; run ID is current | Run failed and auto-fix ended; failure shown on the card; status unchanged |
 | 26 | `planning` | `implementing` | Type changed from same to sub | Same | Valid category for sub | Type becomes sub; provision as 2; queue a routine run (acts as Start) |
+| 27 | `reviewing` | unchanged | Reviewer submits checklist items on a label | All | Label Required; at least one item | Label → Added; items recorded with who added them and when |
+| 28 | `reviewing` | unchanged, or `signed_off` (row 21) | Reviewer approves a label | All | Label Required or Added | Label → Approved, with or without items, ticked or not |
+| 29 | `reviewing` | unchanged | Developer ticks or unticks a checklist item | All | Label Added | Item done flag, who ticked it and when |
+| 30 | `reviewing` | unchanged | Developer resubmits a label for review | All | Label Added | Label → Required; items and ticks kept, unticked ones included |
 
 **Rules across all transitions**
 
@@ -141,7 +145,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 
 **Flags shown alongside status** (not states): failure reason, ATF failure, deployment state per environment, aging colour, "PR still draft".
 
-**Domain events** written to the log: `GlobCreated`, `FieldsChanged`, `StatusChanged` (from, to, actor), `RunTriggered`, `RunFailed`, `BranchCreated`, `CommitPushed`, `PROpened`, `PRReadyForReview`, `PRClosed`, `SubReviewCompleted`, `ReviewReceived`, `Merged`, `MergeFailed`, `LabelChanged`, `PickedUp`, `ArtifactAdded`, `DeployStarted`, `BuildCompleted`, `ATFCompleted`, `Deployed`, `GlobDeleted`.
+**Domain events** written to the log: `GlobCreated`, `FieldsChanged`, `StatusChanged` (from, to, actor), `RunTriggered`, `RunFailed`, `BranchCreated`, `CommitPushed`, `PROpened`, `PRReadyForReview`, `PRClosed`, `SubReviewCompleted`, `ReviewReceived`, `Merged`, `MergeFailed`, `LabelChanged`, `LabelItemTicked`, `PickedUp`, `ArtifactAdded`, `DeployStarted`, `BuildCompleted`, `ATFCompleted`, `Deployed`, `GlobDeleted`.
 
 **Run failure detection (row 17)** uses both mechanisms: the agent calls `report_failure` when it recognises a failure, and slop fails a run that shows no progress (no slop call or push) for a per-board number of hours (default 2), or that has not marked its PR ready within a longer per-board limit (default 8 hours). A watching run (auto-fix) can also fail or time out: the glob stays in pr\_open and the card shows the run failure (row 25). Watching ends when the run ends.
 
@@ -172,6 +176,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `put_artifact` | id, kind (`implementation_plan`, `postplan`, `local_review`), content; optional commitSha, runId | artifact version (ignored if runId is superseded) | Routines, sessionator |
 | `mark_ready` | id; runId for routines | updated glob (moves to `pr_open` when GitHub confirms) | Routines, sessionator |
 | `merge` | id, version | updated glob (row 14: `pr_open` → `merging`; slop updates the branch, waits for checks on the new head and squash-merges, as the Merge button does) | Sessionator (`slop merge`); denied to agents in the agent set (with `gh pr merge`, `gh api`, `slop merge` and `slop call merge`); slop can't tell an agent from its developer, since both use the developer's sign-in, so the deny rules are the guard |
+| `review_label` | id, version, label (FR, CR, QA), kind (`submit_items`, `tick`, `resubmit`); items for `submit_items`; itemId and done for `tick` | updated glob (rows 27–30) | Claude app, sessionator; approving and re-opening a review stay on the board (sign-off is human, like merging) |
 | `report_failure` | id, reason; runId for routines; optional agentSetVersion | updated glob | Routines, sessionator |
 | `get_board` | board | board settings: repo, base branch, environments, enabled integrations | Agents, sessionator |
 | `get_agent_set` | board | the board's agent set (agents, commands, hooks, settings, CLAUDE.md section) with its version | Sessionator (`sstor init`), routines |
@@ -198,7 +203,7 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 | Globs | `GET /boards/{b}/globs`, `GET /globs/{id}` (both with each glob's artifact summaries: latest version per kind, version count, commit SHA, provenance, no content), `POST /boards/{b}/globs`, `PATCH /globs/{id}`, `DELETE /globs/{id}` |
 | Intake | `POST /boards/{b}/intake` — processes text and attachments, returns proposed fields without saving |
 | Actions | `POST /globs/{id}/actions/{start, retrigger, pick-up, start-again}` |
-| Labels | `PUT /globs/{id}/labels/{FR, CR, QA}` with state `required` or `added` |
+| Labels | `POST /globs/{id}/labels/{FR, CR, QA}` with version and a command: `submit_items` (items), `approve`, `tick` (itemId, done), `resubmit` or `reopen` |
 | Artifacts | `GET /globs/{id}/artifacts`, `GET /globs/{id}/artifacts/{kind}?label=` (every version of one artifact, for the viewer), `GET /artifacts/{artifactId}` (presigned URL), `POST /globs/{id}/attachments` (text or link), `POST /globs/{id}/uploads` (presigned upload URL) |
 | Signed Off | `GET /boards/{b}/signed-off?cursor=` |
 | KB | `GET /boards/{b}/kb`, `GET /catalog/kb` (catalog entries), `POST /boards/{b}/kb/catalog-imports` (import chosen catalog entries), `POST /boards/{b}/kb/uploads` (upload docs or a folder), `GET /boards/{b}/kb/proposals?status=` (KB items), `GET /boards/{b}/kb/agent-set/file?path=` (one agent-set file's stored content, for editing it while applying a KB item) |

@@ -11,6 +11,7 @@ import type {
   Actor,
   Board,
   Category,
+  ChecklistItem,
   Glob,
   LabelName,
   LabelState,
@@ -247,6 +248,7 @@ export const create = (input: CreateInput, board: Board, ctx: Context): Result<T
     planner: actor.email,
     implementer: input.type === 'super' ? actor.email : null,
     labels: {},
+    checklists: {},
     pr: null,
     headChecks: null,
     runs: [],
@@ -415,11 +417,32 @@ export const remove = (glob: Glob, ctx: Context): Result<Transition> =>
     .effect({ kind: 'delete_glob_data', globId: glob.id, boardId: glob.boardId, prNumber: glob.pr?.number ?? null })
     .done();
 
-/** Rows 21–22: FR, CR and QA switches. */
-export const setLabel = (
+/** What a reviewer or developer does to one sign-off label (rows 21, 22 and 27–30). */
+export type LabelCommand =
+  /** Reviewer: ask for changes on a required label. */
+  | { readonly kind: 'submit_items'; readonly items: readonly string[] }
+  /** Reviewer: satisfied, with or without items. */
+  | { readonly kind: 'approve' }
+  /** Developer: tick or untick an item while the label has items added. */
+  | { readonly kind: 'tick'; readonly itemId: string; readonly done: boolean }
+  /** Developer: send the label back to its reviewer, even with items unticked. */
+  | { readonly kind: 'resubmit' }
+  /** Re-open an approved label's review. */
+  | { readonly kind: 'reopen' };
+
+export const MAX_CHECKLIST_ITEMS = 100;
+export const MAX_CHECKLIST_ITEM_LENGTH = 2000;
+
+const openItems = (items: readonly ChecklistItem[]): number => items.filter((i) => !i.done).length;
+
+/**
+ * Rows 21, 22 and 27–30: sign-off labels and their review checklists. Who may act is not
+ * restricted yet (anyone on the board); the event log records who did what.
+ */
+export const reviewLabel = (
   glob: Glob,
   name: LabelName,
-  state: LabelState,
+  command: LabelCommand,
   ctx: Context,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
@@ -427,16 +450,87 @@ export const setLabel = (
   if (from === undefined) {
     return invalidTransition(glob, actor, `${name} is not required on this glob`);
   }
-  if (from === state) return unchanged(glob);
-  const labels: Labels = { ...glob.labels, [name]: state };
-  const b = new Builder(glob, ctx).set({ labels }).event('LabelChanged', { label: name, from, to: state });
-  const allAdded = Object.values(labels).every((s) => s === 'added');
-  if (glob.status === 'reviewing' && allAdded) {
-    b.set({ signedOffAt: ctx.now }).status('signed_off');
-  } else if (glob.status === 'signed_off' && !allAdded) {
-    b.set({ signedOffAt: null }).status('reviewing');
+  const items = glob.checklists[name] ?? [];
+  const setState = (to: LabelState, detail: { readonly [key: string]: JsonValue } = {}): Builder => {
+    const labels: Labels = { ...glob.labels, [name]: to };
+    const b = new Builder(glob, ctx).set({ labels }).event('LabelChanged', { ...detail, label: name, from, to });
+    const allApproved = Object.values(labels).every((s) => s === 'approved');
+    if (glob.status === 'reviewing' && allApproved) {
+      b.set({ signedOffAt: ctx.now }).status('signed_off');
+    } else if (glob.status === 'signed_off' && !allApproved) {
+      b.set({ signedOffAt: null }).status('reviewing');
+    }
+    return b;
+  };
+
+  switch (command.kind) {
+    case 'submit_items': {
+      // Row 27.
+      if (from !== 'required') {
+        return invalidTransition(glob, actor, `Items can only be added while ${name} waits for its reviewer`);
+      }
+      const texts = command.items.map((t) => t.trim()).filter((t) => t !== '');
+      if (texts.length === 0) return invalidInput('Add at least one item');
+      if (texts.some((t) => t.length > MAX_CHECKLIST_ITEM_LENGTH)) {
+        return invalidInput(`Items are limited to ${MAX_CHECKLIST_ITEM_LENGTH} characters`);
+      }
+      if (items.length + texts.length > MAX_CHECKLIST_ITEMS) {
+        return invalidInput(`A label holds at most ${MAX_CHECKLIST_ITEMS} items`);
+      }
+      // Items are never removed, so a running number is unique within the label.
+      const added: ChecklistItem[] = texts.map((text, i) => ({
+        id: String(items.length + i + 1),
+        text,
+        done: false,
+        addedBy: actor.email,
+        addedAt: ctx.now,
+        doneBy: null,
+        doneAt: null,
+      }));
+      return setState('added', { items: texts })
+        .set({ checklists: { ...glob.checklists, [name]: [...items, ...added] } })
+        .done();
+    }
+    case 'approve':
+      // Row 28 (and row 21 when it is the last label).
+      if (from === 'approved') return unchanged(glob);
+      return setState('approved', { open: openItems(items) }).done();
+    case 'tick': {
+      // Row 29.
+      if (from !== 'added') {
+        return invalidTransition(
+          glob,
+          actor,
+          glob.status === 'signed_off'
+            ? "A signed-off glob's checklists are read-only"
+            : `Items can only be ticked while ${name} has items added`,
+        );
+      }
+      const item = items.find((i) => i.id === command.itemId);
+      if (item === undefined) return invalidInput(`No item ${command.itemId} on ${name}`);
+      if (item.done === command.done) return unchanged(glob);
+      const ticked: ChecklistItem = {
+        ...item,
+        done: command.done,
+        doneBy: command.done ? actor.email : null,
+        doneAt: command.done ? ctx.now : null,
+      };
+      return new Builder(glob, ctx)
+        .set({ checklists: { ...glob.checklists, [name]: items.map((i) => (i.id === item.id ? ticked : i)) } })
+        .event('LabelItemTicked', { label: name, item: item.id, done: command.done })
+        .done();
+    }
+    case 'resubmit':
+      // Row 30.
+      if (from !== 'added') {
+        return invalidTransition(glob, actor, 'Only a label with items added can be resubmitted');
+      }
+      return setState('required', { open: openItems(items) }).done();
+    case 'reopen':
+      // Row 22 when the glob was signed off.
+      if (from !== 'approved') return invalidTransition(glob, actor, 'Only an approved label can be re-opened');
+      return setState('required').done();
   }
-  return b.done();
 };
 
 export interface FieldChanges {
@@ -737,6 +831,7 @@ export const merged = (glob: Glob, merge: { sha: string }, ctx: Context): Result
     .endRun('completed')
     .set({
       labels: requiredLabels(glob.type),
+      checklists: {},
       failure: null,
       pr: glob.pr === null ? null : { ...glob.pr, state: 'merged' },
     })

@@ -151,6 +151,27 @@ describe('services', () => {
     expect(notifier.hints.at(-1)).toMatchObject({ kind: 'glob.deleted', globId: glob.id });
   });
 
+  it('review checklist commands need the current version and log who acted', async () => {
+    const glob = unwrap(await globs.create(DEV, input({ type: 'sub' })));
+    const reviewing = unwrap(await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: 'abc' }, ctx)));
+    const added = unwrap(
+      await globs.reviewLabel(PO, reviewing.id, reviewing.version, 'QA', { kind: 'submit_items', items: ['Check copy'] }),
+    );
+    expect(added.labels.QA).toBe('added');
+    const stale = await globs.reviewLabel(DEV, added.id, reviewing.version, 'QA', { kind: 'resubmit' });
+    expect(!stale.ok && stale.error.code).toBe('version_conflict');
+    const ticked = unwrap(
+      await globs.reviewLabel(DEV, added.id, added.version, 'QA', { kind: 'tick', itemId: '1', done: true }),
+    );
+    const signedOff = unwrap(await globs.reviewLabel(PO, ticked.id, ticked.version, 'QA', { kind: 'approve' }));
+    expect(signedOff.status).toBe('signed_off');
+    expect(store.state.events.filter((e) => e.type.startsWith('Label')).map((e) => [e.type, e.actor])).toEqual([
+      ['LabelChanged', PO],
+      ['LabelItemTicked', DEV],
+      ['LabelChanged', PO],
+    ]);
+  });
+
   it('only admins manage members, and a board keeps one admin', async () => {
     expect((await boards.setMember(DEV, boardId, 'x@example.com', 'dev')).ok).toBe(false);
     const demote = await boards.setMember(ADMIN, boardId, ADMIN, 'dev');

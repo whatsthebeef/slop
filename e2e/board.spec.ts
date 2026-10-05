@@ -10,12 +10,14 @@ const signIn = async (browser: Browser, email: string): Promise<Page> => {
   await page.goto('/login');
   await page.getByLabel('Email').fill(email);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Your boards' })).toBeVisible();
+  // A new user lands on the first-board form; anyone already on a board lands on it.
+  await expect(page).not.toHaveURL(/\/login$/);
   return page;
 };
 
 test('a glob created and moved on one board shows up live on another', async ({ browser }) => {
   const a = await signIn(browser, owner);
+  await expect(a.getByRole('heading', { name: 'Create your first board' })).toBeVisible();
   await a.getByLabel('Name', { exact: true }).fill(`Smoke ${unique}`);
   await a.getByRole('button', { name: 'Create board' }).click();
   await expect(a.getByRole('heading', { name: `Smoke ${unique}` })).toBeVisible();
@@ -29,7 +31,7 @@ test('a glob created and moved on one board shows up live on another', async ({ 
   const b = await signIn(browser, teammate);
   await b.goto(boardUrl);
   await a.goto(boardUrl);
-  await expect(b.getByTestId('live-indicator')).toHaveText('LIVE');
+  await expect(b.getByTestId('board')).toHaveAttribute('data-live', 'live');
 
   // Create in A; B sees it in Planning without reloading.
   await a.getByRole('button', { name: 'New glob' }).click();

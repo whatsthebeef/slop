@@ -2,10 +2,10 @@ import { err, forbidden, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
-import type { Context, CreateInput, FieldChanges, Transition } from '../domain/machine.js';
+import type { Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { ArtifactSummary } from '../domain/knowledge.js';
-import type { Actor, Board, Category, Glob, LabelName, LabelState, SlopType } from '../domain/types.js';
+import type { Actor, Board, Category, Glob, LabelName, SlopType } from '../domain/types.js';
 import type { Clock, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 
 export interface GlobServiceDeps {
@@ -156,8 +156,9 @@ export class GlobService {
     return this.command(email, id, version, (glob, ctx) => machine.requestMerge(glob, ctx));
   }
 
-  setLabel(email: string, id: string, version: number, name: LabelName, state: LabelState) {
-    return this.command(email, id, version, (glob, ctx) => machine.setLabel(glob, name, state, ctx));
+  /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
+  reviewLabel(email: string, id: string, version: number, name: LabelName, command: LabelCommand) {
+    return this.command(email, id, version, (glob, ctx) => machine.reviewLabel(glob, name, command, ctx));
   }
 
   /** `mark_ready`: ask slop to mark the glob's draft PR ready for review. */
