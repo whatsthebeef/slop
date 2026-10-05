@@ -244,12 +244,12 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
     expect((await current()).pr).toBeNull();
   });
 
-  it('migration 0007 gives older globs an empty PR history and no merge mode, and is idempotent', async () => {
+  it('migration 0008 gives older globs an empty PR history and no merge mode, and is idempotent', async () => {
     await database.db.execute(
       sql`update globs set data = data - 'prs' - 'mergeMode' where id = ${globId}`,
     );
     const migration = await readFile(
-      new URL('../drizzle/0007_glob_prs.sql', import.meta.url),
+      new URL('../drizzle/0008_glob_prs.sql', import.meta.url),
       'utf8',
     );
     for (let i = 0; i < 2; i++) {

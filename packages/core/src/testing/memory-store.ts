@@ -109,7 +109,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, version: 1, agentSetVersion: 0, runNoProgressHours: 2, runReadyHours: 8, subMaxChangedLines: 300 };
+        const board: Board = { ...input, id: s.nextBoardId++, version: 1, agentSetVersion: 0, runNoProgressHours: 2, runReadyHours: 8, subMaxChangedLines: 2000 };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },

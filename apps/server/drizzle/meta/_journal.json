@@ -54,8 +54,15 @@
     {
       "idx": 7,
       "version": "7",
-      "when": 1791226455042,
-      "tag": "0007_glob_prs",
+      "when": 1791300000000,
+      "tag": "0007_sub_limit_2000",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791300001000,
+      "tag": "0008_glob_prs",
       "breakpoints": true
     }
   ]
