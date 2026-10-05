@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { EXIT_FAILURE, EXIT_OK, EXIT_USAGE, main, type CliContext } from '../src/main.js';
-import { MemoryTokenStore, startStubServer, type StubServer } from './support.js';
+import { FakeGit, MemoryTokenStore, startStubServer, type StubServer } from './support.js';
 
 describe('main', () => {
   let stub: StubServer | undefined;
@@ -31,6 +31,8 @@ describe('main', () => {
         stdout: (text) => out.push(text),
         gitRoot: () => undefined,
         isMcpServerConfigured: () => Promise.resolve(false),
+        git: new FakeGit(),
+        sleep: () => Promise.resolve(),
       },
     };
   }

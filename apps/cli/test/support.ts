@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { Git } from '../src/git.js';
 import type { Fetch } from '../src/http.js';
 import type { StoredTokens, TokenStore } from '../src/token-store.js';
 
@@ -93,4 +94,46 @@ export async function freePort(): Promise<number> {
   const port = Number(new URL(stub.url).port);
   await stub.close();
   return port;
+}
+
+/** A git checkout in memory: records pushes and remote-branch checks. */
+export class FakeGit implements Git {
+  branch: string | undefined = undefined;
+  dirty = false;
+  /** Branches origin has; remoteBranchExists answers from this. */
+  readonly remoteBranches = new Set<string>();
+  readonly pushes: string[] = [];
+  remoteChecks = 0;
+
+  currentBranch(): Promise<string | undefined> {
+    return Promise.resolve(this.branch);
+  }
+
+  hasUncommittedChanges(): Promise<boolean> {
+    return Promise.resolve(this.dirty);
+  }
+
+  untracked: string[] = [];
+
+  untrackedFiles(): Promise<string[]> {
+    return Promise.resolve(this.untracked);
+  }
+
+  push(_root: string, branch: string): Promise<void> {
+    this.pushes.push(branch);
+    this.remoteBranches.add(branch);
+    return Promise.resolve();
+  }
+
+  /** Remote checks that fail (a network error) before answering normally. */
+  failingRemoteChecks = 0;
+
+  remoteBranchExists(_root: string, branch: string): Promise<boolean> {
+    this.remoteChecks += 1;
+    if (this.failingRemoteChecks > 0) {
+      this.failingRemoteChecks -= 1;
+      return Promise.reject(new Error('could not read from remote repository'));
+    }
+    return Promise.resolve(this.remoteBranches.has(branch));
+  }
 }

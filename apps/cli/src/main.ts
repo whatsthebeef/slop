@@ -1,8 +1,23 @@
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { accessToken, login, logout, type AuthDeps } from './auth.js';
 import { SlopClient, type ToolArguments } from './client.js';
 import { insecureUrlWarning, requireSetting, userConfigPath } from './config.js';
 import { SlopError, UsageError } from './errors.js';
+import type { Git } from './git.js';
+import {
+  GLOB_USAGE,
+  MERGE_USAGE,
+  NEW_USAGE,
+  PICK_UP_USAGE,
+  READY_USAGE,
+  globCommand,
+  mergeCommand,
+  newCommand,
+  pickUpCommand,
+  readyCommand,
+  type GlobDeps,
+} from './globs.js';
 import { resolveBoard, resolveMcpServer, runInit } from './init.js';
 import { describeError, parseJsonOrUndefined } from './util.js';
 
@@ -13,6 +28,8 @@ export interface CliContext extends AuthDeps {
   readonly gitRoot: () => string | undefined;
   /** Whether the developer already has this MCP server configured in Claude Code. */
   readonly isMcpServerConfigured: (server: string, root: string) => Promise<boolean>;
+  readonly git: Git;
+  readonly sleep: (ms: number) => Promise<void>;
 }
 
 interface Command {
@@ -33,6 +50,20 @@ function clientFor(context: CliContext): SlopClient {
   });
 }
 
+function globDeps(context: CliContext): GlobDeps {
+  return {
+    client: clientFor(context),
+    git: context.git,
+    root: context.gitRoot(),
+    settings: context.settings,
+    stdout: context.stdout,
+    log: context.log,
+    now: context.now,
+    sleep: context.sleep,
+    newIdempotencyKey: randomUUID,
+  };
+}
+
 function expectArgs(args: readonly string[], min: number, max: number, usage: string): void {
   if (args.length < min || args.length > max) throw new UsageError(`usage: slop ${usage}`);
 }
@@ -51,7 +82,7 @@ function parseToolArguments(text: string | undefined): ToolArguments {
   return parsed.data;
 }
 
-// New commands (init, glob commands) are added here.
+// New commands are added here.
 const COMMANDS: Readonly<Record<string, Command>> = {
   login: {
     usage: 'login',
@@ -116,12 +147,45 @@ const COMMANDS: Readonly<Record<string, Command>> = {
       });
     },
   },
+  glob: {
+    usage: GLOB_USAGE,
+    summary: "Print a glob's summary (status, branch, implementer, run, PR)",
+    run: (args, context) => globCommand(args, globDeps(context)),
+  },
+  'pick-up': {
+    usage: PICK_UP_USAGE,
+    summary: 'Become the implementer of a glob and wait for its branch; prints the branch',
+    run: (args, context) => pickUpCommand(args, globDeps(context)),
+  },
+  new: {
+    usage: NEW_USAGE,
+    summary: 'Create a glob on SLOP_BOARD from a prompt (intake fills in the rest)',
+    run: (args, context) => newCommand(args, globDeps(context)),
+  },
+  ready: {
+    usage: READY_USAGE,
+    summary: "Push the glob's branch (default: the current one) and mark its PR ready",
+    run: (args, context) => readyCommand(args, globDeps(context)),
+  },
+  merge: {
+    usage: MERGE_USAGE,
+    summary: "Merge the glob (default: the current branch's) through slop, like its Merge button",
+    run: (args, context) => mergeCommand(args, globDeps(context)),
+  },
 };
 
+const HELP_USAGE_WIDTH = 40;
+
 export function helpText(): string {
-  const width = Math.max(...Object.values(COMMANDS).map((command) => command.usage.length));
-  const lines = Object.values(COMMANDS).map(
-    (command) => `  slop ${command.usage.padEnd(width)}  ${command.summary}`,
+  // A usage longer than the column gets its summary on the next line.
+  const width = Math.min(
+    HELP_USAGE_WIDTH,
+    Math.max(...Object.values(COMMANDS).map((command) => command.usage.length)),
+  );
+  const lines = Object.values(COMMANDS).map((command) =>
+    command.usage.length > width
+      ? `  slop ${command.usage}\n  ${' '.repeat(width + 5)}  ${command.summary}`
+      : `  slop ${command.usage.padEnd(width)}  ${command.summary}`,
   );
   return [
     'slop: the command line for slop',
@@ -135,7 +199,7 @@ export function helpText(): string {
     '  SLOP_URL        slop server, e.g. https://slop.example.com',
     '  SLOP_CLIENT_ID  the Cognito app client for the CLI',
     '  SLOP_DEV_EMAIL  sign in as this person against a server with AUTH_MODE=dev',
-    '  SLOP_BOARD      the board slop init installs when none is given',
+    '  SLOP_BOARD      the board for slop init (when none is given) and slop new',
     "  SLOP_MCP_SERVER slop's MCP server name in Claude Code (default slop)",
     '',
     'Exit codes: 0 ok, 1 slop or sign-in error, 2 usage error.',

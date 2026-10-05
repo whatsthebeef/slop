@@ -248,6 +248,22 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
   );
 
   server.registerTool(
+    'merge',
+    {
+      description:
+        "Merge a same or super whose PR is ready and whose required checks passed on the current head, as the glob's Merge button does: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. Pass the version you read.",
+      inputSchema: { id: z.string(), version: z.number().int() },
+    },
+    async ({ id, version }) => {
+      const result = await globs.merge(email, id, version);
+      if (!result.ok) return reply(result);
+      // Run the squash_merge job now and answer with the glob as it then is, as the REST action does.
+      await deps.outbox.drain(id);
+      return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
+    },
+  );
+
+  server.registerTool(
     'report_failure',
     {
       description:

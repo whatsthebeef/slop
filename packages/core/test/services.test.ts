@@ -119,6 +119,23 @@ describe('services', () => {
     expect(runId).toBe('run-1');
   });
 
+  it('merge (row 14) needs the current version and passed checks, then queues the squash merge', async () => {
+    const glob = unwrap(await globs.create(DEV, input()));
+    const picked = unwrap(await globs.pickUp(DEV, glob.id, glob.version, false));
+    const ready = unwrap(
+      await globs.applyEvent(picked.id, (g, ctx) => machine.prReadyForReview(g, { number: 7, headSha: 'abc' }, ctx)),
+    );
+    const early = await globs.merge(DEV, ready.id, ready.version);
+    expect(!early.ok && early.error.code).toBe('invalid_transition');
+    const passing = unwrap(
+      await globs.applyEvent(ready.id, (g, ctx) => machine.checksCompleted(g, { sha: 'abc', passed: true }, ctx)),
+    );
+    const stale = await globs.merge(DEV, passing.id, passing.version - 1);
+    expect(!stale.ok && stale.error.code).toBe('version_conflict');
+    expect(unwrap(await globs.merge(DEV, passing.id, passing.version)).status).toBe('merging');
+    expect(store.state.outbox.at(-1)).toMatchObject({ kind: 'squash_merge', globId: glob.id, sha: 'abc' });
+  });
+
   it('delete removes the glob and its events and queues the clean-up', async () => {
     const glob = unwrap(await globs.create(DEV, input()));
     unwrap(await globs.delete(PO, glob.id, 1));

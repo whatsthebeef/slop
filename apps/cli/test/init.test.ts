@@ -27,7 +27,7 @@ import {
   type ToolCaller,
 } from '../src/init.js';
 import { EXIT_OK, EXIT_USAGE, main, type CliContext } from '../src/main.js';
-import { MemoryTokenStore } from './support.js';
+import { FakeGit, MemoryTokenStore } from './support.js';
 
 const DOWNLOAD_URL = 'https://slop.test/downloads/agent-set/7?expires=1&signature=x';
 const NOW = Date.parse('2026-10-04T12:00:00.000Z');
@@ -488,6 +488,8 @@ describe('slop init command', () => {
         stdout: () => undefined,
         gitRoot: () => gitRoot,
         isMcpServerConfigured: () => Promise.resolve(false),
+        git: new FakeGit(),
+        sleep: () => Promise.resolve(),
       },
     };
   }
