@@ -1,4 +1,4 @@
-import type { Artifact, Board, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
+import type { Artifact, ArtifactSummary, Board, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
 import { ARTIFACT_KINDS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, LEARNING_TYPES } from '@slop/core';
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
@@ -305,6 +305,40 @@ export class PgStore implements Store {
           .where(and(eq(schema.artifacts.globId, globId), eq(schema.artifacts.kind, kind), eq(schema.artifacts.label, label)))
           .orderBy(asc(schema.artifacts.version));
         return rows.map(toArtifact);
+      },
+      listArtifactSummaries: async (boardId, globIds) => {
+        if (globIds.length === 0) return [];
+        const a = schema.artifacts;
+        const conditions = [eq(schema.globs.boardId, boardId), inArray(a.globId, [...globIds])];
+        // The latest version of each (glob, kind, label), with the count of all versions; no content.
+        const rows = await t
+          .selectDistinctOn([a.globId, a.kind, a.label], {
+            globId: a.globId,
+            kind: a.kind,
+            label: a.label,
+            version: a.version,
+            versions: sql<number>`count(*) over (partition by ${a.globId}, ${a.kind}, ${a.label})`.mapWith(Number),
+            commitSha: a.commitSha,
+            createdAt: a.createdAt,
+            provenance: a.provenance,
+          })
+          .from(a)
+          .innerJoin(schema.globs, eq(schema.globs.id, a.globId))
+          .where(and(...conditions))
+          .orderBy(a.globId, a.kind, a.label, desc(a.version));
+        return rows.map(
+          (row): ArtifactSummary => ({
+            globId: row.globId,
+            kind: oneOf(ARTIFACT_KINDS, row.kind),
+            label: row.label,
+            version: row.version,
+            versions: row.versions,
+            commitSha: row.commitSha,
+            createdAt: row.createdAt.toISOString(),
+            by: row.provenance.by,
+            actor: row.provenance.actor,
+          }),
+        );
       },
 
       insertKbItem: async (item) => {

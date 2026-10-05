@@ -69,15 +69,16 @@ describe('knowledge and artifacts', () => {
   let knowledge: KnowledgeService;
   let artifacts: ArtifactService;
   let globs: GlobService;
+  let notifier: RecordingNotifier;
   let boardId: number;
   const clock = { now: () => '2026-10-05T12:00:00.000Z' };
 
   beforeEach(async () => {
     store = new MemoryStore();
-    const notifier = new RecordingNotifier();
+    notifier = new RecordingNotifier();
     const boards = new BoardService({ store, notifier });
     knowledge = new KnowledgeService({ store, clock, catalog, notifier });
-    artifacts = new ArtifactService({ store, clock });
+    artifacts = new ArtifactService({ store, clock, notifier });
     globs = new GlobService({
       store,
       notifier,
@@ -167,9 +168,94 @@ describe('knowledge and artifacts', () => {
       await artifacts.putArtifact(DEV, glob.id, 'implementation_plan', 'plan', { commitSha: null, runId: 'old', agentSetVersion: 1 }),
     );
     expect(stale).toMatchObject({ ignored: true });
+    expect(store.state.events.filter((e) => e.type === 'ArtifactAdded')).toHaveLength(0);
+    expect(notifier.hints.filter((h) => h.kind === 'glob.artifacts')).toHaveLength(0);
     const fresh = unwrap(
       await artifacts.putArtifact(DEV, glob.id, 'implementation_plan', 'plan', { commitSha: 'abc', runId: 'run-1', agentSetVersion: 1 }),
     );
     expect(fresh).toMatchObject({ version: 1, provenance: { by: 'routine', runId: 'run-1', agentSetVersion: 1 } });
+  });
+
+  const createGlob = async (title: string, type: 'same' | 'super' = 'same') =>
+    unwrap(
+      await globs.create(DEV, {
+        boardId,
+        title,
+        summary: '',
+        type,
+        category: 'task',
+        group: null,
+        environment: null,
+        autoTrigger: false,
+        idempotencyKey: null,
+      }),
+    );
+
+  it('records ArtifactAdded and publishes a hint without bumping the glob version', async () => {
+    const glob = await createGlob('Review me', 'super');
+    notifier.hints.length = 0;
+    const review = unwrap(
+      await artifacts.putArtifact(DEV, glob.id, 'local_review', '# Review\n\nLooks fine.', {
+        commitSha: 'abc123',
+        runId: null,
+        agentSetVersion: 4,
+      }),
+    );
+    expect(review).toMatchObject({ kind: 'local_review', version: 1, provenance: { by: 'sessionator' } });
+    const added = store.state.events.filter((e) => e.type === 'ArtifactAdded');
+    expect(added).toEqual([
+      {
+        type: 'ArtifactAdded',
+        globId: glob.id,
+        actor: DEV,
+        at: clock.now(),
+        data: { kind: 'local_review', label: '', version: 1, commitSha: 'abc123', runId: null, agentSetVersion: 4 },
+      },
+    ]);
+    expect(notifier.hints).toEqual([{ kind: 'glob.artifacts', boardId, globId: glob.id }]);
+    expect(unwrap(await globs.get(DEV, glob.id)).glob.version).toBe(glob.version);
+  });
+
+  it('lists artifact summaries per kind with the latest version and a version count', async () => {
+    const glob = await createGlob('Super', 'super');
+    const other = await createGlob('Other');
+    unwrap(await artifacts.putPlan(DEV, glob.id, '# Plan'));
+    const options = { runId: null, agentSetVersion: null };
+    unwrap(await artifacts.putArtifact(DEV, glob.id, 'local_review', 'first', { ...options, commitSha: 'aaa' }));
+    unwrap(await artifacts.putArtifact(DEV, glob.id, 'local_review', 'second', { ...options, commitSha: 'bbb' }));
+    unwrap(await artifacts.putArtifact(DEV, glob.id, 'postplan', 'post', { ...options, commitSha: 'bbb' }));
+    unwrap(await artifacts.putArtifact(DEV, other.id, 'postplan', 'other', { ...options, commitSha: null }));
+
+    const view = unwrap(await globs.get(DEV, glob.id));
+    expect(view.artifacts.map((a) => [a.kind, a.version, a.versions, a.commitSha])).toEqual([
+      ['plan', 1, 1, null],
+      ['postplan', 1, 1, 'bbb'],
+      ['local_review', 2, 2, 'bbb'],
+    ]);
+    expect(view.artifacts[2]).toMatchObject({ by: 'sessionator', actor: DEV, createdAt: clock.now() });
+    expect(view.artifacts[2]).not.toHaveProperty('content');
+    const history = unwrap(await artifacts.versions(DEV, glob.id, 'local_review', ''));
+    expect(history.map((a) => [a.version, a.content, a.commitSha])).toEqual([
+      [1, 'first', 'aaa'],
+      [2, 'second', 'bbb'],
+    ]);
+    expect((await artifacts.versions('stranger@example.com', glob.id, 'local_review', '')).ok).toBe(false);
+
+    const board = unwrap(await globs.listWithArtifacts(DEV, boardId, {}));
+    const kinds = Object.fromEntries(board.map((g) => [g.glob.id, g.artifacts.map((a) => a.kind)]));
+    expect(kinds).toEqual({ [glob.id]: ['plan', 'postplan', 'local_review'], [other.id]: ['postplan'] });
+    // Globs the board doesn't show are dropped before their summaries are read.
+    const shown = unwrap(await globs.listWithArtifacts(DEV, boardId, {}, (g) => g.id === other.id));
+    expect(shown.map((g) => g.glob.id)).toEqual([other.id]);
+    expect((await globs.listWithArtifacts('stranger@example.com', boardId, {})).ok).toBe(false);
+  });
+
+  it('deletes a glob\'s artifacts with the glob', async () => {
+    const glob = await createGlob('Short-lived');
+    unwrap(await artifacts.putPlan(DEV, glob.id, '# Plan'));
+    const current = unwrap(await globs.get(DEV, glob.id)).glob;
+    unwrap(await globs.delete(DEV, glob.id, current.version));
+    expect(store.state.artifacts.filter((a) => a.globId === glob.id)).toEqual([]);
+    expect(await store.transaction((tx) => tx.listArtifactSummaries(boardId, [glob.id]))).toEqual([]);
   });
 });

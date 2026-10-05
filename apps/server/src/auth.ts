@@ -5,7 +5,7 @@ import type { Config } from './config.js';
 import * as schema from './db/schema.js';
 import type { Db } from './db/store.js';
 
-const SESSION_DAYS = 30;
+export const SESSION_DAYS = 30;
 export const SESSION_COOKIE = 'slop_session';
 
 export interface Identity {
@@ -77,17 +77,29 @@ export class Auth {
       },
       body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri }),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // Cognito's error code only (e.g. invalid_grant, invalid_client); the body carries no tokens on failure.
+      const error = await response.text().then((t) => /"error"\s*:\s*"([^"]+)"/.exec(t)?.[1] ?? 'unknown', () => 'unreadable');
+      console.warn(`[auth] board sign-in: token exchange failed (${response.status} ${error}) for ${redirectUri}`);
+      return null;
+    }
     const tokens = (await response.json()) as { id_token?: unknown };
-    if (typeof tokens.id_token !== 'string') return null;
+    if (typeof tokens.id_token !== 'string') {
+      console.warn('[auth] board sign-in: token response had no id_token');
+      return null;
+    }
     try {
       const claims = await this.idVerifier.verify(tokens.id_token);
-      if (typeof claims.email !== 'string') return null;
+      if (typeof claims.email !== 'string') {
+        console.warn('[auth] board sign-in: ID token has no email claim');
+        return null;
+      }
       const email = claims.email.toLowerCase();
       const name = typeof claims.name === 'string' ? claims.name : email;
       await this.ensureUser({ email, name }, claims.sub);
       return { email, name };
-    } catch {
+    } catch (error) {
+      console.warn(`[auth] board sign-in: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
   }

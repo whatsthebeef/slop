@@ -70,7 +70,7 @@ Globs move through four lists: Planning, Doing, Reviewing, Signed Off. Reviewing
 
 **Routine run on the card:** a run indicator shows the current run's state (queued, active, watching, ended: completed, failed or superseded), its routine owner and triggerer, when it started and when it last made progress (its last slop call or push). The glob view lists the run history and, for the current run, an *Open in Claude* link to the cloud session at claude.ai/code and a copyable *Continue locally* command (`sstor --teleport <id>`). Slop stores each run's cloud session ID and URL from the routine fire response (to verify in slice 4; fallback: the routine reports them on its first MCP call). Only the routine owner can teleport into a run; for everyone else the link is view-only.
 
-**Live updates:** every save publishes a small hint (`kind`, `globId`, `version`) through the notifier port. The server streams it to every open board over server-sent events; the board refetches that glob, and reloads the whole board after reconnecting. Each glob carries a version number and every write is conditional on it, so simultaneous moves resolve cleanly.
+**Live updates:** every save publishes a small hint (`kind`, `globId`, `version`) through the notifier port. The server streams it to every open board over server-sent events; the board refetches that glob (unless it already holds that version), and reloads the whole board after reconnecting. The exception is `glob.artifacts`, sent when an artifact is added: artifacts are versioned on their own and the card reads them from the artifact records, so adding one doesn't bump the glob's version (which would turn concurrent client writes into conflicts), and its hint carries no version; the board always refetches that glob, and any open artifact view. Each glob carries a version number and every write is conditional on it, so simultaneous moves resolve cleanly.
 
 **Changing type, category and group:** category and group can be changed at any time (the type/category matrix still applies; IDs keep their original letter). Type changes are limited to what the current execution mode supports: sub to same at any point before merge (the developer then merges instead of auto-merge); same and super interchangeably only in `in_progress` or `pr_open` with no run queued, active or watching, since both are human-driven there; same to sub only from `planning`, which is a transition (row 26) and starts work. No other type changes are allowed, and apart from row 26 a type change never moves the glob. Reports use the category at report time.
 
@@ -194,11 +194,11 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 | --- | --- |
 | Boards | `GET /boards`, `POST /boards`, `GET /boards/{b}`, `PATCH /boards/{b}/settings` |
 | Members | `GET /boards/{b}/members`, `POST /boards/{b}/members`, `PATCH /boards/{b}/members/{email}`, `DELETE /boards/{b}/members/{email}` (admins only) |
-| Globs | `GET /boards/{b}/globs`, `GET /globs/{id}`, `POST /boards/{b}/globs`, `PATCH /globs/{id}`, `DELETE /globs/{id}` |
+| Globs | `GET /boards/{b}/globs`, `GET /globs/{id}` (both with each glob's artifact summaries: latest version per kind, version count, commit SHA, provenance, no content), `POST /boards/{b}/globs`, `PATCH /globs/{id}`, `DELETE /globs/{id}` |
 | Intake | `POST /boards/{b}/intake` — processes text and attachments, returns proposed fields without saving |
 | Actions | `POST /globs/{id}/actions/{start, retrigger, pick-up, start-again}` |
 | Labels | `PUT /globs/{id}/labels/{FR, CR, QA}` with state `required` or `added` |
-| Artifacts | `GET /globs/{id}/artifacts`, `GET /artifacts/{artifactId}` (presigned URL), `POST /globs/{id}/attachments` (text or link), `POST /globs/{id}/uploads` (presigned upload URL) |
+| Artifacts | `GET /globs/{id}/artifacts`, `GET /globs/{id}/artifacts/{kind}?label=` (every version of one artifact, for the viewer), `GET /artifacts/{artifactId}` (presigned URL), `POST /globs/{id}/attachments` (text or link), `POST /globs/{id}/uploads` (presigned upload URL) |
 | Signed Off | `GET /boards/{b}/signed-off?cursor=` |
 | KB | `GET /boards/{b}/kb`, `GET /catalog/kb` (catalog entries), `POST /boards/{b}/kb/catalog-imports` (import chosen catalog entries), `POST /boards/{b}/kb/uploads` (upload docs or a folder) |
 | Inbox | `GET /inbox`, `POST /inbox/{meetingId}/attach`, `POST /inbox/{meetingId}/create-glob`, `POST /inbox/{meetingId}/discard` |
@@ -216,7 +216,7 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 **Outbound**
 
 - **Routine fire:** POST to the triggerer's routine URL with text naming the glob ID and instructing the agent to call `get_context`.
-- **Live hints:** server-sent events on `/boards/{b}/events`, payload `{ kind: "glob.changed" | "glob.deleted" | "board.changed", globId, version }`.
+- **Live hints:** server-sent events on `/boards/{b}/events`, payload `{ kind: "glob.changed" | "glob.deleted" | "board.changed", globId, version }`, or `{ kind: "glob.artifacts", boardId, globId }` (no version; refetched regardless) when an artifact is added.
 - **GitHub App:** create and delete branches, update a branch (rebase), squash merge with title `<id>: <title>`, create each glob's branch with an empty first commit and open its draft PR with labels, compare commits, read check runs, post the CodeRabbit review command. CodeBuild: StartBuild for glob-branch deploys through the Deployer port.
 - **Bedrock:** intake inference, meeting classification, embeddings and board chat through the LLM port.
 
@@ -373,7 +373,7 @@ Slop is one portable Docker image running as a single instance, backed by Postgr
 
 **Auth**
 
-- **Board:** the server handles the Cognito login (federated to Identity Center) and keeps a server-side session cookie.
+- **Board:** the server handles the Cognito login (federated to Identity Center) and keeps a server-side session cookie (30 days). The OAuth `state` is signed by the server and bound to the browser by a nonce cookie, which stops login CSRF. A plain-http `localhost` dev server accepts the signed state without the cookie, because Chrome drops it on the cross-site return from Cognito. So a proxy in front of slop must keep the original `Host` or set `X-Forwarded-Proto`; one that rewrites `Host` to `localhost` over http would make every sign-in look local.
 - **Claude app connector and routines:** Cognito is the OAuth authorization server, using a pre-registered app client whose ID and secret go in the connector's Advanced settings, with callback `https://claude.ai/api/mcp/auth_callback`. Routines use the account's connector.
 - **Claude Code:** OAuth login against Cognito via `claude mcp add --client-id`, once in the browser, then automatic refresh.
 - **Sessionator (the slop CLI):** the same public client as Claude Code, with its own callback (`localhost:7780`): `sstor login` runs the authorization code flow with PKCE once in the browser, keeps the tokens in the macOS Keychain and refreshes automatically. sstor calls slop's `/mcp` directly with the access token; it never starts a Claude session to reach slop.

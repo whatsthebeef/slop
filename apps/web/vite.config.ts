@@ -9,6 +9,7 @@ export default defineConfig({
   resolve: { conditions: ['development'], alias: { '@': '/src' } },
   server: {
     port: Number(process.env.SLOP_WEB_PORT ?? 5173),
-    proxy: { '/api': api, '/auth': api },
+    // Keep the browser's Host so sign-in redirects back to this dev server, not to the API's port.
+    proxy: { '/api': { target: api, changeOrigin: false }, '/auth': { target: api, changeOrigin: false } },
   },
 });

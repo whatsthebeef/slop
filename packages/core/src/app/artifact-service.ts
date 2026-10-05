@@ -3,7 +3,7 @@ import type { Result } from '../domain/errors.js';
 import type { Artifact, ArtifactKind, Provenance } from '../domain/knowledge.js';
 import { currentRun } from '../domain/machine.js';
 import type { Glob } from '../domain/types.js';
-import type { Clock, Store } from '../ports.js';
+import type { Clock, Notifier, Store } from '../ports.js';
 import { memberOf } from './access.js';
 
 export interface GlobContext {
@@ -33,7 +33,7 @@ export interface PutOptions {
  * version, and results from a superseded routine run are ignored.
  */
 export class ArtifactService {
-  constructor(private readonly deps: { store: Store; clock: Clock }) {}
+  constructor(private readonly deps: { store: Store; clock: Clock; notifier: Notifier }) {}
 
   async putPlan(email: string, globId: string, content: string): Promise<Result<Artifact | Ignored>> {
     return this.put(email, globId, 'plan', '', content, null, { commitSha: null, runId: null, agentSetVersion: null });
@@ -100,6 +100,17 @@ export class ArtifactService {
     });
   }
 
+  /** Every version of one artifact (kind and label), oldest first, with content. */
+  async versions(email: string, globId: string, kind: ArtifactKind, label: string): Promise<Result<Artifact[]>> {
+    return this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(globId);
+      if (glob === null) return notFound(`No glob ${globId}`);
+      const actor = await memberOf(tx, email, glob.boardId);
+      if (!actor.ok) return actor;
+      return ok(await tx.artifactVersions(globId, kind, label));
+    });
+  }
+
   /** `get_context` (basic): the glob, plan.md and attachments. Decisions, meetings and search come in slice 8. */
   async context(email: string, globId: string): Promise<Result<GlobContext>> {
     return this.deps.store.transaction(async (tx) => {
@@ -149,7 +160,7 @@ export class ArtifactService {
     link: string | null,
     options: PutOptions,
   ): Promise<Result<Artifact | Ignored>> {
-    return this.deps.store.transaction(async (tx) => {
+    const result = await this.deps.store.transaction(async (tx): Promise<Result<{ artifact: Artifact | Ignored; boardId: number }>> => {
       const glob = await tx.getGlob(globId);
       if (glob === null) return notFound(`No glob ${globId}`);
       const actor = await memberOf(tx, email, glob.boardId);
@@ -157,7 +168,10 @@ export class ArtifactService {
       if (options.runId !== null) {
         const run = currentRun(glob);
         if (run === null || run.id !== options.runId || run.state === 'ended') {
-          return ok({ ignored: true as const, reason: `Run ${options.runId} is not the glob's current run` });
+          return ok({
+            artifact: { ignored: true as const, reason: `Run ${options.runId} is not the glob's current run` },
+            boardId: glob.boardId,
+          });
         }
       }
       const provenance: Provenance = {
@@ -166,18 +180,39 @@ export class ArtifactService {
         runId: options.runId,
         agentSetVersion: options.agentSetVersion,
       };
-      return ok(
-        await tx.insertArtifact({
+      const now = this.deps.clock.now();
+      const artifact = await tx.insertArtifact({
+        globId,
+        kind,
+        label,
+        content,
+        link,
+        commitSha: options.commitSha,
+        provenance,
+        createdAt: now,
+      });
+      await tx.appendEvents([
+        {
+          type: 'ArtifactAdded',
           globId,
-          kind,
-          label,
-          content,
-          link,
-          commitSha: options.commitSha,
-          provenance,
-          createdAt: this.deps.clock.now(),
-        }),
-      );
+          actor: email,
+          at: now,
+          data: {
+            kind,
+            label,
+            version: artifact.version,
+            commitSha: options.commitSha,
+            runId: options.runId,
+            agentSetVersion: options.agentSetVersion,
+          },
+        },
+      ]);
+      return ok({ artifact, boardId: glob.boardId });
     });
+    if (!result.ok) return result;
+    const { artifact, boardId } = result.value;
+    // Artifacts don't bump the glob's version, so open boards get their own hint kind.
+    if (!('ignored' in artifact)) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId, globId });
+    return ok(artifact);
   }
 }

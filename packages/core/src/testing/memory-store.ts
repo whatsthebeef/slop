@@ -1,6 +1,6 @@
 import type { DomainEvent, Effect } from '../domain/events.js';
 import type { KbItem } from '../domain/kb.js';
-import type { Artifact, KnowledgeDoc } from '../domain/knowledge.js';
+import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
 
@@ -78,6 +78,7 @@ export class MemoryStore implements Store {
       },
       deleteGlob: (id) => {
         s.globs.delete(id);
+        s.artifacts = s.artifacts.filter((a) => a.globId !== id);
         return Promise.resolve();
       },
       findGlobByCreationKey: (boardId, key) =>
@@ -172,6 +173,26 @@ export class MemoryStore implements Store {
       },
       artifactVersions: (globId, kind, label) =>
         Promise.resolve(s.artifacts.filter((a) => a.globId === globId && a.kind === kind && a.label === label)),
+      listArtifactSummaries: (boardId, globIds) => {
+        const onBoard = (id: string) => s.globs.get(id)?.glob.boardId === boardId && globIds.includes(id);
+        const summaries = new Map<string, ArtifactSummary>();
+        for (const a of s.artifacts) {
+          if (!onBoard(a.globId)) continue;
+          const key = `${a.globId}:${a.kind}:${a.label}`;
+          summaries.set(key, {
+            globId: a.globId,
+            kind: a.kind,
+            label: a.label,
+            version: a.version,
+            versions: (summaries.get(key)?.versions ?? 0) + 1,
+            commitSha: a.commitSha,
+            createdAt: a.createdAt,
+            by: a.provenance.by,
+            actor: a.provenance.actor,
+          });
+        }
+        return Promise.resolve([...summaries.values()]);
+      },
       insertKbItem: (item) => {
         if (s.kbItems.has(item.id)) return Promise.resolve(false);
         s.kbItems.set(item.id, item);

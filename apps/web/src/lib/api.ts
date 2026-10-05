@@ -1,5 +1,7 @@
 import type {
   Action,
+  ArtifactKind,
+  ArtifactSummary,
   Board,
   Category,
   Environment,
@@ -18,7 +20,11 @@ export interface GlobView extends Glob {
   readonly branch: string;
   readonly currentRun: Run | null;
   readonly allowedActions?: readonly Action[];
+  /** The latest version of each artifact (board list and glob reads; absent from some write responses). */
+  readonly artifacts?: readonly ArtifactSummaryView[];
 }
+
+export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;
 
 export interface BoardView extends Board {
   readonly role: Role;
@@ -52,11 +58,12 @@ export interface ImportResult {
 
 export interface ArtifactView {
   readonly id: number;
-  readonly kind: string;
+  readonly kind: ArtifactKind;
   readonly label: string;
   readonly version: number;
   readonly content: string;
   readonly link: string | null;
+  readonly commitSha: string | null;
   readonly createdAt: string;
   readonly provenance: { readonly by: string; readonly actor: string };
 }
@@ -157,6 +164,8 @@ export const api = {
     ),
   savePlan: (id: string, content: string) => request<ArtifactView>('PUT', `/api/globs/${id}/plan`, { content }),
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
+  artifactVersions: (id: string, kind: ArtifactKind, label: string) =>
+    request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts/${kind}?label=${encodeURIComponent(label)}`),
   setLabel: (id: string, label: LabelName, state: LabelState, version: number) =>
     request<GlobView>('PUT', `/api/globs/${id}/labels/${label}`, { state, version }),
 };

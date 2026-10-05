@@ -139,12 +139,12 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'get_glob',
     {
       description:
-        'Everything about a glob: status, version, fields, labels, PR, runs and flags. Routines pass their run ID, which records the run as making progress.',
+        'Everything about a glob: status, version, fields, labels, PR, runs, flags, and its artifacts (the latest version of each plan, implementation plan, postplan, local review and attachment, with version count, commitSha, createdAt and provenance; no content). Routines pass their run ID, which records the run as making progress.',
       inputSchema: { id: z.string(), runId: z.string().optional() },
     },
     async ({ id, runId }) => {
       if (runId !== undefined) await globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
-      return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions));
+      return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
     },
   );
 
@@ -224,7 +224,12 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
         'Become the glob\'s human implementer. Refused with run_active while a routine run is active or watching, unless takeOver is set.',
       inputSchema: { id: z.string(), version: z.number().int(), takeOver: z.boolean().optional() },
     },
-    async ({ id, version, takeOver }) => reply(await globs.pickUp(email, id, version, takeOver ?? false), (g) => globView(g)),
+    async ({ id, version, takeOver }) => {
+      const result = await globs.pickUp(email, id, version, takeOver ?? false);
+      // Run the jobs it queued (a super's provisioning) now, as the REST action does.
+      if (result.ok) await deps.outbox.drain(id);
+      return reply(result, (g) => globView(g));
+    },
   );
 
   server.registerTool(
@@ -375,7 +380,7 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'attach',
     {
       description: 'Attach text or a link to a glob (clarifications, assumptions, notes) under a label.',
-      inputSchema: { id: z.string(), label: z.string().min(1), text: z.string().optional(), link: z.url().optional() },
+      inputSchema: { id: z.string(), label: z.string().min(1), text: z.string().optional(), link: z.url({ protocol: /^https?$/ }).optional() },
     },
     async ({ id, label, text, link }) =>
       reply(await artifacts.attach(email, id, { label, text: text ?? null, link: link ?? null }), (a) =>

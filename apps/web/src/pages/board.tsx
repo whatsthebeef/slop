@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
+import type { ArtifactRef } from '@/components/artifacts';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import { GlobDialog } from '@/components/glob-dialog';
@@ -53,6 +54,7 @@ export const BoardPage = () => {
   const toast = useToast();
   const live = useLiveBoard(boardId);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [openArtifact, setOpenArtifact] = useState<ArtifactRef | null>(null);
   const [creating, setCreating] = useState(false);
   const [typeFilter, setTypeFilter] = useState<SlopType | 'all'>('all');
   const [dropChoice, setDropChoice] = useState<{ glob: GlobView; actions: Action[] } | null>(null);
@@ -60,8 +62,12 @@ export const BoardPage = () => {
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
   const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId) });
 
+  // Keeps the known artifact summaries when a response carries none.
   const store = (glob: GlobView) =>
-    client.setQueryData<GlobView[]>(globsKey(boardId), (list = []) => [...list.filter((g) => g.id !== glob.id), glob]);
+    client.setQueryData<GlobView[]>(globsKey(boardId), (list = []) => {
+      const artifacts = glob.artifacts ?? list.find((g) => g.id === glob.id)?.artifacts;
+      return [...list.filter((g) => g.id !== glob.id), artifacts === undefined ? glob : { ...glob, artifacts }];
+    });
 
   /** Shows the error; on a version conflict, takes the current glob so the next click works. */
   const fail = (error: unknown) => {
@@ -164,7 +170,14 @@ export const BoardPage = () => {
                   <GlobCard
                     key={glob.id}
                     glob={glob}
-                    onOpen={() => setOpenId(glob.id)}
+                    onOpen={() => {
+                      setOpenArtifact(null);
+                      setOpenId(glob.id);
+                    }}
+                    onOpenArtifact={(kind) => {
+                      setOpenArtifact({ kind, label: '' });
+                      setOpenId(glob.id);
+                    }}
                     onSwitchLabel={switchLabel(glob)}
                   />
                 ))}
@@ -191,6 +204,7 @@ export const BoardPage = () => {
         <GlobDialog
           board={board.data}
           glob={open}
+          initialArtifact={openArtifact}
           onClose={() => setOpenId(null)}
           onAction={(action) => act(open, action)}
           onSwitchLabel={switchLabel(open)}

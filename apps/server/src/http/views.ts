@@ -1,18 +1,38 @@
-import type { Action, DomainError, Glob, Role } from '@slop/core';
+import type { Action, ArtifactSummary, DomainError, Glob, Role } from '@slop/core';
 import { listOf, machine } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
-/** The glob as clients see it: the stored document plus derived fields. */
-export const globView = (glob: Glob, allowedActions: readonly Action[] | null = null) => ({
+/**
+ * The glob as clients see it: the stored document plus derived fields, and its artifact
+ * summaries where the caller read them (they live in the artifacts table, not on the glob).
+ */
+export const globView = (
+  glob: Glob,
+  allowedActions: readonly Action[] | null = null,
+  artifacts: readonly ArtifactSummary[] | null = null,
+) => ({
   ...glob,
   list: listOf(glob.status),
   branch: glob.id,
   currentRun: machine.currentRun(glob),
   ...(allowedActions === null ? {} : { allowedActions }),
+  ...(artifacts === null ? {} : { artifacts: artifacts.map(artifactView) }),
 });
 
-export const globViewFor = (glob: Glob, email: string, role: Role) =>
-  globView(glob, machine.allowedActions(glob, { email, role }));
+/** An artifact summary on a glob view (the glob ID is implied). */
+const artifactView = ({ kind, label, version, versions, commitSha, createdAt, by, actor }: ArtifactSummary) => ({
+  kind,
+  label,
+  version,
+  versions,
+  commitSha,
+  createdAt,
+  by,
+  actor,
+});
+
+export const globViewFor = (glob: Glob, email: string, role: Role, artifacts: readonly ArtifactSummary[] | null = null) =>
+  globView(glob, machine.allowedActions(glob, { email, role }), artifacts);
 
 export const statusOf = (error: DomainError): ContentfulStatusCode => {
   switch (error.code) {

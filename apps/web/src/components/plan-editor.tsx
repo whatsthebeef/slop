@@ -12,11 +12,23 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
   const plan = useQuery({ queryKey: ['plan', globId], queryFn: () => api.plan(globId) });
   const saved = plan.data?.current?.content ?? null;
   const [draft, setDraft] = useState<string | null>(null);
-  useEffect(() => setDraft(null), [globId, saved]);
+  // The saved content the draft started from: live updates refetch the plan, and a change
+  // underneath a draft is flagged rather than allowed to wipe it.
+  const [base, setBase] = useState<string | null>(null);
+  useEffect(() => setDraft(null), [globId]);
+  const changedUnderneath = draft !== null && saved !== base;
+
+  const edit = (text: string) => {
+    if (draft === null) setBase(saved);
+    setDraft(text);
+  };
 
   const save = useMutation({
     mutationFn: (content: string) => api.savePlan(globId, content),
-    onSuccess: () => void client.invalidateQueries({ queryKey: ['plan', globId] }),
+    onSuccess: () => {
+      setDraft(null);
+      void client.invalidateQueries({ queryKey: ['plan', globId] });
+    },
     onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not save the plan'),
   });
 
@@ -32,8 +44,21 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
         className='min-h-40 font-mono text-xs'
         value={value}
         placeholder={summary === '' ? 'What to build, and "Done when:" lines…' : summary}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => edit(e.target.value)}
       />
+      {changedUnderneath && (
+        <div className='flex items-center justify-between gap-2 rounded border border-amber/50 bg-amber/10 px-2 py-1 text-xs'>
+          <span>plan.md changed since you started editing.</span>
+          <span className='flex gap-2'>
+            <Button variant='outline' size='sm' onClick={() => setDraft(null)}>
+              Reload
+            </Button>
+            <Button variant='ghost' size='sm' onClick={() => setBase(saved)}>
+              Keep editing
+            </Button>
+          </span>
+        </div>
+      )}
       {draft !== null && draft !== (saved ?? '') && (
         <div className='flex justify-end gap-2'>
           <Button variant='outline' size='sm' onClick={() => setDraft(null)}>

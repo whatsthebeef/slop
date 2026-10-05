@@ -1,7 +1,7 @@
 import type { ArtifactService, BoardService, Catalog, IntakeService, KnowledgeService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
-import { CATEGORIES, SLOP_TYPES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, SLOP_TYPES } from '@slop/core';
 import { parseFrontmatter } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -123,10 +123,17 @@ export const mountKnowledge = (
 
   app.get('/api/globs/:id/artifacts', async (c) => send(c, await artifacts.list(c.get('email'), c.req.param('id'))));
 
+  // Every version of one artifact, for the glob view's viewer (attachments pass their label).
+  app.get('/api/globs/:id/artifacts/:kind', async (c) => {
+    const kind = z.enum(ARTIFACT_KINDS).safeParse(c.req.param('kind'));
+    if (!kind.success) return c.json({ code: 'not_found', message: 'Unknown artifact kind' }, 404);
+    return send(c, await artifacts.versions(c.get('email'), c.req.param('id'), kind.data, c.req.query('label') ?? ''));
+  });
+
   app.post('/api/globs/:id/attachments', async (c) => {
     const body = await parse(
       c,
-      z.object({ label: z.string().min(1), text: z.string().nullable().default(null), link: z.url().nullable().default(null) }),
+      z.object({ label: z.string().min(1), text: z.string().nullable().default(null), link: z.url({ protocol: /^https?$/ }).nullable().default(null) }),
     );
     if (body instanceof Response) return body;
     return send(c, await artifacts.attach(c.get('email'), c.req.param('id'), body));

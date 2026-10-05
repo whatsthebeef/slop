@@ -1,8 +1,9 @@
 import { useDraggable } from '@dnd-kit/core';
-import type { LabelName, LabelState } from '@slop/core';
+import type { ArtifactKind, LabelName, LabelState } from '@slop/core';
 import { AlertTriangle, Bot, Loader2 } from 'lucide-react';
 import type { GlobView } from '@/lib/api';
 import { cn, groupHue } from '@/lib/utils';
+import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { LabelSwitches } from './labels';
 
 const TYPE_STYLE = {
@@ -59,13 +60,48 @@ const RunIndicator = ({ glob }: { glob: GlobView }) => {
   );
 };
 
+/** Small icons for the artifacts the glob has; each opens the glob view on that artifact. */
+const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (kind: ArtifactKind) => void }) => {
+  const present = CARD_ARTIFACT_KINDS.flatMap((kind) => {
+    const artifact = glob.artifacts?.find((a) => a.kind === kind);
+    return artifact === undefined ? [] : [artifact];
+  });
+  if (present.length === 0) return null;
+  return (
+    <span className='inline-flex items-center gap-0.5'>
+      {present.map((a) => {
+        const { title, icon: Icon } = ARTIFACT_META[a.kind];
+        return (
+          <button
+            key={a.kind}
+            type='button'
+            className='rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
+            title={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}`}
+            aria-label={title}
+            data-testid={`artifact-icon-${a.kind}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen(a.kind);
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <Icon className='h-3.5 w-3.5' />
+          </button>
+        );
+      })}
+    </span>
+  );
+};
+
 export const GlobCard = ({
   glob,
   onOpen,
+  onOpenArtifact,
   onSwitchLabel,
 }: {
   glob: GlobView;
   onOpen: () => void;
+  onOpenArtifact: (kind: ArtifactKind) => void;
   onSwitchLabel: (label: LabelName, state: LabelState) => void;
 }) => {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: glob.id, data: { glob } });
@@ -101,6 +137,7 @@ export const GlobCard = ({
       <div className='mt-2 flex flex-wrap items-center gap-1.5'>
         {glob.group !== null && <GroupChip name={glob.group} />}
         <LabelSwitches glob={glob} onSwitch={onSwitchLabel} />
+        <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         {failed && (
           <span className='inline-flex items-center gap-1 text-[11px] text-red' title={glob.failure?.reason}>
             <AlertTriangle className='h-3 w-3' /> failed

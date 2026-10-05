@@ -110,3 +110,19 @@ export interface Artifact {
   readonly provenance: Provenance;
   readonly createdAt: string;
 }
+
+/** An artifact's latest version without its content: what cards and `get_glob` show. */
+export interface ArtifactSummary {
+  readonly globId: string;
+  readonly kind: ArtifactKind;
+  readonly label: string;
+  /** The latest version. */
+  readonly version: number;
+  /** How many versions exist. */
+  readonly versions: number;
+  /** The latest version's commit SHA. */
+  readonly commitSha: string | null;
+  readonly createdAt: string;
+  readonly by: Provenance['by'];
+  readonly actor: string;
+}

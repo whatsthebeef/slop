@@ -1,7 +1,7 @@
 import type { DomainEvent, Effect } from './domain/events.js';
 import type { IdLetter } from './domain/ids.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
-import type { Artifact, ArtifactKind, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
+import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
 export interface GlobFilter {
@@ -50,6 +50,8 @@ export interface Tx {
   /** Latest version of each artifact (per kind and label), optionally of one kind. */
   listArtifacts(globId: string, kind?: ArtifactKind): Promise<Artifact[]>;
   artifactVersions(globId: string, kind: ArtifactKind, label: string): Promise<Artifact[]>;
+  /** Content-free summaries of the latest version of each artifact on the given globs of a board. */
+  listArtifactSummaries(boardId: number, globIds: readonly string[]): Promise<ArtifactSummary[]>;
 
   /** Inserts a new KB item; returns false if the ID already exists. */
   insertKbItem(item: KbItem): Promise<boolean>;
@@ -70,6 +72,8 @@ export interface Store {
 export type Hint =
   | { readonly kind: 'glob.changed'; readonly boardId: number; readonly globId: string; readonly version: number }
   | { readonly kind: 'glob.deleted'; readonly boardId: number; readonly globId: string; readonly version: number }
+  /** An artifact was added: it doesn't bump the glob's version, so clients refetch regardless. */
+  | { readonly kind: 'glob.artifacts'; readonly boardId: number; readonly globId: string }
   | { readonly kind: 'board.changed'; readonly boardId: number };
 
 /** Publishes small change hints to open boards after a commit. */

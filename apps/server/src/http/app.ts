@@ -1,16 +1,17 @@
 import type { BoardService, GlobService, Result } from '@slop/core';
 import { CATEGORIES, LABEL_NAMES, ROLES, SLOP_TYPES, STATUSES } from '@slop/core';
-import { randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import type { Auth } from '../auth.js';
-import { SESSION_COOKIE } from '../auth.js';
+import { SESSION_COOKIE, SESSION_DAYS } from '../auth.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
 import type { HintHub } from '../notifier.js';
+import type { SignedLinks } from '../signed-links.js';
 import { requestOrigin } from './origin.js';
+import { checkSignInState, issueSignInState } from './sign-in-state.js';
 import { errorBody, globView, globViewFor, onBoard, statusOf } from './views.js';
 
 export interface AppDeps {
@@ -19,6 +20,8 @@ export interface AppDeps {
   readonly globs: GlobService;
   readonly hub: HintHub;
   readonly outbox: OutboxRunner;
+  /** Signs the board sign-in `state`. */
+  readonly links: SignedLinks;
   /** Runs after a board is created (forks the catalog's agent set into it). */
   readonly onBoardCreated: (email: string, boardId: number) => Promise<void>;
 }
@@ -26,6 +29,11 @@ export interface AppDeps {
 export type Env = { Variables: { email: string } };
 
 const STATE_COOKIE = 'slop_oauth_state';
+// The session cookie lasts as long as the server-side session, so a browser restart keeps you signed in.
+const SESSION_MAX_AGE = SESSION_DAYS * 86_400;
+
+/** Request values go into log lines; keep them to one short printable line so they can't forge entries. */
+const printable = (value: string): string => value.replace(/[^\x20-\x7e]/g, '?').slice(0, 120);
 
 const environmentSchema = z.object({ name: z.string().min(1), allowBranchDeploy: z.boolean() });
 
@@ -97,7 +105,7 @@ export const createApp = (deps: AppDeps) => {
       if (body instanceof Response) return body;
       const email = body.email.toLowerCase();
       const session = await auth.createSession({ email, name: body.name ?? email });
-      setCookie(c, SESSION_COOKIE, session, { httpOnly: true, sameSite: 'Lax', path: '/' });
+      setCookie(c, SESSION_COOKIE, session, { httpOnly: true, sameSite: 'Lax', path: '/', maxAge: SESSION_MAX_AGE });
       return c.json({ email });
     });
   }
@@ -106,22 +114,37 @@ export const createApp = (deps: AppDeps) => {
 
   if (auth.config.AUTH_MODE === 'cognito') {
     app.get('/auth/login', (c) => {
-      const state = randomBytes(16).toString('base64url');
-      setCookie(c, STATE_COOKIE, state, { httpOnly: true, sameSite: 'Lax', path: '/auth', maxAge: 600 });
+      const { state, nonce } = issueSignInState(deps.links);
+      setCookie(c, STATE_COOKIE, nonce, { httpOnly: true, sameSite: 'Lax', path: '/auth', maxAge: 600 });
       return c.redirect(auth.authorizeUrl(state, auth.boardRedirectUri(originOf(c))));
     });
 
     app.get('/auth/callback', async (c) => {
-      const expected = getCookie(c, STATE_COOKIE);
+      const cookie = getCookie(c, STATE_COOKIE);
       deleteCookie(c, STATE_COOKIE, { path: '/auth' });
       const code = c.req.query('code');
-      if (expected === undefined || c.req.query('state') !== expected || code === undefined) {
-        return c.text('Sign-in failed: the request did not match. Try again.', 400);
+      const local = originOf(c).startsWith('http://localhost');
+      const check = checkSignInState(deps.links, c.req.query('state'), cookie, !local);
+      if (!check.ok || code === undefined) {
+        // Which check failed, and which cookies arrived (names only), so a failed sign-in can be diagnosed.
+        const cookieNames = (c.req.header('cookie') ?? '').split(';').map((p) => p.split('=')[0]?.trim()).filter(Boolean).join(',');
+        const reason =
+          `state ${check.ok ? 'valid' : check.reason}, state cookie ${cookie === undefined ? 'missing' : 'present'}` +
+          `, code ${code === undefined ? 'missing' : 'present'}, cognito error ${printable(c.req.query('error') ?? 'none')}, host ${printable(c.req.header('host') ?? '?')}, cookies [${printable(cookieNames)}]`;
+        console.warn(`[auth] board callback rejected: ${reason}`);
+        // On a local dev server, show the reason on the page too; it holds no secrets (cookie names only).
+        return c.text(`Sign-in failed: the request did not match. Try again.${local ? `\n\n(${reason})` : ''}`, 400);
       }
       const identity = await auth.completeSignIn(code, auth.boardRedirectUri(originOf(c)));
       if (identity === null) return c.text('Sign-in failed.', 401);
       const session = await auth.createSession(identity);
-      setCookie(c, SESSION_COOKIE, session, { httpOnly: true, sameSite: 'Lax', path: '/', secure: originOf(c).startsWith('https:') });
+      setCookie(c, SESSION_COOKIE, session, {
+        httpOnly: true,
+        sameSite: 'Lax',
+        path: '/',
+        secure: originOf(c).startsWith('https:'),
+        maxAge: SESSION_MAX_AGE,
+      });
       return c.redirect('/');
     });
   }
@@ -210,12 +233,15 @@ export const createApp = (deps: AppDeps) => {
     const membership = await boards.get(email, boardId);
     if (!membership.ok) return send(c, membership);
     const status = c.req.query('status');
-    const result = await globs.list(email, boardId, {
-      ...(status === undefined ? {} : { status: z.array(z.enum(STATUSES)).parse(status.split(',')) }),
-    });
     const now = Date.now();
+    const result = await globs.listWithArtifacts(
+      email,
+      boardId,
+      { ...(status === undefined ? {} : { status: z.array(z.enum(STATUSES)).parse(status.split(',')) }) },
+      (g) => onBoard(g, now),
+    );
     return send(c, result, (list) =>
-      list.filter((g) => onBoard(g, now)).map((g) => globViewFor(g, email, membership.value.role)),
+      list.map(({ glob, artifacts }) => globViewFor(glob, email, membership.value.role, artifacts)),
     );
   });
 
@@ -243,11 +269,11 @@ export const createApp = (deps: AppDeps) => {
     if (!created.ok) return send(c, created);
     // Return once provisioning has been attempted.
     await deps.outbox.drain(created.value.id);
-    return send(c, await globs.get(email, created.value.id), (v) => globView(v.glob, v.allowedActions));
+    return send(c, await globs.get(email, created.value.id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
   });
 
   app.get('/api/globs/:id', async (c) =>
-    send(c, await globs.get(c.get('email'), c.req.param('id')), (v) => globView(v.glob, v.allowedActions)),
+    send(c, await globs.get(c.get('email'), c.req.param('id')), (v) => globView(v.glob, v.allowedActions, v.artifacts)),
   );
 
   app.patch('/api/globs/:id', async (c) => {
@@ -293,7 +319,7 @@ export const createApp = (deps: AppDeps) => {
   /** Responds with the updated glob and the actions now open to the caller. */
   const withView = async (c: Context<Env>, result: Awaited<ReturnType<GlobService['start']>>) => {
     if (!result.ok) return send(c, result);
-    return send(c, await globs.get(c.get('email'), result.value.id), (v) => globView(v.glob, v.allowedActions));
+    return send(c, await globs.get(c.get('email'), result.value.id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
   };
 
   // ---------------------------------------------------------------------------

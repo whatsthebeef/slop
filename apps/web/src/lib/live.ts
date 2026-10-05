@@ -4,7 +4,7 @@ import { api, RequestError } from './api';
 import type { GlobView } from './api';
 
 interface Hint {
-  readonly kind: 'glob.changed' | 'glob.deleted' | 'board.changed';
+  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'board.changed';
   readonly globId?: string;
   readonly version?: number;
 }
@@ -12,6 +12,9 @@ interface Hint {
 export type LiveState = 'connecting' | 'live' | 'reconnecting' | 'paused';
 
 export const globsKey = (boardId: number) => ['globs', boardId] as const;
+
+/** One artifact's versions in the glob view; invalidated by `glob.artifacts` hints. */
+export const artifactKey = (globId: string, kind: string, label: string) => ['artifact', globId, kind, label] as const;
 
 /**
  * Keeps the board's glob list live: each hint refetches only that glob, and every reconnect
@@ -45,8 +48,14 @@ export const useLiveBoard = (boardId: number): LiveState => {
         replace(null, id);
         return;
       }
-      const known = client.getQueryData<GlobView[]>(globsKey(boardId))?.find((g) => g.id === id);
-      if (known !== undefined && hint.version !== undefined && known.version >= hint.version) return;
+      if (hint.kind === 'glob.artifacts') {
+        // Artifacts don't bump the glob's version, so always refetch (the view carries their summaries).
+        void client.invalidateQueries({ queryKey: ['artifact', id] });
+        void client.invalidateQueries({ queryKey: ['plan', id] });
+      } else {
+        const known = client.getQueryData<GlobView[]>(globsKey(boardId))?.find((g) => g.id === id);
+        if (known !== undefined && hint.version !== undefined && known.version >= hint.version) return;
+      }
       api
         .glob(id)
         .then((glob) => replace(glob, id))
