@@ -127,7 +127,17 @@ describe('slop glob', () => {
     );
     const json = setup({ get_glob: () => view });
     await globCommand(['s1t4', '--json'], json.deps);
-    expect(JSON.parse(json.out.join(''))).toEqual(view);
+    expect(JSON.parse(json.out.join(''))).toEqual({ ...view, environment: null });
+  });
+
+  it("includes the glob's environment when it has one", async () => {
+    const view = { ...glob({ status: 'in_progress' }), environment: 'dev' };
+    const human = setup({ get_glob: () => view });
+    await globCommand(['s1t4'], human.deps);
+    expect(human.out.join('')).toContain('(branch s1t4; environment dev; implementer none;');
+    const json = setup({ get_glob: () => view });
+    await globCommand(['s1t4', '--json'], json.deps);
+    expect(JSON.parse(json.out.join(''))).toMatchObject({ environment: 'dev' });
   });
 
   it('refuses a missing or malformed ID', async () => {
@@ -190,6 +200,26 @@ describe('slop pick-up', () => {
     run.git.remoteBranches.add('s1t4');
     await pickUpCommand(['s1t4', '--take-over'], run.deps);
     expect(run.slop.calls[1]?.args).toEqual({ id: 's1t4', version: 3, takeOver: true });
+  });
+
+  it('passes --env to pick_up, as --env <name> or --env=<name>', async () => {
+    for (const args of [
+      ['s1t4', '--env', 'dev'],
+      ['--env=dev', 's1t4'],
+    ]) {
+      const run = setup({
+        get_glob: () => glob({ status: 'failed', provisioning: 'ok' }),
+        pick_up: () => glob({ status: 'in_progress', provisioning: 'ok' }),
+      });
+      run.git.remoteBranches.add('s1t4');
+      await pickUpCommand(args, run.deps);
+      expect(run.slop.calls[1]?.args).toEqual({ id: 's1t4', version: 3, environment: 'dev' });
+    }
+    const { deps } = setup({});
+    await expect(pickUpCommand(['s1t4', '--env'], deps)).rejects.toBeInstanceOf(UsageError);
+    await expect(pickUpCommand(['s1t4', '--env', '--json'], deps)).rejects.toBeInstanceOf(
+      UsageError,
+    );
   });
 
   it('does not ask for a take-over when there is no run to take over', async () => {
@@ -341,6 +371,18 @@ describe('slop new', () => {
     expect(sup.slop.calls[0]?.args).toMatchObject({ type: 'super' });
   });
 
+  it('passes --env to create_glob', async () => {
+    const run = setup({ create_glob: () => created({ type: 'super' }) }, { board: '2' });
+    await newCommand(['--super', '--env', 'dev', 'pair', 'on', 'export'], run.deps);
+    expect(run.slop.calls[0]?.args).toEqual({
+      board: 2,
+      idempotencyKey: 'key-1',
+      input: 'pair on export',
+      type: 'super',
+      environment: 'dev',
+    });
+  });
+
   it('refuses bad flag combinations, no prompt and no board', async () => {
     const { deps, slop } = setup({ create_glob: () => created() }, { board: '1' });
     await expect(newCommand(['--same', '--sub', 'x'], deps)).rejects.toBeInstanceOf(UsageError);
@@ -482,6 +524,16 @@ describe('slop merge', () => {
     });
     await expect(mergeCommand(['s1t4'], twice.deps)).rejects.toThrow(/version_conflict/);
     expect(twice.slop.tools()).toEqual(['get_glob', 'merge', 'get_glob', 'merge']);
+  });
+
+  it('merges and continues a super with --continue', async () => {
+    const run = setup({
+      get_glob: () => glob({ type: 'super', status: 'pr_open', version: 7, pr: { number: 9, state: 'ready' } }),
+      merge: () => glob({ type: 'super', status: 'in_progress', version: 9, pr: null }),
+    });
+    await mergeCommand(['s1t4', '--continue'], run.deps);
+    expect(run.slop.calls.at(-1)).toEqual({ tool: 'merge', args: { id: 's1t4', version: 7, continue: true } });
+    expect(run.out.join('')).toMatch(/^s1t4: in_progress \(merged and continued/);
   });
 
   it('reports an already merged glob without merging again', async () => {

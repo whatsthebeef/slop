@@ -5,7 +5,7 @@ import { z } from 'zod';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/store.js';
 import type { CodeHost } from '../codehost.js';
-import { repoOf } from '../codehost.js';
+import { SUB_GATE_CHECK, repoOf } from '../codehost.js';
 import type { Delivery } from './webhooks.js';
 
 const repository = z.object({ full_name: z.string() });
@@ -44,9 +44,6 @@ const checkPayload = z.object({
     .optional(),
   repository,
 });
-
-/** The check run the sub gate's GitHub Action reports as. */
-const SUB_GATE_CHECK = 'sub-gate';
 
 const SLOP_RUN = /^Slop-Run:\s*(\S+)\s*$/m;
 
@@ -147,7 +144,7 @@ const handle = async (
         case 'closed':
           if (pr.merged === true) {
             await apply(glob, (g, ctx) =>
-              machine.merged(g, { sha: pr.merge_commit_sha ?? pr.head.sha }, ctx),
+              machine.merged(g, { sha: pr.merge_commit_sha ?? pr.head.sha, number: pr.number }, ctx),
             );
           } else {
             await apply(glob, (g, ctx) => machine.prClosed(g, ctx));

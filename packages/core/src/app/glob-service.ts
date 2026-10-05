@@ -2,7 +2,7 @@ import { err, forbidden, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
-import type { Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
+import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { ArtifactSummary } from '../domain/knowledge.js';
 import type { Actor, Board, Category, Glob, LabelName, SlopType } from '../domain/types.js';
@@ -39,7 +39,7 @@ export interface GlobView {
 const byKind = (a: ArtifactSummary, b: ArtifactSummary): number =>
   ARTIFACT_KINDS.indexOf(a.kind) - ARTIFACT_KINDS.indexOf(b.kind) || a.label.localeCompare(b.label);
 
-type Step = (glob: Glob, ctx: Context, board: Board) => Result<Transition>;
+type Step = (glob: Glob, ctx: Context, board: Board, facts: ActionFacts) => Result<Transition>;
 
 /** Integration events retry a few times on concurrent writes; they carry no client version. */
 const EVENT_RETRIES = 5;
@@ -60,8 +60,9 @@ export class GlobService {
       if (glob === null) return notFound(`No glob ${id}`);
       const actor = await this.actorFor(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const artifacts = await tx.listArtifactSummaries(glob.boardId, [glob.id]);
-      return ok({ glob, allowedActions: machine.allowedActions(glob, actor.value), artifacts: artifacts.sort(byKind) });
+      const artifacts = (await tx.listArtifactSummaries(glob.boardId, [glob.id])).sort(byKind);
+      const facts = { postplanSha: machine.postplanShaOf(artifacts) };
+      return ok({ glob, allowedActions: machine.allowedActions(glob, actor.value, facts), artifacts });
     });
   }
 
@@ -140,8 +141,11 @@ export class GlobService {
     return this.command(email, id, version, (glob, ctx) => machine.start(glob, ctx));
   }
 
-  pickUp(email: string, id: string, version: number, takeOver: boolean) {
-    return this.command(email, id, version, (glob, ctx) => machine.pickUp(glob, ctx, { takeOver }));
+  /** `environment` (optional) is chosen at pick-up; leaving it out keeps the glob's environment. */
+  pickUp(email: string, id: string, version: number, takeOver: boolean, environment?: string | null) {
+    return this.command(email, id, version, (glob, ctx, board) =>
+      machine.pickUp(glob, ctx, board, environment === undefined ? { takeOver } : { takeOver, environment }),
+    );
   }
 
   retrigger(email: string, id: string, version: number) {
@@ -152,8 +156,15 @@ export class GlobService {
     return this.command(email, id, version, (glob, ctx) => machine.startAgain(glob, ctx));
   }
 
-  merge(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx) => machine.requestMerge(glob, ctx));
+  /** Merge, or (`continueAfter`, supers) Merge and continue, which needs the latest postplan at the head. */
+  merge(email: string, id: string, version: number, continueAfter = false) {
+    return this.command(
+      email,
+      id,
+      version,
+      (glob, ctx, _board, facts) => machine.requestMerge(glob, ctx, { continue: continueAfter, facts }),
+      continueAfter,
+    );
   }
 
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
@@ -164,6 +175,17 @@ export class GlobService {
   /** `mark_ready`: ask slop to mark the glob's draft PR ready for review. */
   requestReady(email: string, id: string, runId: string | null) {
     return this.command(email, id, null, (glob, ctx) => machine.readyRequested(glob, runId, ctx));
+  }
+
+  /** The board's Ready for review on a super: allowed once the latest postplan is at the PR head. */
+  requestReadyFromBoard(email: string, id: string, version: number) {
+    return this.command(
+      email,
+      id,
+      version,
+      (glob, ctx, _board, facts) => machine.readyRequested(glob, null, ctx, { from: 'board', facts }),
+      true,
+    );
   }
 
   /** `report_failure` from a person's interactive session (no run ID). */
@@ -216,6 +238,8 @@ export class GlobService {
     id: string,
     expectedVersion: number | null,
     step: Step,
+    /** Read the facts some actions depend on (the latest postplan); other steps get none. */
+    withFacts = false,
   ): Promise<Result<Glob>> {
     for (let attempt = 0; ; attempt++) {
       const result = await this.deps.store.transaction(async (tx): Promise<Result<Glob> | 'retry'> => {
@@ -232,7 +256,10 @@ export class GlobService {
         }
         const board = await tx.getBoard(glob.boardId);
         if (board === null) return notFound(`No board ${glob.boardId}`);
-        const transition = step(glob, await this.context(actor, board), board);
+        const facts: ActionFacts = withFacts
+          ? { postplanSha: machine.postplanShaOf(await tx.listArtifactSummaries(glob.boardId, [glob.id])) }
+          : {};
+        const transition = step(glob, await this.context(actor, board), board, facts);
         if (!transition.ok) return transition;
         const { changed, events, effects } = transition.value;
         if (!changed) {

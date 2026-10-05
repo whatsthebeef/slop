@@ -32,7 +32,11 @@ const artifactView = ({ kind, label, version, versions, commitSha, createdAt, by
 });
 
 export const globViewFor = (glob: Glob, email: string, role: Role, artifacts: readonly ArtifactSummary[] | null = null) =>
-  globView(glob, machine.allowedActions(glob, { email, role }), artifacts);
+  globView(
+    glob,
+    machine.allowedActions(glob, { email, role }, { postplanSha: machine.postplanShaOf(artifacts ?? []) }),
+    artifacts,
+  );
 
 export const statusOf = (error: DomainError): ContentfulStatusCode => {
   switch (error.code) {

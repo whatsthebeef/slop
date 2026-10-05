@@ -36,7 +36,15 @@ const SESSION_MAX_AGE = SESSION_DAYS * 86_400;
 /** Request values go into log lines; keep them to one short printable line so they can't forge entries. */
 const printable = (value: string): string => value.replace(/[^\x20-\x7e]/g, '?').slice(0, 120);
 
-const environmentSchema = z.object({ name: z.string().min(1), allowBranchDeploy: z.boolean() });
+const environmentSchema = z.object({
+  name: z.string().min(1),
+  allowBranchDeploy: z.boolean(),
+  // false is accepted and treated as absent.
+  subDefault: z
+    .boolean()
+    .optional()
+    .transform((v) => (v === true ? (true as const) : undefined)),
+});
 
 const createBoardSchema = z.object({
   name: z.string().min(1),
@@ -79,6 +87,10 @@ const updateGlobSchema = z.object({
 });
 
 const versionSchema = z.object({ version: z.number().int() });
+
+/** Glob actions carry the version read; pick-up and take-over may also choose the environment. */
+const actionSchema = versionSchema.extend({ environment: z.string().min(1).optional() });
+type ActionBody = z.infer<typeof actionSchema>;
 
 const send = <T>(c: Context<Env>, result: Result<T>, map: (value: T) => unknown = (v) => v) =>
   result.ok ? c.json(map(result.value) as object) : c.json(errorBody(result.error), statusOf(result.error));
@@ -318,20 +330,23 @@ export const createApp = (deps: AppDeps) => {
   });
 
   const actions = {
-    start: (email: string, id: string, v: number) => globs.start(email, id, v),
-    retrigger: (email: string, id: string, v: number) => globs.retrigger(email, id, v),
-    'pick-up': (email: string, id: string, v: number) => globs.pickUp(email, id, v, false),
-    'take-over': (email: string, id: string, v: number) => globs.pickUp(email, id, v, true),
-    'start-again': (email: string, id: string, v: number) => globs.startAgain(email, id, v),
-    merge: (email: string, id: string, v: number) => globs.merge(email, id, v),
+    start: (email: string, id: string, b: ActionBody) => globs.start(email, id, b.version),
+    retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version),
+    'pick-up': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, false, b.environment),
+    'take-over': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, true, b.environment),
+    'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),
+    merge: (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version),
+    // Supers: row 31, and the board's Ready for review (both need the latest postplan at the head).
+    'merge-continue': (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version, true),
+    'mark-ready': (email: string, id: string, b: ActionBody) => globs.requestReadyFromBoard(email, id, b.version),
   } as const;
 
   app.post('/api/globs/:id/actions/:action', async (c) => {
     const action = z.enum(Object.keys(actions) as [keyof typeof actions]).safeParse(c.req.param('action'));
     if (!action.success) return c.json({ code: 'not_found', message: 'Unknown action' }, 404);
-    const body = await parse(c, versionSchema);
+    const body = await parse(c, actionSchema);
     if (body instanceof Response) return body;
-    const result = await actions[action.data](c.get('email'), c.req.param('id'), body.version);
+    const result = await actions[action.data](c.get('email'), c.req.param('id'), body);
     if (result.ok) await deps.outbox.drain(result.value.id);
     return withView(c, result);
   });

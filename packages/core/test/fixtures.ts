@@ -54,6 +54,8 @@ export const glob = (patch: Partial<Glob> = {}): Glob => ({
   labels: {},
   checklists: {},
   pr: { number: 7, state: 'draft', headSha: 'aaa' },
+  prs: [],
+  mergeMode: null,
   headChecks: null,
   runs: [],
   failure: null,

@@ -14,6 +14,9 @@ export const repoOf = (board: Board): Repo | null => {
     : null;
 };
 
+/** The check run the sub gate's GitHub Action reports as; slop applies its policy once it passes (rows 12–13). */
+export const SUB_GATE_CHECK = 'sub-gate';
+
 /** Whether a review's head can merge, in the host's own view (required checks, conflicts, up to date). */
 export type MergeState = 'passed' | 'pending' | 'failed' | 'behind' | 'conflict' | 'unknown';
 
@@ -44,11 +47,18 @@ export interface CodeHost {
   connection(repo: Repo): Promise<RepoConnection>;
   /** Creates the glob's branch (empty `<id>: start` commit) and draft review with labels. Idempotent. */
   provision(repo: Repo, glob: Glob): Promise<{ branch: string; pr: { number: number; headSha: string } }>;
+  /**
+   * Opens a draft review with labels for the glob's existing branch, or returns the open one.
+   * Null when the host refuses one because the branch has nothing to merge yet.
+   */
+  openDraftPr(repo: Repo, glob: Glob): Promise<{ number: number; headSha: string } | null>;
   syncLabels(repo: Repo, glob: Glob, prNumber: number): Promise<void>;
   closePr(repo: Repo, prNumber: number): Promise<void>;
   deleteBranch(repo: Repo, branch: string): Promise<void>;
   reopenPr(repo: Repo, prNumber: number, branch: string): Promise<'reopened' | 'missing'>;
   mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState }>;
+  /** The latest completed check run named `name` on commit `sha`, or null if none has completed yet. */
+  completedCheckRun(repo: Repo, sha: string, name: string): Promise<{ sha: string; passed: boolean } | null>;
   /** Marks a draft PR ready for review. */
   markReady(repo: Repo, prNumber: number): Promise<void>;
   /** Lines changed and files touched between the base branch and `sha`. */
