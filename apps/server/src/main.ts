@@ -28,6 +28,7 @@ import { BedrockLlm } from './llm.js';
 import { FileRoutines } from './routines.js';
 import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
+import { DeployWatch } from './jobs/deploy-watch.js';
 
 const config = loadConfig();
 await runMigrations(config.DATABASE_URL, config.MIGRATIONS_DIR);
@@ -170,6 +171,7 @@ if (config.WEB_DIST !== undefined) {
 outbox.start();
 const runWatch = new RunWatch(store, globs, logError);
 runWatch.start();
+new DeployWatch(deploys, logError).start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });

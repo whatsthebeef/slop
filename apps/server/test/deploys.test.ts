@@ -11,7 +11,7 @@ const unwrap = <T>(result: Result<T>): T => {
 
 const DEV = 'dev@example.com';
 
-const glob = (id: string, boardId: number): Glob => ({
+const glob = (id: string, boardId: number, environment = 'dev1'): Glob => ({
   id,
   boardId,
   title: id,
@@ -19,7 +19,7 @@ const glob = (id: string, boardId: number): Glob => ({
   type: 'super',
   category: 'feature',
   group: null,
-  environment: 'dev1',
+  environment,
   status: 'in_progress',
   version: 1,
   generation: 1,
@@ -68,7 +68,10 @@ describe('deploys in Postgres', () => {
         baseBranch: 'main',
         timeZone: 'UTC',
         defaultRoutineOwner: null,
-        environments: [{ name: 'dev1', allowBranchDeploy: true }],
+        environments: [
+          { name: 'dev1', allowBranchDeploy: true },
+          { name: 'dev2', allowBranchDeploy: true },
+        ],
         sensitivePaths: [],
       });
       expect(inserted.deploy).toBeNull();
@@ -80,6 +83,7 @@ describe('deploys in Postgres', () => {
       expect(await tx.updateBoard(withDeploy, inserted.version)).toBe(true);
       await tx.upsertMember({ boardId: inserted.id, email: DEV, role: 'dev' });
       for (const id of ['s9f1', 's9f2', 's9f3']) await tx.insertGlob(glob(id, inserted.id), null);
+      for (const id of ['s9f4', 's9f5', 's9f6']) await tx.insertGlob(glob(id, inserted.id, 'dev2'), null);
       return withDeploy;
     });
   });
@@ -125,5 +129,33 @@ describe('deploys in Postgres', () => {
     unwrap(await service.finished('dep-3', { succeeded: false, error: 'exit 2' }));
     const history = unwrap(await service.history(DEV, 's9f3'));
     expect(history[0]).toMatchObject({ state: 'failed', error: 'exit 2' });
+  });
+
+  it('keeps one running and one waiting deploy per environment under concurrent requests and results', async () => {
+    const dev2 = () => store.transaction((tx) => tx.listDeploys(board.id, { environment: 'dev2' }));
+    const results = await Promise.all([
+      service.requestFromPush('s9f4', 'd1'),
+      service.requestFromPush('s9f5', 'e1'),
+      service.requestFromPush('s9f6', 'f1'),
+    ]);
+    expect(results.every((r) => r.ok)).toBe(true);
+    const states = (await dev2()).map((d) => d.state).sort();
+    expect(states).toEqual(['replaced', 'running', 'waiting']);
+
+    // A result and a new request at the same time: the waiting deploy (or the new one) must run.
+    const running = (await dev2()).find((d) => d.state === 'running');
+    if (running === undefined) throw new Error('expected a running deploy');
+    await Promise.all([
+      service.finished(running.id, { succeeded: true, error: null }),
+      service.requestFromPush('s9f4', 'd2'),
+    ]);
+    const after = await dev2();
+    expect(after.filter((d) => d.state === 'running')).toHaveLength(1);
+    expect(after.filter((d) => d.state === 'waiting').length).toBeLessThanOrEqual(1);
+  });
+
+  it("reads each glob's latest deploy", async () => {
+    const latest = await store.transaction((tx) => tx.latestDeploys(board.id, ['s9f1', 's9f4', 'nope']));
+    expect(new Map(latest.map((d) => [d.globId, d.sha]))).toEqual(new Map([['s9f1', 'a1'], ['s9f4', 'd2']]));
   });
 });

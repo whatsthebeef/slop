@@ -230,6 +230,16 @@ export class MemoryStore implements Store {
             .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt) || b.id.localeCompare(a.id))
             .slice(0, filter.limit ?? Infinity),
         ),
+      latestDeploys: (boardId, globIds) => {
+        const latest = new Map<string, Deploy>();
+        const sorted = [...s.deploys.values()]
+          .filter((d) => d.boardId === boardId && globIds.includes(d.globId))
+          .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt) || b.id.localeCompare(a.id));
+        for (const d of sorted) if (!latest.has(d.globId)) latest.set(d.globId, d);
+        return Promise.resolve([...latest.values()]);
+      },
+      // Memory transactions run one at a time, so there is nothing to serialise.
+      lockDeployQueue: () => Promise.resolve(),
       findDeployByProviderRef: (ref) =>
         Promise.resolve([...s.deploys.values()].find((d) => d.providerRef === ref) ?? null),
       appendEvents: (events) => {

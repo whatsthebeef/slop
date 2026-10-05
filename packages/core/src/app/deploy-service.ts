@@ -59,10 +59,9 @@ export class DeployService {
   ): Promise<{ indicators: Map<string, DeployIndicator>; running: Set<string> }> {
     return this.deps.store.transaction(async (tx) => {
       const indicators = new Map<string, DeployIndicator>();
-      const recent = globIds.length === 0 ? [] : await tx.listDeploys(boardId, { globIds });
-      const latest = new Map<string, Deploy>();
-      // Newest first, so the first one seen per glob is its latest.
-      for (const d of recent) if (!latest.has(d.globId)) latest.set(d.globId, d);
+      const latest = new Map<string, Deploy>(
+        (globIds.length === 0 ? [] : await tx.latestDeploys(boardId, globIds)).map((d) => [d.globId, d]),
+      );
       const live = new Map<string, Deploy | null>();
       for (const d of latest.values()) {
         if (!live.has(d.environment)) live.set(d.environment, await this.liveIn(tx, boardId, d.environment));
@@ -114,6 +113,7 @@ export class DeployService {
       if (blocked !== null || glob.environment === null) return invalidInput(blocked ?? 'The glob has no environment');
       const sha = glob.pr?.headSha ?? null;
       if (sha === null) return invalidInput(`${glob.id} has no pushed commit to deploy`);
+      await tx.lockDeployQueue(board.id, glob.environment);
       const running = await tx.listDeploys(board.id, { environment: glob.environment, states: ['running'] });
       if (running.length > 0) return invalidInput(deployRunning(glob.environment, running[0]?.globId ?? ''));
       return ok(await this.enqueue(dtx, glob, glob.environment, sha, 'deploy_now', email));
@@ -124,8 +124,11 @@ export class DeployService {
   async started(deployId: string, ref: { providerRef: string; url: string | null }): Promise<Result<Deploy | null>> {
     return this.change(async (dtx) => {
       const { tx } = dtx;
-      const deploy = await tx.getDeploy(deployId);
-      if (deploy === null) return notFound(`No deploy ${deployId}`);
+      const found = await tx.getDeploy(deployId);
+      if (found === null) return notFound(`No deploy ${deployId}`);
+      // Under the queue lock, so a result that finished it meanwhile isn't overwritten.
+      await tx.lockDeployQueue(found.boardId, found.environment);
+      const deploy = (await tx.getDeploy(deployId)) ?? found;
       return ok(await this.apply(dtx, deploys.started(deploy, ref, this.deps.clock.now())));
     });
   }
@@ -151,9 +154,31 @@ export class DeployService {
     });
   }
 
+  /**
+   * Gives up on running deploys that never started or whose result never came (see
+   * `deploys.staleReason`), failing them so their environments' waiting deploys start. Returns how many.
+   */
+  async sweep(now: string = this.deps.clock.now()): Promise<number> {
+    const stale = await this.deps.store.transaction(async (tx) => {
+      const found: { id: string; reason: string }[] = [];
+      for (const board of await tx.listAllBoards()) {
+        for (const d of await tx.listDeploys(board.id, { states: ['running'] })) {
+          const reason = deploys.staleReason(d, now);
+          if (reason !== null) found.push({ id: d.id, reason });
+        }
+      }
+      return found;
+    });
+    for (const { id, reason } of stale) await this.finished(id, { succeeded: false, error: reason });
+    return stale.length;
+  }
+
   // -------------------------------------------------------------------------
 
-  private async finish(dtx: DeployTx, deploy: Deploy, result: DeployResult): Promise<Deploy | null> {
+  private async finish(dtx: DeployTx, found: Deploy, result: DeployResult): Promise<Deploy | null> {
+    await dtx.tx.lockDeployQueue(found.boardId, found.environment);
+    // Re-read under the lock: another transaction may have finished it meanwhile.
+    const deploy = (await dtx.tx.getDeploy(found.id)) ?? found;
     const active = await dtx.tx.listDeploys(deploy.boardId, {
       environment: deploy.environment,
       states: ['waiting', 'running'],
@@ -170,6 +195,7 @@ export class DeployService {
     requestedBy: string | null,
   ): Promise<Deploy | null> {
     const { tx } = dtx;
+    await tx.lockDeployQueue(glob.boardId, environment);
     const now = this.deps.clock.now();
     const active = await tx.listDeploys(glob.boardId, { environment, states: ['waiting', 'running'] });
     const deploy: Deploy = {

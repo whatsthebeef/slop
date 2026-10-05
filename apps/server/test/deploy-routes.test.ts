@@ -106,6 +106,11 @@ describe('deploy results and executors', () => {
     });
     links = new SignedLinks('test-secret');
     app = new Hono<Env>();
+    // Stands in for the app's sign-in middleware: the caller's email comes from a test header.
+    app.use('/api/*', async (c, next) => {
+      c.set('email', c.req.header('x-test-email') ?? DEV);
+      await next();
+    });
     mountDeploys(app, {
       deploys,
       boards: new BoardService({ store, notifier: { publish: () => undefined } }),
@@ -131,6 +136,7 @@ describe('deploy results and executors', () => {
       };
       await tx.updateBoard(withDeploy, inserted.version);
       for (const id of ['s9f1', 's9f2']) await tx.insertGlob(glob(id, inserted.id), null);
+      await tx.upsertMember({ boardId: inserted.id, email: DEV, role: 'dev' });
       return withDeploy;
     });
   });
@@ -225,5 +231,59 @@ describe('deploy results and executors', () => {
     expect((await deploys.get(id))?.error).toBe(
       'CodeBuild failed in DOWNLOAD_SOURCE: CLIENT_ERROR: Connection slop-sandbox is not available',
     );
+  });
+
+  it('shows deploy state and history to board members only', async () => {
+    const asStranger = { headers: { 'x-test-email': 'stranger@example.com' } };
+    expect((await app.request(`/api/boards/${String(board.id)}/deploys?globs=s9f1`)).status).toBe(200);
+    expect((await app.request(`/api/boards/${String(board.id)}/deploys?globs=s9f1`, asStranger)).status).toBe(403);
+    expect((await app.request('/api/globs/s9f1/deploys')).status).toBe(200);
+    expect((await app.request('/api/globs/s9f1/deploys', asStranger)).status).toBe(403);
+    expect((await app.request('/api/globs/s9f1/deploy-now', { method: 'POST', ...asStranger })).status).toBe(403);
+  });
+
+  it('refuses expired callbacks and callbacks signed for another deploy', async () => {
+    const send = (id: string, path: string, ttl: number) => {
+      const signed = links.sign(path, ttl);
+      return app.request(`${callbackPath(id)}?expires=${String(signed.expires)}&sig=${signed.signature}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'succeeded' }),
+      });
+    };
+    expect((await send('dep-1', callbackPath('dep-1'), -10)).status).toBe(401);
+    expect((await send('dep-2', callbackPath('dep-1'), 60)).status).toBe(401);
+  });
+
+  it('turns /webhooks/aws off without a key', async () => {
+    const bare = new Hono<Env>();
+    mountDeploys(bare, {
+      deploys,
+      boards: new BoardService({ store, notifier: { publish: () => undefined } }),
+      links,
+      awsWebhookKey: undefined,
+      log: () => undefined,
+    });
+    const response = await bare.request('/webhooks/aws', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-slop-key': '' },
+      body: '{}',
+    });
+    expect(response.status).toBe(404);
+  });
+
+  it("doesn't start a queued deploy whose environment stopped taking branch deploys", async () => {
+    await deploys.requestFromPush('s9f1', 'a9');
+    const id = `dep-${String(n)}`;
+    await store.transaction(async (tx) => {
+      const current = await tx.getBoard(board.id);
+      if (current === null) throw new Error('no board');
+      await tx.updateBoard(
+        { ...current, environments: [{ name: 'dev1', allowBranchDeploy: false }], version: current.version + 1 },
+        current.version,
+      );
+    });
+    await drain();
+    expect(await deploys.get(id)).toMatchObject({ state: 'failed', error: "Not started: dev1 doesn't take branch deploys" });
   });
 });

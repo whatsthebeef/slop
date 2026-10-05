@@ -20,6 +20,18 @@ const FAILURE_WINDOW_DAYS = 7;
 
 const agentSetFile = z.object({ version: z.number().int() });
 
+/** The version in `.claude/slop-agent-set.json`, or 'unreadable' when the file isn't valid. */
+const parseAgentSetVersion = (text: string): number | 'unreadable' => {
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return 'unreadable';
+  }
+  const parsed = agentSetFile.safeParse(json);
+  return parsed.success ? parsed.data.version : 'unreadable';
+};
+
 /**
  * The board's readiness checklist: what slop can check (the repo, its workflow and agent set, the
  * knowledge base, environments) plus the admin's ticks, turned red by matching routine failures.
@@ -36,7 +48,8 @@ export const mountReadiness = (app: Hono<Env>, deps: ReadinessRoutesDeps): void 
     let repoConnected: boolean | null = null;
     let installUrl: string | null = null;
     let subGateWorkflow: boolean | null = null;
-    let committedAgentSetVersion: number | null = null;
+    let committedAgentSetVersion: number | 'unreadable' | null = null;
+    let agentSetRead = false;
     if (repo !== null && deps.host.configured) {
       try {
         const connection = await deps.host.connection(repo);
@@ -48,8 +61,8 @@ export const mountReadiness = (app: Hono<Env>, deps: ReadinessRoutesDeps): void 
             deps.host.readFile(repo, board.baseBranch, '.claude/slop-agent-set.json'),
           ]);
           subGateWorkflow = workflow !== null;
-          const parsed = agentSetFile.safeParse(agentSet === null ? null : JSON.parse(agentSet));
-          committedAgentSetVersion = parsed.success ? parsed.data.version : null;
+          agentSetRead = true;
+          committedAgentSetVersion = agentSet === null ? null : parseAgentSetVersion(agentSet);
         }
       } catch (error) {
         // An unreachable host leaves its items unknown rather than failing the checklist.
@@ -67,7 +80,7 @@ export const mountReadiness = (app: Hono<Env>, deps: ReadinessRoutesDeps): void 
       repoConnected,
       installUrl,
       subGateWorkflow,
-      committedAgentSetVersion,
+      committedAgentSetVersion: agentSetRead ? committedAgentSetVersion : 'unknown',
       hasBuildDoc: index.ok && index.value.some((d) => d.area === 'build'),
       ticks: board.readinessTicks,
       recentFailures: globs.ok ? recentRoutineFailures(globs.value, since) : [],

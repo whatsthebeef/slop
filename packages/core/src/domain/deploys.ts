@@ -119,6 +119,41 @@ export const finished = (
   };
 };
 
+/** How long a running deploy may wait for its provider to accept it, and then for its result. */
+export const START_TIMEOUT_MINUTES = 10;
+export const RESULT_TIMEOUT_MINUTES = 60;
+
+/**
+ * Why a running deploy should be given up on, or null: its provider never accepted it, or no result
+ * arrived in time (a lost webhook, a stopped tunnel, a job that failed before reporting). Giving up
+ * fails it, which starts the environment's waiting deploy, so a queue never sticks.
+ */
+export const staleReason = (deploy: Deploy, now: string): string | null => {
+  if (deploy.state !== 'running') return null;
+  const minutesSince = (iso: string) => (Date.parse(now) - Date.parse(iso)) / 60_000;
+  if (deploy.startedAt === null) {
+    return minutesSince(deploy.requestedAt) >= START_TIMEOUT_MINUTES
+      ? `The deploy job didn't start within ${String(START_TIMEOUT_MINUTES)} minutes`
+      : null;
+  }
+  return minutesSince(deploy.startedAt) >= RESULT_TIMEOUT_MINUTES
+    ? `No result from the deploy job after ${String(RESULT_TIMEOUT_MINUTES)} minutes`
+    : null;
+};
+
+/**
+ * Why a deploy that is about to start must not (the environment stopped taking branch deploys, the
+ * integration was removed, or the glob moved to another environment while it waited), or null.
+ */
+export const startBlocked = (board: Board, deploy: Deploy, globEnvironment: string | null): string | null => {
+  const blocked = deployBlocked(board, deploy.environment);
+  if (blocked !== null) return blocked;
+  if (globEnvironment !== deploy.environment) {
+    return `${deploy.globId} moved to ${globEnvironment ?? 'no environment'} while this deploy waited`;
+  }
+  return null;
+};
+
 /** What a glob's card shows about its deploys. */
 export type DeployIndicator =
   | { readonly state: 'deploying'; readonly environment: string; readonly waiting: boolean }

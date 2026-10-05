@@ -52,6 +52,8 @@ export class CodeBuildDeployer implements Deployer {
       new StartBuildCommand({
         projectName,
         sourceVersion: job.deploy.sha,
+        // A retried start returns the same build rather than starting another.
+        idempotencyToken: job.deploy.id,
         environmentVariablesOverride: Object.entries(deployVariables(job)).map(([name, value]) => ({
           name,
           value,

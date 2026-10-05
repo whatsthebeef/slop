@@ -76,6 +76,13 @@ export interface Tx {
   listDeploys(boardId: number, filter: DeployFilter): Promise<Deploy[]>;
   /** The deploy a provider reports on, by its handle. */
   findDeployByProviderRef(providerRef: string): Promise<Deploy | null>;
+  /** Each glob's latest deploy (by request time), for the given globs of a board. */
+  latestDeploys(boardId: number, globIds: readonly string[]): Promise<Deploy[]>;
+  /**
+   * Serialises an environment's deploy queue until the transaction ends, so concurrent requests
+   * and results can't both see "nothing running" (a no-op where transactions don't overlap).
+   */
+  lockDeployQueue(boardId: number, environment: string): Promise<void>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;

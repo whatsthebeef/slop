@@ -433,6 +433,18 @@ export class PgStore implements Store {
         const rows = filter.limit === undefined ? await query : await query.limit(filter.limit);
         return rows.map(toDeploy);
       },
+      latestDeploys: async (boardId, globIds) => {
+        if (globIds.length === 0) return [];
+        const rows = await t
+          .selectDistinctOn([schema.deploys.globId])
+          .from(schema.deploys)
+          .where(and(eq(schema.deploys.boardId, boardId), inArray(schema.deploys.globId, [...globIds])))
+          .orderBy(schema.deploys.globId, desc(schema.deploys.requestedAt), desc(schema.deploys.id));
+        return rows.map(toDeploy);
+      },
+      lockDeployQueue: async (boardId, environment) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`deploys:${String(boardId)}:${environment}`}))`);
+      },
       findDeployByProviderRef: async (providerRef) => {
         const [row] = await t.select().from(schema.deploys).where(eq(schema.deploys.providerRef, providerRef));
         return row === undefined ? null : toDeploy(row);

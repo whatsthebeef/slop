@@ -113,7 +113,8 @@ export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
       succeeded: body.data.status === 'succeeded',
       error: body.data.status === 'failed' ? (body.data.message ?? 'The deploy script failed') : null,
     });
-    if (!result.ok) return c.json({ error: result.error.message }, 404);
+    // A deploy deleted with its glob: nothing to record, so don't make the job retry.
+    if (!result.ok) return c.json({ ok: true, ignored: true }, 202);
     return c.json({ ok: true }, 202);
   });
 

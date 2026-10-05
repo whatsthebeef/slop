@@ -100,6 +100,28 @@ describe('deploy rules', () => {
   });
 });
 
+describe('stale and blocked deploys', () => {
+  const minutes = (n: number) => new Date(Date.parse(NOW) + n * 60_000).toISOString();
+
+  it('gives up on a deploy that never started, or whose result never came', () => {
+    expect(deploys.staleReason(deploy({ state: 'running' }), minutes(9))).toBeNull();
+    expect(deploys.staleReason(deploy({ state: 'running' }), minutes(10))).toMatch(/didn't start within 10 minutes/);
+    const started = deploy({ state: 'running', startedAt: NOW });
+    expect(deploys.staleReason(started, minutes(59))).toBeNull();
+    expect(deploys.staleReason(started, minutes(60))).toMatch(/No result .* after 60 minutes/);
+    expect(deploys.staleReason(deploy({ state: 'waiting' }), minutes(600))).toBeNull();
+  });
+
+  it('refuses to start a deploy whose environment changed while it waited', () => {
+    const d = deploy({ environment: 'dev' });
+    expect(deploys.startBlocked(board, d, 'dev')).toBeNull();
+    expect(deploys.startBlocked({ ...board, environments: [{ name: 'dev', allowBranchDeploy: false }] }, d, 'dev')).toMatch(
+      /doesn't take branch deploys/,
+    );
+    expect(deploys.startBlocked(board, d, 'qa')).toMatch(/moved to qa while this deploy waited/);
+  });
+});
+
 describe('pushes request deploys', () => {
   const push = (patch: Parameters<typeof glob>[0], p: Parameters<typeof m.commitPushed>[1]) => {
     const t = m.commitPushed(glob({ status: 'in_progress', type: 'super', ...patch }), p, ctx(null));
@@ -176,6 +198,22 @@ describe('DeployService', () => {
     expect(indicators.get('s1t2')).toMatchObject({ state: 'live' });
     expect(indicators.get('s1t1')).toEqual({ state: 'replaced', environment: 'dev', by: 's1t2' });
     expect(running.size).toBe(0);
+  });
+
+  it('sweeps stale running deploys and starts the waiting one', async () => {
+    unwrap(await service.requestFromPush('s1t1', 'a1'));
+    unwrap(await service.requestFromPush('s1t2', 'b1'));
+    expect(await service.sweep(new Date(Date.parse(NOW) + 5 * 60_000).toISOString())).toBe(0);
+    expect(await service.sweep(new Date(Date.parse(NOW) + 11 * 60_000).toISOString())).toBe(1);
+    expect(store.state.deploys.get('d1')?.state).toBe('failed');
+    expect(store.state.deploys.get('d1')?.error).toMatch(/didn't start/);
+    expect(store.state.deploys.get('d2')?.state).toBe('running');
+  });
+
+  it("shows a glob's history to board members only", async () => {
+    unwrap(await service.requestFromPush('s1t1', 'a1'));
+    expect(unwrap(await service.history(MEMBER, 's1t1'))).toHaveLength(1);
+    expect((await service.history('stranger@example.com', 's1t1')).ok).toBe(false);
   });
 
   it('ignores provider results for builds slop did not start', async () => {

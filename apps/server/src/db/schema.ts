@@ -12,6 +12,7 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 export const users = pgTable('users', {
   email: text('email').primaryKey(),
@@ -261,5 +262,8 @@ export const deploys = pgTable(
     index('deploys_board_env_state_idx').on(t.boardId, t.environment, t.state),
     index('deploys_glob_requested_idx').on(t.globId, t.requestedAt),
     uniqueIndex('deploys_provider_ref_idx').on(t.providerRef),
+    // The queue's invariant, as a backstop to the per-environment lock: one running, one waiting.
+    uniqueIndex('deploys_one_running_idx').on(t.boardId, t.environment).where(sql`${t.state} = 'running'`),
+    uniqueIndex('deploys_one_waiting_idx').on(t.boardId, t.environment).where(sql`${t.state} = 'waiting'`),
   ],
 );

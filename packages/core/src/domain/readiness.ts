@@ -46,8 +46,11 @@ export interface ReadinessFacts {
   readonly installUrl: string | null;
   /** Whether the base branch has `.github/workflows/sub-gate.yml`; null when slop can't read the repo. */
   readonly subGateWorkflow: boolean | null;
-  /** The agent-set version committed on the base branch (`.claude/slop-agent-set.json`); null if absent or unreadable. */
-  readonly committedAgentSetVersion: number | null;
+  /**
+   * The agent-set version committed on the base branch (`.claude/slop-agent-set.json`): null when
+   * the file is absent, 'unreadable' when it isn't valid, 'unknown' when slop couldn't read the repo.
+   */
+  readonly committedAgentSetVersion: number | null | 'unreadable' | 'unknown';
   readonly hasBuildDoc: boolean;
   readonly ticks: ReadinessTicks;
   /** Recent routine failures on the board's globs, newest first. */
@@ -121,7 +124,14 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
 
   const committed = facts.committedAgentSetVersion;
   items.push(
-    committed === null
+    committed === 'unknown'
+      ? item('agent_set', 'Agent set in the repo', 'unknown', "slop can't read the repo yet", null)
+      : committed === 'unreadable'
+        ? item('agent_set', 'Agent set in the repo', 'missing', `.claude/slop-agent-set.json on ${board.baseBranch} isn't valid: run slop init ${String(board.id)} and commit it`, {
+            kind: 'knowledge',
+            label: 'Agent set',
+          })
+        : committed === null
       ? item('agent_set', 'Agent set in the repo', 'missing', `No .claude/slop-agent-set.json on ${board.baseBranch}: run slop init ${String(board.id)} in a checkout and commit it`, {
           kind: 'knowledge',
           label: 'Agent set',

@@ -49,9 +49,16 @@ describe('board readiness', () => {
   });
 
   it('marks unknown what slop cannot check yet', () => {
-    const states = stateOf({ ...ready, repoConnected: null, subGateWorkflow: null });
+    const states = stateOf({ ...ready, repoConnected: null, subGateWorkflow: null, committedAgentSetVersion: 'unknown' });
     expect(states.repo_app).toBe('unknown');
     expect(states.sub_gate).toBe('unknown');
+    expect(states.agent_set).toBe('unknown');
+  });
+
+  it('says an invalid agent-set file needs re-running slop init', () => {
+    const item = readiness({ ...ready, committedAgentSetVersion: 'unreadable' }).find((i) => i.key === 'agent_set');
+    expect(item).toMatchObject({ state: 'missing' });
+    expect(item?.detail).toMatch(/isn't valid: run slop init 1/);
   });
 
   it('turns a ticked item red when a recent routine failure points to it', () => {

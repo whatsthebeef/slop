@@ -167,8 +167,9 @@ export const api = {
       `/api/boards/${boardId}/signed-off${cursor === null ? '' : `?cursor=${cursor}`}`,
     ),
   glob: (id: string) => request<GlobView>('GET', `/api/globs/${id}`),
-  /** Deploy indicators for the given globs, and the environments with a deploy running. */
+  /** The board's readiness checklist. */
   readiness: (boardId: number) => request<{ items: ReadinessItem[] }>('GET', `/api/boards/${boardId}/readiness`).then((r) => r.items),
+  /** Deploy indicators for the given globs, and the environments with a deploy running. */
   boardDeploys: (boardId: number, globIds: readonly string[]) =>
     request<BoardDeploys>('GET', `/api/boards/${boardId}/deploys?globs=${globIds.map(encodeURIComponent).join(',')}`),
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
