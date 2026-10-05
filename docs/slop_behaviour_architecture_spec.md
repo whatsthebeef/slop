@@ -288,7 +288,7 @@ Approved changes are served on the next fetch; no PR is needed.
 
 From now on the team works with a branch and PR per glob, replacing direct commits to master. Slop links everything in GitHub to globs by one convention: the branch name is the glob ID, and slop creates that branch itself.
 
-**Sub review** runs as a GitHub Action and reports back to slop. It starts with basic checks (lint, type check, tests). Each board has a sensitive-paths setting, empty for now. A flagged sub converts to a same.
+**Sub review** runs as a GitHub Action and reports back to slop. It starts with basic checks (lint, type check, tests). Each board has a sensitive-paths setting, empty for now. A sub whose diff exceeds 2,000 changed lines also converts; slop will learn the right limit from outcomes later (slice 8), so it is not a setting. A flagged sub converts to a same.
 
 **Merging**
 

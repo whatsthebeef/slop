@@ -18,7 +18,7 @@ export const board: Board = {
   agentSetVersion: 1,
   runNoProgressHours: 2,
   runReadyHours: 8,
-  subMaxChangedLines: 300,
+  subMaxChangedLines: 2000,
   version: 1,
 };
 
