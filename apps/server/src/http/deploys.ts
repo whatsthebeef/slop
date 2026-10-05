@@ -31,8 +31,33 @@ const codeBuildEventSchema = z.object({
     'build-status': z.string(),
     'build-id': z.string(),
     'project-name': z.string().optional(),
+    // The build's phases; a failed one carries CodeBuild's reason in its context.
+    'additional-information': z
+      .object({
+        phases: z
+          .array(
+            z.object({
+              'phase-type': z.string().optional(),
+              'phase-status': z.string().optional(),
+              'phase-context': z.array(z.string()).optional(),
+            }),
+          )
+          .optional(),
+      })
+      .optional(),
   }),
 });
+
+/** Why a build failed, from its first failed phase: e.g. "DOWNLOAD_SOURCE: Connection ... is not available". */
+const failureReason = (detail: z.infer<typeof codeBuildEventSchema>['detail'], status: string): string => {
+  const failed = detail['additional-information']?.phases?.find(
+    (p) => p['phase-status'] !== undefined && p['phase-status'] !== 'SUCCEEDED',
+  );
+  const context = (failed?.['phase-context'] ?? []).filter((c) => c.trim() !== '' && c.trim() !== ':').join('; ');
+  const base = `CodeBuild ${status.toLowerCase().replace('_', ' ')}`;
+  if (failed === undefined) return base;
+  return `${base} in ${failed['phase-type'] ?? 'a phase'}${context === '' ? '' : `: ${context}`}`.slice(0, 500);
+};
 
 /** CodeBuild's final states; anything else (IN_PROGRESS) is not a result yet. */
 const CODEBUILD_FINAL: Record<string, boolean> = {
@@ -104,7 +129,7 @@ export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
     if (succeeded === undefined) return c.json({ ok: true, ignored: true }, 202);
     const result = await deploys.finishedByProviderRef(event.data.detail['build-id'], {
       succeeded,
-      error: succeeded ? null : `CodeBuild ${status.toLowerCase().replace('_', ' ')}`,
+      error: succeeded ? null : failureReason(event.data.detail, status),
     });
     if (!result.ok) {
       deps.log('webhook aws', result.error.message);

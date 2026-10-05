@@ -195,4 +195,35 @@ describe('deploy results and executors', () => {
     expect(await deploys.get('dep-3')).toMatchObject({ state: 'failed', error: "Couldn't start the deploy: AccessDenied" });
     expect(logged.some((m) => m.includes('AccessDenied'))).toBe(true);
   });
+  it("records CodeBuild's reason from the failed phase", async () => {
+    await deploys.requestFromPush('s9f2', 'b0');
+    await drain();
+    const id = `dep-${String(n)}`;
+    const response = await app.request('/webhooks/aws', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-slop-key': KEY },
+      body: JSON.stringify({
+        source: 'aws.codebuild',
+        'detail-type': 'CodeBuild Build State Change',
+        detail: {
+          'build-status': 'FAILED',
+          'build-id': `arn:aws:codebuild:build/${id}`,
+          'additional-information': {
+            phases: [
+              { 'phase-type': 'SUBMITTED', 'phase-status': 'SUCCEEDED' },
+              {
+                'phase-type': 'DOWNLOAD_SOURCE',
+                'phase-status': 'CLIENT_ERROR',
+                'phase-context': ['CLIENT_ERROR: Connection slop-sandbox is not available'],
+              },
+            ],
+          },
+        },
+      }),
+    });
+    expect(response.status).toBe(202);
+    expect((await deploys.get(id))?.error).toBe(
+      'CodeBuild failed in DOWNLOAD_SOURCE: CLIENT_ERROR: Connection slop-sandbox is not available',
+    );
+  });
 });
