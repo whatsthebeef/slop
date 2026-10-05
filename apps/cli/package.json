@@ -1,0 +1,23 @@
+{
+  "name": "@slop/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "slop": "dist/slop.mjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && esbuild src/bin.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/slop.mjs --banner:js=\"#!/usr/bin/env node\" && node -e \"require('node:fs').chmodSync('dist/slop.mjs', 0o755)\"",
+    "dev": "tsx src/bin.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15"
+  }
+}
