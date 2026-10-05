@@ -8,8 +8,8 @@ const LABEL_TITLES: Record<LabelName, string> = { FR: 'Functional review', CR: '
 
 const chip = (state: LabelState) =>
   state === 'added'
-    ? 'bg-emerald-600 text-white border-emerald-600'
-    : 'bg-transparent text-amber-700 dark:text-amber-300 border-amber-500';
+    ? 'border-foreground bg-lcd text-lcd-foreground'
+    : 'border-required-border bg-transparent text-required';
 
 /** FR/CR/QA chips; clicking opens switches without opening the glob. */
 export const LabelSwitches = ({
@@ -32,7 +32,7 @@ export const LabelSwitches = ({
         {present.map((name) => {
           const state = glob.labels[name] ?? 'required';
           return (
-            <span key={name} className={cn('rounded border px-1.5 text-[11px] font-semibold', chip(state))}>
+            <span key={name} className={cn('rounded-sm border px-1.5 font-mono text-[10px] font-semibold', chip(state))}>
               {name}
             </span>
           );
@@ -55,21 +55,21 @@ export const LabelSwitches = ({
                   aria-checked={added}
                   onClick={() => onSwitch(name, added ? 'required' : 'added')}
                   className={cn(
-                    'relative h-6 w-11 shrink-0 rounded-full transition-colors',
-                    added ? 'bg-emerald-600' : 'bg-amber-500',
+                    'relative h-6 w-11 shrink-0 rounded-md border border-foreground/70 transition-colors',
+                    added ? 'bg-lcd' : 'bg-muted',
                   )}
                 >
                   <span
                     className={cn(
-                      'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform',
-                      added ? 'translate-x-5.5' : 'translate-x-0.5',
+                      'absolute top-0.5 h-[18px] w-[18px] rounded-sm border border-foreground/70 bg-card transition-transform',
+                      added ? 'translate-x-5' : 'translate-x-0.5',
                     )}
                   />
                 </button>
               </label>
             );
           })}
-          <p className='text-xs text-muted-foreground'>Amber: required. Green: added.</p>
+          <p className='text-xs text-muted-foreground'>Outlined: required. Green: added.</p>
         </div>
       </PopoverContent>
     </Popover>

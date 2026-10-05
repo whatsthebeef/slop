@@ -9,6 +9,7 @@ import { BoardPage } from './pages/board';
 import { KnowledgePage } from './pages/knowledge';
 import { HomePage, LoginPage } from './pages/home';
 import { SettingsPage, SignedOffPage } from './pages/settings';
+import { ThemeToggle } from './components/theme-toggle';
 import { ToastProvider } from './toast';
 
 const client = new QueryClient({
@@ -53,6 +54,7 @@ createRoot(root).render(
             </Routes>
           </RequireSession>
         </BrowserRouter>
+        <ThemeToggle />
       </ToastProvider>
     </QueryClientProvider>
   </StrictMode>,

@@ -14,10 +14,10 @@ export const DialogContent = ({
   ...props
 }: Omit<ComponentProps<typeof DialogPrimitive.Content>, 'title'> & { title: ReactNode }) => (
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay className='fixed inset-0 z-40 bg-black/40' />
+    <DialogPrimitive.Overlay className='fixed inset-0 z-40 bg-[#2b2e29]/50' />
     <DialogPrimitive.Content
       className={cn(
-        'fixed top-[8vh] left-1/2 z-50 max-h-[84vh] w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 overflow-y-auto rounded-lg border bg-card p-5 shadow-xl',
+        'fixed top-[8vh] left-1/2 z-50 max-h-[84vh] w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 overflow-y-auto rounded-lg border-2 border-foreground/80 bg-card p-5 shadow-[4px_4px_0_var(--edge)]',
         className,
       )}
       aria-describedby={undefined}

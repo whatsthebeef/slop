@@ -79,7 +79,7 @@ const DocumentComparison = ({
         Replaces {existing.name} (v{existing.version})
       </p>
       {!sameAudience(existing.audience, proposed.audience) && (
-        <p className='rounded border border-amber-500/50 bg-amber-500/10 p-2' data-testid='audience-change'>
+        <p className='rounded-md border border-required-border bg-red-soft/15 p-2' data-testid='audience-change'>
           Audience changes from <span className='font-medium'>{audienceText(existing.audience)}</span> to{' '}
           <span className='font-medium'>{audienceText(proposed.audience)}</span>: this changes which agents are always given
           the document.
