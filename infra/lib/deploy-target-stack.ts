@@ -3,7 +3,7 @@ import type { StackProps } from 'aws-cdk-lib';
 import { BuildSpec, CfnProject, ComputeType, LinuxBuildImage, Project, Source } from 'aws-cdk-lib/aws-codebuild';
 import { ApiDestination, Authorization, Connection, HttpMethod, Rule } from 'aws-cdk-lib/aws-events';
 import { ApiDestination as ApiDestinationTarget } from 'aws-cdk-lib/aws-events-targets';
-import { Policy, PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { PolicyDocument, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import type { Construct } from 'constructs';
 
@@ -30,8 +30,32 @@ export class DeployTargetStack extends Stack {
     const [owner, repo] = props.repo.split('/');
     if (owner === undefined || repo === undefined) throw new Error(`repo must be owner/name, not ${props.repo}`);
 
+    // CodeBuild checks the project's role can use the connection when it creates the project, so the
+    // role carries that permission from the start (an inline policy, created with the role and
+    // before the project). Connections answer to both service prefixes.
+    const role = new Role(this, 'DeployRole', {
+      assumedBy: new ServicePrincipal('codebuild.amazonaws.com'),
+      inlinePolicies: {
+        Connection: new PolicyDocument({
+          statements: [
+            new PolicyStatement({
+              actions: [
+                'codeconnections:UseConnection',
+                'codeconnections:GetConnection',
+                'codeconnections:GetConnectionToken',
+                'codestar-connections:UseConnection',
+                'codestar-connections:GetConnection',
+                'codestar-connections:GetConnectionToken',
+              ],
+              resources: [props.connectionArn],
+            }),
+          ],
+        }),
+      },
+    });
     const project = new Project(this, 'Deploy', {
       projectName: props.projectName,
+      role,
       source: Source.gitHub({ owner, repo, reportBuildStatus: false }),
       buildSpec: BuildSpec.fromSourceFilename('.sstor/buildspec-deploy.yml'),
       environment: { buildImage: LinuxBuildImage.STANDARD_7_0, computeType: ComputeType.SMALL },
@@ -41,28 +65,6 @@ export class DeployTargetStack extends Stack {
     const cfn = project.node.defaultChild;
     if (!(cfn instanceof CfnProject)) throw new Error('Expected the CodeBuild project resource');
     cfn.addPropertyOverride('Source.Auth', { Type: 'CODECONNECTIONS', Resource: props.connectionArn });
-    // CodeBuild checks the project's role can use the connection when it creates the project, so the
-    // permission is its own policy the project waits for (not the role's default policy, which
-    // CloudFormation may create afterwards). Connections answer to both service prefixes.
-    const role = project.role;
-    if (role === undefined) throw new Error('Expected the CodeBuild project to have a role');
-    const connectionAccess = new Policy(this, 'ConnectionAccess', {
-      roles: [role],
-      statements: [
-        new PolicyStatement({
-          actions: [
-            'codeconnections:UseConnection',
-            'codeconnections:GetConnection',
-            'codeconnections:GetConnectionToken',
-            'codestar-connections:UseConnection',
-            'codestar-connections:GetConnection',
-            'codestar-connections:GetConnectionToken',
-          ],
-          resources: [props.connectionArn],
-        }),
-      ],
-    });
-    project.node.addDependency(connectionAccess);
 
     const key = new Secret(this, 'WebhookKey', {
       description: `Key EventBridge sends to slop's /webhooks/aws for ${props.projectName}`,
