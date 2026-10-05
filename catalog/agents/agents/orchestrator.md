@@ -101,6 +101,19 @@ Also tell each sub-agent:
 - whether the session is **unattended** (then it must not use `AskUserQuestion`);
 - the base branch.
 
+## Effort and cost
+
+Spend agent effort where it finds problems: reading the change. Don't repeat work another agent already did.
+
+- **Risk tier.** Set it in Phase 2 and record it in the plan file:
+  - **high**: auth, tokens or secrets, permissions, data and migrations, money, concurrency, public endpoints;
+  - **normal**: everything else that changes behaviour;
+  - **low**: docs, copy, styling, config-only, tests-only, or a small isolated change.
+- **Checks.** If the board's build doc separates fast and full checks, sub-agents run the fast checks on every round, and the full checks run once, before the Phase 6 commit (or are left to CI where the build doc says so). Without that split, treat the targeted tests for the changed code plus lint and type checks as fast. Every agent records the exact commands it ran and the pass counts, not logs, and uses quiet reporters, reading output only on failure.
+- **No re-running.** The tester and change_reviewer rely on the results the implementer (and tester) recorded. They re-run a check only when a result looks wrong or a finding depends on it.
+- **No new end-to-end or browser tests** unless the board's docs or the developer ask for one. Cover behaviour with unit and integration tests.
+- **Precise briefs.** Give sub-agents the files and functions to start from, the acceptance criteria and the decisions already made, so they don't explore what you already know.
+
 ## Workflow
 
 Run all phases sequentially without pausing, except where a phase says to ask the developer. Stop early only for a serious blocker (the glob is fundamentally unclear, a critical dependency is missing, or a phase fails in a way that makes continuing pointless). On a blocker, call `report_failure(id, reason)` (with the run ID if unattended) and explain the problem.
@@ -124,7 +137,7 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 ### Phase 2: Investigation
 
-1. Read `.reviews/<id>-context.md`.
+1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 5.
 2. Invoke the **investigator** with:
    - plan.md (acceptance criteria, or the bug fields for bugs);
    - the `## Context` section, with the reminder: "Decisions in the context bundle are team decisions. If they settle an approach, recommend it rather than proposing alternatives";
@@ -150,6 +163,8 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 ### Phase 4: Testing
 
+Skip this phase for **low** risk work when the implementer added or updated tests for the change and recorded passing fast checks; say so in the review document.
+
 1. Read the context and implementation files.
 2. Invoke the **tester** with: plan.md's acceptance criteria (or for bugs the bug fields, stating that a regression test must reproduce the original bug and verify the fix); clarifications or assumptions verbatim; the learnings file path; the implementation summary; the board's build doc and relevant board doc paths; the report path `.reviews/<id>-tests.md`; the server URL if any.
 3. The tester returns `PASS` or `FAIL`.
@@ -157,7 +172,7 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 ### Phase 5: Review cycle (max 3 rounds)
 
-For each round (up to 3):
+The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1. For each round:
 
 1. Invoke the **change_reviewer** in standard mode with: plan.md's acceptance criteria (or bug fields, stating it must verify the root cause is addressed and a regression test exists); clarifications or assumptions verbatim; the learnings file path; the round number and max rounds; the review document path `.reviews/<id>-review.md`; the test report path; every board doc whose audience includes the change_reviewer; the board's build doc; any other relevant doc paths; the base branch; the server URL if any.
 2. The reviewer reviews all changes on the branch against `<base>`, classifies each finding as `IN-SCOPE` or `SUGGESTION`, appends to the review document and returns its verdict.
@@ -166,9 +181,10 @@ For each round (up to 3):
 
 ### Phase 6: Finalise
 
-1. **Format** with the format command from the board's build doc, if it has one.
-2. **Stage** code changes, excluding `.reviews/`: `git add -A && git reset HEAD .reviews/`. Check `git diff --cached --name-only | grep '^\.reviews/'` returns nothing; unstage anything it lists.
-3. **Commit** (use a HEREDOC), without asking for approval:
+1. **Full checks**: run the board's full checks once (unless its build doc leaves them to CI). If something fails, hand it to the implementer, re-run the failed check, and note it in the review document.
+2. **Format** with the format command from the board's build doc, if it has one.
+3. **Stage** code changes, excluding `.reviews/`: `git add -A && git reset HEAD .reviews/`. Check `git diff --cached --name-only | grep '^\.reviews/'` returns nothing; unstage anything it lists.
+4. **Commit** (use a HEREDOC), without asking for approval:
    ```
    <id>: <glob title>
 
@@ -179,15 +195,15 @@ For each round (up to 3):
    Slop-Run: <runId>          (unattended only)
    ```
    3–6 concise bullets from the implementation summary.
-4. **Local review:** push `.reviews/<id>-review.md` followed by `.reviews/<id>-tests.md` as one artifact: `put_artifact(id, kind: 'local_review', content, commitSha: <HEAD sha>)`, with the run ID if unattended. Slop stores it verbatim and shows it under the card's local review icon.
-5. **Learnings:** extract what a developer working on related code should know, from the implementation summary, review document and test report:
+5. **Local review:** push `.reviews/<id>-review.md` followed by `.reviews/<id>-tests.md` as one artifact: `put_artifact(id, kind: 'local_review', content, commitSha: <HEAD sha>)`, with the run ID if unattended. Slop stores it verbatim and shows it under the card's local review icon.
+6. **Learnings:** extract what a developer working on related code should know, from the implementation summary, review document and test report:
    - `decision` — a choice made and why;
    - `gotcha` — an unexpected issue and how it was resolved;
    - `pattern` — a new pattern future work should follow;
    - `agent-behaviour` — something an instruction would have prevented or should keep doing: a review finding the implementer should never have produced, a test pass that failed because of how the code was written, a plan that needed heavy amendment, and above all **any time the developer corrected you or a sub-agent** in the session (quote the correction). Name the agent concerned.
 
    Skip trivial or glob-specific details; most globs produce 0–3. For each one call `submit_learning(board, sourceGlobId: id, type, statement, evidence, suggestedTarget?)`. Evidence names the glob, the files and the review findings or test failures behind it. Never edit `.sstor/docs/`, `.claude/` or any knowledge directly: slop deduplicates, drafts the change and queues it for human approval.
-6. **Push and mark ready:**
+7. **Push and mark ready:**
    - **Unattended:** run the pre-push check (see Unattended mode), `git push origin <id>`, then call slop's `mark_ready` with the glob ID and your run ID; slop marks the draft PR ready through its GitHub App. Do not use `gh` or open a PR. The PR title is already `<id>: <title>`; do not change it. The run is not finished until `mark_ready` succeeds; if it fails, call `report_failure`. Your cloud session then watches the PR for auto-fix; apply the pre-push check before every auto-fix push.
    - **Interactive:** `git push origin <id>`. Then ask the developer whether to mark the PR ready for review now. If yes, run `/finalise <requestId>` (generate the request ID with `uuidgen`; local review and learnings are already submitted for this commit, so /finalise will skip them), then call slop's `mark_ready` with the glob ID. If not, tell them to run `sstor --ready` from a terminal when they are. Never run `sstor` yourself: it is the developer's terminal tool, it drives this session, and it cannot run inside the sandbox.
 
