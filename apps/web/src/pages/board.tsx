@@ -289,7 +289,7 @@ export const BoardPage = () => {
             </Button>
           ))}
         </div>
-        <nav className='ml-auto flex flex-wrap items-center gap-4 text-sm'>
+        <nav className='ml-auto flex flex-wrap items-center gap-8 text-sm'>
           <Link className='hover:underline' to={`/boards/${boardId}/signed-off`}>
             Signed off
           </Link>

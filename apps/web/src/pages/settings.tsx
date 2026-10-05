@@ -262,7 +262,7 @@ export const SignedOffPage = () => {
   });
   const globs = pages.data?.pages.flatMap((p) => p.globs) ?? [];
   return (
-    <main className='mx-auto grid max-w-2xl gap-4 p-6'>
+    <main className='mx-auto grid w-full max-w-[63rem] gap-4 p-6'>
       <header className='flex items-center gap-3'>
         <Link className='text-sm text-muted-foreground hover:underline' to={`/boards/${boardId}`}>
           ← Board

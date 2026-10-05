@@ -4,7 +4,7 @@ import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router';
 import { NewBoardForm } from '@/components/new-board';
-import { Attention, Reviews, Running, StatusBar } from '@/components/status-bar';
+import { Attention, Reviews, Running, StatusBar, Supers } from '@/components/status-bar';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
 import { api } from '@/lib/api';
@@ -85,7 +85,7 @@ export const BoardsPage = () => {
   return (
     <div className='flex h-dvh flex-col'>
       <StatusBar />
-      <main className='mx-auto grid w-full max-w-2xl content-start gap-3 overflow-auto p-6'>
+      <main className='mx-auto grid w-full max-w-[63rem] content-start gap-3 overflow-auto p-6'>
         <h1 className='text-base font-semibold'>All boards</h1>
         {me.data === undefined && <p className='text-sm text-muted-foreground'>Loading…</p>}
         <ul className='grid gap-1.5'>
@@ -93,7 +93,7 @@ export const BoardsPage = () => {
             <li key={b.id}>
               <Link
                 to={`/boards/${b.id}`}
-                className='grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-md border bg-card px-3 py-2 no-underline hover:bg-muted'
+                className='grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-md border bg-card px-3 py-3 no-underline hover:bg-muted'
                 data-testid={`board-row-${b.id}`}
               >
                 <span className='font-mono text-xs text-muted-foreground'>{b.id}</span>
@@ -105,6 +105,7 @@ export const BoardsPage = () => {
                 </span>
                 <span className='flex items-center gap-3'>
                   <Running count={b.running ?? 0} />
+                  <Supers count={b.supers ?? 0} />
                   <Attention count={b.attention ?? 0} />
                   {LABEL_NAMES.map((name) => (
                     <Reviews key={name} name={name} count={b.reviews?.[name] ?? 0} />

@@ -35,6 +35,8 @@ export interface BoardView extends Board {
   readonly attention?: number;
   /** Globs on the board with a routine run in progress (from /api/me only). */
   readonly running?: number;
+  /** Your supers in Doing on the board (from /api/me only); a person drives them, so they aren't runs. */
+  readonly supers?: number;
   /** Per sign-off label, globs waiting on that review (from /api/me only). */
   readonly reviews?: Partial<Record<LabelName, number>>;
 }

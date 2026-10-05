@@ -3,8 +3,8 @@ import type { GlobView } from './api';
 import type { LiveState } from './live';
 
 /** The one card that changed list steps across like a block; the cards it displaces glide. */
-const STEP_MS = 280;
-const GLIDE_MS = 220;
+const STEP_MS = 420;
+const GLIDE_MS = 330;
 const LOCK_MS = 110;
 const TAG_MS = 3000;
 /** Several moves at once (a burst of webhooks) play one after another, and only the first few. */
