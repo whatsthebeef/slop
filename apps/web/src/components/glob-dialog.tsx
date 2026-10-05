@@ -106,6 +106,16 @@ export const GlobDialog = ({
   // Ready for review changes nothing until GitHub confirms, so say it was asked for meanwhile.
   const [readyAsked, setReadyAsked] = useState(false);
   const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
+  // A super's local review normally comes first (/finalise); the board warns, then allows.
+  const [confirmingReady, setConfirmingReady] = useState(false);
+  const reviewedAtHead = (glob.artifacts ?? []).some(
+    (a) => a.kind === 'local_review' && machine.sameCommit(a.commitSha, glob.pr?.headSha),
+  );
+  const markReady = () =>
+    run(async () => {
+      setConfirmingReady(false);
+      if (await onAction('mark_ready')) setReadyAsked(true);
+    });
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
 
   const run = async (work: () => Promise<void>) => {
@@ -167,12 +177,16 @@ export const GlobDialog = ({
                       variant={action === 'start_again' ? 'outline' : 'default'}
                       size='sm'
                       disabled={busy}
-                      onClick={() =>
+                      onClick={() => {
+                        if (action === 'mark_ready') {
+                          if (reviewedAtHead) void markReady();
+                          else setConfirmingReady(true);
+                          return;
+                        }
                         void run(async () => {
-                          const done = await onAction(action);
-                          if (done && action === 'mark_ready') setReadyAsked(true);
-                        })
-                      }
+                          await onAction(action);
+                        });
+                      }}
                     >
                       {ACTION_LABELS[action]}
                     </Button>
@@ -203,6 +217,20 @@ export const GlobDialog = ({
                   : {reason}
                 </p>
               ))}
+              {confirmingReady && (
+                <div role='alert' className='flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs'>
+                  <span className='flex-1'>
+                    No local review is recorded at the PR head: the change_reviewer and /finalise haven't run for{' '}
+                    {glob.pr?.headSha?.slice(0, 7) ?? 'the head'}. Mark it ready anyway?
+                  </span>
+                  <Button size='sm' variant='ghost' onClick={() => setConfirmingReady(false)}>
+                    Cancel
+                  </Button>
+                  <Button size='sm' disabled={busy} onClick={() => void markReady()} data-testid='confirm-ready'>
+                    Ready for review
+                  </Button>
+                </div>
+              )}
               {readyPending && (
                 <p role='status' className='text-xs text-muted-foreground'>
                   Asked GitHub to mark PR #{glob.pr.number} ready; the glob moves to PR open when GitHub confirms.
