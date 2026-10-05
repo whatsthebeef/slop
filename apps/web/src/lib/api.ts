@@ -97,6 +97,9 @@ export class RequestError extends Error {
   }
 }
 
+/** A failure that can pass by itself: the server unreachable (fetch throws) or a 5xx. */
+export const isTransient = (error: unknown): boolean => !(error instanceof RequestError) || error.status >= 500;
+
 const request = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
   const response = await fetch(path, {
     method,

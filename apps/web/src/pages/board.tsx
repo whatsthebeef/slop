@@ -12,7 +12,7 @@ import type { CardMove } from '@/components/glob-card';
 import { GlobDialog } from '@/components/glob-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
-import { ACTION_LABELS, ACTION_PATHS, api, RequestError } from '@/lib/api';
+import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
 import { useBoardMotion } from '@/lib/board-motion';
 import { globsKey, useLiveBoard } from '@/lib/live';
@@ -117,6 +117,47 @@ const Column = ({
   </section>
 );
 
+/** The board loads until it gets an answer: an unreachable server or a 5xx is retried, backing off to 10s. */
+const KEEP_TRYING = {
+  retry: (_count: number, error: Error) => isTransient(error),
+  retryDelay: (attempt: number) => Math.min(1000 * 2 ** attempt, 10_000),
+};
+
+/** Why the board can't be shown, told apart so each says what to do. */
+const Unavailable = ({ boardId, error }: { boardId: number; error: unknown }) => {
+  const status = error instanceof RequestError ? error.status : null;
+  const message =
+    status === null || status >= 500 ? (
+      <span role='status' className='inline-flex items-center gap-2'>
+        <span className='h-[7px] w-[7px] animate-pulse bg-amber' aria-hidden />
+        Can't reach slop, retrying…
+      </span>
+    ) : status === 401 ? (
+      <>
+        You're signed out.{' '}
+        <Link className='underline' to='/login'>
+          Sign in
+        </Link>
+      </>
+    ) : status === 403 ? (
+      <>You're not on board {boardId}. Ask one of its admins to add you.</>
+    ) : status === 404 ? (
+      <>
+        There's no board {boardId}.{' '}
+        <Link className='underline' to='/boards'>
+          All boards
+        </Link>
+      </>
+    ) : (
+      <>{error instanceof RequestError ? error.body.message : 'The board could not be loaded.'}</>
+    );
+  return (
+    <p className='p-6 text-sm' data-testid='board-unavailable'>
+      {message}
+    </p>
+  );
+};
+
 /** How long a first connection may take before the board says it isn't live. */
 const CONNECT_GRACE_MS = 3000;
 
@@ -163,8 +204,8 @@ export const BoardPage = () => {
     halts: string[];
   } | null>(null);
 
-  const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
-  const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId) });
+  const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId), ...KEEP_TRYING });
+  const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId), ...KEEP_TRYING });
   const motion = useBoardMotion(globs.data, live);
 
   // The status bar's counts include this board; refresh them when its globs change, at most every
@@ -261,8 +302,12 @@ export const BoardPage = () => {
     if (next !== undefined) setPreview({ glob, ...next });
   };
 
-  if (board.isError) return <p className='p-6'>You don't have access to this board.</p>;
-  if (board.data === undefined || globs.data === undefined) return <p className='p-6 text-muted-foreground'>Loading…</p>;
+  if (board.data === undefined || globs.data === undefined) {
+    // While retrying, the failure is the reason rather than the error.
+    const failure = board.error ?? globs.error ?? board.failureReason ?? globs.failureReason;
+    if (failure !== null) return <Unavailable boardId={boardId} error={failure} />;
+    return <p className='p-6 text-muted-foreground'>Loading…</p>;
+  }
 
   const all = globs.data;
   const visible = all.filter((g) => typeFilter === 'all' || g.type === typeFilter);
