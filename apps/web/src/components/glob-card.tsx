@@ -1,4 +1,4 @@
-import type { Action, ArtifactKind, Category, LabelName, LabelState } from '@slop/core';
+import type { Action, ArtifactKind, Category } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
@@ -6,7 +6,9 @@ import type { GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
-import { LabelSwitches } from './labels';
+import { Tip } from './ui/tip';
+import { LabelPopover } from './labels';
+import type { ReviewLabel } from './labels';
 
 /** The glob's category as a small icon in the card's corner. */
 const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> = {
@@ -18,9 +20,9 @@ const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> =
 const CategoryIcon = ({ category }: { category: Category }) => {
   const { icon: Icon, className } = CATEGORY_ICON[category];
   return (
-    <span title={category} className='inline-flex'>
+    <Tip text={`Category: ${category}`}>
       <Icon className={cn('h-3.5 w-3.5 shrink-0', className)} aria-label={category} role='img' />
-    </span>
+    </Tip>
   );
 };
 
@@ -49,15 +51,16 @@ const initials = (email: string): string => {
 
 /** The implementer, or the planner (dashed) while nobody has picked the glob up. */
 const Avatar = ({ email, planner }: { email: string; planner: boolean }) => (
+  <Tip text={`${planner ? 'Planner (not picked up yet)' : 'Implementer'}: ${email}`}>
   <span
     className={cn(
       'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border font-mono text-[9px] font-semibold',
       planner ? 'border-dashed border-muted-foreground text-muted-foreground' : 'bg-muted text-foreground',
     )}
-    title={`${planner ? 'Planner' : 'Implementer'}: ${email}`}
   >
     {initials(email)}
   </span>
+  </Tip>
 );
 
 /** A group's label: a curated sticker colour, the only shiny thing on the board. */
@@ -69,9 +72,11 @@ export const GroupChip = ({ name }: { name: string }) => {
     '--st-lo': lo,
   };
   return (
-    <span className='sticker rounded-sm px-1.5 font-mono text-[10px] font-semibold' style={colours}>
-      {name}
-    </span>
+    <Tip text={`Group: ${name}`}>
+      <span className='sticker rounded-sm px-1.5 font-mono text-[10px] font-semibold' style={colours}>
+        {name}
+      </span>
+    </Tip>
   );
 };
 
@@ -80,16 +85,17 @@ const RunIndicator = ({ glob }: { glob: GlobView }) => {
   if (run === null) return null;
   const label = run.state === 'ended' ? (run.outcome ?? 'ended') : run.state;
   return (
+    <Tip text={`Routine run ${label}: owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`}>
     <span
       className={cn(
         'inline-flex items-center gap-1 font-mono text-[11px]',
         run.outcome === 'failed' ? 'text-red' : 'text-muted-foreground',
       )}
-      title={`Routine owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`}
     >
       {run.state === 'active' ? <Loader2 className='h-3 w-3 animate-spin' /> : <Bot className='h-3 w-3' />}
       {label}
     </span>
+    </Tip>
   );
 };
 
@@ -105,11 +111,10 @@ const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (kind: Artifa
       {present.map((a) => {
         const { title, icon: Icon } = ARTIFACT_META[a.kind];
         return (
+          <Tip key={a.kind} text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}`}>
           <button
-            key={a.kind}
             type='button'
             className='rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
-            title={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}`}
             aria-label={title}
             data-testid={`artifact-icon-${a.kind}`}
             onClick={(e) => {
@@ -120,6 +125,7 @@ const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (kind: Artifa
           >
             <Icon className='h-3.5 w-3.5' />
           </button>
+          </Tip>
         );
       })}
     </span>
@@ -147,6 +153,7 @@ const MoveButton = ({
   onPreview: (move: CardMove | null) => void;
   onMove: (move: CardMove) => void;
 }) => (
+  <Tip text={move.description}>
   <button
     type='button'
     className={cn(
@@ -154,7 +161,6 @@ const MoveButton = ({
       hot ? 'border-foreground bg-lcd text-lcd-foreground' : 'bg-background text-foreground hover:bg-muted',
     )}
     aria-label={move.description}
-    title={move.description}
     data-testid={`move-${move.action}`}
     onMouseEnter={() => onPreview(move)}
     onMouseLeave={() => onPreview(null)}
@@ -168,6 +174,7 @@ const MoveButton = ({
   >
     {move.label}
   </button>
+  </Tip>
 );
 
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
@@ -178,7 +185,7 @@ export const GlobCard = ({
   glob,
   onOpen,
   onOpenArtifact,
-  onSwitchLabel,
+  onReviewLabel,
   moves,
   previewing,
   onPreview,
@@ -191,7 +198,7 @@ export const GlobCard = ({
   glob: GlobView;
   onOpen: () => void;
   onOpenArtifact: (kind: ArtifactKind) => void;
-  onSwitchLabel: (label: LabelName, state: LabelState) => void;
+  onReviewLabel: ReviewLabel;
   /** Only the moves this glob can make; none means no buttons at all. */
   moves: readonly CardMove[];
   /** The move whose ghost piece is showing, if it is this card's. */
@@ -258,18 +265,22 @@ export const GlobCard = ({
       <div className='mt-1 leading-snug font-medium'>{glob.title}</div>
       <div className='mt-2 flex flex-wrap items-center gap-1.5'>
         {glob.group !== null && <GroupChip name={glob.group} />}
-        <LabelSwitches glob={glob} onSwitch={onSwitchLabel} />
+        <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         {failed && (
-          <span className='font-mono text-[11px] font-semibold text-red' title={glob.failure?.reason}>
-            ! failed
-          </span>
+          <Tip text={`Failed: ${glob.failure?.reason ?? 'the routine run failed'}`}>
+            <span className='font-mono text-[11px] font-semibold text-red'>! failed</span>
+          </Tip>
         )}
         {age !== 'neutral' && glob.pr?.state === 'draft' && (
-          <span className='font-mono text-[11px] text-muted-foreground'>PR still draft</span>
+          <Tip text='Two or more days in Doing and the PR is still a draft'>
+            <span className='font-mono text-[11px] text-muted-foreground'>PR still draft</span>
+          </Tip>
         )}
         {glob.provisioning === 'failed' && (
-          <span className='font-mono text-[11px] text-red'>provisioning failed</span>
+          <Tip text='slop could not create the branch and draft PR; it retries in the background'>
+            <span className='font-mono text-[11px] text-red'>provisioning failed</span>
+          </Tip>
         )}
         <span className='ml-auto inline-flex items-center gap-1'>
           {moves.map((move) => (

@@ -43,6 +43,13 @@
       "when": 1791167263094,
       "tag": "0005_kb_review",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791216858979,
+      "tag": "0006_label_checklists",
+      "breakpoints": true
     }
   ]
 }

@@ -1,11 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { LABEL_NAMES } from '@slop/core';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, Navigate, useNavigate } from 'react-router';
+import { NewBoardForm } from '@/components/new-board';
+import { Attention, Reviews, Running, StatusBar } from '@/components/status-bar';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
-import { api, RequestError } from '@/lib/api';
-import { useToast } from '@/toast';
+import { api } from '@/lib/api';
+import { boardVisits, lastBoard } from '@/lib/recent-boards';
 
 export const LoginPage = () => {
   const [email, setEmail] = useState('');
@@ -44,78 +47,74 @@ export const LoginPage = () => {
   );
 };
 
+/**
+ * There's no home page: `/` opens the board you used last (or your first). With no boards yet it
+ * offers to create one; after that, new boards come from the app settings menu.
+ */
 export const HomePage = () => {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
-  const client = useQueryClient();
-  const toast = useToast();
-  const navigate = useNavigate();
-  const [name, setName] = useState('');
-  const [repo, setRepo] = useState('');
-
-  const create = useMutation({
-    mutationFn: () =>
-      api.createBoard({
-        name,
-        repo: repo.trim() === '' ? null : repo.trim(),
-        baseBranch: 'main',
-        timeZone: 'UTC',
-        environments: [],
-      }),
-    onSuccess: (board) => {
-      void client.invalidateQueries({ queryKey: ['me'] });
-      void navigate(`/boards/${board.id}`);
-    },
-    onError: (error) => toast(error instanceof RequestError ? error.body.message : 'Could not create the board'),
-  });
-
-  if (me.data === undefined) return <p className='p-6 text-muted-foreground'>Loading…</p>;
+  // Wait for a fresh list: a cached one may be stale (or belong to whoever signed in before).
+  if (me.data === undefined || !me.isFetchedAfterMount) {
+    return <p className='p-6 text-muted-foreground'>Loading…</p>;
+  }
+  const boards = me.data.boards;
+  const last = lastBoard();
+  const target = boards.find((b) => b.id === last) ?? boards[0];
+  if (target !== undefined) return <Navigate to={`/boards/${target.id}`} replace />;
   return (
-    <main className='mx-auto grid max-w-lg gap-6 p-6'>
-      <header className='flex items-center justify-between'>
-        <h1 className='font-mono text-lg font-semibold tracking-wider'>SLOPMUX<span className='text-signal'>_</span></h1>
-        <span className='flex items-center gap-3 text-sm text-muted-foreground'>
-          {me.data.email}
-          <Button
-            variant='ghost'
-            size='sm'
-            onClick={() => void api.logout().then(() => navigate('/login'))}
-          >
-            Sign out
-          </Button>
-        </span>
-      </header>
-      <section className='grid gap-2'>
-        <h2 className='text-sm font-semibold'>Your boards</h2>
-        {me.data.boards.length === 0 && <p className='text-sm text-muted-foreground'>No boards yet.</p>}
-        {me.data.boards.map((b) => (
-          <Link key={b.id} to={`/boards/${b.id}`} className='rounded-md border bg-card p-3 hover:bg-muted'>
-            <span className='font-medium'>{b.name}</span>{' '}
-            <span className='text-xs text-muted-foreground'>
-              {b.repo ?? 'no repo'} · {b.role}
-            </span>
-          </Link>
-        ))}
-      </section>
-      <form
-        className='grid gap-3 rounded-md border p-4'
-        onSubmit={(e) => {
-          e.preventDefault();
-          create.mutate();
-        }}
-      >
-        <h2 className='text-sm font-semibold'>New board</h2>
-        <Label>
-          Name
-          <Input value={name} onChange={(e) => setName(e.target.value)} required />
-        </Label>
-        <Label>
-          Repo (owner/name)
-          <Input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder='optional' />
-        </Label>
-        <Button type='submit' disabled={create.isPending}>
-          Create board
-        </Button>
-      </form>
-    </main>
+    <div className='flex h-dvh flex-col'>
+      <StatusBar />
+      <main className='mx-auto grid w-full max-w-sm gap-3 p-6'>
+        <h1 className='text-base font-semibold'>Create your first board</h1>
+        <NewBoardForm />
+      </main>
+    </div>
+  );
+};
+
+const opened = (at: number | undefined) =>
+  at === undefined ? 'not opened here' : `opened ${new Date(at).toLocaleString()}`;
+
+/** Every board you're on, the most recently opened (in this browser) first, then the newest. */
+export const BoardsPage = () => {
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
+  const visits = boardVisits();
+  const boards = [...(me.data?.boards ?? [])].sort(
+    (a, b) => (visits[b.id] ?? 0) - (visits[a.id] ?? 0) || b.id - a.id,
+  );
+  return (
+    <div className='flex h-dvh flex-col'>
+      <StatusBar />
+      <main className='mx-auto grid w-full max-w-2xl content-start gap-3 overflow-auto p-6'>
+        <h1 className='text-base font-semibold'>All boards</h1>
+        {me.data === undefined && <p className='text-sm text-muted-foreground'>Loading…</p>}
+        <ul className='grid gap-1.5'>
+          {boards.map((b) => (
+            <li key={b.id}>
+              <Link
+                to={`/boards/${b.id}`}
+                className='grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-md border bg-card px-3 py-2 no-underline hover:bg-muted'
+                data-testid={`board-row-${b.id}`}
+              >
+                <span className='font-mono text-xs text-muted-foreground'>{b.id}</span>
+                <span className='grid min-w-0'>
+                  <span className='truncate text-sm font-medium text-foreground'>{b.name}</span>
+                  <span className='truncate text-xs text-muted-foreground'>
+                    {b.repo ?? 'no repo'} · {b.role} · {opened(visits[b.id])}
+                  </span>
+                </span>
+                <span className='flex items-center gap-3'>
+                  <Running count={b.running ?? 0} />
+                  <Attention count={b.attention ?? 0} />
+                  {LABEL_NAMES.map((name) => (
+                    <Reviews key={name} name={name} count={b.reviews?.[name] ?? 0} />
+                  ))}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </main>
+    </div>
   );
 };

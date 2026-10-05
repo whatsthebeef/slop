@@ -1,5 +1,5 @@
 import { CATEGORIES, isValidCombination, SLOP_TYPES } from '@slop/core';
-import type { Action, Category, LabelName, LabelState, SlopType } from '@slop/core';
+import type { Action, Category, SlopType } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -9,7 +9,8 @@ import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
 import { ArtifactsSection } from './artifacts';
 import type { ArtifactRef } from './artifacts';
 import { GroupChip } from './glob-card';
-import { LabelSwitches } from './labels';
+import { LabelChips, LabelReviews } from './labels';
+import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
 
 const STATUS_TEXT: Record<GlobView['status'], string> = {
@@ -32,7 +33,7 @@ export const GlobDialog = ({
   onClose,
   onUpdate,
   onAction,
-  onSwitchLabel,
+  onReviewLabel,
   onDelete,
 }: {
   board: BoardView;
@@ -42,7 +43,7 @@ export const GlobDialog = ({
   onClose: () => void;
   onUpdate: (changes: GlobChanges) => Promise<void>;
   onAction: (action: Action) => Promise<void>;
-  onSwitchLabel: (label: LabelName, state: LabelState) => void;
+  onReviewLabel: ReviewLabel;
   onDelete: () => Promise<void>;
 }) => {
   const [draft, setDraft] = useState<GlobChanges>({});
@@ -80,7 +81,7 @@ export const GlobDialog = ({
           <div className='flex flex-wrap items-center gap-2 text-sm'>
             <span className='rounded bg-muted px-2 py-0.5'>{STATUS_TEXT[glob.status]}</span>
             {glob.group !== null && <GroupChip name={glob.group} />}
-            <LabelSwitches glob={glob} onSwitch={onSwitchLabel} />
+            <LabelChips glob={glob} />
             <span className='ml-auto text-xs text-muted-foreground'>
               branch <span className='font-mono'>{glob.branch}</span> · v{glob.version}
             </span>
@@ -89,6 +90,8 @@ export const GlobDialog = ({
           {glob.failure !== null && (
             <p className='rounded border border-red/40 bg-red/10 p-2 text-sm'>Failed: {glob.failure.reason}</p>
           )}
+
+          <LabelReviews glob={glob} onReview={onReviewLabel} />
 
           {actions.length > 0 && (
             <div className='flex flex-wrap gap-2'>

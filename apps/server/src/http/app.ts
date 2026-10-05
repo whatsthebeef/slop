@@ -1,5 +1,5 @@
 import type { BoardService, GlobService, Result } from '@slop/core';
-import { CATEGORIES, LABEL_NAMES, ROLES, SLOP_TYPES, STATUSES } from '@slop/core';
+import { CATEGORIES, LABEL_NAMES, ROLES, SLOP_TYPES, STATUSES, isMine, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -10,6 +10,7 @@ import { SESSION_COOKIE, SESSION_DAYS } from '../auth.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
 import type { HintHub } from '../notifier.js';
 import type { SignedLinks } from '../signed-links.js';
+import { labelCommandSchema } from './labels.js';
 import { requestOrigin } from './origin.js';
 import { checkSignInState, issueSignInState } from './sign-in-state.js';
 import { errorBody, globView, globViewFor, onBoard, statusOf } from './views.js';
@@ -187,7 +188,33 @@ export const createApp = (deps: AppDeps) => {
   app.get('/api/me', async (c) => {
     const email = c.get('email');
     const memberships = await boards.memberships(email);
-    return c.json({ email, boards: memberships.map((m) => ({ ...m.board, role: m.role })) });
+    // The status bar's counts per board, over your globs only (planned or implemented by you): globs
+    // waiting on a person, routine runs in progress and, per sign-off label, reviews needing you
+    // (required: review it; added: work through the items).
+    const open = STATUSES.filter((s) => s !== 'signed_off');
+    const views = await Promise.all(
+      memberships.map(async (m) => {
+        const listed = await globs.list(email, m.board.id, { status: open });
+        const list = (listed.ok ? listed.value : []).filter((g) => isMine(g, email));
+        const reviews = Object.fromEntries(
+          LABEL_NAMES.map((name) => [
+            name,
+            list.filter((g) => {
+              const state = g.labels[name];
+              return g.status === 'reviewing' && (state === 'required' || state === 'added');
+            }).length,
+          ]),
+        );
+        return {
+          ...m.board,
+          role: m.role,
+          attention: list.filter(needsHuman).length,
+          running: list.filter(machine.hasLiveRun).length,
+          reviews,
+        };
+      }),
+    );
+    return c.json({ email, boards: views });
   });
 
   // ---------------------------------------------------------------------------
@@ -321,12 +348,16 @@ export const createApp = (deps: AppDeps) => {
     return withView(c, result);
   });
 
-  app.put('/api/globs/:id/labels/:label', async (c) => {
+  // Sign-off labels and their review checklists (rows 21, 22, 27–30).
+  app.post('/api/globs/:id/labels/:label', async (c) => {
     const label = z.enum(LABEL_NAMES).safeParse(c.req.param('label'));
     if (!label.success) return c.json({ code: 'not_found', message: 'Unknown label' }, 404);
-    const body = await parse(c, z.object({ version: z.number().int(), state: z.enum(['required', 'added']) }));
+    const body = await parse(c, z.object({ version: z.number().int(), command: labelCommandSchema }));
     if (body instanceof Response) return body;
-    return withView(c, await globs.setLabel(c.get('email'), c.req.param('id'), body.version, label.data, body.state));
+    return withView(
+      c,
+      await globs.reviewLabel(c.get('email'), c.req.param('id'), body.version, label.data, body.command),
+    );
   });
 
   /** Responds with the updated glob and the actions now open to the caller. */

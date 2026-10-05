@@ -21,8 +21,28 @@ export type List = (typeof LISTS)[number];
 
 export const LABEL_NAMES = ['FR', 'CR', 'QA'] as const;
 export type LabelName = (typeof LABEL_NAMES)[number];
-export type LabelState = 'required' | 'added';
+/**
+ * required: waiting for the reviewer (initially, and whenever the developer resubmits);
+ * added: the reviewer added checklist items for the developer to work through;
+ * approved: the reviewer is satisfied, with or without items.
+ */
+export const LABEL_STATES = ['required', 'added', 'approved'] as const;
+export type LabelState = (typeof LABEL_STATES)[number];
 export type Labels = Partial<Record<LabelName, LabelState>>;
+
+/** One thing a reviewer asked for on a sign-off label; kept across the label's states. */
+export interface ChecklistItem {
+  /** Unique within its label. */
+  readonly id: string;
+  readonly text: string;
+  readonly done: boolean;
+  readonly addedBy: string;
+  readonly addedAt: string;
+  /** Who last ticked the item, and when; null while unticked. */
+  readonly doneBy: string | null;
+  readonly doneAt: string | null;
+}
+export type Checklists = Partial<Record<LabelName, readonly ChecklistItem[]>>;
 
 export const ROLES = ['admin', 'dev', 'qa', 'po'] as const;
 export type Role = (typeof ROLES)[number];
@@ -87,6 +107,8 @@ export interface Glob {
   readonly planner: string;
   readonly implementer: string | null;
   readonly labels: Labels;
+  /** Each sign-off label's review checklist; read-only once the glob is signed off. */
+  readonly checklists: Checklists;
   readonly pr: PullRequest | null;
   readonly headChecks: HeadChecks | null;
   /** Every routine run, oldest first; the last one is the current run. */

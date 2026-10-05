@@ -9,8 +9,8 @@ import type {
   Glob,
   KbItem,
   KbItemStatus,
+  LabelCommand,
   LabelName,
-  LabelState,
   List,
   Member,
   Role,
@@ -31,6 +31,12 @@ export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;
 
 export interface BoardView extends Board {
   readonly role: Role;
+  /** Globs on the board waiting on a person (from /api/me only). */
+  readonly attention?: number;
+  /** Globs on the board with a routine run in progress (from /api/me only). */
+  readonly running?: number;
+  /** Per sign-off label, globs waiting on that review (from /api/me only). */
+  readonly reviews?: Partial<Record<LabelName, number>>;
 }
 
 export interface KnowledgeIndex {
@@ -179,8 +185,9 @@ export const api = {
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
   artifactVersions: (id: string, kind: ArtifactKind, label: string) =>
     request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts/${kind}?label=${encodeURIComponent(label)}`),
-  setLabel: (id: string, label: LabelName, state: LabelState, version: number) =>
-    request<GlobView>('PUT', `/api/globs/${id}/labels/${label}`, { state, version }),
+  /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
+  reviewLabel: (id: string, label: LabelName, command: LabelCommand, version: number) =>
+    request<GlobView>('POST', `/api/globs/${id}/labels/${label}`, { command, version }),
 };
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {

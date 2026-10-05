@@ -1,8 +1,8 @@
 import { LISTS, SLOP_TYPES } from '@slop/core';
-import type { Action, LabelName, LabelState, List, SlopType } from '@slop/core';
+import type { Action, LabelCommand, LabelName, List, SlopType } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import type { ArtifactRef } from '@/components/artifacts';
@@ -16,7 +16,7 @@ import { ACTION_LABELS, ACTION_PATHS, api, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
 import { useBoardMotion } from '@/lib/board-motion';
 import { globsKey, useLiveBoard } from '@/lib/live';
-import { cn } from '@/lib/utils';
+import type { LiveState } from '@/lib/live';
 import { useToast } from '@/toast';
 
 const LIST_TITLES: Record<List, string> = {
@@ -117,6 +117,34 @@ const Column = ({
   </section>
 );
 
+/** How long a first connection may take before the board says it isn't live. */
+const CONNECT_GRACE_MS = 3000;
+
+/**
+ * Live updates are the normal state, so nothing shows while they're connected; a notice appears
+ * only when they drop (or the first connection is slow). A hidden tab pauses them on purpose.
+ */
+const OfflineNotice = ({ live }: { live: LiveState }) => {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    setSlow(false);
+    if (live !== 'connecting') return;
+    const timer = setTimeout(() => setSlow(true), CONNECT_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [live]);
+  if (live !== 'reconnecting' && !(live === 'connecting' && slow)) return null;
+  return (
+    <div
+      role='status'
+      className='fixed bottom-4 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-md border border-foreground/70 bg-card px-3 py-1.5 text-sm shadow-[2px_2px_0_var(--edge)]'
+      data-testid='offline-notice'
+    >
+      <span className='h-[7px] w-[7px] animate-pulse bg-amber' aria-hidden />
+      Not live: reconnecting… Changes by others won't show until it's back.
+    </div>
+  );
+};
+
 export const BoardPage = () => {
   const boardId = Number(useParams().boardId);
   const client = useQueryClient();
@@ -138,6 +166,30 @@ export const BoardPage = () => {
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
   const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId) });
   const motion = useBoardMotion(globs.data, live);
+
+  // The status bar's counts include this board; refresh them when its globs change, at most every
+  // few seconds (a burst of live updates shouldn't refetch every board's counts each time), with a
+  // trailing refresh so the last change in a burst still shows. The first load needs none: the
+  // status bar fetches the counts itself.
+  const meRefreshed = useRef<number | null>(null);
+  useEffect(() => {
+    if (globs.dataUpdatedAt === 0) return;
+    if (meRefreshed.current === null) {
+      meRefreshed.current = Date.now();
+      return;
+    }
+    const refresh = () => {
+      meRefreshed.current = Date.now();
+      void client.invalidateQueries({ queryKey: ['me'] });
+    };
+    const wait = meRefreshed.current + 5_000 - Date.now();
+    if (wait <= 0) {
+      refresh();
+      return;
+    }
+    const timer = setTimeout(refresh, wait);
+    return () => clearTimeout(timer);
+  }, [globs.dataUpdatedAt, client]);
 
   // Keeps the known artifact summaries when a response carries none.
   const store = (glob: GlobView) =>
@@ -174,8 +226,11 @@ export const BoardPage = () => {
     await mutation.mutateAsync(() => api.action(glob.id, path, glob.version)).catch(() => undefined);
   };
 
-  const switchLabel = (glob: GlobView) => (label: LabelName, state: LabelState) =>
-    mutation.mutate(() => api.setLabel(glob.id, label, state, glob.version));
+  const reviewLabel = (glob: GlobView) => (label: LabelName, command: LabelCommand) =>
+    mutation.mutateAsync(() => api.reviewLabel(glob.id, label, command, glob.version)).then(
+      () => true,
+      () => false,
+    );
 
   /** Drops the card: the action runs and, once the board updates, the card steps into place. */
   const commit = async (glob: GlobView, action: Action) => {
@@ -215,26 +270,17 @@ export const BoardPage = () => {
   const open = openId === null ? undefined : all.find((g) => g.id === openId);
 
   return (
-    <div className='flex h-dvh flex-col'>
-      <header className='flex flex-wrap items-center gap-3 border-b-2 border-foreground/80 px-5 py-3'>
-        <Link to='/' className='font-mono text-[15px] font-semibold tracking-wider text-foreground no-underline'>
-          SLOPMUX<span className='text-signal'>_</span>
-        </Link>
-        <span className='h-4.5 w-px bg-edge' aria-hidden />
-        <h1 className='text-[15px] font-semibold'>{board.data.name}</h1>
-        <span
-          className='inline-flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-muted-foreground'
-          title={live === 'live' ? 'Live updates connected' : 'Reconnecting…'}
-          data-testid='live-indicator'
-        >
-          <span className={cn('h-[7px] w-[7px]', live === 'live' ? 'bg-signal' : 'bg-amber')} />
-          {live === 'live' ? 'LIVE' : 'RECONNECTING'}
-        </span>
+    <div className='flex h-full flex-col' data-testid='board' data-live={live}>
+      <OfflineNotice live={live} />
+      {/* The board's toolbar, under the app's status bar; the board's own top padding spaces it below. */}
+      <header className='flex flex-wrap items-center gap-3 px-5 pt-4'>
+        <h1 className='sr-only'>{board.data.name}</h1>
         <div className='flex gap-0.5 rounded-md border bg-muted p-0.5' role='group' aria-label='Filter by type'>
           {(['all', ...SLOP_TYPES] as const).map((t) => (
             <Button
               key={t}
               size='sm'
+              className='capitalize'
               variant={typeFilter === t ? 'selected' : 'ghost'}
               aria-pressed={typeFilter === t}
               onClick={() => setTypeFilter(t)}
@@ -253,7 +299,8 @@ export const BoardPage = () => {
           <Link className='hover:underline' to={`/boards/${boardId}/settings`}>
             Settings
           </Link>
-          <Button size='sm' onClick={() => setCreating(true)}>
+          {/* Same text size as the nav links beside it (the small button size uses text-xs). */}
+          <Button size='sm' className='text-sm' onClick={() => setCreating(true)}>
             <Plus className='h-4 w-4' /> New glob
           </Button>
         </nav>
@@ -285,7 +332,7 @@ export const BoardPage = () => {
                       setOpenArtifact({ kind, label: '' });
                       setOpenId(glob.id);
                     }}
-                    onSwitchLabel={switchLabel(glob)}
+                    onReviewLabel={reviewLabel(glob)}
                     moves={moves.map((m) => m.move)}
                     previewing={preview?.glob.id === glob.id ? preview.move.action : null}
                     onPreview={(move) => {
@@ -328,7 +375,7 @@ export const BoardPage = () => {
           initialArtifact={openArtifact}
           onClose={() => setOpenId(null)}
           onAction={(action) => act(open, action)}
-          onSwitchLabel={switchLabel(open)}
+          onReviewLabel={reviewLabel(open)}
           onUpdate={async (changes: GlobChanges) => {
             await mutation.mutateAsync(() => api.updateGlob(open.id, open.version, changes)).catch(() => undefined);
           }}
