@@ -172,7 +172,8 @@ if (config.WEB_DIST !== undefined) {
 outbox.start();
 const runWatch = new RunWatch(store, globs, logError);
 runWatch.start();
-new DeployWatch(deploys, logError).start();
+const deployWatch = new DeployWatch(deploys, logError);
+deployWatch.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -180,6 +181,7 @@ const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
 const shutdown = () => {
   outbox.stop();
   runWatch.stop();
+  deployWatch.stop();
   server.close();
   void database.close();
 };

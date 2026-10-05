@@ -34,5 +34,6 @@ export class DeployWatch {
 
   stop(): void {
     if (this.timer !== null) clearInterval(this.timer);
+    this.timer = null;
   }
 }
