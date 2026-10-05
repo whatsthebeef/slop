@@ -77,6 +77,22 @@ describe('create (rows 1–4)', () => {
     expect(errorCode(m.create(createInput({ environment: 'prod' }), board, ctx()))).toBe('invalid_input');
     expect(errorCode(m.create(createInput({ environment: 'nope' }), board, ctx()))).toBe('invalid_input');
   });
+
+  it("gives a new sub without an environment the board's default for subs, and nothing else", () => {
+    const withDefault = {
+      ...board,
+      environments: [
+        { name: 'dev', allowBranchDeploy: true },
+        { name: 'qa', allowBranchDeploy: true, subDefault: true as const },
+      ],
+    };
+    const sub = createInput({ type: 'sub' });
+    expect(value(m.create(sub, withDefault, ctx())).glob.environment).toBe('qa');
+    expect(value(m.create({ ...sub, environment: 'dev' }, withDefault, ctx())).glob.environment).toBe('dev');
+    expect(value(m.create(createInput(), withDefault, ctx())).glob.environment).toBeNull();
+    expect(value(m.create(createInput({ type: 'super', category: 'feature' }), withDefault, ctx())).glob.environment).toBeNull();
+    expect(value(m.create(sub, board, ctx())).glob.environment).toBeNull();
+  });
 });
 
 describe('start (row 5)', () => {
@@ -99,7 +115,7 @@ describe('start (row 5)', () => {
 describe('pick up (rows 6–10)', () => {
   it('row 6: from planning, the picker becomes implementer and a queued run is cancelled', () => {
     const t = value(
-      m.pickUp(glob({ runs: [run({ state: 'queued', startedAt: null })] }), ctx(), { takeOver: false }),
+      m.pickUp(glob({ runs: [run({ state: 'queued', startedAt: null })] }), ctx(), board, { takeOver: false }),
     );
     expect(t.glob.status).toBe('in_progress');
     expect(t.glob.implementer).toBe(dev.email);
@@ -108,28 +124,28 @@ describe('pick up (rows 6–10)', () => {
 
   it('row 6: from failed, clears the failure', () => {
     const t = value(
-      m.pickUp(glob({ status: 'failed', failure: { reason: 'x', at: 'y' } }), ctx(), { takeOver: false }),
+      m.pickUp(glob({ status: 'failed', failure: { reason: 'x', at: 'y' } }), ctx(), board, { takeOver: false }),
     );
     expect(t.glob.status).toBe('in_progress');
     expect(t.glob.failure).toBeNull();
   });
 
   it('row 7: from pr_open, status is unchanged', () => {
-    const t = value(m.pickUp(glob({ status: 'pr_open' }), ctx(), { takeOver: false }));
+    const t = value(m.pickUp(glob({ status: 'pr_open' }), ctx(), board, { takeOver: false }));
     expect(t.glob.status).toBe('pr_open');
     expect(t.glob.implementer).toBe(dev.email);
   });
 
   it('row 8: the current implementer picking up again is a no-op', () => {
     const t = value(
-      m.pickUp(glob({ status: 'in_progress', implementer: dev.email }), ctx(), { takeOver: false }),
+      m.pickUp(glob({ status: 'in_progress', implementer: dev.email }), ctx(), board, { takeOver: false }),
     );
     expect(t.changed).toBe(false);
   });
 
   it('row 9: someone else picking up changes the implementer', () => {
     const t = value(
-      m.pickUp(glob({ status: 'in_progress', implementer: dev.email }), ctx(other), { takeOver: false }),
+      m.pickUp(glob({ status: 'in_progress', implementer: dev.email }), ctx(other), board, { takeOver: false }),
     );
     expect(t.glob.implementer).toBe(other.email);
   });
@@ -137,28 +153,80 @@ describe('pick up (rows 6–10)', () => {
   it('is refused while a run is active or watching', () => {
     for (const state of ['active', 'watching'] as const) {
       const g = glob({ status: 'pr_open', runs: [run({ state })] });
-      expect(errorCode(m.pickUp(g, ctx(), { takeOver: false }))).toBe('run_active');
+      expect(errorCode(m.pickUp(g, ctx(), board, { takeOver: false }))).toBe('run_active');
     }
   });
 
   it('row 10: take over supersedes the run and bumps the generation', () => {
     const t = value(
-      m.pickUp(glob({ status: 'implementing', runs: [run()] }), ctx(), { takeOver: true }),
+      m.pickUp(glob({ status: 'implementing', runs: [run()] }), ctx(), board, { takeOver: true }),
     );
     expect(t.glob.status).toBe('in_progress');
     expect(t.glob.generation).toBe(2);
     expect(m.currentRun(t.glob)?.outcome).toBe('superseded');
 
     const watching = value(
-      m.pickUp(glob({ status: 'pr_open', runs: [run({ state: 'watching' })] }), ctx(), { takeOver: true }),
+      m.pickUp(glob({ status: 'pr_open', runs: [run({ state: 'watching' })] }), ctx(), board, { takeOver: true }),
     );
     expect(watching.glob.status).toBe('pr_open');
   });
 
   it('QA and PO cannot pick up or take over sames', () => {
-    expect(errorCode(m.pickUp(glob(), ctx(po), { takeOver: false }))).toBe('forbidden');
+    expect(errorCode(m.pickUp(glob(), ctx(po), board, { takeOver: false }))).toBe('forbidden');
     const sub = glob({ type: 'sub', status: 'failed' });
-    expect(value(m.pickUp(sub, ctx(po), { takeOver: false })).glob.implementer).toBe(po.email);
+    expect(value(m.pickUp(sub, ctx(po), board, { takeOver: false })).glob.implementer).toBe(po.email);
+  });
+
+  it('QA and PO cannot pick up supers, and are not offered it', () => {
+    const qa = { email: 'qa@example.com', role: 'qa' } as const;
+    const superGlob = glob({ type: 'super', category: 'feature', status: 'in_progress', implementer: dev.email });
+    for (const actor of [po, qa]) {
+      expect(errorCode(m.pickUp(superGlob, ctx(actor), board, { takeOver: false }))).toBe('forbidden');
+      expect(m.allowedActions(superGlob, actor)).not.toContain('pick_up');
+    }
+    expect(m.allowedActions(superGlob, other)).toContain('pick_up');
+  });
+});
+
+describe('environment at pick-up', () => {
+  it('sets a valid environment, records the change and relabels the PR', () => {
+    const t = value(m.pickUp(glob({ status: 'pr_open' }), ctx(), board, { takeOver: false, environment: 'dev' }));
+    expect(t.glob.environment).toBe('dev');
+    expect(t.glob.implementer).toBe(dev.email);
+    expect(t.events.find((e) => e.type === 'FieldsChanged')?.data).toEqual({ environment: { from: null, to: 'dev' } });
+    expect(effectKinds(t)).toEqual(['sync_pr_labels']);
+  });
+
+  it('does not queue a label sync before the glob has a PR', () => {
+    const t = value(m.pickUp(glob({ pr: null }), ctx(), board, { takeOver: false, environment: 'dev' }));
+    expect(t.glob.environment).toBe('dev');
+    expect(effectKinds(t)).not.toContain('sync_pr_labels');
+  });
+
+  it('refuses an environment the board lacks or that does not allow branch deploys', () => {
+    const g = glob({ status: 'pr_open' });
+    expect(errorCode(m.pickUp(g, ctx(), board, { takeOver: false, environment: 'nope' }))).toBe('invalid_input');
+    expect(errorCode(m.pickUp(g, ctx(), board, { takeOver: false, environment: 'prod' }))).toBe('invalid_input');
+  });
+
+  it('row 8 with a changed environment applies it; with the same one it stays a no-op', () => {
+    const mine = glob({ type: 'super', category: 'feature', status: 'in_progress', implementer: dev.email });
+    const t = value(m.pickUp(mine, ctx(), board, { takeOver: false, environment: 'dev' }));
+    expect(t.changed).toBe(true);
+    expect(t.glob.environment).toBe('dev');
+    expect(t.events.map((e) => e.type)).toEqual(['FieldsChanged']);
+    expect(effectKinds(t)).toEqual(['sync_pr_labels']);
+
+    const same = value(m.pickUp({ ...mine, environment: 'dev' }, ctx(), board, { takeOver: false, environment: 'dev' }));
+    expect(same.changed).toBe(false);
+  });
+
+  it('take over can set the environment, labelled at the new generation', () => {
+    const t = value(
+      m.pickUp(glob({ status: 'implementing', runs: [run()] }), ctx(), board, { takeOver: true, environment: 'dev' }),
+    );
+    expect(t.glob.environment).toBe('dev');
+    expect(t.effects).toContainEqual({ kind: 'sync_pr_labels', globId: 's1t1', generation: 2 });
   });
 });
 
@@ -509,7 +577,7 @@ describe('provisioning when a glob enters Doing', () => {
     const started = value(m.start(planning, ctx()));
     expect(started.glob.provisioning).toBe('pending');
     expect(effectKinds(started)).toEqual(['provision', 'fire_routine']);
-    expect(effectKinds(value(m.pickUp(planning, ctx(), { takeOver: false })))).toEqual(['provision']);
+    expect(effectKinds(value(m.pickUp(planning, ctx(), board, { takeOver: false })))).toEqual(['provision']);
   });
 
   it('subs, supers and auto-started sames provision at creation', () => {
@@ -544,6 +612,18 @@ describe('checks and merging (slice 2)', () => {
     const pushed = value(m.commitPushed({ ...ready, headChecks: { sha: 'bbb', state: 'passed' } }, { sha: 'ccc', runId: null }, ctx(null)));
     expect(pushed.glob.headChecks).toBeNull();
     expect(effectKinds(pushed)).toEqual(['refresh_checks']);
+  });
+
+  it('a sub entering pr_open also looks up a sub gate that finished before the PR was ready', () => {
+    const sub = value(m.prReadyForReview(glob({ type: 'sub', status: 'implementing' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+    expect(sub.effects).toEqual([
+      { kind: 'refresh_checks', globId: 's1t1', generation: 1 },
+      { kind: 'refresh_sub_gate', globId: 's1t1', generation: 1 },
+    ]);
+    const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+    expect(effectKinds(same)).toEqual(['refresh_checks']);
+    const superGlob = value(m.prReadyForReview(glob({ type: 'super', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+    expect(effectKinds(superGlob)).toEqual(['refresh_checks']);
   });
 
   it('a check change queues a refresh without changing the glob', () => {
@@ -624,5 +704,133 @@ describe('runs', () => {
     const t = value(m.commitPushed(g, { sha: 'ccc', runId: 'run-0' }, ctx(null)));
     expect(t.events[0]?.data).toMatchObject({ fromSupersededRun: true });
     expect(t.glob.pr?.headSha).toBe('ccc');
+  });
+});
+
+describe('supers: Merge and continue (row 31) and Ready for review on the board', () => {
+  const HEAD = 'bbbbbbb1234567890';
+  const atHead = { postplanSha: HEAD.slice(0, 7) };
+  const superReady = glob({
+    type: 'super',
+    status: 'pr_open',
+    implementer: dev.email,
+    pr: { number: 7, state: 'ready', headSha: HEAD },
+    headChecks: { sha: HEAD, state: 'passed' },
+  });
+
+  it('offers merge_continue only to supers with the latest postplan at the head', () => {
+    expect(m.allowedActions(superReady, dev, atHead)).toEqual(expect.arrayContaining(['merge', 'merge_continue']));
+    expect(m.allowedActions(superReady, dev, { postplanSha: HEAD })).toContain('merge_continue');
+    expect(m.allowedActions(superReady, dev, { postplanSha: 'ccccccc' })).not.toContain('merge_continue');
+    expect(m.allowedActions(superReady, dev, { postplanSha: null })).not.toContain('merge_continue');
+    expect(m.allowedActions(superReady, dev)).not.toContain('merge_continue');
+    // Too short to identify a commit.
+    expect(m.allowedActions(superReady, dev, { postplanSha: 'bbb' })).not.toContain('merge_continue');
+    const same = { ...superReady, type: 'same' as const };
+    expect(m.allowedActions(same, dev, atHead)).toContain('merge');
+    expect(m.allowedActions(same, dev, atHead)).not.toContain('merge_continue');
+    // The same conditions as merge: checks passed on the current head.
+    const pending = { ...superReady, headChecks: null };
+    expect(m.allowedActions(pending, dev, atHead)).not.toContain('merge_continue');
+  });
+
+  it('merge_continue goes to merging in continue mode; it needs a super and the postplan at the head', () => {
+    const t = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead }));
+    expect(t.glob.status).toBe('merging');
+    expect(t.glob.mergeMode).toBe('continue');
+    expect(t.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: HEAD }]);
+    expect(errorCode(m.requestMerge(superReady, ctx(), { continue: true, facts: { postplanSha: 'ccccccc' } }))).toBe(
+      'invalid_transition',
+    );
+    const same = { ...superReady, type: 'same' as const };
+    expect(errorCode(m.requestMerge(same, ctx(), { continue: true, facts: atHead }))).toBe('invalid_transition');
+  });
+
+  it('the observed continue merge returns to in_progress with the PR in its history and no labels', () => {
+    const merging = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead })).glob;
+    const t = value(m.merged(merging, { sha: 'm1', number: 7 }, ctx(null)));
+    expect(t.glob.status).toBe('in_progress');
+    expect(t.glob.labels).toEqual({});
+    expect(t.glob.prs).toEqual([{ number: 7, mergeSha: 'm1', mergedAt: NOW }]);
+    expect(t.glob.pr).toBeNull();
+    expect(t.glob.headChecks).toBeNull();
+    expect(t.glob.mergeMode).toBeNull();
+    expect(t.glob.implementer).toBe(dev.email);
+    expect(t.glob.doingSince).toBe(merging.doingSince);
+    expect(t.events.map((e) => e.type)).toEqual(['Merged', 'StatusChanged']);
+
+    // The second observation (merged webhook after slop's own response, or the reverse) is a no-op.
+    const again = value(m.merged(t.glob, { sha: 'm1', number: 7 }, ctx(null)));
+    expect(again.changed).toBe(false);
+    expect(again.glob.status).toBe('in_progress');
+  });
+
+  it('the next push opens a fresh draft PR, which is then recorded once', () => {
+    const merging = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead })).glob;
+    const continued = value(m.merged(merging, { sha: 'm1', number: 7 }, ctx(null))).glob;
+    const pushed = value(m.commitPushed(continued, { sha: 'ddd', runId: null }, ctx(null)));
+    expect(pushed.effects).toEqual([{ kind: 'open_pr', globId: 's1t1', generation: 1 }]);
+    const opened = value(m.prOpened(pushed.glob, { number: 8, headSha: 'ddd' }, ctx(null)));
+    expect(opened.glob.pr).toEqual({ number: 8, state: 'draft', headSha: 'ddd' });
+    expect(value(m.prOpened(opened.glob, { number: 8, headSha: 'ddd' }, ctx(null))).changed).toBe(false);
+    // Once it has a PR, pushes don't open another.
+    expect(effectKinds(value(m.commitPushed(opened.glob, { sha: 'eee', runId: null }, ctx(null))))).toEqual([]);
+    // Neither do pushes while provisioning is still under way.
+    const provisioning = glob({ type: 'super', status: 'in_progress', pr: null, provisioning: 'pending' });
+    expect(effectKinds(value(m.commitPushed(provisioning, { sha: 'fff', runId: null }, ctx(null))))).toEqual([]);
+  });
+
+  it('the final Merge still moves a super to reviewing with FR, CR and QA', () => {
+    const continued = { ...superReady, prs: [{ number: 5, mergeSha: 'm0', mergedAt: NOW }] };
+    const merging = value(m.requestMerge(continued, ctx())).glob;
+    expect(merging.mergeMode).toBeNull();
+    const t = value(m.merged(merging, { sha: 'm2', number: 7 }, ctx(null)));
+    expect(t.glob.status).toBe('reviewing');
+    expect(t.glob.labels).toEqual({ FR: 'required', CR: 'required', QA: 'required' });
+    expect(t.glob.prs).toHaveLength(1);
+    expect(t.glob.pr?.state).toBe('merged');
+  });
+
+  it('a failed continue merge clears the merge mode', () => {
+    const merging = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead })).glob;
+    const failed = value(m.mergeFailed(merging, 'conflict', ctx(null))).glob;
+    expect(failed.status).toBe('failed');
+    expect(failed.mergeMode).toBeNull();
+    const checksFailed = value(m.checksCompleted(merging, { sha: HEAD, passed: false }, ctx(null))).glob;
+    expect(checksFailed.mergeMode).toBeNull();
+  });
+
+  it('mark_ready from the board: supers with a draft PR and the postplan at the head', () => {
+    const drafting = glob({
+      type: 'super',
+      status: 'in_progress',
+      implementer: dev.email,
+      pr: { number: 7, state: 'draft', headSha: HEAD },
+    });
+    expect(m.allowedActions(drafting, dev, atHead)).toContain('mark_ready');
+    expect(m.allowedActions(drafting, dev, { postplanSha: 'ccccccc' })).not.toContain('mark_ready');
+    expect(m.allowedActions(drafting, dev)).not.toContain('mark_ready');
+    expect(m.allowedActions({ ...drafting, type: 'same' }, dev, atHead)).not.toContain('mark_ready');
+
+    const board = { from: 'board' as const, facts: atHead };
+    expect(effectKinds(value(m.readyRequested(drafting, null, ctx(), board)))).toEqual(['mark_pr_ready']);
+    const behind = m.readyRequested(drafting, null, ctx(), { from: 'board', facts: { postplanSha: 'ccccccc' } });
+    expect(!behind.ok && behind.error.message).toBe(m.POSTPLAN_NOT_AT_HEAD);
+    expect(errorCode(m.readyRequested({ ...drafting, type: 'same' }, null, ctx(), board))).toBe('invalid_transition');
+    // QA and PO can't mark a super ready from the board, and aren't offered it.
+    for (const actor of [po, { email: 'qa@example.com', role: 'qa' } as const]) {
+      expect(errorCode(m.readyRequested(drafting, null, ctx(actor), board))).toBe('forbidden');
+      expect(m.allowedActions(drafting, actor, atHead)).not.toContain('mark_ready');
+    }
+    // The MCP tool (sstor --ready) is unchanged: it needs no postplan.
+    expect(effectKinds(value(m.readyRequested(drafting, null, ctx())))).toEqual(['mark_pr_ready']);
+  });
+
+  it('start again clears the merge mode and keeps the PR history', () => {
+    const merging = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead })).glob;
+    const withHistory = { ...merging, prs: [{ number: 5, mergeSha: 'm0', mergedAt: NOW }] };
+    const t = value(m.startAgain(withHistory, ctx()));
+    expect(t.glob.mergeMode).toBeNull();
+    expect(t.glob.prs).toHaveLength(1);
   });
 });

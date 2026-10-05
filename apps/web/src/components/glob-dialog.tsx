@@ -1,5 +1,5 @@
-import { CATEGORIES, isValidCombination, SLOP_TYPES } from '@slop/core';
-import type { Action, Category, SlopType } from '@slop/core';
+import { CATEGORIES, isValidCombination, machine, SLOP_TYPES } from '@slop/core';
+import type { Action, Category, Role, SlopType } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -12,6 +12,7 @@ import { GroupChip } from './glob-card';
 import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
+import { Tip } from './ui/tip';
 
 const STATUS_TEXT: Record<GlobView['status'], string> = {
   planning: 'Planning',
@@ -25,6 +26,28 @@ const STATUS_TEXT: Record<GlobView['status'], string> = {
 };
 
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
+
+const ACTION_TIPS: Partial<Record<Action, string>> = {
+  merge_continue: "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
+  mark_ready: 'Marks the draft PR ready for review',
+};
+
+const { POSTPLAN_NOT_AT_HEAD } = machine;
+
+/**
+ * A super's actions that need the latest postplan at the PR head, shown disabled with the reason
+ * while they would otherwise apply.
+ */
+const waitingOnPostplan = (glob: GlobView, actions: readonly Action[], role: Role): Action[] => {
+  // QA and PO can't take these actions at all, so a postplan reason would mislead them.
+  if (glob.type !== 'super' || role === 'qa' || role === 'po') return [];
+  const waiting: Action[] = [];
+  if (actions.includes('merge') && !actions.includes('merge_continue')) waiting.push('merge_continue');
+  if (glob.status === 'in_progress' && glob.pr?.state === 'draft' && !actions.includes('mark_ready')) {
+    waiting.push('mark_ready');
+  }
+  return waiting;
+};
 
 export const GlobDialog = ({
   board,
@@ -56,6 +79,7 @@ export const GlobDialog = ({
   const merged = { ...glob, ...draft };
   const dirty = Object.keys(draft).length > 0;
   const actions = (glob.allowedActions ?? []).filter((a) => a !== 'delete');
+  const disabled = waitingOnPostplan(glob, actions, board.role);
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
 
   const run = async (work: () => Promise<void>) => {
@@ -93,19 +117,43 @@ export const GlobDialog = ({
 
           <LabelReviews glob={glob} onReview={onReviewLabel} />
 
-          {actions.length > 0 && (
-            <div className='flex flex-wrap gap-2'>
-              {actions.map((action) => (
-                <Button
-                  key={action}
-                  variant={action === 'start_again' ? 'outline' : 'default'}
-                  size='sm'
-                  disabled={busy}
-                  onClick={() => void run(() => onAction(action))}
-                >
-                  {ACTION_LABELS[action]}
-                </Button>
-              ))}
+          {actions.length + disabled.length > 0 && (
+            <div className='grid gap-1'>
+              <div className='flex flex-wrap gap-2'>
+                {actions.map((action) => {
+                  const button = (
+                    <Button
+                      key={action}
+                      variant={action === 'start_again' ? 'outline' : 'default'}
+                      size='sm'
+                      disabled={busy}
+                      onClick={() => void run(() => onAction(action))}
+                    >
+                      {ACTION_LABELS[action]}
+                    </Button>
+                  );
+                  const tip = ACTION_TIPS[action];
+                  return tip === undefined ? (
+                    button
+                  ) : (
+                    <Tip key={action} text={tip}>
+                      {button}
+                    </Tip>
+                  );
+                })}
+                {disabled.map((action) => (
+                  <Tip key={action} text={POSTPLAN_NOT_AT_HEAD}>
+                    <Button variant='outline' size='sm' disabled>
+                      {ACTION_LABELS[action]}
+                    </Button>
+                  </Tip>
+                ))}
+              </div>
+              {disabled.length > 0 && (
+                <p className='text-xs text-muted-foreground'>
+                  {disabled.map((a) => ACTION_LABELS[a]).join(' and ')}: {POSTPLAN_NOT_AT_HEAD}
+                </p>
+              )}
             </div>
           )}
 
@@ -204,7 +252,9 @@ export const GlobDialog = ({
                   ? 'provisioning failed; retrying'
                   : glob.provisioning === 'none'
                     ? 'opened when work starts'
-                    : 'opening…'
+                    : glob.prs.length > 0
+                      ? 'a new one opens on the next push'
+                      : 'opening…'
               ) : board.repo === null ? (
                 `#${glob.pr.number} (${glob.pr.state})`
               ) : (
@@ -218,6 +268,30 @@ export const GlobDialog = ({
                 </a>
               )}
             </dd>
+            {glob.prs.length > 0 && (
+              <>
+                <dt>Merged and continued</dt>
+                <dd className='flex flex-wrap gap-x-2'>
+                  {glob.prs.map((p) => (
+                    <span key={p.number} title={`${p.mergeSha.slice(0, 7)} · ${when(p.mergedAt)}`}>
+                      {board.repo === null ? (
+                        `#${p.number}`
+                      ) : (
+                        <a
+                          className='underline'
+                          href={`https://github.com/${board.repo}/pull/${p.number}`}
+                          target='_blank'
+                          rel='noreferrer'
+                        >
+                          #{p.number}
+                        </a>
+                      )}{' '}
+                      <span className='font-mono'>{p.mergeSha.slice(0, 7)}</span>
+                    </span>
+                  ))}
+                </dd>
+              </>
+            )}
           </dl>
 
           {glob.runs.length > 0 && (

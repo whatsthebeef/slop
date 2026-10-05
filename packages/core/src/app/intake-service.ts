@@ -2,7 +2,7 @@ import { invalidInput, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { isValidCombination } from '../domain/matrix.js';
 import { CATEGORIES, SLOP_TYPES } from '../domain/types.js';
-import type { Category, SlopType } from '../domain/types.js';
+import type { Category, Environment, SlopType } from '../domain/types.js';
 import type { Store } from '../ports.js';
 import { memberOf } from './access.js';
 
@@ -14,7 +14,14 @@ export interface Llm {
 export interface IntakeInput {
   readonly text: string;
   /** Fields the person (or the MCP caller) set explicitly; they always win. */
-  readonly explicit: Partial<{ title: string; summary: string; type: SlopType; category: Category; group: string }>;
+  readonly explicit: Partial<{
+    title: string;
+    summary: string;
+    type: SlopType;
+    category: Category;
+    group: string;
+    environment: string;
+  }>;
 }
 
 export interface IntakeProposal {
@@ -23,6 +30,8 @@ export interface IntakeProposal {
   readonly type: SlopType;
   readonly category: Category;
   readonly group: string | null;
+  /** An environment the request names (one that allows branch deploys); null when it names none. */
+  readonly environment: string | null;
   readonly autoTrigger: boolean;
   /** Why auto-trigger was set, quoting the instruction; null when it was not. */
   readonly autoTriggerReason: string | null;
@@ -61,6 +70,24 @@ const field = (value: unknown, key: string): unknown => {
 
 const text = (value: unknown): string | null => (typeof value === 'string' ? value : null);
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * The first of the board's branch-deploy environments the request names as a target: "to", "on",
+ * "in" or "into" (optionally "the") followed by the name as a whole word, case-insensitive. The cue
+ * keeps environments named after common words ("test", "qa") from matching ordinary requests.
+ * Deterministic rather than asked of the model, so it can only suggest environments that exist.
+ */
+export const environmentNamedIn = (request: string, environments: readonly Environment[]): string | null =>
+  environments.find(
+    (e) =>
+      e.allowBranchDeploy &&
+      new RegExp(
+        `(^|[^\\p{L}\\p{N}_-])(to|on|in|into)\\s+(the\\s+)?${escapeRegExp(e.name)}($|[^\\p{L}\\p{N}_-])`,
+        'iu',
+      ).test(request),
+  )?.name ?? null;
+
 const oneOf = <T extends string>(values: readonly T[], value: unknown): T | null =>
   values.find((v) => v === value) ?? null;
 
@@ -75,25 +102,35 @@ export class IntakeService {
 
   async propose(email: string, boardId: number, input: IntakeInput): Promise<Result<IntakeProposal>> {
     if (input.text.trim() === '') return invalidInput('Describe the work first');
-    const groups = await this.deps.store.transaction(async (tx) => {
+    const known = await this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
       const globs = await tx.listGlobs(boardId, {});
-      return ok([...new Set(globs.flatMap((g) => (g.group === null ? [] : [g.group])))]);
+      const board = await tx.getBoard(boardId);
+      return ok({
+        groups: [...new Set(globs.flatMap((g) => (g.group === null ? [] : [g.group])))],
+        environments: board?.environments ?? [],
+      });
     });
-    if (!groups.ok) return groups;
+    if (!known.ok) return known;
+    const { groups, environments } = known.value;
 
     const prompt = [
-      `Existing groups: ${groups.value.length === 0 ? '(none)' : groups.value.join(', ')}`,
+      `Existing groups: ${groups.length === 0 ? '(none)' : groups.join(', ')}`,
       '',
       'Request:',
       input.text.trim(),
     ].join('\n');
     const answer = parseJson(await this.deps.llm.complete({ system: INTAKE_SYSTEM, prompt, maxTokens: 1200 }));
-    return ok(this.validate(answer, input, groups.value));
+    return ok(this.validate(answer, input, groups, environments));
   }
 
-  private validate(answer: unknown, input: IntakeInput, groups: readonly string[]): IntakeProposal {
+  private validate(
+    answer: unknown,
+    input: IntakeInput,
+    groups: readonly string[],
+    environments: readonly Environment[],
+  ): IntakeProposal {
     const request = input.text.trim();
     const title = (input.explicit.title ?? text(field(answer, 'title')) ?? '').trim() || request.split('\n')[0]?.slice(0, 70) || 'Untitled';
     const summary = input.explicit.summary ?? text(field(answer, 'summary')) ?? request;
@@ -129,6 +166,7 @@ export class IntakeService {
       type,
       category,
       group,
+      environment: input.explicit.environment ?? environmentNamedIn(request, environments),
       autoTrigger,
       autoTriggerReason: autoTrigger && typeof quote === 'string' ? `The request says: "${quote.trim()}"` : null,
     };

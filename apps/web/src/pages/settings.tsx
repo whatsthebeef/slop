@@ -154,10 +154,40 @@ export const SettingsPage = () => {
                 disabled={!admin}
                 checked={env.allowBranchDeploy}
                 onChange={(e) =>
-                  setEnvs(envs.map((x, j) => (j === i ? { ...x, allowBranchDeploy: e.target.checked } : x)))
+                  // An environment without branch deploys can't be the subs' default.
+                  setEnvs(
+                    envs.map((x, j) =>
+                      j !== i
+                        ? x
+                        : e.target.checked
+                          ? { ...x, allowBranchDeploy: true }
+                          : { name: x.name, allowBranchDeploy: false },
+                    ),
+                  )
                 }
               />
               branch deploys
+            </label>
+            <label
+              className='flex shrink-0 items-center gap-1 text-xs'
+              title='Subs created without an environment get this one'
+            >
+              <input
+                type='checkbox'
+                disabled={!admin || !env.allowBranchDeploy}
+                checked={env.subDefault === true}
+                onChange={(e) =>
+                  // At most one default: choosing one clears the others.
+                  setEnvs(
+                    envs.map((x, j) =>
+                      j === i && e.target.checked
+                        ? { ...x, subDefault: true }
+                        : { name: x.name, allowBranchDeploy: x.allowBranchDeploy },
+                    ),
+                  )
+                }
+              />
+              default for subs
             </label>
             {admin && (
               <Button variant='ghost' size='sm' onClick={() => setEnvs(envs.filter((_, j) => j !== i))}>

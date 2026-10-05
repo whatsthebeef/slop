@@ -119,7 +119,15 @@ export interface NewGlob {
 
 export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment'>>;
 
-export type ActionPath = 'start' | 'retrigger' | 'pick-up' | 'take-over' | 'start-again' | 'merge';
+export type ActionPath =
+  | 'start'
+  | 'retrigger'
+  | 'pick-up'
+  | 'take-over'
+  | 'start-again'
+  | 'merge'
+  | 'merge-continue'
+  | 'mark-ready';
 
 export const api = {
   authConfig: () => request<{ mode: 'dev' | 'cognito' }>('GET', '/auth/config'),
@@ -197,6 +205,8 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   retrigger: 'retrigger',
   start_again: 'start-again',
   merge: 'merge',
+  merge_continue: 'merge-continue',
+  mark_ready: 'mark-ready',
   delete: null,
 };
 
@@ -207,5 +217,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   retrigger: 'Re-trigger',
   start_again: 'Start again',
   merge: 'Merge',
+  merge_continue: 'Merge and continue',
+  mark_ready: 'Ready for review',
   delete: 'Delete',
 };

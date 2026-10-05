@@ -150,6 +150,29 @@ describe('knowledge and artifacts', () => {
     expect(unwrap(await artifacts.plan(DEV, glob.id, null)).versions).toHaveLength(1);
   });
 
+  it("uses a super's plan.md until it has a postplan, then the postplan", async () => {
+    const glob = unwrap(
+      await globs.create(DEV, {
+        boardId,
+        title: 'Pair on it',
+        summary: 'Idea',
+        type: 'super',
+        category: 'feature',
+        group: null,
+        environment: null,
+        autoTrigger: false,
+        idempotencyKey: null,
+      }),
+    );
+    unwrap(await artifacts.putPlan(DEV, glob.id, '# Plan from the PO'));
+    expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 1, content: '# Plan from the PO' });
+    expect(unwrap(await artifacts.plan(DEV, glob.id, null))).toMatchObject({ kind: 'plan', current: { content: '# Plan from the PO' } });
+
+    unwrap(await artifacts.putArtifact(DEV, glob.id, 'postplan', '# What was built', { commitSha: 'abc', runId: null, agentSetVersion: null }));
+    expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 1, content: '# What was built' });
+    expect(unwrap(await artifacts.plan(DEV, glob.id, null))).toMatchObject({ kind: 'postplan', current: { content: '# What was built' } });
+  });
+
   it('ignores artifacts from a run that is not current', async () => {
     const glob = unwrap(
       await globs.create(DEV, {

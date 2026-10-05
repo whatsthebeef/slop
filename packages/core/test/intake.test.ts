@@ -38,6 +38,7 @@ describe('intake', () => {
       type: 'sub',
       category: 'bug',
       group: 'Device Sync',
+      environment: null,
       autoTrigger: false,
       autoTriggerReason: null,
     });
@@ -50,6 +51,33 @@ describe('intake', () => {
     expect(p.category).toBe('task');
     const q = await propose('add export');
     expect([q.type, q.category]).toEqual(['same', 'feature']);
+  });
+
+  it("suggests a branch-deploy environment the request names as a target; explicit fields win", async () => {
+    await store.transaction(async (tx) => {
+      const board = await tx.getBoard(boardId);
+      if (board === null) throw new Error('no board');
+      await tx.updateBoard(
+        {
+          ...board,
+          environments: [
+            { name: 'main', allowBranchDeploy: false },
+            { name: 'Staging', allowBranchDeploy: true },
+            { name: 'dev', allowBranchDeploy: true },
+          ],
+          version: board.version + 1,
+        },
+        board.version,
+      );
+    });
+    answer = '{"title":"T","summary":"S","type":"super","category":"feature","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
+    expect((await propose('Pair on the export and deploy it to staging.')).environment).toBe('Staging');
+    expect((await propose('Rework the developer settings')).environment).toBeNull();
+    expect((await propose('Fix the main menu')).environment).toBeNull();
+    // Named without a target cue ("to/on/in/into <env>"): not a suggestion.
+    expect((await propose('Add a dev-only flag and a dev toggle')).environment).toBeNull();
+    expect((await propose('Ship it into the dev environment')).environment).toBe('dev');
+    expect((await propose('Try it on staging', { environment: 'dev' })).environment).toBe('dev');
   });
 
   it('auto-triggers a same only on an instruction actually in the request', async () => {

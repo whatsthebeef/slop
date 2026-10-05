@@ -54,7 +54,7 @@ Globs move through four lists: Planning, Doing, Reviewing, Signed Off. Reviewing
 | --- | --- | --- | --- | --- |
 | Sub | Skipped | Automatic on creation; routine starts | Automatic when sub review passes and it merges; QA Required | Automatic when all labels are Approved |
 | Same | Starts here | Start button or pick-up (glob view or sstor); a routine runs if chosen | Automatic when the developer merges the PR; FR, CR, QA Required | Automatic when all labels are Approved |
-| Super | Skipped | On creation | Automatic when the developer merges the PR; FR, CR, QA Required | Automatic when all labels are Approved |
+| Super | Skipped | On creation | Automatic when the developer merges the PR; FR, CR, QA Required. Merge and continue lands work mid-way and keeps the glob in Doing | Automatic when all labels are Approved |
 
 **Moves** happen through buttons in the glob view, enabled only where a manual move makes sense. Everything else is driven by events, including human events outside slop (a developer merging a PR in GitHub). Manual and automated moves go through the same core transitions.
 
@@ -100,14 +100,14 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 | 5 | `planning` | `implementing` | Start (button or `start_glob`) | Same | — | Provision as 2; queue a routine run |
 | 6 | `planning`, `failed` | `in_progress` | Pick up | All | No run active or watching | Implementer = picker; provision as 2 if the glob has no branch yet; a queued run is cancelled together with its launch job |
 | 7 | `pr_open` | `pr_open` | Pick up | All | No run active or watching | Implementer = picker; status unchanged; a queued run is cancelled with its launch job |
-| 8 | `in_progress`, `pr_open` | unchanged | Pick up by the current implementer | All | — | No-op (idempotent) |
+| 8 | `in_progress`, `pr_open` | unchanged | Pick up by the current implementer | All | — | No-op (idempotent), unless it chooses a different environment, which is then recorded as a field change |
 | 9 | `in_progress`, `pr_open` | unchanged | Pick up by someone else | All | No run active or watching | Implementer changes; a queued run is cancelled with its launch job |
 | 10 | `implementing`, `pr_open` | `in_progress` (from `implementing`) or unchanged | Take over (`pick_up` with `takeOver`) | Sub, same | Run queued, active or watching | Run superseded (a queued run's launch job is cancelled); generation increased; implementer = picker |
 | 11 | `implementing`, `in_progress` | `pr_open` | Draft PR marked ready for review | All | PR head branch = glob ID | Record PR; an active run moves to watching |
 | 12 | `pr_open` | `merging` | Sub gate passes on the current head commit | Sub | Type is still sub | Slop squash-merges |
 | 13 | `pr_open` | `pr_open` | Sub gate flags the change | Sub | — | Type becomes same; the developer now merges |
 | 14 | `pr_open` | `merging` | Merge button on the glob | Same, super | Checks pass on the current head | Slop squash-merges |
-| 15 | `planning`, `merging`, `pr_open`, `in_progress`, `implementing`, `failed` | `reviewing` | Merge observed (slop's own merge response or the `merged` event, whichever arrives first; the second is a no-op) | All | Glob's PR merged | Labels set Required (sub: QA; same/super: FR, CR, QA); run ended |
+| 15 | `planning`, `merging`, `pr_open`, `in_progress`, `implementing`, `failed` | `reviewing` | Merge observed (slop's own merge response or the `merged` event, whichever arrives first; the second is a no-op) | All | Glob's PR merged; not a Merge and continue (row 31) | Labels set Required (sub: QA; same/super: FR, CR, QA); run ended |
 | 16 | `merging` | `failed` | Conflict, or checks fail after update | All | No merge observed | Failure reason recorded |
 | 17 | `implementing` | `failed` | `report_failure` with the current run ID, or run timeout | Sub, same | Run ID is current | Run failed; reason recorded |
 | 18 | `in_progress` | `failed` | `report_failure` from an interactive session | All | — | Reason recorded |
@@ -123,6 +123,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 | 28 | `reviewing` | unchanged, or `signed_off` (row 21) | Reviewer approves a label | All | Label Required or Added | Label → Approved, with or without items, ticked or not |
 | 29 | `reviewing` | unchanged | Developer ticks or unticks a checklist item | All | Label Added | Item done flag, who ticked it and when |
 | 30 | `reviewing` | unchanged | Developer resubmits a label for review | All | Label Added | Label → Required; items and ticks kept, unticked ones included |
+| 31 | `pr_open` → `merging` | `in_progress` | Merge and continue on the glob (board, or `slop merge --continue`), then the merge observed as in row 15 (the second observation is a no-op) | Super | As row 14, and the latest postplan's commit SHA is the PR head (full or short SHA) | Slop squash-merges as row 14; no labels; the merged PR (number, merge SHA, time) is added to the glob's PR history and its current PR and head checks are cleared; the branch is kept; the next push to it opens a fresh draft PR (after main is merged back into the branch, so the new PR shows only new work). The final Merge (row 14) still moves the super to `reviewing`, and FR, CR and QA sign off the whole super |
 
 **Rules across all transitions**
 
@@ -130,6 +131,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 - Writes are conditional on the glob's version, so simultaneous events resolve cleanly.
 - Changing type, category or group is not a transition: it never moves the glob, only changes which rows apply next.
 - Draft PRs are recorded on the glob without changing status.
+- Sub gate (rows 11–13): the `sub-gate` check can finish before the PR is recorded as ready, so slop also looks up a gate result that finished before the PR was marked ready, when the sub enters `pr_open` and whenever it re-reads the head's checks.
 - Time attribution follows the planner until a human implementer picks the glob up, then the implementer; triggeredBy only chooses whose routine runs.
 
 **Provisioning and reliability**
@@ -141,7 +143,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 - **Deduplication:** GitHub deliveries are deduplicated by delivery ID, other webhooks by their source event ID. Incoming events are applied against the glob's current version inside the handler; only client writes carry an expected version.
 - **Outbox:** side effects (firing routines, GitHub provisioning, CodeBuild deploys) are written to an outbox table in the same transaction as the state change and executed by the job queue with retries and idempotency keys, so partial failures resume.
 - **Routine ownership:** slop stores `triggeredBy` and `routineOwner` separately. `triggeredBy` chooses whose routine runs; commits, PRs and Claude usage belong to the routine owner (e.g. the board's default routine owner on fallback); time follows the planner until a human picks the glob up.
-- **Routines and humans (cooperative):** pick-up is refused while a run is active or watching; Take over supersedes it. Routines check the glob through the MCP before every push and stop if their run is superseded, a human implementer is recorded, or the glob is merged. Because the check and the push are separate operations, a late push is still possible: routine commits carry a `Slop-Run: <runId>` trailer, and a push from a superseded run is flagged on the glob so the developer can revert it. Slop deletes any glob branch recreated by a late push after merge.
+- **Routines and humans (cooperative):** pick-up is refused while a run is active or watching; Take over supersedes it. Routines check the glob through the MCP before every push and stop if their run is superseded, a human implementer is recorded, or the glob is merged. Because the check and the push are separate operations, a late push is still possible: routine commits carry a `Slop-Run: <runId>` trailer, and a push from a superseded run is flagged on the glob so the developer can revert it. Slop deletes any glob branch recreated by a late push after merge (to `reviewing`; a super's Merge and continue keeps its branch, row 31).
 
 **Flags shown alongside status** (not states): failure reason, ATF failure, deployment state per environment, aging colour, "PR still draft".
 
@@ -165,17 +167,17 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | --- | --- | --- | --- |
 | `whoami` | — | user, boards, role per board | Sessionator, Claude app |
 | `create_glob` | board, input, idempotencyKey; optional title, summary, type, category, group, environment, links, autoTrigger | `{ id, version, branch, provisioning: none \| ok \| failed, status, type, category, group, environment, summary }` (same glob returned for a repeated key) | All |
-| `get_glob` | id | full glob: status, version, generation, fields, labels, PR, current run (state, runId, owner, triggeredBy, started, last progress, cloud session ID and URL), run history, flags, artifact list | All |
+| `get_glob` | id | full glob: status, version, generation, fields, labels, PR, PRs merged with Merge and continue, current run (state, runId, owner, triggeredBy, started, last progress, cloud session ID and URL), run history, flags, artifact list | All |
 | `get_context` | id | assembled context bundle with citations | Routines, sessionator |
 | `list_globs` | board; optional status, type, group, person | glob summaries | Claude app |
 | `update_glob` | id, version; optional title, summary, type, category, group, environment | updated glob | All |
 | `attach` | id, version, text or link, label | attachment reference | All |
 | `ingest_text` | board, text, title; optional glob id | communication id | Claude app |
 | `start_glob` | id, version | updated glob (same: `planning` → `implementing`) | Claude app |
-| `pick_up` | id, version; optional takeOver | updated glob, or `run_active` if a run is active or watching and takeOver is not set | Sessionator, Claude app |
+| `pick_up` | id, version; optional takeOver, environment | updated glob (with the environment, if given), or `run_active` if a run is active or watching and takeOver is not set | Sessionator, Claude app |
 | `put_artifact` | id, kind (`implementation_plan`, `postplan`, `local_review`), content; optional commitSha, runId | artifact version (ignored if runId is superseded) | Routines, sessionator |
-| `mark_ready` | id; runId for routines | updated glob (moves to `pr_open` when GitHub confirms) | Routines, sessionator |
-| `merge` | id, version | updated glob (row 14: `pr_open` → `merging`; slop updates the branch, waits for checks on the new head and squash-merges, as the Merge button does) | Sessionator (`slop merge`); denied to agents in the agent set (with `gh pr merge`, `gh api`, `slop merge` and `slop call merge`); slop can't tell an agent from its developer, since both use the developer's sign-in, so the deny rules are the guard |
+| `mark_ready` | id; runId for routines | updated glob (moves to `pr_open` when GitHub confirms) | Routines, sessionator; the board's Ready for review on a super uses the same transition (REST `mark-ready`), offered only when the latest postplan is at the PR head |
+| `merge` | id, version; optional continue (supers: Merge and continue, row 31) | updated glob (row 14: `pr_open` → `merging`; slop updates the branch, waits for checks on the new head and squash-merges, as the Merge button does; with continue, the super returns to `in_progress` once merged) | Sessionator (`slop merge`, `slop merge --continue`); denied to agents in the agent set (with `gh pr merge`, `gh api`, `slop merge` and `slop call merge`); slop can't tell an agent from its developer, since both use the developer's sign-in, so the deny rules are the guard |
 | `review_label` | id, version, label (FR, CR, QA), kind (`submit_items`, `tick`, `resubmit`); items for `submit_items`; itemId and done for `tick` | updated glob (rows 27–30) | Claude app, sessionator; approving and re-opening a review stay on the board (sign-off is human, like merging) |
 | `report_failure` | id, reason; runId for routines; optional agentSetVersion | updated glob | Routines, sessionator |
 | `get_board` | board | board settings: repo, base branch, environments, enabled integrations | Agents, sessionator |
@@ -202,7 +204,7 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 | Members | `GET /boards/{b}/members`, `POST /boards/{b}/members`, `PATCH /boards/{b}/members/{email}`, `DELETE /boards/{b}/members/{email}` (admins only) |
 | Globs | `GET /boards/{b}/globs`, `GET /globs/{id}` (both with each glob's artifact summaries: latest version per kind, version count, commit SHA, provenance, no content), `POST /boards/{b}/globs`, `PATCH /globs/{id}`, `DELETE /globs/{id}` |
 | Intake | `POST /boards/{b}/intake` — processes text and attachments, returns proposed fields without saving |
-| Actions | `POST /globs/{id}/actions/{start, retrigger, pick-up, start-again}` |
+| Actions | `POST /globs/{id}/actions/{start, retrigger, pick-up, take-over, start-again, merge, merge-continue, mark-ready}` (pick-up and take-over take an optional `environment`; `merge-continue` (row 31) and `mark-ready` (Ready for review) are for supers and need the latest postplan at the PR head) |
 | Labels | `POST /globs/{id}/labels/{FR, CR, QA}` with version and a command: `submit_items` (items), `approve`, `tick` (itemId, done), `resubmit` or `reopen` |
 | Artifacts | `GET /globs/{id}/artifacts`, `GET /globs/{id}/artifacts/{kind}?label=` (every version of one artifact, for the viewer), `GET /artifacts/{artifactId}` (presigned URL), `POST /globs/{id}/attachments` (text or link), `POST /globs/{id}/uploads` (presigned upload URL) |
 | Signed Off | `GET /boards/{b}/signed-off?cursor=` |
@@ -210,7 +212,7 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 | Inbox | `GET /inbox`, `POST /inbox/{meetingId}/attach`, `POST /inbox/{meetingId}/create-glob`, `POST /inbox/{meetingId}/discard` |
 | Reports | `GET /boards/{b}/reports?period=2026-09` — presigned CSV URL |
 
-**Further write endpoints:** `POST /globs/{id}/actions/merge` (Merge button), `POST /globs/{id}/actions/deploy-now`, `POST /globs/{id}/actions/take-over`, `PUT /globs/{id}/plan` (edit plan.md), `POST /kb/{itemId}/approve` (as a learning, as an edit to a document or agent-set file, or as the proposed document) and `POST /kb/{itemId}/reject` (with a reason) (admins). Every write, through REST or MCP, carries the glob or item `version` it read.
+**Further write endpoints:** `POST /globs/{id}/actions/merge` (Merge button), `POST /globs/{id}/actions/merge-continue` (Merge and continue, supers), `POST /globs/{id}/actions/mark-ready` (Ready for review, supers with the postplan at the head), `POST /globs/{id}/actions/deploy-now`, `POST /globs/{id}/actions/take-over`, `PUT /globs/{id}/plan` (edit plan.md), `POST /kb/{itemId}/approve` (as a learning, as an edit to a document or agent-set file, or as the proposed document) and `POST /kb/{itemId}/reject` (with a reason) (admins). Every write, through REST or MCP, carries the glob or item `version` it read.
 
 **Inbound**
 
@@ -311,7 +313,7 @@ From now on the team works with a branch and PR per glob, replacing direct commi
 
 ## Review and testing
 
-The repo's build scripts decide which checks run, using the PR labels; slop displays results on the glob. Every glob in Doing has a PR, opened as a draft by slop's GitHub App when the glob enters Doing, so CI, reviewers, labels and auto-fix can attach. Because GitHub cannot open a PR on a branch identical to master, slop creates each glob's branch with an empty first commit (\<id>: start), which the squash merge removes.
+The repo's build scripts decide which checks run, using the PR labels; slop displays results on the glob. Every glob in Doing has a PR, opened as a draft by slop's GitHub App when the glob enters Doing, so CI, reviewers, labels and auto-fix can attach (after a super's Merge and continue, its next draft PR opens on the next push). Because GitHub cannot open a PR on a branch identical to master, slop creates each glob's branch with an empty first commit (\<id>: start), which the squash merge removes.
 
 | # | Stage | Where | Sub | Same | Super | Blocks merge? |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -344,7 +346,7 @@ Each environment is represented by the commit it runs, and a glob counts as depl
 
 **ATF failures:** any failing test counts as a failure. A failure is flagged clearly on the card but never blocks PR creation, PR approval, sign-off or production deployment, including ATF runs against feature branches.
 
-**Environment assignment for product work:** each board has an enumerated list of environments; the default is a single environment, main (enough for slop's own development). A glob's environment is chosen at creation (MCP input, board form or `sstor --new`) or at pick-up and can be edited in the glob view at any time. **Slop starts the deploy:** when a push to a glob branch arrives through the GitHub webhook and the glob has an environment set, slop calls CodeBuild's `StartBuild` (through a `Deployer` port, using its IAM role) with the branch and target environment as parameters. If none is set, nothing deploys. Each environment has an allowBranchDeploy flag, and the core rejects assigning a glob to an environment without it. Deploys run one at a time per environment: each is pinned to an exact commit SHA (StartBuild with that SHA, never a moving branch), and while one is running only the newest pending request for that environment is kept. The environment's live state is recorded from the deploy that actually succeeded, so the board always reflects what is running. A changed environment applies on the next push, or immediately with a *Deploy now* button. Slop records which glob is live in each environment, so the card shows when another glob's deploy has replaced it in a shared environment. The base branch's own pipeline still deploys merged work to the integration environment, and release environments remain observe-only. Slop's GitHub App also puts the glob's type and environment on its PR as labels (e.g. `slop:sub`, `env:dev`) for the repo's build scripts, which decide which checks and tests run.
+**Environment assignment for product work:** each board has an enumerated list of environments; the default is a single environment, main (enough for slop's own development). A glob's environment is chosen at creation (MCP input, board form, `slop new --env` or `sstor --new --env`) or at pick-up (`pick_up`, the REST pick-up and take-over actions, `slop pick-up --env` or `sstor --glob --env`; a pick-up without one keeps the glob's environment) and can be edited in the glob view at any time. There is no default, except that a board can mark one branch-deploy environment as the default for subs, which a sub created without an environment gets. Intake suggests an environment the request names (one of the board's branch-deploy environments); an explicit choice wins. **Slop starts the deploy:** when a push to a glob branch arrives through the GitHub webhook and the glob has an environment set, slop calls CodeBuild's `StartBuild` (through a `Deployer` port, using its IAM role) with the branch and target environment as parameters. If none is set, nothing deploys. Each environment has an allowBranchDeploy flag, and the core rejects assigning a glob to an environment without it. Deploys run one at a time per environment: each is pinned to an exact commit SHA (StartBuild with that SHA, never a moving branch), and while one is running only the newest pending request for that environment is kept. The environment's live state is recorded from the deploy that actually succeeded, so the board always reflects what is running. A changed environment applies on the next push, or immediately with a *Deploy now* button. Slop records which glob is live in each environment, so the card shows when another glob's deploy has replaced it in a shared environment. The base branch's own pipeline still deploys merged work to the integration environment, and release environments remain observe-only. Slop's GitHub App also puts the glob's type and environment on its PR as labels (e.g. `slop:sub`, `env:dev`) for the repo's build scripts, which decide which checks and tests run.
 
 ## Time tracking and reports
 
@@ -460,9 +462,9 @@ Board roles are admin, dev, QA and PO.
 - Anyone can create a board; its creator is its admin. New members default to dev.
 - Only admins add users and set roles; admins can do everything.
 - Anyone on the board can delete globs. FR, CR and QA can only be switched on the board, not through the MCP.
-- QA and PO can create subs and sames, but not supers, and they cannot pick up (or take over) sames.
+- QA and PO can create subs and sames, but not supers, and they cannot pick up (or take over) sames or supers.
 - Users are added by email and linked to their account on first sign-in.
-- **Board settings:** repo, base branch (e.g. master or main), sensitive paths, time zone, default routine owner, environments with their allowBranchDeploy flags, members and roles. Wherever this document says master, it means the board's base branch.
+- **Board settings:** repo, base branch (e.g. master or main), sensitive paths, time zone, default routine owner, environments with their allowBranchDeploy flags (and at most one, allowing branch deploys, marked as the default for subs), members and roles. Wherever this document says master, it means the board's base branch.
 - **MCP access:** slop's MCP is a claude.ai custom connector with Cognito as the OAuth server (see Auth). The Claude app and routines act as the signed-in person with their board role; Claude Code and sessionator log in the same way.
 - No notifications outside the app for now.
 
@@ -473,7 +475,7 @@ Board roles are admin, dev, QA and PO.
 - **Related meetings:** intake searches slop's stored meetings by keyword (semantic search later), not the meeting tools directly.
 - **Artifact history:** S3 bucket versioning, with a current-version pointer on the glob. No git.
 - **LLM:** Amazon Bedrock via the Converse API, called with slop's IAM role behind the LLM port; prompts live in the core. Claude Haiku 4.5 for intake and meeting classification to start.
-- **Intake inference** returns name, summary, type, category, group (existing preferred) and `autoTrigger` with a reason, validated against the matrix with safe defaults. Through the MCP, explicit fields win. Sames auto-trigger only on an explicit instruction in the input.
+- **Intake inference** returns name, summary, type, category, group (existing preferred), an environment the input names (one of the board's branch-deploy environments, matched as a word) and `autoTrigger` with a reason, validated against the matrix with safe defaults. Through the MCP, explicit fields win. Sames auto-trigger only on an explicit instruction in the input.
 - **Create on the board:** a free-text box with attachments and a Process button; the LLM fills a structured form (name, summary, type, category, group, auto-trigger) that the user checks and edits before Create. The form can also be filled directly.
 
 * **Meeting sources:** Google Meet notes via Apps Script. Each person's script uses their own ingest secret. Meetings arrive without a board, in a shared inbox every slop user can see; once attached to a glob they also appear on that glob's board. Attachment is always confirmed by a person. The inbox has a discard action for meetings that don't belong.
@@ -592,7 +594,7 @@ Slop is built in vertical slices, each usable on its own. The checks above are v
 5. **Sames and sessionator:** start and pick-up rules, take over, `sstor --glob` / `--new` / `--ready` / `--merge`, local reviews, KB items, `/kb-bootstrap`. *Done when:* a same is picked up with sstor, implemented, marked ready and merged.
 6. **Supers:** super mode, postplans, slop-started branch deploys. *Done when:* a super's pushes deploy to the developer's environment, and the postplan is updated at least at sstor --ready.
 7. **Builds, ATF and deploys:** EventBridge, build failures, test results, environment indicators and ordering, CodeRabbit results. *Done when:* a failing build shows its error on the card and a deploy to a release environment is reflected on the globs it contains.
-8. **Search, chat and context:** indexing, search modes, decisions and supersession, the full `get_context`, the board chat, the self-improvement pipeline (finding classification, mining, routing, effect checks). *Done when:* the chat answers "why did we decide X" with a cited source.
+8. **Search, chat and context:** indexing, search modes, decisions and supersession, the full `get_context`, the board chat, the self-improvement pipeline (finding classification, mining, routing, effect checks), including learned thresholds: slop tunes each board's sub size limit from outcomes (converted subs merged unchanged raise it; subs that needed fixes after merging lower it), replacing today's fixed per-board limit (`subMaxChangedLines`). *Done when:* the chat answers "why did we decide X" with a cited source.
 9. **Ingest and backfill:** Apps Script, Slack app, paste, legacy issue-tracker (Jira) and Google Docs import. *Done when:* a Meet note arrives in the inbox and attaches to a glob.
 10. **Time tracking and reports:** event-log calculation and CSV downloads. *Done when:* the worked examples in Time tracking produce the expected hours.
 

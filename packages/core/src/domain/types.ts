@@ -75,6 +75,17 @@ export interface PullRequest {
   readonly headSha: string | null;
 }
 
+/** A PR a super landed with Merge and continue; the glob kept going on the same branch. */
+export interface MergedPr {
+  readonly number: number;
+  /** The squash commit on the base branch. */
+  readonly mergeSha: string;
+  readonly mergedAt: string;
+}
+
+/** `continue`: the merge in progress is a super's Merge and continue, so the glob stays in Doing. */
+export type MergeMode = 'continue';
+
 /** Result of the required checks on the PR's current head commit. */
 export interface HeadChecks {
   readonly sha: string;
@@ -110,6 +121,10 @@ export interface Glob {
   /** Each sign-off label's review checklist; read-only once the glob is signed off. */
   readonly checklists: Checklists;
   readonly pr: PullRequest | null;
+  /** PRs merged with Merge and continue, oldest first (supers); the final PR stays in `pr`. */
+  readonly prs: readonly MergedPr[];
+  /** Set while a Merge and continue is merging; null otherwise. */
+  readonly mergeMode: MergeMode | null;
   readonly headChecks: HeadChecks | null;
   /** Every routine run, oldest first; the last one is the current run. */
   readonly runs: readonly Run[];
@@ -125,6 +140,8 @@ export interface Glob {
 export interface Environment {
   readonly name: string;
   readonly allowBranchDeploy: boolean;
+  /** At most one per board: the environment a sub gets when it is created without one. */
+  readonly subDefault?: true;
 }
 
 export interface Board {

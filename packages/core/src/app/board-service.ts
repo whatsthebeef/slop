@@ -56,6 +56,11 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
     const names = settings.environments.map((e) => e.name.trim());
     if (names.some((n) => n === '')) return invalidInput('Environments need names');
     if (new Set(names).size !== names.length) return invalidInput('Environment names must be unique');
+    const subDefaults = settings.environments.filter((e) => e.subDefault === true);
+    if (subDefaults.length > 1) return invalidInput('Only one environment can be the default for subs');
+    if (subDefaults.some((e) => !e.allowBranchDeploy)) {
+      return invalidInput("The subs' default environment must allow branch deploys");
+    }
   }
   return ok(null);
 };

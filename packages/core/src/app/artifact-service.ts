@@ -9,7 +9,7 @@ import { memberOf } from './access.js';
 export interface GlobContext {
   readonly glob: Pick<Glob, 'id' | 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'status'>;
   readonly board: { readonly id: number; readonly repo: string | null; readonly baseBranch: string };
-  /** plan.md: the latest version, or the summary when no plan has been written yet. */
+  /** plan.md (a super's postplan once it has one): the latest version, or the summary when no plan has been written yet. */
   readonly plan: { readonly version: number; readonly content: string } | null;
   readonly implementationPlan: { readonly version: number; readonly content: string } | null;
   readonly attachments: readonly { readonly label: string; readonly content: string; readonly link: string | null }[];
@@ -67,7 +67,7 @@ export class ArtifactService {
     return this.put(email, globId, kind, '', content, null, options);
   }
 
-  /** `get_plan`: plan.md (or the postplan for supers) with its version history. */
+  /** `get_plan`: plan.md (or a super's postplan, once it has one) with its version history. */
   async plan(
     email: string,
     globId: string,
@@ -78,8 +78,10 @@ export class ArtifactService {
       if (glob === null) return notFound(`No glob ${globId}`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const kind: ArtifactKind = glob.type === 'super' ? 'postplan' : 'plan';
-      const versions = await tx.artifactVersions(globId, kind, '');
+      // A super's postplan replaces plan.md once it exists; until then plan.md is its plan.
+      const postplans = glob.type === 'super' ? await tx.artifactVersions(globId, 'postplan', '') : [];
+      const kind: ArtifactKind = postplans.length > 0 ? 'postplan' : 'plan';
+      const versions = kind === 'postplan' ? postplans : await tx.artifactVersions(globId, kind, '');
       const current = version === null ? (versions.at(-1) ?? null) : (versions.find((v) => v.version === version) ?? null);
       if (version !== null && current === null) return notFound(`${globId} has no ${kind} version ${version}`);
       return ok({
@@ -122,7 +124,8 @@ export class ArtifactService {
       if (board === null) return notFound(`No board ${glob.boardId}`);
       const artifacts = await tx.listArtifacts(globId);
       const latest = (kind: ArtifactKind) => artifacts.find((a) => a.kind === kind) ?? null;
-      const plan = latest(glob.type === 'super' ? 'postplan' : 'plan');
+      // A super's postplan replaces plan.md once it exists; until then plan.md is its plan.
+      const plan = (glob.type === 'super' ? latest('postplan') : null) ?? latest('plan');
       const implementation = latest('implementation_plan');
       return ok({
         glob: {

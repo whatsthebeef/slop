@@ -1,10 +1,11 @@
-import type { Board, EffectKind } from '@slop/core';
+import type { Board, EffectKind, Glob, GlobService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { FileRoutines } from './routines.js';
 import { machine, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
-import { repoOf } from './codehost.js';
+import type { Repo } from './codehost.js';
+import { SUB_GATE_CHECK, repoOf } from './codehost.js';
 
 /**
  * Outbox executors for the code host (the GitHub App today). Each turns one effect into GitHub calls and feeds what
@@ -18,6 +19,18 @@ export const codeHostExecutors = (
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
     return board === null ? null : repoOf(board);
+  };
+
+  /**
+   * A sub's gate check can finish before slop records the PR as ready, and its webhook is then ignored: look up a
+   * completed run on the head and feed it through the machine (which ignores it unless the sub is in pr_open there).
+   */
+  const lookUpSubGate = async (repo: Repo, glob: Glob, sha: string, globs: GlobService) => {
+    if (glob.type !== 'sub' || glob.status !== 'pr_open') return;
+    const check = await host.completedCheckRun(repo, sha, SUB_GATE_CHECK);
+    // Not finished yet: its webhook will come.
+    if (check === null) return;
+    await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCheckCompleted(g, check, ctx));
   };
 
   return {
@@ -77,6 +90,19 @@ export const codeHostExecutors = (
       return 'done';
     },
 
+    open_pr: async (_effect, glob, { globs }) => {
+      // After Merge and continue: only while the glob is still in progress without a PR.
+      if (glob === null || glob.pr !== null || glob.status !== 'in_progress') return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null || !host.configured) return 'dropped';
+      const pr = await host.openDraftPr(repo, glob);
+      // Nothing to merge yet: the next push tries again.
+      if (pr === null) return 'done';
+      // The `opened` webhook may have recorded it first; recording it again is a no-op.
+      await globs.applyEvent(glob.id, (g, ctx) => machine.prOpened(g, pr, ctx));
+      return 'done';
+    },
+
     refresh_checks: async (_effect, glob, { globs }) => {
       if (glob?.pr == null) return 'dropped';
       const repo = await repoFor(glob.boardId);
@@ -84,6 +110,7 @@ export const codeHostExecutors = (
       const { sha, state } = await host.mergeState(repo, glob.pr.number);
       // GitHub computes mergeability in the background; retry until it has an answer.
       if (state === 'unknown') throw new Error('GitHub has not computed the merge state yet');
+      await lookUpSubGate(repo, glob, sha, globs);
       if (state === 'pending') return 'done';
       const passed = state === 'passed' || state === 'behind';
       await globs.applyEvent(glob.id, (g, ctx) => machine.checksCompleted(g, { sha, passed }, ctx));
@@ -94,11 +121,12 @@ export const codeHostExecutors = (
       if (effect.kind !== 'squash_merge' || glob?.pr == null) return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
-      const result = await host.squashMerge(repo, glob, glob.pr.number, effect.sha);
+      const prNumber = glob.pr.number;
+      const result = await host.squashMerge(repo, glob, prNumber, effect.sha);
       switch (result.outcome) {
         case 'merged':
-          // Slop's own merge response; the `closed` webhook that follows is a no-op (row 15).
-          await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: result.sha }, ctx));
+          // Slop's own merge response; the `closed` webhook that follows is a no-op (rows 15 and 31).
+          await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: result.sha, number: prNumber }, ctx));
           break;
         case 'updating':
           // The update pushes a new head; its checks resume the merge.
@@ -118,6 +146,14 @@ export const codeHostExecutors = (
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
       await host.markReady(repo, glob.pr.number);
+      return 'done';
+    },
+
+    refresh_sub_gate: async (_effect, glob, { globs }) => {
+      if (glob?.pr?.headSha == null || glob.type !== 'sub' || glob.status !== 'pr_open') return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      await lookUpSubGate(repo, glob, glob.pr.headSha, globs);
       return 'done';
     },
 
