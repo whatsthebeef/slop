@@ -15,7 +15,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
 import { useBoardMotion } from '@/lib/board-motion';
-import { globsKey, useLiveBoard } from '@/lib/live';
+import { deploysKey, globsKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useToast } from '@/toast';
 
@@ -207,6 +207,13 @@ export const BoardPage = () => {
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId), ...KEEP_TRYING });
   const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId), ...KEEP_TRYING });
   const motion = useBoardMotion(globs.data, live);
+  // Deploy state lives beside the globs; read it for the globs on the board.
+  const boardGlobIds = (globs.data ?? []).map((g) => g.id).sort();
+  const deployState = useQuery({
+    queryKey: [...deploysKey(boardId), boardGlobIds.join(',')],
+    queryFn: () => api.boardDeploys(boardId, boardGlobIds),
+    enabled: boardGlobIds.length > 0,
+  });
 
   // The status bar's counts include this board; refresh them when its globs change, at most every
   // few seconds (a burst of live updates shouldn't refetch every board's counts each time), with a
@@ -396,6 +403,7 @@ export const BoardPage = () => {
                     lock={motion.locks[glob.id]}
                     bump={bumps[glob.id]}
                     tag={motion.tags[glob.id]}
+                    deploy={deployState.data?.indicators[glob.id]}
                   />
                 );
               })}

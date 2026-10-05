@@ -24,6 +24,7 @@ export type BoardSettings = Partial<
     | 'runNoProgressHours'
     | 'runReadyHours'
     | 'subMaxChangedLines'
+    | 'deploy'
   >
 >;
 
@@ -61,6 +62,15 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
     if (subDefaults.some((e) => !e.allowBranchDeploy)) {
       return invalidInput("The subs' default environment must allow branch deploys");
     }
+  }
+  const deploy = settings.deploy;
+  if (deploy?.provider === 'codebuild') {
+    if (deploy.region.trim() === '' || deploy.defaultProject.trim() === '') {
+      return invalidInput('CodeBuild deploys need a region and a default project');
+    }
+  }
+  if (deploy?.provider === 'github_actions' && deploy.workflow.trim() === '') {
+    return invalidInput('GitHub Actions deploys need a workflow file');
   }
   return ok(null);
 };

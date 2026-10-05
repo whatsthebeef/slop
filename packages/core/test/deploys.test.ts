@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { BoardService } from '../src/app/board-service.js';
 import { DeployService } from '../src/app/deploy-service.js';
 import * as deploys from '../src/domain/deploys.js';
 import type { Deploy } from '../src/domain/deploys.js';
@@ -197,5 +198,24 @@ describe('DeployService', () => {
     const refused = await service.deployNow(MEMBER, 's1t1');
     expect(refused.ok).toBe(false);
     expect(unwrap(await service.requestFromPush('s1t1', 'a1'))).toBeNull();
+  });
+});
+
+describe('board deploy settings', () => {
+  it('stores a deploy integration and refuses incomplete ones', async () => {
+    const store = new MemoryStore();
+    const boards = new BoardService({ store, notifier: new RecordingNotifier() });
+    const admin = 'admin@example.com';
+    await store.transaction((tx) => tx.upsertUser({ email: admin, name: admin, active: true }));
+    const created = unwrap(
+      await boards.create(admin, { name: 'sandbox', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
+    );
+    expect(created.deploy).toBeNull();
+    const incomplete = await boards.updateSettings(admin, created.id, created.version, {
+      deploy: { provider: 'codebuild', region: 'us-east-1', defaultProject: ' ', projects: {} },
+    });
+    expect(incomplete.ok).toBe(false);
+    const deploy = { provider: 'codebuild', region: 'us-east-1', defaultProject: 'sandbox-deploy', projects: {} } as const;
+    expect(unwrap(await boards.updateSettings(admin, created.id, created.version, { deploy })).deploy).toEqual(deploy);
   });
 });

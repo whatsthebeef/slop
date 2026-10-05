@@ -63,6 +63,18 @@ const settingsSchema = z.object({
   defaultRoutineOwner: z.string().nullable().optional(),
   environments: z.array(environmentSchema).optional(),
   sensitivePaths: z.array(z.string()).optional(),
+  deploy: z
+    .discriminatedUnion('provider', [
+      z.object({
+        provider: z.literal('codebuild'),
+        region: z.string(),
+        defaultProject: z.string(),
+        projects: z.record(z.string(), z.string()).default({}),
+      }),
+      z.object({ provider: z.literal('github_actions'), workflow: z.string() }),
+    ])
+    .nullable()
+    .optional(),
 });
 
 export const createGlobSchema = z.object({

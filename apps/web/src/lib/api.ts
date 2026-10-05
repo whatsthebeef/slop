@@ -5,6 +5,8 @@ import type {
   ArtifactSummary,
   Board,
   Category,
+  Deploy,
+  DeployIndicator,
   Environment,
   Glob,
   KbItem,
@@ -88,6 +90,12 @@ export interface ApiError {
   readonly allowedActions?: readonly string[];
 }
 
+export interface BoardDeploys {
+  readonly indicators: Readonly<Record<string, DeployIndicator>>;
+  /** Environments with a deploy running: Deploy now is disabled there for everyone. */
+  readonly running: readonly string[];
+}
+
 export class RequestError extends Error {
   constructor(
     readonly status: number,
@@ -158,6 +166,11 @@ export const api = {
       `/api/boards/${boardId}/signed-off${cursor === null ? '' : `?cursor=${cursor}`}`,
     ),
   glob: (id: string) => request<GlobView>('GET', `/api/globs/${id}`),
+  /** Deploy indicators for the given globs, and the environments with a deploy running. */
+  boardDeploys: (boardId: number, globIds: readonly string[]) =>
+    request<BoardDeploys>('GET', `/api/boards/${boardId}/deploys?globs=${globIds.map(encodeURIComponent).join(',')}`),
+  globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
+  deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),
   createGlob: (boardId: number, input: NewGlob) =>
     request<GlobView>('POST', `/api/boards/${boardId}/globs`, { ...input, idempotencyKey: crypto.randomUUID() }),
   updateGlob: (id: string, version: number, changes: GlobChanges) =>

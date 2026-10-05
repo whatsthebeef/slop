@@ -1,5 +1,5 @@
 import { ROLES } from '@slop/core';
-import type { Environment, Role } from '@slop/core';
+import type { DeployIntegration, Environment, Role } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
@@ -31,6 +31,7 @@ export const SettingsPage = () => {
   const [baseBranch, setBaseBranch] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<Role>('dev');
+  const [deploy, setDeploy] = useState<DeployIntegration | null>(null);
 
   useEffect(() => {
     if (board.data === undefined) return;
@@ -38,6 +39,7 @@ export const SettingsPage = () => {
     setTimeZone(board.data.timeZone);
     setBaseBranch(board.data.baseBranch);
     setRepo(board.data.repo ?? '');
+    setDeploy(board.data.deploy);
   }, [board.data]);
 
   const save = useMutation({
@@ -48,6 +50,7 @@ export const SettingsPage = () => {
         timeZone,
         baseBranch,
         repo: repo.trim() === '' ? null : repo.trim(),
+        deploy,
       });
     },
     onSuccess: () => {
@@ -198,6 +201,12 @@ export const SettingsPage = () => {
             )}
           </div>
         ))}
+        <DeploySettings
+          deploy={deploy}
+          environments={envs.filter((e) => e.allowBranchDeploy && e.name.trim() !== '').map((e) => e.name)}
+          disabled={!admin}
+          onChange={setDeploy}
+        />
         {admin && (
           <div className='flex gap-2'>
             <Button variant='outline' size='sm' onClick={() => setEnvs([...envs, { name: '', allowBranchDeploy: true }])}>
@@ -253,6 +262,84 @@ export const SettingsPage = () => {
     </main>
   );
 };
+
+const CODEBUILD_DEFAULT: DeployIntegration = { provider: 'codebuild', region: 'us-east-1', defaultProject: '', projects: {} };
+const GITHUB_DEFAULT: DeployIntegration = { provider: 'github_actions', workflow: 'slop-deploy.yml' };
+
+/**
+ * How branch deploys run: none, CodeBuild (a project per environment, with a default) or GitHub
+ * Actions (a workflow file). Either runs the repo's `.sstor/deploy.sh <env>`.
+ */
+const DeploySettings = ({
+  deploy,
+  environments,
+  disabled,
+  onChange,
+}: {
+  deploy: DeployIntegration | null;
+  environments: readonly string[];
+  disabled: boolean;
+  onChange: (deploy: DeployIntegration | null) => void;
+}) => (
+  <div className='grid gap-2' data-testid='deploy-settings'>
+    <h3 className='text-xs font-semibold text-muted-foreground'>Branch deploys</h3>
+    <Label>
+      Deploys run with
+      <Select
+        value={deploy?.provider ?? ''}
+        disabled={disabled}
+        onChange={(e) =>
+          onChange(e.target.value === 'codebuild' ? CODEBUILD_DEFAULT : e.target.value === 'github_actions' ? GITHUB_DEFAULT : null)
+        }
+      >
+        <option value=''>No deploys</option>
+        <option value='codebuild'>AWS CodeBuild</option>
+        <option value='github_actions'>GitHub Actions</option>
+      </Select>
+    </Label>
+    {deploy?.provider === 'codebuild' && (
+      <>
+        <div className='grid grid-cols-2 gap-3'>
+          <Label>
+            Region
+            <Input value={deploy.region} disabled={disabled} onChange={(e) => onChange({ ...deploy, region: e.target.value })} />
+          </Label>
+          <Label>
+            Default project
+            <Input
+              value={deploy.defaultProject}
+              disabled={disabled}
+              onChange={(e) => onChange({ ...deploy, defaultProject: e.target.value })}
+            />
+          </Label>
+        </div>
+        {environments.map((env) => (
+          <Label key={env}>
+            Project for {env} (blank: the default)
+            <Input
+              value={deploy.projects[env] ?? ''}
+              disabled={disabled}
+              onChange={(e) => {
+                const rest = Object.fromEntries(Object.entries(deploy.projects).filter(([name]) => name !== env));
+                onChange({ ...deploy, projects: e.target.value.trim() === '' ? rest : { ...rest, [env]: e.target.value } });
+              }}
+            />
+          </Label>
+        ))}
+        <p className='text-xs text-muted-foreground'>
+          Each push to a glob with one of these environments starts the project at exactly that commit; it runs{' '}
+          <code>.sstor/deploy.sh &lt;env&gt;</code>. Results come back through EventBridge.
+        </p>
+      </>
+    )}
+    {deploy?.provider === 'github_actions' && (
+      <Label>
+        Workflow file
+        <Input value={deploy.workflow} disabled={disabled} onChange={(e) => onChange({ ...deploy, workflow: e.target.value })} />
+      </Label>
+    )}
+  </div>
+);
 
 export const SignedOffPage = () => {
   const boardId = Number(useParams().boardId);
