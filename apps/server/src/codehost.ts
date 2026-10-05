@@ -14,6 +14,9 @@ export const repoOf = (board: Board): Repo | null => {
     : null;
 };
 
+/** The check run the sub gate's GitHub Action reports as; slop applies its policy once it passes (rows 12–13). */
+export const SUB_GATE_CHECK = 'sub-gate';
+
 /** Whether a review's head can merge, in the host's own view (required checks, conflicts, up to date). */
 export type MergeState = 'passed' | 'pending' | 'failed' | 'behind' | 'conflict' | 'unknown';
 
@@ -54,6 +57,8 @@ export interface CodeHost {
   deleteBranch(repo: Repo, branch: string): Promise<void>;
   reopenPr(repo: Repo, prNumber: number, branch: string): Promise<'reopened' | 'missing'>;
   mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState }>;
+  /** The latest completed check run named `name` on commit `sha`, or null if none has completed yet. */
+  completedCheckRun(repo: Repo, sha: string, name: string): Promise<{ sha: string; passed: boolean } | null>;
   /** Marks a draft PR ready for review. */
   markReady(repo: Repo, prNumber: number): Promise<void>;
   /** Lines changed and files touched between the base branch and `sha`. */

@@ -131,6 +131,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 - Writes are conditional on the glob's version, so simultaneous events resolve cleanly.
 - Changing type, category or group is not a transition: it never moves the glob, only changes which rows apply next.
 - Draft PRs are recorded on the glob without changing status.
+- Sub gate (rows 11–13): the `sub-gate` check can finish before the PR is recorded as ready, so slop also looks up a gate result that finished before the PR was marked ready, when the sub enters `pr_open` and whenever it re-reads the head's checks.
 - Time attribution follows the planner until a human implementer picks the glob up, then the implementer; triggeredBy only chooses whose routine runs.
 
 **Provisioning and reliability**
@@ -593,7 +594,7 @@ Slop is built in vertical slices, each usable on its own. The checks above are v
 5. **Sames and sessionator:** start and pick-up rules, take over, `sstor --glob` / `--new` / `--ready` / `--merge`, local reviews, KB items, `/kb-bootstrap`. *Done when:* a same is picked up with sstor, implemented, marked ready and merged.
 6. **Supers:** super mode, postplans, slop-started branch deploys. *Done when:* a super's pushes deploy to the developer's environment, and the postplan is updated at least at sstor --ready.
 7. **Builds, ATF and deploys:** EventBridge, build failures, test results, environment indicators and ordering, CodeRabbit results. *Done when:* a failing build shows its error on the card and a deploy to a release environment is reflected on the globs it contains.
-8. **Search, chat and context:** indexing, search modes, decisions and supersession, the full `get_context`, the board chat, the self-improvement pipeline (finding classification, mining, routing, effect checks). *Done when:* the chat answers "why did we decide X" with a cited source.
+8. **Search, chat and context:** indexing, search modes, decisions and supersession, the full `get_context`, the board chat, the self-improvement pipeline (finding classification, mining, routing, effect checks), including learned thresholds: slop tunes each board's sub size limit from outcomes (converted subs merged unchanged raise it; subs that needed fixes after merging lower it), replacing today's fixed per-board limit (`subMaxChangedLines`). *Done when:* the chat answers "why did we decide X" with a cited source.
 9. **Ingest and backfill:** Apps Script, Slack app, paste, legacy issue-tracker (Jira) and Google Docs import. *Done when:* a Meet note arrives in the inbox and attaches to a glob.
 10. **Time tracking and reports:** event-log calculation and CSV downloads. *Done when:* the worked examples in Time tracking produce the expected hours.
 

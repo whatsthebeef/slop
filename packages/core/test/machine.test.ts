@@ -614,6 +614,18 @@ describe('checks and merging (slice 2)', () => {
     expect(effectKinds(pushed)).toEqual(['refresh_checks']);
   });
 
+  it('a sub entering pr_open also looks up a sub gate that finished before the PR was ready', () => {
+    const sub = value(m.prReadyForReview(glob({ type: 'sub', status: 'implementing' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+    expect(sub.effects).toEqual([
+      { kind: 'refresh_checks', globId: 's1t1', generation: 1 },
+      { kind: 'refresh_sub_gate', globId: 's1t1', generation: 1 },
+    ]);
+    const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+    expect(effectKinds(same)).toEqual(['refresh_checks']);
+    const superGlob = value(m.prReadyForReview(glob({ type: 'super', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+    expect(effectKinds(superGlob)).toEqual(['refresh_checks']);
+  });
+
   it('a check change queues a refresh without changing the glob', () => {
     const t = value(m.checksChanged(ready, ctx(null)));
     expect(t.changed).toBe(false);

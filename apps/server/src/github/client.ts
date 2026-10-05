@@ -239,6 +239,23 @@ export class GitHub implements CodeHost {
     return { sha: data.head.sha, state };
   }
 
+  /** The latest completed check run named `name` on `sha`; only a `success` conclusion passes. */
+  async completedCheckRun(repo: Repo, sha: string, name: string): Promise<{ sha: string; passed: boolean } | null> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
+      owner: repo.owner,
+      repo: repo.name,
+      ref: sha,
+      check_name: name,
+      status: 'completed',
+      filter: 'latest',
+    });
+    const latest = data.check_runs
+      .filter((run) => run.status === 'completed' && run.head_sha === sha)
+      .sort((a, b) => (b.completed_at ?? '').localeCompare(a.completed_at ?? ''))[0];
+    return latest === undefined ? null : { sha, passed: latest.conclusion === 'success' };
+  }
+
   /**
    * Squash-merges the PR at exactly `sha` with the title `<id>: <title>`. If the branch is
    * behind the base, slop updates it instead and the merge resumes when the new head's checks pass.

@@ -816,10 +816,10 @@ export const prReadyForReview = (
   if (run !== null && (run.state === 'active' || run.state === 'queued')) {
     b.updateRun({ state: 'watching', lastProgressAt: ctx.now, startedAt: run.startedAt ?? ctx.now });
   }
-  return b
-    .status('pr_open')
-    .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation })
-    .done();
+  b.status('pr_open').effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+  // The sub gate may have finished before the PR was recorded as ready: look up its result.
+  if (glob.type === 'sub') b.effect({ kind: 'refresh_sub_gate', globId: glob.id, generation: glob.generation });
+  return b.done();
 };
 
 /** A check suite or run changed on the glob's branch: re-read the head's merge state. */

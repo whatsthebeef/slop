@@ -71,6 +71,11 @@ export type Effect =
   | { readonly kind: 'mark_pr_ready'; readonly globId: string; readonly generation: number }
   /** Apply the board's sub-gate policy (size, sensitive paths) to the PR's head after its checks passed. */
   | { readonly kind: 'evaluate_sub_gate'; readonly globId: string; readonly generation: number; readonly sha: string }
+  /**
+   * Look up a `sub-gate` check run that already completed on a sub's PR head, in case it finished before
+   * slop recorded the PR as ready (its webhook was then ignored).
+   */
+  | { readonly kind: 'refresh_sub_gate'; readonly globId: string; readonly generation: number }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
   | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number };
 
