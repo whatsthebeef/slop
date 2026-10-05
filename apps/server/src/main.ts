@@ -130,6 +130,7 @@ mountMcp(app, {
   auth,
   boards,
   globs,
+  deploys,
   outbox,
   knowledge,
   artifacts,
