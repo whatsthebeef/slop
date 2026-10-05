@@ -19,6 +19,7 @@
       "Bash(gh pr create:*)",
       "Bash(gh pr merge:*)",
       "Bash(git push --force*)",
+      "Bash(slop api:*)",
       "Bash(slop call merge:*)",
       "Bash(slop merge:*)",
       "mcp__claude_ai_Slop__merge",

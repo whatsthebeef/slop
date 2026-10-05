@@ -82,6 +82,15 @@ export const postplanAtHead = (glob: Glob, facts: ActionFacts): boolean =>
 
 export const POSTPLAN_NOT_AT_HEAD = 'Update the postplan at the head first (/finalise)';
 
+/**
+ * The squash commit's title: `<id>: <title>`. A piece landed with Merge and continue says which
+ * part it is, so the base branch doesn't read as if the whole super had landed.
+ */
+export const squashTitle = (glob: Glob): string =>
+  glob.mergeMode === 'continue'
+    ? `${glob.id}: ${glob.title} (part ${glob.prs.length + 1})`
+    : `${glob.id}: ${glob.title}`;
+
 // ---------------------------------------------------------------------------
 // Helpers
 
@@ -734,7 +743,7 @@ export const provisioningFailed =(glob: Glob, reason: string, ctx: Context) =>
 /** A push to the glob branch: records the new head; results for older commits stop counting. */
 export const commitPushed = (
   glob: Glob,
-  push: { sha: string; runId: string | null },
+  push: { sha: string; runId: string | null; message?: string | null },
   ctx: Context,
 ): Result<Transition> => {
   const b = new Builder(glob, ctx);
@@ -751,6 +760,12 @@ export const commitPushed = (
   // work on the branch (main is merged back into it first, so the PR shows only the new work).
   if (glob.status === 'in_progress' && glob.pr === null && glob.provisioning === 'ok') {
     b.effect({ kind: 'open_pr', globId: glob.id, generation: glob.generation });
+  }
+  // Each push deploys exactly that commit to the glob's environment; not a superseded run's push,
+  // nor the empty `<id>: start` commit slop creates the branch with.
+  const isStart = push.message?.trim() === `${glob.id}: start`;
+  if (glob.environment !== null && !superseded && !isStart && listOf(glob.status) === 'doing') {
+    b.effect({ kind: 'request_deploy', globId: glob.id, generation: glob.generation, sha: push.sha });
   }
   return b.event('CommitPushed', { sha: push.sha, runId: push.runId, fromSupersededRun: superseded }).done();
 };

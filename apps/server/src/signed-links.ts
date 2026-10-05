@@ -13,7 +13,11 @@ export class SignedLinks {
   }
 
   sign(path: string, ttlSeconds: number): { expires: number; signature: string } {
-    const expires = Math.floor(Date.now() / 1000) + ttlSeconds;
+    return this.signUntil(path, Math.floor(Date.now() / 1000) + ttlSeconds);
+  }
+
+  /** Signs `path` until a fixed time (Unix seconds), so signing again gives the same link. */
+  signUntil(path: string, expires: number): { expires: number; signature: string } {
     return { expires, signature: this.mac(path, expires) };
   }
 

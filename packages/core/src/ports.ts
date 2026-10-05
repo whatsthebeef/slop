@@ -1,3 +1,4 @@
+import type { Deploy, DeployState } from './domain/deploys.js';
 import type { DomainEvent, Effect } from './domain/events.js';
 import type { IdLetter } from './domain/ids.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
@@ -9,6 +10,13 @@ export interface GlobFilter {
   readonly type?: SlopType;
   readonly group?: string;
   readonly person?: string;
+}
+
+export interface DeployFilter {
+  readonly environment?: string;
+  readonly states?: readonly DeployState[];
+  readonly globIds?: readonly string[];
+  readonly limit?: number;
 }
 
 /** Store access inside one transaction. Glob writes are conditional on the glob's version. */
@@ -25,7 +33,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'runNoProgressHours' | 'runReadyHours' | 'subMaxChangedLines'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'runNoProgressHours' | 'runReadyHours' | 'subMaxChangedLines' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   listBoards(email: string): Promise<Board[]>;
   /** Every board, for background jobs. */
@@ -61,6 +69,21 @@ export interface Tx {
   /** Writes `item` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateKbItem(item: KbItem, expectedVersion: number): Promise<boolean>;
 
+  getDeploy(id: string): Promise<Deploy | null>;
+  /** Writes deploys (insert or replace by ID). */
+  saveDeploys(deploys: readonly Deploy[]): Promise<void>;
+  /** A board's deploys, newest request first, narrowed by the filter. */
+  listDeploys(boardId: number, filter: DeployFilter): Promise<Deploy[]>;
+  /** The deploy a provider reports on, by its handle. */
+  findDeployByProviderRef(providerRef: string): Promise<Deploy | null>;
+  /** Each glob's latest deploy (by request time), for the given globs of a board. */
+  latestDeploys(boardId: number, globIds: readonly string[]): Promise<Deploy[]>;
+  /**
+   * Serialises an environment's deploy queue until the transaction ends, so concurrent requests
+   * and results can't both see "nothing running" (a no-op where transactions don't overlap).
+   */
+  lockDeployQueue(boardId: number, environment: string): Promise<void>;
+
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
   enqueueEffects(effects: readonly Effect[]): Promise<void>;
@@ -76,6 +99,8 @@ export type Hint =
   | { readonly kind: 'glob.deleted'; readonly boardId: number; readonly globId: string; readonly version: number }
   /** An artifact was added: it doesn't bump the glob's version, so clients refetch regardless. */
   | { readonly kind: 'glob.artifacts'; readonly boardId: number; readonly globId: string }
+  /** A glob's deploys changed: they don't bump the glob's version, so clients refetch regardless. */
+  | { readonly kind: 'glob.deploys'; readonly boardId: number; readonly globId: string }
   | { readonly kind: 'board.changed'; readonly boardId: number };
 
 /** Publishes small change hints to open boards after a commit. */

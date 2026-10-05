@@ -1,4 +1,5 @@
-import type { Action, ArtifactKind, Category } from '@slop/core';
+import { stuckHint } from '@slop/core';
+import type { Action, ArtifactKind, Category, DeployIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
@@ -177,6 +178,31 @@ const MoveButton = ({
   </Tip>
 );
 
+/** The glob's deploy state on its card: deploying, live, failed, or replaced by another glob. */
+export const DeployChip = ({ deploy }: { deploy: DeployIndicator }) => {
+  const env = deploy.environment;
+  const [text, tip, tone] =
+    deploy.state === 'deploying'
+      ? [
+          deploy.waiting ? `${env}: queued` : `${env}: deploying`,
+          deploy.waiting ? `Waiting for the deploy running in ${env}` : `Deploying to ${env}`,
+          'text-muted-foreground',
+        ]
+      : deploy.state === 'live'
+        ? [`${env}: live`, `Live in ${env} at ${deploy.sha.slice(0, 7)}`, 'text-signal-strong']
+        : deploy.state === 'failed'
+          ? [`${env}: deploy failed`, `Deploy to ${env} failed: ${deploy.error ?? 'no reason given'}`, 'text-red']
+          : [`${env}: replaced`, `${deploy.by} has been deployed to ${env} since`, 'text-muted-foreground'];
+  return (
+    <Tip text={tip}>
+      <span className={cn('inline-flex items-center gap-1 font-mono text-[11px]', tone)} data-testid='deploy-chip'>
+        {deploy.state === 'deploying' && !deploy.waiting && <Loader2 className='h-3 w-3 animate-spin' />}
+        {text}
+      </span>
+    </Tip>
+  );
+};
+
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -194,6 +220,7 @@ export const GlobCard = ({
   lock,
   bump,
   tag,
+  deploy,
 }: {
   glob: GlobView;
   onOpen: () => void;
@@ -213,10 +240,12 @@ export const GlobCard = ({
   bump?: 'left' | 'right';
   /** Who moved it, briefly, when the move was made elsewhere. */
   tag?: MoveTag;
+  deploy?: DeployIndicator;
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
+  const hint = stuckHint(glob, new Date().toISOString());
   const preview = moves.find((m) => m.action === previewing);
 
   return (
@@ -267,6 +296,14 @@ export const GlobCard = ({
         {glob.group !== null && <GroupChip name={glob.group} />}
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
+        {deploy !== undefined && <DeployChip deploy={deploy} />}
+        {hint !== null && (
+          <Tip text={hint}>
+            <span className='font-mono text-[11px] text-required' data-testid='stuck-hint'>
+              stuck?
+            </span>
+          </Tip>
+        )}
         {failed && (
           <Tip text={`Failed: ${glob.failure?.reason ?? 'the routine run failed'}`}>
             <span className='font-mono text-[11px] font-semibold text-red'>! failed</span>

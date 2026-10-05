@@ -1,5 +1,5 @@
-import type { DomainEvent, Effect, Environment, Glob, KbOutcome, Provenance, ProposedDocument } from '@slop/core';
-import { LEARNING_TYPES } from '@slop/core';
+import type { Board, DeployIntegration, DomainEvent, Effect, Environment, Glob, KbOutcome, Provenance, ProposedDocument } from '@slop/core';
+import { DEPLOY_STATES, DEPLOY_TRIGGERS, LEARNING_TYPES } from '@slop/core';
 import {
   bigserial,
   boolean,
@@ -12,6 +12,7 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 export const users = pgTable('users', {
   email: text('email').primaryKey(),
@@ -35,6 +36,10 @@ export const boards = pgTable('boards', {
   runNoProgressHours: integer('run_no_progress_hours').notNull().default(2),
   runReadyHours: integer('run_ready_hours').notNull().default(8),
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
+  /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
+  deploy: jsonb('deploy').$type<DeployIntegration>(),
+  /** Readiness items slop can't check, ticked by an admin. */
+  readinessTicks: jsonb('readiness_ticks').$type<Board['readinessTicks']>().notNull().default({}),
   version: integer('version').notNull(),
 });
 
@@ -230,4 +235,36 @@ export const kbProposals = pgTable(
     version: integer('version').notNull(),
   },
   (t) => [index('kb_proposals_board_status_idx').on(t.boardId, t.status)],
+);
+
+/** Branch deploys: one row per request, queued per environment (one running, one waiting). */
+export const deploys = pgTable(
+  'deploys',
+  {
+    id: text('id').primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    environment: text('environment').notNull(),
+    globId: text('glob_id').notNull(),
+    sha: text('sha').notNull(),
+    state: text('state', { enum: DEPLOY_STATES }).notNull(),
+    trigger: text('trigger', { enum: DEPLOY_TRIGGERS }).notNull(),
+    requestedBy: text('requested_by'),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull(),
+    runningSince: timestamp('running_since', { withTimezone: true }),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    providerRef: text('provider_ref'),
+    url: text('url'),
+    error: text('error'),
+  },
+  (t) => [
+    index('deploys_board_env_state_idx').on(t.boardId, t.environment, t.state),
+    index('deploys_glob_requested_idx').on(t.globId, t.requestedAt),
+    uniqueIndex('deploys_provider_ref_idx').on(t.providerRef),
+    // The queue's invariant, as a backstop to the per-environment lock: one running, one waiting.
+    uniqueIndex('deploys_one_running_idx').on(t.boardId, t.environment).where(sql`${t.state} = 'running'`),
+    uniqueIndex('deploys_one_waiting_idx').on(t.boardId, t.environment).where(sql`${t.state} = 'waiting'`),
+  ],
 );

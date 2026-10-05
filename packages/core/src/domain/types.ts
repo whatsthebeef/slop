@@ -144,6 +144,25 @@ export interface Environment {
   readonly subDefault?: true;
 }
 
+/**
+ * How a board's branch deploys run. Deploy scripts never run on slop's server: slop starts the
+ * provider's job, which runs the repo's `.sstor/deploy.sh <env>`.
+ */
+export type DeployIntegration =
+  | {
+      readonly provider: 'codebuild';
+      readonly region: string;
+      /** The CodeBuild project for environments without their own. */
+      readonly defaultProject: string;
+      /** Per environment, a CodeBuild project overriding the default. */
+      readonly projects: Readonly<Record<string, string>>;
+    }
+  | {
+      readonly provider: 'github_actions';
+      /** The workflow file dispatched for deploys, e.g. `slop-deploy.yml`. */
+      readonly workflow: string;
+    };
+
 export interface Board {
   readonly id: number;
   readonly name: string;
@@ -153,6 +172,10 @@ export interface Board {
   readonly defaultRoutineOwner: string | null;
   readonly environments: readonly Environment[];
   readonly sensitivePaths: readonly string[];
+  /** How branch deploys run; null when the board has none. */
+  readonly deploy: DeployIntegration | null;
+  /** Readiness items slop can't check, ticked by an admin (routines, the routine's repo, the Claude GitHub App). */
+  readonly readinessTicks: Readonly<Partial<Record<'routines' | 'routine_repo' | 'claude_app', boolean>>>;
   /** Increases with every approved change to the board's agent set. */
   readonly agentSetVersion: number;
   /** A run with no slop call or push for this long is failed. */

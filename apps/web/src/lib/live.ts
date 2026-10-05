@@ -4,7 +4,7 @@ import { api, RequestError } from './api';
 import type { GlobView } from './api';
 
 interface Hint {
-  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'board.changed';
+  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'glob.deploys' | 'board.changed';
   readonly globId?: string;
   readonly version?: number;
 }
@@ -12,6 +12,12 @@ interface Hint {
 export type LiveState = 'connecting' | 'live' | 'reconnecting' | 'paused';
 
 export const globsKey = (boardId: number) => ['globs', boardId] as const;
+
+/** The board's deploy indicators and running environments; invalidated by `glob.deploys` hints. */
+export const deploysKey = (boardId: number) => ['deploys', boardId] as const;
+
+/** One glob's deploy history in the glob view. */
+export const globDeploysKey = (globId: string) => ['glob-deploys', globId] as const;
 
 /** One artifact's versions in the glob view; invalidated by `glob.artifacts` hints. */
 export const artifactKey = (globId: string, kind: string, label: string) => ['artifact', globId, kind, label] as const;
@@ -44,6 +50,12 @@ export const useLiveBoard = (boardId: number): LiveState => {
       }
       const id = hint.globId;
       if (id === undefined) return;
+      if (hint.kind === 'glob.deploys') {
+        // Deploys live beside the glob, not on it: refresh the board's indicators and the glob's history.
+        void client.invalidateQueries({ queryKey: deploysKey(boardId) });
+        void client.invalidateQueries({ queryKey: globDeploysKey(id) });
+        return;
+      }
       if (hint.kind === 'glob.deleted') {
         replace(null, id);
         return;
@@ -70,7 +82,13 @@ export const useLiveBoard = (boardId: number): LiveState => {
       next.addEventListener('ready', () => {
         setState('live');
         // Hints may have been missed while disconnected or hidden: reload the board.
-        if (connectedBefore) void client.invalidateQueries({ queryKey: globsKey(boardId) });
+        if (connectedBefore) {
+          void client.invalidateQueries({ queryKey: globsKey(boardId) });
+          // Deploys and readiness live beside the globs, so missed deploy hints need their own refresh.
+          void client.invalidateQueries({ queryKey: deploysKey(boardId) });
+          void client.invalidateQueries({ queryKey: ['glob-deploys'] });
+          void client.invalidateQueries({ queryKey: ['readiness', boardId] });
+        }
         connectedBefore = true;
       });
       next.addEventListener('hint', onHint);

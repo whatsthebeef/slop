@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, GlobService, IntakeService, KnowledgeService, Result } from '@slop/core';
+import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, IntakeService, KnowledgeService, Result } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
 import { CATEGORIES, LABEL_NAMES, LEARNING_TYPES, SLOP_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -19,6 +19,7 @@ export interface McpDeps {
   readonly auth: Auth;
   readonly boards: BoardService;
   readonly globs: GlobService;
+  readonly deploys: DeployService;
   readonly outbox: OutboxRunner;
   readonly knowledge: KnowledgeService;
   readonly artifacts: ArtifactService;
@@ -31,6 +32,18 @@ export interface McpDeps {
 
 const json = (value: unknown): CallToolResult => ({
   content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+});
+
+/** A deploy as agents see it: enough to tell the developer what's deploying, live or failed. */
+const deployView = (d: Deploy) => ({
+  environment: d.environment,
+  sha: d.sha,
+  state: d.state,
+  trigger: d.trigger,
+  requestedAt: d.requestedAt,
+  finishedAt: d.finishedAt,
+  error: d.error,
+  url: d.url,
 });
 
 const reply = <T>(result: Result<T>, map: (value: T) => unknown = (v) => v): CallToolResult =>
@@ -56,7 +69,7 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
   server.registerTool(
     'get_board',
     {
-      description: "A board's settings: repo, base branch, environments, time zone.",
+      description: "A board's settings: repo, base branch, environments, time zone, and its enabled integrations (integrations.deploy: how branch deploys run, or null).",
       inputSchema: { board: z.number().int().describe('Board ID (the number in a glob ID: s1t4 is on board 1)') },
     },
     async ({ board }) =>
@@ -67,6 +80,7 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
         baseBranch: b.baseBranch,
         timeZone: b.timeZone,
         environments: b.environments,
+        integrations: { deploy: b.deploy },
       })),
   );
 
@@ -151,12 +165,18 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'get_glob',
     {
       description:
-        'Everything about a glob: status, version, fields, labels, PR, runs, flags, and its artifacts (the latest version of each plan, implementation plan, postplan, local review and attachment, with version count, commitSha, createdAt and provenance; no content). Routines pass their run ID, which records the run as making progress.',
+        "Everything about a glob: status, version, fields, labels, PR, runs, flags, its artifacts (the latest version of each plan, implementation plan, postplan, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress.",
       inputSchema: { id: z.string(), runId: z.string().optional() },
     },
     async ({ id, runId }) => {
       if (runId !== undefined) await globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
-      return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
+      const view = await globs.get(email, id);
+      if (!view.ok) return reply(view, () => null);
+      const history = await deps.deploys.history(email, id, 5);
+      return reply(view, (v) => ({
+        ...globView(v.glob, v.allowedActions, v.artifacts),
+        deploys: history.ok ? history.value.map(deployView) : [],
+      }));
     },
   );
 

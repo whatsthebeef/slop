@@ -1,12 +1,15 @@
 import { ROLES } from '@slop/core';
-import type { Environment, Role } from '@slop/core';
+import type { DeployIntegration, Environment, Role } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { GroupChip } from '@/components/glob-card';
+import { GlobDialog } from '@/components/glob-dialog';
+import { ReadinessChecklist } from '@/components/readiness';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
-import { api, RequestError } from '@/lib/api';
+import { ACTION_PATHS, api, RequestError } from '@/lib/api';
+import type { GlobView } from '@/lib/api';
 import { useToast } from '@/toast';
 
 const message = (error: unknown) => (error instanceof RequestError ? error.body.message : 'Something went wrong');
@@ -29,6 +32,7 @@ export const SettingsPage = () => {
   const [baseBranch, setBaseBranch] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<Role>('dev');
+  const [deploy, setDeploy] = useState<DeployIntegration | null>(null);
 
   useEffect(() => {
     if (board.data === undefined) return;
@@ -36,6 +40,7 @@ export const SettingsPage = () => {
     setTimeZone(board.data.timeZone);
     setBaseBranch(board.data.baseBranch);
     setRepo(board.data.repo ?? '');
+    setDeploy(board.data.deploy);
   }, [board.data]);
 
   const save = useMutation({
@@ -46,6 +51,7 @@ export const SettingsPage = () => {
         timeZone,
         baseBranch,
         repo: repo.trim() === '' ? null : repo.trim(),
+        deploy,
       });
     },
     onSuccess: () => {
@@ -124,6 +130,8 @@ export const SettingsPage = () => {
         )}
       </section>
 
+      <ReadinessChecklist board={board.data} />
+
       <section className='grid gap-3'>
         <h2 className='text-sm font-semibold'>Board</h2>
         <Label>
@@ -196,6 +204,12 @@ export const SettingsPage = () => {
             )}
           </div>
         ))}
+        <DeploySettings
+          deploy={deploy}
+          environments={envs.filter((e) => e.allowBranchDeploy && e.name.trim() !== '').map((e) => e.name)}
+          disabled={!admin}
+          onChange={setDeploy}
+        />
         {admin && (
           <div className='flex gap-2'>
             <Button variant='outline' size='sm' onClick={() => setEnvs([...envs, { name: '', allowBranchDeploy: true }])}>
@@ -252,6 +266,84 @@ export const SettingsPage = () => {
   );
 };
 
+const CODEBUILD_DEFAULT: DeployIntegration = { provider: 'codebuild', region: 'us-east-1', defaultProject: '', projects: {} };
+const GITHUB_DEFAULT: DeployIntegration = { provider: 'github_actions', workflow: 'slop-deploy.yml' };
+
+/**
+ * How branch deploys run: none, CodeBuild (a project per environment, with a default) or GitHub
+ * Actions (a workflow file). Either runs the repo's `.sstor/deploy.sh <env>`.
+ */
+const DeploySettings = ({
+  deploy,
+  environments,
+  disabled,
+  onChange,
+}: {
+  deploy: DeployIntegration | null;
+  environments: readonly string[];
+  disabled: boolean;
+  onChange: (deploy: DeployIntegration | null) => void;
+}) => (
+  <div className='grid gap-2' data-testid='deploy-settings'>
+    <h3 className='text-xs font-semibold text-muted-foreground'>Branch deploys</h3>
+    <Label>
+      Deploys run with
+      <Select
+        value={deploy?.provider ?? ''}
+        disabled={disabled}
+        onChange={(e) =>
+          onChange(e.target.value === 'codebuild' ? CODEBUILD_DEFAULT : e.target.value === 'github_actions' ? GITHUB_DEFAULT : null)
+        }
+      >
+        <option value=''>No deploys</option>
+        <option value='codebuild'>AWS CodeBuild</option>
+        <option value='github_actions'>GitHub Actions</option>
+      </Select>
+    </Label>
+    {deploy?.provider === 'codebuild' && (
+      <>
+        <div className='grid grid-cols-2 gap-3'>
+          <Label>
+            Region
+            <Input value={deploy.region} disabled={disabled} onChange={(e) => onChange({ ...deploy, region: e.target.value })} />
+          </Label>
+          <Label>
+            Default project
+            <Input
+              value={deploy.defaultProject}
+              disabled={disabled}
+              onChange={(e) => onChange({ ...deploy, defaultProject: e.target.value })}
+            />
+          </Label>
+        </div>
+        {environments.map((env) => (
+          <Label key={env}>
+            Project for {env} (blank: the default)
+            <Input
+              value={deploy.projects[env] ?? ''}
+              disabled={disabled}
+              onChange={(e) => {
+                const rest = Object.fromEntries(Object.entries(deploy.projects).filter(([name]) => name !== env));
+                onChange({ ...deploy, projects: e.target.value.trim() === '' ? rest : { ...rest, [env]: e.target.value } });
+              }}
+            />
+          </Label>
+        ))}
+        <p className='text-xs text-muted-foreground'>
+          Each push to a glob with one of these environments starts the project at exactly that commit; it runs{' '}
+          <code>.sstor/deploy.sh &lt;env&gt;</code>. Results come back through EventBridge.
+        </p>
+      </>
+    )}
+    {deploy?.provider === 'github_actions' && (
+      <Label>
+        Workflow file
+        <Input value={deploy.workflow} disabled={disabled} onChange={(e) => onChange({ ...deploy, workflow: e.target.value })} />
+      </Label>
+    )}
+  </div>
+);
+
 export const SignedOffPage = () => {
   const boardId = Number(useParams().boardId);
   const pages = useInfiniteQuery({
@@ -261,6 +353,25 @@ export const SignedOffPage = () => {
     getNextPageParam: (last) => last.next,
   });
   const globs = pages.data?.pages.flatMap((p) => p.globs) ?? [];
+  const client = useQueryClient();
+  const toast = useToast();
+  const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
+  const [open, setOpen] = useState<GlobView | null>(null);
+
+  /** Runs a change from the glob view; the view shows the glob as it is afterwards. */
+  const change = async (work: () => Promise<unknown>): Promise<boolean> => {
+    if (open === null) return false;
+    try {
+      await work();
+      setOpen(await api.glob(open.id));
+      void client.invalidateQueries({ queryKey: ['signed-off', boardId] });
+      return true;
+    } catch (error) {
+      toast(error instanceof RequestError ? error.body.message : 'Something went wrong');
+      return false;
+    }
+  };
+
   return (
     <main className='mx-auto grid w-full max-w-[63rem] gap-4 p-6'>
       <header className='flex items-center gap-3'>
@@ -271,19 +382,51 @@ export const SignedOffPage = () => {
       </header>
       {globs.length === 0 && !pages.isLoading && <p className='text-sm text-muted-foreground'>Nothing signed off yet.</p>}
       {globs.map((g) => (
-        <div key={g.id} className='flex items-center gap-2 rounded-md border bg-card p-2 text-sm'>
+        <button
+          key={g.id}
+          type='button'
+          // The list item has no actions; the glob view (fetched fresh) has them.
+          onClick={() => void api.glob(g.id).then(setOpen, () => toast(`Couldn't open ${g.id}`))}
+          className='flex items-center gap-2 rounded-md border bg-card p-2 text-left text-sm hover:bg-muted'
+          data-testid={`signed-off-${g.id}`}
+        >
           <span className='font-mono text-xs text-muted-foreground'>{g.id}</span>
           <span className='flex-1'>{g.title}</span>
           {g.group !== null && <GroupChip name={g.group} />}
           <span className='text-xs text-muted-foreground'>
             {g.signedOffAt === null ? '' : new Date(g.signedOffAt).toLocaleDateString()}
           </span>
-        </div>
+        </button>
       ))}
       {pages.hasNextPage && (
         <Button variant='outline' onClick={() => void pages.fetchNextPage()}>
           Load more
         </Button>
+      )}
+      {open !== null && board.data !== undefined && (
+        <GlobDialog
+          board={board.data}
+          glob={open}
+          initialArtifact={null}
+          onClose={() => setOpen(null)}
+          onUpdate={async (changes) => {
+            await change(() => api.updateGlob(open.id, open.version, changes));
+          }}
+          onAction={(action) => {
+            const path = ACTION_PATHS[action];
+            return path === null ? Promise.resolve(false) : change(() => api.action(open.id, path, open.version));
+          }}
+          onReviewLabel={(label, command) => change(() => api.reviewLabel(open.id, label, command, open.version))}
+          onDelete={async () => {
+            try {
+              await api.deleteGlob(open.id, open.version);
+              setOpen(null);
+              void client.invalidateQueries({ queryKey: ['signed-off', boardId] });
+            } catch (error) {
+              toast(error instanceof RequestError ? error.body.message : 'Something went wrong');
+            }
+          }}
+        />
       )}
     </main>
   );

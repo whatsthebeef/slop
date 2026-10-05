@@ -113,7 +113,9 @@ const handle = async (
         return true;
       }
       const runId = SLOP_RUN.exec(push.head_commit?.message ?? '')?.[1] ?? null;
-      await apply(glob, (g, ctx) => machine.commitPushed(g, { sha: push.after, runId }, ctx));
+      await apply(glob, (g, ctx) =>
+        machine.commitPushed(g, { sha: push.after, runId, message: push.head_commit?.message ?? null }, ctx),
+      );
       return true;
     }
 

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { ArtifactService, BoardService, GlobService, IntakeService, KnowledgeService } from '@slop/core';
+import { ArtifactService, BoardService, DeployService, GlobService, IntakeService, KnowledgeService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -19,11 +19,16 @@ import { githubDeliveryHandler } from './github/events.js';
 import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
+import { CodeBuildDeployer, Deployers } from './deployer.js';
+import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
+import { mountDeploys } from './http/deploys.js';
+import { mountReadiness } from './http/readiness.js';
 import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
 import { FileRoutines } from './routines.js';
 import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
+import { DeployWatch } from './jobs/deploy-watch.js';
 
 const config = loadConfig();
 await runMigrations(config.DATABASE_URL, config.MIGRATIONS_DIR);
@@ -51,7 +56,30 @@ const githubCredentials = new AppCredentialsStore(config.GITHUB_APP_FILE);
 await githubCredentials.load();
 const github = new GitHub(githubCredentials);
 const boardOf = (id: number) => store.transaction((tx) => tx.getBoard(id));
-const outbox = new OutboxRunner(db, { globs }, codeHostExecutors(github, boardOf, routines), logError);
+// Signs agent-set download links, the board sign-in state and deploy callbacks.
+const links = new SignedLinks(config.SIGNING_SECRET);
+const deploys = new DeployService({
+  store,
+  notifier: hub,
+  clock: { now: () => new Date().toISOString() },
+  newDeployId: () => `dep_${randomUUID()}`,
+});
+
+const outbox = new OutboxRunner(
+  db,
+  { globs },
+  {
+    ...codeHostExecutors(github, boardOf, routines),
+    ...deployExecutors(
+      deploys,
+      new Deployers({ codebuild: new CodeBuildDeployer() }),
+      boardOf,
+      deployCallbackUrl(links, config.WEBHOOK_BASE_URL ?? config.PUBLIC_URL),
+      logError,
+    ),
+  },
+  logError,
+);
 
 const catalog = new FsCatalog(config.CATALOG_DIR);
 const clock = { now: () => new Date().toISOString() };
@@ -64,8 +92,6 @@ const intake = new IntakeService({
   ),
 });
 
-// Signs agent-set download links and the board sign-in state.
-const links = new SignedLinks(config.SIGNING_SECRET);
 if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
   console.warn('[auth] SIGNING_SECRET is not set: sign-ins and download links in flight fail across restarts and instances');
 }
@@ -82,6 +108,8 @@ const app = createApp({
     if (!forked.ok) logError('board created', `Agent set fork failed for board ${boardId}: ${forked.error.message}`);
   },
 });
+mountDeploys(app, { deploys, boards, links, awsWebhookKey: config.AWS_WEBHOOK_KEY, log: logError });
+mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
 mountKnowledge(app, { knowledge, artifacts, catalog, intake, boards, host: github });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
@@ -106,6 +134,7 @@ mountMcp(app, {
   auth,
   boards,
   globs,
+  deploys,
   outbox,
   knowledge,
   artifacts,
@@ -143,6 +172,8 @@ if (config.WEB_DIST !== undefined) {
 outbox.start();
 const runWatch = new RunWatch(store, globs, logError);
 runWatch.start();
+const deployWatch = new DeployWatch(deploys, logError);
+deployWatch.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -150,6 +181,7 @@ const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
 const shutdown = () => {
   outbox.stop();
   runWatch.stop();
+  deployWatch.stop();
   server.close();
   void database.close();
 };

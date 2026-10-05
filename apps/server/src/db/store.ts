@@ -1,5 +1,5 @@
-import type { Artifact, ArtifactSummary, Board, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, LEARNING_TYPES } from '@slop/core';
+import type { Artifact, ArtifactSummary, Board, Deploy, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, DEPLOY_STATES, DEPLOY_TRIGGERS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, LEARNING_TYPES } from '@slop/core';
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -44,6 +44,8 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   runNoProgressHours: row.runNoProgressHours,
   runReadyHours: row.runReadyHours,
   subMaxChangedLines: row.subMaxChangedLines,
+  deploy: row.deploy,
+  readinessTicks: row.readinessTicks,
   version: row.version,
 });
 
@@ -53,6 +55,24 @@ const oneOf = <T extends string>(values: readonly T[], value: string): T => {
   if (found === undefined) throw new Error(`Unexpected stored value: ${value}`);
   return found;
 };
+
+const toDeploy = (row: typeof schema.deploys.$inferSelect): Deploy => ({
+  ...row,
+  state: oneOf(DEPLOY_STATES, row.state),
+  trigger: oneOf(DEPLOY_TRIGGERS, row.trigger),
+  requestedAt: row.requestedAt.toISOString(),
+  runningSince: row.runningSince?.toISOString() ?? null,
+  startedAt: row.startedAt?.toISOString() ?? null,
+  finishedAt: row.finishedAt?.toISOString() ?? null,
+});
+
+const deployRow = (d: Deploy): typeof schema.deploys.$inferInsert => ({
+  ...d,
+  requestedAt: new Date(d.requestedAt),
+  runningSince: d.runningSince === null ? null : new Date(d.runningSince),
+  startedAt: d.startedAt === null ? null : new Date(d.startedAt),
+  finishedAt: d.finishedAt === null ? null : new Date(d.finishedAt),
+});
 
 const toKnowledge = (row: typeof schema.knowledge.$inferSelect): KnowledgeDoc => ({
   ...row,
@@ -183,6 +203,8 @@ export class PgStore implements Store {
             agentSetVersion: board.agentSetVersion,
             runNoProgressHours: board.runNoProgressHours,
             runReadyHours: board.runReadyHours,
+            deploy: board.deploy,
+            readinessTicks: board.readinessTicks,
             subMaxChangedLines: board.subMaxChangedLines,
             version: board.version,
           })
@@ -384,6 +406,50 @@ export class PgStore implements Store {
           .where(and(eq(schema.kbProposals.id, item.id), eq(schema.kbProposals.version, expectedVersion)))
           .returning({ id: schema.kbProposals.id });
         return rows.length === 1;
+      },
+
+      getDeploy: async (id) => {
+        const [row] = await t.select().from(schema.deploys).where(eq(schema.deploys.id, id));
+        return row === undefined ? null : toDeploy(row);
+      },
+      saveDeploys: async (deploys) => {
+        // Sequential: a transaction holds a single connection.
+        for (const d of deploys) {
+          const row = deployRow(d);
+          await t.insert(schema.deploys).values(row).onConflictDoUpdate({ target: schema.deploys.id, set: row });
+        }
+      },
+      listDeploys: async (boardId, filter) => {
+        const conditions = [eq(schema.deploys.boardId, boardId)];
+        if (filter.environment !== undefined) conditions.push(eq(schema.deploys.environment, filter.environment));
+        if (filter.states !== undefined) conditions.push(inArray(schema.deploys.state, [...filter.states]));
+        if (filter.globIds !== undefined) {
+          if (filter.globIds.length === 0) return [];
+          conditions.push(inArray(schema.deploys.globId, [...filter.globIds]));
+        }
+        const query = t
+          .select()
+          .from(schema.deploys)
+          .where(and(...conditions))
+          .orderBy(desc(schema.deploys.requestedAt), desc(schema.deploys.id));
+        const rows = filter.limit === undefined ? await query : await query.limit(filter.limit);
+        return rows.map(toDeploy);
+      },
+      latestDeploys: async (boardId, globIds) => {
+        if (globIds.length === 0) return [];
+        const rows = await t
+          .selectDistinctOn([schema.deploys.globId])
+          .from(schema.deploys)
+          .where(and(eq(schema.deploys.boardId, boardId), inArray(schema.deploys.globId, [...globIds])))
+          .orderBy(schema.deploys.globId, desc(schema.deploys.requestedAt), desc(schema.deploys.id));
+        return rows.map(toDeploy);
+      },
+      lockDeployQueue: async (boardId, environment) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`deploys:${String(boardId)}:${environment}`}))`);
+      },
+      findDeployByProviderRef: async (providerRef) => {
+        const [row] = await t.select().from(schema.deploys).where(eq(schema.deploys.providerRef, providerRef));
+        return row === undefined ? null : toDeploy(row);
       },
 
       appendEvents: async (events) => {

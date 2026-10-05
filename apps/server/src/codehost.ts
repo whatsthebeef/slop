@@ -59,6 +59,8 @@ export interface CodeHost {
   mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState }>;
   /** The latest completed check run named `name` on commit `sha`, or null if none has completed yet. */
   completedCheckRun(repo: Repo, sha: string, name: string): Promise<{ sha: string; passed: boolean } | null>;
+  /** A file's text on a branch, or null when the file (or branch) doesn't exist. */
+  readFile(repo: Repo, ref: string, path: string): Promise<string | null>;
   /** Marks a draft PR ready for review. */
   markReady(repo: Repo, prNumber: number): Promise<void>;
   /** Lines changed and files touched between the base branch and `sha`. */

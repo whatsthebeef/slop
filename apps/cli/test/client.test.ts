@@ -156,3 +156,46 @@ describe('SlopClient.call', () => {
     await expect(client(url).call('whoami')).rejects.toThrow(`could not reach ${url}/mcp`);
   });
 });
+
+describe('SlopClient.rest', () => {
+  let stub: StubServer | undefined;
+  const seen: { method?: string; url?: string; auth?: string; body: string }[] = [];
+
+  afterEach(async () => {
+    seen.length = 0;
+    await stub?.close();
+    stub = undefined;
+  });
+
+  async function serve(statuses: number[], reply: object): Promise<SlopClient> {
+    stub = await startStubServer((request, body, response) => {
+      seen.push({ method: request.method, url: request.url, auth: request.headers.authorization, body });
+      sendJson(response, statuses[seen.length - 1] ?? 200, reply);
+    });
+    const tokens = ['t1', 't2'];
+    let n = 0;
+    return new SlopClient({
+      slopUrl: stub.url,
+      fetch: (input, init) => fetch(input, init),
+      accessToken: () => Promise.resolve(tokens[n++] ?? 'none'),
+    });
+  }
+
+  it('sends the method, path, body and token, and returns the JSON', async () => {
+    const client = await serve([200], { id: 15, version: 4 });
+    expect(await client.rest('PATCH', '/api/boards/15/settings', { version: 3 })).toEqual({ id: 15, version: 4 });
+    expect(seen).toEqual([{ method: 'PATCH', url: '/api/boards/15/settings', auth: 'Bearer t1', body: '{"version":3}' }]);
+  });
+
+  it('retries once with a fresh token after a 401', async () => {
+    const client = await serve([401, 200], { ok: true });
+    expect(await client.rest('GET', '/api/me')).toEqual({ ok: true });
+    expect(seen.map((s) => s.auth)).toEqual(['Bearer t1', 'Bearer t2']);
+  });
+
+  it("throws slop's message on failure and refuses paths outside /api", async () => {
+    const client = await serve([403], { code: 'forbidden', message: 'Only admins can change settings' });
+    await expect(client.rest('PATCH', '/api/boards/1/settings', {})).rejects.toThrow(/403.*Only admins/);
+    await expect(client.rest('GET', '/mcp')).rejects.toBeInstanceOf(SlopError);
+  });
+});

@@ -69,6 +69,8 @@ function expectArgs(args: readonly string[], min: number, max: number, usage: st
 }
 
 const CALL_USAGE = "call <tool> ['<json arguments>']";
+const API_USAGE = "api <GET|POST|PUT|PATCH|DELETE> </api/...> ['<json body>']";
+const API_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
 const INIT_USAGE = 'init [board]';
 
 const whoamiResultSchema = z.object({ email: z.string() });
@@ -120,6 +122,20 @@ const COMMANDS: Readonly<Record<string, Command>> = {
       const [tool, json] = args;
       if (tool === undefined) throw new UsageError(`usage: slop ${CALL_USAGE}`);
       const value = await clientFor(context).call(tool, parseToolArguments(json));
+      context.stdout(`${JSON.stringify(value)}\n`);
+    },
+  },
+  api: {
+    usage: API_USAGE,
+    summary: "Call slop's REST API (the board's API, e.g. board settings) and print its JSON",
+    run: async (args, context) => {
+      expectArgs(args, 2, 3, API_USAGE);
+      const [method, path, json] = args;
+      const verb = API_METHODS.find((m) => m === method?.toUpperCase());
+      if (verb === undefined || path === undefined) throw new UsageError(`usage: slop ${API_USAGE}`);
+      const body = json === undefined ? undefined : parseJsonOrUndefined(json);
+      if (json !== undefined && body === undefined) throw new UsageError('the body must be JSON');
+      const value = await clientFor(context).rest(verb, path, body);
       context.stdout(`${JSON.stringify(value)}\n`);
     },
   },
