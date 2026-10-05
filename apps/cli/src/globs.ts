@@ -25,7 +25,7 @@ export const PICK_UP_USAGE = 'pick-up <id> [--take-over] [--env <name>] [--json]
 export const NEW_USAGE =
   'new [--same|--sub|--super] [--feature|--task|--bug] [--routine] [--env <name>] [--json] <prompt...>';
 export const READY_USAGE = 'ready [<id>] [--json]';
-export const MERGE_USAGE = 'merge [<id>] [--json]';
+export const MERGE_USAGE = 'merge [<id>] [--continue] [--json]';
 
 /** How long pick-up waits for the glob's branch. */
 export const PROVISION_TIMEOUT_MS = 60_000;
@@ -427,34 +427,46 @@ function isVersionConflict(error: unknown): boolean {
 /**
  * Calls `merge` with the version read. A webhook can change the glob between the read and the
  * merge, so a version conflict is retried once with a fresh read; the write stays conditional.
+ * `continueAfter` is a super's Merge and continue.
  */
-async function mergeAt(deps: GlobDeps, glob: GlobView): Promise<GlobView> {
+async function mergeAt(deps: GlobDeps, glob: GlobView, continueAfter: boolean): Promise<GlobView> {
   const attempt = async (version: number): Promise<GlobView> =>
-    parseGlob(await deps.client.call('merge', { id: glob.id, version }), 'merge');
+    parseGlob(
+      await deps.client.call('merge', { id: glob.id, version, ...(continueAfter ? { continue: true } : {}) }),
+      'merge',
+    );
   try {
     return await attempt(glob.version);
   } catch (error) {
     if (!isVersionConflict(error)) throw error;
     const fresh = await getGlob(deps, glob.id);
-    return MERGED_STATUSES.has(fresh.status) ? fresh : attempt(fresh.version);
+    // A continued merge returns the glob to in_progress, so only a PR still open is retried.
+    const done = continueAfter ? fresh.status !== 'pr_open' : MERGED_STATUSES.has(fresh.status);
+    return done ? fresh : attempt(fresh.version);
   }
 }
 
-/** `slop merge [<id>]`: merge through slop, as the glob's Merge button does. */
+/**
+ * `slop merge [<id>] [--continue]`: merge through slop, as the glob's Merge button does; with
+ * --continue, a super's Merge and continue (it stays in progress and gets a new PR on the next push).
+ */
 export async function mergeCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
-  const { flags, positionals } = parseArgs(args, ['--json'], MERGE_USAGE);
+  const { flags, positionals } = parseArgs(args, ['--json', '--continue'], MERGE_USAGE);
   const id = await globIdOrBranch(deps, positionals, 'merge', MERGE_USAGE);
+  const continueAfter = flags.has('--continue');
   const glob = await getGlob(deps, id);
-  const merged = MERGED_STATUSES.has(glob.status) ? glob : await mergeAt(deps, glob);
+  const merged = MERGED_STATUSES.has(glob.status) ? glob : await mergeAt(deps, glob, continueAfter);
   if (flags.has('--json')) {
     printJson(deps, summary(merged));
     return;
   }
   const note =
     merged.status === 'merging'
-      ? 'slop is updating the branch, rerunning checks and squash-merging'
+      ? `slop is updating the branch, rerunning checks and squash-merging${continueAfter ? '; the glob then stays in progress' : ''}`
       : MERGED_STATUSES.has(merged.status)
         ? 'merged'
-        : 'see the glob view';
+        : continueAfter && merged.status === 'in_progress'
+          ? 'merged and continued; the next push opens a new draft PR'
+          : 'see the glob view';
   deps.stdout(`${id}: ${merged.status} (${note})\n`);
 }

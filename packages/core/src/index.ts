@@ -8,7 +8,7 @@ export * from './domain/kb.js';
 export * from './domain/sub-gate.js';
 export * from './domain/attention.js';
 export * as machine from './domain/machine.js';
-export type { Action, Context, FieldChanges, LabelCommand, Transition } from './domain/machine.js';
+export type { Action, ActionFacts, Context, FieldChanges, LabelCommand, Transition } from './domain/machine.js';
 export * from './ports.js';
 export * from './app/glob-service.js';
 export * from './app/board-service.js';

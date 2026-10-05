@@ -59,6 +59,8 @@ export type Effect =
     }
   | { readonly kind: 'squash_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
   | { readonly kind: 'reopen_pr'; readonly globId: string; readonly generation: number }
+  /** Open a fresh draft PR for the glob's branch (after Merge and continue, on the next push). */
+  | { readonly kind: 'open_pr'; readonly globId: string; readonly generation: number }
   | { readonly kind: 'close_pr'; readonly globId: string; readonly generation: number; readonly prNumber: number | null }
   | { readonly kind: 'delete_branch'; readonly globId: string; readonly generation: number }
   /** Runs after the glob is gone, so it carries what the clean-up needs. */

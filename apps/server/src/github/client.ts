@@ -107,20 +107,36 @@ export class GitHub implements CodeHost {
       }
     }
 
+    const pr = await this.openDraftPr(repo, glob);
+    // The start commit means there is always something to merge.
+    if (pr === null) throw new Error(`GitHub refused a draft PR for ${glob.id}`);
+    return { branch: glob.id, pr };
+  }
+
+  async openDraftPr(repo: Repo, glob: Glob): Promise<{ number: number; headSha: string } | null> {
+    const gh = await this.octokit(repo);
     let pr = await this.openPr(repo, glob.id);
     if (pr === null) {
-      const { data } = await gh.request('POST /repos/{owner}/{repo}/pulls', {
-        ...r,
-        title: `${glob.id}: ${glob.title}`,
-        head: glob.id,
-        base: repo.base,
-        draft: true,
-        body: this.prBody(glob),
-      });
-      pr = { number: data.number, headSha: data.head.sha };
+      try {
+        const { data } = await gh.request('POST /repos/{owner}/{repo}/pulls', {
+          owner: repo.owner,
+          repo: repo.name,
+          title: `${glob.id}: ${glob.title}`,
+          head: glob.id,
+          base: repo.base,
+          draft: true,
+          body: this.prBody(glob),
+        });
+        pr = { number: data.number, headSha: data.head.sha };
+      } catch (error) {
+        if (!isStatus(error, 422)) throw error;
+        // A concurrent attempt opened it first, or "No commits between": nothing to merge yet.
+        pr = await this.openPr(repo, glob.id);
+        if (pr === null) return null;
+      }
     }
     await this.syncLabels(repo, glob, pr.number);
-    return { branch: glob.id, pr: { number: pr.number, headSha: pr.headSha } };
+    return pr;
   }
 
   async syncLabels(repo: Repo, glob: Glob, prNumber: number): Promise<void> {

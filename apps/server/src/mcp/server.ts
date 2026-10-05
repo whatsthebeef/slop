@@ -268,11 +268,15 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'merge',
     {
       description:
-        "Merge a same or super whose PR is ready and whose required checks passed on the current head, as the glob's Merge button does: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. Pass the version you read.",
-      inputSchema: { id: z.string(), version: z.number().int() },
+        "Merge a same or super whose PR is ready and whose required checks passed on the current head, as the glob's Merge button does: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. With continue (supers, latest postplan at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Pass the version you read.",
+      inputSchema: {
+        id: z.string(),
+        version: z.number().int(),
+        continue: z.boolean().optional().describe('Supers: Merge and continue (a checkpoint merge; the glob stays in Doing)'),
+      },
     },
-    async ({ id, version }) => {
-      const result = await globs.merge(email, id, version);
+    async ({ id, version, continue: continueAfter }) => {
+      const result = await globs.merge(email, id, version, continueAfter ?? false);
       if (!result.ok) return reply(result);
       // Run the squash_merge job now and answer with the glob as it then is, as the REST action does.
       await deps.outbox.drain(id);

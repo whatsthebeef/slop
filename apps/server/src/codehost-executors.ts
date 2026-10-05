@@ -77,6 +77,19 @@ export const codeHostExecutors = (
       return 'done';
     },
 
+    open_pr: async (_effect, glob, { globs }) => {
+      // After Merge and continue: only while the glob is still in progress without a PR.
+      if (glob === null || glob.pr !== null || glob.status !== 'in_progress') return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null || !host.configured) return 'dropped';
+      const pr = await host.openDraftPr(repo, glob);
+      // Nothing to merge yet: the next push tries again.
+      if (pr === null) return 'done';
+      // The `opened` webhook may have recorded it first; recording it again is a no-op.
+      await globs.applyEvent(glob.id, (g, ctx) => machine.prOpened(g, pr, ctx));
+      return 'done';
+    },
+
     refresh_checks: async (_effect, glob, { globs }) => {
       if (glob?.pr == null) return 'dropped';
       const repo = await repoFor(glob.boardId);
@@ -94,11 +107,12 @@ export const codeHostExecutors = (
       if (effect.kind !== 'squash_merge' || glob?.pr == null) return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
-      const result = await host.squashMerge(repo, glob, glob.pr.number, effect.sha);
+      const prNumber = glob.pr.number;
+      const result = await host.squashMerge(repo, glob, prNumber, effect.sha);
       switch (result.outcome) {
         case 'merged':
-          // Slop's own merge response; the `closed` webhook that follows is a no-op (row 15).
-          await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: result.sha }, ctx));
+          // Slop's own merge response; the `closed` webhook that follows is a no-op (rows 15 and 31).
+          await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: result.sha, number: prNumber }, ctx));
           break;
         case 'updating':
           // The update pushes a new head; its checks resume the merge.

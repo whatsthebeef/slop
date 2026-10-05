@@ -142,6 +142,61 @@ describe('services', () => {
     expect(store.state.outbox.at(-1)).toMatchObject({ kind: 'squash_merge', globId: glob.id, sha: 'abc' });
   });
 
+  const putPostplan = (globId: string, commitSha: string) =>
+    store.transaction((tx) =>
+      tx.insertArtifact({
+        globId,
+        kind: 'postplan',
+        label: '',
+        content: '# postplan',
+        link: null,
+        commitSha,
+        provenance: { by: 'sessionator', actor: DEV, runId: null, agentSetVersion: null },
+        createdAt: '2026-10-05T12:00:00.000Z',
+      }),
+    );
+
+  it('merge and continue (row 31) needs the latest postplan at the head', async () => {
+    const glob = unwrap(await globs.create(DEV, input({ type: 'super', category: 'feature' })));
+    const head = 'abcdef0123456789';
+    unwrap(await globs.applyEvent(glob.id, (g, ctx) => machine.prReadyForReview(g, { number: 7, headSha: head }, ctx)));
+    const passing = unwrap(
+      await globs.applyEvent(glob.id, (g, ctx) => machine.checksCompleted(g, { sha: head, passed: true }, ctx)),
+    );
+    await putPostplan(glob.id, 'fff0000');
+    expect(unwrap(await globs.get(DEV, glob.id)).allowedActions).not.toContain('merge_continue');
+    const behind = await globs.merge(DEV, glob.id, passing.version, true);
+    expect(!behind.ok && behind.error.code).toBe('invalid_transition');
+
+    await putPostplan(glob.id, head.slice(0, 7));
+    expect(unwrap(await globs.get(DEV, glob.id)).allowedActions).toContain('merge_continue');
+    const merging = unwrap(await globs.merge(DEV, glob.id, passing.version, true));
+    expect(merging).toMatchObject({ status: 'merging', mergeMode: 'continue' });
+    const continued = unwrap(
+      await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: 'm1', number: 7 }, ctx)),
+    );
+    expect(continued).toMatchObject({ status: 'in_progress', pr: null, labels: {} });
+    expect(continued.prs.map((p) => p.number)).toEqual([7]);
+  });
+
+  it("mark_ready from the board (supers) needs the latest postplan at the draft PR's head", async () => {
+    const glob = unwrap(await globs.create(DEV, input({ type: 'super', category: 'feature' })));
+    const head = 'abcdef0123456789';
+    const drafted = unwrap(
+      await globs.applyEvent(glob.id, (g, ctx) =>
+        machine.provisioned(g, { branch: g.id, pr: { number: 7, headSha: head } }, ctx),
+      ),
+    );
+    expect(unwrap(await globs.get(DEV, glob.id)).allowedActions).not.toContain('mark_ready');
+    const without = await globs.requestReadyFromBoard(DEV, glob.id, drafted.version);
+    expect(!without.ok && without.error.message).toBe(machine.POSTPLAN_NOT_AT_HEAD);
+
+    await putPostplan(glob.id, head);
+    expect(unwrap(await globs.get(DEV, glob.id)).allowedActions).toContain('mark_ready');
+    unwrap(await globs.requestReadyFromBoard(DEV, glob.id, drafted.version));
+    expect(store.state.outbox.at(-1)).toMatchObject({ kind: 'mark_pr_ready', globId: glob.id });
+  });
+
   it('delete removes the glob and its events and queues the clean-up', async () => {
     const glob = unwrap(await globs.create(DEV, input()));
     unwrap(await globs.delete(PO, glob.id, 1));

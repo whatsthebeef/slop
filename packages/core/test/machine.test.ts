@@ -694,3 +694,131 @@ describe('runs', () => {
     expect(t.glob.pr?.headSha).toBe('ccc');
   });
 });
+
+describe('supers: Merge and continue (row 31) and Ready for review on the board', () => {
+  const HEAD = 'bbbbbbb1234567890';
+  const atHead = { postplanSha: HEAD.slice(0, 7) };
+  const superReady = glob({
+    type: 'super',
+    status: 'pr_open',
+    implementer: dev.email,
+    pr: { number: 7, state: 'ready', headSha: HEAD },
+    headChecks: { sha: HEAD, state: 'passed' },
+  });
+
+  it('offers merge_continue only to supers with the latest postplan at the head', () => {
+    expect(m.allowedActions(superReady, dev, atHead)).toEqual(expect.arrayContaining(['merge', 'merge_continue']));
+    expect(m.allowedActions(superReady, dev, { postplanSha: HEAD })).toContain('merge_continue');
+    expect(m.allowedActions(superReady, dev, { postplanSha: 'ccccccc' })).not.toContain('merge_continue');
+    expect(m.allowedActions(superReady, dev, { postplanSha: null })).not.toContain('merge_continue');
+    expect(m.allowedActions(superReady, dev)).not.toContain('merge_continue');
+    // Too short to identify a commit.
+    expect(m.allowedActions(superReady, dev, { postplanSha: 'bbb' })).not.toContain('merge_continue');
+    const same = { ...superReady, type: 'same' as const };
+    expect(m.allowedActions(same, dev, atHead)).toContain('merge');
+    expect(m.allowedActions(same, dev, atHead)).not.toContain('merge_continue');
+    // The same conditions as merge: checks passed on the current head.
+    const pending = { ...superReady, headChecks: null };
+    expect(m.allowedActions(pending, dev, atHead)).not.toContain('merge_continue');
+  });
+
+  it('merge_continue goes to merging in continue mode; it needs a super and the postplan at the head', () => {
+    const t = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead }));
+    expect(t.glob.status).toBe('merging');
+    expect(t.glob.mergeMode).toBe('continue');
+    expect(t.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: HEAD }]);
+    expect(errorCode(m.requestMerge(superReady, ctx(), { continue: true, facts: { postplanSha: 'ccccccc' } }))).toBe(
+      'invalid_transition',
+    );
+    const same = { ...superReady, type: 'same' as const };
+    expect(errorCode(m.requestMerge(same, ctx(), { continue: true, facts: atHead }))).toBe('invalid_transition');
+  });
+
+  it('the observed continue merge returns to in_progress with the PR in its history and no labels', () => {
+    const merging = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead })).glob;
+    const t = value(m.merged(merging, { sha: 'm1', number: 7 }, ctx(null)));
+    expect(t.glob.status).toBe('in_progress');
+    expect(t.glob.labels).toEqual({});
+    expect(t.glob.prs).toEqual([{ number: 7, mergeSha: 'm1', mergedAt: NOW }]);
+    expect(t.glob.pr).toBeNull();
+    expect(t.glob.headChecks).toBeNull();
+    expect(t.glob.mergeMode).toBeNull();
+    expect(t.glob.implementer).toBe(dev.email);
+    expect(t.glob.doingSince).toBe(merging.doingSince);
+    expect(t.events.map((e) => e.type)).toEqual(['Merged', 'StatusChanged']);
+
+    // The second observation (merged webhook after slop's own response, or the reverse) is a no-op.
+    const again = value(m.merged(t.glob, { sha: 'm1', number: 7 }, ctx(null)));
+    expect(again.changed).toBe(false);
+    expect(again.glob.status).toBe('in_progress');
+  });
+
+  it('the next push opens a fresh draft PR, which is then recorded once', () => {
+    const merging = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead })).glob;
+    const continued = value(m.merged(merging, { sha: 'm1', number: 7 }, ctx(null))).glob;
+    const pushed = value(m.commitPushed(continued, { sha: 'ddd', runId: null }, ctx(null)));
+    expect(pushed.effects).toEqual([{ kind: 'open_pr', globId: 's1t1', generation: 1 }]);
+    const opened = value(m.prOpened(pushed.glob, { number: 8, headSha: 'ddd' }, ctx(null)));
+    expect(opened.glob.pr).toEqual({ number: 8, state: 'draft', headSha: 'ddd' });
+    expect(value(m.prOpened(opened.glob, { number: 8, headSha: 'ddd' }, ctx(null))).changed).toBe(false);
+    // Once it has a PR, pushes don't open another.
+    expect(effectKinds(value(m.commitPushed(opened.glob, { sha: 'eee', runId: null }, ctx(null))))).toEqual([]);
+    // Neither do pushes while provisioning is still under way.
+    const provisioning = glob({ type: 'super', status: 'in_progress', pr: null, provisioning: 'pending' });
+    expect(effectKinds(value(m.commitPushed(provisioning, { sha: 'fff', runId: null }, ctx(null))))).toEqual([]);
+  });
+
+  it('the final Merge still moves a super to reviewing with FR, CR and QA', () => {
+    const continued = { ...superReady, prs: [{ number: 5, mergeSha: 'm0', mergedAt: NOW }] };
+    const merging = value(m.requestMerge(continued, ctx())).glob;
+    expect(merging.mergeMode).toBeNull();
+    const t = value(m.merged(merging, { sha: 'm2', number: 7 }, ctx(null)));
+    expect(t.glob.status).toBe('reviewing');
+    expect(t.glob.labels).toEqual({ FR: 'required', CR: 'required', QA: 'required' });
+    expect(t.glob.prs).toHaveLength(1);
+    expect(t.glob.pr?.state).toBe('merged');
+  });
+
+  it('a failed continue merge clears the merge mode', () => {
+    const merging = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead })).glob;
+    const failed = value(m.mergeFailed(merging, 'conflict', ctx(null))).glob;
+    expect(failed.status).toBe('failed');
+    expect(failed.mergeMode).toBeNull();
+    const checksFailed = value(m.checksCompleted(merging, { sha: HEAD, passed: false }, ctx(null))).glob;
+    expect(checksFailed.mergeMode).toBeNull();
+  });
+
+  it('mark_ready from the board: supers with a draft PR and the postplan at the head', () => {
+    const drafting = glob({
+      type: 'super',
+      status: 'in_progress',
+      implementer: dev.email,
+      pr: { number: 7, state: 'draft', headSha: HEAD },
+    });
+    expect(m.allowedActions(drafting, dev, atHead)).toContain('mark_ready');
+    expect(m.allowedActions(drafting, dev, { postplanSha: 'ccccccc' })).not.toContain('mark_ready');
+    expect(m.allowedActions(drafting, dev)).not.toContain('mark_ready');
+    expect(m.allowedActions({ ...drafting, type: 'same' }, dev, atHead)).not.toContain('mark_ready');
+
+    const board = { from: 'board' as const, facts: atHead };
+    expect(effectKinds(value(m.readyRequested(drafting, null, ctx(), board)))).toEqual(['mark_pr_ready']);
+    const behind = m.readyRequested(drafting, null, ctx(), { from: 'board', facts: { postplanSha: 'ccccccc' } });
+    expect(!behind.ok && behind.error.message).toBe(m.POSTPLAN_NOT_AT_HEAD);
+    expect(errorCode(m.readyRequested({ ...drafting, type: 'same' }, null, ctx(), board))).toBe('invalid_transition');
+    // QA and PO can't mark a super ready from the board, and aren't offered it.
+    for (const actor of [po, { email: 'qa@example.com', role: 'qa' } as const]) {
+      expect(errorCode(m.readyRequested(drafting, null, ctx(actor), board))).toBe('forbidden');
+      expect(m.allowedActions(drafting, actor, atHead)).not.toContain('mark_ready');
+    }
+    // The MCP tool (sstor --ready) is unchanged: it needs no postplan.
+    expect(effectKinds(value(m.readyRequested(drafting, null, ctx())))).toEqual(['mark_pr_ready']);
+  });
+
+  it('start again clears the merge mode and keeps the PR history', () => {
+    const merging = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead })).glob;
+    const withHistory = { ...merging, prs: [{ number: 5, mergeSha: 'm0', mergedAt: NOW }] };
+    const t = value(m.startAgain(withHistory, ctx()));
+    expect(t.glob.mergeMode).toBeNull();
+    expect(t.glob.prs).toHaveLength(1);
+  });
+});

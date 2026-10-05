@@ -6,6 +6,7 @@
 import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from './errors.js';
 import type { Result } from './errors.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
+import type { ArtifactSummary } from './knowledge.js';
 import { isValidCombination, listOf } from './matrix.js';
 import type {
   Actor,
@@ -45,7 +46,41 @@ export type Action =
   | 'retrigger'
   | 'start_again'
   | 'merge'
+  /** Supers: squash-merge what's done and keep going on the same glob and branch. */
+  | 'merge_continue'
+  /** Supers, from the board: ask slop to mark the draft PR ready (as the `mark_ready` tool does). */
+  | 'mark_ready'
   | 'delete';
+
+/**
+ * What the actions depend on beyond the glob itself: read from its artifacts, which live outside
+ * the glob document.
+ */
+export interface ActionFacts {
+  /** The commit SHA of the glob's latest postplan, or null without one (or without a SHA). */
+  readonly postplanSha?: string | null;
+}
+
+/** The latest postplan's commit SHA among a glob's artifact summaries. */
+export const postplanShaOf = (artifacts: readonly Pick<ArtifactSummary, 'kind' | 'label' | 'commitSha'>[]): string | null =>
+  artifacts.find((a) => a.kind === 'postplan' && a.label === '')?.commitSha ?? null;
+
+/** Short SHAs are at least this long (git's default abbreviation). */
+const MIN_SHA_LENGTH = 7;
+
+/** Whether two SHAs name the same commit: equal, or one a prefix of the other (a short SHA). */
+export const sameCommit = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  if (a == null || b == null) return false;
+  const [x, y] = [a.trim().toLowerCase(), b.trim().toLowerCase()];
+  if (Math.min(x.length, y.length) < MIN_SHA_LENGTH) return false;
+  return x.startsWith(y) || y.startsWith(x);
+};
+
+/** A super's latest postplan was written at its PR's current head. */
+export const postplanAtHead = (glob: Glob, facts: ActionFacts): boolean =>
+  glob.type === 'super' && sameCommit(facts.postplanSha, glob.pr?.headSha);
+
+export const POSTPLAN_NOT_AT_HEAD = 'Update the postplan at the head first (/finalise)';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -253,6 +288,8 @@ export const create = (input: CreateInput, board: Board, ctx: Context): Result<T
     labels: {},
     checklists: {},
     pr: null,
+    prs: [],
+    mergeMode: null,
     headChecks: null,
     runs: [],
     failure: null,
@@ -408,6 +445,7 @@ export const startAgain = (glob: Glob, ctx: Context): Result<Transition> => {
     implementer: glob.type === 'super' ? glob.creator : null,
     failure: null,
     pr: null,
+    mergeMode: null,
     headChecks: null,
     provisioning: 'none',
   })
@@ -420,8 +458,18 @@ export const startAgain = (glob: Glob, ctx: Context): Result<Transition> => {
   return b.done();
 };
 
-/** Row 14: the Merge button on a same or super. */
-export const requestMerge = (glob: Glob, ctx: Context): Result<Transition> => {
+export interface MergeOptions {
+  /** Row 31: Merge and continue (supers): the glob returns to in_progress once merged. */
+  readonly continue: boolean;
+  readonly facts?: ActionFacts;
+}
+
+/** Rows 14 and 31: the Merge (or Merge and continue) button on a same or super. */
+export const requestMerge = (
+  glob: Glob,
+  ctx: Context,
+  options: MergeOptions = { continue: false },
+): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status !== 'pr_open' || glob.type === 'sub') {
     return invalidTransition(glob, actor, 'Only a same or super with a ready PR can be merged');
@@ -430,8 +478,13 @@ export const requestMerge = (glob: Glob, ctx: Context): Result<Transition> => {
   if (head === null || glob.headChecks?.sha !== head || glob.headChecks.state !== 'passed') {
     return invalidTransition(glob, actor, 'Required checks have not passed on the current head');
   }
+  if (options.continue) {
+    if (glob.type !== 'super') return invalidTransition(glob, actor, 'Only a super can merge and continue');
+    if (!postplanAtHead(glob, options.facts ?? {})) return invalidTransition(glob, actor, POSTPLAN_NOT_AT_HEAD);
+  }
   return new Builder(glob, ctx)
-    .status('merging')
+    .set({ mergeMode: options.continue ? 'continue' : null })
+    .status('merging', options.continue ? { mode: 'continue' } : {})
     .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
     .done();
 };
@@ -646,12 +699,17 @@ const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> =
 // ---------------------------------------------------------------------------
 // Events from integrations and routines
 
-/** Draft PRs are recorded without changing status. */
-export const prOpened = (glob: Glob, pr: { number: number; headSha: string | null }, ctx: Context) =>
-  new Builder(glob, ctx)
+/**
+ * Draft PRs are recorded without changing status. Recording the glob's current PR again is a no-op
+ * (slop's own open response and the `opened` event both report it).
+ */
+export const prOpened = (glob: Glob, pr: { number: number; headSha: string | null }, ctx: Context): Result<Transition> => {
+  if (glob.pr?.number === pr.number && glob.provisioning === 'ok') return unchanged(glob);
+  return new Builder(glob, ctx)
     .set({ pr: { number: pr.number, state: 'draft', headSha: pr.headSha }, provisioning: 'ok' })
     .event('PROpened', { number: pr.number })
     .done();
+};
 
 /** Provisioning finished: the branch exists, and the draft PR if the repo integration opened one. */
 export const provisioned = (
@@ -688,6 +746,11 @@ export const commitPushed = (
   }
   if (glob.status === 'pr_open' || glob.status === 'merging') {
     b.set({ headChecks: null }).effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+  }
+  // After Merge and continue the glob has no PR until the next push opens one, once there's new
+  // work on the branch (main is merged back into it first, so the PR shows only the new work).
+  if (glob.status === 'in_progress' && glob.pr === null && glob.provisioning === 'ok') {
+    b.effect({ kind: 'open_pr', globId: glob.id, generation: glob.generation });
   }
   return b.event('CommitPushed', { sha: push.sha, runId: push.runId, fromSupersededRun: superseded }).done();
 };
@@ -781,7 +844,7 @@ export const checksCompleted = (
   if (glob.status === 'merging') {
     if (!checks.passed) {
       return b
-        .set({ failure: { reason: 'Checks failed after updating the branch', at: ctx.now } })
+        .set({ failure: { reason: 'Checks failed after updating the branch', at: ctx.now }, mergeMode: null })
         .event('MergeFailed', { reason: 'checks failed after update' })
         .status('failed')
         .done();
@@ -791,15 +854,28 @@ export const checksCompleted = (
   return b.done();
 };
 
+/** Where `mark_ready` came from: the board offers it to supers only, once the postplan is at the head. */
+export type ReadySource = { readonly from: 'tool' } | { readonly from: 'board'; readonly facts: ActionFacts };
+
 /**
  * `mark_ready`: the implementer is done and asks slop to mark the draft PR ready. The status
  * changes when GitHub confirms (row 11); a routine passes its run ID, which must be current.
  */
-export const readyRequested = (glob: Glob, runId: string | null, ctx: Context): Result<Transition> => {
+export const readyRequested = (
+  glob: Glob,
+  runId: string | null,
+  ctx: Context,
+  source: ReadySource = { from: 'tool' },
+): Result<Transition> => {
   if (glob.status !== 'implementing' && glob.status !== 'in_progress') {
     return invalidTransition(glob, ctx.actor, `A glob in ${glob.status} has no draft PR to mark ready`);
   }
   if (glob.pr === null) return invalidTransition(glob, ctx.actor, 'The glob has no PR yet');
+  if (source.from === 'board') {
+    if (glob.type !== 'super') return invalidTransition(glob, ctx.actor, 'Only a super is marked ready from the board');
+    if (restrictedFrom(requireActor(ctx), glob)) return forbidden('QA and PO members cannot mark a super ready');
+    if (!postplanAtHead(glob, source.facts)) return invalidTransition(glob, ctx.actor, POSTPLAN_NOT_AT_HEAD);
+  }
   const run = currentRun(glob);
   if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
     return invalidTransition(glob, ctx.actor, `Run ${runId} is not the glob's current run`);
@@ -850,16 +926,32 @@ export const subGateCompleted = (
     .done();
 };
 
-/** Row 15: the merge was observed (slop's own merge response or the merged event). */
-export const merged = (glob: Glob, merge: { sha: string }, ctx: Context): Result<Transition> => {
+/**
+ * Rows 15 and 31: the merge was observed (slop's own merge response or the merged event, whichever
+ * comes first; the second is a no-op). `number` is the merged PR's, when the caller knows it.
+ */
+export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx: Context): Result<Transition> => {
   // GitHub is the source of truth for merges, so any status before merging moves to reviewing.
   if (glob.status === 'reviewing' || glob.status === 'signed_off') return unchanged(glob);
+  // A PR already landed with Merge and continue: its second observation.
+  if (merge.number !== undefined && glob.prs.some((p) => p.number === merge.number)) return unchanged(glob);
+  if (glob.type === 'super' && glob.mergeMode === 'continue') {
+    // Row 31: the glob keeps going on its branch; the next push opens a fresh draft PR.
+    const number = merge.number ?? glob.pr?.number;
+    const prs = number === undefined ? glob.prs : [...glob.prs, { number, mergeSha: merge.sha, mergedAt: ctx.now }];
+    return new Builder(glob, ctx)
+      .set({ prs, pr: null, headChecks: null, mergeMode: null, failure: null })
+      .event('Merged', { sha: merge.sha, ...(number === undefined ? {} : { number }), mode: 'continue' })
+      .status('in_progress')
+      .done();
+  }
   return new Builder(glob, ctx)
     .endRun('completed')
     .set({
       labels: requiredLabels(glob.type),
       checklists: {},
       failure: null,
+      mergeMode: null,
       pr: glob.pr === null ? null : { ...glob.pr, state: 'merged' },
     })
     .event('Merged', { sha: merge.sha })
@@ -871,7 +963,7 @@ export const merged = (glob: Glob, merge: { sha: string }, ctx: Context): Result
 export const mergeFailed = (glob: Glob, reason: string, ctx: Context): Result<Transition> => {
   if (glob.status !== 'merging') return unchanged(glob);
   return new Builder(glob, ctx)
-    .set({ failure: { reason, at: ctx.now } })
+    .set({ failure: { reason, at: ctx.now }, mergeMode: null })
     .event('MergeFailed', { reason })
     .status('failed')
     .done();
@@ -938,7 +1030,7 @@ export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
 // ---------------------------------------------------------------------------
 // What a person can do next (drives the glob view's buttons and error messages)
 
-export const allowedActions = (glob: Glob, actor: Actor): Action[] => {
+export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}): Action[] => {
   const actions: Action[] = [];
   const restricted = restrictedFrom(actor, glob);
   if (glob.status === 'planning' && glob.type === 'same') actions.push('start');
@@ -968,6 +1060,15 @@ export const allowedActions = (glob: Glob, actor: Actor): Action[] => {
     glob.headChecks.state === 'passed'
   ) {
     actions.push('merge');
+    if (postplanAtHead(glob, facts)) actions.push('merge_continue');
+  }
+  if (
+    !restricted &&
+    glob.status === 'in_progress' &&
+    glob.pr?.state === 'draft' &&
+    postplanAtHead(glob, facts)
+  ) {
+    actions.push('mark_ready');
   }
   actions.push('delete');
   return actions;

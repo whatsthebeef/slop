@@ -526,6 +526,16 @@ describe('slop merge', () => {
     expect(twice.slop.tools()).toEqual(['get_glob', 'merge', 'get_glob', 'merge']);
   });
 
+  it('merges and continues a super with --continue', async () => {
+    const run = setup({
+      get_glob: () => glob({ type: 'super', status: 'pr_open', version: 7, pr: { number: 9, state: 'ready' } }),
+      merge: () => glob({ type: 'super', status: 'in_progress', version: 9, pr: null }),
+    });
+    await mergeCommand(['s1t4', '--continue'], run.deps);
+    expect(run.slop.calls.at(-1)).toEqual({ tool: 'merge', args: { id: 's1t4', version: 7, continue: true } });
+    expect(run.out.join('')).toMatch(/^s1t4: in_progress \(merged and continued/);
+  });
+
   it('reports an already merged glob without merging again', async () => {
     const run = setup({ get_glob: () => glob({ status: 'reviewing' }) });
     await mergeCommand(['s1t4', '--json'], run.deps);

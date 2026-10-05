@@ -336,6 +336,9 @@ export const createApp = (deps: AppDeps) => {
     'take-over': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, true, b.environment),
     'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),
     merge: (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version),
+    // Supers: row 31, and the board's Ready for review (both need the latest postplan at the head).
+    'merge-continue': (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version, true),
+    'mark-ready': (email: string, id: string, b: ActionBody) => globs.requestReadyFromBoard(email, id, b.version),
   } as const;
 
   app.post('/api/globs/:id/actions/:action', async (c) => {

@@ -147,7 +147,7 @@ const handle = async (
         case 'closed':
           if (pr.merged === true) {
             await apply(glob, (g, ctx) =>
-              machine.merged(g, { sha: pr.merge_commit_sha ?? pr.head.sha }, ctx),
+              machine.merged(g, { sha: pr.merge_commit_sha ?? pr.head.sha, number: pr.number }, ctx),
             );
           } else {
             await apply(glob, (g, ctx) => machine.prClosed(g, ctx));
