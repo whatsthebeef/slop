@@ -718,6 +718,14 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     headChecks: { sha: HEAD, state: 'passed' },
   });
 
+  it('titles a piece landed with Merge and continue by its part number', () => {
+    expect(m.squashTitle(superReady)).toBe(`${superReady.id}: ${superReady.title}`);
+    const continuing = { ...superReady, mergeMode: 'continue' as const };
+    expect(m.squashTitle(continuing)).toBe(`${superReady.id}: ${superReady.title} (part 1)`);
+    const second = { ...continuing, prs: [{ number: 6, mergeSha: 'm1', mergedAt: NOW }] };
+    expect(m.squashTitle(second)).toBe(`${superReady.id}: ${superReady.title} (part 2)`);
+  });
+
   it('offers merge_continue only to supers with the latest postplan at the head', () => {
     expect(m.allowedActions(superReady, dev, atHead)).toEqual(expect.arrayContaining(['merge', 'merge_continue']));
     expect(m.allowedActions(superReady, dev, { postplanSha: HEAD })).toContain('merge_continue');

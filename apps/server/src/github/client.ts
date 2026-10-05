@@ -1,5 +1,6 @@
 import { App } from '@octokit/app';
 import type { DiffSummary, Glob } from '@slop/core';
+import { machine } from '@slop/core';
 import type { CodeHost, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
 import type { AppCredentialsStore } from './credentials.js';
 
@@ -257,7 +258,7 @@ export class GitHub implements CodeHost {
   }
 
   /**
-   * Squash-merges the PR at exactly `sha` with the title `<id>: <title>`. If the branch is
+   * Squash-merges the PR at exactly `sha` with the title `<id>: <title>` (`machine.squashTitle`). If the branch is
    * behind the base, slop updates it instead and the merge resumes when the new head's checks pass.
    */
   async squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult> {
@@ -279,7 +280,7 @@ export class GitHub implements CodeHost {
         ...r,
         sha,
         merge_method: 'squash',
-        commit_title: `${glob.id}: ${glob.title}`,
+        commit_title: machine.squashTitle(glob),
         commit_message: '',
       });
       return { outcome: 'merged', sha: data.sha };

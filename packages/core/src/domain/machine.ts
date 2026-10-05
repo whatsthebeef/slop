@@ -82,6 +82,15 @@ export const postplanAtHead = (glob: Glob, facts: ActionFacts): boolean =>
 
 export const POSTPLAN_NOT_AT_HEAD = 'Update the postplan at the head first (/finalise)';
 
+/**
+ * The squash commit's title: `<id>: <title>`. A piece landed with Merge and continue says which
+ * part it is, so the base branch doesn't read as if the whole super had landed.
+ */
+export const squashTitle = (glob: Glob): string =>
+  glob.mergeMode === 'continue'
+    ? `${glob.id}: ${glob.title} (part ${glob.prs.length + 1})`
+    : `${glob.id}: ${glob.title}`;
+
 // ---------------------------------------------------------------------------
 // Helpers
 
