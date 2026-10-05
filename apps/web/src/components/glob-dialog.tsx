@@ -94,7 +94,7 @@ export const GlobDialog = ({
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className='max-w-2xl'
+        className='max-w-[63rem]'
         title={
           <span>
             <span className='font-mono text-muted-foreground'>{glob.id}</span> {glob.title}
@@ -107,7 +107,21 @@ export const GlobDialog = ({
             {glob.group !== null && <GroupChip name={glob.group} />}
             <LabelChips glob={glob} />
             <span className='ml-auto text-xs text-muted-foreground'>
-              branch <span className='font-mono'>{glob.branch}</span> · v{glob.version}
+              branch{' '}
+              {board.repo === null ? (
+                <span className='font-mono'>{glob.branch}</span>
+              ) : (
+                <a
+                  className='font-mono underline-offset-2 hover:underline'
+                  href={`https://github.com/${board.repo}/compare/${board.baseBranch}...${glob.branch}`}
+                  target='_blank'
+                  rel='noreferrer'
+                  title={`Compare ${glob.branch} with ${board.baseBranch} on GitHub`}
+                >
+                  {glob.branch}
+                </a>
+              )}{' '}
+              · v{glob.version}
             </span>
           </div>
 

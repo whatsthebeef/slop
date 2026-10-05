@@ -54,6 +54,16 @@ export const Running = ({ count }: { count: number }) => (
   <Count count={count} word="RUNNING" tip={runs(count)} on="bg-signal" />
 );
 
+/** How many of the board's supers are in Doing: a person drives them, so they aren't counted as runs. */
+export const Supers = ({ count }: { count: number }) => (
+  <Count
+    count={count}
+    word="SUPER"
+    tip={`${count} of your ${count === 1 ? 'super is' : 'supers are'} in Doing`}
+    on="bg-foreground"
+  />
+);
+
 /** How many globs on the board wait on a person. */
 export const Attention = ({ count }: { count: number }) => (
   <Count count={count} word="WAITING" tip={needs(count)} on="bg-red-soft" />
@@ -76,9 +86,9 @@ export const Reviews = ({ name, count }: { name: LabelName; count: number }) => 
   />
 );
 
-/** Board rows and the All boards row share columns: number, name, running, waiting. */
+/** Board rows and the All boards row share columns: number, name, running, supers, waiting, reviews. */
 const ROW =
-  'grid grid-cols-[2rem_minmax(0,1fr)_auto_auto] items-center gap-x-4 rounded-sm border px-2 py-0.5 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)_7rem_7rem_3.5rem_3.5rem_3.5rem]';
+  'grid grid-cols-[2rem_minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 rounded-sm border px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)_7rem_7rem_7rem_3.5rem_3.5rem_3.5rem]';
 
 const MENU_ITEM =
   'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted';
@@ -220,6 +230,7 @@ export const StatusBar = ({ current }: { current?: number }) => {
           <span className="font-mono text-xs opacity-70">{board.id}</span>
           <span className="truncate text-[15px] font-semibold tracking-tight">{board.name}</span>
           <Running count={board.running ?? 0} />
+          <Supers count={board.supers ?? 0} />
           <Attention count={board.attention ?? 0} />
           {LABEL_NAMES.map((name) => (
             <Reviews key={name} name={name} count={board.reviews?.[name] ?? 0} />
