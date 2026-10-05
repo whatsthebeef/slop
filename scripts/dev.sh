@@ -1,10 +1,30 @@
 #!/usr/bin/env bash
-# Runs the local slop stack in a tmux session "slop-dev": Postgres (Docker), a fresh board
-# build, the server (Cognito mode when apps/server/.env.cognito exists, otherwise dev sign-in)
-# and, if SLOP_TUNNEL_DOMAIN is set in .slop-dev, an ngrok tunnel for webhooks and connectors.
+# Runs the local slop stack: Postgres (Docker), a fresh board build, the server on :3000
+# (Cognito mode when apps/server/.env.cognito exists, otherwise dev sign-in) and, if
+# SLOP_TUNNEL_DOMAIN is set in .slop-dev, an ngrok tunnel for webhooks and connectors.
 # .slop-dev may also set AWS_PROFILE (Bedrock for intake).
-# Usage: scripts/dev.sh [start|stop|restart|foreground]   (default: start, then attach)
-#   foreground: run in the current terminal (sstor's server window), stopping any other copy first
+#
+# One server at a time, shared by every checkout: running dev.sh in a worktree switches :3000
+# to that worktree's code (stopping whichever copy was running), and every checkout uses the
+# same Postgres database. Before starting code whose migrations the database hasn't run, the
+# database is snapshotted, so `restore` can roll it back when you switch to older code.
+usage() {
+  cat <<'EOF'
+Usage: scripts/dev.sh [command]
+
+  start        Start slop from this checkout in tmux session "slop-dev" and attach (the default).
+               If another checkout's server is running, it is stopped first.
+  restart      Stop and start again, from this checkout.
+  stop         Stop the server and the tunnel. Postgres keeps running.
+  foreground   Run the server in this terminal (sstor's server window), stopping any other copy.
+  snapshots    List database snapshots, newest first.
+  restore [f]  Stop the server and restore the database from a snapshot (default: the newest).
+  help         Show this help.
+
+Snapshots are taken automatically before code with new migrations starts, and kept (newest
+10) in .slop-dev-snapshots/ in the main checkout.
+EOF
+}
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -31,19 +51,103 @@ if [[ -f "$root/.slop-dev" ]]; then
   set +a
 fi
 
+# The database is shared, so its snapshots are too.
+snapshots="$main_root/.slop-dev-snapshots"
+keep_snapshots=10
+
+psql_slop() {
+  (cd "$root" && docker compose exec -T postgres psql -U slop -v ON_ERROR_STOP=1 "$@")
+}
+
+postgres_up() {
+  (cd "$root" && docker compose up -d --wait postgres)
+}
+
+# The checkout the running tmux server came from, if any.
+running_root() {
+  tmux show-environment -t "$session" SLOP_DEV_ROOT 2>/dev/null | sed -n 's/^SLOP_DEV_ROOT=//p'
+}
+
 stop() {
   tmux kill-session -t "$session" 2>/dev/null || true
-  # A server started outside tmux would hold the port.
+  # A server started outside tmux (sstor's foreground window) would hold the port.
   lsof -ti tcp:3000 | xargs kill 2>/dev/null || true
+  # A tunnel left over from an earlier run keeps the endpoint, and a new one can't start.
+  if [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]]; then
+    pkill -f "ngrok http --url=$SLOP_TUNNEL_DOMAIN" 2>/dev/null || true
+  fi
+}
+
+snapshot() {
+  local label="$1"
+  mkdir -p "$snapshots"
+  local file
+  file="$snapshots/$(date -u +%Y%m%dT%H%M%SZ)-${label//[^A-Za-z0-9._-]/_}.dump"
+  (cd "$root" && docker compose exec -T postgres pg_dump -U slop -d slop --format=custom) >"$file"
+  echo "Database snapshot: $file (scripts/dev.sh restore rolls back to it)"
+  # Keep the newest few.
+  ls -1t "$snapshots"/*.dump | tail -n +$((keep_snapshots + 1)) | while read -r old; do rm -f "$old"; done
+}
+
+# Drizzle runs every migration in the journal newer than the newest one the database has run;
+# compare the two before the server migrates on start.
+check_migrations() {
+  local applied
+  applied="$(psql_slop -d slop -Atc \
+    "select coalesce(max(created_at), 0) from drizzle.__drizzle_migrations" 2>/dev/null || echo 0)"
+  local counts
+  counts="$(node -e '
+    const entries = require(process.argv[1]).entries;
+    const applied = Number(process.argv[2]);
+    const newer = entries.filter((e) => e.when > applied).map((e) => e.tag);
+    const newest = Math.max(0, ...entries.map((e) => e.when));
+    console.log(`${newer.length} ${applied > newest ? "ahead" : "ok"} ${newer.join(",")}`);
+  ' "$root/apps/server/drizzle/meta/_journal.json" "$applied")"
+  local pending state tags
+  read -r pending state tags <<<"$counts"
+  if [[ "$applied" != 0 && "$pending" -gt 0 ]]; then
+    echo "This checkout has migrations the database hasn't run: ${tags//,/, }"
+    snapshot "$(git -C "$root" rev-parse --abbrev-ref HEAD)"
+  fi
+  if [[ "$state" == ahead ]]; then
+    echo "Warning: the database has run migrations this checkout doesn't have. If the server fails,"
+    echo "roll the database back with scripts/dev.sh restore (scripts/dev.sh snapshots lists them)."
+  fi
+}
+
+build_board() {
+  (cd "$root/apps/web" && node node_modules/vite/bin/vite.js build --logLevel warn)
+}
+
+# ngrok reports a failed tunnel only in its own window; say so here, since webhooks need it.
+check_tunnel() {
+  [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]] || return 0
+  for _ in 1 2 3 4 5 6; do
+    sleep 1
+    if curl -s --max-time 2 http://127.0.0.1:4040/api/tunnels | grep -q "$SLOP_TUNNEL_DOMAIN"; then
+      return 0
+    fi
+  done
+  echo "Warning: the ngrok tunnel to https://$SLOP_TUNNEL_DOMAIN isn't up, so GitHub webhooks won't"
+  echo "arrive. Is another ngrok holding the endpoint (ERR_NGROK_334)? Stop it and restart."
 }
 
 start() {
   if tmux has-session -t "$session" 2>/dev/null; then
-    echo "slop-dev is already running (scripts/dev.sh restart to restart)"
-    return
+    local other
+    other="$(running_root)"
+    if [[ "$other" == "$root" ]]; then
+      echo "slop-dev is already running from this checkout (scripts/dev.sh restart to restart)"
+      return
+    fi
+    echo "Switching :3000 from ${other:-another checkout} to $root"
+  elif lsof -ti tcp:3000 >/dev/null 2>&1; then
+    echo "Stopping the slop server already on :3000 (one server at a time)"
   fi
-  (cd "$root" && docker compose up -d --wait postgres)
-  (cd "$root/apps/web" && node node_modules/vite/bin/vite.js build --logLevel warn)
+  stop
+  postgres_up
+  check_migrations
+  build_board
 
   local env_file=""
   [[ -f "$root/apps/server/.env.cognito" ]] && env_file="--env-file=.env.cognito"
@@ -53,20 +157,24 @@ start() {
   [[ -n "${AWS_PROFILE:-}" ]] && env_args+=(-e "AWS_PROFILE=$AWS_PROFILE")
   tmux new-session -d -s "$session" ${env_args[@]+"${env_args[@]}"} -n server -c "$root/apps/server" \
     "node $env_file --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts; read"
+  tmux set-environment -t "$session" SLOP_DEV_ROOT "$root"
   if [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]]; then
     tmux new-window -t "$session" -n tunnel "ngrok http --url=$SLOP_TUNNEL_DOMAIN 3000; read"
   fi
-  echo "slop-dev started: http://localhost:3000${SLOP_TUNNEL_DOMAIN:+ and https://$SLOP_TUNNEL_DOMAIN}"
+  echo "slop-dev started from $root: http://localhost:3000${SLOP_TUNNEL_DOMAIN:+ and https://$SLOP_TUNNEL_DOMAIN}"
+  check_tunnel
 }
 
 foreground() {
   stop
-  (cd "$root" && docker compose up -d --wait postgres)
-  (cd "$root/apps/web" && node node_modules/vite/bin/vite.js build --logLevel warn)
+  postgres_up
+  check_migrations
+  build_board
   if [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]]; then
     ngrok http --url="$SLOP_TUNNEL_DOMAIN" 3000 --log=false >/dev/null &
     trap 'kill %1 2>/dev/null || true' EXIT
     echo "Tunnel: https://$SLOP_TUNNEL_DOMAIN"
+    check_tunnel
   fi
   local env_file=()
   [[ -f "$root/apps/server/.env.cognito" ]] && env_file=(--env-file=.env.cognito)
@@ -74,12 +182,39 @@ foreground() {
   LOCAL_SIGN_IN_WITHOUT_COOKIE=true node ${env_file[@]+"${env_file[@]}"} --conditions=development --import tsx src/main.ts
 }
 
+list_snapshots() {
+  if ! ls -1t "$snapshots"/*.dump 2>/dev/null; then
+    echo "No snapshots in $snapshots"
+  fi
+}
+
+restore() {
+  local file="${1:-}"
+  if [[ -z "$file" ]]; then
+    file="$(ls -1t "$snapshots"/*.dump 2>/dev/null | head -n 1 || true)"
+    [[ -n "$file" ]] || { echo "No snapshots in $snapshots" >&2; exit 1; }
+  fi
+  [[ -f "$file" ]] || { echo "No such snapshot: $file" >&2; exit 1; }
+  if [[ -t 0 ]]; then
+    read -r -p "Replace the local slop database with $(basename "$file")? [y/N] " answer
+    [[ "$answer" == y || "$answer" == Y ]] || exit 1
+  fi
+  stop
+  postgres_up
+  psql_slop -d postgres -qc 'drop database if exists slop with (force)' -c 'create database slop owner slop'
+  (cd "$root" && docker compose exec -T postgres pg_restore -U slop -d slop --no-owner) <"$file"
+  echo "Restored $(basename "$file"). Start the checkout that matches it with scripts/dev.sh start."
+}
+
 case "$action" in
   foreground) foreground; exit 0 ;;
   start) start ;;
   stop) stop ;;
   restart) stop; start ;;
-  *) echo "Usage: $0 [start|stop|restart]" >&2; exit 1 ;;
+  snapshots) list_snapshots; exit 0 ;;
+  restore) restore "${2:-}"; exit 0 ;;
+  help|-h|--help) usage; exit 0 ;;
+  *) usage >&2; exit 1 ;;
 esac
 
 if [[ "$action" != stop && -z "${TMUX:-}" && -t 1 ]]; then

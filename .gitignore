@@ -12,3 +12,4 @@ cdk.out/
 .github-app.json
 .routines.json
 .slop-dev
+.slop-dev-snapshots/
