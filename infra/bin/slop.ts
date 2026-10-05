@@ -30,24 +30,41 @@ new AuthStack(app, `slop-${stage}-auth`, {
 });
 
 /**
- * A branch-deploy target for a board (e.g. a sandbox), only when its context is given:
+ * A branch-deploy target for a board (e.g. a sandbox), only when its context is given. Either a new
+ * CodeBuild project running the repo's `.sstor/deploy.sh`:
  *   cdk deploy -c deployTargetRepo=owner/name -c deployTargetConnectionArn=arn:... \
  *     -c deployTargetWebhookUrl=https://<public slop>/webhooks/aws [-c deployTargetName=<project>]
+ * or existing deploy projects, whose builds are only reported to slop:
+ *   cdk deploy -c deployTargetProjects=<project>,<project> -c deployTargetName=<name> \
+ *     -c deployTargetWebhookUrl=https://<public slop>/webhooks/aws
  */
-const deployTargetRepo: unknown = app.node.tryGetContext('deployTargetRepo');
-if (typeof deployTargetRepo === 'string' && deployTargetRepo !== '') {
-  const context = (key: string): string => {
-    const value: unknown = app.node.tryGetContext(key);
-    if (typeof value !== 'string' || value === '') throw new Error(`-c ${key}=... is required with deployTargetRepo`);
-    return value;
-  };
-  const name = String(app.node.tryGetContext('deployTargetName') ?? `${deployTargetRepo.split('/').at(-1) ?? 'app'}-deploy`);
-  new DeployTargetStack(app, `slop-${stage}-deploy-${name}`, {
-    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION ?? 'us-east-1' },
-    repo: deployTargetRepo,
-    connectionArn: context('deployTargetConnectionArn'),
-    webhookUrl: context('deployTargetWebhookUrl'),
-    projectName: name,
-    tags: { project: 'slop', stage },
-  });
+const contextValue = (key: string): string | undefined => {
+  const value: unknown = app.node.tryGetContext(key);
+  return typeof value === 'string' && value !== '' ? value : undefined;
+};
+const required = (key: string): string => {
+  const value = contextValue(key);
+  if (value === undefined) throw new Error(`-c ${key}=... is required for a deploy target`);
+  return value;
+};
+const deployTargetRepo = contextValue('deployTargetRepo');
+const deployTargetProjects = contextValue('deployTargetProjects');
+if (deployTargetRepo !== undefined || deployTargetProjects !== undefined) {
+  const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION ?? 'us-east-1' };
+  if (deployTargetRepo !== undefined) {
+    const name = contextValue('deployTargetName') ?? `${deployTargetRepo.split('/').at(-1) ?? 'app'}-deploy`;
+    new DeployTargetStack(app, `slop-${stage}-deploy-${name}`, {
+      env,
+      target: { kind: 'new', repo: deployTargetRepo, connectionArn: required('deployTargetConnectionArn'), projectName: name },
+      webhookUrl: required('deployTargetWebhookUrl'),
+      tags: { project: 'slop', stage },
+    });
+  } else if (deployTargetProjects !== undefined) {
+    new DeployTargetStack(app, `slop-${stage}-deploy-${required('deployTargetName')}`, {
+      env,
+      target: { kind: 'existing', projectNames: deployTargetProjects.split(',').map((p) => p.trim()).filter((p) => p !== '') },
+      webhookUrl: required('deployTargetWebhookUrl'),
+      tags: { project: 'slop', stage },
+    });
+  }
 }

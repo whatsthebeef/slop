@@ -10,8 +10,8 @@ export interface DeployRoutesDeps {
   readonly deploys: DeployService;
   readonly boards: BoardService;
   readonly links: SignedLinks;
-  /** The shared key EventBridge's API destination sends; `/webhooks/aws` is off without one. */
-  readonly awsWebhookKey: string | undefined;
+  /** The keys EventBridge API destinations send (one per deploy-target stack); `/webhooks/aws` is off without any. */
+  readonly awsWebhookKeys: readonly string[];
   readonly log: (task: string, message: string) => void;
 }
 
@@ -120,8 +120,11 @@ export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
 
   // CodeBuild results through an EventBridge API destination, which sends the shared key as a header.
   app.post('/webhooks/aws', async (c) => {
-    if (deps.awsWebhookKey === undefined || deps.awsWebhookKey === '') return c.json({ error: 'not configured' }, 404);
-    if (!sameSecret(deps.awsWebhookKey, c.req.header('x-slop-key') ?? '')) return c.json({ error: 'bad key' }, 401);
+    if (deps.awsWebhookKeys.length === 0) return c.json({ error: 'not configured' }, 404);
+    const given = c.req.header('x-slop-key') ?? '';
+    // Compare against every key (no early exit), so timing doesn't say which one nearly matched.
+    const matches = deps.awsWebhookKeys.map((key) => sameSecret(key, given));
+    if (!matches.includes(true)) return c.json({ error: 'bad key' }, 401);
     const event = codeBuildEventSchema.safeParse(await c.req.json().catch(() => null));
     // Other events on the bus aren't ours to handle; accept them so EventBridge doesn't retry.
     if (!event.success) return c.json({ ok: true, ignored: true }, 202);

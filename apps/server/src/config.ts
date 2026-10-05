@@ -43,8 +43,14 @@ const schema = z.object({
    * reach. Defaults to PUBLIC_URL; locally, the ngrok tunnel.
    */
   WEBHOOK_BASE_URL: z.string().optional(),
-  /** The key EventBridge's API destination sends to `/webhooks/aws` (CodeBuild results); off when unset. */
-  AWS_WEBHOOK_KEY: z.string().optional(),
+  /**
+   * The keys EventBridge API destinations send to `/webhooks/aws` (CodeBuild results), comma-separated:
+   * each deploy-target stack generates its own. Off when unset.
+   */
+  AWS_WEBHOOK_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v ?? '').split(',').map((k) => k.trim()).filter((k) => k !== '')),
   BEDROCK_REGION: z.string().default('us-east-1'),
   /** Haiku 4.5 for intake and classification. */
   INTAKE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
