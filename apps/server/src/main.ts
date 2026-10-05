@@ -22,6 +22,7 @@ import { mountGitHubWebhooks } from './github/webhooks.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { CALLBACK_TTL_SECONDS, deployExecutors } from './deploy-executors.js';
 import { callbackPath, mountDeploys } from './http/deploys.js';
+import { mountReadiness } from './http/readiness.js';
 import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
 import { FileRoutines } from './routines.js';
@@ -106,6 +107,7 @@ const app = createApp({
   },
 });
 mountDeploys(app, { deploys, boards, links, awsWebhookKey: config.AWS_WEBHOOK_KEY, log: logError });
+mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
 mountKnowledge(app, { knowledge, artifacts, catalog, intake, boards, host: github });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { GroupChip } from '@/components/glob-card';
 import { GlobDialog } from '@/components/glob-dialog';
+import { ReadinessChecklist } from '@/components/readiness';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { ACTION_PATHS, api, RequestError } from '@/lib/api';
@@ -128,6 +129,8 @@ export const SettingsPage = () => {
           </p>
         )}
       </section>
+
+      <ReadinessChecklist board={board.data} />
 
       <section className='grid gap-3'>
         <h2 className='text-sm font-semibold'>Board</h2>

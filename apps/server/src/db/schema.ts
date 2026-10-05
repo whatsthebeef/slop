@@ -1,4 +1,4 @@
-import type { DeployIntegration, DomainEvent, Effect, Environment, Glob, KbOutcome, Provenance, ProposedDocument } from '@slop/core';
+import type { Board, DeployIntegration, DomainEvent, Effect, Environment, Glob, KbOutcome, Provenance, ProposedDocument } from '@slop/core';
 import { DEPLOY_STATES, DEPLOY_TRIGGERS, LEARNING_TYPES } from '@slop/core';
 import {
   bigserial,
@@ -37,6 +37,8 @@ export const boards = pgTable('boards', {
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
   /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
   deploy: jsonb('deploy').$type<DeployIntegration>(),
+  /** Readiness items slop can't check, ticked by an admin. */
+  readinessTicks: jsonb('readiness_ticks').$type<Board['readinessTicks']>().notNull().default({}),
   version: integer('version').notNull(),
 });
 

@@ -71,6 +71,13 @@
       "when": 1791300002000,
       "tag": "0009_deploys",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791300003000,
+      "tag": "0010_readiness_ticks",
+      "breakpoints": true
     }
   ]
 }

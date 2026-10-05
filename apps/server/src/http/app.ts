@@ -75,6 +75,10 @@ const settingsSchema = z.object({
     ])
     .nullable()
     .optional(),
+  readinessTicks: z
+    .object({ routines: z.boolean(), routine_repo: z.boolean(), claude_app: z.boolean() })
+    .partial()
+    .optional(),
 });
 
 export const createGlobSchema = z.object({

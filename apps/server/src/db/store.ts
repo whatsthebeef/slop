@@ -45,6 +45,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   runReadyHours: row.runReadyHours,
   subMaxChangedLines: row.subMaxChangedLines,
   deploy: row.deploy,
+  readinessTicks: row.readinessTicks,
   version: row.version,
 });
 
@@ -201,6 +202,7 @@ export class PgStore implements Store {
             runNoProgressHours: board.runNoProgressHours,
             runReadyHours: board.runReadyHours,
             deploy: board.deploy,
+            readinessTicks: board.readinessTicks,
             subMaxChangedLines: board.subMaxChangedLines,
             version: board.version,
           })

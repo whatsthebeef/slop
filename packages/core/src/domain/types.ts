@@ -174,6 +174,8 @@ export interface Board {
   readonly sensitivePaths: readonly string[];
   /** How branch deploys run; null when the board has none. */
   readonly deploy: DeployIntegration | null;
+  /** Readiness items slop can't check, ticked by an admin (routines, the routine's repo, the Claude GitHub App). */
+  readonly readinessTicks: Readonly<Partial<Record<'routines' | 'routine_repo' | 'claude_app', boolean>>>;
   /** Increases with every approved change to the board's agent set. */
   readonly agentSetVersion: number;
   /** A run with no slop call or push for this long is failed. */

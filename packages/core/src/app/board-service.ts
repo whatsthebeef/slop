@@ -25,6 +25,7 @@ export type BoardSettings = Partial<
     | 'runReadyHours'
     | 'subMaxChangedLines'
     | 'deploy'
+    | 'readinessTicks'
   >
 >;
 

@@ -321,6 +321,23 @@ export class GitHub implements CodeHost {
     };
   }
 
+  async readFile(repo: Repo, ref: string, path: string): Promise<string | null> {
+    const gh = await this.octokit(repo);
+    try {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: repo.owner,
+        repo: repo.name,
+        path,
+        ref,
+      });
+      if (Array.isArray(data) || data.type !== 'file' || !('content' in data)) return null;
+      return Buffer.from(data.content, 'base64').toString('utf8');
+    } catch (error) {
+      if (isStatus(error, 404)) return null;
+      throw error;
+    }
+  }
+
   private async branchHead(repo: Repo, branch: string): Promise<string | null> {
     const gh = await this.octokit(repo);
     try {

@@ -1,3 +1,4 @@
+import { stuckHint } from '@slop/core';
 import type { Action, ArtifactKind, Category, DeployIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -244,6 +245,7 @@ export const GlobCard = ({
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
+  const hint = stuckHint(glob, new Date().toISOString());
   const preview = moves.find((m) => m.action === previewing);
 
   return (
@@ -295,6 +297,13 @@ export const GlobCard = ({
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         {deploy !== undefined && <DeployChip deploy={deploy} />}
+        {hint !== null && (
+          <Tip text={hint}>
+            <span className='font-mono text-[11px] text-required' data-testid='stuck-hint'>
+              stuck?
+            </span>
+          </Tip>
+        )}
         {failed && (
           <Tip text={`Failed: ${glob.failure?.reason ?? 'the routine run failed'}`}>
             <span className='font-mono text-[11px] font-semibold text-red'>! failed</span>

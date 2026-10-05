@@ -1,0 +1,208 @@
+import type { Board, Glob } from './types.js';
+
+/**
+ * Board readiness: what a board needs before slop can run its globs end to end, checked where slop
+ * can see it and ticked by hand where it can't. Each item says what's wrong and how to fix it.
+ */
+export const READINESS_KEYS = [
+  'repo_app',
+  'sub_gate',
+  'agent_set',
+  'build_doc',
+  'environments',
+  'routines',
+  'routine_repo',
+  'claude_app',
+] as const;
+export type ReadinessKey = (typeof READINESS_KEYS)[number];
+
+/** The items slop can't check for itself: an admin ticks them in board settings. */
+export const MANUAL_READINESS_KEYS = ['routines', 'routine_repo', 'claude_app'] as const;
+export type ManualReadinessKey = (typeof MANUAL_READINESS_KEYS)[number];
+export type ReadinessTicks = Readonly<Partial<Record<ManualReadinessKey, boolean>>>;
+
+/** ok; missing (do something); failing (ticked or set up, but recent runs say otherwise); unknown (can't check yet). */
+export type ReadinessState = 'ok' | 'missing' | 'failing' | 'unknown';
+
+/** Where to fix an item: a page on the board, or an outside link. */
+export type ReadinessFix =
+  | { readonly kind: 'settings' | 'knowledge'; readonly label: string }
+  | { readonly kind: 'link'; readonly label: string; readonly href: string };
+
+export interface ReadinessItem {
+  readonly key: ReadinessKey;
+  readonly title: string;
+  readonly state: ReadinessState;
+  readonly detail: string;
+  readonly fix: ReadinessFix | null;
+  readonly manual: boolean;
+}
+
+/** What slop found out about the board's setup (null where it couldn't look). */
+export interface ReadinessFacts {
+  readonly board: Board;
+  /** Whether slop's GitHub App can reach the repo; null without a repo or before the app exists. */
+  readonly repoConnected: boolean | null;
+  readonly installUrl: string | null;
+  /** Whether the base branch has `.github/workflows/sub-gate.yml`; null when slop can't read the repo. */
+  readonly subGateWorkflow: boolean | null;
+  /** The agent-set version committed on the base branch (`.claude/slop-agent-set.json`); null if absent or unreadable. */
+  readonly committedAgentSetVersion: number | null;
+  readonly hasBuildDoc: boolean;
+  readonly ticks: ReadinessTicks;
+  /** Recent routine failures on the board's globs, newest first. */
+  readonly recentFailures: readonly { readonly globId: string; readonly reason: string }[];
+}
+
+/**
+ * Which readiness item a routine failure points to, and its fix, from the failure's reason.
+ * Null when the reason doesn't match a known setup problem.
+ */
+export const routineFailureFix = (reason: string): { key: ManualReadinessKey; fix: string } | null => {
+  if (/resource not accessible by integration|workflows? permission|claude github app/i.test(reason)) {
+    return { key: 'claude_app', fix: "Install the Claude GitHub App on the repo, with the workflows permission" };
+  }
+  if (/repository not found|not (have )?access(ible)? to (the )?repo|could not read from remote|permission to \S+ denied|not in the routine'?s repositories/i.test(reason)) {
+    return { key: 'routine_repo', fix: "Add the repo to the routine's repositories" };
+  }
+  if (/routine (fire )?(failed|not found)|fire (url|token)|no routine/i.test(reason)) {
+    return { key: 'routines', fix: 'Check the routine and its fire URL and token in .routines.json' };
+  }
+  return null;
+};
+
+const item = (
+  key: ReadinessKey,
+  title: string,
+  state: ReadinessState,
+  detail: string,
+  fix: ReadinessFix | null,
+): ReadinessItem => ({ key, title, state, detail, fix, manual: MANUAL_READINESS_KEYS.some((k) => k === key) });
+
+/** The readiness checklist, in the order a board is set up. */
+export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
+  const { board } = facts;
+  const repo = board.repo;
+  const settings: ReadinessFix = { kind: 'settings', label: 'Board settings' };
+  const items: ReadinessItem[] = [];
+
+  items.push(
+    repo === null
+      ? item('repo_app', "slop's GitHub App on the repo", 'missing', 'The board has no repository', settings)
+      : facts.repoConnected === null
+        ? item('repo_app', "slop's GitHub App on the repo", 'unknown', "slop's GitHub App isn't set up yet", {
+            kind: 'link',
+            label: 'Set up the GitHub App',
+            href: '/setup/github-app',
+          })
+        : facts.repoConnected
+          ? item('repo_app', "slop's GitHub App on the repo", 'ok', `Connected to ${repo}`, null)
+          : item(
+              'repo_app',
+              "slop's GitHub App on the repo",
+              'missing',
+              `slop can't reach ${repo}`,
+              facts.installUrl === null ? settings : { kind: 'link', label: 'Install the app', href: facts.installUrl },
+            ),
+  );
+
+  const subGatePath = '.github/workflows/sub-gate.yml';
+  items.push(
+    facts.subGateWorkflow === null
+      ? item('sub_gate', 'Sub-gate workflow', 'unknown', "slop can't read the repo yet", null)
+      : facts.subGateWorkflow
+        ? item('sub_gate', 'Sub-gate workflow', 'ok', `${subGatePath} is on ${board.baseBranch}`, null)
+        : item('sub_gate', 'Sub-gate workflow', 'missing', `Subs can't merge themselves without ${subGatePath} on ${board.baseBranch}`, {
+            kind: 'link',
+            label: 'Add the workflow',
+            href: `https://github.com/${repo ?? ''}/new/${board.baseBranch}?filename=${subGatePath}`,
+          }),
+  );
+
+  const committed = facts.committedAgentSetVersion;
+  items.push(
+    committed === null
+      ? item('agent_set', 'Agent set in the repo', 'missing', `No .claude/slop-agent-set.json on ${board.baseBranch}: run slop init ${String(board.id)} in a checkout and commit it`, {
+          kind: 'knowledge',
+          label: 'Agent set',
+        })
+      : committed < board.agentSetVersion
+        ? item('agent_set', 'Agent set in the repo', 'missing', `The repo has version ${String(committed)}; the board's is ${String(board.agentSetVersion)}. Routines update it on their next run, or run slop init ${String(board.id)}`, {
+            kind: 'knowledge',
+            label: 'Agent set',
+          })
+        : item('agent_set', 'Agent set in the repo', 'ok', `Version ${String(committed)}`, null),
+  );
+
+  items.push(
+    facts.hasBuildDoc
+      ? item('build_doc', 'Build doc', 'ok', 'Agents get the build, test and lint commands', null)
+      : item('build_doc', 'Build doc', 'missing', 'Agents have to guess the build, test and lint commands: import the build doc template or run /kb-bootstrap', {
+          kind: 'knowledge',
+          label: 'Knowledge',
+        }),
+  );
+
+  const deployable = board.environments.filter((e) => e.allowBranchDeploy);
+  const subDefault = board.environments.find((e) => e.subDefault === true);
+  items.push(
+    deployable.length === 0
+      ? item('environments', 'Environments', 'missing', 'No environment takes branch deploys', settings)
+      : subDefault === undefined
+        ? item('environments', 'Environments', 'missing', 'No environment is the default for subs', settings)
+        : item('environments', 'Environments', 'ok', `${deployable.map((e) => e.name).join(', ')}; subs default to ${subDefault.name}`, null),
+  );
+
+  const MANUAL: Record<ManualReadinessKey, string> = {
+    routines: 'Routines for the board',
+    routine_repo: "The repo in the routine's repositories",
+    claude_app: 'Claude GitHub App on the repo',
+  };
+  for (const key of MANUAL_READINESS_KEYS) {
+    const failure = facts.recentFailures.find((f) => routineFailureFix(f.reason)?.key === key);
+    const fix = failure === undefined ? null : routineFailureFix(failure.reason);
+    items.push(
+      failure !== undefined && fix !== null
+        ? item(key, MANUAL[key], 'failing', `${failure.globId} failed: ${failure.reason}. ${fix.fix}`, settings)
+        : facts.ticks[key] === true
+          ? item(key, MANUAL[key], 'ok', 'Ticked by an admin', null)
+          : item(key, MANUAL[key], 'missing', "slop can't check this: tick it in board settings once it's done", settings),
+    );
+  }
+  return items;
+};
+
+/** Routine failures on globs, newest first, from the globs' current failure (recent ones only). */
+export const recentRoutineFailures = (
+  globs: readonly Glob[],
+  since: string,
+): { globId: string; reason: string }[] =>
+  globs
+    .filter((g) => g.failure !== null && g.failure.at >= since)
+    .sort((a, b) => (b.failure?.at ?? '').localeCompare(a.failure?.at ?? ''))
+    .map((g) => ({ globId: g.id, reason: g.failure?.reason ?? '' }));
+
+/** How long a sub's PR may sit ready before the card says its gate looks stuck. */
+const STUCK_MINUTES = 15;
+
+/**
+ * A short hint on a card when a glob looks stuck on setup rather than on work: a ready sub with no
+ * sub-gate result, a sub whose gate passed but hasn't merged, or a routine failure with a known fix.
+ */
+export const stuckHint = (glob: Glob, now: string): string | null => {
+  if (glob.failure !== null) {
+    const fix = routineFailureFix(glob.failure.reason);
+    if (fix !== null) return fix.fix;
+  }
+  if (glob.type !== 'sub' || glob.status !== 'pr_open') return null;
+  const minutes = (Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000;
+  if (minutes < STUCK_MINUTES) return null;
+  const head = glob.pr?.headSha ?? null;
+  if (head !== null && glob.headChecks?.sha === head && glob.headChecks.state === 'passed') {
+    return 'The sub-gate passed but slop hasn\'t merged it: check the board\'s sub size limit and sensitive paths, or merge it';
+  }
+  if (glob.headChecks === null || glob.headChecks.sha !== head || glob.headChecks.state === 'pending') {
+    return `No sub-gate result after ${String(STUCK_MINUTES)} minutes: is .github/workflows/sub-gate.yml on the base branch?`;
+  }
+  return null;
+};
