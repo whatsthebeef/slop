@@ -26,7 +26,10 @@ export const DOMAIN_EVENT_TYPES = [
   'LabelItemTicked',
   'PickedUp',
   'ArtifactAdded',
+  'DeployRequested',
+  'DeployReplaced',
   'DeployStarted',
+  'DeployFailed',
   'BuildCompleted',
   'ATFCompleted',
   'Deployed',
@@ -76,6 +79,10 @@ export type Effect =
    * slop recorded the PR as ready (its webhook was then ignored).
    */
   | { readonly kind: 'refresh_sub_gate'; readonly globId: string; readonly generation: number }
+  /** A push to a glob with an environment asks for a deploy of exactly that commit. */
+  | { readonly kind: 'request_deploy'; readonly globId: string; readonly generation: number; readonly sha: string }
+  /** Start a deploy with the board's deploy integration; the deploy record says what and where. */
+  | { readonly kind: 'start_deploy'; readonly deployId: string; readonly globId: string }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
   | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number };
 

@@ -1,3 +1,4 @@
+import type { Deploy } from '../domain/deploys.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
 import type { KbItem } from '../domain/kb.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
@@ -17,6 +18,7 @@ interface State {
   knowledgeHistory: KnowledgeDoc[];
   artifacts: Artifact[];
   kbItems: Map<string, KbItem>;
+  deploys: Map<string, Deploy>;
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -34,6 +36,7 @@ const clone = (state: State): State => ({
   knowledgeHistory: [...state.knowledgeHistory],
   artifacts: [...state.artifacts],
   kbItems: new Map(state.kbItems),
+  deploys: new Map(state.deploys),
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -53,6 +56,7 @@ export class MemoryStore implements Store {
     knowledgeHistory: [],
     artifacts: [],
     kbItems: new Map(),
+    deploys: new Map(),
   };
 
   async transaction<T>(work: (tx: Tx) => Promise<T>): Promise<T> {
@@ -109,7 +113,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, version: 1, agentSetVersion: 0, runNoProgressHours: 2, runReadyHours: 8, subMaxChangedLines: 2000 };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, version: 1, agentSetVersion: 0, runNoProgressHours: 2, runReadyHours: 8, subMaxChangedLines: 2000 };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -208,6 +212,26 @@ export class MemoryStore implements Store {
         s.kbItems.set(item.id, item);
         return Promise.resolve(true);
       },
+      getDeploy: (id) => Promise.resolve(s.deploys.get(id) ?? null),
+      saveDeploys: (deploys) => {
+        for (const d of deploys) s.deploys.set(d.id, d);
+        return Promise.resolve();
+      },
+      listDeploys: (boardId, filter) =>
+        Promise.resolve(
+          [...s.deploys.values()]
+            .filter(
+              (d) =>
+                d.boardId === boardId &&
+                (filter.environment === undefined || d.environment === filter.environment) &&
+                (filter.states === undefined || filter.states.includes(d.state)) &&
+                (filter.globIds === undefined || filter.globIds.includes(d.globId)),
+            )
+            .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt) || b.id.localeCompare(a.id))
+            .slice(0, filter.limit ?? Infinity),
+        ),
+      findDeployByProviderRef: (ref) =>
+        Promise.resolve([...s.deploys.values()].find((d) => d.providerRef === ref) ?? null),
       appendEvents: (events) => {
         s.events.push(...events);
         return Promise.resolve();
