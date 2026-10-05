@@ -69,7 +69,7 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
   server.registerTool(
     'get_board',
     {
-      description: "A board's settings: repo, base branch, environments, time zone.",
+      description: "A board's settings: repo, base branch, environments, time zone, and its enabled integrations (integrations.deploy: how branch deploys run, or null).",
       inputSchema: { board: z.number().int().describe('Board ID (the number in a glob ID: s1t4 is on board 1)') },
     },
     async ({ board }) =>
@@ -80,6 +80,7 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
         baseBranch: b.baseBranch,
         timeZone: b.timeZone,
         environments: b.environments,
+        integrations: { deploy: b.deploy },
       })),
   );
 
