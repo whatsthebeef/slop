@@ -3,6 +3,7 @@ import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import type { GlobView } from '@/lib/api';
+import type { MoveTag } from '@/lib/board-motion';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { LabelSwitches } from './labels';
@@ -204,7 +205,7 @@ export const GlobCard = ({
   /** Nudges toward a side with no move. */
   bump?: 'left' | 'right';
   /** Who moved it, briefly, when the move was made elsewhere. */
-  tag?: string;
+  tag?: MoveTag;
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
@@ -217,6 +218,8 @@ export const GlobCard = ({
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => {
+        // Keys from inside the card (label switches, their popover, buttons) are theirs, not the card's.
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           e.preventDefault();
           onArrow(e.key === 'ArrowLeft' ? 'left' : 'right');
@@ -282,8 +285,9 @@ export const GlobCard = ({
         </span>
       </div>
       {tag !== undefined && (
-        <div className='move-tag mt-1.5 font-mono text-[10px] text-muted-foreground' role='status'>
-          ▸ {tag}
+        // Keyed by the move, so a second move's tag restarts its fade.
+        <div key={tag.n} className='move-tag mt-1.5 font-mono text-[10px] text-muted-foreground' role='status'>
+          ▸ {tag.text}
         </div>
       )}
     </div>

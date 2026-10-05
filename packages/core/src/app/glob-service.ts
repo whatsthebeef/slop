@@ -279,7 +279,7 @@ export class GlobService {
     const now = this.deps.clock.now();
     // Only the actor ever triggers a run, so resolve their routine owner up front.
     let owner = actor?.email ?? board.defaultRoutineOwner ?? '';
-    if (actor !== null && !(await this.deps.routines.hasRoutine(actor.email))) {
+    if (actor !== null && !(await this.deps.routines.hasRoutine(actor.email, board.id))) {
       owner = board.defaultRoutineOwner ?? actor.email;
     }
     return {

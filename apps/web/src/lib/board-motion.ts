@@ -13,6 +13,12 @@ const MAX_ANIMATED = 5;
 /** After the live connection comes back, the catch-up refetch just appears. */
 const RECONNECT_QUIET_MS = 2000;
 
+/** A short note on a card moved elsewhere; `n` changes per move so its fade restarts. */
+export interface MoveTag {
+  readonly text: string;
+  readonly n: number;
+}
+
 /** A copy of a record without one key. */
 const without = <T>(record: Record<string, T>, key: string): Record<string, T> =>
   Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
@@ -40,23 +46,37 @@ const describeRemote = (before: GlobView, after: GlobView): string => {
 
 type Rects = Map<string, { x: number; y: number }>;
 
+/** An element's layout position: offsets ignore transforms, so a card mid-animation measures true. */
+const layoutPosition = (el: HTMLElement): { x: number; y: number } => {
+  let x = 0;
+  let y = 0;
+  for (let node: Element | null = el; node instanceof HTMLElement; node = node.offsetParent) {
+    x += node.offsetLeft;
+    y += node.offsetTop;
+  }
+  return { x, y };
+};
+
 /**
- * Animates cards between renders by position (FLIP): before each update the board's card
- * positions are known, after it each card that moved is played from its old place to its new one.
- * Only a glob whose list changed gets the stepped, block-like move and the lock flash (LCD green
- * for your own moves, khaki for moves made elsewhere, which also get a short tag); every other
- * card it pushed or pulled glides. Nothing animates on the first load, right after a reconnect,
- * in a hidden tab, or for people who prefer reduced motion (they still get the tag).
+ * Animates cards between renders by position (FLIP): the board's card positions are measured
+ * after every commit, and when the globs change each card that moved is played from its old
+ * place to its new one. Only a glob whose list changed gets the stepped, block-like move and the
+ * lock flash (LCD green for your own moves, khaki for moves made elsewhere, which also get a short
+ * tag); every other card it pushed or pulled glides. Nothing animates on the first load, right
+ * after a reconnect, in a hidden tab, or for people who prefer reduced motion (they still get the tag).
  */
 export const useBoardMotion = (globs: readonly GlobView[] | undefined, live: LiveState) => {
   const container = useRef<HTMLElement | null>(null);
   const rects = useRef<Rects>(new Map());
+  const seen = useRef<readonly GlobView[] | undefined>(undefined);
   const previous = useRef<Map<string, GlobView> | null>(null);
   const local = useRef(new Set<string>());
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const tagCount = useRef(0);
   const quietUntil = useRef(0);
   const wasLive = useRef(live);
   const [locks, setLocks] = useState<Record<string, 'local' | 'remote'>>({});
-  const [tags, setTags] = useState<Record<string, string>>({});
+  const [tags, setTags] = useState<Record<string, MoveTag>>({});
 
   useEffect(() => {
     if (live === 'live' && wasLive.current !== 'live')
@@ -64,54 +84,75 @@ export const useBoardMotion = (globs: readonly GlobView[] | undefined, live: Liv
     wasLive.current = live;
   }, [live]);
 
+  /** One timer per key: a repeat move replaces the earlier timer instead of being cut short by it. */
+  const later = (key: string, run: () => void, ms: number) => {
+    const existing = timers.current.get(key);
+    if (existing !== undefined) clearTimeout(existing);
+    timers.current.set(
+      key,
+      setTimeout(() => {
+        timers.current.delete(key);
+        run();
+      }, ms),
+    );
+  };
+
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending.values()) clearTimeout(timer);
+      pending.clear();
+    };
+  }, []);
+
   const measure = (): Rects => {
     const root = container.current;
     const next: Rects = new Map();
     if (root === null) return next;
-    const origin = root.getBoundingClientRect();
+    const origin = layoutPosition(root);
     for (const el of root.querySelectorAll<HTMLElement>('[data-glob-id]')) {
       const id = el.dataset.globId;
       if (id === undefined) continue;
-      const r = el.getBoundingClientRect();
-      next.set(id, {
-        x: r.left - origin.left + root.scrollLeft,
-        y: r.top - origin.top + root.scrollTop,
-      });
+      const at = layoutPosition(el);
+      next.set(id, { x: at.x - origin.x, y: at.y - origin.y });
     }
     return next;
   };
 
-  // Scrolling or resizing moves cards without an update; keep the "before" positions current.
+  // Layout can change without a commit (window size, web fonts arriving); keep positions current.
   useEffect(() => {
     const refresh = () => {
       rects.current = measure();
     };
     window.addEventListener('resize', refresh);
-    window.addEventListener('scroll', refresh, true);
-    return () => {
-      window.removeEventListener('resize', refresh);
-      window.removeEventListener('scroll', refresh, true);
-    };
+    void document.fonts.ready.then(refresh);
+    return () => window.removeEventListener('resize', refresh);
   }, []);
+
+  const showTag = (id: string, text: string) => {
+    tagCount.current += 1;
+    const tag: MoveTag = { text, n: tagCount.current };
+    setTags((t) => ({ ...t, [id]: tag }));
+    later(`tag:${id}`, () => setTags((t) => without(t, id)), TAG_MS);
+  };
 
   const flash = (id: string, kind: 'local' | 'remote', tag: string | null) => {
     setLocks((l) => ({ ...l, [id]: kind }));
-    setTimeout(() => setLocks((l) => without(l, id)), LOCK_MS + 20);
-    if (tag !== null) {
-      setTags((t) => ({ ...t, [id]: tag }));
-      setTimeout(() => setTags((tg) => without(tg, id)), TAG_MS);
-    }
+    later(`lock:${id}`, () => setLocks((l) => without(l, id)), LOCK_MS + 20);
+    if (tag !== null) showTag(id, tag);
   };
 
+  // After every commit: animate if the globs changed, then remember where every card now is.
   useLayoutEffect(() => {
     const root = container.current;
-    if (globs === undefined || root === null) return;
-    const now = new Map(globs.map((g) => [g.id, g]));
     const before = rects.current;
     const after = measure();
+    rects.current = after;
+    if (globs === undefined || root === null || globs === seen.current) return;
+    seen.current = globs;
+    const now = new Map(globs.map((g) => [g.id, g]));
     const prior = previous.current;
     previous.current = now;
-    rects.current = after;
     if (prior === null) return; // first load: nothing moved, it arrived
 
     const movers = [...now.values()].filter((g) => {
@@ -129,8 +170,7 @@ export const useBoardMotion = (globs: readonly GlobView[] | undefined, live: Liv
       const from = before.get(glob.id);
       const to = after.get(glob.id);
       if (still || el === null || from === undefined || to === undefined || index >= MAX_ANIMATED) {
-        if (tag !== null) setTags((t) => ({ ...t, [glob.id]: tag }));
-        if (tag !== null) setTimeout(() => setTags((tg) => without(tg, glob.id)), TAG_MS);
+        if (tag !== null) showTag(glob.id, tag);
         return;
       }
       const motion = el.animate(
@@ -159,7 +199,7 @@ export const useBoardMotion = (globs: readonly GlobView[] | undefined, live: Liv
         },
       );
     }
-  }, [globs]);
+  });
 
   /** Marks a move as made on this board, so it gets your flash and no tag. */
   const markLocal = (id: string) => local.current.add(id);

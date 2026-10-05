@@ -13,7 +13,7 @@ export interface RoutineSecret {
  * Each developer's routine fire URL and token. Locally a gitignored file keyed by email
  * (`.routines.json`); in production Secrets Manager at `slop/routines/<email>`. A routine's cloud
  * environment has a fixed set of repositories, so a developer can add one per board under
- * `<email>#<boardId>`; a board without its own entry uses the developer's default.
+ * `<email>#<boardId>` (Secrets Manager: `slop/routines/<email>/<boardId>`, since names can't hold `#`); a board without its own entry uses the developer's default.
  */
 export class FileRoutines implements RoutineDirectory {
   constructor(private readonly file: string) {}
@@ -27,8 +27,8 @@ export class FileRoutines implements RoutineDirectory {
     }
   }
 
-  async hasRoutine(email: string): Promise<boolean> {
-    return (await this.secretFor(email)) !== null;
+  async hasRoutine(email: string, boardId: number): Promise<boolean> {
+    return (await this.secretFor(email, boardId)) !== null;
   }
 
   async secretFor(email: string, boardId?: number): Promise<RoutineSecret | null> {

@@ -48,7 +48,7 @@ describe('services', () => {
       notifier,
       clock: { now: () => '2026-10-05T12:00:00.000Z' },
       ids: { runId: () => `run-${++runs}` },
-      routines: { hasRoutine: (email) => Promise.resolve(withRoutine.has(email)) },
+      routines: { hasRoutine: (email, board) => Promise.resolve(withRoutine.has(email) || withRoutine.has(`${email}#${String(board)}`)) },
     });
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV, PO]) await tx.upsertUser({ email, name: email, active: true });
@@ -98,6 +98,12 @@ describe('services', () => {
     const fallback = unwrap(await globs.create(PO, input({ type: 'sub' })));
     expect(fallback.runs[0]?.triggeredBy).toBe(PO);
     expect(fallback.runs[0]?.routineOwner).toBe(ADMIN);
+  });
+
+  it("counts a routine set up only for this board as the triggerer's own", async () => {
+    withRoutine.add(`${PO}#${String(boardId)}`);
+    const glob = unwrap(await globs.create(PO, input({ type: 'sub' })));
+    expect(glob.runs[0]?.routineOwner).toBe(PO);
   });
 
   it('refuses non-members and deactivated users', async () => {

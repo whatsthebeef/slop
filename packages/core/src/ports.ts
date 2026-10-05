@@ -99,7 +99,8 @@ export interface IdGenerator {
 
 /** Who owns routines: used to fall back to the board's default routine owner. */
 export interface RoutineDirectory {
-  hasRoutine(email: string): Promise<boolean>;
+  /** Whether the developer has a routine for this board (their own for it, or their default). */
+  hasRoutine(email: string, boardId: number): Promise<boolean>;
 }
 
 export type { Role };

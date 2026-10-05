@@ -34,6 +34,14 @@ describe('routine directory', () => {
     expect((await routines.secretFor('dev@example.com'))?.token).toBe('default');
   });
 
+  it('counts a board-only routine for that board and not for others', async () => {
+    const file = join(dir, 'board-only.json');
+    await writeFile(file, JSON.stringify({ 'po@example.com#16': { url: 'https://example.com/po-16', token: 'po-16' } }));
+    const boardOnly = new FileRoutines(file);
+    expect(await boardOnly.hasRoutine('po@example.com', 16)).toBe(true);
+    expect(await boardOnly.hasRoutine('po@example.com', 15)).toBe(false);
+  });
+
   it('has nothing for a developer without a routine', async () => {
     expect(await routines.secretFor('other@example.com', 16)).toBeNull();
   });
