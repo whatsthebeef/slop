@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { ArtifactService, BoardService, GlobService, IntakeService, KnowledgeService } from '@slop/core';
+import { ArtifactService, BoardService, DeployService, GlobService, IntakeService, KnowledgeService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -19,6 +19,9 @@ import { githubDeliveryHandler } from './github/events.js';
 import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
+import { CodeBuildDeployer, Deployers } from './deployer.js';
+import { CALLBACK_TTL_SECONDS, deployExecutors } from './deploy-executors.js';
+import { callbackPath, mountDeploys } from './http/deploys.js';
 import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
 import { FileRoutines } from './routines.js';
@@ -51,7 +54,29 @@ const githubCredentials = new AppCredentialsStore(config.GITHUB_APP_FILE);
 await githubCredentials.load();
 const github = new GitHub(githubCredentials);
 const boardOf = (id: number) => store.transaction((tx) => tx.getBoard(id));
-const outbox = new OutboxRunner(db, { globs }, codeHostExecutors(github, boardOf, routines), logError);
+// Signs agent-set download links, the board sign-in state and deploy callbacks.
+const links = new SignedLinks(config.SIGNING_SECRET);
+const deploys = new DeployService({
+  store,
+  notifier: hub,
+  clock: { now: () => new Date().toISOString() },
+  newDeployId: () => `dep_${randomUUID()}`,
+});
+const webhookBase = config.WEBHOOK_BASE_URL ?? config.PUBLIC_URL;
+const deployCallbackUrl = (deployId: string) => {
+  const path = callbackPath(deployId);
+  const { expires, signature } = links.sign(path, CALLBACK_TTL_SECONDS);
+  return `${webhookBase}${path}?expires=${String(expires)}&sig=${signature}`;
+};
+const outbox = new OutboxRunner(
+  db,
+  { globs },
+  {
+    ...codeHostExecutors(github, boardOf, routines),
+    ...deployExecutors(deploys, new Deployers({ codebuild: new CodeBuildDeployer() }), boardOf, deployCallbackUrl, logError),
+  },
+  logError,
+);
 
 const catalog = new FsCatalog(config.CATALOG_DIR);
 const clock = { now: () => new Date().toISOString() };
@@ -64,8 +89,6 @@ const intake = new IntakeService({
   ),
 });
 
-// Signs agent-set download links and the board sign-in state.
-const links = new SignedLinks(config.SIGNING_SECRET);
 if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
   console.warn('[auth] SIGNING_SECRET is not set: sign-ins and download links in flight fail across restarts and instances');
 }
@@ -82,6 +105,7 @@ const app = createApp({
     if (!forked.ok) logError('board created', `Agent set fork failed for board ${boardId}: ${forked.error.message}`);
   },
 });
+mountDeploys(app, { deploys, boards, links, awsWebhookKey: config.AWS_WEBHOOK_KEY, log: logError });
 mountKnowledge(app, { knowledge, artifacts, catalog, intake, boards, host: github });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.

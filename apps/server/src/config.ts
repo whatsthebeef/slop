@@ -38,6 +38,13 @@ const schema = z.object({
   SIGNING_SECRET: z.string().optional(),
   /** Each developer's routine fire URL and token, keyed by email (gitignored; Secrets Manager in production). */
   ROUTINES_FILE: z.string().default('.routines.json'),
+  /**
+   * Where deploy jobs post their results (`/webhooks/deploy/...`): a URL CodeBuild or GitHub can
+   * reach. Defaults to PUBLIC_URL; locally, the ngrok tunnel.
+   */
+  WEBHOOK_BASE_URL: z.string().optional(),
+  /** The key EventBridge's API destination sends to `/webhooks/aws` (CodeBuild results); off when unset. */
+  AWS_WEBHOOK_KEY: z.string().optional(),
   BEDROCK_REGION: z.string().default('us-east-1'),
   /** Haiku 4.5 for intake and classification. */
   INTAKE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),

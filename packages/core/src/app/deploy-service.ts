@@ -32,6 +32,11 @@ export interface DeployResult {
 export class DeployService {
   constructor(private readonly deps: DeployServiceDeps) {}
 
+  /** One deploy, for system callers (the outbox, provider results). */
+  async get(id: string): Promise<Deploy | null> {
+    return this.deps.store.transaction((tx) => tx.getDeploy(id));
+  }
+
   /** A glob's latest deploys, newest first, for the glob view's history. */
   async history(email: string, globId: string, limit = 10): Promise<Result<Deploy[]>> {
     return this.deps.store.transaction(async (tx) => {
