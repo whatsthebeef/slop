@@ -1,5 +1,5 @@
-import type { Artifact, Board, Glob, GlobFilter, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, KNOWLEDGE_KINDS } from '@slop/core';
+import type { Artifact, ArtifactSummary, Board, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, LEARNING_TYPES } from '@slop/core';
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -64,6 +64,15 @@ const toArtifact = (row: typeof schema.artifacts.$inferSelect): Artifact => ({
   ...row,
   kind: oneOf(ARTIFACT_KINDS, row.kind),
   createdAt: row.createdAt.toISOString(),
+});
+
+const toKbItem = (row: typeof schema.kbProposals.$inferSelect): KbItem => ({
+  ...row,
+  status: oneOf(KB_ITEM_STATUSES, row.status),
+  type: oneOf(LEARNING_TYPES, row.type),
+  source: oneOf(KB_ITEM_SOURCES, row.source),
+  createdAt: row.createdAt.toISOString(),
+  decidedAt: row.decidedAt?.toISOString() ?? null,
 });
 
 const globColumns = (glob: Glob) => ({
@@ -296,6 +305,85 @@ export class PgStore implements Store {
           .where(and(eq(schema.artifacts.globId, globId), eq(schema.artifacts.kind, kind), eq(schema.artifacts.label, label)))
           .orderBy(asc(schema.artifacts.version));
         return rows.map(toArtifact);
+      },
+      listArtifactSummaries: async (boardId, globIds) => {
+        if (globIds.length === 0) return [];
+        const a = schema.artifacts;
+        const conditions = [eq(schema.globs.boardId, boardId), inArray(a.globId, [...globIds])];
+        // The latest version of each (glob, kind, label), with the count of all versions; no content.
+        const rows = await t
+          .selectDistinctOn([a.globId, a.kind, a.label], {
+            globId: a.globId,
+            kind: a.kind,
+            label: a.label,
+            version: a.version,
+            versions: sql<number>`count(*) over (partition by ${a.globId}, ${a.kind}, ${a.label})`.mapWith(Number),
+            commitSha: a.commitSha,
+            createdAt: a.createdAt,
+            provenance: a.provenance,
+          })
+          .from(a)
+          .innerJoin(schema.globs, eq(schema.globs.id, a.globId))
+          .where(and(...conditions))
+          .orderBy(a.globId, a.kind, a.label, desc(a.version));
+        return rows.map(
+          (row): ArtifactSummary => ({
+            globId: row.globId,
+            kind: oneOf(ARTIFACT_KINDS, row.kind),
+            label: row.label,
+            version: row.version,
+            versions: row.versions,
+            commitSha: row.commitSha,
+            createdAt: row.createdAt.toISOString(),
+            by: row.provenance.by,
+            actor: row.provenance.actor,
+          }),
+        );
+      },
+
+      insertKbItem: async (item) => {
+        const rows = await t
+          .insert(schema.kbProposals)
+          .values({
+            ...item,
+            sourceGlobIds: [...item.sourceGlobIds],
+            createdAt: new Date(item.createdAt),
+            decidedAt: item.decidedAt === null ? null : new Date(item.decidedAt),
+          })
+          .onConflictDoNothing()
+          .returning({ id: schema.kbProposals.id });
+        return rows.length === 1;
+      },
+      getKbItem: async (id) => {
+        const [row] = await t.select().from(schema.kbProposals).where(eq(schema.kbProposals.id, id));
+        return row === undefined ? null : toKbItem(row);
+      },
+      listKbItems: async (boardId, status) => {
+        const conditions = [eq(schema.kbProposals.boardId, boardId)];
+        if (status !== undefined) conditions.push(eq(schema.kbProposals.status, status));
+        const rows = await t
+          .select()
+          .from(schema.kbProposals)
+          .where(and(...conditions))
+          .orderBy(asc(schema.kbProposals.createdAt), asc(schema.kbProposals.id));
+        return rows.map(toKbItem);
+      },
+      updateKbItem: async (item, expectedVersion) => {
+        const rows = await t
+          .update(schema.kbProposals)
+          .set({
+            status: item.status,
+            statement: item.statement,
+            sourceGlobIds: [...item.sourceGlobIds],
+            decidedBy: item.decidedBy,
+            decidedAt: item.decidedAt === null ? null : new Date(item.decidedAt),
+            decisionReason: item.decisionReason,
+            outcome: item.outcome,
+            version: item.version,
+          })
+          .where(and(eq(schema.kbProposals.id, item.id), eq(schema.kbProposals.version, expectedVersion)))
+          .returning({ id: schema.kbProposals.id });
+        return rows.length === 1;
       },
 
       appendEvents: async (events) => {

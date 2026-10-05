@@ -19,6 +19,8 @@ export interface AuthStackProps extends StackProps {
   readonly boardLogoutUrls: readonly string[];
   /** Claude Code's OAuth redirect (`claude mcp add --callback-port`); verified in slice 1. */
   readonly claudeCodeCallbackUrls: readonly string[];
+  /** The slop CLI's OAuth redirect (`login`); the CLI shares Claude Code's client. */
+  readonly cliCallbackUrls: readonly string[];
   /**
    * The SAML metadata URL of the custom application in IAM Identity Center. Without it the pool
    * only has native users (local development); with it sign-in is federated to Identity Center.
@@ -29,8 +31,8 @@ export interface AuthStackProps extends StackProps {
 const TEN_YEARS = Duration.days(3650);
 
 /**
- * Cognito for slop: the authorization server for the board, the Claude app connector, routines
- * and Claude Code. Roles live in slop; Cognito only answers who someone is.
+ * Cognito for slop: the authorization server for the board, the Claude app connector, routines,
+ * Claude Code and the slop CLI. Roles live in slop; Cognito only answers who someone is.
  */
 export class AuthStack extends Stack {
   constructor(scope: Construct, id: string, props: AuthStackProps) {
@@ -106,7 +108,12 @@ export class AuthStack extends Stack {
       callbacks: ['https://claude.ai/api/mcp/auth_callback', 'https://claude.com/api/mcp/auth_callback'],
       mcp: true,
     });
-    const claudeCode = client('ClaudeCode', { secret: false, callbacks: props.claudeCodeCallbackUrls, mcp: true });
+    // One public client for the developer's local tools: Claude Code and the slop CLI.
+    const claudeCode = client('ClaudeCode', {
+      secret: false,
+      callbacks: [...props.claudeCodeCallbackUrls, ...props.cliCallbackUrls],
+      mcp: true,
+    });
 
     new CfnOutput(this, 'UserPoolId', { value: pool.userPoolId });
     new CfnOutput(this, 'Domain', { value: `${domain.domainName}.auth.${this.region}.amazoncognito.com` });
@@ -114,7 +121,7 @@ export class AuthStack extends Stack {
     new CfnOutput(this, 'ClaudeConnectorClientId', { value: connector.userPoolClientId });
     new CfnOutput(this, 'ClaudeCodeClientId', { value: claudeCode.userPoolClientId });
     new CfnOutput(this, 'ClientIds', {
-      value: [board.userPoolClientId, connector.userPoolClientId, claudeCode.userPoolClientId].join(','),
+      value: [board, connector, claudeCode].map((c) => c.userPoolClientId).join(','),
       description: 'COGNITO_CLIENT_IDS for the server',
     });
   }

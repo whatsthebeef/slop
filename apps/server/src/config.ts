@@ -10,7 +10,7 @@ const schema = z.object({
   COGNITO_USER_POOL_ID: z.string().optional(),
   COGNITO_REGION: z.string().optional(),
   COGNITO_DOMAIN: z.string().optional(),
-  /** App client IDs whose access tokens slop accepts (board, Claude connector, Claude Code). */
+  /** App client IDs whose access tokens slop accepts (board, Claude connector, Claude Code and the slop CLI). */
   COGNITO_CLIENT_IDS: z.string().optional(),
   COGNITO_BOARD_CLIENT_ID: z.string().optional(),
   COGNITO_BOARD_CLIENT_SECRET: z.string().optional(),
@@ -25,6 +25,15 @@ const schema = z.object({
   CATALOG_DIR: z.string().default('../../catalog'),
   /** The Cognito app client Claude Code uses; filled into the agent set's `.mcp.json`. */
   CLAUDE_CODE_CLIENT_ID: z.string().default(''),
+  /**
+   * Accept a signed board sign-in state without its nonce cookie on a plain-http localhost origin
+   * (Chrome drops the cookie there on the return from Cognito). Off unless a dev server turns it on,
+   * so a proxy that rewrites Host to localhost can't open login CSRF elsewhere.
+   */
+  LOCAL_SIGN_IN_WITHOUT_COOKIE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   /** Signs short-lived download links (agent-set bundles). Random per process if unset. */
   SIGNING_SECRET: z.string().optional(),
   /** Each developer's routine fire URL and token, keyed by email (gitignored; Secrets Manager in production). */

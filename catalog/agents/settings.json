@@ -1,20 +1,28 @@
 {
   "sandbox": {
     "enabled": true,
-    "autoAllowBashIfSandboxed": true
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowedDomains": [
+        "github.com"
+      ]
+    }
   },
   "permissions": {
     "allow": [
       "mcp__slop__*",
       "mcp__claude_ai_Slop__*",
-      "Bash(git push origin s*)",
-      "Bash(gh pr ready:*)",
-      "Bash(gh pr view:*)"
+      "Bash(git push origin s*)"
     ],
     "deny": [
-      "Bash(git push --force*)",
+      "Bash(gh api:*)",
       "Bash(gh pr create:*)",
-      "Bash(gh pr merge:*)"
+      "Bash(gh pr merge:*)",
+      "Bash(git push --force*)",
+      "Bash(slop call merge:*)",
+      "Bash(slop merge:*)",
+      "mcp__claude_ai_Slop__merge",
+      "mcp__slop__merge"
     ]
   },
   "enabledMcpjsonServers": [

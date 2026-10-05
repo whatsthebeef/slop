@@ -89,7 +89,8 @@ class Builder {
     return this;
   }
 
-  status(to: Status): this {
+  /** `detail` adds to the StatusChanged event (e.g. a failure report's reason and agent-set version). */
+  status(to: Status, detail: { readonly [key: string]: JsonValue } = {}): this {
     const from = this.glob.status;
     if (from === to) return this;
     const entersDoing = listOf(from) !== 'doing' && listOf(to) === 'doing';
@@ -98,7 +99,7 @@ class Builder {
       status: to,
       doingSince: entersDoing ? this.ctx.now : leavesDoing ? null : this.glob.doingSince,
     });
-    this.event('StatusChanged', { from, to });
+    this.event('StatusChanged', { ...detail, from, to });
     return listOf(to) === 'doing' ? this.ensureProvisioned() : this;
   }
 
@@ -125,14 +126,14 @@ class Builder {
     return this;
   }
 
-  /** Ends the current run if it has not ended. */
-  endRun(outcome: RunOutcome, failureReason: string | null = null): this {
+  /** Ends the current run if it has not ended. `detail` adds to a RunFailed event (e.g. the agent-set version). */
+  endRun(outcome: RunOutcome, failureReason: string | null = null, detail: { readonly [key: string]: JsonValue } = {}): this {
     const run = currentRun(this.glob);
     if (run === null || run.state === 'ended') return this;
     const ended: Run = { ...run, state: 'ended', outcome, endedAt: this.ctx.now, failureReason };
     this.set({ runs: [...this.glob.runs.slice(0, -1), ended] });
     return outcome === 'failed'
-      ? this.event('RunFailed', { runId: run.id, reason: failureReason })
+      ? this.event('RunFailed', { ...detail, runId: run.id, reason: failureReason })
       : this.event('RunEnded', { runId: run.id, outcome });
   }
 
@@ -212,7 +213,7 @@ export interface CreateInput {
   readonly category: Category;
   readonly group: string | null;
   readonly environment: string | null;
-  /** Same only: start a routine run immediately (explicit instruction or `runRoutine`). */
+  /** Same only: start a routine run immediately (explicit instruction or `autoTrigger`). */
   readonly autoTrigger: boolean;
 }
 
@@ -757,17 +758,20 @@ export const mergeFailed = (glob: Glob, reason: string, ctx: Context): Result<Tr
 /** Rows 17, 18 and 25: `report_failure`, or a run timeout (always with its run ID). */
 export const reportFailure = (
   glob: Glob,
-  report: { reason: string; runId: string | null },
+  report: { reason: string; runId: string | null; agentSetVersion?: number | null },
   ctx: Context,
 ): Result<Transition> => {
+  // Every failure report records the agent-set version it ran with (spec: provenance).
+  const agentSetVersion = report.agentSetVersion ?? null;
+  const failure = { reason: report.reason, at: ctx.now, ...(agentSetVersion === null ? {} : { agentSetVersion }) };
   if (report.runId === null) {
     // Row 18: an interactive session gave up.
     if (glob.status !== 'in_progress') {
       return invalidTransition(glob, ctx.actor, 'Only a glob in progress can be failed without a run');
     }
     return new Builder(glob, ctx)
-      .set({ failure: { reason: report.reason, at: ctx.now } })
-      .status('failed')
+      .set({ failure })
+      .status('failed', { reason: report.reason, agentSetVersion })
       .done();
   }
 
@@ -775,22 +779,22 @@ export const reportFailure = (
   if (run === null || run.id !== report.runId || run.state === 'ended') {
     // Results from superseded runs are recorded but ignored.
     return new Builder(glob, ctx)
-      .event('RunFailed', { runId: report.runId, reason: report.reason, ignored: true })
+      .event('RunFailed', { runId: report.runId, reason: report.reason, ignored: true, agentSetVersion })
       .done();
   }
   if (glob.status === 'implementing') {
     // Row 17.
     return new Builder(glob, ctx)
-      .endRun('failed', report.reason)
-      .set({ failure: { reason: report.reason, at: ctx.now } })
+      .endRun('failed', report.reason, { agentSetVersion })
+      .set({ failure })
       .status('failed')
       .done();
   }
   if (glob.status === 'pr_open' && run.state === 'watching') {
     // Row 25: auto-fix ended; the glob stays in pr_open and shows the failure.
     return new Builder(glob, ctx)
-      .endRun('failed', report.reason)
-      .set({ failure: { reason: report.reason, at: ctx.now } })
+      .endRun('failed', report.reason, { agentSetVersion })
+      .set({ failure })
       .done();
   }
   return invalidTransition(glob, ctx.actor, `Run failure ignored: glob is ${glob.status}`);

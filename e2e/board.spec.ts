@@ -14,18 +14,6 @@ const signIn = async (browser: Browser, email: string): Promise<Page> => {
   return page;
 };
 
-/** Drags in small steps so dnd-kit's pointer sensor sees a real drag. */
-const dragTo = async (page: Page, from: string, to: string) => {
-  const source = await page.getByTestId(from).boundingBox();
-  const target = await page.getByTestId(to).boundingBox();
-  if (source === null || target === null) throw new Error('Nothing to drag');
-  await page.mouse.move(source.x + 20, source.y + 20);
-  await page.mouse.down();
-  await page.mouse.move(source.x + 40, source.y + 40, { steps: 5 });
-  await page.mouse.move(target.x + target.width / 2, target.y + 80, { steps: 15 });
-  await page.mouse.up();
-};
-
 test('a glob created and moved on one board shows up live on another', async ({ browser }) => {
   const a = await signIn(browser, owner);
   await a.getByLabel('Name', { exact: true }).fill(`Smoke ${unique}`);
@@ -41,7 +29,7 @@ test('a glob created and moved on one board shows up live on another', async ({ 
   const b = await signIn(browser, teammate);
   await b.goto(boardUrl);
   await a.goto(boardUrl);
-  await expect(b.getByTitle('Live')).toBeVisible();
+  await expect(b.getByTestId('live-indicator')).toHaveText('LIVE');
 
   // Create in A; B sees it in Planning without reloading.
   await a.getByRole('button', { name: 'New glob' }).click();
@@ -52,13 +40,8 @@ test('a glob created and moved on one board shows up live on another', async ({ 
   const card = await a.getByTestId('list-planning').locator('[data-testid^="card-"]').first().getAttribute('data-testid');
   if (card === null) throw new Error('No card');
 
-  // Drag to Doing in A and choose Pick up; B sees it move.
-  await dragTo(a, card, 'list-doing');
-  const move = a.getByRole('dialog', { name: /^Move .* to Doing$/ });
-  await expect(move).toBeVisible();
-  // dnd-kit swallows clicks until the event loop turns after a drop.
-  await a.waitForTimeout(50);
-  await move.getByRole('button', { name: /^Pick up/ }).click();
+  // Pick it up from the card in A (its move buttons are the only moves it has); B sees it move.
+  await a.getByTestId(card).getByTestId('move-pick_up').click();
   await expect(b.getByTestId('list-doing').getByText('Smoke glob')).toBeVisible();
   await expect(planningB.getByText('Smoke glob')).toHaveCount(0);
 

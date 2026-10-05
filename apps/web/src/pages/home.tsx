@@ -32,7 +32,7 @@ export const LoginPage = () => {
   return (
     <main className='grid min-h-dvh place-items-center p-4'>
       <form className='grid w-full max-w-xs gap-3' onSubmit={(e) => void submit(e)}>
-        <h1 className='text-lg font-semibold'>slop</h1>
+        <h1 className='font-mono text-lg font-semibold tracking-wider'>SLOPMUX<span className='text-signal'>_</span></h1>
         <p className='text-xs text-muted-foreground'>Development sign-in: any email, no password.</p>
         <Label>
           Email
@@ -72,7 +72,7 @@ export const HomePage = () => {
   return (
     <main className='mx-auto grid max-w-lg gap-6 p-6'>
       <header className='flex items-center justify-between'>
-        <h1 className='text-lg font-semibold'>slop</h1>
+        <h1 className='font-mono text-lg font-semibold tracking-wider'>SLOPMUX<span className='text-signal'>_</span></h1>
         <span className='flex items-center gap-3 text-sm text-muted-foreground'>
           {me.data.email}
           <Button

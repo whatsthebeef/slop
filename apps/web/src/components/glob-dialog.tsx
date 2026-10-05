@@ -6,6 +6,8 @@ import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
+import { ArtifactsSection } from './artifacts';
+import type { ArtifactRef } from './artifacts';
 import { GroupChip } from './glob-card';
 import { LabelSwitches } from './labels';
 import { PlanEditor } from './plan-editor';
@@ -26,6 +28,7 @@ const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLoc
 export const GlobDialog = ({
   board,
   glob,
+  initialArtifact,
   onClose,
   onUpdate,
   onAction,
@@ -34,6 +37,8 @@ export const GlobDialog = ({
 }: {
   board: BoardView;
   glob: GlobView;
+  /** The artifact to show first (from a card icon). */
+  initialArtifact: ArtifactRef | null;
   onClose: () => void;
   onUpdate: (changes: GlobChanges) => Promise<void>;
   onAction: (action: Action) => Promise<void>;
@@ -43,7 +48,9 @@ export const GlobDialog = ({
   const [draft, setDraft] = useState<GlobChanges>({});
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
   useEffect(() => setDraft({}), [glob.id]);
+  useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
 
   const merged = { ...glob, ...draft };
   const dirty = Object.keys(draft).length > 0;
@@ -177,6 +184,8 @@ export const GlobDialog = ({
           </div>
 
           <PlanEditor globId={glob.id} summary={glob.summary} />
+
+          <ArtifactsSection globId={glob.id} artifacts={glob.artifacts ?? []} selected={artifact} onSelect={setArtifact} />
 
           <dl className='grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground'>
             <dt>Planner</dt>

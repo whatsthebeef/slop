@@ -1,6 +1,7 @@
 import type { DomainEvent, Effect } from './domain/events.js';
 import type { IdLetter } from './domain/ids.js';
-import type { Artifact, ArtifactKind, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
+import type { KbItem, KbItemStatus } from './domain/kb.js';
+import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
 export interface GlobFilter {
@@ -49,6 +50,16 @@ export interface Tx {
   /** Latest version of each artifact (per kind and label), optionally of one kind. */
   listArtifacts(globId: string, kind?: ArtifactKind): Promise<Artifact[]>;
   artifactVersions(globId: string, kind: ArtifactKind, label: string): Promise<Artifact[]>;
+  /** Content-free summaries of the latest version of each artifact on the given globs of a board. */
+  listArtifactSummaries(boardId: number, globIds: readonly string[]): Promise<ArtifactSummary[]>;
+
+  /** Inserts a new KB item; returns false if the ID already exists. */
+  insertKbItem(item: KbItem): Promise<boolean>;
+  getKbItem(id: string): Promise<KbItem | null>;
+  /** A board's KB items, oldest first, optionally with one status. */
+  listKbItems(boardId: number, status?: KbItemStatus): Promise<KbItem[]>;
+  /** Writes `item` if the stored version is still `expectedVersion`; returns false otherwise. */
+  updateKbItem(item: KbItem, expectedVersion: number): Promise<boolean>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
@@ -63,6 +74,8 @@ export interface Store {
 export type Hint =
   | { readonly kind: 'glob.changed'; readonly boardId: number; readonly globId: string; readonly version: number }
   | { readonly kind: 'glob.deleted'; readonly boardId: number; readonly globId: string; readonly version: number }
+  /** An artifact was added: it doesn't bump the glob's version, so clients refetch regardless. */
+  | { readonly kind: 'glob.artifacts'; readonly boardId: number; readonly globId: string }
   | { readonly kind: 'board.changed'; readonly boardId: number };
 
 /** Publishes small change hints to open boards after a commit. */
@@ -86,7 +99,8 @@ export interface IdGenerator {
 
 /** Who owns routines: used to fall back to the board's default routine owner. */
 export interface RoutineDirectory {
-  hasRoutine(email: string): Promise<boolean>;
+  /** Whether the developer has a routine for this board (their own for it, or their default). */
+  hasRoutine(email: string, boardId: number): Promise<boolean>;
 }
 
 export type { Role };

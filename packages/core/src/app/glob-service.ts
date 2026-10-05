@@ -3,6 +3,8 @@ import type { Result } from '../domain/errors.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import type { Context, CreateInput, FieldChanges, Transition } from '../domain/machine.js';
+import { ARTIFACT_KINDS } from '../domain/knowledge.js';
+import type { ArtifactSummary } from '../domain/knowledge.js';
 import type { Actor, Board, Category, Glob, LabelName, LabelState, SlopType } from '../domain/types.js';
 import type { Clock, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 
@@ -29,7 +31,13 @@ export interface CreateGlobInput {
 export interface GlobView {
   readonly glob: Glob;
   readonly allowedActions: readonly machine.Action[];
+  /** The latest version of each artifact, without content. */
+  readonly artifacts: readonly ArtifactSummary[];
 }
+
+/** Artifacts in a stable order: by kind (plan first), then label. */
+const byKind = (a: ArtifactSummary, b: ArtifactSummary): number =>
+  ARTIFACT_KINDS.indexOf(a.kind) - ARTIFACT_KINDS.indexOf(b.kind) || a.label.localeCompare(b.label);
 
 type Step = (glob: Glob, ctx: Context, board: Board) => Result<Transition>;
 
@@ -52,7 +60,8 @@ export class GlobService {
       if (glob === null) return notFound(`No glob ${id}`);
       const actor = await this.actorFor(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      return ok({ glob, allowedActions: machine.allowedActions(glob, actor.value) });
+      const artifacts = await tx.listArtifactSummaries(glob.boardId, [glob.id]);
+      return ok({ glob, allowedActions: machine.allowedActions(glob, actor.value), artifacts: artifacts.sort(byKind) });
     });
   }
 
@@ -61,6 +70,31 @@ export class GlobService {
       const actor = await this.actorFor(tx, email, boardId);
       if (!actor.ok) return actor;
       return ok(await tx.listGlobs(boardId, filter));
+    });
+  }
+
+  /**
+   * The board's globs with their artifact summaries (read from the artifacts, not stored on the
+   * glob). `shown` drops globs before their summaries are read (e.g. signed off long ago).
+   */
+  async listWithArtifacts(
+    email: string,
+    boardId: number,
+    filter: GlobFilter,
+    shown: (glob: Glob) => boolean = () => true,
+  ): Promise<Result<{ glob: Glob; artifacts: ArtifactSummary[] }[]>> {
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await this.actorFor(tx, email, boardId);
+      if (!actor.ok) return actor;
+      // Sequential: a transaction holds a single connection.
+      const globs = (await tx.listGlobs(boardId, filter)).filter(shown);
+      const summaries = await tx.listArtifactSummaries(
+        boardId,
+        globs.map((g) => g.id),
+      );
+      const byGlob = new Map<string, ArtifactSummary[]>();
+      for (const summary of summaries) byGlob.set(summary.globId, [...(byGlob.get(summary.globId) ?? []), summary]);
+      return ok(globs.map((glob) => ({ glob, artifacts: (byGlob.get(glob.id) ?? []).sort(byKind) })));
     });
   }
 
@@ -132,9 +166,9 @@ export class GlobService {
   }
 
   /** `report_failure` from a person's interactive session (no run ID). */
-  reportFailure(email: string, id: string, reason: string, runId: string | null) {
+  reportFailure(email: string, id: string, reason: string, runId: string | null, agentSetVersion: number | null = null) {
     return this.command(email, id, null, (glob, ctx) =>
-      machine.reportFailure(glob, { reason, runId }, ctx),
+      machine.reportFailure(glob, { reason, runId, agentSetVersion }, ctx),
     );
   }
 
@@ -245,7 +279,7 @@ export class GlobService {
     const now = this.deps.clock.now();
     // Only the actor ever triggers a run, so resolve their routine owner up front.
     let owner = actor?.email ?? board.defaultRoutineOwner ?? '';
-    if (actor !== null && !(await this.deps.routines.hasRoutine(actor.email))) {
+    if (actor !== null && !(await this.deps.routines.hasRoutine(actor.email, board.id))) {
       owner = board.defaultRoutineOwner ?? actor.email;
     }
     return {

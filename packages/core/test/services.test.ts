@@ -48,7 +48,7 @@ describe('services', () => {
       notifier,
       clock: { now: () => '2026-10-05T12:00:00.000Z' },
       ids: { runId: () => `run-${++runs}` },
-      routines: { hasRoutine: (email) => Promise.resolve(withRoutine.has(email)) },
+      routines: { hasRoutine: (email, board) => Promise.resolve(withRoutine.has(email) || withRoutine.has(`${email}#${String(board)}`)) },
     });
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV, PO]) await tx.upsertUser({ email, name: email, active: true });
@@ -86,7 +86,7 @@ describe('services', () => {
     unwrap(await globs.update(DEV, glob.id, 1, { group: 'Sync' }));
     const stale = await globs.start(DEV, glob.id, 1);
     expect(stale.ok).toBe(false);
-    if (!stale.ok && stale.error.code === 'version_conflict') {
+    if (!stale.ok && stale.error.code === 'version_conflict' && 'current' in stale.error) {
       expect(stale.error.current.version).toBe(2);
     }
     expect(unwrap(await globs.start(DEV, glob.id, 2)).status).toBe('implementing');
@@ -98,6 +98,12 @@ describe('services', () => {
     const fallback = unwrap(await globs.create(PO, input({ type: 'sub' })));
     expect(fallback.runs[0]?.triggeredBy).toBe(PO);
     expect(fallback.runs[0]?.routineOwner).toBe(ADMIN);
+  });
+
+  it("counts a routine set up only for this board as the triggerer's own", async () => {
+    withRoutine.add(`${PO}#${String(boardId)}`);
+    const glob = unwrap(await globs.create(PO, input({ type: 'sub' })));
+    expect(glob.runs[0]?.routineOwner).toBe(PO);
   });
 
   it('refuses non-members and deactivated users', async () => {
@@ -117,6 +123,23 @@ describe('services', () => {
     );
     expect(ready.status).toBe('pr_open');
     expect(runId).toBe('run-1');
+  });
+
+  it('merge (row 14) needs the current version and passed checks, then queues the squash merge', async () => {
+    const glob = unwrap(await globs.create(DEV, input()));
+    const picked = unwrap(await globs.pickUp(DEV, glob.id, glob.version, false));
+    const ready = unwrap(
+      await globs.applyEvent(picked.id, (g, ctx) => machine.prReadyForReview(g, { number: 7, headSha: 'abc' }, ctx)),
+    );
+    const early = await globs.merge(DEV, ready.id, ready.version);
+    expect(!early.ok && early.error.code).toBe('invalid_transition');
+    const passing = unwrap(
+      await globs.applyEvent(ready.id, (g, ctx) => machine.checksCompleted(g, { sha: 'abc', passed: true }, ctx)),
+    );
+    const stale = await globs.merge(DEV, passing.id, passing.version - 1);
+    expect(!stale.ok && stale.error.code).toBe('version_conflict');
+    expect(unwrap(await globs.merge(DEV, passing.id, passing.version)).status).toBe('merging');
+    expect(store.state.outbox.at(-1)).toMatchObject({ kind: 'squash_merge', globId: glob.id, sha: 'abc' });
   });
 
   it('delete removes the glob and its events and queues the clean-up', async () => {

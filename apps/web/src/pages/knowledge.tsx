@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Link, useParams } from 'react-router';
+import { KbProposals } from '@/components/kb-proposals';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { api, RequestError } from '@/lib/api';
@@ -19,7 +20,7 @@ const summary = (r: ImportResult) =>
     .filter((s) => s !== '')
     .join(', ');
 
-/** The board's knowledge base: its documents, its agent set, and the ways to add to them. */
+/** The board's knowledge base: its documents, proposals for it, its agent set, and the ways to add to them. */
 export const KnowledgePage = () => {
   const boardId = Number(useParams().boardId);
   const client = useQueryClient();
@@ -117,6 +118,13 @@ export const KnowledgePage = () => {
           </label>
         )}
       </section>
+
+      <KbProposals
+        boardId={boardId}
+        admin={admin}
+        documents={kb.data.documents}
+        agentFiles={kb.data.agentSet.files}
+      />
 
       {admin && catalog.data !== undefined && (
         <section className='grid gap-2'>

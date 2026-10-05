@@ -105,6 +105,66 @@ describe('PgStore', () => {
     expect(versions.map((v) => v.version)).toEqual([1, 2]);
   });
 
+  it('summarises artifacts per glob on a board: latest version per kind, version count, no content', async () => {
+    const first = unwrap(await create());
+    const second = unwrap(await create());
+    const elsewhere = await store.transaction(async (tx) => {
+      const board = await tx.insertBoard({
+        name: 'other',
+        repo: null,
+        baseBranch: 'main',
+        timeZone: 'UTC',
+        defaultRoutineOwner: null,
+        environments: [],
+        sensitivePaths: [],
+      });
+      const glob = { ...first, id: `s${String(board.id)}t1`, boardId: board.id, version: 1 };
+      await tx.insertGlob(glob, null);
+      return glob;
+    });
+    const put = (globId: string, kind: 'local_review' | 'postplan', commitSha: string | null, by: 'sessionator' | 'routine' = 'sessionator') =>
+      store.transaction((tx) =>
+        tx.insertArtifact({
+          globId,
+          kind,
+          label: '',
+          content: `${kind} at ${commitSha ?? '-'}`,
+          link: null,
+          commitSha,
+          provenance: { by, actor: 'dev@example.com', runId: null, agentSetVersion: 2 },
+          createdAt: new Date().toISOString(),
+        }),
+      );
+    await put(first.id, 'local_review', 'aaa');
+    await put(first.id, 'local_review', 'bbb');
+    await put(first.id, 'postplan', 'bbb');
+    await put(second.id, 'local_review', null, 'routine');
+    await put(elsewhere.id, 'local_review', 'zzz');
+
+    const summaries = await store.transaction((tx) => tx.listArtifactSummaries(1, [first.id, second.id, elsewhere.id]));
+    const rows = summaries
+      .map((a) => `${a.globId}:${a.kind}:v${String(a.version)}/${String(a.versions)}:${a.commitSha ?? '-'}:${a.by}`)
+      .sort();
+    expect(rows).toEqual(
+      [
+        `${first.id}:local_review:v2/2:bbb:sessionator`,
+        `${first.id}:postplan:v1/1:bbb:sessionator`,
+        `${second.id}:local_review:v1/1:-:routine`,
+      ].sort(),
+    );
+    expect(summaries[0]).not.toHaveProperty('content');
+    expect(summaries.every((a) => typeof a.createdAt === 'string' && a.actor === 'dev@example.com')).toBe(true);
+
+    const one = await store.transaction((tx) => tx.listArtifactSummaries(1, [second.id]));
+    expect(one.map((a) => a.globId)).toEqual([second.id]);
+    expect(await store.transaction((tx) => tx.listArtifactSummaries(1, []))).toEqual([]);
+
+    const view = unwrap(await globs.get('dev@example.com', first.id));
+    expect(view.artifacts.map((a) => a.kind)).toEqual(['postplan', 'local_review']);
+    const board = unwrap(await globs.listWithArtifacts('dev@example.com', 1, {}));
+    expect(board.find((g) => g.glob.id === second.id)?.artifacts.map((a) => a.kind)).toEqual(['local_review']);
+  });
+
   it('keeps earlier knowledge versions as history', async () => {
     const doc = {
       boardId: 1,

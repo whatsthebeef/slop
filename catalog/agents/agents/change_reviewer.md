@@ -54,11 +54,13 @@ You review code changes to make sure they meet the glob's requirements, follow t
 
 ### 4. Dependency checks
 
-Run every dependency check the board's build doc defines (for example a vulnerability audit, or a check that the lockfile matches the dependency manifests). Also check whether the branch changes dependency manifests or lockfiles, and flag unexpected changes as `IN-SCOPE`, noting what changed.
+When the branch changes dependency manifests or lockfiles, run every dependency check the board's build doc defines (for example a vulnerability audit, or a check that the lockfile matches the dependency manifests); otherwise record them as N/A. Also check whether the branch changes dependency manifests or lockfiles, and flag unexpected changes as `IN-SCOPE`, noting what changed.
 
 ### 5. Build, test and lint (standalone mode, or when asked)
 
 Run the build, test and lint commands from the board's build doc and record pass/fail (per package or module, where the project has several) with errors and warnings.
+
+In standard mode, don't re-run what the implementer and tester already ran: take their recorded commands and results into the review document, and re-run a single targeted check only when a result looks wrong or a finding depends on it. Spend the effort on reading the change.
 
 ### 6. Browser verification (if a server URL is provided)
 

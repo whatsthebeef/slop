@@ -1,6 +1,6 @@
 import type { ArtifactService, BoardService, GlobService, IntakeService, KnowledgeService, Result } from '@slop/core';
 import { machine } from '@slop/core';
-import { CATEGORIES, SLOP_TYPES, STATUSES } from '@slop/core';
+import { CATEGORIES, LEARNING_TYPES, SLOP_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -139,12 +139,12 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'get_glob',
     {
       description:
-        'Everything about a glob: status, version, fields, labels, PR, runs and flags. Routines pass their run ID, which records the run as making progress.',
+        'Everything about a glob: status, version, fields, labels, PR, runs, flags, and its artifacts (the latest version of each plan, implementation plan, postplan, local review and attachment, with version count, commitSha, createdAt and provenance; no content). Routines pass their run ID, which records the run as making progress.',
       inputSchema: { id: z.string(), runId: z.string().optional() },
     },
     async ({ id, runId }) => {
       if (runId !== undefined) await globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
-      return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions));
+      return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
     },
   );
 
@@ -224,7 +224,12 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
         'Become the glob\'s human implementer. Refused with run_active while a routine run is active or watching, unless takeOver is set.',
       inputSchema: { id: z.string(), version: z.number().int(), takeOver: z.boolean().optional() },
     },
-    async ({ id, version, takeOver }) => reply(await globs.pickUp(email, id, version, takeOver ?? false), (g) => globView(g)),
+    async ({ id, version, takeOver }) => {
+      const result = await globs.pickUp(email, id, version, takeOver ?? false);
+      // Run the jobs it queued (a super's provisioning) now, as the REST action does.
+      if (result.ok) await deps.outbox.drain(id);
+      return reply(result, (g) => globView(g));
+    },
   );
 
   server.registerTool(
@@ -243,12 +248,35 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
   );
 
   server.registerTool(
+    'merge',
+    {
+      description:
+        "Merge a same or super whose PR is ready and whose required checks passed on the current head, as the glob's Merge button does: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. Pass the version you read.",
+      inputSchema: { id: z.string(), version: z.number().int() },
+    },
+    async ({ id, version }) => {
+      const result = await globs.merge(email, id, version);
+      if (!result.ok) return reply(result);
+      // Run the squash_merge job now and answer with the glob as it then is, as the REST action does.
+      await deps.outbox.drain(id);
+      return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
+    },
+  );
+
+  server.registerTool(
     'report_failure',
     {
-      description: 'Report that the glob cannot be finished. Routines pass their run ID.',
-      inputSchema: { id: z.string(), reason: z.string().min(1), runId: z.string().optional() },
+      description:
+        'Report that the glob cannot be finished. Routines pass their run ID; pass the agent-set version from .claude/slop-agent-set.json.',
+      inputSchema: {
+        id: z.string(),
+        reason: z.string().min(1),
+        runId: z.string().optional(),
+        agentSetVersion: z.number().int().nonnegative().optional(),
+      },
     },
-    async ({ id, reason, runId }) => reply(await globs.reportFailure(email, id, reason, runId ?? null), (g) => globView(g)),
+    async ({ id, reason, runId, agentSetVersion }) =>
+      reply(await globs.reportFailure(email, id, reason, runId ?? null, agentSetVersion ?? null), (g) => globView(g)),
   );
 
   // ---------------------------------------------------------------------------
@@ -285,15 +313,18 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'get_conventions',
     {
       description:
-        "The board's knowledge. Without an area: the index of documents (name, area, description, and audience: the agents that must always be given it). With an area or a document name: those documents in full.",
+        "The board's knowledge. Without an area: the index of documents (name, area, description, and audience: the agents that must always be given it) and the approved learnings (statement, type, source globs, approvedAt). With an area or a document name: those documents in full.",
       inputSchema: { board: z.number().int(), area: z.string().optional() },
     },
-    async ({ board, area }) =>
-      area === undefined
-        ? reply(await knowledge.index(email, board), (documents) => ({ documents, learnings: [] }))
-        : reply(await knowledge.documents(email, board, area), (docs) =>
-            docs.map(({ name, area: a, audience, description, version, content }) => ({ name, area: a, audience, description, version, content })),
-          ),
+    async ({ board, area }) => {
+      if (area === undefined) {
+        const [index, learnings] = await Promise.all([knowledge.index(email, board), knowledge.approvedLearnings(email, board)]);
+        return learnings.ok ? reply(index, (documents) => ({ documents, learnings: learnings.value })) : reply(learnings);
+      }
+      return reply(await knowledge.documents(email, board, area), (docs) =>
+        docs.map(({ name, area: a, audience, description, version, content }) => ({ name, area: a, audience, description, version, content })),
+      );
+    },
   );
 
   server.registerTool(
@@ -307,6 +338,56 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
       },
     },
     async ({ board, documents }) => reply(await knowledge.importDocuments(email, board, documents, 'import')),
+  );
+
+  server.registerTool(
+    'submit_learning',
+    {
+      description:
+        "Submit one learning from a run (orchestrator phase 6, /finalise) as a KB item for the board's admins to review; nothing changes the knowledge base until it is approved. Returns its ID (s1k3). Pass the agent-set version from .claude/slop-agent-set.json; routines pass their run ID. /kb-bootstrap proposes a whole new document with `document`; approving it creates or updates that document.",
+      inputSchema: {
+        board: z.number().int(),
+        sourceGlobId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('The glob the learning came from; required unless a document is proposed'),
+        type: z
+          .enum(LEARNING_TYPES)
+          .describe('decision, gotcha, pattern, or agent-behaviour (something an instruction would have prevented)'),
+        statement: z.string().min(1).describe('The learning, as one rule or fact'),
+        evidence: z.string().min(1).describe('What showed it: files, review findings, failures, a developer correction'),
+        suggestedTarget: z.string().optional().describe('Where it belongs: a document, area or agent definition'),
+        agentSetVersion: z.number().int().nonnegative().optional(),
+        runId: z.string().optional(),
+        document: z
+          .object({
+            name: z.string().min(1).describe('Document name, e.g. build_test_lint'),
+            area: z.string().min(1).describe('Frontmatter area, e.g. build, conventions, architecture'),
+            audience: z.array(z.string().min(1)).describe('Agents that must always be given it, e.g. implementer, tester'),
+            description: z.string().min(1).describe('One line: what the document covers'),
+            content: z.string().min(1).max(200_000).describe('The document body in Markdown (frontmatter is built from the fields above)'),
+          })
+          .optional()
+          .describe('A whole new document to propose (/kb-bootstrap)'),
+      },
+    },
+    async ({ board, sourceGlobId, type, statement, evidence, suggestedTarget, agentSetVersion, runId, document }) => {
+      if (runId !== undefined && sourceGlobId !== undefined) {
+        await deps.globs.applyEvent(sourceGlobId, (g, ctx) => machine.runProgress(g, runId, ctx));
+      }
+      return reply(
+        await knowledge.submitLearning(email, board, {
+          sourceGlobId: sourceGlobId ?? null,
+          type,
+          statement,
+          evidence,
+          suggestedTarget: suggestedTarget ?? null,
+          agentSetVersion: agentSetVersion ?? null,
+          document: document ?? null,
+        }),
+      );
+    },
   );
 
   server.registerTool(
@@ -335,7 +416,7 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'attach',
     {
       description: 'Attach text or a link to a glob (clarifications, assumptions, notes) under a label.',
-      inputSchema: { id: z.string(), label: z.string().min(1), text: z.string().optional(), link: z.url().optional() },
+      inputSchema: { id: z.string(), label: z.string().min(1), text: z.string().optional(), link: z.url({ protocol: /^https?$/ }).optional() },
     },
     async ({ id, label, text, link }) =>
       reply(await artifacts.attach(email, id, { label, text: text ?? null, link: link ?? null }), (a) =>
@@ -354,7 +435,7 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
         content: z.string().min(1),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
-        agentSetVersion: z.number().int().optional(),
+        agentSetVersion: z.number().int().nonnegative().optional(),
       },
     },
     async ({ id, kind, content, commitSha, runId, agentSetVersion }) => {

@@ -56,7 +56,7 @@ const outbox = new OutboxRunner(db, { globs }, codeHostExecutors(github, boardOf
 const catalog = new FsCatalog(config.CATALOG_DIR);
 const clock = { now: () => new Date().toISOString() };
 const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub });
-const artifacts = new ArtifactService({ store, clock });
+const artifacts = new ArtifactService({ store, clock, notifier: hub });
 const intake = new IntakeService({
   store,
   llm: new BedrockLlm(config.INTAKE_MODEL, config.BEDROCK_REGION, (u) =>
@@ -64,8 +64,15 @@ const intake = new IntakeService({
   ),
 });
 
+// Signs agent-set download links and the board sign-in state.
+const links = new SignedLinks(config.SIGNING_SECRET);
+if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
+  console.warn('[auth] SIGNING_SECRET is not set: sign-ins and download links in flight fail across restarts and instances');
+}
+
 const app = createApp({
   auth,
+  links,
   boards,
   globs,
   hub,
@@ -78,7 +85,6 @@ const app = createApp({
 mountKnowledge(app, { knowledge, artifacts, catalog, intake, boards, host: github });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
-const links = new SignedLinks(config.SIGNING_SECRET);
 const agentSetValues = { SLOP_URL: config.PUBLIC_URL, COGNITO_CLAUDE_CODE_CLIENT_ID: config.CLAUDE_CODE_CLIENT_ID };
 app.get('/downloads/agent-set/:board', async (c) => {
   const boardId = Number(c.req.param('board'));

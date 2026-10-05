@@ -67,6 +67,8 @@ export type ProvisioningState = 'none' | 'pending' | 'ok' | 'failed';
 export interface Failure {
   readonly reason: string;
   readonly at: string;
+  /** Failure reports: the agent-set version the session or run used, when it said. */
+  readonly agentSetVersion?: number;
 }
 
 export interface Glob {

@@ -1,9 +1,14 @@
 import type {
   Action,
+  Approval,
+  ArtifactKind,
+  ArtifactSummary,
   Board,
   Category,
   Environment,
   Glob,
+  KbItem,
+  KbItemStatus,
   LabelName,
   LabelState,
   List,
@@ -18,7 +23,11 @@ export interface GlobView extends Glob {
   readonly branch: string;
   readonly currentRun: Run | null;
   readonly allowedActions?: readonly Action[];
+  /** The latest version of each artifact (board list and glob reads; absent from some write responses). */
+  readonly artifacts?: readonly ArtifactSummaryView[];
 }
+
+export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;
 
 export interface BoardView extends Board {
   readonly role: Role;
@@ -52,11 +61,12 @@ export interface ImportResult {
 
 export interface ArtifactView {
   readonly id: number;
-  readonly kind: string;
+  readonly kind: ArtifactKind;
   readonly label: string;
   readonly version: number;
   readonly content: string;
   readonly link: string | null;
+  readonly commitSha: string | null;
   readonly createdAt: string;
   readonly provenance: { readonly by: string; readonly actor: string };
 }
@@ -65,6 +75,8 @@ export interface ApiError {
   readonly code: string;
   readonly message: string;
   readonly current?: GlobView;
+  /** A KB item's version conflict carries the item as it is now. */
+  readonly currentItem?: KbItem;
   readonly allowedActions?: readonly string[];
 }
 
@@ -150,6 +162,14 @@ export const api = {
   upload: (boardId: number, documents: { fileName: string; content: string }[]) =>
     request<ImportResult>('POST', `/api/boards/${boardId}/kb/uploads`, { documents }),
   forkAgentSet: (boardId: number) => request<ImportResult>('POST', `/api/boards/${boardId}/kb/agent-set/fork`),
+  agentSetFile: (boardId: number, path: string) =>
+    request<{ path: string; content: string }>('GET', `/api/boards/${boardId}/kb/agent-set/file?path=${encodeURIComponent(path)}`),
+  proposals: (boardId: number, status?: KbItemStatus) =>
+    request<KbItem[]>('GET', `/api/boards/${boardId}/kb/proposals${status === undefined ? '' : `?status=${status}`}`),
+  approveProposal: (id: string, version: number, approval: Approval) =>
+    request<KbItem>('POST', `/api/kb/${id}/approve`, { ...approval, version }),
+  rejectProposal: (id: string, version: number, reason: string) =>
+    request<KbItem>('POST', `/api/kb/${id}/reject`, { version, reason }),
   plan: (id: string) =>
     request<{ current: ArtifactView | null; versions: { version: number; createdAt: string; by: string }[] }>(
       'GET',
@@ -157,6 +177,8 @@ export const api = {
     ),
   savePlan: (id: string, content: string) => request<ArtifactView>('PUT', `/api/globs/${id}/plan`, { content }),
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
+  artifactVersions: (id: string, kind: ArtifactKind, label: string) =>
+    request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts/${kind}?label=${encodeURIComponent(label)}`),
   setLabel: (id: string, label: LabelName, state: LabelState, version: number) =>
     request<GlobView>('PUT', `/api/globs/${id}/labels/${label}`, { state, version }),
 };

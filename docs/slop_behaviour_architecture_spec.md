@@ -70,7 +70,7 @@ Globs move through four lists: Planning, Doing, Reviewing, Signed Off. Reviewing
 
 **Routine run on the card:** a run indicator shows the current run's state (queued, active, watching, ended: completed, failed or superseded), its routine owner and triggerer, when it started and when it last made progress (its last slop call or push). The glob view lists the run history and, for the current run, an *Open in Claude* link to the cloud session at claude.ai/code and a copyable *Continue locally* command (`sstor --teleport <id>`). Slop stores each run's cloud session ID and URL from the routine fire response (to verify in slice 4; fallback: the routine reports them on its first MCP call). Only the routine owner can teleport into a run; for everyone else the link is view-only.
 
-**Live updates:** every save publishes a small hint (`kind`, `globId`, `version`) through the notifier port. The server streams it to every open board over server-sent events; the board refetches that glob, and reloads the whole board after reconnecting. Each glob carries a version number and every write is conditional on it, so simultaneous moves resolve cleanly.
+**Live updates:** every save publishes a small hint (`kind`, `globId`, `version`) through the notifier port. The server streams it to every open board over server-sent events; the board refetches that glob (unless it already holds that version), and reloads the whole board after reconnecting. The exception is `glob.artifacts`, sent when an artifact is added: artifacts are versioned on their own and the card reads them from the artifact records, so adding one doesn't bump the glob's version (which would turn concurrent client writes into conflicts), and its hint carries no version; the board always refetches that glob, and any open artifact view. Each glob carries a version number and every write is conditional on it, so simultaneous moves resolve cleanly.
 
 **Changing type, category and group:** category and group can be changed at any time (the type/category matrix still applies; IDs keep their original letter). Type changes are limited to what the current execution mode supports: sub to same at any point before merge (the developer then merges instead of auto-merge); same and super interchangeably only in `in_progress` or `pr_open` with no run queued, active or watching, since both are human-driven there; same to sub only from `planning`, which is a transition (row 26) and starts work. No other type changes are allowed, and apart from row 26 a type change never moves the glob. Reports use the category at report time.
 
@@ -96,7 +96,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 | 1 | — | `planning` | Create (board, MCP or sstor) | Same | Valid type/category | Intake; planner recorded. No branch yet: it is provisioned when the glob enters Doing |
 | 2 | — | `implementing` | Create | Sub | Valid type/category | Provision branch, empty first commit and draft PR with labels; queue a routine run for the triggerer (fallback: default routine owner) |
 | 3 | — | `in_progress` | Create (`sstor --new --super` or MCP) | Super | Valid type/category | Provision as 2; implementer = creator |
-| 4 | — | `implementing` | Create with explicit auto-trigger or `runRoutine` | Same | Instruction explicit | As 2 |
+| 4 | — | `implementing` | Create with `autoTrigger` | Same | Instruction explicit | As 2 |
 | 5 | `planning` | `implementing` | Start (button or `start_glob`) | Same | — | Provision as 2; queue a routine run |
 | 6 | `planning`, `failed` | `in_progress` | Pick up | All | No run active or watching | Implementer = picker; provision as 2 if the glob has no branch yet; a queued run is cancelled together with its launch job |
 | 7 | `pr_open` | `pr_open` | Pick up | All | No run active or watching | Implementer = picker; status unchanged; a queued run is cancelled with its launch job |
@@ -160,7 +160,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | Tool | Input | Returns | Used by |
 | --- | --- | --- | --- |
 | `whoami` | — | user, boards, role per board | Sessionator, Claude app |
-| `create_glob` | board, input, idempotencyKey; optional title, summary, type, category, group, environment, runRoutine, links, autoTrigger | `{ id, version, branch, provisioning: none \| ok \| failed, status, type, category, group, environment, summary }` (same glob returned for a repeated key) | All |
+| `create_glob` | board, input, idempotencyKey; optional title, summary, type, category, group, environment, links, autoTrigger | `{ id, version, branch, provisioning: none \| ok \| failed, status, type, category, group, environment, summary }` (same glob returned for a repeated key) | All |
 | `get_glob` | id | full glob: status, version, generation, fields, labels, PR, current run (state, runId, owner, triggeredBy, started, last progress, cloud session ID and URL), run history, flags, artifact list | All |
 | `get_context` | id | assembled context bundle with citations | Routines, sessionator |
 | `list_globs` | board; optional status, type, group, person | glob summaries | Claude app |
@@ -171,9 +171,10 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `pick_up` | id, version; optional takeOver | updated glob, or `run_active` if a run is active or watching and takeOver is not set | Sessionator, Claude app |
 | `put_artifact` | id, kind (`implementation_plan`, `postplan`, `local_review`), content; optional commitSha, runId | artifact version (ignored if runId is superseded) | Routines, sessionator |
 | `mark_ready` | id; runId for routines | updated glob (moves to `pr_open` when GitHub confirms) | Routines, sessionator |
-| `report_failure` | id, reason; runId for routines | updated glob | Routines, sessionator |
+| `merge` | id, version | updated glob (row 14: `pr_open` → `merging`; slop updates the branch, waits for checks on the new head and squash-merges, as the Merge button does) | Sessionator (`slop merge`); denied to agents in the agent set (with `gh pr merge`, `gh api`, `slop merge` and `slop call merge`); slop can't tell an agent from its developer, since both use the developer's sign-in, so the deny rules are the guard |
+| `report_failure` | id, reason; runId for routines; optional agentSetVersion | updated glob | Routines, sessionator |
 | `get_board` | board | board settings: repo, base branch, environments, enabled integrations | Agents, sessionator |
-| `get_agent_set` | board | the board's agent set (agents, commands, hooks, settings, CLAUDE.md section) with its version | Sessionator (`sstor init` via headless Claude), routines |
+| `get_agent_set` | board | the board's agent set (agents, commands, hooks, settings, CLAUDE.md section) with its version | Sessionator (`sstor init`), routines |
 | `get_conventions` | board; optional area | without an area: the knowledge index (each document's title, area, description and audience, meaning the agents that must always be given it) plus approved learnings; with an area: that area's documents | Agents |
 | `search_text` | board, query; optional mode (current / all time), date range, source types | matching chunks with citations | Agents, chat |
 | `search_semantic` | board, query; same options | matching chunks with citations | Agents, chat |
@@ -183,7 +184,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `get_build_results` | glob, commit or environment | build failures | Agents, chat |
 | `get_test_results` | glob, commit or environment | test runs and failures | Agents, chat |
 | `import_knowledge` | board, documents (name, content, optional frontmatter) | imported document ids; admins only | Claude in a session |
-| `submit_learning` | board, source glob id, type (decision, gotcha, pattern, agent-behaviour), statement, evidence; optional suggested target | KB item id (`s1k3`) | Agents |
+| `submit_learning` | board, source glob id, type (decision, gotcha, pattern, agent-behaviour), statement, evidence; optional suggested target, agentSetVersion, runId, and `document` (name, area, audience, description, content: a whole new-document proposal from `/kb-bootstrap`, for which the source glob is optional) | KB item id (`s1k3`) | Agents |
 | `get_review_guide` | repo | the board's review guide | CodeRabbit, review agents |
 
 All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Claude app, Claude Code and routines all connect through the OAuth connector.
@@ -194,17 +195,17 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 | --- | --- |
 | Boards | `GET /boards`, `POST /boards`, `GET /boards/{b}`, `PATCH /boards/{b}/settings` |
 | Members | `GET /boards/{b}/members`, `POST /boards/{b}/members`, `PATCH /boards/{b}/members/{email}`, `DELETE /boards/{b}/members/{email}` (admins only) |
-| Globs | `GET /boards/{b}/globs`, `GET /globs/{id}`, `POST /boards/{b}/globs`, `PATCH /globs/{id}`, `DELETE /globs/{id}` |
+| Globs | `GET /boards/{b}/globs`, `GET /globs/{id}` (both with each glob's artifact summaries: latest version per kind, version count, commit SHA, provenance, no content), `POST /boards/{b}/globs`, `PATCH /globs/{id}`, `DELETE /globs/{id}` |
 | Intake | `POST /boards/{b}/intake` — processes text and attachments, returns proposed fields without saving |
 | Actions | `POST /globs/{id}/actions/{start, retrigger, pick-up, start-again}` |
 | Labels | `PUT /globs/{id}/labels/{FR, CR, QA}` with state `required` or `added` |
-| Artifacts | `GET /globs/{id}/artifacts`, `GET /artifacts/{artifactId}` (presigned URL), `POST /globs/{id}/attachments` (text or link), `POST /globs/{id}/uploads` (presigned upload URL) |
+| Artifacts | `GET /globs/{id}/artifacts`, `GET /globs/{id}/artifacts/{kind}?label=` (every version of one artifact, for the viewer), `GET /artifacts/{artifactId}` (presigned URL), `POST /globs/{id}/attachments` (text or link), `POST /globs/{id}/uploads` (presigned upload URL) |
 | Signed Off | `GET /boards/{b}/signed-off?cursor=` |
-| KB | `GET /boards/{b}/kb`, `GET /catalog/kb` (catalog entries), `POST /boards/{b}/kb/catalog-imports` (import chosen catalog entries), `POST /boards/{b}/kb/uploads` (upload docs or a folder) |
+| KB | `GET /boards/{b}/kb`, `GET /catalog/kb` (catalog entries), `POST /boards/{b}/kb/catalog-imports` (import chosen catalog entries), `POST /boards/{b}/kb/uploads` (upload docs or a folder), `GET /boards/{b}/kb/proposals?status=` (KB items), `GET /boards/{b}/kb/agent-set/file?path=` (one agent-set file's stored content, for editing it while applying a KB item) |
 | Inbox | `GET /inbox`, `POST /inbox/{meetingId}/attach`, `POST /inbox/{meetingId}/create-glob`, `POST /inbox/{meetingId}/discard` |
 | Reports | `GET /boards/{b}/reports?period=2026-09` — presigned CSV URL |
 
-**Further write endpoints:** `POST /globs/{id}/actions/merge` (Merge button), `POST /globs/{id}/actions/deploy-now`, `POST /globs/{id}/actions/take-over`, `PUT /globs/{id}/plan` (edit plan.md), `POST /kb/{itemId}/approve` and `POST /kb/{itemId}/reject` (admins). Every write, through REST or MCP, carries the glob or item `version` it read.
+**Further write endpoints:** `POST /globs/{id}/actions/merge` (Merge button), `POST /globs/{id}/actions/deploy-now`, `POST /globs/{id}/actions/take-over`, `PUT /globs/{id}/plan` (edit plan.md), `POST /kb/{itemId}/approve` (as a learning, as an edit to a document or agent-set file, or as the proposed document) and `POST /kb/{itemId}/reject` (with a reason) (admins). Every write, through REST or MCP, carries the glob or item `version` it read.
 
 **Inbound**
 
@@ -216,7 +217,7 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 **Outbound**
 
 - **Routine fire:** POST to the triggerer's routine URL with text naming the glob ID and instructing the agent to call `get_context`.
-- **Live hints:** server-sent events on `/boards/{b}/events`, payload `{ kind: "glob.changed" | "glob.deleted" | "board.changed", globId, version }`.
+- **Live hints:** server-sent events on `/boards/{b}/events`, payload `{ kind: "glob.changed" | "glob.deleted" | "board.changed", globId, version }`, or `{ kind: "glob.artifacts", boardId, globId }` (no version; refetched regardless) when an artifact is added.
 - **GitHub App:** create and delete branches, update a branch (rebase), squash merge with title `<id>: <title>`, create each glob's branch with an empty first commit and open its draft PR with labels, compare commits, read check runs, post the CodeRabbit review command. CodeBuild: StartBuild for glob-branch deploys through the Deployer port.
 - **Bedrock:** intake inference, meeting classification, embeddings and board chat through the LLM port.
 
@@ -233,6 +234,7 @@ Subs and sames are implemented by Claude Code routines owned by whoever triggere
 
 - Each developer creates one routine in their own claude.ai account, used for both subs and sames, from a shared prompt and command. The prompt stays thin and identical: fetch the glob from the slop MCP and follow its instructions using the agents in `.claude/`.
 - Each developer stores the routine's fire URL and token in Secrets Manager at `slop/routines/<userId>`; slop builds the path from the triggerer. If the triggerer has no routine, slop falls back to the board's default routine owner.
+- A routine's cloud environment has a fixed set of repositories, so a developer can also store one routine per board (`slop/routines/<userId>/<boardId>`, as Secrets Manager names can't hold `#`; locally `<email>#<boardId>` in `.routines.json`), used before their default. Either way the routine's environment must include the board's repository, with the Claude GitHub App installed on it. The fire text names the board's repository, and a session that doesn't have it, or can't push to it, reports a failure instead of working in another repository.
 - The triggerer is the person whose session created the glob, where slop can determine it.
 - Usage, the daily run cap, commits and PRs belong to the routine owner; time follows the planner until a human picks the glob up (slop stores both). Only the routine owner can teleport into a run.
 - Sessionator's sstor --routine-setup command handles routine setup and storing the secret.
@@ -243,7 +245,7 @@ Subs and sames are implemented by Claude Code routines owned by whoever triggere
 
 - **The agent set is board knowledge.** Each board's agent definitions, commands, hooks and Claude settings are KB items of kind `agent`, versioned and changed through approved proposals like any other document. The board's **agent-set version** increases with every approved change to any of them.
 - **Catalog origin:** a new board imports (forks) the generic agent set from slop's public repo under `catalog/agents/`, exactly as it imports KB catalog entries. When the catalog's agent set changes, each board gets a proposal with the diff since its import; the admin merges it around the board's own changes.
-- **Delivery:** `sstor init` fetches the board's agent set with `get_agent_set(board)` through a headless Claude call (the developer's own OAuth login; sstor holds no slop credential), writes it into the checkout and records the version in `.claude/slop-agent-set.json`. The files are committed in the project repo, so every checkout, including a routine's cloud checkout, has the agents registered from the start. Updates ride along in the next glob commit.
+- **Delivery:** `sstor init` fetches the board's agent set with `get_agent_set(board)` with sstor's own sign-in (the developer's OAuth login through sstor's Cognito app client), writes it into the checkout and records the version in `.claude/slop-agent-set.json`. The files are committed in the project repo, so every checkout, including a routine's cloud checkout, has the agents registered from the start. Updates ride along in the next glob commit.
 - **Routines** use the committed copy. At the start of an unattended run the orchestrator compares the committed version with `get_agent_set`; if slop's is newer it writes the new files and commits them with the glob, and they take effect from the next session (files written during a session only register in the next one). Routines need no session-start hook.
 - **What goes in a definition and what goes in a document:** short rules that always apply to one agent go in that agent's definition, whether generic or project-specific (they are always present and carry system-prompt weight). Bulky or situational knowledge (conventions, architecture, testing guides) goes in documents, loaded by area and passed to agents by their audience.
 - The knowledge base is searchable at runtime through MCP tools such as `get_conventions`, `search_text` and `search_semantic`, and agents submit learnings with `submit_learning`.
@@ -373,9 +375,10 @@ Slop is one portable Docker image running as a single instance, backed by Postgr
 
 **Auth**
 
-- **Board:** the server handles the Cognito login (federated to Identity Center) and keeps a server-side session cookie.
+- **Board:** the server handles the Cognito login (federated to Identity Center) and keeps a server-side session cookie (30 days). The OAuth `state` is signed by the server and bound to the browser by a nonce cookie, which stops login CSRF. A plain-http `localhost` dev server can accept the signed state without the cookie, because Chrome drops it on the cross-site return from Cognito; that exception is off unless the server is started with `LOCAL_SIGN_IN_WITHOUT_COOKIE=true` (`scripts/dev.sh` sets it), so a proxy rewriting `Host` to `localhost` can't open login CSRF on a deployed slop.
 - **Claude app connector and routines:** Cognito is the OAuth authorization server, using a pre-registered app client whose ID and secret go in the connector's Advanced settings, with callback `https://claude.ai/api/mcp/auth_callback`. Routines use the account's connector.
-- **Claude Code and sessionator:** OAuth login against Cognito via `claude mcp add --client-id`, once in the browser, then automatic refresh.
+- **Claude Code:** OAuth login against Cognito via `claude mcp add --client-id`, once in the browser, then automatic refresh.
+- **Sessionator (the slop CLI):** the same public client as Claude Code, with its own callback (`localhost:7780`): `sstor login` runs the authorization code flow with PKCE once in the browser, keeps the tokens in the macOS Keychain and refreshes automatically. sstor calls slop's `/mcp` directly with the access token; it never starts a Claude session to reach slop.
 - **Slop verifies Cognito JWTs** with `aws-jwt-verify`, checking issuer and client ID, and publishes the protected-resource discovery document pointing clients at Cognito.
 - **Integrations** use per-integration secrets, not user sign-in: a per-user ingest secret for the Apps Script (it also identifies the user), the Slack app's signing secret, the GitHub App webhook secret, and an API key on the EventBridge connection. **Public endpoints:** only the script catalog is served without authentication; it is board-agnostic and contains nothing sensitive or project-specific. The agent set is board knowledge, fetched through the authenticated MCP. Everything specific to a board, including its knowledge, settings and review guide, stays behind OAuth. There is no board token.
 - **Roles live in slop.** Identity Center only answers who someone is; email is the stable user ID, with Cognito's user ID and the GitHub username stored against it.
@@ -441,7 +444,7 @@ Pairing work is at the developer's discretion, including up to 2 days before mar
 - The glob's draft PR exists from creation (supers start in Doing). Marking it ready for review (`sstor --ready`) triggers ATF and the remote review; results reach slop through the existing webhooks and EventBridge.
 - Developers choose the glob's environment from the board's branch-deploy environments. Slop tracks no environment claims; the card shows when another glob's deploy has replaced this one in a shared environment.
 - **Branches:** every glob has its own branch, always created from master. No stacking: if reviews send back serious problems, work does not continue on a new glob until they are resolved.
-- `sstor --new --super` creates the glob (through a headless Claude call to `create_glob`, which returns `{ id, branch }`) and opens a session on its branch.
+- `sstor --new --super` creates the glob (through `create_glob`, which returns `{ id, branch }`) and opens a session on its branch.
 - **Postplan:** sessionator updates the postplan from the code changes and the session conversation on each push (best effort) and always at sstor --ready and --derge, and sends it to slop. When the meeting ends and its Gemini notes arrive through the Apps Script, slop suggests attaching them to the developer's active super, a person confirms, and slop then runs one more pass merging the meeting's decisions into the postplan.
 
 ## Roles and permissions
@@ -490,7 +493,7 @@ Slop is a context manager: it holds what is known about the work, decides what i
 | Decisions | Their own items, linked to their source | One chunk | Search; shown on globs |
 | Knowledge base | Lives in slop, versioned in Postgres, per board. Each document has an area and an audience (the agents that must always be given it). Served only through MCP tools; agents save what they fetch under `.reviews/` for the session. Slop indexes it directly | By heading | `get_conventions`; search |
 
-**Knowledge delivery:** slop is the source of truth. `sstor init <board>` runs before Claude starts whenever sessionator creates or syncs an instance: it fetches the board's agent set through a headless Claude call to `get_agent_set` and writes it into the checkout, where it is committed (see Agent system). On a first install it writes the slop server entry into `.mcp.json` from sstor's own configuration (slop's URL and the Claude Code client ID, neither sensitive), so the headless call can authenticate. Routines use the committed agent set and refresh it from the orchestrator. The board ID comes from an argument, an environment variable, or `.sstor/sstor.conf` (`SLOP_BOARD`). If slop is unreachable, the committed copy is used with a warning. All other board knowledge (build commands, conventions, architecture, decisions, history) and the board's settings are fetched at run time through the MCP tools (`get_board`, `get_context`, `get_conventions`, the search tools), authenticated by the connector's OAuth. Existing project docs (e.g. a project's `.sstor/docs/`) are imported into the board's knowledge base once, then removed from the project repo. Review guides are also served from slop rather than the repo (see Review and testing). Details are in the sessionator document.
+**Knowledge delivery:** slop is the source of truth. `sstor init <board>` runs before Claude starts whenever sessionator creates or syncs an instance: it fetches the board's agent set with `get_agent_set`, using sstor's own sign-in, and writes it into the checkout, where it is committed (see Agent system). On a first install it writes the slop server entry into `.mcp.json` from sstor's own configuration (slop's URL and the Claude Code client ID, neither sensitive), so Claude Code can authenticate. Routines use the committed agent set and refresh it from the orchestrator. The board ID comes from an argument, an environment variable, or `.sstor/sstor.conf` (`SLOP_BOARD`). If slop is unreachable, the committed copy is used with a warning. All other board knowledge (build commands, conventions, architecture, decisions, history) and the board's settings are fetched at run time through the MCP tools (`get_board`, `get_context`, `get_conventions`, the search tools), authenticated by the connector's OAuth. Existing project docs (e.g. a project's `.sstor/docs/`) are imported into the board's knowledge base once, then removed from the project repo. Review guides are also served from slop rather than the repo (see Review and testing). Details are in the sessionator document.
 
 - **Card search and content search are separate.** Board filters find globs by structured fields; the chat and agent tools search content. The chat can use both.
 - **The current codebase is not indexed.** Agents with a checkout use grep and git; slop holds the history of changes, not the code. GitHub's own MCP server can complement slop's tools for code and PR search.

@@ -2,36 +2,59 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * SLOPMUX: a developer tool with a 1990s handheld's discipline. Earthy neutrals, LCD green for
+ * selection, borders over shadows, small radii. Light is the default; `.dark` on <html> (set
+ * before first paint from the saved choice or the system) switches every token.
+ */
 :root {
-  --background: oklch(0.985 0 0);
-  --foreground: oklch(0.2 0 0);
-  --card: oklch(1 0 0);
-  --muted: oklch(0.955 0 0);
-  --muted-foreground: oklch(0.5 0 0);
-  --border: oklch(0.9 0 0);
-  --primary: oklch(0.25 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.58 0.22 27);
-  --ring: oklch(0.7 0 0);
-  --amber: oklch(0.8 0.15 80);
-  --red: oklch(0.63 0.2 25);
-  --sub: oklch(0.72 0.12 200);
-  --same: oklch(0.65 0.15 280);
-  --super: oklch(0.7 0.17 50);
+  --background: #f4f1e9; /* cream */
+  --foreground: #2b2e29; /* charcoal */
+  --card: #fbf9f3; /* paper */
+  --muted: #e7e2d5; /* recessed lists, secondary surfaces */
+  --muted-foreground: #5f6950;
+  --border: #a9a993; /* khaki */
+  --edge: #d9d3c4; /* stone: card bottom edge, list rim */
+  --primary: #2b2e29;
+  --primary-foreground: #f4f1e9;
+  --press: #6b755a; /* olive edge under raised buttons */
+  --destructive: #9e3b26; /* rust */
+  --ring: #6b755a;
+  --lcd: #c7d6a0; /* selected states */
+  --lcd-foreground: #2b2e29;
+  --signal: #6b755a; /* live indicator, cursor underscore, ghost piece */
+  --signal-strong: #4e5741;
+  --remote: #a9a993; /* lock flash for moves made elsewhere */
+  --amber: #c9a04a; /* aging */
+  --red: #9e3b26; /* failures */
+  --red-soft: #c9a089; /* clay: failed card border */
+  --required: #6e513f; /* brown: FR, CR, QA still required */
+  --required-border: #8b6b56;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: oklch(0.17 0 0);
-    --foreground: oklch(0.95 0 0);
-    --card: oklch(0.22 0 0);
-    --muted: oklch(0.27 0 0);
-    --muted-foreground: oklch(0.7 0 0);
-    --border: oklch(0.32 0 0);
-    --primary: oklch(0.92 0 0);
-    --primary-foreground: oklch(0.2 0 0);
-    --ring: oklch(0.5 0 0);
-  }
+.dark {
+  --background: #22251f;
+  --foreground: #ece8dd;
+  --card: #33372f;
+  --muted: #2b2e29;
+  --muted-foreground: #b3b19b;
+  --border: #4a4f43;
+  --edge: #3a3e35;
+  --primary: #c7d6a0;
+  --primary-foreground: #2b2e29;
+  --press: #6b755a;
+  --destructive: #e5a088;
+  --ring: #c7d6a0;
+  --lcd: #c7d6a0;
+  --lcd-foreground: #2b2e29;
+  --signal: #c7d6a0;
+  --signal-strong: #c7d6a0;
+  --remote: #6b755a;
+  --amber: #d9b45a;
+  --red: #e5a088;
+  --red-soft: #9a5a44;
+  --required: #d9b49c;
+  --required-border: #c9a089;
 }
 
 @theme inline {
@@ -41,25 +64,136 @@
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
+  --color-edge: var(--edge);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-destructive: var(--destructive);
   --color-ring: var(--ring);
+  --color-lcd: var(--lcd);
+  --color-lcd-foreground: var(--lcd-foreground);
+  --color-signal: var(--signal);
+  --color-signal-strong: var(--signal-strong);
   --color-amber: var(--amber);
   --color-red: var(--red);
-  --color-sub: var(--sub);
-  --color-same: var(--same);
-  --color-super: var(--super);
+  --color-red-soft: var(--red-soft);
+  --color-required: var(--required);
+  --color-required-border: var(--required-border);
+  --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 5px;
+  --radius-xl: 6px;
 }
 
 @layer base {
   body {
     background: var(--background);
     color: var(--foreground);
-    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-sans);
   }
 
   * {
     border-color: var(--border);
+  }
+}
+
+/* Raised controls sit on a 2px edge that collapses when pressed: immediate and mechanical. */
+.press {
+  box-shadow: 0 2px 0 var(--press);
+  transition:
+    transform 60ms,
+    box-shadow 60ms;
+}
+
+.press:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 0 1px 0 var(--press);
+}
+
+/* Lists sit recessed; cards sit on them with a stone bottom edge. */
+.list-well {
+  box-shadow: inset 0 2px 0 var(--edge);
+}
+
+.card-edge {
+  box-shadow: inset 0 -2px 0 var(--edge);
+}
+
+/* The ghost piece: where a card will land if the previewed move is made. */
+.ghost-piece {
+  border: 2px dashed var(--signal);
+  border-radius: var(--radius-md);
+}
+
+/*
+ * Group labels are the one shiny thing on the board: a curated sticker colour per group
+ * (--st-hi/--st-base/--st-lo), a sheen, a light top edge and a darker bottom edge.
+ */
+.sticker {
+  color: #2b2e29;
+  border: 1px solid var(--st-lo);
+  background: linear-gradient(180deg, var(--st-hi) 0%, var(--st-base) 55%, var(--st-lo) 130%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.6),
+    0 1px 0 rgb(0 0 0 / 0.22);
+}
+
+/* A moved card locks into place with a short inverted flash: LCD green for yours, khaki for remote. */
+@keyframes lock-flash {
+  0%,
+  49% {
+    background-color: var(--flash);
+    color: var(--lcd-foreground);
+  }
+  50%,
+  100% {
+  }
+}
+
+.lock-local {
+  --flash: var(--lcd);
+  animation: lock-flash 110ms steps(1, end);
+}
+
+.lock-remote {
+  --flash: var(--remote);
+  animation: lock-flash 110ms steps(1, end);
+}
+
+/* A move with nowhere to go: the card nudges toward the wall and snaps back. */
+@keyframes wall-bump {
+  0%,
+  100% {
+    transform: none;
+  }
+  50% {
+    transform: translateX(var(--bump, 3px));
+  }
+}
+
+.wall-bump {
+  animation: wall-bump 120ms steps(2, end);
+}
+
+@keyframes tag-fade {
+  0%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.move-tag {
+  animation: tag-fade 3s linear forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lock-local,
+  .lock-remote,
+  .wall-bump {
+    animation: none;
   }
 }

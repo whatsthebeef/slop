@@ -97,9 +97,9 @@ export const SettingsPage = () => {
           <div className='flex flex-wrap items-center gap-3 text-sm'>
             <span className='font-mono'>{connection.data.repo}</span>
             {connection.data.connected ? (
-              <span className='rounded bg-emerald-600 px-2 py-0.5 text-xs text-white'>Connected</span>
+              <span className='rounded-sm border border-foreground bg-lcd px-2 py-0.5 font-mono text-xs text-lcd-foreground'>Connected</span>
             ) : (
-              <span className='rounded bg-amber px-2 py-0.5 text-xs text-black'>Not installed</span>
+              <span className='rounded-sm border border-required-border px-2 py-0.5 font-mono text-xs text-required'>Not installed</span>
             )}
             {!connection.data.connected && connection.data.installUrl !== null && (
               <a
