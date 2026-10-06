@@ -1,4 +1,4 @@
-import { agentSetKind, markdownHeadings, MAX_PROCESSING_ATTEMPTS, sectionText } from '@slop/core';
+import { agentSetKind, KB_HISTORY_PAGE, MAX_PROCESSING_ATTEMPTS, PROSE_KINDS, sameHeading, sectionText, spliceHeadings } from '@slop/core';
 import type {
   AgentSetEntry,
   Approval,
@@ -11,9 +11,9 @@ import type {
   ProposedDocument,
   TargetChange,
 } from '@slop/core';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { createContext, useContext, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { MarkdownView } from '@/components/markdown-view';
@@ -21,7 +21,11 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
+import { useCardMotion } from '@/lib/card-motion';
+import type { CardMotionOptions } from '@/lib/card-motion';
 import { invalidateKnowledge } from '@/lib/live';
+import type { LiveState } from '@/lib/live';
+import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
 
 type Decision = 'learning' | 'document' | 'reject';
@@ -29,9 +33,6 @@ type Decision = 'learning' | 'document' | 'reject';
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
 
 const message = (error: unknown) => (error instanceof RequestError ? error.body.message : 'Something went wrong');
-
-/** Kinds a learning (prose) can target among agent-set files. */
-const PROSE_KINDS: readonly KnowledgeKind[] = ['agent', 'command', 'claude_md'];
 
 /** Agent-set paths the board owns outright: their target is the whole file, not board rules over the catalog's. */
 const ownedPaths = (entries: readonly AgentSetEntry[]) =>
@@ -50,10 +51,10 @@ const targetPath = (target: KbTarget, owned: ReadonlySet<string>): string => {
 /** Items the pipeline closed without a decision: they leave the open queue but keep their links. */
 const CLOSED_BY_PIPELINE: readonly KbItem['status'][] = ['merged', 'suppressed', 'covered'];
 
-/** Whether the background pipeline still has work to do on an item (routing, or its draft). */
 /** The fallback poll while the pipeline is working; hints normally refresh the list (as the board's deploy poll). */
 const PIPELINE_POLL_MS = 15_000;
 
+/** Whether the background pipeline still has work to do on an item (routing, or its draft). */
 const inPipeline = (item: KbItem) => item.status === 'open' && (item.processing === 'pending' || item.processing === 'routed');
 
 /** The newest evidence an item has: its own submission or a near-duplicate merged into it. */
@@ -65,6 +66,25 @@ const lastEvidenceAt = (item: KbItem) => item.extraEvidence.reduce((latest, e) =
  */
 const byPriority = (a: KbItem, b: KbItem) =>
   b.occurrenceCount - a.occurrenceCount || lastEvidenceAt(b).localeCompare(lastEvidenceAt(a));
+
+/**
+ * Card motion as on the board (`useCardMotion`): an item that moves between the open list and the
+ * decided or closed sections steps across, and the cards it displaces (or a reordering by
+ * repeats and evidence) glide. No tags: the card's own outcome says what happened.
+ */
+const KB_MOTION: CardMotionOptions<KbItem> = {
+  attribute: 'data-kb-id',
+  idOf: (item) => item.id,
+  groupOf: (item) =>
+    item.status === 'open' ? 'open' : item.status === 'approved' || item.status === 'rejected' ? 'decided' : 'closed',
+  describeRemote: () => null,
+};
+
+/** The cards' lock flashes, and how a decision made here marks its move as yours. */
+const KbMotion = createContext<{ locks: Record<string, 'local' | 'remote'>; markLocal: (id: string) => void }>({
+  locks: {},
+  markLocal: () => undefined,
+});
 
 /** Scrolls to another item's card, opening the collapsed section it sits in. */
 const jumpTo = (id: string) => {
@@ -447,6 +467,8 @@ const ProposalCard = ({
   onOpen: (opening: Opening) => void;
 }) => {
   const { boardId, admin } = board;
+  const { locks, markLocal } = useContext(KbMotion);
+  const lock = locks[item.id];
   const [showDocument, setShowDocument] = useState(false);
   const open = item.status === 'open';
   const client = useQueryClient();
@@ -455,6 +477,7 @@ const ProposalCard = ({
   const approveDraft = useMutation({
     mutationFn: () => api.approveProposal(item.id, item.version, { as: 'draft' }),
     onSuccess: (decided) => {
+      markLocal(decided.id);
       toast(appliedText(decided));
       refresh(client, boardId);
     },
@@ -469,10 +492,25 @@ const ProposalCard = ({
     },
     onError: (e) => reportError(client, boardId, toast, e),
   });
+  const reopen = useMutation({
+    mutationFn: () => api.reopenProposal(item.id, item.version),
+    onSuccess: (reopened) => {
+      markLocal(reopened.id);
+      toast(`${reopened.id} is open again`);
+      void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] });
+    },
+    onError: (e) => reportError(client, boardId, toast, e),
+  });
+  const closedByPipeline = CLOSED_BY_PIPELINE.includes(item.status);
   const blocker = open && item.document === null ? approveBlocker(item) : null;
 
   return (
-    <div id={`kb-${item.id}`} className='grid gap-2 rounded-md border bg-card p-3 text-sm' data-testid={`proposal-${item.id}`}>
+    <div
+      id={`kb-${item.id}`}
+      className={cn('grid gap-2 rounded-md border bg-card p-3 text-sm', lock === 'local' && 'lock-local', lock === 'remote' && 'lock-remote')}
+      data-kb-id={item.id}
+      data-testid={`proposal-${item.id}`}
+    >
       <div className='flex flex-wrap items-center gap-2'>
         <span className='font-mono text-xs font-semibold'>{item.id}</span>
         <span className='rounded bg-muted px-1.5 text-xs'>{item.type}</span>
@@ -535,6 +573,14 @@ const ProposalCard = ({
           )}
         </p>
       )}
+      {closedByPipeline && admin && (
+        <div className='mt-1 flex flex-wrap items-center gap-2'>
+          {/* The pipeline closed it without a person: an admin can put it back in the open queue. */}
+          <Button size='sm' variant='outline' disabled={reopen.isPending} onClick={() => reopen.mutate()}>
+            Reopen
+          </Button>
+        </div>
+      )}
       {open && admin && (
         <div className='mt-1 flex flex-wrap items-center gap-2'>
           {item.document === null ? (
@@ -586,6 +632,7 @@ const DecisionDialog = ({
 }) => {
   const client = useQueryClient();
   const toast = useToast();
+  const { markLocal } = useContext(KbMotion);
   const [statement, setStatement] = useState(item.statement);
   const [content, setContent] = useState(item.document?.content ?? '');
   const [reason, setReason] = useState('');
@@ -597,6 +644,7 @@ const DecisionDialog = ({
       return api.approveProposal(item.id, item.version, approval);
     },
     onSuccess: (decided) => {
+      markLocal(decided.id);
       toast(`${decided.id} ${decided.status}`);
       refresh(client, boardId);
       onClose();
@@ -678,15 +726,18 @@ const useTargetText = (boardId: number, kind: KnowledgeKind | null, name: string
 const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item: KbItemView; target: KbTarget; onClose: () => void }) => {
   const client = useQueryClient();
   const toast = useToast();
+  const { markLocal } = useContext(KbMotion);
   const isNew = target.newDocument !== null;
   const text = useTargetText(boardId, target.kind, target.name, isNew);
   const current = isNew ? '' : text.data;
-  const headings = current === undefined ? [] : markdownHeadings(current).map((h) => h.text);
+  const headings = current === undefined ? [] : spliceHeadings(current).map((h) => h.text);
   const wanted = item.draft?.section ?? target.section;
   const [section, setSection] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(item.draft?.content ?? null);
-  // Until the admin picks one: the draft's heading when the target has it, otherwise append.
-  const chosen = section ?? (wanted !== null && headings.includes(wanted) ? wanted : '');
+  // Until the admin picks one: the draft's heading when the target has it (matched as core's splice
+  // matches it, ignoring case), otherwise append.
+  const matched = wanted === null ? undefined : headings.find((h) => sameHeading(h, wanted.replace(/^#+\s*/, '')));
+  const chosen = section ?? matched ?? '';
   // Without a draft (drafting failed), start from the section's current text.
   const body = content ?? (current === undefined ? null : chosen === '' ? '' : (sectionText(current, chosen) ?? ''));
 
@@ -694,6 +745,7 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
     mutationFn: () =>
       api.approveProposal(item.id, item.version, { as: 'draft', content: body ?? '', section: isNew || chosen === '' ? null : chosen }),
     onSuccess: (decided) => {
+      markLocal(decided.id);
       toast(appliedText(decided));
       refresh(client, boardId);
       onClose();
@@ -784,7 +836,7 @@ const TargetEditor = ({
   const name = kind === 'doc' ? docName : kind === 'agent' ? agentPath : newName.trim();
   const textKind = kind === 'doc' ? 'doc' : kind === 'agent' ? (agent?.kind ?? null) : null;
   const text = useTargetText(boardId, textKind, name, kind === 'new');
-  const headings = text.data === undefined ? [] : [...new Set(markdownHeadings(text.data).map((h) => h.text))];
+  const headings = text.data === undefined ? [] : [...new Set(spliceHeadings(text.data).map((h) => h.text))];
 
   const change = (): TargetChange | null => {
     const heading = section.trim() === '' ? null : section.trim();
@@ -982,27 +1034,45 @@ export const KbProposals = ({
   documents,
   agentEntries,
   onOpenDocument,
+  live,
 }: {
   boardId: number;
   admin: boolean;
   documents: readonly BoardDocument[];
   agentEntries: readonly AgentSetEntry[];
   onOpenDocument: (name: string) => void;
+  /** The live connection, so a catch-up refetch after a reconnect doesn't animate. */
+  live: LiveState;
 }) => {
+  // Decided and closed items only grow, so the newest are listed, with more on request.
+  const [historyLimit, setHistoryLimit] = useState(KB_HISTORY_PAGE);
   const proposals = useQuery({
-    queryKey: ['kb-proposals', boardId],
-    queryFn: () => api.proposals(boardId),
+    queryKey: ['kb-proposals', boardId, historyLimit],
+    queryFn: () => api.proposals(boardId, historyLimit),
+    placeholderData: keepPreviousData,
     // Routing and drafting run in the background and `board.kb` hints report each step; while any
     // item waits for either, also check now and then in case a hint was lost.
-    refetchInterval: (query) => ((query.state.data ?? []).some(inPipeline) ? PIPELINE_POLL_MS : false),
+    refetchInterval: (query) => (query.state.data?.open.some(inPipeline) === true ? PIPELINE_POLL_MS : false),
   });
   const [opened, setOpened] = useState<{ item: KbItemView; opening: Opening } | null>(null);
 
   const board: Board = { boardId, admin, documents, owned: ownedPaths(agentEntries), onOpenDocument };
-  const items = proposals.data ?? [];
-  const open = items.filter((i) => i.status === 'open').sort(byPriority);
-  const decided = items.filter((i) => i.status === 'approved' || i.status === 'rejected').reverse();
-  const closed = items.filter((i) => CLOSED_BY_PIPELINE.includes(i.status)).reverse();
+  const { data } = proposals;
+  const open = useMemo(() => [...(data?.open ?? [])].sort(byPriority), [data]);
+  const decided = data?.decided ?? { items: [], total: 0 };
+  const closed = data?.closed ?? { items: [], total: 0 };
+  // Every listed card, in a list that keeps its identity until the data changes (what the motion compares).
+  const listed = useMemo(
+    () => (data === undefined ? undefined : [...open, ...data.decided.items, ...data.closed.items]),
+    [data, open],
+  );
+  const motion = useCardMotion(listed, live, KB_MOTION);
+  const hasMore = decided.total > decided.items.length || closed.total > closed.items.length;
+  const showMore = hasMore && (
+    <Button size='sm' variant='outline' className='w-fit' onClick={() => setHistoryLimit(historyLimit + KB_HISTORY_PAGE)}>
+      Show older
+    </Button>
+  );
   // Only open proposals can still replace a document; decided ones already did.
   const existingFor = (item: KbItem) =>
     item.status === 'open' && item.document !== null ? (documents.find((d) => d.name === item.document?.name) ?? null) : null;
@@ -1014,59 +1084,69 @@ export const KbProposals = ({
   const current = opened?.item ?? null;
 
   return (
-    <section className='grid gap-2' data-testid='kb-proposals'>
-      <h2 className='text-sm font-semibold'>Proposals</h2>
-      <p className='text-xs text-muted-foreground'>
-        Learnings and documents submitted by agents, routed to a target, checked for repeats and drafted as a change in the
-        background. Nothing reaches the knowledge base or the agent set until an admin approves it. The most repeated come
-        first, then the freshest evidence.
-      </p>
-      {proposals.isPending && <p className='text-sm text-muted-foreground'>Loading…</p>}
-      {proposals.data !== undefined && open.length === 0 && <p className='text-sm text-muted-foreground'>No open proposals.</p>}
-      {open.map((item) => (
-        <ProposalCard
-          key={item.id}
-          board={board}
-          item={item}
-          existing={existingFor(item)}
-          onOpen={(opening) => setOpened({ item, opening })}
-        />
-      ))}
-      {decided.length > 0 && (
-        <details className='text-sm' data-testid='kb-decided'>
-          <summary className='cursor-pointer text-xs text-muted-foreground'>Approved and rejected ({decided.length})</summary>
-          <div className='mt-2 grid gap-2'>
-            {decided.map((item) => (
-              <ProposalCard key={item.id} board={board} item={item} existing={null} onOpen={() => undefined} />
-            ))}
-          </div>
-        </details>
-      )}
-      {closed.length > 0 && (
-        <details className='text-sm' data-testid='kb-closed'>
-          <summary className='cursor-pointer text-xs text-muted-foreground'>
-            Merged, suppressed or already covered ({closed.length})
-          </summary>
-          <div className='mt-2 grid gap-2'>
-            {closed.map((item) => (
-              <ProposalCard key={item.id} board={board} item={item} existing={null} onOpen={() => undefined} />
-            ))}
-          </div>
-        </details>
-      )}
-      {opened !== null && current !== null && opened.opening.kind === 'decision' && (
-        <DecisionDialog
-          key={`${current.id}-${opened.opening.decision}`}
-          boardId={boardId}
-          item={current}
-          existing={existingFor(current)}
-          decision={opened.opening.decision}
-          onClose={() => setOpened(null)}
-        />
-      )}
-      {opened !== null && current !== null && opened.opening.kind === 'edit' && (
-        <EditDialog key={`${current.id}-edit`} board={board} item={current} agentFiles={agentFiles} onClose={() => setOpened(null)} />
-      )}
-    </section>
+    <KbMotion.Provider value={{ locks: motion.locks, markLocal: motion.markLocal }}>
+      <section
+        ref={(el) => {
+          motion.container.current = el;
+        }}
+        className='grid gap-2'
+        data-testid='kb-proposals'
+      >
+        <h2 className='text-sm font-semibold'>Proposals</h2>
+        <p className='text-xs text-muted-foreground'>
+          Learnings and documents submitted by agents, routed to a target, checked for repeats and drafted as a change in the
+          background. Nothing reaches the knowledge base or the agent set until an admin approves it. The most repeated come
+          first, then the freshest evidence.
+        </p>
+        {proposals.isPending && <p className='text-sm text-muted-foreground'>Loading…</p>}
+        {proposals.data !== undefined && open.length === 0 && <p className='text-sm text-muted-foreground'>No open proposals.</p>}
+        {open.map((item) => (
+          <ProposalCard
+            key={item.id}
+            board={board}
+            item={item}
+            existing={existingFor(item)}
+            onOpen={(opening) => setOpened({ item, opening })}
+          />
+        ))}
+        {decided.total > 0 && (
+          <details className='text-sm' data-testid='kb-decided'>
+            <summary className='cursor-pointer text-xs text-muted-foreground'>Approved and rejected ({decided.total})</summary>
+            <div className='mt-2 grid gap-2'>
+              {decided.items.map((item) => (
+                <ProposalCard key={item.id} board={board} item={item} existing={null} onOpen={() => undefined} />
+              ))}
+              {decided.total > decided.items.length && showMore}
+            </div>
+          </details>
+        )}
+        {closed.total > 0 && (
+          <details className='text-sm' data-testid='kb-closed'>
+            <summary className='cursor-pointer text-xs text-muted-foreground'>
+              Merged, suppressed or already covered ({closed.total})
+            </summary>
+            <div className='mt-2 grid gap-2'>
+              {closed.items.map((item) => (
+                <ProposalCard key={item.id} board={board} item={item} existing={null} onOpen={() => undefined} />
+              ))}
+              {closed.total > closed.items.length && showMore}
+            </div>
+          </details>
+        )}
+        {opened !== null && current !== null && opened.opening.kind === 'decision' && (
+          <DecisionDialog
+            key={`${current.id}-${opened.opening.decision}`}
+            boardId={boardId}
+            item={current}
+            existing={existingFor(current)}
+            decision={opened.opening.decision}
+            onClose={() => setOpened(null)}
+          />
+        )}
+        {opened !== null && current !== null && opened.opening.kind === 'edit' && (
+          <EditDialog key={`${current.id}-edit`} board={board} item={current} agentFiles={agentFiles} onClose={() => setOpened(null)} />
+        )}
+      </section>
+    </KbMotion.Provider>
   );
 };

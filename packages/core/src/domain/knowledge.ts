@@ -8,6 +8,9 @@ export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
 /** Everything except documents belongs to the agent set and changes its version. */
 export const isAgentSetKind = (kind: KnowledgeKind): boolean => kind !== 'doc';
 
+/** Agent-set kinds a learning (prose) can target; settings, hooks and mcp.json aren't. */
+export const PROSE_KINDS: readonly KnowledgeKind[] = ['agent', 'command', 'claude_md'];
+
 /**
  * Agent-set rows are a layer over slop's catalog (`domain/agent-set.ts`): the board's `overlay` on
  * a catalog file, or a whole `file` the board owns. Documents are always `file`.

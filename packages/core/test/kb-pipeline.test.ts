@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
-import type { Llm } from '../src/app/intake-service.js';
+import type { Llm, LlmRequest } from '../src/app/intake-service.js';
 import { DEDUPE_SYSTEM, KbPipeline, ROUTE_SYSTEM } from '../src/app/kb-pipeline.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { NewLearning } from '../src/app/knowledge-service.js';
@@ -47,6 +47,17 @@ class FakeLlm implements Llm {
     const next = this.answers.shift();
     if (next === undefined) return Promise.reject(new Error('No canned answer'));
     return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
+  }
+}
+
+/** A fake LLM that never answers: it only rejects when the caller's deadline aborts the call. */
+class HangingLlm implements Llm {
+  readonly signals: (AbortSignal | undefined)[] = [];
+  complete(request: LlmRequest): Promise<string> {
+    this.signals.push(request.signal);
+    return new Promise((_, reject) => {
+      request.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+    });
   }
 }
 
@@ -270,6 +281,32 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(open.map((i) => i.id)).toEqual([first]);
   });
 
+  it('makes an open item it merges into due again at once, so a claim running on it is redone without waiting out the lease', async () => {
+    const first = await routedAlone();
+    // A worker has claimed the first item for drafting (its lease runs for five minutes).
+    const claimed = await item(first);
+    const lease = '2026-10-05T12:05:00.000Z';
+    await store.transaction((tx) => tx.updateKbItem({ ...claimed, processAfter: lease, version: claimed.version + 1 }, claimed.version));
+    const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
+    llm.answer(toNewDoc('testing'), json({ duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
+    expect(await pipeline.processNext()).toBe(second);
+    expect(await item(first)).toMatchObject({ occurrenceCount: 2, processing: 'routed', processAfter: null });
+
+    // An item backing off after a failure keeps its backoff.
+    const third = await submit({ statement: 'Generated code: src/gen/' });
+    const backingOff = await item(first);
+    const backoff = '2026-10-05T12:01:00.000Z';
+    await store.transaction((tx) =>
+      tx.updateKbItem(
+        { ...backingOff, processingError: 'Bedrock is down', processingAttempts: 1, processAfter: backoff, version: backingOff.version + 1 },
+        backingOff.version,
+      ),
+    );
+    llm.answer(toNewDoc('testing'), json({ duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
+    expect(await pipeline.process(third)).toBe(true);
+    expect(await item(first)).toMatchObject({ occurrenceCount: 3, processAfter: backoff });
+  });
+
   it('suppresses an item matching a rejected one', async () => {
     const rejected = await submit();
     const decided = await item(rejected);
@@ -301,6 +338,39 @@ describe('KB pipeline: routing and dedupe', () => {
     });
   });
 
+  it('lets an admin reopen a closed item: back to drafting with its target, never deduplicated again', async () => {
+    const approvedId = await submit();
+    unwrap(await knowledge.approve(ADMIN, approvedId, (await item(approvedId)).version, { as: 'learning' }));
+    const id = await submit({ sourceGlobId: otherGlobId });
+    llm.answer(toDoc('build_test_lint', 'Test'), json({ coveredBy: { kind: 'item', id: approvedId }, contradicts: [] }));
+    await pipeline.processNext();
+    const closed = await item(id);
+    expect(closed.status).toBe('covered');
+    const evidenceHolder = await item(approvedId);
+
+    expect(errorCode(await knowledge.reopen(DEV, id, closed.version))).toBe('forbidden');
+    expect(errorCode(await knowledge.reopen(ADMIN, id, closed.version - 1))).toBe('version_conflict');
+    expect(errorCode(await knowledge.reopen(ADMIN, approvedId, evidenceHolder.version))).toBe('invalid_input');
+    notifier.hints.length = 0;
+    const reopened = unwrap(await knowledge.reopen(ADMIN, id, closed.version));
+    expect(reopened).toMatchObject({
+      status: 'open',
+      coveredBy: null,
+      processing: 'routed',
+      target: { kind: 'doc', name: 'build_test_lint', section: 'Test' },
+    });
+    expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
+    // The approved item keeps the evidence the closing added.
+    expect(await item(approvedId)).toEqual(evidenceHolder);
+    // The pipeline drafts it (here the drafter has no answer) without routing or deduplicating it again.
+    const calls = llm.calls.length;
+    expect(await pipeline.processNext()).toBe(id);
+    expect(llm.calls).toHaveLength(calls);
+    expect(await item(id)).toMatchObject({ status: 'open', processing: 'routed', processingAttempts: 1 });
+    // And an admin can decide it now.
+    expect(unwrap(await knowledge.reject(ADMIN, id, (await item(id)).version, 'Covered after all')).status).toBe('rejected');
+  });
+
   it('closes an item the target already says as covered by that knowledge', async () => {
     const id = await submit({ statement: 'Tests run with vitest' });
     llm.answer(toDoc('build_test_lint', 'Test'), json({ coveredBy: { kind: 'target' } }));
@@ -308,6 +378,29 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(await item(id)).toMatchObject({
       status: 'covered',
       coveredBy: { kind: 'knowledge', knowledgeKind: 'doc', name: 'build_test_lint', section: 'Test' },
+    });
+  });
+
+  it('ignores target coverage and target contradictions when the target had no text to show (a new document)', async () => {
+    const first = await routedAlone();
+    const id = await submit({ sourceGlobId: otherGlobId, statement: 'Tests live next to the code' });
+    llm.answer(
+      toNewDoc('testing_conventions'),
+      json({
+        coveredBy: { kind: 'target' },
+        contradicts: [
+          { kind: 'target', ref: '', note: 'Says otherwise' },
+          { kind: 'item', ref: first, note: 'Conflicts' },
+        ],
+      }),
+    );
+    expect(await pipeline.process(id)).toBe(true);
+    expect(llm.calls[2]?.prompt).toContain('(none;');
+    expect(await item(id)).toMatchObject({
+      status: 'open',
+      processing: 'routed',
+      coveredBy: null,
+      contradicts: [{ kind: 'item', ref: first, note: 'Conflicts' }],
     });
   });
 
@@ -377,6 +470,35 @@ describe('KB pipeline: routing and dedupe', () => {
     advance(3_600_000);
     expect(await pipeline.processNext()).toBeNull();
     expect(unwrap(await knowledge.approve(ADMIN, id, failed.version, { as: 'learning' })).status).toBe('approved');
+  });
+
+  it('abandons an LLM call that outlives its deadline and retries it with backoff like any other failure', async () => {
+    const hanging = new HangingLlm();
+    const timed = new KbPipeline({
+      store,
+      clock: { now: () => now },
+      catalog,
+      notifier,
+      route: hanging,
+      draft: hanging,
+      llmTimeoutMs: 20,
+    });
+    const id = await submit();
+    expect(await timed.processNext()).toBe(id);
+    expect(hanging.signals).toHaveLength(1);
+    expect(hanging.signals[0]?.aborted).toBe(true);
+    expect(await item(id)).toMatchObject({
+      status: 'open',
+      processing: 'pending',
+      processingAttempts: 1,
+      processingError: 'The model did not answer within 0.02 s',
+      processAfter: '2026-10-05T12:00:30.000Z',
+    });
+    // The worker is free again: the next due item is processed.
+    advance(30_000);
+    llm.answer(toDoc('build_test_lint', 'Test'), NO_MATCH);
+    expect(await pipeline.processNext()).toBe(id);
+    expect(await item(id)).toMatchObject({ processing: 'routed', processingError: null, processingAttempts: 0 });
   });
 
   it('fails an item when the dedupe answer is unusable', async () => {

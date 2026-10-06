@@ -179,19 +179,36 @@ describe('layered agent set on a board', () => {
 
   it('bumps the agent-set version of every board when the catalog hash changes, and not otherwise', async () => {
     expect((await board()).agentCatalogHash).toBe('h1');
-    expect(await knowledge.syncCatalogAgentSet()).toEqual([]);
+    expect(await knowledge.syncCatalogAgentSet()).toEqual({ bumped: [], failed: [] });
     expect((await board()).agentSetVersion).toBe(1);
 
     catalogSet = { hash: 'h2', files: [...catalogSet.files, { path: 'agents/new.md', content: 'New agent\n' }] };
     notifier.hints.length = 0;
-    expect(await knowledge.syncCatalogAgentSet()).toEqual([boardId]);
+    expect(await knowledge.syncCatalogAgentSet()).toEqual({ bumped: [boardId], failed: [] });
     const after = await board();
     expect(after).toMatchObject({ agentSetVersion: 2, agentCatalogHash: 'h2' });
     expect(notifier.hints).toContainEqual({ kind: 'board.changed', boardId });
     // The new catalog file reaches the board with no copy.
     expect(unwrap(await knowledge.agentSet(DEV, boardId)).files.map((f) => f.path)).toContain('agents/new.md');
-    expect(await knowledge.syncCatalogAgentSet()).toEqual([]);
+    expect(await knowledge.syncCatalogAgentSet()).toEqual({ bumped: [], failed: [] });
     expect((await board()).agentSetVersion).toBe(2);
+  });
+
+  it('moves on past a board whose writes keep conflicting, still bumping the boards after it', async () => {
+    const boards = new BoardService({ store, notifier });
+    const later = unwrap(await boards.create(ADMIN, { name: 'c', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, later));
+    catalogSet = { ...catalogSet, hash: 'h2' };
+    // The first board loses every conditional write, as if something kept changing it.
+    const transaction = store.transaction.bind(store);
+    store.transaction = (work) =>
+      transaction((tx) => work({ ...tx, updateBoard: (b, v) => (b.id === boardId ? Promise.resolve(false) : tx.updateBoard(b, v)) }));
+    const result = await knowledge.syncCatalogAgentSet();
+    expect(result.bumped).toEqual([later]);
+    expect(result.failed.map((f) => f.boardId)).toEqual([boardId]);
+    store.transaction = transaction;
+    expect((await board()).agentCatalogHash).toBe('h1');
+    expect(await store.transaction((tx) => tx.getBoard(later))).toMatchObject({ agentCatalogHash: 'h2', agentSetVersion: 2 });
   });
 
   it('writes an approved agent edit as the overlay and serves catalog text plus Board rules', async () => {
@@ -245,7 +262,8 @@ describe('layered agent set on a board', () => {
     expect(errorCode(await knowledge.useCatalogVersion(ADMIN, boardId, 'hooks/after_push.sh', 'echo'))).toBe('invalid_input');
 
     const before = (await board()).agentSetVersion;
-    expect(unwrap(await knowledge.useCatalogVersion(ADMIN, boardId, 'agents/tester.md', '- Keep this.'))).toEqual({ version: 2 });
+    // The result is the board's new agent-set version (not the row's).
+    expect(unwrap(await knowledge.useCatalogVersion(ADMIN, boardId, 'agents/tester.md', '- Keep this.'))).toEqual({ version: before + 1 });
     expect(await row('agent', 'agents/tester.md')).toMatchObject({ layer: 'overlay', content: '- Keep this.', version: 2 });
     expect((await board()).agentSetVersion).toBe(before + 1);
     const served = unwrap(await knowledge.agentSet(DEV, boardId)).files.find((f) => f.path === 'agents/tester.md');
@@ -261,5 +279,32 @@ describe('layered agent set on a board', () => {
     expect(unwrap(await knowledge.agentSet(DEV, boardId)).files.map((f) => f.path)).not.toContain('agents/retired.md');
     expect(unwrap(await knowledge.agentSetFile(DEV, boardId, 'agents/retired.md'))).toMatchObject({ served: null, catalog: null });
     expect(unwrap(await knowledge.agentSetForDownload(boardId)).files).toEqual(unwrap(await knowledge.agentSet(DEV, boardId)).files);
+  });
+
+  it('refuses to approve a draft for an overlay whose catalog file was removed, since nothing would serve it', async () => {
+    const first = await submit();
+    unwrap(await knowledge.approve(ADMIN, first, 1, { as: 'edit', target: { kind: 'agent', name: 'agents/tester.md' }, content: '- Rule one.\n' }));
+    const id = await submit();
+    await store.transaction(async (tx) => {
+      const item = await tx.getKbItem(id);
+      if (item === null) throw new Error('no item');
+      await tx.updateKbItem(
+        {
+          ...item,
+          target: { kind: 'agent', name: 'agents/tester.md', section: null, newDocument: null },
+          draft: { section: null, content: '- Rule two.' },
+          draftedAgainstVersion: 1,
+          processing: 'drafted',
+          version: item.version + 1,
+        },
+        item.version,
+      );
+    });
+    catalogSet = { hash: 'h2', files: catalogSet.files.filter((f) => f.path !== 'agents/tester.md') };
+    const [view] = unwrap(await knowledge.proposals(DEV, boardId)).open;
+    expect(view?.preview).toBeNull();
+    const refused = await knowledge.approve(ADMIN, id, 2, { as: 'draft' });
+    expect(errorCode(refused)).toBe('not_found');
+    expect(await row('agent', 'agents/tester.md')).toMatchObject({ content: '- Rule one.\n', version: 1 });
   });
 });

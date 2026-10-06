@@ -93,6 +93,25 @@ export interface KbItemView extends KbItem {
   readonly preview: DraftPreview | null;
 }
 
+/** The newest items of a history group (decided, or closed by the pipeline) and how many there are in all. */
+export interface KbItemPage {
+  readonly items: readonly KbItemView[];
+  readonly total: number;
+}
+
+/**
+ * The Knowledge page's proposals: every open item, oldest first, and the newest decided and
+ * closed items (bounded, since they only grow).
+ */
+export interface KbProposalList {
+  readonly open: readonly KbItemView[];
+  readonly decided: KbItemPage;
+  readonly closed: KbItemPage;
+}
+
+/** How many decided and closed items the Knowledge page lists by default. */
+export const KB_HISTORY_PAGE = 50;
+
 /** `submitted` by an agent through `submit_learning`; `mined` from signals by slop's jobs (later). */
 export const KB_ITEM_SOURCES = ['submitted', 'mined'] as const;
 export type KbItemSource = (typeof KB_ITEM_SOURCES)[number];

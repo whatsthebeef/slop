@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { contextDiff, lineDiff } from '../src/domain/agent-set.js';
-import { markdownHeadings, sectionText, spliceSection, splicePreview, withHeading } from '../src/domain/sections.js';
+import { markdownHeadings, sectionText, spliceHeadings, spliceSection, splicePreview, withHeading } from '../src/domain/sections.js';
 
 const DOC = '# Title\n\nIntro\n\n## Test\n\nRun vitest.\n\n### Watch\n\nUse --watch.\n\n```sh\n## not a heading\n```\n\n## Lint\n\nRun eslint.\n';
 
@@ -12,6 +12,10 @@ describe('markdown sections', () => {
       [3, 'Watch'],
       [2, 'Lint'],
     ]);
+  });
+
+  it('keeps a trailing # that follows no whitespace as part of the heading (CommonMark closing hashes)', () => {
+    expect(markdownHeadings('## C#\n\n## Closed ##\n\n### F# notes #\n').map((h) => h.text)).toEqual(['C#', 'Closed', 'F# notes']);
   });
 
   it('returns a section up to the next heading of the same or a higher level', () => {
@@ -46,6 +50,13 @@ describe('splicing a drafted section', () => {
     expect(spliceSection('# A\n\nText\n\n\n', 'Missing', '## New\n\nBody')).toBe(appended);
     expect(spliceSection(DOC, 'not a heading', '## X')).toBe(`${DOC.trimEnd()}\n\n## X\n`);
     expect(spliceSection('', null, '### Rule\n\n- One')).toBe('### Rule\n\n- One\n');
+  });
+
+  it("never splices at a document's level-1 title when it has lower-level headings: the section is appended", () => {
+    expect(spliceHeadings(DOC).map((h) => h.text)).toEqual(['Test', 'Watch', 'Lint']);
+    expect(spliceSection(DOC, 'Title', '## Title notes\n\nMore')).toBe(`${DOC.trimEnd()}\n\n## Title notes\n\nMore\n`);
+    // A text with only a level-1 heading can still have it replaced.
+    expect(spliceSection('# Only\n\nOld\n', 'Only', '# Only\n\nNew')).toBe('# Only\n\nNew\n');
   });
 
   it('keeps CRLF line endings', () => {

@@ -1,10 +1,10 @@
 import { composeAgentSet } from '../domain/agent-set.js';
 import type { KbContradiction, KbCoverage, KbDraft, KbItem, KbProcessing, KbTarget, NewDocumentMeta } from '../domain/kb.js';
-import { agentSetKind, docName, hasFrontmatter, isAgentSetKind, parseFrontmatter } from '../domain/knowledge.js';
+import { agentSetKind, docName, hasFrontmatter, isAgentSetKind, parseFrontmatter, PROSE_KINDS } from '../domain/knowledge.js';
 import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
-import { markdownHeadings, sectionText, withHeading } from '../domain/sections.js';
+import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
 import type { Catalog, Clock, Notifier, Store, Tx } from '../ports.js';
-import type { Llm } from './intake-service.js';
+import type { Llm, LlmRequest } from './intake-service.js';
 import { documentTarget, targetState } from './knowledge-service.js';
 import type { TargetState } from './knowledge-service.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
@@ -13,6 +13,11 @@ import { field, isObject, list, parseJson, text } from './llm-json.js';
 export const MAX_PROCESSING_ATTEMPTS = 3;
 /** How long a claimed item is held before another worker may take it (a crash mid-item retries after this). */
 const LEASE_MS = 5 * 60_000;
+/**
+ * How long one LLM call may take before it is abandoned and the attempt fails (retried with
+ * backoff). Below the lease, so a stalled call can't hold the single worker, and every board's items, forever.
+ */
+export const LLM_TIMEOUT_MS = 2 * 60_000;
 const backoffMs = (attempts: number) => 30_000 * 2 ** (attempts - 1);
 /**
  * Dedupe compares against at most this many items per group (open, approved, rejected), newest
@@ -162,8 +167,22 @@ export class KbPipeline {
       route: Llm;
       /** Sonnet: drafting. */
       draft: Llm;
+      /** Deadline for each LLM call; defaults to LLM_TIMEOUT_MS. */
+      llmTimeoutMs?: number;
     },
   ) {}
+
+  /** One LLM call with a deadline; a timeout rejects with a readable reason, recorded like any other failure. */
+  private async complete(llm: Llm, request: Omit<LlmRequest, 'signal'>): Promise<string> {
+    const timeoutMs = this.deps.llmTimeoutMs ?? LLM_TIMEOUT_MS;
+    const signal = AbortSignal.timeout(timeoutMs);
+    try {
+      return await llm.complete({ ...request, signal });
+    } catch (error) {
+      if (signal.aborted) throw new Error(`The model did not answer within ${timeoutMs / 1000} s`, { cause: error });
+      throw error;
+    }
+  }
 
   /** Claims the oldest item due for routing or drafting and processes it; returns its ID, or null when none is due. */
   async processNext(): Promise<string | null> {
@@ -180,7 +199,11 @@ export class KbPipeline {
     return null;
   }
 
-  /** Claims one item, if it is still open and waiting for routing or drafting, and processes it. Returns whether it ran. */
+  /**
+   * Claims one given item, if it is still open and waiting for routing or drafting, and processes
+   * it; returns whether it ran. The job uses `processNext`; this is for a caller (so far only tests)
+   * that must process a particular item while others are due too.
+   */
   async process(itemId: string): Promise<boolean> {
     const claimed = await this.claim(itemId);
     if (claimed === null) return false;
@@ -247,13 +270,13 @@ export class KbPipeline {
     }));
     const { state } = context;
     if (state === null) {
-      await this.fail(item, `The target ${target.name} is no longer on the board`, 'routed');
+      await this.fail(item, `The target ${target.name} is no longer on the board; choose another target`, 'routed');
       return;
     }
     let drafted: Drafted | null;
     try {
       drafted = parseDraft(
-        await this.deps.draft.complete({
+        await this.complete(this.deps.draft, {
           system: DRAFT_SYSTEM,
           prompt: draftPrompt(item, target, state, context.docs),
           maxTokens: DRAFT_MAX_TOKENS,
@@ -302,7 +325,7 @@ export class KbPipeline {
   private async ask(item: KbItem, snapshot: Snapshot): Promise<{ routing: Routing; dedupe: Dedupe } | { failure: string }> {
     try {
       const routing = parseRouting(
-        await this.deps.route.complete({ system: ROUTE_SYSTEM, prompt: routePrompt(item, snapshot), maxTokens: 600 }),
+        await this.complete(this.deps.route, { system: ROUTE_SYSTEM, prompt: routePrompt(item, snapshot), maxTokens: 600 }),
         snapshot,
       );
       if (routing === null) return { failure: 'The routing answer was not usable JSON' };
@@ -311,13 +334,14 @@ export class KbPipeline {
         snapshot.open.length + snapshot.approved.length + snapshot.rejected.length === 0 && targetText === null;
       if (nothingToCompare) return { routing, dedupe: NO_MATCH };
       const dedupe = parseDedupe(
-        await this.deps.route.complete({
+        await this.complete(this.deps.route, {
           system: DEDUPE_SYSTEM,
           prompt: dedupePrompt(item, snapshot, routing.target, targetText),
           maxTokens: 800,
         }),
         snapshot,
         routing.target,
+        targetText !== null,
       );
       return dedupe === null ? { failure: 'The dedupe answer was not usable JSON' } : { routing, dedupe };
     } catch (error) {
@@ -336,7 +360,7 @@ export class KbPipeline {
       const agentFiles: AgentFile[] = [];
       for (const entry of composed.entries) {
         // Learnings are prose: settings, hooks and mcp.json aren't targets.
-        if (!(entry.kind === 'agent' || entry.kind === 'command' || entry.kind === 'claude_md')) continue;
+        if (!PROSE_KINDS.includes(entry.kind)) continue;
         const served = composed.files.find((f) => f.path === entry.path)?.content;
         if (served === undefined) continue;
         const row = rows.find((r) => r.name === entry.path);
@@ -385,7 +409,13 @@ export class KbPipeline {
         const addEvidence = async (id: string, status: 'open' | 'approved'): Promise<boolean> => {
           const other = await tx.getKbItem(id);
           if (other?.status !== status) return false;
-          if (!(await tx.updateKbItem(withEvidenceFrom(other, current), other.version))) throw new StaleItem(id);
+          let merged = withEvidenceFrom(other, current);
+          // The write bumps its version, so a claim running on it now drops its result: make it due
+          // again at once rather than after the claim's lease. An item with an error is backing off
+          // after a failure (or retrying one); it keeps its time so a failing model isn't hammered.
+          const waiting = merged.processing === 'pending' || merged.processing === 'routed';
+          if (waiting && merged.processingError === null) merged = { ...merged, processAfter: null };
+          if (!(await tx.updateKbItem(merged, other.version))) throw new StaleItem(id);
           return true;
         };
         if (dedupe.suppressedBy !== null) {
@@ -552,10 +582,12 @@ const parseRouting = (answer: string, snapshot: Snapshot): Routing | null => {
 };
 
 /**
- * The dedupe answer, keeping only references to items it was shown (anything else is ignored
- * rather than failing the item); null when it isn't a JSON object.
+ * The dedupe answer, keeping only references to items and text it was shown (anything else is
+ * ignored rather than failing the item); null when it isn't a JSON object. `sawTargetText` is false
+ * when the model was told the target has no text yet (a new document, an empty overlay or
+ * document), so the target can't cover or contradict the learning.
  */
-const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget): Dedupe | null => {
+const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, sawTargetText: boolean): Dedupe | null => {
   const parsed = parseJson(answer);
   if (!isObject(parsed)) return null;
   const idIn = (items: readonly KbItem[], value: unknown) => {
@@ -564,7 +596,7 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget): Dedu
   };
   const covered = field(parsed, 'coveredBy');
   let coveredBy: KbCoverage | null = null;
-  if (field(covered, 'kind') === 'target') {
+  if (field(covered, 'kind') === 'target' && sawTargetText) {
     coveredBy = { kind: 'knowledge', knowledgeKind: target.kind, name: target.name, section: target.section };
   } else if (field(covered, 'kind') === 'item') {
     const id = idIn(snapshot.approved, field(covered, 'id'));
@@ -573,6 +605,7 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget): Dedu
   const contradicts = list(field(parsed, 'contradicts')).flatMap((entry): KbContradiction[] => {
     const note = text(field(entry, 'note'))?.trim() ?? '';
     if (field(entry, 'kind') === 'target') {
+      if (!sawTargetText) return [];
       const heading = cleanSection(field(entry, 'ref'));
       return [{ kind: 'knowledge', ref: heading === null ? target.name : `${target.name} § ${heading}`, note }];
     }
@@ -658,7 +691,13 @@ const parseDraft = (answer: string, target: KbTarget, state: TargetState): Draft
     const body = (hasFrontmatter(raw) ? parseFrontmatter(raw).body : raw).trim();
     return body === '' ? null : { draft: { section: null, content: body }, target, rationale: why };
   }
-  const section = cleanSection(field(parsed, 'section'));
+  const named = cleanSection(field(parsed, 'section'));
+  // A document's title isn't a section to replace (it would take the whole document): append instead.
+  const titled =
+    named !== null &&
+    markdownHeadings(state.text).some((h) => sameHeading(h.text, named)) &&
+    !spliceHeadings(state.text).some((h) => sameHeading(h.text, named));
+  const section = titled ? null : named;
   // Board rules sit under "## Board rules", so a new heading there is one level down.
   const content = section === null ? raw : withHeading(state.text, section, raw, state.catalog === null ? 2 : 3);
   return {

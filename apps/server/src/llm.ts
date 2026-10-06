@@ -1,5 +1,5 @@
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
-import type { Llm } from '@slop/core';
+import type { Llm, LlmRequest } from '@slop/core';
 
 /**
  * The LLM port on Amazon Bedrock (Converse API), with slop's IAM role or the developer's AWS
@@ -18,7 +18,7 @@ export class BedrockLlm implements Llm {
     this.client = new BedrockRuntimeClient({ region });
   }
 
-  async complete(request: { system: string; prompt: string; maxTokens: number }): Promise<string> {
+  async complete(request: LlmRequest): Promise<string> {
     const response = await this.client.send(
       new ConverseCommand({
         modelId: this.modelId,
@@ -29,6 +29,8 @@ export class BedrockLlm implements Llm {
             ? { maxTokens: request.maxTokens }
             : { maxTokens: request.maxTokens, temperature: this.temperature },
       }),
+      // The SDK has no request timeout by default; the caller's deadline ends a stalled call.
+      request.signal === undefined ? {} : { abortSignal: request.signal },
     );
     this.onUsage({
       model: this.modelId,

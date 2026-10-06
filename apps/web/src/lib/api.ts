@@ -14,8 +14,7 @@ import type {
   Environment,
   Glob,
   KbItem,
-  KbItemStatus,
-  KbItemView,
+  KbProposalList,
   LabelCommand,
   LabelName,
   List,
@@ -213,13 +212,14 @@ export const api = {
     request<AgentSetFileView>('GET', `/api/boards/${boardId}/kb/agent-set/file?path=${encodeURIComponent(path)}`),
   useCatalogVersion: (boardId: number, path: string, overlay = '') =>
     request<{ version: number }>('POST', `/api/boards/${boardId}/kb/agent-set/use-catalog`, { path, overlay }),
-  proposals: (boardId: number, status?: KbItemStatus) =>
-    request<KbItemView[]>('GET', `/api/boards/${boardId}/kb/proposals${status === undefined ? '' : `?status=${status}`}`),
+  proposals: (boardId: number, limit: number) =>
+    request<KbProposalList>('GET', `/api/boards/${boardId}/kb/proposals?limit=${limit}`),
   approveProposal: (id: string, version: number, approval: Approval) =>
     request<KbItem>('POST', `/api/kb/${id}/approve`, { ...approval, version }),
   changeProposalTarget: (id: string, version: number, target: TargetChange) =>
     request<KbItem>('POST', `/api/kb/${id}/target`, { version, target }),
   retryProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/retry`, { version }),
+  reopenProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/reopen`, { version }),
   rejectProposal: (id: string, version: number, reason: string) =>
     request<KbItem>('POST', `/api/kb/${id}/reject`, { version, reason }),
   plan: (id: string) =>

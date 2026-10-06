@@ -3,13 +3,15 @@ import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
 import { composeAgentSet, contextDiff, overlayProblem } from '../domain/agent-set.js';
 import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../domain/agent-set.js';
-import { isLearningType, needsDraft, UNPROCESSED } from '../domain/kb.js';
+import { isLearningType, KB_HISTORY_PAGE, needsDraft, UNPROCESSED } from '../domain/kb.js';
 import type {
   DraftPreview,
   KbItem,
+  KbItemPage,
   KbItemStatus,
   KbItemView,
   KbOutcome,
+  KbProposalList,
   KbTarget,
   LearningType,
   NewDocumentMeta,
@@ -22,6 +24,7 @@ import {
   hasFrontmatter,
   isAgentSetKind,
   parseFrontmatter,
+  PROSE_KINDS,
   renderFrontmatter,
 } from '../domain/knowledge.js';
 import type { CatalogUpdate, KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
@@ -205,7 +208,10 @@ export const targetState = async (
     return target.newDocument === null ? null : { text: '', version: 0, existing: null, catalog: null, newDocument: true };
   }
   const catalogText = catalog.files.find((f) => f.path === target.name)?.content ?? null;
-  if (existing === null && catalogText === null) return null;
+  if (catalogText === null && existing?.layer !== 'file') {
+    // No file, or an orphaned overlay (its catalog file was removed): nothing serves it, so it's no target.
+    return null;
+  }
   return {
     text: existing?.content ?? '',
     version: existing?.version ?? 0,
@@ -214,9 +220,6 @@ export const targetState = async (
     newDocument: false,
   };
 };
-
-/** Agent-set kinds a learning (prose) can target. */
-const PROSE_KINDS: readonly KnowledgeKind[] = ['agent', 'command', 'claude_md'];
 
 const cleanHeading = (section: string | null): string | null => {
   const heading = section?.replace(/^#+\s*/, '').trim() ?? '';
@@ -407,17 +410,25 @@ export class KnowledgeService {
 
   /**
    * At server start: every board whose agent set followed a different catalog gets a new
-   * agent-set version (so routines and readiness see the catalog change). Returns the boards bumped.
+   * agent-set version (so routines and readiness see the catalog change). Returns the boards bumped,
+   * and those that kept changing under it (the caller logs them; the next start tries them again).
    */
-  async syncCatalogAgentSet(): Promise<number[]> {
+  async syncCatalogAgentSet(): Promise<{ bumped: number[]; failed: { boardId: number; error: unknown }[] }> {
     const { hash } = await this.deps.catalog.agentSet();
     const boards = await this.deps.store.transaction((tx) => tx.listAllBoards());
     const bumped: number[] = [];
+    const failed: { boardId: number; error: unknown }[] = [];
     for (const board of boards) {
       if (board.agentCatalogHash === hash) continue;
-      if ((await this.followCatalog(board.id, hash)) !== null) bumped.push(board.id);
+      try {
+        if ((await this.followCatalog(board.id, hash)) !== null) bumped.push(board.id);
+      } catch (error) {
+        // One busy board (its conditional writes keep losing) mustn't strand the boards after it.
+        if (!(error instanceof BoardChanged)) throw error;
+        failed.push({ boardId: board.id, error });
+      }
     }
-    return bumped;
+    return { bumped, failed };
   }
 
   /**
@@ -440,7 +451,9 @@ export class KnowledgeService {
           if (existing?.layer !== 'file') return invalidInput(`${path} already follows the catalog`);
           const written = await this.write(tx, email, boardId, [{ kind, name: path, content: overlay, layer: 'overlay', source: 'edit' }]);
           if (!written.ok) return written;
-          return ok({ version: existing.version + 1 });
+          // The board's new agent-set version, as the other agent-set results report it.
+          const board = await tx.getBoard(boardId);
+          return board === null ? notFound(`No board ${boardId}`) : ok({ version: board.agentSetVersion });
         });
       } catch (error) {
         if (!(error instanceof BoardChanged) || attempt >= 4) throw error;
@@ -519,19 +532,25 @@ export class KnowledgeService {
   }
 
   /**
-   * The board's KB items, oldest first, optionally with one status, each open drafted item with a
-   * preview of its draft against the target's current text. Members may read them.
+   * The board's open KB items, oldest first, each drafted one with a preview of its draft against
+   * the target's current text; and the newest `historyLimit` decided and closed items, with their
+   * totals. Members may read them.
    */
-  async proposals(email: string, boardId: number, status?: KbItemStatus): Promise<Result<KbItemView[]>> {
+  async proposals(email: string, boardId: number, historyLimit = KB_HISTORY_PAGE): Promise<Result<KbProposalList>> {
     const catalog = await this.deps.catalog.agentSet();
+    const limit = Math.max(1, Math.min(Math.trunc(historyLimit), 1000));
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
-      const views: KbItemView[] = [];
-      for (const item of await tx.listKbItems(boardId, status)) {
-        views.push({ ...item, preview: await this.preview(tx, catalog, item) });
+      const open: KbItemView[] = [];
+      for (const item of await tx.listKbItems(boardId, 'open')) {
+        open.push({ ...item, preview: await this.preview(tx, catalog, item) });
       }
-      return ok(views);
+      const page = async (statuses: readonly KbItemStatus[]): Promise<KbItemPage> => {
+        const { items, total } = await tx.listRecentKbItems(boardId, statuses, limit);
+        return { items: items.map((item) => ({ ...item, preview: null })), total };
+      };
+      return ok({ open, decided: await page(['approved', 'rejected']), closed: await page(['merged', 'suppressed', 'covered']) });
     });
   }
 
@@ -582,6 +601,52 @@ export class KnowledgeService {
         item.target === null
           ? { ...item, processing: 'pending', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
           : needsDraft(item);
+      if (!(await tx.updateKbItem(next, item.version))) {
+        const current = await tx.getKbItem(itemId);
+        return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
+      }
+      this.kbChanged(tx, item.boardId);
+      return ok(next);
+    });
+  }
+
+  /**
+   * Admins reopen an item the pipeline closed (merged, suppressed or covered: a false positive from
+   * the model would otherwise drop the learning for good). It goes back to the open queue with its
+   * target, to be drafted (a document proposal is its own draft). It isn't routed or deduplicated
+   * again, so the pipeline can't close it a second time: dedupe only runs on `pending` items, and a
+   * reopened item without a target is left `failed` for the admin to choose one under Edit. The
+   * other item keeps the evidence and count the closing added to it: they are only evidence, and
+   * that item may have been decided since.
+   */
+  async reopen(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
+    return this.transaction(async (tx) => {
+      const item = await tx.getKbItem(itemId);
+      if (item === null) return notFound(`No KB item ${itemId}`);
+      const actor = await adminOf(tx, email, item.boardId);
+      if (!actor.ok) return actor;
+      const stale = (current: KbItem) =>
+        err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: current });
+      if (item.version !== version) return stale(item);
+      if (!(item.status === 'merged' || item.status === 'suppressed' || item.status === 'covered')) {
+        return invalidInput(`${item.id} is ${item.status}; only items the pipeline closed can be reopened`);
+      }
+      const reopened: KbItem = { ...item, status: 'open', duplicateOf: null, suppressedBy: null, coveredBy: null };
+      let next: KbItem;
+      if (item.document !== null) {
+        next = { ...reopened, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 };
+      } else if (item.target === null) {
+        next = {
+          ...reopened,
+          processing: 'failed',
+          processingError: 'Reopened without a target: choose one under Edit',
+          processingAttempts: 0,
+          processAfter: null,
+          version: item.version + 1,
+        };
+      } else {
+        next = needsDraft(reopened);
+      }
       if (!(await tx.updateKbItem(next, item.version))) {
         const current = await tx.getKbItem(itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
@@ -732,7 +797,7 @@ export class KnowledgeService {
     if (draft === null) return invalidInput(`${item.id} has no draft yet`);
     if (draft.content.trim() === '') return invalidInput('The draft is empty');
     const state = await targetState(tx, await this.deps.catalog.agentSet(), item.boardId, target);
-    if (state === null) return notFound(`${target.name} is no longer on board ${item.boardId}`);
+    if (state === null) return notFound(`${target.name} is no longer on board ${item.boardId}; choose another target under Edit`);
     if (item.draft !== null && item.draftedAgainstVersion !== null && state.version !== item.draftedAgainstVersion) {
       const requeued = needsDraft(item);
       if (!(await tx.updateKbItem(requeued, item.version))) throw new StaleKbItem(item.id);

@@ -175,6 +175,45 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     expect((await post(`/api/kb/${id}/retry`, { version: 3 })).status).toBe(422);
   });
 
+  it('POST /api/kb/:id/reopen sends a covered item back to drafting for admins, conditional on its version', async () => {
+    const { id } = unwrap(
+      await knowledge.submitLearning(DEV, boardId, { sourceGlobId: globId, type: 'gotcha', statement: 'Reopen me', evidence: 'Seen' }),
+    );
+    const target = { kind: 'doc', name: 'testing', section: null, newDocument: null };
+    const coveredBy = { kind: 'knowledge', knowledgeKind: 'doc', name: 'testing', section: null };
+    await database.db.execute(
+      sql`update kb_proposals set status = 'covered', processing = 'routed', target = ${JSON.stringify(target)}::jsonb, covered_by = ${JSON.stringify(coveredBy)}::jsonb, version = 2 where id = ${id}`,
+    );
+    expect((await post(`/api/kb/${id}/reopen`, { version: 2 }, DEV)).status).toBe(403);
+    expect((await post(`/api/kb/${id}/reopen`, {})).status).toBe(422);
+    expect((await post(`/api/kb/${id}/reopen`, { version: 1 })).status).toBe(409);
+
+    const response = await post(`/api/kb/${id}/reopen`, { version: 2 });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id, status: 'open', coveredBy: null, processing: 'routed', target, version: 3 });
+    expect(await store.transaction((tx) => tx.getKbItem(id))).toMatchObject({ status: 'open', coveredBy: null, processing: 'routed' });
+    // Only closed items: reopening an open one is refused.
+    expect((await post(`/api/kb/${id}/reopen`, { version: 3 })).status).toBe(422);
+  });
+
+  it('GET /api/boards/:b/kb/proposals lists open items and the newest decided ones up to the limit, with totals', async () => {
+    const rejected: string[] = [];
+    for (const statement of ['Old rule', 'Newer rule']) {
+      const { id } = unwrap(await knowledge.submitLearning(DEV, boardId, { sourceGlobId: globId, type: 'gotcha', statement, evidence: 'Seen' }));
+      unwrap(await knowledge.reject(ADMIN, id, 1, 'No'));
+      rejected.push(id);
+    }
+    const get = (query: string) => app.request(`/api/boards/${boardId}/kb/proposals${query}`, { headers: { 'x-test-email': DEV } });
+    const response = await get('?limit=1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { open: KbItem[]; decided: { items: KbItem[]; total: number }; closed: { total: number } };
+    expect(body.decided.items.map((i) => i.id)).toEqual([rejected[1]]);
+    expect(body.decided.total).toBe(2);
+    expect(body.open.every((i) => i.status === 'open')).toBe(true);
+    expect((await get('')).status).toBe(200);
+    expect((await get('?limit=0')).status).toBe(422);
+  });
+
   it('GET /api/boards/:b/kb lists documents forked from an older catalog version', async () => {
     const kb = async () => {
       const response = await app.request(`/api/boards/${String(boardId)}/kb`, {

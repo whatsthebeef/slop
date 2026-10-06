@@ -104,14 +104,14 @@ describe('layered agent set in Postgres', () => {
   it('records the catalog hash on the board and bumps the version only when it changes', async () => {
     const before = await store.transaction((tx) => tx.getBoard(boardId));
     expect(before?.agentCatalogHash).toBeNull();
-    expect(await knowledge.syncCatalogAgentSet()).toContain(boardId);
+    expect((await knowledge.syncCatalogAgentSet()).bumped).toContain(boardId);
     expect(await store.transaction((tx) => tx.getBoard(boardId))).toMatchObject({
       agentCatalogHash: 'h1',
       agentSetVersion: (before?.agentSetVersion ?? 0) + 1,
     });
-    expect(await knowledge.syncCatalogAgentSet()).not.toContain(boardId);
+    expect((await knowledge.syncCatalogAgentSet()).bumped).not.toContain(boardId);
     catalogSet = { ...catalogSet, hash: 'h2' };
-    expect(await knowledge.syncCatalogAgentSet()).toContain(boardId);
+    expect((await knowledge.syncCatalogAgentSet()).bumped).toContain(boardId);
     expect((await store.transaction((tx) => tx.getBoard(boardId)))?.agentSetVersion).toBe((before?.agentSetVersion ?? 0) + 2);
   });
 

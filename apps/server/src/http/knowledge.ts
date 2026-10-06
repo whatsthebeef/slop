@@ -1,7 +1,7 @@
 import type { ArtifactService, BoardService, Catalog, IntakeService, KnowledgeService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
-import { ARTIFACT_KINDS, CATEGORIES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
 import { parseFrontmatter } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -146,11 +146,12 @@ export const mountKnowledge = (
     return send(c, await knowledge.useCatalogVersion(c.get('email'), Number(c.req.param('b')), body.path, body.overlay));
   });
 
-  // KB items (proposals); members read them, admins decide them.
+  // KB items (proposals): every open one, and the newest `limit` decided and closed ones. Members
+  // read them, admins decide them.
   app.get('/api/boards/:b/kb/proposals', async (c) => {
-    const status = c.req.query('status');
-    const parsed = z.enum(KB_ITEM_STATUSES).optional().safeParse(status === '' ? undefined : status);
-    if (!parsed.success) return c.json({ code: 'invalid_input', message: `status is one of ${KB_ITEM_STATUSES.join(', ')}` }, 422);
+    const limit = c.req.query('limit');
+    const parsed = z.coerce.number().int().min(1).max(1000).optional().safeParse(limit === '' ? undefined : limit);
+    if (!parsed.success) return c.json({ code: 'invalid_input', message: 'limit is a whole number from 1 to 1000' }, 422);
     return send(c, await knowledge.proposals(c.get('email'), Number(c.req.param('b')), parsed.data));
   });
 
@@ -172,6 +173,13 @@ export const mountKnowledge = (
     const body = await parse(c, z.object({ version }));
     if (body instanceof Response) return body;
     return send(c, await knowledge.retryProcessing(c.get('email'), c.req.param('itemId'), body.version));
+  });
+
+  // Admins reopen an item the pipeline closed (merged, suppressed or covered); it is drafted again.
+  app.post('/api/kb/:itemId/reopen', async (c) => {
+    const body = await parse(c, z.object({ version }));
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.reopen(c.get('email'), c.req.param('itemId'), body.version));
   });
 
   app.post('/api/kb/:itemId/reject', async (c) => {

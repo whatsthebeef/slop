@@ -118,8 +118,10 @@ describe('KB pipeline: drafting and approving drafts', () => {
     if (found === null) throw new Error('No board');
     return found;
   };
-  const preview = async (id: string) =>
-    unwrap(await knowledge.proposals(DEV, boardId)).find((i) => i.id === id)?.preview;
+  const preview = async (id: string) => {
+    const listed = unwrap(await knowledge.proposals(DEV, boardId));
+    return [...listed.open, ...listed.decided.items, ...listed.closed.items].find((i) => i.id === id)?.preview;
+  };
   const approveDraft = async (
     id: string,
     patch: Partial<{ content: string; section: string | null }> = {},
@@ -177,6 +179,13 @@ describe('KB pipeline: drafting and approving drafts', () => {
       ),
     );
     notifier.hints.length = 0;
+  });
+
+  it("appends a draft that names the document's title as its section instead of replacing the whole document", async () => {
+    const id = await drafted({ kind: 'doc', name: 'build_test_lint', section: null }, draftAnswer('Build', '## Reporters\n\nUse dot.'));
+    expect((await item(id)).draft).toEqual({ section: null, content: '## Reporters\n\nUse dot.' });
+    unwrap(await approveDraft(id));
+    expect(await doc('build_test_lint')).toBe('# Build\n\n## Test\n\nRun vitest.\n\n## Lint\n\nRun eslint.\n\n## Reporters\n\nUse dot.\n');
   });
 
   it('routes, then drafts the routed section in the next step, showing Sonnet the evidence and the whole target', async () => {

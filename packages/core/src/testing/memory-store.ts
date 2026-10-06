@@ -207,6 +207,10 @@ export class MemoryStore implements Store {
         Promise.resolve(
           [...s.kbItems.values()].filter((i) => i.boardId === boardId && (status === undefined || i.status === status)),
         ),
+      listRecentKbItems: (boardId, statuses, limit) => {
+        const all = [...s.kbItems.values()].filter((i) => i.boardId === boardId && statuses.includes(i.status)).reverse();
+        return Promise.resolve({ items: all.slice(0, limit), total: all.length });
+      },
       nextKbItemToProcess: (now) =>
         Promise.resolve(
           [...s.kbItems.values()]

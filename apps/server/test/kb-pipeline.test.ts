@@ -216,7 +216,7 @@ describe('KB pipeline in Postgres', () => {
       draftedAgainstVersion: 1,
       rationale: 'Quiet',
     });
-    const preview = unwrap(await knowledge.proposals(DEV, boardId, 'open')).find((i) => i.id === first)?.preview;
+    const preview = unwrap(await knowledge.proposals(DEV, boardId)).open.find((i) => i.id === first)?.preview;
     expect(preview?.diff).toContainEqual({ op: 'added', text: 'Run vitest --reporter=dot.' });
 
     unwrap(await knowledge.approve(ADMIN, first, (await get(first)).version, { as: 'draft' }));

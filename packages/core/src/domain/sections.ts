@@ -13,7 +13,8 @@ export interface Heading {
   readonly line: number;
 }
 
-const HEADING = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
+/** An ATX heading; closing hashes count only after whitespace (CommonMark), so `## C#` is "C#". */
+const HEADING = /^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/;
 const FENCE = /^\s*(```|~~~)/;
 
 export const markdownHeadings = (markdown: string): Heading[] => {
@@ -28,7 +29,8 @@ export const markdownHeadings = (markdown: string): Heading[] => {
   return headings;
 };
 
-const sameHeading = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+/** Headings match ignoring case and surrounding space (as the drafter or an admin may write them). */
+export const sameHeading = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 /** The section under `heading` (its heading line to the next heading of the same or a higher level), or null. */
 export const sectionText = (markdown: string, heading: string): string | null => {
@@ -44,16 +46,31 @@ export const sectionText = (markdown: string, heading: string): string | null =>
 const firstHeading = (content: string): Heading | undefined => markdownHeadings(content)[0];
 
 /**
+ * The headings a section can be spliced at: all of them, except a level-1 heading (a document's
+ * `# Title`) when the text has lower-level headings, since replacing it would replace everything
+ * from the title to the end.
+ */
+export const spliceHeadings = (text: string): Heading[] => {
+  const headings = markdownHeadings(text);
+  return headings.some((h) => h.level > 1) ? headings.filter((h) => h.level > 1) : headings;
+};
+
+/**
  * `text` with one section replaced by `content` (its heading line through to the next heading of
  * the same or a higher level, so nested subsections go with it), or with `content` appended as a
- * new section when `section` is null or not a heading of `text`. Keeps the text's line endings.
+ * new section when `section` is null or not a heading it can splice at (`spliceHeadings`). Keeps
+ * the text's line endings.
  */
 export const spliceSection = (text: string, section: string | null, content: string): string => {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const body = content.trim().split(/\r?\n/);
   const lines = text.split(/\r?\n/);
   const headings = markdownHeadings(text);
-  const index = section === null ? -1 : headings.findIndex((h) => sameHeading(h.text, section.replace(/^#+\s*/, '')));
+  const spliceable = new Set(spliceHeadings(text).map((h) => h.line));
+  const index =
+    section === null
+      ? -1
+      : headings.findIndex((h) => spliceable.has(h.line) && sameHeading(h.text, section.replace(/^#+\s*/, '')));
   const found = headings[index];
   if (found === undefined) {
     if (text.trim() === '') return body.join(eol) + eol;

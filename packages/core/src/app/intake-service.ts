@@ -7,9 +7,19 @@ import type { Store } from '../ports.js';
 import { memberOf } from './access.js';
 import { field, parseJson, text } from './llm-json.js';
 
-/** The LLM port: a single completion. The adapter chooses the model (Haiku for intake). */
+/**
+ * The LLM port: a single completion. The adapter chooses the model (Haiku for intake). An adapter
+ * must give up when `signal` aborts (a caller's deadline), rejecting the call.
+ */
+export interface LlmRequest {
+  readonly system: string;
+  readonly prompt: string;
+  readonly maxTokens: number;
+  readonly signal?: AbortSignal;
+}
+
 export interface Llm {
-  complete(request: { system: string; prompt: string; maxTokens: number }): Promise<string>;
+  complete(request: LlmRequest): Promise<string>;
 }
 
 export interface IntakeInput {

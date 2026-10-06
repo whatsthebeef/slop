@@ -137,6 +137,7 @@ export const KnowledgePage = () => {
         documents={kb.data.documents}
         agentEntries={kb.data.agentSet.entries}
         onOpenDocument={setViewing}
+        live={live}
       />
 
       {admin && catalog.data !== undefined && (

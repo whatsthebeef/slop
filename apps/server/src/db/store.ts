@@ -418,6 +418,17 @@ export class PgStore implements Store {
           .orderBy(asc(schema.kbProposals.createdAt), asc(schema.kbProposals.id));
         return rows.map(toKbItem);
       },
+      listRecentKbItems: async (boardId, statuses, limit) => {
+        const where = and(eq(schema.kbProposals.boardId, boardId), inArray(schema.kbProposals.status, [...statuses]));
+        const rows = await t
+          .select()
+          .from(schema.kbProposals)
+          .where(where)
+          .orderBy(desc(schema.kbProposals.createdAt), desc(schema.kbProposals.id))
+          .limit(limit);
+        const [counted] = await t.select({ total: sql<number>`count(*)`.mapWith(Number) }).from(schema.kbProposals).where(where);
+        return { items: rows.map(toKbItem), total: counted?.total ?? 0 };
+      },
       nextKbItemToProcess: async (now) => {
         const [row] = await t
           .select()

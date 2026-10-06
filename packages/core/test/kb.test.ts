@@ -456,9 +456,25 @@ describe('KB review', () => {
       outcome: null,
       version: 2,
     });
-    expect(unwrap(await knowledge.proposals(DEV, boardId, 'rejected')).map((i) => i.id)).toEqual([id]);
-    expect(unwrap(await knowledge.proposals(DEV, boardId, 'open'))).toEqual([]);
+    const listed = unwrap(await knowledge.proposals(DEV, boardId));
+    expect(listed.decided).toMatchObject({ items: [{ id, status: 'rejected' }], total: 1 });
+    expect(listed.open).toEqual([]);
+    expect(listed.closed).toEqual({ items: [], total: 0 });
     expect(errorCode(await knowledge.proposals(OUTSIDER, boardId))).toBe('forbidden');
+  });
+
+  it('lists the newest decided items up to the limit, with their total', async () => {
+    const ids: string[] = [];
+    for (let n = 0; n < 3; n++) {
+      const id = await submit({ statement: `Rule ${n}` });
+      unwrap(await knowledge.reject(ADMIN, id, 1, 'No'));
+      ids.push(id);
+    }
+    const open = await submit({ statement: 'Still open' });
+    const listed = unwrap(await knowledge.proposals(DEV, boardId, 2));
+    expect(listed.open.map((i) => i.id)).toEqual([open]);
+    expect(listed.decided.items.map((i) => i.id)).toEqual([ids[2], ids[1]]);
+    expect(listed.decided.total).toBe(3);
   });
 
   it('records a document proposal, without a source glob, and approving it creates the document', async () => {

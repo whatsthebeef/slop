@@ -174,8 +174,11 @@ if (config.WEB_DIST !== undefined) {
 
 // Catalog agent files reach boards through layering; a changed catalog gives each board a new agent-set version.
 try {
-  const bumped = await knowledge.syncCatalogAgentSet();
+  const { bumped, failed } = await knowledge.syncCatalogAgentSet();
   if (bumped.length > 0) console.log(`[agent set] catalog changed: new agent-set version for boards ${bumped.join(', ')}`);
+  for (const { boardId, error } of failed) {
+    logError('agent set sync', `board ${boardId}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 } catch (error) {
   logError('agent set sync', error instanceof Error ? (error.stack ?? error.message) : String(error));
 }
