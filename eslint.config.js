@@ -39,7 +39,7 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser } },
   },
   {
-    files: ['**/*.js', '**/*.config.ts'],
+    files: ['**/*.{js,mjs}', '**/*.config.ts'],
     ...tseslint.configs.disableTypeChecked,
   },
 );
