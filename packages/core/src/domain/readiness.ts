@@ -55,6 +55,8 @@ export interface ReadinessFacts {
   readonly ticks: ReadinessTicks;
   /** Recent routine failures on the board's globs, newest first. */
   readonly recentFailures: readonly { readonly globId: string; readonly reason: string }[];
+  /** Globs whose watching run hasn't reacted to failed checks (see `unreactedCheckFailures`). */
+  readonly unreactedCheckFailures: readonly string[];
 }
 
 /**
@@ -171,9 +173,12 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
   for (const key of MANUAL_READINESS_KEYS) {
     const failure = facts.recentFailures.find((f) => routineFailureFix(f.reason)?.key === key);
     const fix = failure === undefined ? null : routineFailureFix(failure.reason);
+    const unreacted = key === 'claude_app' ? facts.unreactedCheckFailures[0] : undefined;
     items.push(
       failure !== undefined && fix !== null
         ? item(key, MANUAL[key], 'failing', `${failure.globId} failed: ${failure.reason}. ${fix.fix}`, settings)
+        : unreacted !== undefined
+          ? item(key, MANUAL[key], 'failing', `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo`, settings)
         : facts.ticks[key] === true
           ? item(key, MANUAL[key], 'ok', 'Ticked by an admin', null)
           : item(key, MANUAL[key], 'missing', "slop can't check this: tick it in board settings once it's done", settings),
@@ -196,6 +201,26 @@ export const recentRoutineFailures = (
 const STUCK_MINUTES = 15;
 
 /**
+ * Minutes since the head's checks failed with a watching run that hasn't pushed or called slop
+ * since; null when the glob isn't in that state. A push resets the head checks, a run ending or a
+ * take-over means the run is no longer watching.
+ */
+const minutesUnreacted = (glob: Glob, now: string): number | null => {
+  if (glob.status !== 'pr_open') return null;
+  const run = glob.runs[glob.runs.length - 1];
+  if (run === undefined || run.state !== 'watching') return null;
+  const head = glob.pr?.headSha ?? null;
+  const checks = glob.headChecks;
+  if (head === null || checks === null || checks.sha !== head || checks.state !== 'failed' || checks.at === undefined) return null;
+  const since = Math.max(Date.parse(checks.at), Date.parse(run.lastProgressAt ?? checks.at));
+  return (Date.parse(now) - since) / 60_000;
+};
+
+/** Globs whose checks failed on the head and whose watching run hasn't reacted for a while. */
+export const unreactedCheckFailures = (globs: readonly Glob[], now: string): string[] =>
+  globs.filter((g) => (minutesUnreacted(g, now) ?? 0) >= STUCK_MINUTES).map((g) => g.id);
+
+/**
  * A short hint on a card when a glob looks stuck on setup rather than on work: a ready sub with no
  * sub-gate result, a sub whose gate passed but hasn't merged, or a routine failure with a known fix.
  */
@@ -203,6 +228,11 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
   if (glob.failure !== null) {
     const fix = routineFailureFix(glob.failure.reason);
     if (fix !== null) return fix.fix;
+  }
+  const unreacted = minutesUnreacted(glob, now);
+  if (unreacted !== null && unreacted >= STUCK_MINUTES) {
+    const session = glob.runs[glob.runs.length - 1]?.sessionUrl ?? null;
+    return `Checks failed on the head ${String(Math.floor(unreacted))} minutes ago and the routine hasn't pushed or reported since. Fix: take over (sstor --glob ${glob.id} --take-over)${session === null ? '' : ` or open the run's session: ${session}`}`;
   }
   if (glob.type !== 'sub' || glob.status !== 'pr_open') return null;
   const minutes = (Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000;

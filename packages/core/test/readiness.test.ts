@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readiness, recentRoutineFailures, routineFailureFix, stuckHint } from '../src/domain/readiness.js';
+import { readiness, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
 import type { ReadinessFacts } from '../src/domain/readiness.js';
 import { NOW, board, glob } from './fixtures.js';
 
@@ -19,6 +19,7 @@ const ready: ReadinessFacts = {
   hasBuildDoc: true,
   ticks: { routines: true, routine_repo: true, claude_app: true },
   recentFailures: [],
+  unreactedCheckFailures: [],
 };
 
 const stateOf = (facts: ReadinessFacts) => Object.fromEntries(readiness(facts).map((i) => [i.key, i.state]));
@@ -106,5 +107,47 @@ describe('stuck hints on cards', () => {
   it('shows the fix for a known routine failure, and nothing for ordinary globs', () => {
     expect(stuckHint(glob({ failure: { reason: 'Repository not found', at: NOW } }), later)).toMatch(/routine's repositories/);
     expect(stuckHint(glob({ status: 'in_progress' }), later)).toBeNull();
+  });
+});
+
+describe('watching run that ignores failed checks', () => {
+  const failedAt = '2026-09-30T10:00:00.000Z';
+  const at = (min: number) => new Date(Date.parse(failedAt) + min * 60_000).toISOString();
+  const head = 'abc1234';
+  const run = (patch: Partial<ReturnType<typeof glob>['runs'][number]> = {}) => ({
+    id: 'r1', state: 'watching' as const, outcome: null, generation: 1, triggeredBy: 'a', routineOwner: 'a',
+    queuedAt: failedAt, startedAt: failedAt, lastProgressAt: failedAt, endedAt: null, failureReason: null,
+    sessionId: 's', sessionUrl: 'https://claude.ai/code/s', ...patch,
+  });
+  const watched = (patch: Parameters<typeof glob>[0] = {}) =>
+    glob({
+      id: 's1t1', type: 'sub', status: 'pr_open', pr: { number: 3, state: 'ready', headSha: head },
+      headChecks: { sha: head, state: 'failed', at: failedAt }, runs: [run()], ...patch,
+    });
+
+  it('hints with the take-over and session fixes after 15 minutes', () => {
+    expect(stuckHint(watched(), at(14))).toBeNull();
+    const hint = stuckHint(watched(), at(16));
+    expect(hint).toMatch(/Checks failed on the head 16 minutes ago/);
+    expect(hint).toContain('sstor --glob s1t1 --take-over');
+    expect(hint).toContain('https://claude.ai/code/s');
+  });
+
+  it('applies to a same too', () => {
+    expect(stuckHint(watched({ type: 'same' }), at(20))).toMatch(/Checks failed/);
+  });
+
+  it('clears on a push, run progress, run end or checks that pass', () => {
+    expect(stuckHint(watched({ type: 'same', headChecks: null }), at(20))).toBeNull();
+    expect(stuckHint(watched({ type: 'same', runs: [run({ lastProgressAt: at(10) })] }), at(20))).toBeNull();
+    expect(stuckHint(watched({ type: 'same', runs: [run({ state: 'ended', outcome: 'failed' })] }), at(20))).toBeNull();
+    expect(stuckHint(watched({ type: 'same', headChecks: { sha: head, state: 'passed' } }), at(20))).toBeNull();
+    expect(stuckHint(watched({ type: 'same', headChecks: { sha: 'old', state: 'failed', at: failedAt } }), at(20))).toBeNull();
+  });
+
+  it('counts toward the Claude GitHub App readiness item', () => {
+    expect(unreactedCheckFailures([watched(), watched({ id: 's1t2', headChecks: null })], at(20))).toEqual(['s1t1']);
+    const items = readiness({ ...ready, unreactedCheckFailures: ['s1t1'] });
+    expect(items.find((i) => i.key === 'claude_app')).toMatchObject({ state: 'failing' });
   });
 });

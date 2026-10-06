@@ -1,5 +1,5 @@
 import type { BoardService, GlobService, KnowledgeService, ReadinessFacts } from '@slop/core';
-import { readiness, recentRoutineFailures } from '@slop/core';
+import { readiness, recentRoutineFailures, unreactedCheckFailures } from '@slop/core';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import type { CodeHost } from '../codehost.js';
@@ -84,6 +84,7 @@ export const mountReadiness = (app: Hono<Env>, deps: ReadinessRoutesDeps): void 
       hasBuildDoc: index.ok && index.value.some((d) => d.area === 'build'),
       ticks: board.readinessTicks,
       recentFailures: globs.ok ? recentRoutineFailures(globs.value, since) : [],
+      unreactedCheckFailures: globs.ok ? unreactedCheckFailures(globs.value, new Date().toISOString()) : [],
     };
     return c.json({ items: readiness(facts) });
   });
