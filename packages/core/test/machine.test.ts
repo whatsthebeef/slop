@@ -799,6 +799,12 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     expect(t.glob.pr?.state).toBe('merged');
   });
 
+  it('failed head checks are recorded on a pr_open glob, so a failing check never shows as passed', () => {
+    const open = glob({ status: 'pr_open', pr: { number: 1, headSha: HEAD, state: 'open' } as never });
+    const failed = value(m.checksCompleted(open, { sha: HEAD, passed: false }, ctx(null))).glob;
+    expect(failed.headChecks).toEqual({ sha: HEAD, state: 'failed' });
+  });
+
   it('a failed continue merge clears the merge mode', () => {
     const merging = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead })).glob;
     const failed = value(m.mergeFailed(merging, 'conflict', ctx(null))).glob;
