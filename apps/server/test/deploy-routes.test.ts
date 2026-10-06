@@ -115,7 +115,7 @@ describe('deploy results and executors', () => {
       deploys,
       boards: new BoardService({ store, notifier: { publish: () => undefined } }),
       links,
-      awsWebhookKey: KEY,
+      awsWebhookKeys: ['other-stack-key', KEY],
       log: () => undefined,
     });
     board = await store.transaction(async (tx) => {
@@ -261,7 +261,7 @@ describe('deploy results and executors', () => {
       deploys,
       boards: new BoardService({ store, notifier: { publish: () => undefined } }),
       links,
-      awsWebhookKey: undefined,
+      awsWebhookKeys: [],
       log: () => undefined,
     });
     const response = await bare.request('/webhooks/aws', {

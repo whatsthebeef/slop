@@ -108,7 +108,7 @@ const app = createApp({
     if (!forked.ok) logError('board created', `Agent set fork failed for board ${boardId}: ${forked.error.message}`);
   },
 });
-mountDeploys(app, { deploys, boards, links, awsWebhookKey: config.AWS_WEBHOOK_KEY, log: logError });
+mountDeploys(app, { deploys, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
 mountKnowledge(app, { knowledge, artifacts, catalog, intake, boards, host: github });
 
