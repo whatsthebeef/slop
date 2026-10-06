@@ -6,6 +6,7 @@ import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
 import { SUB_GATE_CHECK, repoOf } from './codehost.js';
+import { conflictCommentBody, conflictCommentMarker } from './conflict-comment.js';
 
 /**
  * Outbox executors for the code host (the GitHub App today). Each turns one effect into GitHub calls and feeds what
@@ -111,6 +112,8 @@ export const codeHostExecutors = (
       // GitHub computes mergeability in the background; retry until it has an answer.
       if (state === 'unknown') throw new Error('GitHub has not computed the merge state yet');
       await lookUpSubGate(repo, glob, sha, globs);
+      // A flagged conflict clears once the PR can merge into the base branch again.
+      if (state !== 'conflict' && glob.conflict != null) await globs.applyEvent(glob.id, (g, ctx) => machine.conflictCleared(g, ctx));
       if (state === 'pending') return 'done';
       const passed = state === 'passed' || state === 'behind';
       // A conflict after slop updated the branch is its own failure, not a failing check.
@@ -118,6 +121,43 @@ export const codeHostExecutors = (
       await globs.applyEvent(glob.id, (g, ctx) =>
         machine.checksCompleted(g, conflict === undefined ? { sha, passed } : { sha, passed, conflict }, ctx),
       );
+      return 'done';
+    },
+
+    flag_conflicts: async (effect, glob, { globs }) => {
+      if (effect.kind !== 'flag_conflicts' || glob === null) return 'dropped';
+      // Each open PR rechecks through its own effect, which retries while GitHub computes mergeability.
+      for (const other of await globs.peekAll(glob.boardId, { status: ['pr_open', 'in_progress'] })) {
+        await globs.applyEvent(other.id, (g, ctx) => machine.baseMerged(g, { since: glob.id }, ctx));
+      }
+      return 'done';
+    },
+
+    check_conflict: async (effect, glob, { globs }) => {
+      if (effect.kind !== 'check_conflict' || glob?.pr == null) return 'dropped';
+      if (glob.status !== 'pr_open' && glob.status !== 'in_progress') return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      const prNumber = glob.pr.number;
+      const { state } = await host.mergeState(repo, prNumber);
+      if (state === 'unknown') throw new Error('GitHub has not computed the merge state yet');
+      if (state !== 'conflict') {
+        await globs.applyEvent(glob.id, (g, ctx) => machine.conflictCleared(g, ctx));
+        return 'done';
+      }
+      const found = { base: repo.base, files: await host.conflictFiles(repo, prNumber), since: effect.since ?? glob.conflict?.since ?? null };
+      await globs.applyEvent(glob.id, (g, ctx) => machine.conflictFound(g, found, ctx));
+      return 'done';
+    },
+
+    request_conflict_fix: async (_effect, glob, { globs }) => {
+      const conflict = glob?.conflict;
+      if (glob?.pr == null || conflict?.requestedAt === undefined) return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      const merged = conflict.since === null ? null : await globs.peek(conflict.since);
+      const marker = conflictCommentMarker(glob, conflict.requestedAt);
+      await host.commentOnce(repo, glob.pr.number, marker, conflictCommentBody(glob, merged, conflict, marker));
       return 'done';
     },
 
@@ -194,7 +234,7 @@ export const codeHostExecutors = (
         return 'done';
       }
       const repo = await repoFor(glob.boardId);
-      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`, run.resolveConflictWith));
+      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`));
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));

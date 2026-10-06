@@ -65,6 +65,8 @@ export interface CodeHost {
   markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }>;
   /** Files changed on both the PR's branch and the base branch since they diverged: where a conflict can be. Best effort; empty when unknown. */
   conflictFiles(repo: Repo, prNumber: number): Promise<string[]>;
+  /** Posts a PR comment containing `marker` unless one with it exists already (so a retried effect comments once). */
+  commentOnce(repo: Repo, prNumber: number, marker: string, body: string): Promise<'posted' | 'exists'>;
   /** Lines changed and files touched between the base branch and `sha`. */
   diffSummary(repo: Repo, sha: string): Promise<DiffSummary>;
   /** Squash-merges at exactly `sha` as `<id>: <title>`, or updates a branch that is behind. */

@@ -655,9 +655,10 @@ describe('checks and merging (slice 2)', () => {
     expect(checks.failure?.conflict).toBeUndefined();
   });
 
-  it('resolve conflict: a routine run continues on the same branch, only for an unowned conflict failure', () => {
-    const conflict = { base: 'main', files: [] };
-    const failed = glob({ type: 'sub', status: 'failed', failure: { reason: 'Merge conflict with main', at: NOW, conflict } });
+  it('resolve conflict: a failed merge conflict returns to review and asks for one PR comment, with no routine run', () => {
+    const conflict = { base: 'main', files: ['a.ts'] };
+    const pr = { number: 7, state: 'ready' as const, headSha: 'abc1234' };
+    const failed = glob({ type: 'sub', status: 'failed', pr, failure: { reason: 'Merge conflict with main', at: NOW, conflict } });
     expect(m.allowedActions(failed, dev)).toContain('resolve_conflict');
     expect(m.allowedActions(glob({ type: 'sub', status: 'failed', failure: { reason: 'x', at: NOW } }), dev)).not.toContain('resolve_conflict');
     const owned = { ...failed, implementer: other.email };
@@ -666,13 +667,74 @@ describe('checks and merging (slice 2)', () => {
     expect(errorCode(m.resolveConflict(owned, ctx()))).toBe('invalid_transition');
 
     const t = value(m.resolveConflict(failed, ctx()));
-    expect(t.glob.status).toBe('implementing');
+    expect(t.glob.status).toBe('pr_open');
     expect(t.glob.failure).toBeNull();
-    expect(m.currentRun(t.glob)?.resolveConflictWith).toBe('main');
-    expect(effectKinds(t)).toEqual(['reopen_pr', 'fire_routine']);
-    expect(effectKinds(t)).not.toContain('delete_branch');
+    expect(t.glob.runs).toEqual([]);
+    expect(t.glob.conflict).toMatchObject({ base: 'main', files: ['a.ts'], since: null, requestedAt: NOW });
+    expect(effectKinds(t)).toEqual(['refresh_checks', 'request_conflict_fix']);
   });
 
+  it('resolve conflict: a flagged conflict is requested once', () => {
+    const pr = { number: 7, state: 'ready' as const, headSha: 'abc1234' };
+    const flagged = glob({ status: 'pr_open', pr, conflict: { base: 'main', files: [], since: 's1t2', at: NOW } });
+    expect(m.allowedActions(flagged, dev)).toContain('resolve_conflict');
+    const t = value(m.resolveConflict(flagged, ctx()));
+    expect(t.glob.status).toBe('pr_open');
+    expect(t.glob.conflict?.requestedAt).toBe(NOW);
+    expect(effectKinds(t)).toEqual(['request_conflict_fix']);
+    // Asked already: no second comment, and the action is gone.
+    expect(m.allowedActions(t.glob, dev)).not.toContain('resolve_conflict');
+    const again = value(m.resolveConflict(t.glob, ctx()));
+    expect(again.changed).toBe(false);
+    expect(again.effects).toEqual([]);
+  });
+
+  it('resolve conflict: a live routine run or an unflagged glob is refused', () => {
+    const pr = { number: 7, state: 'ready' as const, headSha: 'abc1234' };
+    const conflict = { base: 'main', files: [], since: null, at: NOW };
+    expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr }), ctx()))).toBe('invalid_transition');
+    expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr, conflict, runs: [run()] }), ctx()))).toBe('run_active');
+  });
+});
+
+describe('conflicts flagged after a merge', () => {
+  const pr = { number: 7, state: 'draft' as const, headSha: 'abc1234' };
+  const found = { base: 'main', files: ['a.ts'], since: 's1t2' };
+
+  it('a merge queues the recheck of other globs with an open PR only', () => {
+    const merged = value(m.merged(glob({ status: 'pr_open' }), { sha: 'm1' }, ctx(null)));
+    expect(effectKinds(merged)).toEqual(['flag_conflicts']);
+    const open = value(m.baseMerged(glob({ status: 'in_progress', pr }), { since: 's1t2' }, ctx(null)));
+    expect(open.effects).toEqual([{ kind: 'check_conflict', globId: 's1t1', generation: 1, since: 's1t2' }]);
+    expect(value(m.baseMerged(glob({ status: 'in_progress', pr: null }), { since: 's1t2' }, ctx(null))).effects).toEqual([]);
+    expect(value(m.baseMerged(glob({ status: 'planning', pr }), { since: 's1t2' }, ctx(null))).effects).toEqual([]);
+    expect(value(m.baseMerged(glob({ status: 'in_progress', pr, id: 's1t2' }), { since: 's1t2' }, ctx(null))).effects).toEqual([]);
+  });
+
+  it('flags a conflict without failing the glob, keeps the first one, and clears it', () => {
+    const g = glob({ status: 'in_progress', pr });
+    const flagged = value(m.conflictFound(g, found, ctx(null)));
+    expect(flagged.glob.status).toBe('in_progress');
+    expect(flagged.glob.failure).toBeNull();
+    expect(flagged.glob.conflict).toEqual({ ...found, at: NOW });
+    expect(value(m.conflictFound(flagged.glob, { ...found, since: 's1t3' }, ctx(null))).changed).toBe(false);
+    expect(value(m.conflictFound(glob({ status: 'in_progress', pr: null }), found, ctx(null))).changed).toBe(false);
+
+    const cleared = value(m.conflictCleared(flagged.glob, ctx(null)));
+    expect(cleared.glob.conflict).toBeNull();
+    expect(value(m.conflictCleared(cleared.glob, ctx(null))).changed).toBe(false);
+  });
+
+  it('a push rechecks a flagged conflict; merging clears it', () => {
+    const flagged = glob({ status: 'in_progress', pr, conflict: { ...found, at: NOW } });
+    const pushed = value(m.commitPushed(flagged, { sha: 'def5678', runId: null }, ctx(null)));
+    expect(pushed.effects).toContainEqual({ kind: 'check_conflict', globId: 's1t1', generation: 1, since: null });
+    const merged = value(m.merged({ ...flagged, status: 'pr_open' }, { sha: 'm1' }, ctx(null)));
+    expect(merged.glob.conflict).toBeNull();
+  });
+});
+
+describe('fields and labels', () => {
   it('type and environment changes sync the PR labels', () => {
     const t = value(m.changeFields(glob({ status: 'in_progress' }), { environment: 'dev' }, board, ctx()));
     expect(effectKinds(t)).toEqual(['sync_pr_labels']);

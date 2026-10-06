@@ -18,6 +18,7 @@ import type {
   LabelState,
   Labels,
   MergeConflict,
+  OpenConflict,
   Run,
   RunOutcome,
   SlopType,
@@ -45,7 +46,7 @@ export type Action =
   | 'pick_up'
   | 'take_over'
   | 'retrigger'
-  /** Failed by a merge conflict with no human implementer: a routine merges the base branch in on the same branch. */
+  /** A merge conflict with no human implementer: ask the Claude GitHub App, in a PR comment, to resolve it on the same branch. */
   | 'resolve_conflict'
   | 'start_again'
   | 'merge'
@@ -192,7 +193,7 @@ class Builder {
   }
 
   /** Queues a new routine run for whoever triggered it. */
-  queueRun(triggeredBy: string, extra: Pick<Run, 'resolveConflictWith'> = {}): this {
+  queueRun(triggeredBy: string): this {
     const run: Run = {
       id: this.ctx.newRunId(),
       state: 'queued',
@@ -207,7 +208,6 @@ class Builder {
       failureReason: null,
       sessionId: null,
       sessionUrl: null,
-      ...extra,
     };
     this.set({ runs: [...this.glob.runs, run] });
     this.event('RunTriggered', {
@@ -453,27 +453,78 @@ export const conflictReason = (conflict: MergeConflict): string => {
   return `Merge conflict with ${conflict.base}${conflict.files.length === 0 ? '' : ` in ${shown}${more}`}`;
 };
 
+/** Whether the glob has an open PR that a base-branch conflict is worth flagging on. */
+const hasOpenPr = (glob: Glob): boolean =>
+  glob.pr !== null &&
+  (glob.pr.state === 'draft' || glob.pr.state === 'ready') &&
+  (glob.status === 'pr_open' || glob.status === 'in_progress');
+
+/** A conflict slop could ask the Claude GitHub App to fix: nobody implements the glob, no routine run is live, and it hasn't asked yet. */
+const canRequestConflictFix = (glob: Glob): boolean =>
+  glob.type !== 'super' &&
+  glob.implementer === null &&
+  !hasLiveRun(glob) &&
+  ((hasOpenPr(glob) && glob.conflict != null && glob.conflict.requestedAt === undefined) ||
+    (glob.status === 'failed' && glob.failure?.conflict !== undefined && glob.pr?.state === 'ready'));
+
 /**
- * Resolve conflict (row 16 follow-up): a glob failed by a merge conflict and nobody is implementing it gets a
- * routine run that merges the base branch into the existing branch. Unlike re-triggering, the run is told why.
+ * A base-branch merge happened: recheck this glob's open PR for a conflict with it. The recheck runs through the
+ * outbox because GitHub computes mergeability in the background.
+ */
+export const baseMerged = (glob: Glob, merge: { since: string }, ctx: Context): Result<Transition> => {
+  if (glob.id === merge.since || !hasOpenPr(glob)) return unchanged(glob);
+  return new Builder(glob, ctx)
+    .effect({ kind: 'check_conflict', globId: glob.id, generation: glob.generation, since: merge.since })
+    .done();
+};
+
+/** The open PR conflicts with the base branch: flag it on the card. The first conflict found is kept. */
+export const conflictFound = (
+  glob: Glob,
+  found: { base: string; files: readonly string[]; since: string | null },
+  ctx: Context,
+): Result<Transition> => {
+  if (!hasOpenPr(glob) || glob.conflict?.base === found.base) return unchanged(glob);
+  const conflict: OpenConflict = { ...found, at: ctx.now };
+  return new Builder(glob, ctx)
+    .set({ conflict })
+    .event('ConflictFlagged', { base: found.base, files: [...found.files], since: found.since })
+    .done();
+};
+
+/** The open PR no longer conflicts with the base branch. */
+export const conflictCleared = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (glob.conflict == null) return unchanged(glob);
+  return new Builder(glob, ctx).set({ conflict: null }).event('ConflictCleared', { base: glob.conflict.base }).done();
+};
+
+/**
+ * Resolve conflict (rows 16 and 20a): a conflicting PR nobody is implementing gets one PR comment asking the Claude
+ * GitHub App to merge the base branch in and push; no routine run starts. A glob failed by a merge conflict goes back
+ * to review with the conflict flagged. A human implementer resolves locally (`sstor --glob <id> --resolve`).
  */
 export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
-  const conflict = glob.failure?.conflict;
-  if (glob.status !== 'failed' || glob.type === 'super' || conflict === undefined) {
-    return invalidTransition(glob, actor, 'Only a glob failed by a merge conflict can resolve it');
-  }
   if (glob.implementer !== null) {
     return invalidTransition(glob, actor, 'A glob with a human implementer resolves its conflict locally');
   }
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
-  return new Builder(glob, ctx)
-    .bumpGeneration()
-    .set({ failure: null, headChecks: null })
-    .effect({ kind: 'reopen_pr', globId: glob.id, generation: glob.generation + 1 })
-    .status('implementing')
-    .queueRun(actor.email, { resolveConflictWith: conflict.base })
-    .done();
+  if (glob.conflict?.requestedAt !== undefined) return unchanged(glob);
+  if (!canRequestConflictFix(glob)) {
+    return invalidTransition(glob, actor, 'Only a glob whose PR conflicts with the base branch can resolve it');
+  }
+  const request = { kind: 'request_conflict_fix', globId: glob.id, generation: glob.generation } as const;
+  const b = new Builder(glob, ctx);
+  const failed = glob.status === 'failed' ? glob.failure?.conflict : undefined;
+  if (failed !== undefined) {
+    // The failed merge left a ready PR: return it to review while the conflict is fixed.
+    b.set({ failure: null, headChecks: null, conflict: { ...failed, since: null, at: ctx.now, requestedAt: ctx.now } })
+      .status('pr_open')
+      .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+  } else if (glob.conflict != null) {
+    b.set({ conflict: { ...glob.conflict, requestedAt: ctx.now } });
+  }
+  return b.event('ConflictFixRequested', { base: (failed ?? glob.conflict)?.base ?? null }).effect(request).done();
 };
 
 /** Row 23: return the glob to its starting status with a fresh branch and PR. */
@@ -790,6 +841,10 @@ export const commitPushed = (
   if (glob.status === 'pr_open' || glob.status === 'merging') {
     b.set({ headChecks: null }).effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
   }
+  // A push may have fixed a flagged conflict (or not): look again.
+  if (glob.conflict != null && glob.pr !== null) {
+    b.effect({ kind: 'check_conflict', globId: glob.id, generation: glob.generation, since: null });
+  }
   // After Merge and continue the glob has no PR until the next push opens one, once there's new
   // work on the branch (main is merged back into it first, so the PR shows only the new work).
   if (glob.status === 'in_progress' && glob.pr === null && glob.provisioning === 'ok') {
@@ -1004,9 +1059,10 @@ export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx:
     const number = merge.number ?? glob.pr?.number;
     const prs = number === undefined ? glob.prs : [...glob.prs, { number, mergeSha: merge.sha, mergedAt: ctx.now }];
     return new Builder(glob, ctx)
-      .set({ prs, pr: null, headChecks: null, mergeMode: null, failure: null })
+      .set({ prs, pr: null, headChecks: null, mergeMode: null, failure: null, ...(glob.conflict == null ? {} : { conflict: null }) })
       .event('Merged', { sha: merge.sha, ...(number === undefined ? {} : { number }), mode: 'continue' })
       .status('in_progress')
+      .effect({ kind: 'flag_conflicts', globId: glob.id, generation: glob.generation })
       .done();
   }
   return new Builder(glob, ctx)
@@ -1017,9 +1073,11 @@ export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx:
       failure: null,
       mergeMode: null,
       pr: glob.pr === null ? null : { ...glob.pr, state: 'merged' },
+      ...(glob.conflict == null ? {} : { conflict: null }),
     })
     .event('Merged', { sha: merge.sha })
     .status('reviewing')
+    .effect({ kind: 'flag_conflicts', globId: glob.id, generation: glob.generation })
     .done();
 };
 
@@ -1120,15 +1178,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     actions.push('take_over');
   }
   if (glob.status === 'failed' && glob.type !== 'super' && !hasLiveRun(glob)) actions.push('retrigger');
-  if (
-    glob.status === 'failed' &&
-    glob.type !== 'super' &&
-    !hasLiveRun(glob) &&
-    glob.failure?.conflict !== undefined &&
-    glob.implementer === null
-  ) {
-    actions.push('resolve_conflict');
-  }
+  if (canRequestConflictFix(glob)) actions.push('resolve_conflict');
   if (glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
   if (
     glob.status === 'pr_open' &&
