@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Link, useParams } from 'react-router';
-import { AgentSetFiles } from '@/components/agent-set-files';
+import { AgentSetFiles, LineDiff } from '@/components/agent-set-files';
 import { KbProposals } from '@/components/kb-proposals';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -31,6 +31,7 @@ export const KnowledgePage = () => {
   const catalog = useQuery({ queryKey: ['catalog'], queryFn: api.catalog });
   const [picked, setPicked] = useState<string[]>([]);
   const [viewing, setViewing] = useState<string | null>(null);
+  const [comparing, setComparing] = useState<string | null>(null);
   const doc = useQuery({
     queryKey: ['kb-doc', boardId, viewing],
     queryFn: () => api.knowledgeDoc(boardId, viewing ?? ''),
@@ -69,6 +70,8 @@ export const KnowledgePage = () => {
   if (board.data === undefined || kb.data === undefined) return <p className='p-6 text-muted-foreground'>Loading…</p>;
   const admin = board.data.role === 'admin';
   const imported = new Set(kb.data.documents.map((d) => d.source.replace(/^catalog:|@\d+$/g, '')));
+  const updates = kb.data.catalogUpdates;
+  const compared = updates.find((u) => u.name === comparing) ?? null;
 
   return (
     <main className='mx-auto grid w-full max-w-[63rem] gap-8 p-6'>
@@ -86,26 +89,36 @@ export const KnowledgePage = () => {
         </p>
         {kb.data.documents.length === 0 && <p className='text-sm text-muted-foreground'>No documents yet.</p>}
         <div className='grid gap-1'>
-          {kb.data.documents.map((d) => (
-            <button
-              key={d.name}
-              type='button'
-              onClick={() => setViewing(d.name)}
-              className='grid gap-0.5 rounded-md border bg-card p-2 text-left text-sm hover:bg-muted'
-            >
-              <span className='flex flex-wrap items-center gap-2'>
-                <span className='font-medium'>{d.name}</span>
-                {d.area !== null && <span className='rounded bg-muted px-1.5 text-xs'>{d.area}</span>}
-                <span className='ml-auto text-xs text-muted-foreground'>
-                  v{d.version} · {d.source}
-                </span>
-              </span>
-              {d.description !== '' && <span className='text-xs text-muted-foreground'>{d.description}</span>}
-              {d.audience.length > 0 && (
-                <span className='text-xs text-muted-foreground'>always for: {d.audience.join(', ')}</span>
-              )}
-            </button>
-          ))}
+          {kb.data.documents.map((d) => {
+            const update = updates.find((u) => u.name === d.name);
+            return (
+              <div key={d.name} className='grid gap-0.5 rounded-md border bg-card text-sm'>
+                <button type='button' onClick={() => setViewing(d.name)} className='grid gap-0.5 rounded-md p-2 text-left hover:bg-muted'>
+                  <span className='flex flex-wrap items-center gap-2'>
+                    <span className='font-medium'>{d.name}</span>
+                    {d.area !== null && <span className='rounded bg-muted px-1.5 text-xs'>{d.area}</span>}
+                    <span className='ml-auto text-xs text-muted-foreground'>
+                      v{d.version} · {d.source}
+                    </span>
+                  </span>
+                  {d.description !== '' && <span className='text-xs text-muted-foreground'>{d.description}</span>}
+                  {d.audience.length > 0 && (
+                    <span className='text-xs text-muted-foreground'>always for: {d.audience.join(', ')}</span>
+                  )}
+                </button>
+                {update !== undefined && (
+                  <button
+                    type='button'
+                    onClick={() => setComparing(d.name)}
+                    className='mx-2 mb-2 w-fit rounded bg-amber-500/15 px-1.5 text-left text-xs text-amber-800 hover:underline dark:text-amber-200'
+                    data-testid={`catalog-update-${d.name}`}
+                  >
+                    Catalog has a newer version (v{update.catalogVersion})
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
         {admin && (
           <label className='mt-2 inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-muted'>
@@ -119,7 +132,8 @@ export const KnowledgePage = () => {
         boardId={boardId}
         admin={admin}
         documents={kb.data.documents}
-        agentFiles={kb.data.agentSet.files}
+        agentEntries={kb.data.agentSet.entries}
+        onOpenDocument={setViewing}
       />
 
       {admin && catalog.data !== undefined && (
@@ -167,6 +181,20 @@ export const KnowledgePage = () => {
         <Dialog open onOpenChange={(o) => !o && setViewing(null)}>
           <DialogContent title={viewing} className='max-w-3xl'>
             <pre className='overflow-x-auto text-xs whitespace-pre-wrap'>{doc.data?.[0]?.content ?? 'Loading…'}</pre>
+          </DialogContent>
+        </Dialog>
+      )}
+      {compared !== null && (
+        <Dialog open onOpenChange={(o) => !o && setComparing(null)}>
+          <DialogContent title={`${compared.name}: catalog v${compared.catalogVersion}`} className='max-w-3xl'>
+            <div className='grid gap-3'>
+              <p className='text-xs text-muted-foreground'>
+                This board's copy was taken from catalog v{compared.forkedVersion} of {compared.catalogId}. Catalog documents
+                stay as the board forked them, so nothing changes here on its own: copy across what you want. Lines only in
+                the board's copy are marked −, lines only in the catalog's v{compared.catalogVersion} +.
+              </p>
+              <LineDiff board={compared.board} catalog={compared.catalog} />
+            </div>
           </DialogContent>
         </Dialog>
       )}

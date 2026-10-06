@@ -415,6 +415,55 @@ describe('KB pipeline: drafting and approving drafts', () => {
     expect(await doc('build_test_lint')).toContain('Run vitest --reporter=dot.');
   });
 
+  it('retries a failed item as an admin: back to routing without a target, to drafting with one', async () => {
+    // Drafting failed: the target stands and drafting starts again with fresh attempts.
+    const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: 'Test' });
+    for (let attempt = 1; attempt <= MAX_PROCESSING_ATTEMPTS; attempt++) {
+      drafter.answer(new Error('Sonnet is down'));
+      expect(await pipeline.processNext()).toBe(id);
+      advance(120_000);
+    }
+    const failed = await item(id);
+    expect(failed.processing).toBe('failed');
+    expect(errorOf(await knowledge.retryProcessing(DEV, id, failed.version))?.code).toBe('forbidden');
+    expect(errorOf(await knowledge.retryProcessing(ADMIN, id, failed.version - 1))?.code).toBe('version_conflict');
+    notifier.hints.length = 0;
+    const retried = unwrap(await knowledge.retryProcessing(ADMIN, id, failed.version));
+    expect(retried).toMatchObject({
+      processing: 'routed',
+      processingError: null,
+      processingAttempts: 0,
+      processAfter: null,
+      target: { name: 'build_test_lint', section: 'Test' },
+      version: failed.version + 1,
+    });
+    expect(await item(id)).toEqual(retried);
+    expect(notifier.hints).toEqual([{ kind: 'board.changed', boardId }]);
+    // Only failed items can be retried.
+    expect(errorOf(await knowledge.retryProcessing(ADMIN, id, retried.version))?.code).toBe('invalid_input');
+    drafter.answer(draftAnswer('Test', '## Test\n\nRun vitest --reporter=dot.'));
+    expect(await pipeline.processNext()).toBe(id);
+    expect((await item(id)).processing).toBe('drafted');
+
+    // Routing failed: no target, so it goes back to routing.
+    const other = await submit({ statement: 'Another rule' });
+    for (let attempt = 1; attempt <= MAX_PROCESSING_ATTEMPTS; attempt++) {
+      router.answer(new Error('Haiku is down'));
+      expect(await pipeline.processNext()).toBe(other);
+      advance(120_000);
+    }
+    const unrouted = await item(other);
+    expect(unrouted).toMatchObject({ processing: 'failed', target: null });
+    expect(unwrap(await knowledge.retryProcessing(ADMIN, other, unrouted.version))).toMatchObject({
+      processing: 'pending',
+      processingError: null,
+      processingAttempts: 0,
+      processAfter: null,
+    });
+    expect(await pipeline.processNext()).toBe(other);
+    expect(router.calls.length).toBe(MAX_PROCESSING_ATTEMPTS + 1);
+  });
+
   it('applies an edited draft (edit then approve), with its own section', async () => {
     const id = await drafted(
       { kind: 'doc', name: 'build_test_lint', section: 'Test' },

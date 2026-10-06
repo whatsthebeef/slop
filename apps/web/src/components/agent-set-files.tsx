@@ -19,7 +19,7 @@ const STATUS_TEXT: Record<AgentSetEntryStatus, string> = {
 };
 
 /** A two-way line diff: lines only in the board's file in red, lines only in the catalog in green. */
-const LineDiff = ({ board, catalog }: { board: string; catalog: string }) => (
+export const LineDiff = ({ board, catalog }: { board: string; catalog: string }) => (
   <pre className='max-h-96 overflow-auto rounded-md border text-xs'>
     {lineDiff(board, catalog).map((line, i) => (
       <div

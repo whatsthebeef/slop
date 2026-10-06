@@ -4,7 +4,7 @@ import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
-import { agentSetKind, docName, parseFrontmatter } from '../src/domain/knowledge.js';
+import { agentSetKind, catalogFork, catalogUpdates, docName, parseFrontmatter } from '../src/domain/knowledge.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -59,6 +59,29 @@ describe('frontmatter and names', () => {
 
   it('treats documents without frontmatter as plain content', () => {
     expect(parseFrontmatter('# Hello\n')).toMatchObject({ area: null, audience: [], body: '# Hello\n' });
+  });
+
+  it('finds documents forked from an older catalog version', () => {
+    expect(catalogFork('catalog:typescript_conventions@1')).toEqual({ id: 'typescript_conventions', version: 1 });
+    expect(catalogFork('kb:s1k2')).toBeNull();
+    expect(catalogFork('catalog:agents')).toBeNull();
+    const entries = [
+      { id: 'ts', version: 3, content: '---\ncatalog: ts\nversion: 3\n---\nNew text.\n' },
+      { id: 'review', version: 1, content: 'Review.\n' },
+    ];
+    const doc = (name: string, source: string) => ({ kind: 'doc' as const, name, source, content: 'Board text.\n' });
+    expect(
+      catalogUpdates(
+        [
+          doc('ts', 'catalog:ts@2'),
+          doc('review', 'catalog:review@1'),
+          doc('edited', 'edit'),
+          doc('gone', 'catalog:gone@1'),
+          { kind: 'agent', name: 'agents/x.md', source: 'catalog:ts@1', content: '' },
+        ],
+        entries,
+      ),
+    ).toEqual([{ name: 'ts', catalogId: 'ts', forkedVersion: 2, catalogVersion: 3, board: 'Board text.\n', catalog: 'New text.\n' }]);
   });
 
   it('names documents after their file and classifies agent-set paths', () => {
@@ -119,6 +142,26 @@ describe('knowledge and artifacts', () => {
     expect(entry).toMatchObject({ name: 'build_test_lint', area: 'build', version: 2, source: 'upload' });
     // Importing documents never changes the agent set.
     expect(unwrap(await knowledge.agentSet(DEV, boardId)).version).toBe(0);
+  });
+
+  it('lists catalog documents with a newer catalog version for members, without changing them', async () => {
+    unwrap(await knowledge.importCatalogEntries(ADMIN, boardId, ['typescript_conventions']));
+    expect(unwrap(await knowledge.catalogUpdates(DEV, boardId))).toEqual([]);
+    // A board that forked version 1 of the entry (the catalog is at 2 now).
+    const forked = await store.transaction((tx) => tx.getKnowledge(boardId, 'doc', 'typescript_conventions'));
+    if (forked === null) throw new Error('not imported');
+    await store.transaction((tx) => tx.saveKnowledge({ ...forked, content: 'Avoid any.\n', source: 'catalog:typescript_conventions@1' }));
+    expect(unwrap(await knowledge.catalogUpdates(DEV, boardId))).toEqual([
+      {
+        name: 'typescript_conventions',
+        catalogId: 'typescript_conventions',
+        forkedVersion: 1,
+        catalogVersion: 2,
+        board: 'Avoid any.\n',
+        catalog: 'No any.\n',
+      },
+    ]);
+    expect(errorCode(await knowledge.catalogUpdates('stranger@example.com', boardId))).toBe('forbidden');
   });
 
   it('serves documents by area or by name', async () => {

@@ -101,6 +101,49 @@ export const renderFrontmatter = (meta: {
 export const docName = (fileName: string): string =>
   (fileName.split('/').pop() ?? fileName).replace(/\.md$/i, '').trim();
 
+/** The catalog entry and version a document was forked from, read from its source (`catalog:<id>@<version>`). */
+export const catalogFork = (source: string): { readonly id: string; readonly version: number } | null => {
+  const match = /^catalog:(.+)@(\d+)$/.exec(source);
+  if (match === null) return null;
+  return { id: match[1] ?? '', version: Number(match[2]) };
+};
+
+/**
+ * A board document forked from a catalog entry the catalog has since moved past. Catalog KB
+ * documents stay forked (no sync): the Knowledge page shows the two texts so an admin can copy
+ * changes across by hand.
+ */
+export interface CatalogUpdate {
+  readonly name: string;
+  readonly catalogId: string;
+  readonly forkedVersion: number;
+  readonly catalogVersion: number;
+  /** The board document's body and the catalog entry's, both without frontmatter. */
+  readonly board: string;
+  readonly catalog: string;
+}
+
+/** The board documents whose catalog entry has a newer version than the one they were forked from. */
+export const catalogUpdates = (
+  docs: readonly Pick<KnowledgeDoc, 'kind' | 'name' | 'source' | 'content'>[],
+  entries: readonly { readonly id: string; readonly version: number; readonly content: string }[],
+): CatalogUpdate[] =>
+  docs.flatMap((doc) => {
+    const fork = doc.kind === 'doc' ? catalogFork(doc.source) : null;
+    const entry = fork === null ? undefined : entries.find((e) => e.id === fork.id);
+    if (fork === null || entry === undefined || entry.version <= fork.version) return [];
+    return [
+      {
+        name: doc.name,
+        catalogId: entry.id,
+        forkedVersion: fork.version,
+        catalogVersion: entry.version,
+        board: doc.content,
+        catalog: parseFrontmatter(entry.content).body,
+      },
+    ];
+  });
+
 /** Maps a path inside the agent set to its kind. */
 export const agentSetKind = (path: string): KnowledgeKind | null => {
   if (path.startsWith('agents/') && path.endsWith('.md')) return 'agent';

@@ -1,46 +1,158 @@
-import { agentSetKind } from '@slop/core';
-import type { Approval, DraftPreview, KbItem, KbItemView, KbTarget, KnowledgeKind, ProposedDocument } from '@slop/core';
+import { agentSetKind, markdownHeadings, MAX_PROCESSING_ATTEMPTS, sectionText } from '@slop/core';
+import type {
+  AgentSetEntry,
+  Approval,
+  ContextDiffLine,
+  DraftPreview,
+  KbItem,
+  KbItemView,
+  KbTarget,
+  KnowledgeKind,
+  ProposedDocument,
+  TargetChange,
+} from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import type { QueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { Link } from 'react-router';
 import { MarkdownView } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
-import { Label, Select, Textarea } from '@/components/ui/input';
+import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import { useToast } from '@/toast';
 
-type Decision = 'learning' | 'edit' | 'document' | 'reject';
+type Decision = 'learning' | 'document' | 'reject';
 
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
 
 const message = (error: unknown) => (error instanceof RequestError ? error.body.message : 'Something went wrong');
 
-/** A document is `doc:<name>`, an agent-set file `<kind>:<path>`, so one select can list both. */
-const targetKey = (kind: KnowledgeKind, name: string) => `${kind}:${name}`;
+/** Kinds a learning (prose) can target among agent-set files. */
+const PROSE_KINDS: readonly KnowledgeKind[] = ['agent', 'command', 'claude_md'];
 
-const targetText = (target: KbTarget): string => {
-  if (target.newDocument !== null) return `new document ${target.name} (area ${target.newDocument.area})`;
-  const where = target.kind === 'doc' ? `document ${target.name}` : `${target.name} (board rules)`;
-  return target.section === null ? where : `${where} § ${target.section}`;
+/** Agent-set paths the board owns outright: their target is the whole file, not board rules over the catalog's. */
+const ownedPaths = (entries: readonly AgentSetEntry[]) =>
+  new Set(entries.filter((e) => e.status === 'board_file' || e.status === 'override').map((e) => e.path));
+
+/** A target as a readable path: `build_test_lint › Build`, `agents/implementer.md › Board rules`, or a new document. */
+const targetPath = (target: KbTarget, owned: ReadonlySet<string>): string => {
+  if (target.newDocument !== null) {
+    const { area, audience } = target.newDocument;
+    return `new document: ${target.name} (${area}${audience.length === 0 ? '' : `, for ${audience.join(', ')}`})`;
+  }
+  const parts = [target.name, ...(target.kind !== 'doc' && !owned.has(target.name) ? ['Board rules'] : [])];
+  return [...parts, ...(target.section === null ? [] : [target.section])].join(' › ');
 };
 
 /** Items the pipeline closed without a decision: they leave the open queue but keep their links. */
 const CLOSED_BY_PIPELINE: readonly KbItem['status'][] = ['merged', 'suppressed', 'covered'];
 
-const outcomeText = (item: KbItem): string => {
-  if (item.status === 'merged') return `Merged into ${item.duplicateOf ?? '?'} (a near-duplicate)`;
-  if (item.status === 'suppressed') return `Suppressed: matches rejected ${item.suppressedBy ?? '?'}`;
+/** Whether the background pipeline still has work to do on an item (routing, or its draft). */
+const inPipeline = (item: KbItem) => item.status === 'open' && (item.processing === 'pending' || item.processing === 'routed');
+
+/** The newest evidence an item has: its own submission or a near-duplicate merged into it. */
+const lastEvidenceAt = (item: KbItem) => item.extraEvidence.reduce((latest, e) => (e.at > latest ? e.at : latest), item.createdAt);
+
+/**
+ * Open items: the most repeated first (repeats are the strongest sign a rule is missing), then the
+ * freshest evidence, so an item that keeps coming back rises instead of sinking under new ones.
+ */
+const byPriority = (a: KbItem, b: KbItem) =>
+  b.occurrenceCount - a.occurrenceCount || lastEvidenceAt(b).localeCompare(lastEvidenceAt(a));
+
+/** Scrolls to another item's card, opening the collapsed section it sits in. */
+const jumpTo = (id: string) => {
+  const card = document.getElementById(`kb-${id}`);
+  if (card === null) return;
+  const section = card.closest('details');
+  if (section !== null) section.open = true;
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
+
+const ItemLink = ({ id }: { id: string }) => (
+  <button type='button' className='font-mono underline decoration-dotted hover:decoration-solid' onClick={() => jumpTo(id)}>
+    {id}
+  </button>
+);
+
+/** Context shared by every card: the board, its documents, how its agent files are served, and the document viewer. */
+interface Board {
+  readonly boardId: number;
+  readonly admin: boolean;
+  readonly documents: readonly BoardDocument[];
+  readonly owned: ReadonlySet<string>;
+  readonly onOpenDocument: (name: string) => void;
+}
+
+/** A link to a glob on the board (its view opens there, or on the signed-off page). */
+const GlobLinks = ({ boardId, ids }: { boardId: number; ids: readonly string[] }) =>
+  ids.map((id, index) => (
+    <span key={id}>
+      {index > 0 && ', '}
+      <Link
+        className='font-mono underline decoration-dotted hover:decoration-solid'
+        to={`/boards/${boardId}?glob=${encodeURIComponent(id)}`}
+      >
+        {id}
+      </Link>
+    </span>
+  ));
+
+/** A document or agent-file name: documents open in the viewer, agent files are plain text. */
+const KnowledgeRef = ({ board, name, rest }: { board: Board; name: string; rest?: string }) =>
+  board.documents.some((d) => d.name === name) ? (
+    <>
+      <button type='button' className='underline decoration-dotted hover:decoration-solid' onClick={() => board.onOpenDocument(name)}>
+        {name}
+      </button>
+      {rest}
+    </>
+  ) : (
+    <>
+      {name}
+      {rest}
+    </>
+  );
+
+const outcomeText = (item: KbItem, board: Board): ReactNode => {
+  if (item.status === 'merged') {
+    return (
+      <>
+        Merged into <ItemLink id={item.duplicateOf ?? '?'} /> (a near-duplicate)
+      </>
+    );
+  }
+  if (item.status === 'suppressed') {
+    return (
+      <>
+        Suppressed: matches rejected <ItemLink id={item.suppressedBy ?? '?'} />
+      </>
+    );
+  }
   if (item.status === 'covered') {
     const by = item.coveredBy;
     if (by === null) return 'Already covered';
-    return by.kind === 'item'
-      ? `Already covered by approved ${by.id}`
-      : `Already covered by ${by.knowledgeKind === 'doc' ? 'document ' : ''}${by.name}${by.section === null ? '' : ` § ${by.section}`}`;
+    return by.kind === 'item' ? (
+      <>
+        Already covered by approved <ItemLink id={by.id} />
+      </>
+    ) : (
+      <>
+        Already covered by <KnowledgeRef board={board} name={by.name} rest={by.section === null ? '' : ` › ${by.section}`} />
+      </>
+    );
   }
   if (item.status === 'rejected') return `Rejected: ${item.decisionReason ?? ''}`;
-  if (item.outcome?.kind === 'applied') return `Applied to ${item.outcome.name} (v${item.outcome.version})`;
-  return 'Approved as a learning';
+  if (item.outcome?.kind === 'applied') {
+    return (
+      <>
+        Applied to <KnowledgeRef board={board} name={item.outcome.name} rest={` v${item.outcome.version}`} />
+      </>
+    );
+  }
+  return 'Kept as a learning';
 };
 
 /** A board document as the Knowledge page's index lists it. */
@@ -56,6 +168,30 @@ const sameAudience = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && [...a].sort().join(',') === [...b].sort().join(',');
 
 const audienceText = (audience: readonly string[]) => (audience.length === 0 ? 'no agents' : audience.join(', '));
+
+/** After a refused write: a version conflict carries the item as it is now, so the list is refetched to show it. */
+const reportError = (client: QueryClient, boardId: number, toast: (text: string) => void, error: unknown) => {
+  if (error instanceof RequestError && error.body.code === 'version_conflict') {
+    toast(`${error.body.message}. The list now shows it as it is.`);
+    void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] });
+    return;
+  }
+  toast(message(error));
+};
+
+const appliedText = (decided: KbItem) =>
+  decided.outcome?.kind === 'applied'
+    ? `${decided.id} applied to ${decided.outcome.name} v${decided.outcome.version}`
+    : `${decided.id} approved`;
+
+/** Everything a decision or edit can change: the items, the documents and the agent set. */
+const refresh = (client: QueryClient, boardId: number) => {
+  void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] });
+  void client.invalidateQueries({ queryKey: ['kb', boardId] });
+  void client.invalidateQueries({ queryKey: ['kb-doc', boardId] });
+  void client.invalidateQueries({ queryKey: ['kb-agent-file', boardId] });
+  void client.invalidateQueries({ queryKey: ['kb-target-text', boardId] });
+};
 
 /**
  * A document proposal against the board: new, or replacing an existing document, in which case the
@@ -129,126 +265,190 @@ const DocumentComparison = ({
   );
 };
 
-/** Whether the background pipeline still has work to do on an item (routing, or its draft). */
-const inPipeline = (item: KbItem) => item.status === 'open' && (item.processing === 'pending' || item.processing === 'routed');
-
-/** What the background pipeline found: routing state, target, catalog flag, repeats and contradictions. */
-const PipelineInfo = ({ item }: { item: KbItem }) => {
-  const working = inPipeline(item) ? (item.processing === 'pending' ? 'Routing…' : 'Drafting…') : null;
-  return (
-    <div className='grid gap-1 text-xs' data-testid='pipeline-info'>
-      <div className='flex flex-wrap items-center gap-2'>
-        {working !== null && (
-          <span className='text-muted-foreground'>
-            {working}
-            {item.processingError !== null && ` (retrying after: ${item.processingError})`}
-          </span>
-        )}
-        {item.processing === 'failed' && (
-          <span className='rounded-md border border-required-border bg-red-soft/15 px-1.5'>
-            {item.target === null ? 'Routing' : 'Drafting'} failed: {item.processingError ?? 'unknown error'}
-          </span>
-        )}
-        {item.target !== null && (
-          <span>
-            <span className='font-medium'>Target: </span>
-            {targetText(item.target)}
-          </span>
-        )}
-        {item.occurrenceCount > 1 && (
-          <span className='rounded bg-muted px-1.5' title='Near-duplicates folded into this item'>
-            seen {item.occurrenceCount}×
-          </span>
-        )}
-        {item.catalogCandidate && (
-          <span className='rounded bg-muted px-1.5 font-medium' title={item.catalogReason ?? undefined}>
-            catalog candidate
-          </span>
+/**
+ * Where the background pipeline is with an open item: routing or drafting (with the last error and
+ * the next try while retrying), or given up on, with Retry for admins.
+ */
+const ProcessingState = ({ item, admin, onRetry, retrying }: { item: KbItem; admin: boolean; onRetry: () => void; retrying: boolean }) => {
+  if (item.status !== 'open') return null;
+  const stage = item.target === null ? 'Routing' : 'Drafting';
+  if (item.processing === 'failed') {
+    return (
+      <div
+        className='flex flex-wrap items-center gap-2 rounded-md border border-required-border bg-red-soft/15 p-2 text-xs'
+        data-testid='processing-failed'
+      >
+        <span>
+          {stage} failed: {item.processingError ?? 'unknown error'}
+        </span>
+        {admin && (
+          <Button size='sm' variant='outline' className='ml-auto' disabled={retrying} onClick={onRetry}>
+            Retry
+          </Button>
         )}
       </div>
-      {item.catalogCandidate && item.catalogReason !== null && (
-        <span className='text-muted-foreground'>Holds for any project: {item.catalogReason}</span>
+    );
+  }
+  if (!inPipeline(item)) return null;
+  const working = item.processing === 'pending' ? 'Routing…' : 'Drafting…';
+  // While retrying, `processAfter` is the backoff's end (or, once picked up again, the lease's).
+  const next = item.processAfter === null ? 'shortly' : `by ${new Date(item.processAfter).toLocaleTimeString()}`;
+  return (
+    <p className='text-xs text-muted-foreground' data-testid='processing'>
+      {working}
+      {item.processingError !== null &&
+        ` Attempt ${item.processingAttempts} of ${MAX_PROCESSING_ATTEMPTS} failed: ${item.processingError}. Trying again ${next}.`}
+    </p>
+  );
+};
+
+/** Diffs longer than this start collapsed. */
+const LONG_DIFF = 40;
+
+const DiffLines = ({ lines }: { lines: readonly ContextDiffLine[] }) =>
+  lines.map((line, index) =>
+    line.op === 'skipped' ? (
+      <div key={index} className='text-muted-foreground'>
+        … {line.count} unchanged line{line.count === 1 ? '' : 's'}
+      </div>
+    ) : (
+      <div
+        key={index}
+        className={
+          line.op === 'removed'
+            ? 'bg-red-500/10 text-red-700 dark:text-red-300'
+            : line.op === 'added'
+              ? 'bg-green-500/10 text-green-700 dark:text-green-300'
+              : 'text-muted-foreground'
+        }
+      >
+        {line.op === 'added' ? '+ ' : line.op === 'removed' ? '- ' : '  '}
+        {line.text}
+      </div>
+    ),
+  );
+
+/** A drafted change: its rationale and the diff approving it would make to the target as it is now. */
+const DraftView = ({ rationale, preview }: { rationale: string | null; preview: DraftPreview }) => {
+  const [expanded, setExpanded] = useState(false);
+  const long = preview.diff.length > LONG_DIFF;
+  return (
+    <div className='grid gap-1 text-xs' data-testid='draft'>
+      {rationale !== null && (
+        <span>
+          <span className='font-medium'>Why: </span>
+          {rationale}
+        </span>
       )}
-      {item.contradicts.length > 0 && (
-        <div className='rounded-md border border-required-border bg-red-soft/15 p-2' data-testid='contradictions'>
-          <span className='font-medium'>Contradicts:</span>
-          <ul className='ml-4 list-disc'>
-            {item.contradicts.map((c) => (
-              <li key={`${c.kind}:${c.ref}`}>
-                {c.ref}
-                {c.note !== '' && ` — ${c.note}`}
-              </li>
-            ))}
-          </ul>
-        </div>
+      {preview.stale && (
+        <span className='w-fit rounded bg-amber-500/15 px-1.5 text-amber-800 dark:text-amber-200'>
+          Stale draft: the target changed since it was drafted; it is being drafted again
+        </span>
       )}
-      {item.extraEvidence.length > 0 && (
-        <details>
-          <summary className='cursor-pointer text-muted-foreground'>More evidence ({item.extraEvidence.length})</summary>
-          <ul className='mt-1 ml-4 list-disc'>
-            {item.extraEvidence.map((e) => (
-              <li key={e.itemId} className='whitespace-pre-wrap'>
-                {e.itemId}
-                {e.globIds.length > 0 && ` (${e.globIds.join(', ')})`}: {e.evidence}
-              </li>
-            ))}
-          </ul>
-        </details>
+      <pre className='max-h-[32rem] overflow-auto rounded-md border text-xs' data-testid='draft-diff'>
+        <DiffLines lines={long && !expanded ? preview.diff.slice(0, LONG_DIFF) : preview.diff} />
+      </pre>
+      {long && (
+        <button type='button' className='w-fit text-muted-foreground hover:underline' onClick={() => setExpanded(!expanded)}>
+          {expanded ? 'Show less' : `Show all ${preview.diff.length} lines`}
+        </button>
       )}
     </div>
   );
 };
 
-/** A drafted change: its rationale and the diff approving it would make to the target as it is now. */
-const DraftView = ({ rationale, preview }: { rationale: string | null; preview: DraftPreview }) => (
-  <div className='grid gap-1 text-xs' data-testid='draft'>
-    {rationale !== null && (
-      <span>
-        <span className='font-medium'>Draft: </span>
-        {rationale}
-      </span>
-    )}
-    {preview.stale && <span className='text-muted-foreground'>The target changed since this draft; drafting it again…</span>}
-    <pre className='max-h-80 overflow-auto rounded-md border text-xs' data-testid='draft-diff'>
-      {preview.diff.map((line, index) =>
-        line.op === 'skipped' ? (
-          <div key={index} className='text-muted-foreground'>
-            … {line.count} unchanged line{line.count === 1 ? '' : 's'}
-          </div>
-        ) : (
-          <div
-            key={index}
-            className={
-              line.op === 'removed'
-                ? 'bg-red-500/10 text-red-700 dark:text-red-300'
-                : line.op === 'added'
-                  ? 'bg-green-500/10 text-green-700 dark:text-green-300'
-                  : 'text-muted-foreground'
-            }
-          >
-            {line.op === 'added' ? '+ ' : line.op === 'removed' ? '- ' : '  '}
-            {line.text}
-          </div>
-        ),
-      )}
-    </pre>
+/** The original evidence and what near-duplicates added, each with links to the globs it came from. */
+const Evidence = ({ boardId, item }: { boardId: number; item: KbItem }) => (
+  <div className='grid gap-1 text-xs' data-testid='evidence'>
+    <span className='font-medium'>
+      Evidence{item.occurrenceCount > 1 && <span className='ml-1 rounded bg-muted px-1.5 font-normal'>seen {item.occurrenceCount}×</span>}
+    </span>
+    <ul className='ml-4 list-disc'>
+      <li className='whitespace-pre-wrap'>
+        <span className='text-muted-foreground'>
+          {item.sourceGlobIds.length > 0 ? <GlobLinks boardId={boardId} ids={item.sourceGlobIds} /> : 'no source glob'} ·{' '}
+          {item.submittedBy} · {when(item.createdAt)}:{' '}
+        </span>
+        {item.evidence}
+      </li>
+      {item.extraEvidence.map((e) => (
+        <li key={e.itemId} className='whitespace-pre-wrap'>
+          <span className='text-muted-foreground'>
+            <ItemLink id={e.itemId} />
+            {e.globIds.length > 0 && (
+              <>
+                {' '}
+                (<GlobLinks boardId={boardId} ids={e.globIds} />)
+              </>
+            )}{' '}
+            · {e.submittedBy} · {when(e.at)}:{' '}
+          </span>
+          {e.evidence}
+        </li>
+      ))}
+    </ul>
   </div>
 );
 
+/** What the pipeline flagged: a suggested catalog change, and contradictions with other items or knowledge. */
+const Flags = ({ item, board }: { item: KbItem; board: Board }) => (
+  <>
+    {item.catalogCandidate && (
+      <p className='text-xs'>
+        <span className='mr-1 rounded bg-muted px-1.5 font-medium'>catalog candidate</span>
+        <span className='text-muted-foreground'>
+          Would hold for any project, so it may belong in slop's catalog{item.catalogReason === null ? '' : `: ${item.catalogReason}`}
+        </span>
+      </p>
+    )}
+    {item.contradicts.length > 0 && (
+      <div className='rounded-md border border-required-border bg-red-soft/15 p-2 text-xs' data-testid='contradictions'>
+        <span className='font-medium'>Contradicts:</span>
+        <ul className='ml-4 list-disc'>
+          {item.contradicts.map((c) => {
+            const [name = c.ref, ...section] = c.ref.split(' § ');
+            return (
+              <li key={`${c.kind}:${c.ref}`}>
+                {c.kind === 'item' ? (
+                  <ItemLink id={c.ref} />
+                ) : (
+                  <KnowledgeRef board={board} name={name} rest={section.length === 0 ? '' : ` › ${section.join(' § ')}`} />
+                )}
+                {c.note !== '' && ` — ${c.note}`}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    )}
+  </>
+);
+
+/** Why Approve is unavailable for an open statement item, or null when it can be approved. */
+const approveBlocker = (item: KbItemView): string | null => {
+  const failed = item.processing === 'failed';
+  if (item.target === null) return failed ? 'No target: choose one under Edit, or retry' : 'Approve once it is routed and drafted';
+  if (item.preview?.stale === true) return 'The draft is stale; approve once it is drafted again';
+  if (item.draft === null) return failed ? 'No draft: write one under Edit, or retry' : 'Approve once the draft is ready';
+  if (item.preview === null) return `${item.target.name} is no longer on the board; change the target under Edit`;
+  return null;
+};
+
+type Opening = { kind: 'decision'; decision: Decision } | { kind: 'edit' };
+
 const ProposalCard = ({
-  boardId,
+  board,
   item,
   existing,
-  admin,
-  onDecide,
+  onOpen,
 }: {
-  boardId: number;
+  board: Board;
   item: KbItemView;
   /** For an open document proposal: the board document of the same name, if there is one. */
   existing: BoardDocument | null;
-  admin: boolean;
-  onDecide: (decision: Decision) => void;
+  onOpen: (opening: Opening) => void;
 }) => {
+  const { boardId, admin } = board;
   const [showDocument, setShowDocument] = useState(false);
   const open = item.status === 'open';
   const client = useQueryClient();
@@ -257,16 +457,24 @@ const ProposalCard = ({
   const approveDraft = useMutation({
     mutationFn: () => api.approveProposal(item.id, item.version, { as: 'draft' }),
     onSuccess: (decided) => {
-      toast(`${decided.id} ${decided.status}`);
-      void client.invalidateQueries({ queryKey: ['kb', boardId] });
-      void client.invalidateQueries({ queryKey: ['kb-doc', boardId] });
+      toast(appliedText(decided));
+      refresh(client, boardId);
     },
-    // A stale draft is refused and drafted again; either way the list shows the current state.
-    onError: (e) => toast(message(e)),
-    onSettled: () => void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] }),
+    // A stale draft is refused and drafted again; the refetch shows that.
+    onError: (e) => reportError(client, boardId, toast, e),
   });
+  const retry = useMutation({
+    mutationFn: () => api.retryProposal(item.id, item.version),
+    onSuccess: (retried) => {
+      toast(`${retried.id} is being ${retried.processing === 'pending' ? 'routed' : 'drafted'} again`);
+      void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] });
+    },
+    onError: (e) => reportError(client, boardId, toast, e),
+  });
+  const blocker = open && item.document === null ? approveBlocker(item) : null;
+
   return (
-    <div className='grid gap-1.5 rounded-md border bg-card p-3 text-sm' data-testid={`proposal-${item.id}`}>
+    <div id={`kb-${item.id}`} className='grid gap-2 rounded-md border bg-card p-3 text-sm' data-testid={`proposal-${item.id}`}>
       <div className='flex flex-wrap items-center gap-2'>
         <span className='font-mono text-xs font-semibold'>{item.id}</span>
         <span className='rounded bg-muted px-1.5 text-xs'>{item.type}</span>
@@ -281,16 +489,19 @@ const ProposalCard = ({
         </span>
       </div>
       <p className='font-medium'>{item.statement}</p>
-      <p className='text-xs whitespace-pre-wrap text-muted-foreground'>
-        <span className='font-medium'>Evidence: </span>
-        {item.evidence}
-      </p>
-      <p className='text-xs text-muted-foreground'>
-        {item.suggestedTarget !== null && <>Suggested target: {item.suggestedTarget} · </>}
-        {item.sourceGlobIds.length > 0 ? `From ${item.sourceGlobIds.join(', ')}` : 'No source glob'}
-      </p>
-      <PipelineInfo item={item} />
+      {item.target !== null && item.document === null && (
+        <p className='text-xs' data-testid='target'>
+          <span className='font-medium'>Target: </span>
+          <span className='font-mono'>{targetPath(item.target, board.owned)}</span>
+        </p>
+      )}
+      {item.suggestedTarget !== null && open && (
+        <p className='text-xs text-muted-foreground'>Suggested by the submitter: {item.suggestedTarget}</p>
+      )}
+      <ProcessingState item={item} admin={admin} onRetry={() => retry.mutate()} retrying={retry.isPending} />
       {preview !== null && <DraftView rationale={item.rationale} preview={preview} />}
+      <Evidence boardId={boardId} item={item} />
+      {open && <Flags item={item} board={board} />}
       {item.document !== null && (
         <div className='grid gap-1 text-xs'>
           <span>
@@ -318,7 +529,7 @@ const ProposalCard = ({
       )}
       {!open && (
         <p className='text-xs'>
-          {outcomeText(item)}{' '}
+          {outcomeText(item, board)}{' '}
           {item.decidedBy !== null && (
             <span className='text-muted-foreground'>
               · {item.decidedBy} · {when(item.decidedAt)}
@@ -327,29 +538,28 @@ const ProposalCard = ({
         </p>
       )}
       {open && admin && (
-        <div className='mt-1 flex flex-wrap gap-2'>
+        <div className='mt-1 flex flex-wrap items-center gap-2'>
           {item.document === null ? (
             <>
-              {preview !== null && (
-                <Button size='sm' disabled={preview.stale || approveDraft.isPending} onClick={() => approveDraft.mutate()}>
-                  Approve draft
-                </Button>
-              )}
-              <Button size='sm' variant={preview === null ? 'default' : 'outline'} onClick={() => onDecide('learning')}>
-                Approve as learning
+              <Button size='sm' disabled={blocker !== null || approveDraft.isPending} onClick={() => approveDraft.mutate()}>
+                Approve
               </Button>
-              <Button size='sm' variant='outline' onClick={() => onDecide('edit')}>
-                Apply to a document or agent file
+              <Button size='sm' variant='outline' onClick={() => onOpen({ kind: 'edit' })}>
+                Edit
+              </Button>
+              <Button size='sm' variant='outline' onClick={() => onOpen({ kind: 'decision', decision: 'learning' })}>
+                Keep as a learning
               </Button>
             </>
           ) : (
-            <Button size='sm' onClick={() => onDecide('document')}>
+            <Button size='sm' onClick={() => onOpen({ kind: 'decision', decision: 'document' })}>
               Approve document
             </Button>
           )}
-          <Button size='sm' variant='outline' onClick={() => onDecide('reject')}>
+          <Button size='sm' variant='outline' onClick={() => onOpen({ kind: 'decision', decision: 'reject' })}>
             Reject
           </Button>
+          {blocker !== null && <span className='text-xs text-muted-foreground'>{blocker}</span>}
         </div>
       )}
     </div>
@@ -357,107 +567,49 @@ const ProposalCard = ({
 };
 
 const TITLES: Record<Decision, string> = {
-  learning: 'Approve as a learning',
-  edit: 'Apply to a document or agent file',
+  learning: 'Keep as a learning',
   document: 'Approve the document',
   reject: 'Reject',
 };
 
-/** The form for one decision: an editable statement, a target and its new content, the document, or a reason. */
+/** The form for one decision: an editable statement (kept as a learning), the proposed document, or a reason. */
 const DecisionDialog = ({
   boardId,
   item,
   existing,
   decision,
-  targets,
   onClose,
 }: {
   boardId: number;
   item: KbItem;
   existing: BoardDocument | null;
   decision: Decision;
-  targets: readonly { kind: KnowledgeKind; name: string }[];
   onClose: () => void;
 }) => {
   const client = useQueryClient();
   const toast = useToast();
-  const suggested = targets.find((t) => t.name === item.suggestedTarget || t.name === `${item.suggestedTarget ?? ''}.md`);
   const [statement, setStatement] = useState(item.statement);
-  const [target, setTarget] = useState(suggested === undefined ? '' : targetKey(suggested.kind, suggested.name));
   const [content, setContent] = useState(item.document?.content ?? '');
-  const [loaded, setLoaded] = useState(decision !== 'edit');
-  // Agent-set files: what the edit writes (the board's overlay or its whole file) and the catalog text beside it.
-  const [layer, setLayer] = useState<{ kind: 'overlay' | 'file'; catalog: string | null } | null>(null);
   const [reason, setReason] = useState('');
-  const chosen = targets.find((t) => targetKey(t.kind, t.name) === target) ?? null;
-
-  const chosenKind = chosen?.kind ?? null;
-  const chosenName = chosen?.name ?? null;
-
-  // Pre-fill the editor with the target's current content: a document's body (without frontmatter),
-  // or an agent-set file's board layer (its overlay, or the whole file the board owns).
-  useEffect(() => {
-    if (decision !== 'edit' || chosenKind === null || chosenName === null) return;
-    let cancelled = false;
-    setLoaded(false);
-    setLayer(null);
-    const current =
-      chosenKind === 'doc'
-        ? api
-            .knowledgeDoc(boardId, chosenName)
-            .then((docs) => ({ text: docs.find((d) => d.name === chosenName)?.content ?? '', layer: null }))
-        : api
-            .agentSetFile(boardId, chosenName)
-            .then((file) => ({ text: file.content, layer: { kind: file.layer, catalog: file.catalog } }));
-    current
-      .then((loadedTarget) => {
-        if (cancelled) return;
-        setContent(loadedTarget.text);
-        setLayer(loadedTarget.layer);
-        setLoaded(true);
-      })
-      .catch((e: unknown) => toast(message(e)));
-    return () => {
-      cancelled = true;
-    };
-  }, [boardId, decision, chosenKind, chosenName, toast]);
 
   const decide = useMutation({
     mutationFn: () => {
       if (decision === 'reject') return api.rejectProposal(item.id, item.version, reason);
-      const approval: Approval =
-        decision === 'learning'
-          ? { as: 'learning', statement }
-          : decision === 'document'
-            ? { as: 'document', content }
-            : { as: 'edit', target: { kind: chosen?.kind ?? 'doc', name: chosen?.name ?? '' }, content, statement };
+      const approval: Approval = decision === 'learning' ? { as: 'learning', statement } : { as: 'document', content };
       return api.approveProposal(item.id, item.version, approval);
     },
     onSuccess: (decided) => {
       toast(`${decided.id} ${decided.status}`);
-      void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] });
-      void client.invalidateQueries({ queryKey: ['kb', boardId] });
-      void client.invalidateQueries({ queryKey: ['kb-doc', boardId] });
+      refresh(client, boardId);
       onClose();
     },
     onError: (e) => {
-      toast(message(e));
-      // Someone else decided it meanwhile: show the current state.
-      if (e instanceof RequestError && e.body.currentItem !== undefined) {
-        void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] });
-        onClose();
-      }
+      reportError(client, boardId, toast, e);
+      if (e instanceof RequestError && e.body.currentItem !== undefined) onClose();
     },
   });
 
-  const ready =
-    decision === 'reject'
-      ? reason.trim() !== ''
-      : decision === 'learning'
-        ? statement.trim() !== ''
-        : decision === 'document'
-          ? content.trim() !== ''
-          : chosen !== null && loaded && content.trim() !== '' && statement.trim() !== '';
+  const ready = decision === 'reject' ? reason.trim() !== '' : decision === 'learning' ? statement.trim() !== '' : content.trim() !== '';
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -469,50 +621,15 @@ const DecisionDialog = ({
             if (ready) decide.mutate();
           }}
         >
-          {(decision === 'learning' || decision === 'edit') && (
-            <Label>
-              Statement
-              <Textarea value={statement} onChange={(e) => setStatement(e.target.value)} />
-            </Label>
-          )}
-          {decision === 'edit' && (
+          {decision === 'learning' && (
             <>
+              <p className='text-xs text-muted-foreground'>
+                Kept as an approved learning, served to agents with the board's conventions, without changing any document.
+              </p>
               <Label>
-                Target
-                <Select value={target} onChange={(e) => setTarget(e.target.value)}>
-                  <option value=''>Choose a document or agent file…</option>
-                  {targets.map((t) => (
-                    <option key={targetKey(t.kind, t.name)} value={targetKey(t.kind, t.name)}>
-                      {t.kind === 'doc' ? `Document: ${t.name}` : t.name}
-                    </option>
-                  ))}
-                </Select>
+                Statement
+                <Textarea value={statement} onChange={(e) => setStatement(e.target.value)} />
               </Label>
-              {chosen !== null && (
-                <>
-                  {layer?.kind === 'overlay' && layer.catalog !== null && (
-                    <details className='text-xs'>
-                      <summary className='cursor-pointer text-muted-foreground'>Catalog version (read-only)</summary>
-                      <pre className='mt-1 max-h-64 overflow-auto rounded-md border p-2 whitespace-pre-wrap'>{layer.catalog}</pre>
-                    </details>
-                  )}
-                  <Label>
-                    {chosen.kind === 'doc'
-                      ? 'New content (its frontmatter is kept unless you add one)'
-                      : layer?.kind === 'overlay'
-                        ? chosen.kind === 'settings'
-                          ? "Board settings (JSON merged onto the catalog's; approving raises the board's agent-set version)"
-                          : "Board rules (appended to the catalog file under “## Board rules”; approving raises the board's agent-set version)"
-                        : "New content of the board's own file (approving raises the board's agent-set version)"}
-                    <Textarea
-                      className='min-h-80 font-mono text-xs'
-                      value={loaded ? content : 'Loading…'}
-                      disabled={!loaded}
-                      onChange={(e) => setContent(e.target.value)}
-                    />
-                  </Label>
-                </>
-              )}
             </>
           )}
           {decision === 'document' && item.document !== null && (
@@ -539,7 +656,7 @@ const DecisionDialog = ({
               Cancel
             </Button>
             <Button type='submit' size='sm' disabled={!ready || decide.isPending}>
-              {decision === 'reject' ? 'Reject' : 'Approve'}
+              {decision === 'reject' ? 'Reject' : decision === 'learning' ? 'Keep as a learning' : 'Approve'}
             </Button>
           </div>
         </form>
@@ -548,69 +665,380 @@ const DecisionDialog = ({
   );
 };
 
+/** A target's current text (a document's body, or the board's layer of an agent file); '' for a new document. */
+const useTargetText = (boardId: number, kind: KnowledgeKind | null, name: string, isNew: boolean) =>
+  useQuery({
+    queryKey: ['kb-target-text', boardId, kind, name],
+    queryFn: async () =>
+      kind === 'doc'
+        ? ((await api.knowledgeDoc(boardId, name)).find((d) => d.name === name)?.content ?? '')
+        : (await api.agentSetFile(boardId, name)).content,
+    enabled: kind !== null && name !== '' && !isNew,
+  });
+
+/** Edits the drafted section, then approves it: the content replaces the chosen heading's section, or is appended. */
+const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item: KbItemView; target: KbTarget; onClose: () => void }) => {
+  const client = useQueryClient();
+  const toast = useToast();
+  const isNew = target.newDocument !== null;
+  const text = useTargetText(boardId, target.kind, target.name, isNew);
+  const current = isNew ? '' : text.data;
+  const headings = current === undefined ? [] : markdownHeadings(current).map((h) => h.text);
+  const wanted = item.draft?.section ?? target.section;
+  const [section, setSection] = useState<string | null>(null);
+  const [content, setContent] = useState<string | null>(item.draft?.content ?? null);
+  // Until the admin picks one: the draft's heading when the target has it, otherwise append.
+  const chosen = section ?? (wanted !== null && headings.includes(wanted) ? wanted : '');
+  // Without a draft (drafting failed), start from the section's current text.
+  const body = content ?? (current === undefined ? null : chosen === '' ? '' : (sectionText(current, chosen) ?? ''));
+
+  const approve = useMutation({
+    mutationFn: () =>
+      api.approveProposal(item.id, item.version, { as: 'draft', content: body ?? '', section: isNew || chosen === '' ? null : chosen }),
+    onSuccess: (decided) => {
+      toast(appliedText(decided));
+      refresh(client, boardId);
+      onClose();
+    },
+    onError: (e) => {
+      reportError(client, boardId, toast, e);
+      if (e instanceof RequestError && e.body.currentItem !== undefined) onClose();
+    },
+  });
+
+  // Core refuses an edit of a stale draft (and drafts it again), so don't offer it.
+  const stale = item.preview?.stale === true;
+  return (
+    <form
+      className='grid gap-3'
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (body !== null && body.trim() !== '') approve.mutate();
+      }}
+    >
+      {stale && <p className='text-xs text-muted-foreground'>The target changed since this draft; approve once it is drafted again.</p>}
+      {isNew ? (
+        <p className='text-xs text-muted-foreground'>The whole body of the new document {target.name}.</p>
+      ) : (
+        <Label>
+          Section
+          <Select value={chosen} onChange={(e) => setSection(e.target.value)} disabled={current === undefined}>
+            <option value=''>Append as a new section</option>
+            {headings.map((h, index) => (
+              <option key={`${h}-${index}`} value={h}>
+                Replace “{h}”
+              </option>
+            ))}
+          </Select>
+        </Label>
+      )}
+      <Label>
+        {isNew ? 'Content' : 'Section text (with its heading)'}
+        <Textarea
+          className='min-h-80 font-mono text-xs'
+          value={body ?? 'Loading…'}
+          disabled={body === null}
+          onChange={(e) => setContent(e.target.value)}
+        />
+      </Label>
+      <div className='flex justify-end gap-2'>
+        <Button type='button' variant='outline' size='sm' onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type='submit' size='sm' disabled={stale || body === null || body.trim() === '' || approve.isPending}>
+          Approve
+        </Button>
+      </div>
+    </form>
+  );
+};
+
+type TargetKind = 'doc' | 'agent' | 'new';
+
+/** Points the item at another target; its draft is cleared and it is drafted again there. */
+const TargetEditor = ({
+  board,
+  item,
+  agentFiles,
+  onClose,
+}: {
+  board: Board;
+  item: KbItem;
+  agentFiles: readonly { kind: KnowledgeKind; path: string }[];
+  onClose: () => void;
+}) => {
+  const { boardId, documents } = board;
+  const client = useQueryClient();
+  const toast = useToast();
+  const target = item.target;
+  const [kind, setKind] = useState<TargetKind>(
+    target === null ? 'doc' : target.newDocument !== null ? 'new' : target.kind === 'doc' ? 'doc' : 'agent',
+  );
+  const [docName, setDocName] = useState(target?.kind === 'doc' && target.newDocument === null ? target.name : (documents[0]?.name ?? ''));
+  const [agentPath, setAgentPath] = useState(target !== null && target.kind !== 'doc' ? target.name : (agentFiles[0]?.path ?? ''));
+  const [section, setSection] = useState(target?.section ?? '');
+  const [newName, setNewName] = useState(target !== null && target.newDocument !== null ? target.name : '');
+  const [area, setArea] = useState(target?.newDocument?.area ?? '');
+  const [audience, setAudience] = useState(target?.newDocument?.audience.join(', ') ?? '');
+  const [description, setDescription] = useState(target?.newDocument?.description ?? '');
+
+  const agent = agentFiles.find((f) => f.path === agentPath) ?? null;
+  const name = kind === 'doc' ? docName : kind === 'agent' ? agentPath : newName.trim();
+  const textKind = kind === 'doc' ? 'doc' : kind === 'agent' ? (agent?.kind ?? null) : null;
+  const text = useTargetText(boardId, textKind, name, kind === 'new');
+  const headings = text.data === undefined ? [] : [...new Set(markdownHeadings(text.data).map((h) => h.text))];
+
+  const change = (): TargetChange | null => {
+    const heading = section.trim() === '' ? null : section.trim();
+    if (kind === 'doc') return docName === '' ? null : { kind: 'doc', name: docName, section: heading };
+    if (kind === 'agent') return agent === null ? null : { kind: agent.kind, name: agent.path, section: heading };
+    const people = audience
+      .split(',')
+      .map((a) => a.trim())
+      .filter((a) => a !== '');
+    if (newName.trim() === '' || area.trim() === '' || description.trim() === '') return null;
+    const newDocument = { area: area.trim(), audience: people, description: description.trim() };
+    return { kind: 'doc', name: newName.trim(), section: null, newDocument };
+  };
+  const next = change();
+
+  const save = useMutation({
+    mutationFn: (to: TargetChange) => api.changeProposalTarget(item.id, item.version, to),
+    onSuccess: (changed) => {
+      toast(`${changed.id} is being drafted again against ${changed.target?.name ?? 'its new target'}`);
+      void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] });
+      onClose();
+    },
+    onError: (e) => {
+      reportError(client, boardId, toast, e);
+      if (e instanceof RequestError && e.body.currentItem !== undefined) onClose();
+    },
+  });
+
+  return (
+    <form
+      className='grid gap-3'
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (next !== null) save.mutate(next);
+      }}
+    >
+      <p className='text-xs text-muted-foreground'>The current draft is discarded and a new one is drafted against the chosen target.</p>
+      <div className='flex flex-wrap gap-2' role='radiogroup' aria-label='Target kind'>
+        {(
+          [
+            ['doc', 'A document'],
+            ['agent', 'An agent file (board rules)'],
+            ['new', 'A new document'],
+          ] as const
+        ).map(([value, label]) => (
+          <Button
+            key={value}
+            type='button'
+            size='sm'
+            role='radio'
+            aria-checked={kind === value}
+            variant={kind === value ? 'selected' : 'outline'}
+            onClick={() => setKind(value)}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      {kind === 'doc' && (
+        <Label>
+          Document
+          <Select value={docName} onChange={(e) => setDocName(e.target.value)}>
+            {documents.length === 0 && <option value=''>No documents yet</option>}
+            {documents.map((d) => (
+              <option key={d.name} value={d.name}>
+                {d.name}
+              </option>
+            ))}
+          </Select>
+        </Label>
+      )}
+      {kind === 'agent' && (
+        <Label>
+          Agent file
+          <Select value={agentPath} onChange={(e) => setAgentPath(e.target.value)}>
+            {agentFiles.map((f) => (
+              <option key={f.path} value={f.path}>
+                {f.path}
+                {board.owned.has(f.path) ? ' (board file)' : ''}
+              </option>
+            ))}
+          </Select>
+        </Label>
+      )}
+      {kind !== 'new' && (
+        <Label>
+          Section (optional: an existing heading, or a new one; empty lets the drafter choose)
+          <Input list={`kb-headings-${item.id}`} value={section} onChange={(e) => setSection(e.target.value)} />
+          <datalist id={`kb-headings-${item.id}`}>
+            {headings.map((h) => (
+              <option key={h} value={h} />
+            ))}
+          </datalist>
+        </Label>
+      )}
+      {kind === 'new' && (
+        <div className='grid gap-2 sm:grid-cols-2'>
+          <Label>
+            Name
+            <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder='testing_conventions' />
+          </Label>
+          <Label>
+            Area
+            <Input value={area} onChange={(e) => setArea(e.target.value)} placeholder='testing' />
+          </Label>
+          <Label>
+            Audience (agents, comma-separated)
+            <Input value={audience} onChange={(e) => setAudience(e.target.value)} placeholder='implementer, tester' />
+          </Label>
+          <Label>
+            Description (one line)
+            <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+          </Label>
+        </div>
+      )}
+      <div className='flex justify-end gap-2'>
+        <Button type='button' variant='outline' size='sm' onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type='submit' size='sm' disabled={next === null || save.isPending}>
+          Change target and redraft
+        </Button>
+      </div>
+    </form>
+  );
+};
+
+/** Edit an item: its drafted section (then approve), or its target (then it is drafted again). */
+const EditDialog = ({
+  board,
+  item,
+  agentFiles,
+  onClose,
+}: {
+  board: Board;
+  item: KbItemView;
+  agentFiles: readonly { kind: KnowledgeKind; path: string }[];
+  onClose: () => void;
+}) => {
+  const { target } = item;
+  const [tab, setTab] = useState<'draft' | 'target'>(target === null ? 'target' : 'draft');
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent title={`Edit · ${item.id}`} className='max-w-3xl'>
+        <div className='grid gap-3'>
+          <p className='text-sm font-medium'>{item.statement}</p>
+          <div className='flex gap-2' role='tablist'>
+            <Button
+              type='button'
+              size='sm'
+              role='tab'
+              aria-selected={tab === 'draft'}
+              variant={tab === 'draft' ? 'selected' : 'ghost'}
+              disabled={target === null}
+              onClick={() => setTab('draft')}
+            >
+              Edit the draft
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              role='tab'
+              aria-selected={tab === 'target'}
+              variant={tab === 'target' ? 'selected' : 'ghost'}
+              onClick={() => setTab('target')}
+            >
+              Change the target
+            </Button>
+          </div>
+          {target !== null && (
+            <p className='text-xs'>
+              <span className='font-medium'>Target: </span>
+              <span className='font-mono'>{targetPath(target, board.owned)}</span>
+            </p>
+          )}
+          {tab === 'draft' && target !== null ? (
+            <DraftEditor boardId={board.boardId} item={item} target={target} onClose={onClose} />
+          ) : (
+            <TargetEditor board={board} item={item} agentFiles={agentFiles} onClose={onClose} />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
 /**
- * KB items (`s<b>k<n>`) submitted by agents: open ones first, decided ones collapsed. Members see
- * them read-only; admins approve (as a learning, as an edit, or the proposed document) or reject.
+ * KB items (`s<b>k<n>`): open ones as cards with their target, draft, evidence and flags; closed
+ * ones collapsed. Members see them read-only; admins approve the draft, edit it or its target, keep
+ * the statement as a learning, or reject it.
  */
 export const KbProposals = ({
   boardId,
   admin,
   documents,
-  agentFiles,
+  agentEntries,
+  onOpenDocument,
 }: {
   boardId: number;
   admin: boolean;
   documents: readonly BoardDocument[];
-  agentFiles: readonly string[];
+  agentEntries: readonly AgentSetEntry[];
+  onOpenDocument: (name: string) => void;
 }) => {
   const proposals = useQuery({
     queryKey: ['kb-proposals', boardId],
     queryFn: () => api.proposals(boardId),
-    // Routing and drafting run in the background: poll while any item waits for either.
+    // Routing and drafting (and their retries) run in the background: poll while any item waits for either.
     refetchInterval: (query) => ((query.state.data ?? []).some(inPipeline) ? 5_000 : false),
   });
-  const [deciding, setDeciding] = useState<{ item: KbItemView; decision: Decision } | null>(null);
+  const [opened, setOpened] = useState<{ item: KbItemView; opening: Opening } | null>(null);
 
+  const board: Board = { boardId, admin, documents, owned: ownedPaths(agentEntries), onOpenDocument };
   const items = proposals.data ?? [];
-  const open = items.filter((i) => i.status === 'open');
+  const open = items.filter((i) => i.status === 'open').sort(byPriority);
   const decided = items.filter((i) => i.status === 'approved' || i.status === 'rejected').reverse();
   const closed = items.filter((i) => CLOSED_BY_PIPELINE.includes(i.status)).reverse();
   // Only open proposals can still replace a document; decided ones already did.
   const existingFor = (item: KbItem) =>
     item.status === 'open' && item.document !== null ? (documents.find((d) => d.name === item.document?.name) ?? null) : null;
-  const targets = [
-    ...documents.map((d) => ({ kind: 'doc' as const, name: d.name })),
-    ...agentFiles.flatMap((path) => {
-      const kind = agentSetKind(path);
-      return kind === null ? [] : [{ kind, name: path }];
-    }),
-  ];
+  const agentFiles = agentEntries.flatMap((e) => {
+    const kind = agentSetKind(e.path);
+    return e.status !== 'orphaned' && kind !== null && PROSE_KINDS.includes(kind) ? [{ kind, path: e.path }] : [];
+  });
+  // Dialogs act on the item as it was when opened: if it changed meanwhile, the write is refused as a conflict.
+  const current = opened?.item ?? null;
 
   return (
     <section className='grid gap-2' data-testid='kb-proposals'>
       <h2 className='text-sm font-semibold'>Proposals</h2>
       <p className='text-xs text-muted-foreground'>
-        Learnings and documents submitted by agents, routed to a target and checked for repeats in the background. Nothing
-        reaches the knowledge base or the agent set until an admin approves it.
+        Learnings and documents submitted by agents, routed to a target, checked for repeats and drafted as a change in the
+        background. Nothing reaches the knowledge base or the agent set until an admin approves it. The most repeated come
+        first, then the freshest evidence.
       </p>
       {proposals.isPending && <p className='text-sm text-muted-foreground'>Loading…</p>}
       {proposals.data !== undefined && open.length === 0 && <p className='text-sm text-muted-foreground'>No open proposals.</p>}
       {open.map((item) => (
         <ProposalCard
           key={item.id}
-          boardId={boardId}
+          board={board}
           item={item}
           existing={existingFor(item)}
-          admin={admin}
-          onDecide={(decision) => setDeciding({ item, decision })}
+          onOpen={(opening) => setOpened({ item, opening })}
         />
       ))}
       {decided.length > 0 && (
-        <details className='text-sm'>
-          <summary className='cursor-pointer text-xs text-muted-foreground'>Decided ({decided.length})</summary>
+        <details className='text-sm' data-testid='kb-decided'>
+          <summary className='cursor-pointer text-xs text-muted-foreground'>Approved and rejected ({decided.length})</summary>
           <div className='mt-2 grid gap-2'>
             {decided.map((item) => (
-              <ProposalCard key={item.id} boardId={boardId} item={item} existing={null} admin={admin} onDecide={() => undefined} />
+              <ProposalCard key={item.id} board={board} item={item} existing={null} onOpen={() => undefined} />
             ))}
           </div>
         </details>
@@ -622,21 +1050,23 @@ export const KbProposals = ({
           </summary>
           <div className='mt-2 grid gap-2'>
             {closed.map((item) => (
-              <ProposalCard key={item.id} boardId={boardId} item={item} existing={null} admin={admin} onDecide={() => undefined} />
+              <ProposalCard key={item.id} board={board} item={item} existing={null} onOpen={() => undefined} />
             ))}
           </div>
         </details>
       )}
-      {deciding !== null && (
+      {opened !== null && current !== null && opened.opening.kind === 'decision' && (
         <DecisionDialog
-          key={`${deciding.item.id}-${deciding.decision}`}
+          key={`${current.id}-${opened.opening.decision}`}
           boardId={boardId}
-          item={deciding.item}
-          existing={existingFor(deciding.item)}
-          decision={deciding.decision}
-          targets={targets}
-          onClose={() => setDeciding(null)}
+          item={current}
+          existing={existingFor(current)}
+          decision={opened.opening.decision}
+          onClose={() => setOpened(null)}
         />
+      )}
+      {opened !== null && current !== null && opened.opening.kind === 'edit' && (
+        <EditDialog key={`${current.id}-edit`} board={board} item={current} agentFiles={agentFiles} onClose={() => setOpened(null)} />
       )}
     </section>
   );

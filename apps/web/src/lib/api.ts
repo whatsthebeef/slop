@@ -6,6 +6,7 @@ import type {
   ArtifactKind,
   ArtifactSummary,
   Board,
+  CatalogUpdate,
   Category,
   Deploy,
   DeployIndicator,
@@ -64,6 +65,8 @@ export interface KnowledgeIndex {
     /** Every path with how it is served, orphaned overlays included. */
     readonly entries: readonly AgentSetEntry[];
   };
+  /** Documents forked from a catalog entry that has a newer version (shown for copying by hand, never applied). */
+  readonly catalogUpdates: readonly CatalogUpdate[];
 }
 
 export interface CatalogEntry {
@@ -216,6 +219,7 @@ export const api = {
     request<KbItem>('POST', `/api/kb/${id}/approve`, { ...approval, version }),
   changeProposalTarget: (id: string, version: number, target: TargetChange) =>
     request<KbItem>('POST', `/api/kb/${id}/target`, { version, target }),
+  retryProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/retry`, { version }),
   rejectProposal: (id: string, version: number, reason: string) =>
     request<KbItem>('POST', `/api/kb/${id}/reject`, { version, reason }),
   plan: (id: string) =>

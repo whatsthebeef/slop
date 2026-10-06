@@ -17,13 +17,14 @@ import type {
 } from '../domain/kb.js';
 import {
   agentSetKind,
+  catalogUpdates,
   docName,
   hasFrontmatter,
   isAgentSetKind,
   parseFrontmatter,
   renderFrontmatter,
 } from '../domain/knowledge.js';
-import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
+import type { CatalogUpdate, KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
 import { splicePreview } from '../domain/sections.js';
 import type { Board } from '../domain/types.js';
 import type { Catalog, CatalogAgentSet, Clock, Notifier, Store, Tx } from '../ports.js';
@@ -528,6 +529,44 @@ export class KnowledgeService {
       }
       this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
       return ok(next);
+    });
+  }
+
+  /**
+   * Admins send an item the pipeline gave up on (`failed`) back to it with fresh attempts: to
+   * routing when it has no target yet, otherwise to drafting against its target.
+   */
+  async retryProcessing(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
+    return this.deps.store.transaction(async (tx) => {
+      const item = await tx.getKbItem(itemId);
+      if (item === null) return notFound(`No KB item ${itemId}`);
+      const actor = await adminOf(tx, email, item.boardId);
+      if (!actor.ok) return actor;
+      const stale = (current: KbItem) =>
+        err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: current });
+      if (item.version !== version) return stale(item);
+      if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
+      if (item.processing !== 'failed') return invalidInput(`${item.id} hasn't failed; it is ${item.processing}`);
+      const next: KbItem =
+        item.target === null
+          ? { ...item, processing: 'pending', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
+          : needsDraft(item);
+      if (!(await tx.updateKbItem(next, item.version))) {
+        const current = await tx.getKbItem(itemId);
+        return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
+      }
+      this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
+      return ok(next);
+    });
+  }
+
+  /** The board's documents forked from a catalog entry that has a newer version now (read-only; no sync). */
+  async catalogUpdates(email: string, boardId: number): Promise<Result<CatalogUpdate[]>> {
+    const entries = await this.deps.catalog.kbEntries();
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      return ok(catalogUpdates(await tx.listKnowledge(boardId, ['doc']), entries));
     });
   }
 

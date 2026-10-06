@@ -93,13 +93,19 @@ export const mountKnowledge = (
   app.get('/api/boards/:b/kb', async (c) => {
     const boardId = Number(c.req.param('b'));
     const email = c.get('email');
-    const [index, set] = await Promise.all([knowledge.index(email, boardId), knowledge.agentSetIndex(email, boardId)]);
+    const [index, set, updates] = await Promise.all([
+      knowledge.index(email, boardId),
+      knowledge.agentSetIndex(email, boardId),
+      knowledge.catalogUpdates(email, boardId),
+    ]);
     if (!index.ok) return send(c, index);
     if (!set.ok) return send(c, set);
+    if (!updates.ok) return send(c, updates);
     const { version, entries } = set.value;
     // `files`: the paths served (orphaned overlays aren't); `entries`: every path with how it is served.
     const files = entries.filter((e) => e.status !== 'orphaned').map((e) => e.path);
-    return c.json({ documents: index.value, agentSet: { version, files, entries } });
+    // `catalogUpdates`: documents forked from a catalog entry that has moved on (shown, never applied).
+    return c.json({ documents: index.value, agentSet: { version, files, entries }, catalogUpdates: updates.value });
   });
 
   app.get('/api/boards/:b/kb/docs/:name', async (c) =>
@@ -159,6 +165,13 @@ export const mountKnowledge = (
     const body = await parse(c, targetSchema);
     if (body instanceof Response) return body;
     return send(c, await knowledge.changeTarget(c.get('email'), c.req.param('itemId'), body.version, body.target));
+  });
+
+  // Admins send an item the pipeline gave up on back to routing or drafting.
+  app.post('/api/kb/:itemId/retry', async (c) => {
+    const body = await parse(c, z.object({ version }));
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.retryProcessing(c.get('email'), c.req.param('itemId'), body.version));
   });
 
   app.post('/api/kb/:itemId/reject', async (c) => {
