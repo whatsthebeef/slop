@@ -219,7 +219,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
     // The whole body, without frontmatter.
     expect(call?.prompt).toContain('# Build\n\n## Test\n\nRun vitest.\n\n## Lint\n\nRun eslint.');
     expect(call?.prompt).not.toContain('area: build');
-    expect(notifier.hints).toContainEqual({ kind: 'board.changed', boardId });
+    expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
     expect(await pipeline.processNext()).toBeNull();
 
     expect(await preview(id)).toEqual({
@@ -438,7 +438,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
       version: failed.version + 1,
     });
     expect(await item(id)).toEqual(retried);
-    expect(notifier.hints).toEqual([{ kind: 'board.changed', boardId }]);
+    expect(notifier.hints).toEqual([{ kind: 'board.kb', boardId }]);
     // Only failed items can be retried.
     expect(errorOf(await knowledge.retryProcessing(ADMIN, id, retried.version))?.code).toBe('invalid_input');
     drafter.answer(draftAnswer('Test', '## Test\n\nRun vitest --reporter=dot.'));

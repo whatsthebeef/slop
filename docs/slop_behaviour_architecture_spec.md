@@ -224,7 +224,7 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 **Outbound**
 
 - **Routine fire:** POST to the triggerer's routine URL with text naming the glob ID and instructing the agent to call `get_context`.
-- **Live hints:** server-sent events on `/boards/{b}/events`, payload `{ kind: "glob.changed" | "glob.deleted" | "board.changed", globId, version }`, or `{ kind: "glob.artifacts", boardId, globId }` (no version; refetched regardless) when an artifact is added.
+- **Live hints:** server-sent events on `/boards/{b}/events`, payload `{ kind: "glob.changed" | "glob.deleted" | "board.changed", globId, version }`, or `{ kind: "glob.artifacts", boardId, globId }` (no version; refetched regardless) when an artifact is added, or `{ kind: "board.kb", boardId }` after any change to the board's KB items, documents or agent-set files (the Knowledge page refetches on it, on `board.changed` and on every reconnect; `board.changed` is sent too only when the board's agent-set version moves).
 - **GitHub App:** create and delete branches, update a branch (rebase), squash merge with title `<id>: <title>`, create each glob's branch with an empty first commit and open its draft PR with labels, compare commits, read check runs, post the CodeRabbit review command. CodeBuild: StartBuild for glob-branch deploys through the Deployer port.
 - **Bedrock:** intake inference, meeting classification, embeddings and board chat through the LLM port.
 

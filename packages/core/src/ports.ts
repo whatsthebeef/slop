@@ -106,7 +106,9 @@ export type Hint =
   | { readonly kind: 'glob.artifacts'; readonly boardId: number; readonly globId: string }
   /** A glob's deploys changed: they don't bump the glob's version, so clients refetch regardless. */
   | { readonly kind: 'glob.deploys'; readonly boardId: number; readonly globId: string }
-  | { readonly kind: 'board.changed'; readonly boardId: number };
+  | { readonly kind: 'board.changed'; readonly boardId: number }
+  /** The board's KB items, documents or agent-set files changed (the board itself only on an agent-set version bump). */
+  | { readonly kind: 'board.kb'; readonly boardId: number };
 
 /** Publishes small change hints to open boards after a commit. */
 export interface Notifier {

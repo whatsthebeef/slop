@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
+import { invalidateKnowledge } from '@/lib/live';
 import { useToast } from '@/toast';
 
 type Decision = 'learning' | 'document' | 'reject';
@@ -50,6 +51,9 @@ const targetPath = (target: KbTarget, owned: ReadonlySet<string>): string => {
 const CLOSED_BY_PIPELINE: readonly KbItem['status'][] = ['merged', 'suppressed', 'covered'];
 
 /** Whether the background pipeline still has work to do on an item (routing, or its draft). */
+/** The fallback poll while the pipeline is working; hints normally refresh the list (as the board's deploy poll). */
+const PIPELINE_POLL_MS = 15_000;
+
 const inPipeline = (item: KbItem) => item.status === 'open' && (item.processing === 'pending' || item.processing === 'routed');
 
 /** The newest evidence an item has: its own submission or a near-duplicate merged into it. */
@@ -185,13 +189,7 @@ const appliedText = (decided: KbItem) =>
     : `${decided.id} approved`;
 
 /** Everything a decision or edit can change: the items, the documents and the agent set. */
-const refresh = (client: QueryClient, boardId: number) => {
-  void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] });
-  void client.invalidateQueries({ queryKey: ['kb', boardId] });
-  void client.invalidateQueries({ queryKey: ['kb-doc', boardId] });
-  void client.invalidateQueries({ queryKey: ['kb-agent-file', boardId] });
-  void client.invalidateQueries({ queryKey: ['kb-target-text', boardId] });
-};
+const refresh = (client: QueryClient, boardId: number) => invalidateKnowledge(client, boardId);
 
 /**
  * A document proposal against the board: new, or replacing an existing document, in which case the
@@ -994,8 +992,9 @@ export const KbProposals = ({
   const proposals = useQuery({
     queryKey: ['kb-proposals', boardId],
     queryFn: () => api.proposals(boardId),
-    // Routing and drafting (and their retries) run in the background: poll while any item waits for either.
-    refetchInterval: (query) => ((query.state.data ?? []).some(inPipeline) ? 5_000 : false),
+    // Routing and drafting run in the background and `board.kb` hints report each step; while any
+    // item waits for either, also check now and then in case a hint was lost.
+    refetchInterval: (query) => ((query.state.data ?? []).some(inPipeline) ? PIPELINE_POLL_MS : false),
   });
   const [opened, setOpened] = useState<{ item: KbItemView; opening: Opening } | null>(null);
 

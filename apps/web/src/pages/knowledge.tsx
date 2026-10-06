@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { api, RequestError } from '@/lib/api';
 import type { ImportResult } from '@/lib/api';
+import { useLiveKnowledge } from '@/lib/live';
 import { useToast } from '@/toast';
 
 const message = (error: unknown) => (error instanceof RequestError ? error.body.message : 'Something went wrong');
@@ -26,6 +27,8 @@ export const KnowledgePage = () => {
   const boardId = Number(useParams().boardId);
   const client = useQueryClient();
   const toast = useToast();
+  // Proposals move through the pipeline and other admins decide them: follow the board's KB hints.
+  const live = useLiveKnowledge(boardId);
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
   const kb = useQuery({ queryKey: ['kb', boardId], queryFn: () => api.knowledge(boardId) });
   const catalog = useQuery({ queryKey: ['catalog'], queryFn: api.catalog });
@@ -74,7 +77,7 @@ export const KnowledgePage = () => {
   const compared = updates.find((u) => u.name === comparing) ?? null;
 
   return (
-    <main className='mx-auto grid w-full max-w-[63rem] gap-8 p-6'>
+    <main className='mx-auto grid w-full max-w-[63rem] gap-8 p-6' data-live={live}>
       <header className='flex items-center gap-3'>
         <Link className='text-sm text-muted-foreground hover:underline' to={`/boards/${boardId}`}>
           ← {board.data.name}

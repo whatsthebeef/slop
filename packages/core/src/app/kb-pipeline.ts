@@ -232,11 +232,12 @@ export class KbPipeline {
     if (item.document !== null || target === null) {
       // Document proposals (routed before drafting existed) are their own draft; an item with no
       // target can't be drafted and is left for an admin to decide or retarget.
-      await this.write(item, (current) =>
+      const wrote = await this.write(item, (current) =>
         current.document !== null
           ? { ...current, processing: 'drafted', processAfter: null }
           : { ...current, processing: 'failed', processingError: 'No target to draft against', processAfter: null },
       );
+      if (wrote) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
       return;
     }
     const catalog = await this.deps.catalog.agentSet();
@@ -285,7 +286,7 @@ export class KbPipeline {
         processAfter: null,
       };
     });
-    if (wrote) this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
+    if (wrote) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
   }
 
   /** A conditional write of the claimed item; false when it changed meanwhile (decided, retargeted). */
@@ -406,7 +407,7 @@ export class KbPipeline {
       if (error instanceof StaleItem) return;
       throw error;
     }
-    this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
+    this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
   }
 
   /**
@@ -416,7 +417,7 @@ export class KbPipeline {
   private async fail(item: KbItem, reason: string, retry: KbProcessing): Promise<void> {
     const now = this.deps.clock.now();
     const message = reason.slice(0, 500);
-    const failed = await this.deps.store.transaction(async (tx) => {
+    const recorded = await this.deps.store.transaction(async (tx) => {
       const current = await tx.getKbItem(item.id);
       if (current?.version !== item.version) return false;
       const attempts = current.processingAttempts + 1;
@@ -429,9 +430,10 @@ export class KbPipeline {
         processAfter: last ? null : this.later(now, backoffMs(attempts)),
         version: current.version + 1,
       };
-      return (await tx.updateKbItem(next, current.version)) && last;
+      return tx.updateKbItem(next, current.version);
     });
-    if (failed) this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
+    // Retrying shows the error and attempt count too, not only the final failure.
+    if (recorded) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
   }
 
   private later(now: string, ms: number): string {

@@ -27,7 +27,7 @@ import {
 import type { CatalogUpdate, KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
 import { splicePreview } from '../domain/sections.js';
 import type { Board } from '../domain/types.js';
-import type { Catalog, CatalogAgentSet, Clock, Notifier, Store, Tx } from '../ports.js';
+import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 
 export interface IndexEntry {
@@ -238,6 +238,36 @@ export class KnowledgeService {
     private readonly deps: { store: Store; clock: Clock; catalog: Catalog; notifier: Notifier },
   ) {}
 
+  /** Hints raised in each open write transaction, published once it commits. */
+  private readonly raised = new WeakMap<Tx, Hint[]>();
+
+  /**
+   * A write transaction whose hints (`hint`) are published only after it commits, so a client
+   * refetching on one sees the change; a transaction that throws publishes nothing.
+   */
+  private async transaction<T>(work: (tx: Tx) => Promise<T>): Promise<T> {
+    let hints: Hint[] = [];
+    const result = await this.deps.store.transaction((tx) => {
+      // A retried transaction starts its hints afresh.
+      hints = [];
+      this.raised.set(tx, hints);
+      return work(tx);
+    });
+    for (const hint of hints) this.deps.notifier.publish(hint);
+    return result;
+  }
+
+  /** Raises a hint for after the commit of `tx` (from `transaction`); repeats within it are dropped. */
+  private hint(tx: Tx, hint: Hint): void {
+    const hints = this.raised.get(tx);
+    if (hints === undefined) throw new Error('Hints need a transaction from KnowledgeService.transaction');
+    if (!hints.some((h) => h.kind === hint.kind && h.boardId === hint.boardId)) hints.push(hint);
+  }
+
+  private kbChanged(tx: Tx, boardId: number): void {
+    this.hint(tx, { kind: 'board.kb', boardId });
+  }
+
   /** `get_conventions(board)`: the document index, so agents know what to fetch. */
   async index(email: string, boardId: number): Promise<Result<IndexEntry[]>> {
     return this.deps.store.transaction(async (tx) => {
@@ -333,7 +363,7 @@ export class KnowledgeService {
     source: 'upload' | 'import',
   ): Promise<Result<ImportResult>> {
     if (documents.length === 0) return invalidInput('Nothing to import');
-    return this.deps.store.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
       if (!actor.ok) return actor;
       const result = await this.write(
@@ -351,7 +381,7 @@ export class KnowledgeService {
     const entries = (await this.deps.catalog.kbEntries()).filter((e) => ids.includes(e.id));
     const missing = ids.filter((id) => !entries.some((e) => e.id === id));
     if (missing.length > 0) return notFound(`Not in the catalog: ${missing.join(', ')}`);
-    return this.deps.store.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
       if (!actor.ok) return actor;
       return this.write(
@@ -403,7 +433,7 @@ export class KnowledgeService {
     if (problem !== null) return invalidInput(problem);
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.deps.store.transaction(async (tx) => {
+        return await this.transaction(async (tx) => {
           const actor = await adminOf(tx, email, boardId);
           if (!actor.ok) return actor;
           const existing = await tx.getKnowledge(boardId, kind, path);
@@ -445,7 +475,7 @@ export class KnowledgeService {
     const sourceGlobId = learning.sourceGlobId?.trim() ?? '';
     if (sourceGlobId === '' && document === null) return invalidInput('A learning needs its source glob');
     const { type } = learning;
-    return this.deps.store.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
       const sourceGlobIds: string[] = [];
@@ -483,6 +513,7 @@ export class KnowledgeService {
       });
       // The counter is atomic, so a clash means the counter and the table disagree.
       if (!inserted) throw new Error(`KB item ${id} already exists`);
+      this.kbChanged(tx, boardId);
       return ok({ id });
     });
   }
@@ -510,7 +541,7 @@ export class KnowledgeService {
    */
   async changeTarget(email: string, itemId: string, version: number, change: TargetChange): Promise<Result<KbItem>> {
     const catalog = await this.deps.catalog.agentSet();
-    return this.deps.store.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const item = await tx.getKbItem(itemId);
       if (item === null) return notFound(`No KB item ${itemId}`);
       const actor = await adminOf(tx, email, item.boardId);
@@ -527,7 +558,7 @@ export class KnowledgeService {
         const current = await tx.getKbItem(itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
       }
-      this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
+      this.kbChanged(tx, item.boardId);
       return ok(next);
     });
   }
@@ -537,7 +568,7 @@ export class KnowledgeService {
    * routing when it has no target yet, otherwise to drafting against its target.
    */
   async retryProcessing(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
-    return this.deps.store.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const item = await tx.getKbItem(itemId);
       if (item === null) return notFound(`No KB item ${itemId}`);
       const actor = await adminOf(tx, email, item.boardId);
@@ -555,7 +586,7 @@ export class KnowledgeService {
         const current = await tx.getKbItem(itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
       }
-      this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
+      this.kbChanged(tx, item.boardId);
       return ok(next);
     });
   }
@@ -650,7 +681,7 @@ export class KnowledgeService {
   ): Promise<Result<KbItem>> {
     const stale = (item: KbItem) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
     try {
-      return await this.deps.store.transaction(async (tx) => {
+      return await this.transaction(async (tx) => {
         const item = await tx.getKbItem(itemId);
         if (item === null) return notFound(`No KB item ${itemId}`);
         const actor = await adminOf(tx, email, item.boardId);
@@ -665,6 +696,7 @@ export class KnowledgeService {
             ? { ...base, status: 'rejected', decisionReason: decided.value.reason }
             : { ...base, status: 'approved', statement: decided.value.statement, outcome: decided.value.outcome };
         if (!(await tx.updateKbItem(next, item.version))) throw new StaleKbItem(item.id);
+        this.kbChanged(tx, item.boardId);
         return ok(next);
       });
     } catch (error) {
@@ -704,7 +736,7 @@ export class KnowledgeService {
     if (item.draft !== null && item.draftedAgainstVersion !== null && state.version !== item.draftedAgainstVersion) {
       const requeued = needsDraft(item);
       if (!(await tx.updateKbItem(requeued, item.version))) throw new StaleKbItem(item.id);
-      this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
+      this.kbChanged(tx, item.boardId);
       return err({
         code: 'version_conflict',
         message: `${target.name} changed since ${item.id} was drafted; it is being drafted again`,
@@ -828,7 +860,11 @@ export class KnowledgeService {
       });
       if (outcome.kind === 'missing') return null;
       if (outcome.kind === 'conflict') continue;
-      if (outcome.kind === 'bumped') this.deps.notifier.publish({ kind: 'board.changed', boardId });
+      if (outcome.kind === 'bumped') {
+        // The board's agent-set version moved, and with it the files the Knowledge page serves.
+        this.deps.notifier.publish({ kind: 'board.changed', boardId });
+        this.deps.notifier.publish({ kind: 'board.kb', boardId });
+      }
       return outcome.version;
     }
     throw new BoardChanged(boardId);
@@ -897,8 +933,10 @@ export class KnowledgeService {
     if (agentSetChanged) {
       const next: Board = { ...board, agentSetVersion: board.agentSetVersion + 1, version: board.version + 1 };
       if (!(await tx.updateBoard(next, board.version))) throw new BoardChanged(boardId);
+      // The board row itself changed (its agent-set version).
+      this.hint(tx, { kind: 'board.changed', boardId });
     }
-    if (created.length + updated.length > 0) this.deps.notifier.publish({ kind: 'board.changed', boardId });
+    if (changed.length > 0) this.kbChanged(tx, boardId);
     return ok({ created, updated, unchanged });
   }
 

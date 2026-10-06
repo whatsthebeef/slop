@@ -192,7 +192,7 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(dedupe?.system).toBe(DEDUPE_SYSTEM);
     expect(dedupe?.prompt).toContain('## Test\n\nRun vitest.');
     expect(dedupe?.prompt).not.toContain('Run eslint.');
-    expect(notifier.hints).toContainEqual({ kind: 'board.changed', boardId });
+    expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
     // Next in line: its draft.
     expect((await store.transaction((tx) => tx.nextKbItemToProcess(now)))?.id).toBe(id);
   });
@@ -343,6 +343,7 @@ describe('KB pipeline: routing and dedupe', () => {
   it('retries unusable answers and LLM errors with backoff, then marks the item failed but still decidable', async () => {
     const id = await submit();
     llm.answer('Sure! Here is my answer.');
+    notifier.hints.length = 0;
     await pipeline.processNext();
     expect(await item(id)).toMatchObject({
       processing: 'pending',
@@ -350,6 +351,8 @@ describe('KB pipeline: routing and dedupe', () => {
       processingError: 'The routing answer was not usable JSON',
       processAfter: '2026-10-05T12:00:30.000Z',
     });
+    // The page shows the error while it retries.
+    expect(notifier.hints).toEqual([{ kind: 'board.kb', boardId }]);
     // Not due yet.
     expect(await pipeline.processNext()).toBeNull();
 
@@ -370,7 +373,7 @@ describe('KB pipeline: routing and dedupe', () => {
       processingError: 'The routing answer was not usable JSON',
       processAfter: null,
     });
-    expect(notifier.hints).toContainEqual({ kind: 'board.changed', boardId });
+    expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
     advance(3_600_000);
     expect(await pipeline.processNext()).toBeNull();
     expect(unwrap(await knowledge.approve(ADMIN, id, failed.version, { as: 'learning' })).status).toBe('approved');
