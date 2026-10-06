@@ -2,6 +2,7 @@ import { App } from '@octokit/app';
 import type { DiffSummary, Glob } from '@slop/core';
 import { machine } from '@slop/core';
 import type { CodeHost, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
+import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
 
 type Octokit = Awaited<ReturnType<App['getInstallationOctokit']>>;
@@ -219,24 +220,18 @@ export class GitHub implements CodeHost {
       repo: repo.name,
       pull_number: prNumber,
     });
-    const state: MergeState = ((): MergeState => {
-      switch (data.mergeable_state) {
-        case 'clean':
-        case 'unstable':
-        case 'has_hooks':
-          return 'passed';
-        case 'blocked':
-          return 'pending';
-        case 'behind':
-          return 'behind';
-        case 'dirty':
-          return 'conflict';
-        case 'draft':
-          return 'pending';
-        default:
-          return 'unknown';
-      }
-    })();
+    let runs: { status: string; conclusion: string | null }[] = [];
+    if (data.mergeable_state === 'unstable' || data.mergeable_state === 'blocked') {
+      const checks = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
+        owner: repo.owner,
+        repo: repo.name,
+        ref: data.head.sha,
+        filter: 'latest',
+        per_page: 100,
+      });
+      runs = checks.data.check_runs;
+    }
+    const state = classifyMergeState(data.mergeable_state, runs);
     return { sha: data.head.sha, state };
   }
 
