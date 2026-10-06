@@ -4,3 +4,7 @@ packages:
   - infra
 allowBuilds:
   esbuild: true
+# drizzle-kit@0.31.x (latest stable) still depends on @esbuild-kit/esm-loader, which pins
+# esbuild ~0.18 (GHSA-67mh-4wv8-2f99, fixed in >=0.25.0). Force the patched esbuild for that path.
+overrides:
+  "@esbuild-kit/core-utils>esbuild": ">=0.25.0"
