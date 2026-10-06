@@ -181,10 +181,9 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
 
 ### Phase 6: Finalise
 
-1. **Full checks**: run the board's full checks once (unless its build doc leaves them to CI). If something fails, hand it to the implementer, re-run the failed check, and note it in the review document.
-2. **Format** with the format command from the board's build doc, if it has one.
-3. **Stage** code changes, excluding `.reviews/`: `git add -A && git reset HEAD .reviews/`. Check `git diff --cached --name-only | grep '^\.reviews/'` returns nothing; unstage anything it lists.
-4. **Commit** (use a HEREDOC), without asking for approval:
+1. **Format** with the format command from the board's build doc, if it has one.
+2. **Stage** code changes, excluding `.reviews/`: `git add -A && git reset HEAD .reviews/`. Check `git diff --cached --name-only | grep '^\.reviews/'` returns nothing; unstage anything it lists.
+3. **Commit** (use a HEREDOC), without asking for approval:
    ```
    <id>: <glob title>
 
@@ -195,15 +194,21 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
    Slop-Run: <runId>          (unattended only)
    ```
    3–6 concise bullets from the implementation summary.
-5. **Local review:** push `.reviews/<id>-review.md` followed by `.reviews/<id>-tests.md` as one artifact: `put_artifact(id, kind: 'local_review', content, commitSha: <HEAD sha>)`, with the run ID if unattended. Slop stores it verbatim and shows it under the card's local review icon.
-6. **Learnings:** extract what a developer working on related code should know, from the implementation summary, review document and test report:
+4. **Merge the base branch** (`baseBranch` from `get_board`), so conflicts are resolved by the agent that wrote the change: `git fetch origin <base> && git merge origin/<base>`. Skip if already up to date.
+   - On conflicts, resolve them keeping both sides' intent. The plan, the context file and `git log origin/<base>` show what the other change meant.
+   - **Unattended:** resolve without asking. Record what was resolved and how in the merge commit message and as an `Assumptions` attachment. If a conflict can't be resolved with confidence (a real clash of behaviour), `git merge --abort` and call `report_failure` with "Merge conflict with <base> in <files> needs a person" instead of guessing.
+   - **Interactive:** show the developer the conflicting hunks with a proposed resolution and ask before committing.
+   - Commit the merge as `<id>: Merge <base>` (with the `Slop-Run` trailer if unattended).
+5. **Full checks**: run the board's full checks once on the merged result (or the fast checks where its build doc leaves full checks to CI). If something fails, hand it to the implementer, re-run the failed check, note it in the review document and commit the fix as `<id>: <what was fixed>`.
+6. **Local review:** push `.reviews/<id>-review.md` followed by `.reviews/<id>-tests.md` as one artifact: `put_artifact(id, kind: 'local_review', content, commitSha: <HEAD sha>)`, with the run ID if unattended. Slop stores it verbatim and shows it under the card's local review icon.
+7. **Learnings:** extract what a developer working on related code should know, from the implementation summary, review document and test report:
    - `decision` — a choice made and why;
    - `gotcha` — an unexpected issue and how it was resolved;
    - `pattern` — a new pattern future work should follow;
    - `agent-behaviour` — something an instruction would have prevented or should keep doing: a review finding the implementer should never have produced, a test pass that failed because of how the code was written, a plan that needed heavy amendment, and above all **any time the developer corrected you or a sub-agent** in the session (quote the correction). Name the agent concerned.
 
    Skip trivial or glob-specific details; most globs produce 0–3. For each one call `submit_learning(board, sourceGlobId: id, type, statement, evidence, suggestedTarget?)`. Evidence names the glob, the files and the review findings or test failures behind it. Never edit `.sstor/docs/`, `.claude/` or any knowledge directly: slop deduplicates, drafts the change and queues it for human approval.
-7. **Push and mark ready:**
+8. **Push and mark ready:**
    - **Unattended:** run the pre-push check (see Unattended mode), `git push origin <id>`, then call slop's `mark_ready` with the glob ID and your run ID; slop marks the draft PR ready through its GitHub App. Do not use `gh` or open a PR. The PR title is already `<id>: <title>`; do not change it. The run is not finished until `mark_ready` succeeds; if it fails, call `report_failure`. Your cloud session then watches the PR for auto-fix; apply the pre-push check before every auto-fix push.
    - **Interactive:** `git push origin <id>`. Then ask the developer whether to mark the PR ready for review now. If yes, run `/finalise <requestId>` (generate the request ID with `uuidgen`; local review and learnings are already submitted for this commit, so /finalise will skip them), then call slop's `mark_ready` with the glob ID. If not, tell them to run `sstor --ready` from a terminal when they are. Never run `sstor` yourself: it is the developer's terminal tool, it drives this session, and it cannot run inside the sandbox.
 
