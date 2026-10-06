@@ -28,6 +28,7 @@ class FakeHost implements CodeHost {
   readonly lookups: string[] = [];
   diff: DiffSummary = { changedLines: 10, files: ['src/a.ts'] };
   mergeStateNow: MergeState = 'pending';
+  conflicting: string[] = [];
 
   connection = () => Promise.resolve({ configured: true, connected: true, installUrl: null, appName: null });
   provision = (_repo: unknown, glob: Glob) => Promise.resolve({ branch: glob.id, pr: { number: 7, headSha: HEAD } });
@@ -41,7 +42,8 @@ class FakeHost implements CodeHost {
     this.lookups.push(`${name}@${sha}`);
     return Promise.resolve(this.subGate === null ? null : { sha, passed: this.subGate.passed });
   };
-  markReady = () => Promise.resolve();
+  markReady = () => Promise.resolve({ wasDraft: true, sha: HEAD });
+  conflictFiles = () => Promise.resolve(this.conflicting);
   diffSummary = () => Promise.resolve(this.diff);
   readFile = () => Promise.resolve(null);
   squashMerge = () => Promise.resolve({ outcome: 'merged' as const, sha: 'm1' });
@@ -201,6 +203,20 @@ describe('a sub gate that completed before the PR was recorded as ready', () => 
     expect(await pending('evaluate_sub_gate')).toHaveLength(1);
     await run('evaluate_sub_gate');
     expect((await current()).status).toBe('merging');
+  });
+
+  it('a conflict found while merging fails the glob as a merge conflict naming the files', async () => {
+    await handle(readyForReview());
+    await globs.applyEvent(globId, (g, ctx) => machine.subGateCompleted(g, { sha: HEAD, passed: true, reason: null }, ctx));
+    expect((await current()).status).toBe('merging');
+    host.mergeStateNow = 'conflict';
+    host.conflicting = ['src/a.ts'];
+    expect(await run('refresh_checks')).toEqual(['done']);
+    const glob = await current();
+    expect(glob.status).toBe('failed');
+    expect(glob.failure?.reason).toBe('Merge conflict with main in src/a.ts');
+    expect(glob.failure?.conflict).toEqual({ base: 'main', files: ['src/a.ts'] });
+    host.conflicting = [];
   });
 
   it('a failed gate found at ready is left to the routine', async () => {

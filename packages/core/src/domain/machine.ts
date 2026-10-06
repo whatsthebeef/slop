@@ -17,6 +17,7 @@ import type {
   LabelName,
   LabelState,
   Labels,
+  MergeConflict,
   Run,
   RunOutcome,
   SlopType,
@@ -44,6 +45,8 @@ export type Action =
   | 'pick_up'
   | 'take_over'
   | 'retrigger'
+  /** Failed by a merge conflict with no human implementer: a routine merges the base branch in on the same branch. */
+  | 'resolve_conflict'
   | 'start_again'
   | 'merge'
   /** Supers: squash-merge what's done and keep going on the same glob and branch. */
@@ -189,7 +192,7 @@ class Builder {
   }
 
   /** Queues a new routine run for whoever triggered it. */
-  queueRun(triggeredBy: string): this {
+  queueRun(triggeredBy: string, extra: Pick<Run, 'resolveConflictWith'> = {}): this {
     const run: Run = {
       id: this.ctx.newRunId(),
       state: 'queued',
@@ -204,6 +207,7 @@ class Builder {
       failureReason: null,
       sessionId: null,
       sessionUrl: null,
+      ...extra,
     };
     this.set({ runs: [...this.glob.runs, run] });
     this.event('RunTriggered', {
@@ -439,6 +443,36 @@ export const retrigger = (glob: Glob, ctx: Context): Result<Transition> => {
     .effect({ kind: 'reopen_pr', globId: glob.id, generation: glob.generation + 1 })
     .status('implementing')
     .queueRun(actor.email)
+    .done();
+};
+
+/** The failure reason for a merge conflict, naming the files when known. */
+export const conflictReason = (conflict: MergeConflict): string => {
+  const shown = conflict.files.slice(0, 5).join(', ');
+  const more = conflict.files.length > 5 ? ` and ${String(conflict.files.length - 5)} more` : '';
+  return `Merge conflict with ${conflict.base}${conflict.files.length === 0 ? '' : ` in ${shown}${more}`}`;
+};
+
+/**
+ * Resolve conflict (row 16 follow-up): a glob failed by a merge conflict and nobody is implementing it gets a
+ * routine run that merges the base branch into the existing branch. Unlike re-triggering, the run is told why.
+ */
+export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  const conflict = glob.failure?.conflict;
+  if (glob.status !== 'failed' || glob.type === 'super' || conflict === undefined) {
+    return invalidTransition(glob, actor, 'Only a glob failed by a merge conflict can resolve it');
+  }
+  if (glob.implementer !== null) {
+    return invalidTransition(glob, actor, 'A glob with a human implementer resolves its conflict locally');
+  }
+  if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+  return new Builder(glob, ctx)
+    .bumpGeneration()
+    .set({ failure: null, headChecks: null })
+    .effect({ kind: 'reopen_pr', globId: glob.id, generation: glob.generation + 1 })
+    .status('implementing')
+    .queueRun(actor.email, { resolveConflictWith: conflict.base })
     .done();
 };
 
@@ -848,15 +882,30 @@ export const checksChanged = (glob: Glob, ctx: Context): Result<Transition> => {
 /** Required checks finished on a commit; only the PR's current head counts. */
 export const checksCompleted = (
   glob: Glob,
-  checks: { sha: string; passed: boolean },
+  checks: { sha: string; passed: boolean; conflict?: MergeConflict },
   ctx: Context,
 ): Result<Transition> => {
   if (glob.pr?.headSha !== checks.sha) return unchanged(glob);
   const b = new Builder(glob, ctx)
-    .set({ headChecks: { sha: checks.sha, state: checks.passed ? 'passed' : 'failed' } })
+    .set({
+      headChecks: {
+        sha: checks.sha,
+        state: checks.passed ? 'passed' : 'failed',
+        // A re-read of the same failure keeps its first time.
+        ...(!checks.passed && { at: glob.headChecks?.sha === checks.sha && glob.headChecks.state === 'failed' ? (glob.headChecks.at ?? ctx.now) : ctx.now }),
+      },
+    })
     .event('BuildCompleted', { sha: checks.sha, passed: checks.passed });
   // Slop updated the branch while merging: the checks on the new head decide (rows 12, 14, 16).
   if (glob.status === 'merging') {
+    if (checks.conflict !== undefined) {
+      const reason = conflictReason(checks.conflict);
+      return b
+        .set({ failure: { reason, at: ctx.now, conflict: checks.conflict }, mergeMode: null })
+        .event('MergeFailed', { reason, conflict: true })
+        .status('failed')
+        .done();
+    }
     if (!checks.passed) {
       return b
         .set({ failure: { reason: 'Checks failed after updating the branch', at: ctx.now }, mergeMode: null })
@@ -975,10 +1024,15 @@ export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx:
 };
 
 /** Row 16: slop's own merge failed (conflict, or checks failed after updating the branch). */
-export const mergeFailed = (glob: Glob, reason: string, ctx: Context): Result<Transition> => {
+export const mergeFailed = (
+  glob: Glob,
+  reason: string,
+  ctx: Context,
+  conflict?: MergeConflict,
+): Result<Transition> => {
   if (glob.status !== 'merging') return unchanged(glob);
   return new Builder(glob, ctx)
-    .set({ failure: { reason, at: ctx.now }, mergeMode: null })
+    .set({ failure: { reason, at: ctx.now, ...(conflict === undefined ? {} : { conflict }) }, mergeMode: null })
     .event('MergeFailed', { reason })
     .status('failed')
     .done();
@@ -1066,6 +1120,15 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     actions.push('take_over');
   }
   if (glob.status === 'failed' && glob.type !== 'super' && !hasLiveRun(glob)) actions.push('retrigger');
+  if (
+    glob.status === 'failed' &&
+    glob.type !== 'super' &&
+    !hasLiveRun(glob) &&
+    glob.failure?.conflict !== undefined &&
+    glob.implementer === null
+  ) {
+    actions.push('resolve_conflict');
+  }
   if (glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
   if (
     glob.status === 'pr_open' &&

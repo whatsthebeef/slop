@@ -76,7 +76,12 @@ export const fireRoutine = async (secret: RoutineSecret, text: string): Promise<
 };
 
 /** The text a routine run receives: which glob, which run, which repository, and how to start. */
-export const runInstructions = (glob: { id: string; title: string }, runId: string, repo: string | null): string =>
+export const runInstructions = (
+  glob: { id: string; title: string },
+  runId: string,
+  repo: string | null,
+  resolveConflictWith?: string,
+): string =>
   [
     `Slop glob ${glob.id}: ${glob.title}`,
     `Run ID: ${runId}`,
@@ -88,7 +93,15 @@ export const runInstructions = (glob: { id: string; title: string }, runId: stri
     '',
     `Work on the glob's branch, ${glob.id}, which already exists on origin with an open draft PR: run \`git fetch origin ${glob.id} && git checkout -B ${glob.id} origin/${glob.id}\` first. Push only to ${glob.id} (\`git push origin ${glob.id}\`); never create or push a claude/ branch, and never open a new PR.`,
     '',
-    `Run /run-glob ${glob.id} --run ${runId}. If that command is not available, read .claude/agents/orchestrator.md and follow it for glob ${glob.id} in unattended mode with run ID ${runId}.`,
-    "Start by calling slop's get_glob and get_context for the glob, passing the run ID.",
-    `When the work is pushed, call slop's mark_ready for ${glob.id} with the run ID (do not use gh). If you cannot finish, call report_failure with the run ID.`,
+    ...(resolveConflictWith === undefined
+      ? [
+          `Run /run-glob ${glob.id} --run ${runId}. If that command is not available, read .claude/agents/orchestrator.md and follow it for glob ${glob.id} in unattended mode with run ID ${runId}.`,
+          "Start by calling slop's get_glob and get_context for the glob, passing the run ID.",
+          `When the work is pushed, call slop's mark_ready for ${glob.id} with the run ID (do not use gh). If you cannot finish, call report_failure with the run ID.`,
+        ]
+      : [
+          `Merging ${glob.id} failed on a merge conflict with ${resolveConflictWith}. Continue on this branch: do not restart the work or reset it, and do not run /run-glob.`,
+          `Run \`git fetch origin ${resolveConflictWith} && git merge origin/${resolveConflictWith}\`, resolve the conflicts keeping both sides' intent, run the fast checks, commit the merge and push it to ${glob.id}.`,
+          `Then call slop's mark_ready for ${glob.id} with the run ID (do not use gh); slop's normal sub gate and merge flow continues. Check the glob with get_glob (passing the run ID) before pushing and stop if your run is no longer current. If you cannot finish, call report_failure with the run ID.`,
+        ]),
   ].join('\n');

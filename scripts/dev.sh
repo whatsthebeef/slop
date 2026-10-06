@@ -14,9 +14,13 @@ Usage: scripts/dev.sh [command]
 
   start        Start slop from this checkout in tmux session "slop-dev" and attach (the default).
                If another checkout's server is running, it is stopped first.
-  restart      Stop and start again, from this checkout.
+  watch        Like start, but reload on change: the server restarts when apps/server/src,
+               packages/core/src or catalog/ change (snapshotting first if a new migration
+               arrived), and the board rebuilds on change (reload the tab to see it).
+  restart      Stop and start again, from this checkout, keeping watch mode if it was on.
   stop         Stop the server and the tunnel. Postgres keeps running.
   foreground   Run the server in this terminal (sstor's server window), stopping any other copy.
+               `foreground watch` watches as `watch` does.
   snapshots    List database snapshots, newest first.
   restore [f]  Stop the server and restore the database from a snapshot (default: the newest).
   help         Show this help.
@@ -32,6 +36,9 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 export COMPOSE_PROJECT_NAME=slop
 session=slop-dev
 action="${1:-start}"
+watch_mode=false
+[[ "$action" == watch ]] && { action=start; watch_mode=true; }
+[[ "$action" == foreground && "${2:-}" == watch ]] && watch_mode=true
 
 # In a worktree, use the main checkout's gitignored local files (secrets, tunnel settings).
 main_root="$(cd "$(git -C "$root" rev-parse --git-common-dir)/.." && pwd)"
@@ -66,6 +73,11 @@ postgres_up() {
 # The checkout the running tmux server came from, if any.
 running_root() {
   tmux show-environment -t "$session" SLOP_DEV_ROOT 2>/dev/null | sed -n 's/^SLOP_DEV_ROOT=//p'
+}
+
+# Whether the running tmux session was started in watch mode.
+running_watch() {
+  [[ "$(tmux show-environment -t "$session" SLOP_DEV_WATCH 2>/dev/null | sed -n 's/^SLOP_DEV_WATCH=//p')" == true ]]
 }
 
 stop() {
@@ -119,6 +131,23 @@ build_board() {
   (cd "$root/apps/web" && node node_modules/vite/bin/vite.js build --logLevel warn)
 }
 
+build_board_watch() {
+  (cd "$root/apps/web" && node node_modules/vite/bin/vite.js build --watch --logLevel warn)
+}
+
+# The server command's node arguments, shared by every mode.
+# Runs in apps/server; the env file is optional.
+server_cmd() {
+  local env_file=""
+  [[ -f "$root/apps/server/.env.cognito" ]] && env_file="--env-file=.env.cognito"
+  echo "node $env_file --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts"
+}
+
+# The server under the watcher; --before re-checks migrations (and snapshots) on each restart.
+watched_server_cmd() {
+  echo "node $root/scripts/dev-watch.mjs --before '$root/scripts/dev.sh check-migrations' $root/apps/server/src,$root/packages/core/src,$root/catalog -- $(server_cmd)"
+}
+
 # ngrok reports a failed tunnel only in its own window; say so here, since webhooks need it.
 check_tunnel() {
   [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]] || return 0
@@ -148,16 +177,17 @@ start() {
   postgres_up
   check_migrations
   build_board
-
-  local env_file=""
-  [[ -f "$root/apps/server/.env.cognito" ]] && env_file="--env-file=.env.cognito"
   # tmux sessions inherit the tmux server's environment, so pass what the server needs.
   # LOCAL_SIGN_IN_WITHOUT_COOKIE: Chrome drops the sign-in state cookie on plain-http localhost.
   local env_args=(-e "LOCAL_SIGN_IN_WITHOUT_COOKIE=true")
   [[ -n "${AWS_PROFILE:-}" ]] && env_args+=(-e "AWS_PROFILE=$AWS_PROFILE")
   tmux new-session -d -s "$session" ${env_args[@]+"${env_args[@]}"} -n server -c "$root/apps/server" \
-    "node $env_file --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts; read"
+    "$($watch_mode && watched_server_cmd || server_cmd); read"
   tmux set-environment -t "$session" SLOP_DEV_ROOT "$root"
+  tmux set-environment -t "$session" SLOP_DEV_WATCH "$watch_mode"
+  if $watch_mode; then
+    tmux new-window -t "$session" -n board -c "$root" "$root/scripts/dev.sh board-watch; read"
+  fi
   if [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]]; then
     tmux new-window -t "$session" -n tunnel "ngrok http --url=$SLOP_TUNNEL_DOMAIN 3000; read"
   fi
@@ -172,13 +202,24 @@ foreground() {
   build_board
   if [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]]; then
     ngrok http --url="$SLOP_TUNNEL_DOMAIN" 3000 --log=false >/dev/null &
-    trap 'kill %1 2>/dev/null || true' EXIT
+    tunnel_pid=$!
+    trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
     echo "Tunnel: https://$SLOP_TUNNEL_DOMAIN"
     check_tunnel
   fi
   local env_file=()
   [[ -f "$root/apps/server/.env.cognito" ]] && env_file=(--env-file=.env.cognito)
   cd "$root/apps/server"
+  if $watch_mode; then
+    build_board_watch &
+    board_pid=$!
+    trap 'kill "$board_pid" ${tunnel_pid:-} 2>/dev/null || true' EXIT
+    LOCAL_SIGN_IN_WITHOUT_COOKIE=true node "$root/scripts/dev-watch.mjs" \
+      --before "$root/scripts/dev.sh check-migrations" \
+      "$root/apps/server/src,$root/packages/core/src,$root/catalog" -- \
+      node ${env_file[@]+"${env_file[@]}"} --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts
+    return
+  fi
   LOCAL_SIGN_IN_WITHOUT_COOKIE=true node ${env_file[@]+"${env_file[@]}"} --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts
 }
 
@@ -210,7 +251,9 @@ case "$action" in
   foreground) foreground; exit 0 ;;
   start) start ;;
   stop) stop ;;
-  restart) stop; start ;;
+  restart) running_watch && watch_mode=true; stop; start ;;
+  check-migrations) check_migrations; exit 0 ;;
+  board-watch) build_board_watch; exit 0 ;;
   snapshots) list_snapshots; exit 0 ;;
   restore) restore "${2:-}"; exit 0 ;;
   help|-h|--help) usage; exit 0 ;;

@@ -65,6 +65,8 @@ export interface Run {
   /** The cloud session started by the fire request, for Open in Claude and Continue locally. */
   readonly sessionId: string | null;
   readonly sessionUrl: string | null;
+  /** Set on a run started by Resolve conflict: the base branch to merge into the glob's branch. */
+  readonly resolveConflictWith?: string;
 }
 
 export type PrState = 'draft' | 'ready' | 'closed' | 'merged';
@@ -90,6 +92,8 @@ export type MergeMode = 'continue';
 export interface HeadChecks {
   readonly sha: string;
   readonly state: 'pending' | 'passed' | 'failed';
+  /** When the checks were first seen failed on this head; absent on results recorded before it was kept. */
+  readonly at?: string;
 }
 
 /** `none` until the glob first enters Doing: branches and draft PRs are created when work starts. */
@@ -100,6 +104,13 @@ export interface Failure {
   readonly at: string;
   /** Failure reports: the agent-set version the session or run used, when it said. */
   readonly agentSetVersion?: number;
+  /** Set when slop's merge failed on a conflict with the base branch (`files`: those both sides changed, when known). */
+  readonly conflict?: MergeConflict;
+}
+
+export interface MergeConflict {
+  readonly base: string;
+  readonly files: readonly string[];
 }
 
 export interface Glob {
