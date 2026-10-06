@@ -131,7 +131,9 @@ export const KnowledgePage = () => {
         )}
       </section>
 
+      {/* Keyed by board: another board's proposals (or its history limit) must never show here. */}
       <KbProposals
+        key={boardId}
         boardId={boardId}
         admin={admin}
         documents={kb.data.documents}

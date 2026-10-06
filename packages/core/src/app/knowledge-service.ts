@@ -3,7 +3,7 @@ import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
 import { composeAgentSet, contextDiff, overlayProblem } from '../domain/agent-set.js';
 import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../domain/agent-set.js';
-import { isLearningType, KB_HISTORY_PAGE, needsDraft, UNPROCESSED } from '../domain/kb.js';
+import { isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE, needsDraft, UNPROCESSED } from '../domain/kb.js';
 import type {
   DraftPreview,
   KbItem,
@@ -533,12 +533,12 @@ export class KnowledgeService {
 
   /**
    * The board's open KB items, oldest first, each drafted one with a preview of its draft against
-   * the target's current text; and the newest `historyLimit` decided and closed items, with their
-   * totals. Members may read them.
+   * the target's current text; and the newest `historyLimit` decided items (by decision, so the one
+   * just decided is listed first) and closed items, with their totals. Members may read them.
    */
   async proposals(email: string, boardId: number, historyLimit = KB_HISTORY_PAGE): Promise<Result<KbProposalList>> {
     const catalog = await this.deps.catalog.agentSet();
-    const limit = Math.max(1, Math.min(Math.trunc(historyLimit), 1000));
+    const limit = Math.max(1, Math.min(Math.trunc(historyLimit), KB_HISTORY_MAX));
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
@@ -614,8 +614,9 @@ export class KnowledgeService {
    * Admins reopen an item the pipeline closed (merged, suppressed or covered: a false positive from
    * the model would otherwise drop the learning for good). It goes back to the open queue with its
    * target, to be drafted (a document proposal is its own draft). It isn't routed or deduplicated
-   * again, so the pipeline can't close it a second time: dedupe only runs on `pending` items, and a
-   * reopened item without a target is left `failed` for the admin to choose one under Edit. The
+   * again, so the pipeline can't close it a second time: dedupe only runs on `pending` items. An
+   * item without a target is refused (the pipeline always routes before it closes, so this
+   * shouldn't happen): reopening it could only send it back through routing and dedupe. The
    * other item keeps the evidence and count the closing added to it: they are only evidence, and
    * that item may have been decided since.
    */
@@ -632,21 +633,13 @@ export class KnowledgeService {
         return invalidInput(`${item.id} is ${item.status}; only items the pipeline closed can be reopened`);
       }
       const reopened: KbItem = { ...item, status: 'open', duplicateOf: null, suppressedBy: null, coveredBy: null };
-      let next: KbItem;
-      if (item.document !== null) {
-        next = { ...reopened, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 };
-      } else if (item.target === null) {
-        next = {
-          ...reopened,
-          processing: 'failed',
-          processingError: 'Reopened without a target: choose one under Edit',
-          processingAttempts: 0,
-          processAfter: null,
-          version: item.version + 1,
-        };
-      } else {
-        next = needsDraft(reopened);
+      if (item.document === null && item.target === null) {
+        return invalidInput(`${item.id} has no target, so reopening it would route and deduplicate it again`);
       }
+      const next: KbItem =
+        item.document !== null
+          ? { ...reopened, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
+          : needsDraft(reopened);
       if (!(await tx.updateKbItem(next, item.version))) {
         const current = await tx.getKbItem(itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);

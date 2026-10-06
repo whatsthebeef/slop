@@ -463,6 +463,25 @@ describe('KB review', () => {
     expect(errorCode(await knowledge.proposals(OUTSIDER, boardId))).toBe('forbidden');
   });
 
+  it('lists decided items newest decision first, so an old item decided just now leads the page', async () => {
+    const ids: string[] = [];
+    for (let n = 0; n < 3; n++) ids.push(await submit({ statement: `Rule ${n}` }));
+    const decideAt = async (id: string, at: string) => {
+      const item = await store.transaction((tx) => tx.getKbItem(id));
+      if (item === null) throw new Error('no item');
+      await store.transaction((tx) =>
+        tx.updateKbItem({ ...item, status: 'rejected', decidedBy: ADMIN, decidedAt: at, decisionReason: 'No', version: item.version + 1 }, item.version),
+      );
+    };
+    // The newer submissions are decided first; the oldest one last.
+    await decideAt(ids[1] ?? '', '2026-10-06T10:00:00.000Z');
+    await decideAt(ids[2] ?? '', '2026-10-06T11:00:00.000Z');
+    await decideAt(ids[0] ?? '', '2026-10-06T12:00:00.000Z');
+    const listed = unwrap(await knowledge.proposals(DEV, boardId, 2));
+    expect(listed.decided.items.map((i) => i.id)).toEqual([ids[0], ids[2]]);
+    expect(listed.decided.total).toBe(3);
+  });
+
   it('lists the newest decided items up to the limit, with their total', async () => {
     const ids: string[] = [];
     for (let n = 0; n < 3; n++) {

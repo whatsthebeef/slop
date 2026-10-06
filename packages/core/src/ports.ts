@@ -66,7 +66,10 @@ export interface Tx {
   getKbItem(id: string): Promise<KbItem | null>;
   /** A board's KB items, oldest first, optionally with one status. */
   listKbItems(boardId: number, status?: KbItemStatus): Promise<KbItem[]>;
-  /** A board's newest `limit` KB items with one of `statuses`, newest first, and how many there are in all. */
+  /**
+   * A board's newest `limit` KB items with one of `statuses`, newest first by `decidedAt` (else
+   * `createdAt`), and how many there are in all.
+   */
   listRecentKbItems(boardId: number, statuses: readonly KbItemStatus[], limit: number): Promise<{ items: KbItem[]; total: number }>;
   /**
    * The oldest open item on any board still waiting for the pipeline (`pending` routing or

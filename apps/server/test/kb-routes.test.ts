@@ -212,6 +212,12 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     expect(body.open.every((i) => i.status === 'open')).toBe(true);
     expect((await get('')).status).toBe(200);
     expect((await get('?limit=0')).status).toBe(422);
+    expect((await get('?limit=1001')).status).toBe(422);
+
+    // Ordered by decision, not submission: the older item decided last leads the page.
+    await database.db.execute(sql`update kb_proposals set decided_at = now() + interval '1 hour' where id = ${rejected[0]}`);
+    const redecided = (await (await get('?limit=1')).json()) as { decided: { items: KbItem[] } };
+    expect(redecided.decided.items.map((i) => i.id)).toEqual([rejected[0]]);
   });
 
   it('GET /api/boards/:b/kb lists documents forked from an older catalog version', async () => {

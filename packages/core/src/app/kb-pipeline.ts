@@ -273,7 +273,7 @@ export class KbPipeline {
       await this.fail(item, `The target ${target.name} is no longer on the board; choose another target`, 'routed');
       return;
     }
-    let drafted: Drafted | null;
+    let drafted: Drafted | string;
     try {
       drafted = parseDraft(
         await this.complete(this.deps.draft, {
@@ -288,8 +288,8 @@ export class KbPipeline {
       await this.fail(item, error instanceof Error ? error.message : String(error), 'routed');
       return;
     }
-    if (drafted === null) {
-      await this.fail(item, 'The draft answer was not usable JSON', 'routed');
+    if (typeof drafted === 'string') {
+      await this.fail(item, drafted, 'routed');
       return;
     }
     const { draft, rationale } = drafted;
@@ -678,26 +678,32 @@ const draftPrompt = (item: KbItem, target: KbTarget, state: TargetState, docs: r
 /**
  * The draft answer: a section (an existing heading or a new one) and its content, given a heading
  * line if it came without one, or a new document's body. The target's section follows the
- * drafter's choice. Null when it isn't usable.
+ * drafter's choice. Otherwise why it isn't usable (the attempt fails and is retried).
  */
-const parseDraft = (answer: string, target: KbTarget, state: TargetState): Drafted | null => {
+const parseDraft = (answer: string, target: KbTarget, state: TargetState): Drafted | string => {
+  const unusable = 'The draft answer was not usable JSON';
   const parsed = parseJson(answer);
-  if (!isObject(parsed)) return null;
+  if (!isObject(parsed)) return unusable;
   const raw = text(field(parsed, 'content'))?.trim() ?? '';
-  if (raw === '') return null;
+  if (raw === '') return unusable;
   const rationale = (text(field(parsed, 'rationale'))?.trim() ?? '').split(/\r?\n/)[0]?.trim() ?? '';
   const why = rationale === '' ? null : rationale;
   if (state.newDocument) {
     const body = (hasFrontmatter(raw) ? parseFrontmatter(raw).body : raw).trim();
-    return body === '' ? null : { draft: { section: null, content: body }, target, rationale: why };
+    return body === '' ? unusable : { draft: { section: null, content: body }, target, rationale: why };
   }
   const named = cleanSection(field(parsed, 'section'));
-  // A document's title isn't a section to replace (it would take the whole document): append instead.
-  const titled =
+  // A document's title isn't a section to replace (it would take the whole document). Content
+  // under it that starts with its own level-1 heading is a whole-document rewrite: a bad draft, so
+  // retry. Otherwise it is a new section: append it.
+  const namesTitle =
     named !== null &&
     markdownHeadings(state.text).some((h) => sameHeading(h.text, named)) &&
     !spliceHeadings(state.text).some((h) => sameHeading(h.text, named));
-  const section = titled ? null : named;
+  if (namesTitle && markdownHeadings(raw)[0]?.level === 1) {
+    return 'The draft rewrote the whole document under its title instead of one section';
+  }
+  const section = namesTitle ? null : named;
   // Board rules sit under "## Board rules", so a new heading there is one level down.
   const content = section === null ? raw : withHeading(state.text, section, raw, state.catalog === null ? 2 : 3);
   return {

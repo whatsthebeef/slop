@@ -208,7 +208,12 @@ export class MemoryStore implements Store {
           [...s.kbItems.values()].filter((i) => i.boardId === boardId && (status === undefined || i.status === status)),
         ),
       listRecentKbItems: (boardId, statuses, limit) => {
-        const all = [...s.kbItems.values()].filter((i) => i.boardId === boardId && statuses.includes(i.status)).reverse();
+        // Newest by decision, else by submission; later inserts first among equals.
+        const all = [...s.kbItems.values()]
+          .map((item, index) => ({ item, index }))
+          .filter(({ item }) => item.boardId === boardId && statuses.includes(item.status))
+          .sort((a, b) => (b.item.decidedAt ?? b.item.createdAt).localeCompare(a.item.decidedAt ?? a.item.createdAt) || b.index - a.index)
+          .map(({ item }) => item);
         return Promise.resolve({ items: all.slice(0, limit), total: all.length });
       },
       nextKbItemToProcess: (now) =>

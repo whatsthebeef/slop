@@ -188,6 +188,18 @@ describe('KB pipeline: drafting and approving drafts', () => {
     expect(await doc('build_test_lint')).toBe('# Build\n\n## Test\n\nRun vitest.\n\n## Lint\n\nRun eslint.\n\n## Reporters\n\nUse dot.\n');
   });
 
+  it("fails (to retry) a draft that rewrites the whole document under the document's title", async () => {
+    const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: null });
+    drafter.answer(draftAnswer('Build', '# Build\n\n## Test\n\nRun vitest --reporter=dot.\n\n## Lint\n\nRun eslint.'));
+    expect(await pipeline.process(id)).toBe(true);
+    expect(await item(id)).toMatchObject({
+      processing: 'routed',
+      draft: null,
+      processingAttempts: 1,
+      processingError: 'The draft rewrote the whole document under its title instead of one section',
+    });
+  });
+
   it('routes, then drafts the routed section in the next step, showing Sonnet the evidence and the whole target', async () => {
     const id = await submit();
     router.answer(

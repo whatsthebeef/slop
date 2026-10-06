@@ -424,7 +424,8 @@ export class PgStore implements Store {
           .select()
           .from(schema.kbProposals)
           .where(where)
-          .orderBy(desc(schema.kbProposals.createdAt), desc(schema.kbProposals.id))
+          // Newest by decision (an item joins the decided group when decided); closed items have none.
+          .orderBy(desc(sql`coalesce(${schema.kbProposals.decidedAt}, ${schema.kbProposals.createdAt})`), desc(schema.kbProposals.id))
           .limit(limit);
         const [counted] = await t.select({ total: sql<number>`count(*)`.mapWith(Number) }).from(schema.kbProposals).where(where);
         return { items: rows.map(toKbItem), total: counted?.total ?? 0 };

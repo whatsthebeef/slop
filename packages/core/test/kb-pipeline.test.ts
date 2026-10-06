@@ -371,6 +371,17 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(unwrap(await knowledge.reject(ADMIN, id, (await item(id)).version, 'Covered after all')).status).toBe('rejected');
   });
 
+  it('refuses to reopen a closed item that has no target, since only routing and dedupe could give it one', async () => {
+    const id = await submit();
+    const current = await item(id);
+    await store.transaction((tx) =>
+      tx.updateKbItem({ ...current, status: 'merged', duplicateOf: 's1k99', target: null, version: current.version + 1 }, current.version),
+    );
+    const refused = await knowledge.reopen(ADMIN, id, current.version + 1);
+    expect(errorCode(refused)).toBe('invalid_input');
+    expect(await item(id)).toMatchObject({ status: 'merged', processing: 'pending' });
+  });
+
   it('closes an item the target already says as covered by that knowledge', async () => {
     const id = await submit({ statement: 'Tests run with vitest' });
     llm.answer(toDoc('build_test_lint', 'Test'), json({ coveredBy: { kind: 'target' } }));

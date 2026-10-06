@@ -1,7 +1,7 @@
 import type { ArtifactService, BoardService, Catalog, IntakeService, KnowledgeService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
-import { ARTIFACT_KINDS, CATEGORIES, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
 import { parseFrontmatter } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -150,8 +150,8 @@ export const mountKnowledge = (
   // read them, admins decide them.
   app.get('/api/boards/:b/kb/proposals', async (c) => {
     const limit = c.req.query('limit');
-    const parsed = z.coerce.number().int().min(1).max(1000).optional().safeParse(limit === '' ? undefined : limit);
-    if (!parsed.success) return c.json({ code: 'invalid_input', message: 'limit is a whole number from 1 to 1000' }, 422);
+    const parsed = z.coerce.number().int().min(1).max(KB_HISTORY_MAX).optional().safeParse(limit === '' ? undefined : limit);
+    if (!parsed.success) return c.json({ code: 'invalid_input', message: `limit is a whole number from 1 to ${KB_HISTORY_MAX}` }, 422);
     return send(c, await knowledge.proposals(c.get('email'), Number(c.req.param('b')), parsed.data));
   });
 

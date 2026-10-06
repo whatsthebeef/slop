@@ -109,8 +109,9 @@ export interface KbProposalList {
   readonly closed: KbItemPage;
 }
 
-/** How many decided and closed items the Knowledge page lists by default. */
+/** How many decided and closed items the Knowledge page lists by default, and at most. */
 export const KB_HISTORY_PAGE = 50;
+export const KB_HISTORY_MAX = 1000;
 
 /** `submitted` by an agent through `submit_learning`; `mined` from signals by slop's jobs (later). */
 export const KB_ITEM_SOURCES = ['submitted', 'mined'] as const;

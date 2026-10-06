@@ -1,4 +1,4 @@
-import { agentSetKind, KB_HISTORY_PAGE, MAX_PROCESSING_ATTEMPTS, PROSE_KINDS, sameHeading, sectionText, spliceHeadings } from '@slop/core';
+import { agentSetKind, KB_HISTORY_MAX, KB_HISTORY_PAGE, MAX_PROCESSING_ATTEMPTS, PROSE_KINDS, sameHeading, sectionText, spliceHeadings } from '@slop/core';
 import type {
   AgentSetEntry,
   Approval,
@@ -1067,9 +1067,15 @@ export const KbProposals = ({
     [data, open],
   );
   const motion = useCardMotion(listed, live, KB_MOTION);
-  const hasMore = decided.total > decided.items.length || closed.total > closed.items.length;
+  // The route lists at most KB_HISTORY_MAX of each group.
+  const hasMore = historyLimit < KB_HISTORY_MAX && (decided.total > decided.items.length || closed.total > closed.items.length);
   const showMore = hasMore && (
-    <Button size='sm' variant='outline' className='w-fit' onClick={() => setHistoryLimit(historyLimit + KB_HISTORY_PAGE)}>
+    <Button
+      size='sm'
+      variant='outline'
+      className='w-fit'
+      onClick={() => setHistoryLimit(Math.min(historyLimit + KB_HISTORY_PAGE, KB_HISTORY_MAX))}
+    >
       Show older
     </Button>
   );
