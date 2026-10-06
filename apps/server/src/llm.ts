@@ -12,6 +12,8 @@ export class BedrockLlm implements Llm {
     private readonly modelId: string,
     region: string,
     private readonly onUsage: (usage: { model: string; input: number; output: number }) => void = () => undefined,
+    /** Sampling temperature; null sends none (Sonnet 5.5 refuses non-default sampling values). */
+    private readonly temperature: number | null = 0,
   ) {
     this.client = new BedrockRuntimeClient({ region });
   }
@@ -22,7 +24,10 @@ export class BedrockLlm implements Llm {
         modelId: this.modelId,
         system: [{ text: request.system }],
         messages: [{ role: 'user', content: [{ text: request.prompt }] }],
-        inferenceConfig: { maxTokens: request.maxTokens, temperature: 0 },
+        inferenceConfig:
+          this.temperature === null
+            ? { maxTokens: request.maxTokens }
+            : { maxTokens: request.maxTokens, temperature: this.temperature },
       }),
     );
     this.onUsage({

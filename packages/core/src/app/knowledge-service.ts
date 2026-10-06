@@ -3,8 +3,8 @@ import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
 import { composeAgentSet, overlayProblem } from '../domain/agent-set.js';
 import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../domain/agent-set.js';
-import { isLearningType } from '../domain/kb.js';
-import type { KbItem, KbItemStatus, KbOutcome, LearningType, ProposedDocument } from '../domain/kb.js';
+import { isLearningType, UNPROCESSED } from '../domain/kb.js';
+import type { KbItem, KbItemStatus, KbOutcome, KbTarget, LearningType, ProposedDocument } from '../domain/kb.js';
 import {
   agentSetKind,
   docName,
@@ -140,6 +140,13 @@ const checkDocument = (document: ProposedDocument): Result<ProposedDocument> => 
   if (!audience.every((a) => PLAIN_NAME.test(a))) return invalidInput('Audience entries are agent names');
   if (body === '') return invalidInput('A proposed document needs content');
   return ok({ name, area, audience, description, content: `${body}\n` });
+};
+
+/** A document proposal's target: that document, with its proposed frontmatter when the board doesn't have it yet. */
+export const documentTarget = async (tx: Tx, boardId: number, document: ProposedDocument): Promise<KbTarget> => {
+  const existing = await tx.getKnowledge(boardId, 'doc', document.name);
+  const { area, audience, description } = document;
+  return { kind: 'doc', name: document.name, section: null, newDocument: existing === null ? { area, audience, description } : null };
 };
 
 export interface NewDocument {
@@ -339,7 +346,8 @@ export class KnowledgeService {
 
   /**
    * `submit_learning`: records an agent's learning as an open KB item (`s<board>k<n>`) for admins
-   * to review. Capture only: nothing reaches the knowledge base until it is approved.
+   * to review. Capture only: the pipeline (`KbPipeline`) routes and deduplicates it in the
+   * background, and nothing reaches the knowledge base until it is approved.
    */
   async submitLearning(email: string, boardId: number, learning: NewLearning): Promise<Result<{ id: string }>> {
     const statement = learning.statement.trim();
@@ -373,6 +381,11 @@ export class KnowledgeService {
         sourceGlobIds.push(glob.id);
       }
       const id = formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
+      // Document proposals already name their target, so the pipeline has nothing to route.
+      const routed =
+        document === null
+          ? UNPROCESSED
+          : { ...UNPROCESSED, processing: 'routed' as const, target: await documentTarget(tx, boardId, document) };
       const inserted = await tx.insertKbItem({
         id,
         boardId,
@@ -391,6 +404,7 @@ export class KnowledgeService {
         decisionReason: null,
         document,
         outcome: null,
+        ...routed,
         version: 1,
       });
       // The counter is atomic, so a clash means the counter and the table disagree.
@@ -471,7 +485,10 @@ export class KnowledgeService {
     return this.decide(email, itemId, version, () => Promise.resolve(ok({ reason: trimmed })));
   }
 
-  /** A decision: the item exists, the caller is an admin of its board, it is unchanged since read and still open. */
+  /**
+   * A decision: the item exists, the caller is an admin of its board, it is unchanged since read
+   * and still open (items the pipeline closed as merged, suppressed or covered can't be decided).
+   */
   private async decide(
     email: string,
     itemId: string,

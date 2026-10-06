@@ -4,6 +4,7 @@ import { GlobService } from '../src/app/glob-service.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { Approval, NewLearning } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
+import { UNPROCESSED } from '../src/domain/kb.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -122,6 +123,7 @@ describe('submit_learning', () => {
       decisionReason: null,
       document: null,
       outcome: null,
+      ...UNPROCESSED,
       version: 1,
     });
     const open = await store.transaction((tx) => tx.listKbItems(boardId, 'open'));

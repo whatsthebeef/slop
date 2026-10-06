@@ -119,7 +119,7 @@ export const mountKnowledge = (
   app.get('/api/boards/:b/kb/proposals', async (c) => {
     const status = c.req.query('status');
     const parsed = z.enum(KB_ITEM_STATUSES).optional().safeParse(status === '' ? undefined : status);
-    if (!parsed.success) return c.json({ code: 'invalid_input', message: 'status is open, approved or rejected' }, 422);
+    if (!parsed.success) return c.json({ code: 'invalid_input', message: `status is one of ${KB_ITEM_STATUSES.join(', ')}` }, 422);
     return send(c, await knowledge.proposals(c.get('email'), Number(c.req.param('b')), parsed.data));
   });
 

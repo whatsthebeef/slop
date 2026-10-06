@@ -5,6 +5,7 @@ import { CATEGORIES, SLOP_TYPES } from '../domain/types.js';
 import type { Category, Environment, SlopType } from '../domain/types.js';
 import type { Store } from '../ports.js';
 import { memberOf } from './access.js';
+import { field, parseJson, text } from './llm-json.js';
 
 /** The LLM port: a single completion. The adapter chooses the model (Haiku for intake). */
 export interface Llm {
@@ -50,25 +51,6 @@ Respond with one JSON object and nothing else:
 - autoTrigger: true only if the request explicitly says to start the work immediately or to let an agent implement it now. Then autoTriggerQuote is the exact words from the request that say so; otherwise null.`;
 
 const normalise = (s: string) => s.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
-
-const parseJson = (text: string): unknown => {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-};
-
-const field = (value: unknown, key: string): unknown => {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const found: unknown = Object.getOwnPropertyDescriptor(value, key)?.value;
-  return found;
-};
-
-const text = (value: unknown): string | null => (typeof value === 'string' ? value : null);
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 

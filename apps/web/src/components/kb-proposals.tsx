@@ -1,5 +1,5 @@
 import { agentSetKind } from '@slop/core';
-import type { Approval, KbItem, KnowledgeKind, ProposedDocument } from '@slop/core';
+import type { Approval, KbItem, KbTarget, KnowledgeKind, ProposedDocument } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -19,7 +19,25 @@ const message = (error: unknown) => (error instanceof RequestError ? error.body.
 /** A document is `doc:<name>`, an agent-set file `<kind>:<path>`, so one select can list both. */
 const targetKey = (kind: KnowledgeKind, name: string) => `${kind}:${name}`;
 
+const targetText = (target: KbTarget): string => {
+  if (target.newDocument !== null) return `new document ${target.name} (area ${target.newDocument.area})`;
+  const where = target.kind === 'doc' ? `document ${target.name}` : `${target.name} (board rules)`;
+  return target.section === null ? where : `${where} § ${target.section}`;
+};
+
+/** Items the pipeline closed without a decision: they leave the open queue but keep their links. */
+const CLOSED_BY_PIPELINE: readonly KbItem['status'][] = ['merged', 'suppressed', 'covered'];
+
 const outcomeText = (item: KbItem): string => {
+  if (item.status === 'merged') return `Merged into ${item.duplicateOf ?? '?'} (a near-duplicate)`;
+  if (item.status === 'suppressed') return `Suppressed: matches rejected ${item.suppressedBy ?? '?'}`;
+  if (item.status === 'covered') {
+    const by = item.coveredBy;
+    if (by === null) return 'Already covered';
+    return by.kind === 'item'
+      ? `Already covered by approved ${by.id}`
+      : `Already covered by ${by.knowledgeKind === 'doc' ? 'document ' : ''}${by.name}${by.section === null ? '' : ` § ${by.section}`}`;
+  }
   if (item.status === 'rejected') return `Rejected: ${item.decisionReason ?? ''}`;
   if (item.outcome?.kind === 'applied') return `Applied to ${item.outcome.name} (v${item.outcome.version})`;
   return 'Approved as a learning';
@@ -111,6 +129,72 @@ const DocumentComparison = ({
   );
 };
 
+/** What the background pipeline found: routing state, target, catalog flag, repeats and contradictions. */
+const PipelineInfo = ({ item }: { item: KbItem }) => {
+  const routing = item.status === 'open' && item.processing === 'pending';
+  return (
+    <div className='grid gap-1 text-xs' data-testid='pipeline-info'>
+      <div className='flex flex-wrap items-center gap-2'>
+        {routing && (
+          <span className='text-muted-foreground'>
+            Routing…{item.processingError !== null && ` (retrying after: ${item.processingError})`}
+          </span>
+        )}
+        {item.processing === 'failed' && (
+          <span className='rounded-md border border-required-border bg-red-soft/15 px-1.5'>
+            Routing failed: {item.processingError ?? 'unknown error'}
+          </span>
+        )}
+        {item.target !== null && (
+          <span>
+            <span className='font-medium'>Target: </span>
+            {targetText(item.target)}
+          </span>
+        )}
+        {item.occurrenceCount > 1 && (
+          <span className='rounded bg-muted px-1.5' title='Near-duplicates folded into this item'>
+            seen {item.occurrenceCount}×
+          </span>
+        )}
+        {item.catalogCandidate && (
+          <span className='rounded bg-muted px-1.5 font-medium' title={item.catalogReason ?? undefined}>
+            catalog candidate
+          </span>
+        )}
+      </div>
+      {item.catalogCandidate && item.catalogReason !== null && (
+        <span className='text-muted-foreground'>Holds for any project: {item.catalogReason}</span>
+      )}
+      {item.contradicts.length > 0 && (
+        <div className='rounded-md border border-required-border bg-red-soft/15 p-2' data-testid='contradictions'>
+          <span className='font-medium'>Contradicts:</span>
+          <ul className='ml-4 list-disc'>
+            {item.contradicts.map((c) => (
+              <li key={`${c.kind}:${c.ref}`}>
+                {c.ref}
+                {c.note !== '' && ` — ${c.note}`}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {item.extraEvidence.length > 0 && (
+        <details>
+          <summary className='cursor-pointer text-muted-foreground'>More evidence ({item.extraEvidence.length})</summary>
+          <ul className='mt-1 ml-4 list-disc'>
+            {item.extraEvidence.map((e) => (
+              <li key={e.itemId} className='whitespace-pre-wrap'>
+                {e.itemId}
+                {e.globIds.length > 0 && ` (${e.globIds.join(', ')})`}: {e.evidence}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+};
+
 const ProposalCard = ({
   boardId,
   item,
@@ -151,6 +235,7 @@ const ProposalCard = ({
         {item.suggestedTarget !== null && <>Suggested target: {item.suggestedTarget} · </>}
         {item.sourceGlobIds.length > 0 ? `From ${item.sourceGlobIds.join(', ')}` : 'No source glob'}
       </p>
+      <PipelineInfo item={item} />
       {item.document !== null && (
         <div className='grid gap-1 text-xs'>
           <span>
@@ -178,7 +263,12 @@ const ProposalCard = ({
       )}
       {!open && (
         <p className='text-xs'>
-          {outcomeText(item)} <span className='text-muted-foreground'>· {item.decidedBy} · {when(item.decidedAt)}</span>
+          {outcomeText(item)}{' '}
+          {item.decidedBy !== null && (
+            <span className='text-muted-foreground'>
+              · {item.decidedBy} · {when(item.decidedAt)}
+            </span>
+          )}
         </p>
       )}
       {open && admin && (
@@ -413,12 +503,19 @@ export const KbProposals = ({
   documents: readonly BoardDocument[];
   agentFiles: readonly string[];
 }) => {
-  const proposals = useQuery({ queryKey: ['kb-proposals', boardId], queryFn: () => api.proposals(boardId) });
+  const proposals = useQuery({
+    queryKey: ['kb-proposals', boardId],
+    queryFn: () => api.proposals(boardId),
+    // Routing runs in the background: poll while any item waits for it.
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((i) => i.status === 'open' && i.processing === 'pending') ? 5_000 : false,
+  });
   const [deciding, setDeciding] = useState<{ item: KbItem; decision: Decision } | null>(null);
 
   const items = proposals.data ?? [];
   const open = items.filter((i) => i.status === 'open');
-  const decided = items.filter((i) => i.status !== 'open').reverse();
+  const decided = items.filter((i) => i.status === 'approved' || i.status === 'rejected').reverse();
+  const closed = items.filter((i) => CLOSED_BY_PIPELINE.includes(i.status)).reverse();
   // Only open proposals can still replace a document; decided ones already did.
   const existingFor = (item: KbItem) =>
     item.status === 'open' && item.document !== null ? (documents.find((d) => d.name === item.document?.name) ?? null) : null;
@@ -434,7 +531,8 @@ export const KbProposals = ({
     <section className='grid gap-2' data-testid='kb-proposals'>
       <h2 className='text-sm font-semibold'>Proposals</h2>
       <p className='text-xs text-muted-foreground'>
-        Learnings and documents submitted by agents. Nothing reaches the knowledge base or the agent set until an admin approves it.
+        Learnings and documents submitted by agents, routed to a target and checked for repeats in the background. Nothing
+        reaches the knowledge base or the agent set until an admin approves it.
       </p>
       {proposals.isPending && <p className='text-sm text-muted-foreground'>Loading…</p>}
       {proposals.data !== undefined && open.length === 0 && <p className='text-sm text-muted-foreground'>No open proposals.</p>}
@@ -453,6 +551,18 @@ export const KbProposals = ({
           <summary className='cursor-pointer text-xs text-muted-foreground'>Decided ({decided.length})</summary>
           <div className='mt-2 grid gap-2'>
             {decided.map((item) => (
+              <ProposalCard key={item.id} boardId={boardId} item={item} existing={null} admin={admin} onDecide={() => undefined} />
+            ))}
+          </div>
+        </details>
+      )}
+      {closed.length > 0 && (
+        <details className='text-sm' data-testid='kb-closed'>
+          <summary className='cursor-pointer text-xs text-muted-foreground'>
+            Merged, suppressed or already covered ({closed.length})
+          </summary>
+          <div className='mt-2 grid gap-2'>
+            {closed.map((item) => (
               <ProposalCard key={item.id} boardId={boardId} item={item} existing={null} admin={admin} onDecide={() => undefined} />
             ))}
           </div>

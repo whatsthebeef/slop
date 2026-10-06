@@ -1,6 +1,6 @@
 import type { Artifact, ArtifactSummary, Board, Deploy, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, DEPLOY_STATES, DEPLOY_TRIGGERS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES } from '@slop/core';
-import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
+import { ARTIFACT_KINDS, DEPLOY_STATES, DEPLOY_TRIGGERS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES } from '@slop/core';
+import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type { PostgresJsDatabase, PostgresJsQueryResultHKT } from 'drizzle-orm/postgres-js';
@@ -93,8 +93,38 @@ const toKbItem = (row: typeof schema.kbProposals.$inferSelect): KbItem => ({
   status: oneOf(KB_ITEM_STATUSES, row.status),
   type: oneOf(LEARNING_TYPES, row.type),
   source: oneOf(KB_ITEM_SOURCES, row.source),
+  processing: oneOf(KB_PROCESSING_STATES, row.processing),
   createdAt: row.createdAt.toISOString(),
   decidedAt: row.decidedAt?.toISOString() ?? null,
+  processAfter: row.processAfter?.toISOString() ?? null,
+});
+
+/** The columns a KB item writes (everything but its ID, board and creation, which never change). */
+const kbItemColumns = (item: KbItem) => ({
+  status: item.status,
+  statement: item.statement,
+  sourceGlobIds: [...item.sourceGlobIds],
+  decidedBy: item.decidedBy,
+  decidedAt: item.decidedAt === null ? null : new Date(item.decidedAt),
+  decisionReason: item.decisionReason,
+  outcome: item.outcome,
+  processing: item.processing,
+  processingError: item.processingError,
+  processingAttempts: item.processingAttempts,
+  processAfter: item.processAfter === null ? null : new Date(item.processAfter),
+  target: item.target,
+  catalogCandidate: item.catalogCandidate,
+  catalogReason: item.catalogReason,
+  occurrenceCount: item.occurrenceCount,
+  extraEvidence: [...item.extraEvidence],
+  duplicateOf: item.duplicateOf,
+  suppressedBy: item.suppressedBy,
+  coveredBy: item.coveredBy,
+  contradicts: [...item.contradicts],
+  draft: item.draft,
+  draftedAgainstVersion: item.draftedAgainstVersion,
+  rationale: item.rationale,
+  version: item.version,
 });
 
 const globColumns = (glob: Glob) => ({
@@ -369,12 +399,7 @@ export class PgStore implements Store {
       insertKbItem: async (item) => {
         const rows = await t
           .insert(schema.kbProposals)
-          .values({
-            ...item,
-            sourceGlobIds: [...item.sourceGlobIds],
-            createdAt: new Date(item.createdAt),
-            decidedAt: item.decidedAt === null ? null : new Date(item.decidedAt),
-          })
+          .values({ ...item, ...kbItemColumns(item), createdAt: new Date(item.createdAt) })
           .onConflictDoNothing()
           .returning({ id: schema.kbProposals.id });
         return rows.length === 1;
@@ -393,19 +418,25 @@ export class PgStore implements Store {
           .orderBy(asc(schema.kbProposals.createdAt), asc(schema.kbProposals.id));
         return rows.map(toKbItem);
       },
+      nextPendingKbItem: async (now) => {
+        const [row] = await t
+          .select()
+          .from(schema.kbProposals)
+          .where(
+            and(
+              eq(schema.kbProposals.status, 'open'),
+              eq(schema.kbProposals.processing, 'pending'),
+              or(isNull(schema.kbProposals.processAfter), lte(schema.kbProposals.processAfter, new Date(now))),
+            ),
+          )
+          .orderBy(asc(schema.kbProposals.createdAt), asc(schema.kbProposals.id))
+          .limit(1);
+        return row === undefined ? null : toKbItem(row);
+      },
       updateKbItem: async (item, expectedVersion) => {
         const rows = await t
           .update(schema.kbProposals)
-          .set({
-            status: item.status,
-            statement: item.statement,
-            sourceGlobIds: [...item.sourceGlobIds],
-            decidedBy: item.decidedBy,
-            decidedAt: item.decidedAt === null ? null : new Date(item.decidedAt),
-            decisionReason: item.decisionReason,
-            outcome: item.outcome,
-            version: item.version,
-          })
+          .set(kbItemColumns(item))
           .where(and(eq(schema.kbProposals.id, item.id), eq(schema.kbProposals.version, expectedVersion)))
           .returning({ id: schema.kbProposals.id });
         return rows.length === 1;
