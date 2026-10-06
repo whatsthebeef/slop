@@ -44,6 +44,8 @@ export class DeployTargetStack extends Stack {
       props.target.kind === 'new' ? [this.createProject(props.target)] : [...props.target.projectNames];
     if (projectNames.length === 0) throw new Error('A deploy target needs at least one CodeBuild project');
     this.reportBuilds(projectNames, props.webhookUrl);
+    // A new-project stack keeps the output name it was first deployed with.
+    new CfnOutput(this, props.target.kind === 'new' ? 'ProjectName' : 'ProjectNames', { value: projectNames.join(',') });
   }
 
   /** The CodeBuild project that runs `.sstor/deploy.sh`; returns its name. */
@@ -91,9 +93,8 @@ export class DeployTargetStack extends Stack {
 
   /** Sends the projects' build state changes to slop's `/webhooks/aws`. */
   private reportBuilds(projectNames: readonly string[], webhookUrl: string): void {
-
     const key = new Secret(this, 'WebhookKey', {
-      description: `Key EventBridge sends to slop's /webhooks/aws for ${projectNames.join(', ')}`,
+      description: `Key EventBridge sends to slop's /webhooks/aws for ${projectNames.join(', ')}`.slice(0, 500),
       generateSecretString: { excludePunctuation: true, passwordLength: 40 },
     });
     const connection = new Connection(this, 'SlopConnection', {
@@ -107,7 +108,8 @@ export class DeployTargetStack extends Stack {
       rateLimitPerSecond: 5,
     });
     new Rule(this, 'BuildResults', {
-      description: `${projectNames.join(', ')} build state changes to slop`,
+      // EventBridge caps descriptions at 512 characters, so long project lists are cut short.
+      description: `${projectNames.join(', ')} build state changes to slop`.slice(0, 500),
       eventPattern: {
         source: ['aws.codebuild'],
         detailType: ['CodeBuild Build State Change'],
@@ -116,7 +118,6 @@ export class DeployTargetStack extends Stack {
       targets: [new ApiDestinationTarget(destination)],
     });
 
-    new CfnOutput(this, 'ProjectNames', { value: projectNames.join(',') });
     new CfnOutput(this, 'WebhookKeySecretArn', { value: key.secretArn });
   }
 }

@@ -49,6 +49,9 @@ const required = (key: string): string => {
 };
 const deployTargetRepo = contextValue('deployTargetRepo');
 const deployTargetProjects = contextValue('deployTargetProjects');
+if (deployTargetRepo !== undefined && deployTargetProjects !== undefined) {
+  throw new Error('Pass deployTargetRepo (a new project) or deployTargetProjects (existing projects), not both');
+}
 if (deployTargetRepo !== undefined || deployTargetProjects !== undefined) {
   const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION ?? 'us-east-1' };
   if (deployTargetRepo !== undefined) {
@@ -59,10 +62,10 @@ if (deployTargetRepo !== undefined || deployTargetProjects !== undefined) {
       webhookUrl: required('deployTargetWebhookUrl'),
       tags: { project: 'slop', stage },
     });
-  } else if (deployTargetProjects !== undefined) {
+  } else {
     new DeployTargetStack(app, `slop-${stage}-deploy-${required('deployTargetName')}`, {
       env,
-      target: { kind: 'existing', projectNames: deployTargetProjects.split(',').map((p) => p.trim()).filter((p) => p !== '') },
+      target: { kind: 'existing', projectNames: (deployTargetProjects ?? '').split(',').map((p) => p.trim()).filter((p) => p !== '') },
       webhookUrl: required('deployTargetWebhookUrl'),
       tags: { project: 'slop', stage },
     });
