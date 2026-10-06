@@ -152,6 +152,10 @@ export class GlobService {
     return this.command(email, id, version, (glob, ctx) => machine.retrigger(glob, ctx));
   }
 
+  resolveConflict(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.resolveConflict(glob, ctx));
+  }
+
   startAgain(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx) => machine.startAgain(glob, ctx));
   }

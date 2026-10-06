@@ -62,7 +62,9 @@ export interface CodeHost {
   /** A file's text on a branch, or null when the file (or branch) doesn't exist. */
   readFile(repo: Repo, ref: string, path: string): Promise<string | null>;
   /** Marks a draft PR ready for review. */
-  markReady(repo: Repo, prNumber: number): Promise<void>;
+  markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }>;
+  /** Files changed on both the PR's branch and the base branch since they diverged: where a conflict can be. Best effort; empty when unknown. */
+  conflictFiles(repo: Repo, prNumber: number): Promise<string[]>;
   /** Lines changed and files touched between the base branch and `sha`. */
   diffSummary(repo: Repo, sha: string): Promise<DiffSummary>;
   /** Squash-merges at exactly `sha` as `<id>: <title>`, or updates a branch that is behind. */

@@ -136,6 +136,7 @@ export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'cat
 export type ActionPath =
   | 'start'
   | 'retrigger'
+  | 'resolve-conflict'
   | 'pick-up'
   | 'take-over'
   | 'start-again'
@@ -224,6 +225,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   pick_up: 'pick-up',
   take_over: 'take-over',
   retrigger: 'retrigger',
+  resolve_conflict: 'resolve-conflict',
   start_again: 'start-again',
   merge: 'merge',
   merge_continue: 'merge-continue',
@@ -236,6 +238,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   pick_up: 'Pick up',
   take_over: 'Take over',
   retrigger: 'Re-trigger',
+  resolve_conflict: 'Resolve conflict',
   start_again: 'Start again',
   merge: 'Merge',
   merge_continue: 'Merge and continue',
