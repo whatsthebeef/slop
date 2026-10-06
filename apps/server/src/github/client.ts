@@ -328,6 +328,19 @@ export class GitHub implements CodeHost {
     }
   }
 
+  async commentOnce(repo: Repo, prNumber: number, marker: string, body: string): Promise<'posted' | 'exists'> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name, issue_number: prNumber };
+    // Comments come oldest first; a marker is looked for in the first thousand.
+    for (let page = 1; page <= 10; page++) {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', { ...r, per_page: 100, page });
+      if (data.some((c) => c.body?.includes(marker) === true)) return 'exists';
+      if (data.length < 100) break;
+    }
+    await gh.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', { ...r, body });
+    return 'posted';
+  }
+
   async diffSummary(repo: Repo, sha: string): Promise<DiffSummary> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/compare/{basehead}', {

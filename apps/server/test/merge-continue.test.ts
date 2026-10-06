@@ -48,6 +48,7 @@ class FakeHost implements CodeHost {
   completedCheckRun = () => Promise.resolve(null);
   markReady = () => Promise.resolve({ wasDraft: true, sha: HEAD });
   conflictFiles = () => Promise.resolve([] as string[]);
+  commentOnce = () => Promise.resolve('posted' as const);
   diffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
   readFile = () => Promise.resolve(null);
   squashMerge = () => Promise.resolve(this.mergeResult);
