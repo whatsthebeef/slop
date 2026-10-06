@@ -38,6 +38,7 @@ const host: CodeHost = {
   deleteBranch: unused,
   reopenPr: unused,
   mergeState: unused,
+  conflictFiles: unused,
   completedCheckRun: unused,
   readFile: unused,
   markReady: unused,
