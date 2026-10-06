@@ -96,7 +96,7 @@ const Column = ({
   ghost: Preview | null;
 }) => (
   <section
-    className='list-well flex min-h-40 min-w-64 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2'
+    className='list-well flex min-h-full min-w-64 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2'
     aria-label={LIST_TITLES[list]}
     data-testid={`list-${list}`}
   >
@@ -375,7 +375,7 @@ export const BoardPage = () => {
         ref={(el) => {
           motion.container.current = el;
         }}
-        className='flex flex-1 gap-3 overflow-x-auto px-5 py-4'
+        className='flex flex-1 items-start gap-3 overflow-auto px-5 py-4'
       >
         {LISTS.map((list) => {
           const items = visible
