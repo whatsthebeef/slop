@@ -90,7 +90,8 @@ describe('KB pipeline in Postgres', () => {
   };
 
   /** Marks every pending item routed so each test starts with an empty queue. */
-  const clearQueue = () => database.db.execute(sql`update kb_proposals set processing = 'routed' where processing = 'pending'`);
+  const clearQueue = () =>
+    database.db.execute(sql`update kb_proposals set processing = 'drafted' where processing in ('pending', 'routed')`);
 
   it('round-trips the pipeline columns', async () => {
     const id = await submit('Generated files live in src/gen/');
@@ -132,9 +133,9 @@ describe('KB pipeline in Postgres', () => {
     expect(await get(id)).toEqual(updated);
   });
 
-  it('finds the oldest open pending item that is due', async () => {
+  it('finds the oldest open item that is due for routing or drafting', async () => {
     await clearQueue();
-    expect(await store.transaction((tx) => tx.nextPendingKbItem(now))).toBeNull();
+    expect(await store.transaction((tx) => tx.nextKbItemToProcess(now))).toBeNull();
     const first = await submit('First');
     const second = await submit('Second');
     const third = await submit('Third');
@@ -143,8 +144,19 @@ describe('KB pipeline in Postgres', () => {
       tx.updateKbItem({ ...held, processAfter: '2026-10-05T12:01:00.000Z', version: held.version + 1 }, held.version),
     );
     unwrap(await knowledge.reject(ADMIN, second, (await get(second)).version, 'No'));
-    expect((await store.transaction((tx) => tx.nextPendingKbItem(now)))?.id).toBe(third);
-    expect((await store.transaction((tx) => tx.nextPendingKbItem('2026-10-05T12:01:00.000Z')))?.id).toBe(first);
+    expect((await store.transaction((tx) => tx.nextKbItemToProcess(now)))?.id).toBe(third);
+    expect((await store.transaction((tx) => tx.nextKbItemToProcess('2026-10-05T12:01:00.000Z')))?.id).toBe(first);
+    // Routed items wait for their draft; drafted and failed ones wait for nothing.
+    const routed = await get(third);
+    await store.transaction((tx) =>
+      tx.updateKbItem({ ...routed, processing: 'routed', version: routed.version + 1 }, routed.version),
+    );
+    expect((await store.transaction((tx) => tx.nextKbItemToProcess(now)))?.id).toBe(third);
+    for (const processing of ['drafted', 'failed'] as const) {
+      const current = await get(third);
+      await store.transaction((tx) => tx.updateKbItem({ ...current, processing, version: current.version + 1 }, current.version));
+      expect(await store.transaction((tx) => tx.nextKbItemToProcess(now))).toBeNull();
+    }
   });
 
   it('lets only one of two concurrent workers claim an item, and merges a near-duplicate with conditional writes', async () => {
@@ -171,9 +183,46 @@ describe('KB pipeline in Postgres', () => {
     const second = await submit('Use the dot reporter for vitest');
     const answers = [NEW_DOC, JSON.stringify({ duplicateOf: first })];
     const dedupe: Llm = { complete: () => Promise.resolve(answers.shift() ?? '') };
-    await new KbPipeline({ store, clock, catalog, notifier, route: dedupe, draft: dedupe }).processNext();
+    await new KbPipeline({ store, clock, catalog, notifier, route: dedupe, draft: dedupe }).process(second);
     expect(await get(second)).toMatchObject({ status: 'merged', duplicateOf: first });
     expect(await get(first)).toMatchObject({ status: 'open', occurrenceCount: 2, extraEvidence: [{ itemId: second }] });
+  });
+
+  it('drafts routed items, applies a draft in one click and re-queues another draft on the same document', async () => {
+    await clearQueue();
+    unwrap(
+      await knowledge.importDocuments(
+        ADMIN,
+        boardId,
+        [{ fileName: 'build.md', content: '---\narea: build\ndescription: Build\n---\n# Build\n\n## Test\n\nRun vitest.\n' }],
+        'upload',
+      ),
+    );
+    const target = { kind: 'doc' as const, name: 'build', section: 'Test' };
+    const first = await submit('Use the dot reporter');
+    const second = await submit('Use --run in CI');
+    for (const id of [first, second]) unwrap(await knowledge.changeTarget(ADMIN, id, (await get(id)).version, target));
+    const answers = [
+      JSON.stringify({ section: 'Test', content: '## Test\n\nRun vitest --reporter=dot.', rationale: 'Quiet' }),
+      JSON.stringify({ section: 'Test', content: '## Test\n\nRun vitest --run.', rationale: 'CI' }),
+    ];
+    const draft: Llm = { complete: () => Promise.resolve(answers.shift() ?? '') };
+    const pipeline = new KbPipeline({ store, clock, catalog, notifier, route: draft, draft });
+    expect(await pipeline.processNext()).toBe(first);
+    expect(await pipeline.processNext()).toBe(second);
+    expect(await get(first)).toMatchObject({
+      processing: 'drafted',
+      draft: { section: 'Test', content: '## Test\n\nRun vitest --reporter=dot.' },
+      draftedAgainstVersion: 1,
+      rationale: 'Quiet',
+    });
+    const preview = unwrap(await knowledge.proposals(DEV, boardId, 'open')).find((i) => i.id === first)?.preview;
+    expect(preview?.diff).toContainEqual({ op: 'added', text: 'Run vitest --reporter=dot.' });
+
+    unwrap(await knowledge.approve(ADMIN, first, (await get(first)).version, { as: 'draft' }));
+    const doc = await store.transaction((tx) => tx.getKnowledge(boardId, 'doc', 'build'));
+    expect(doc).toMatchObject({ area: 'build', content: '# Build\n\n## Test\n\nRun vitest --reporter=dot.\n', version: 2 });
+    expect(await get(second)).toMatchObject({ status: 'open', processing: 'routed', draft: null, draftedAgainstVersion: null });
   });
 
   it('migration 0013 marks decided items routed and leaves open ones pending for the job; re-running is harmless', async () => {

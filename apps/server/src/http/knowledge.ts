@@ -28,7 +28,32 @@ const approvalSchema = z.discriminatedUnion('as', [
     statement: z.string().max(4000).optional(),
   }),
   z.object({ as: z.literal('document'), version, content: z.string().min(1).max(500_000).optional() }),
+  z.object({
+    as: z.literal('draft'),
+    version,
+    content: z.string().min(1).max(500_000).optional(),
+    section: z.string().max(400).nullable().optional(),
+    statement: z.string().max(4000).optional(),
+  }),
 ]);
+
+/** An admin's new target for a KB item (see `TargetChange` in core). */
+const targetSchema = z.object({
+  version,
+  target: z.object({
+    kind: z.enum(KNOWLEDGE_KINDS),
+    name: z.string().min(1).max(400),
+    section: z.string().max(400).nullable(),
+    newDocument: z
+      .object({
+        area: z.string().min(1).max(200),
+        audience: z.array(z.string().min(1).max(100)).max(50),
+        description: z.string().min(1).max(1000),
+      })
+      .nullable()
+      .optional(),
+  }),
+});
 
 const parse = async <S extends z.ZodType>(c: Context<Env>, schema: S): Promise<z.infer<S> | Response> => {
   const body: unknown = await c.req.json().catch(() => ({}));
@@ -127,6 +152,13 @@ export const mountKnowledge = (
     const body = await parse(c, approvalSchema);
     if (body instanceof Response) return body;
     return send(c, await knowledge.approve(c.get('email'), c.req.param('itemId'), body.version, body));
+  });
+
+  // Admins point an item at another target; it is drafted again against it.
+  app.post('/api/kb/:itemId/target', async (c) => {
+    const body = await parse(c, targetSchema);
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.changeTarget(c.get('email'), c.req.param('itemId'), body.version, body.target));
   });
 
   app.post('/api/kb/:itemId/reject', async (c) => {

@@ -14,6 +14,7 @@ import type {
   Glob,
   KbItem,
   KbItemStatus,
+  KbItemView,
   LabelCommand,
   LabelName,
   List,
@@ -21,6 +22,7 @@ import type {
   Role,
   Run,
   SlopType,
+  TargetChange,
 } from '@slop/core';
 
 export interface GlobView extends Glob {
@@ -209,9 +211,11 @@ export const api = {
   useCatalogVersion: (boardId: number, path: string, overlay = '') =>
     request<{ version: number }>('POST', `/api/boards/${boardId}/kb/agent-set/use-catalog`, { path, overlay }),
   proposals: (boardId: number, status?: KbItemStatus) =>
-    request<KbItem[]>('GET', `/api/boards/${boardId}/kb/proposals${status === undefined ? '' : `?status=${status}`}`),
+    request<KbItemView[]>('GET', `/api/boards/${boardId}/kb/proposals${status === undefined ? '' : `?status=${status}`}`),
   approveProposal: (id: string, version: number, approval: Approval) =>
     request<KbItem>('POST', `/api/kb/${id}/approve`, { ...approval, version }),
+  changeProposalTarget: (id: string, version: number, target: TargetChange) =>
+    request<KbItem>('POST', `/api/kb/${id}/target`, { version, target }),
   rejectProposal: (id: string, version: number, reason: string) =>
     request<KbItem>('POST', `/api/kb/${id}/reject`, { version, reason }),
   plan: (id: string) =>

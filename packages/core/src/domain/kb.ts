@@ -1,3 +1,4 @@
+import type { ContextDiffLine } from './agent-set.js';
 import type { KnowledgeKind } from './knowledge.js';
 
 /**
@@ -17,8 +18,10 @@ export type KbItemStatus = (typeof KB_ITEM_STATUSES)[number];
 
 /**
  * Where the background pipeline is with an item: waiting to be routed and deduplicated
- * (`pending`), routed, drafted (step 3), or given up on after repeated LLM failures (`failed`;
- * the item stays open and can still be decided by hand).
+ * (`pending`), routed and waiting for its draft (`routed`), drafted, or given up on after repeated
+ * LLM failures (`failed`: routing failed when it has no target, drafting failed when it has one;
+ * the item stays open and can still be decided by hand). A drafted item whose target changes goes
+ * back to `routed` to be drafted again.
  */
 export const KB_PROCESSING_STATES = ['pending', 'routed', 'drafted', 'failed'] as const;
 export type KbProcessing = (typeof KB_PROCESSING_STATES)[number];
@@ -63,10 +66,31 @@ export interface KbContradiction {
   readonly note: string;
 }
 
-/** A drafted change (step 3): one section's new text, or a whole new document. */
+/**
+ * A drafted change: the new text of one section of the target (`section` is the heading it
+ * replaces, or null to append `content` as a new section), or a new document's whole body. For an
+ * agent-set file the target text is the board's layer (its overlay, or the whole file it owns).
+ */
 export interface KbDraft {
   readonly section: string | null;
   readonly content: string;
+}
+
+/**
+ * What approving an item's draft would change, computed against the target's current text: the
+ * line diff with context, and whether the target moved since the draft was made (`stale`; the
+ * draft is then redone before it can be approved).
+ */
+export interface DraftPreview {
+  /** The target's current version (0: the document or overlay doesn't exist yet). */
+  readonly version: number;
+  readonly stale: boolean;
+  readonly diff: readonly ContextDiffLine[];
+}
+
+/** A KB item as the Knowledge page lists it: open drafted items carry their preview. */
+export interface KbItemView extends KbItem {
+  readonly preview: DraftPreview | null;
 }
 
 /** `submitted` by an agent through `submit_learning`; `mined` from signals by slop's jobs (later). */
@@ -97,9 +121,9 @@ export interface KbItem {
   /** Set when approved. */
   readonly outcome: KbOutcome | null;
   readonly processing: KbProcessing;
-  /** The last routing failure; set when `failed`. */
+  /** The last routing or drafting failure; set when `failed`, and while retrying. */
   readonly processingError: string | null;
-  /** Failed routing attempts so far. */
+  /** Failed attempts at the current stage (routing, then drafting). */
   readonly processingAttempts: number;
   /** A pending item isn't picked up before this (retry backoff, or a claimed item's lease). */
   readonly processAfter: string | null;
@@ -118,7 +142,7 @@ export interface KbItem {
   readonly coveredBy: KbCoverage | null;
   /** Open items that conflict with active knowledge or approved items. */
   readonly contradicts: readonly KbContradiction[];
-  /** Step 3: the drafted change, the target version it was drafted against, and why. */
+  /** The drafted change, the target version it was drafted against (0: none yet), and why, in one line. */
   readonly draft: KbDraft | null;
   readonly draftedAgainstVersion: number | null;
   readonly rationale: string | null;
@@ -192,3 +216,20 @@ export type KbOutcome =
       readonly name: string;
       readonly version: number;
     };
+
+/**
+ * The item with its draft cleared, back in the queue to be drafted again (its target changed, or
+ * an admin chose another target). Routing isn't repeated: the target stands.
+ */
+export const needsDraft = (item: KbItem, target: KbTarget | null = item.target): KbItem => ({
+  ...item,
+  target,
+  processing: 'routed',
+  processingError: null,
+  processingAttempts: 0,
+  processAfter: null,
+  draft: null,
+  draftedAgainstVersion: null,
+  rationale: null,
+  version: item.version + 1,
+});

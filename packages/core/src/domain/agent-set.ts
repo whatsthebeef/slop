@@ -239,3 +239,37 @@ export const lineDiff = (a: string, b: string): DiffLine[] => {
   for (const text of left.slice(endLeft)) out.push({ op: 'same', text });
   return out;
 };
+
+/** A diff line, or a run of unchanged lines left out of a diff shown with context. */
+export type ContextDiffLine = DiffLine | { readonly op: 'skipped'; readonly count: number };
+
+/**
+ * A diff with only `context` unchanged lines around each change; longer unchanged runs become one
+ * `skipped` marker, so a small change to a long file stays small. Empty when nothing changed.
+ */
+export const contextDiff = (diff: readonly DiffLine[], context = 3): ContextDiffLine[] => {
+  const near = new Array<boolean>(diff.length).fill(false);
+  diff.forEach((line, index) => {
+    if (line.op === 'same') return;
+    for (let i = Math.max(0, index - context); i <= Math.min(diff.length - 1, index + context); i++) near[i] = true;
+  });
+  if (!near.includes(true)) return [];
+  const out: ContextDiffLine[] = [];
+  let run: DiffLine[] = [];
+  // A marker in place of a single line saves nothing, so that line is shown.
+  const flush = () => {
+    if (run.length === 1) out.push(...run);
+    else if (run.length > 1) out.push({ op: 'skipped', count: run.length });
+    run = [];
+  };
+  diff.forEach((line, index) => {
+    if (near[index] === true) {
+      flush();
+      out.push(line);
+    } else {
+      run.push(line);
+    }
+  });
+  flush();
+  return out;
+};

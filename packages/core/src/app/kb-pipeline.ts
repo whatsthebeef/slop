@@ -1,14 +1,15 @@
 import { composeAgentSet } from '../domain/agent-set.js';
-import type { KbContradiction, KbCoverage, KbItem, KbTarget, NewDocumentMeta } from '../domain/kb.js';
-import { agentSetKind, docName, isAgentSetKind, parseFrontmatter } from '../domain/knowledge.js';
+import type { KbContradiction, KbCoverage, KbDraft, KbItem, KbProcessing, KbTarget, NewDocumentMeta } from '../domain/kb.js';
+import { agentSetKind, docName, hasFrontmatter, isAgentSetKind, parseFrontmatter } from '../domain/knowledge.js';
 import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
-import { markdownHeadings, sectionText } from '../domain/sections.js';
+import { markdownHeadings, sectionText, withHeading } from '../domain/sections.js';
 import type { Catalog, Clock, Notifier, Store, Tx } from '../ports.js';
 import type { Llm } from './intake-service.js';
-import { documentTarget } from './knowledge-service.js';
+import { documentTarget, targetState } from './knowledge-service.js';
+import type { TargetState } from './knowledge-service.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 
-/** Routing failures (LLM errors or unusable answers) before an item is marked `failed`. */
+/** Failures at one stage (LLM errors or unusable answers) before an item is marked `failed`. */
 export const MAX_PROCESSING_ATTEMPTS = 3;
 /** How long a claimed item is held before another worker may take it (a crash mid-item retries after this). */
 const LEASE_MS = 5 * 60_000;
@@ -21,6 +22,8 @@ const backoffMs = (attempts: number) => 30_000 * 2 ** (attempts - 1);
 const CANDIDATE_CAP = 100;
 /** A target with no section is compared whole up to this many characters, then truncated. */
 const TARGET_TEXT_LIMIT = 8_000;
+/** Enough for a rewritten section or a whole new document. */
+const DRAFT_MAX_TOKENS = 8_000;
 
 export const ROUTE_SYSTEM = `You route one learning, submitted by a coding agent, to the place in a software project's knowledge base where it belongs.
 
@@ -51,6 +54,20 @@ Respond with one JSON object and nothing else:
 - coveredBy: an approved item that already says it ({"kind": "item", "id": ...}), or {"kind": "target"} when the current text already says it; otherwise null.
 - contradicts: open or approved items, or the current text, that the new learning conflicts with (both cannot be followed), each with a one-line note; [] if none. For the current text, ref is the heading it conflicts with, or "".
 "The same thing" means the same rule or fact, however it is worded; related but different learnings are not duplicates. Use IDs exactly as given.`;
+
+export const DRAFT_SYSTEM = `You draft one change to a software project's knowledge base: the edit that puts a reviewed learning, submitted by a coding agent, into the document or agent file it was routed to. An admin approves your draft as is or edits it first.
+
+Rules:
+- Change only what the learning requires. Keep the target's structure, headings, tone and formatting, and be concise: a bullet or a sentence or two is usually enough.
+- Rewrite one section: the existing heading the learning belongs under (you may choose a better heading in the same text than the one suggested), or add a new section when none fits.
+- For an agent file you change only the project's board rules. The catalog text is shown for context and is never changed; don't repeat what it already says. Board rules are appended under a "## Board rules" heading, so their sections use "###" headings.
+- For a new document, write the whole body (no frontmatter), starting with a "#" title, and don't overlap the existing documents listed.
+
+Respond with one JSON object and nothing else:
+{"section": string | null, "content": string, "rationale": string}
+- section: the existing heading (its text, without "#") whose section content replaces, or null to add content as a new section. Always null for a new document.
+- content: the full new text of that section, from its heading line through to the end of the section, including any subsections it keeps; for a new section, its heading line and body; for a new document, the whole body.
+- rationale: one line saying what the change does and why.`;
 
 const PLAIN_NAME = /^[\w.-]+$/;
 const SINGLE_LINE = /^[^\r\n]*$/;
@@ -90,6 +107,12 @@ interface Dedupe {
 
 const NO_MATCH: Dedupe = { suppressedBy: null, duplicateOf: null, coveredBy: null, contradicts: [] };
 
+interface Drafted {
+  readonly draft: KbDraft;
+  readonly target: KbTarget;
+  readonly rationale: string | null;
+}
+
 /** The item changed while it was processed (decided, or merged into); thrown so the writes roll back. */
 class StaleItem extends Error {
   constructor(id: string) {
@@ -123,8 +146,10 @@ const describeItem = (item: KbItem) => {
 /**
  * The KB pipeline (spec, self-improvement processing): a background job claims each newly
  * submitted item and, with one Haiku call each, routes it to a document or agent file and
- * deduplicates it against open, approved and rejected items and the target's current text.
- * Nothing reaches the knowledge base here; it only prepares items for an admin's decision.
+ * deduplicates it against open, approved and rejected items and the target's current text. Each
+ * routed item is then claimed again and drafted (one Sonnet call): the new text of one section of
+ * its target, or a whole new document. Nothing reaches the knowledge base here; it only prepares
+ * items for an admin's decision.
  */
 export class KbPipeline {
   constructor(
@@ -135,16 +160,16 @@ export class KbPipeline {
       notifier: Notifier;
       /** Haiku: routing and dedupe. */
       route: Llm;
-      /** Sonnet: drafting (step 3). */
+      /** Sonnet: drafting. */
       draft: Llm;
     },
   ) {}
 
-  /** Claims the oldest pending item and processes it; returns its ID, or null when none is due. */
+  /** Claims the oldest item due for routing or drafting and processes it; returns its ID, or null when none is due. */
   async processNext(): Promise<string | null> {
     for (let attempt = 0; attempt < 5; attempt++) {
       const now = this.deps.clock.now();
-      const next = await this.deps.store.transaction((tx) => tx.nextPendingKbItem(now));
+      const next = await this.deps.store.transaction((tx) => tx.nextKbItemToProcess(now));
       if (next === null) return null;
       const claimed = await this.claim(next.id);
       // Another worker took it first: look for the next one.
@@ -155,7 +180,7 @@ export class KbPipeline {
     return null;
   }
 
-  /** Claims one item, if it is still open and pending, and processes it. Returns whether it ran. */
+  /** Claims one item, if it is still open and waiting for routing or drafting, and processes it. Returns whether it ran. */
   async process(itemId: string): Promise<boolean> {
     const claimed = await this.claim(itemId);
     if (claimed === null) return false;
@@ -171,7 +196,7 @@ export class KbPipeline {
     const now = this.deps.clock.now();
     return this.deps.store.transaction(async (tx) => {
       const item = await tx.getKbItem(itemId);
-      if (item?.status !== 'open' || item.processing !== 'pending') return null;
+      if (item?.status !== 'open' || !(item.processing === 'pending' || item.processing === 'routed')) return null;
       if (item.processAfter !== null && item.processAfter > now) return null;
       const claimed: KbItem = { ...item, processAfter: this.later(now, LEASE_MS), version: item.version + 1 };
       return (await tx.updateKbItem(claimed, item.version)) ? claimed : null;
@@ -179,6 +204,10 @@ export class KbPipeline {
   }
 
   private async run(item: KbItem): Promise<void> {
+    if (item.processing === 'routed') {
+      await this.draft(item);
+      return;
+    }
     if (item.document !== null) {
       // A document proposal names its own target (items from before routing existed land here).
       const { document } = item;
@@ -190,8 +219,82 @@ export class KbPipeline {
     }
     const snapshot = await this.snapshot(item);
     const decided = await this.ask(item, snapshot);
-    if ('failure' in decided) await this.fail(item, decided.failure);
+    if ('failure' in decided) await this.fail(item, decided.failure, 'pending');
     else await this.finish(item, () => Promise.resolve(decided));
+  }
+
+  /**
+   * Drafts a routed item against its target's current text. A document proposal is its own draft,
+   * so it needs no call. If the target changes during the call, the item is released to be drafted again.
+   */
+  private async draft(item: KbItem): Promise<void> {
+    const { target } = item;
+    if (item.document !== null || target === null) {
+      // Document proposals (routed before drafting existed) are their own draft; an item with no
+      // target can't be drafted and is left for an admin to decide or retarget.
+      await this.write(item, (current) =>
+        current.document !== null
+          ? { ...current, processing: 'drafted', processAfter: null }
+          : { ...current, processing: 'failed', processingError: 'No target to draft against', processAfter: null },
+      );
+      return;
+    }
+    const catalog = await this.deps.catalog.agentSet();
+    const context = await this.deps.store.transaction(async (tx) => ({
+      state: await targetState(tx, catalog, item.boardId, target),
+      docs: target.newDocument === null ? [] : await tx.listKnowledge(item.boardId, ['doc']),
+    }));
+    const { state } = context;
+    if (state === null) {
+      await this.fail(item, `The target ${target.name} is no longer on the board`, 'routed');
+      return;
+    }
+    let drafted: Drafted | null;
+    try {
+      drafted = parseDraft(
+        await this.deps.draft.complete({
+          system: DRAFT_SYSTEM,
+          prompt: draftPrompt(item, target, state, context.docs),
+          maxTokens: DRAFT_MAX_TOKENS,
+        }),
+        target,
+        state,
+      );
+    } catch (error) {
+      await this.fail(item, error instanceof Error ? error.message : String(error), 'routed');
+      return;
+    }
+    if (drafted === null) {
+      await this.fail(item, 'The draft answer was not usable JSON', 'routed');
+      return;
+    }
+    const { draft, rationale } = drafted;
+    const wrote = await this.write(item, async (current, tx) => {
+      const now = await targetState(tx, catalog, item.boardId, target);
+      // The target moved during the call: release the item to be drafted against the new text.
+      if (now?.version !== state.version) return { ...current, processAfter: null };
+      return {
+        ...current,
+        target: drafted.target,
+        draft,
+        rationale,
+        draftedAgainstVersion: state.version,
+        processing: 'drafted',
+        processingError: null,
+        processingAttempts: 0,
+        processAfter: null,
+      };
+    });
+    if (wrote) this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
+  }
+
+  /** A conditional write of the claimed item; false when it changed meanwhile (decided, retargeted). */
+  private async write(item: KbItem, next: (current: KbItem, tx: Tx) => KbItem | Promise<KbItem>): Promise<boolean> {
+    return this.deps.store.transaction(async (tx) => {
+      const current = await tx.getKbItem(item.id);
+      if (current?.version !== item.version) return false;
+      return tx.updateKbItem({ ...(await next(current, tx)), version: current.version + 1 }, current.version);
+    });
   }
 
   /** The routing call, then the dedupe call against the routed target; a failure says why either went wrong. */
@@ -271,8 +374,10 @@ export class KbPipeline {
           target: routing.target,
           catalogCandidate: routing.catalogCandidate,
           catalogReason: routing.catalogReason,
-          processing: 'routed',
+          // A document proposal is its own draft.
+          processing: item.document === null ? 'routed' : 'drafted',
           processingError: null,
+          processingAttempts: 0,
           processAfter: null,
           version: current.version + 1,
         };
@@ -304,8 +409,11 @@ export class KbPipeline {
     this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
   }
 
-  /** Records a failed attempt: back off and retry, or give up after the last attempt (the item stays open). */
-  private async fail(item: KbItem, reason: string): Promise<void> {
+  /**
+   * Records a failed attempt at a stage (`retry`: the state to retry it from): back off and retry,
+   * or give up after the last attempt (the item stays open).
+   */
+  private async fail(item: KbItem, reason: string, retry: KbProcessing): Promise<void> {
     const now = this.deps.clock.now();
     const message = reason.slice(0, 500);
     const failed = await this.deps.store.transaction(async (tx) => {
@@ -317,7 +425,7 @@ export class KbPipeline {
         ...current,
         processingAttempts: attempts,
         processingError: message,
-        processing: last ? 'failed' : 'pending',
+        processing: last ? 'failed' : retry,
         processAfter: last ? null : this.later(now, backoffMs(attempts)),
         version: current.version + 1,
       };
@@ -477,5 +585,84 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget): Dedu
     duplicateOf: idIn(snapshot.open, field(parsed, 'duplicateOf')),
     coveredBy,
     contradicts,
+  };
+};
+
+const titled = (heading: string, text: string) => `${heading}\n<<<\n${text.trim() === '' ? '(empty)' : text}\n>>>`;
+
+/** What the drafter sees: the learning and its evidence, the target, and the target's full current text. */
+const draftPrompt = (item: KbItem, target: KbTarget, state: TargetState, docs: readonly KnowledgeDoc[]): string => {
+  const where = target.section === null ? 'no section chosen' : `section "${target.section}"`;
+  let targetLines: string[];
+  if (state.newDocument && target.newDocument !== null) {
+    const meta = target.newDocument;
+    targetLines = [
+      `Target: a new document "${target.name}" [area: ${meta.area}; for: ${meta.audience.join(', ') || '-'}] ${meta.description}`,
+      '',
+      "Existing documents (don't overlap them):",
+      ...(docs.length === 0 ? ['(none)'] : docs.map((d) => `- ${d.name} [area: ${d.area ?? '-'}] ${d.description}`)),
+    ];
+  } else if (target.kind === 'doc') {
+    targetLines = [
+      `Target: document ${target.name}, ${where}`,
+      '',
+      titled(`Current text of document ${target.name} (without its frontmatter):`, state.text),
+    ];
+  } else if (state.catalog !== null) {
+    targetLines = [
+      `Target: the board rules of agent file ${target.name}, ${where}`,
+      '',
+      titled(`Catalog text of ${target.name} (context only; never changed):`, state.catalog),
+      '',
+      titled(`Current board rules of ${target.name} (the text you change):`, state.text),
+    ];
+  } else {
+    targetLines = [
+      `Target: agent file ${target.name} (the project's own file), ${where}`,
+      '',
+      titled(`Current text of ${target.name}:`, state.text),
+    ];
+  }
+  return [
+    `Learning (${item.type}): ${item.statement}`,
+    `Evidence: ${item.evidence}`,
+    ...(item.extraEvidence.length === 0
+      ? []
+      : [
+          'More evidence (from near-duplicates):',
+          ...item.extraEvidence.map(
+            (e) => `- ${e.itemId}${e.globIds.length === 0 ? '' : ` (${e.globIds.join(', ')})`}: ${e.evidence}`,
+          ),
+        ]),
+    `Source globs: ${item.sourceGlobIds.join(', ') || '(none)'}`,
+    '',
+    ...targetLines,
+  ].join('\n');
+};
+
+/**
+ * The draft answer: a section (an existing heading or a new one) and its content, given a heading
+ * line if it came without one, or a new document's body. The target's section follows the
+ * drafter's choice. Null when it isn't usable.
+ */
+const parseDraft = (answer: string, target: KbTarget, state: TargetState): Drafted | null => {
+  const parsed = parseJson(answer);
+  if (!isObject(parsed)) return null;
+  const raw = text(field(parsed, 'content'))?.trim() ?? '';
+  if (raw === '') return null;
+  const rationale = (text(field(parsed, 'rationale'))?.trim() ?? '').split(/\r?\n/)[0]?.trim() ?? '';
+  const why = rationale === '' ? null : rationale;
+  if (state.newDocument) {
+    const body = (hasFrontmatter(raw) ? parseFrontmatter(raw).body : raw).trim();
+    return body === '' ? null : { draft: { section: null, content: body }, target, rationale: why };
+  }
+  const section = cleanSection(field(parsed, 'section'));
+  // Board rules sit under "## Board rules", so a new heading there is one level down.
+  const content = section === null ? raw : withHeading(state.text, section, raw, state.catalog === null ? 2 : 3);
+  return {
+    draft: { section, content },
+    // The document exists now (another item created it), so the item no longer proposes it.
+    target: { ...target, section: section ?? markdownHeadings(content)[0]?.text ?? null, newDocument: null },
+    rationale: why,
   };
 };

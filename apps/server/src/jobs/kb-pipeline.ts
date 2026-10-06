@@ -3,8 +3,9 @@ import type { KbPipeline } from '@slop/core';
 const POLL_MS = 5_000;
 
 /**
- * Routes and deduplicates submitted KB items in the background, one at a time: every few seconds
- * it processes pending items until none is due. `stop` lets the item in hand finish.
+ * Routes, deduplicates and drafts submitted KB items in the background, one step at a time: every
+ * few seconds it processes items due for routing or drafting until none is left. `stop` lets the
+ * item in hand finish.
  */
 export class KbPipelineJob {
   private timer: NodeJS.Timeout | null = null;

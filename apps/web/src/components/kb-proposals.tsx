@@ -1,5 +1,5 @@
 import { agentSetKind } from '@slop/core';
-import type { Approval, KbItem, KbTarget, KnowledgeKind, ProposedDocument } from '@slop/core';
+import type { Approval, DraftPreview, KbItem, KbItemView, KbTarget, KnowledgeKind, ProposedDocument } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -129,20 +129,24 @@ const DocumentComparison = ({
   );
 };
 
+/** Whether the background pipeline still has work to do on an item (routing, or its draft). */
+const inPipeline = (item: KbItem) => item.status === 'open' && (item.processing === 'pending' || item.processing === 'routed');
+
 /** What the background pipeline found: routing state, target, catalog flag, repeats and contradictions. */
 const PipelineInfo = ({ item }: { item: KbItem }) => {
-  const routing = item.status === 'open' && item.processing === 'pending';
+  const working = inPipeline(item) ? (item.processing === 'pending' ? 'Routing…' : 'Drafting…') : null;
   return (
     <div className='grid gap-1 text-xs' data-testid='pipeline-info'>
       <div className='flex flex-wrap items-center gap-2'>
-        {routing && (
+        {working !== null && (
           <span className='text-muted-foreground'>
-            Routing…{item.processingError !== null && ` (retrying after: ${item.processingError})`}
+            {working}
+            {item.processingError !== null && ` (retrying after: ${item.processingError})`}
           </span>
         )}
         {item.processing === 'failed' && (
           <span className='rounded-md border border-required-border bg-red-soft/15 px-1.5'>
-            Routing failed: {item.processingError ?? 'unknown error'}
+            {item.target === null ? 'Routing' : 'Drafting'} failed: {item.processingError ?? 'unknown error'}
           </span>
         )}
         {item.target !== null && (
@@ -195,6 +199,42 @@ const PipelineInfo = ({ item }: { item: KbItem }) => {
   );
 };
 
+/** A drafted change: its rationale and the diff approving it would make to the target as it is now. */
+const DraftView = ({ rationale, preview }: { rationale: string | null; preview: DraftPreview }) => (
+  <div className='grid gap-1 text-xs' data-testid='draft'>
+    {rationale !== null && (
+      <span>
+        <span className='font-medium'>Draft: </span>
+        {rationale}
+      </span>
+    )}
+    {preview.stale && <span className='text-muted-foreground'>The target changed since this draft; drafting it again…</span>}
+    <pre className='max-h-80 overflow-auto rounded-md border text-xs' data-testid='draft-diff'>
+      {preview.diff.map((line, index) =>
+        line.op === 'skipped' ? (
+          <div key={index} className='text-muted-foreground'>
+            … {line.count} unchanged line{line.count === 1 ? '' : 's'}
+          </div>
+        ) : (
+          <div
+            key={index}
+            className={
+              line.op === 'removed'
+                ? 'bg-red-500/10 text-red-700 dark:text-red-300'
+                : line.op === 'added'
+                  ? 'bg-green-500/10 text-green-700 dark:text-green-300'
+                  : 'text-muted-foreground'
+            }
+          >
+            {line.op === 'added' ? '+ ' : line.op === 'removed' ? '- ' : '  '}
+            {line.text}
+          </div>
+        ),
+      )}
+    </pre>
+  </div>
+);
+
 const ProposalCard = ({
   boardId,
   item,
@@ -203,7 +243,7 @@ const ProposalCard = ({
   onDecide,
 }: {
   boardId: number;
-  item: KbItem;
+  item: KbItemView;
   /** For an open document proposal: the board document of the same name, if there is one. */
   existing: BoardDocument | null;
   admin: boolean;
@@ -211,6 +251,20 @@ const ProposalCard = ({
 }) => {
   const [showDocument, setShowDocument] = useState(false);
   const open = item.status === 'open';
+  const client = useQueryClient();
+  const toast = useToast();
+  const preview = open && item.draft !== null ? item.preview : null;
+  const approveDraft = useMutation({
+    mutationFn: () => api.approveProposal(item.id, item.version, { as: 'draft' }),
+    onSuccess: (decided) => {
+      toast(`${decided.id} ${decided.status}`);
+      void client.invalidateQueries({ queryKey: ['kb', boardId] });
+      void client.invalidateQueries({ queryKey: ['kb-doc', boardId] });
+    },
+    // A stale draft is refused and drafted again; either way the list shows the current state.
+    onError: (e) => toast(message(e)),
+    onSettled: () => void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] }),
+  });
   return (
     <div className='grid gap-1.5 rounded-md border bg-card p-3 text-sm' data-testid={`proposal-${item.id}`}>
       <div className='flex flex-wrap items-center gap-2'>
@@ -236,6 +290,7 @@ const ProposalCard = ({
         {item.sourceGlobIds.length > 0 ? `From ${item.sourceGlobIds.join(', ')}` : 'No source glob'}
       </p>
       <PipelineInfo item={item} />
+      {preview !== null && <DraftView rationale={item.rationale} preview={preview} />}
       {item.document !== null && (
         <div className='grid gap-1 text-xs'>
           <span>
@@ -275,7 +330,12 @@ const ProposalCard = ({
         <div className='mt-1 flex flex-wrap gap-2'>
           {item.document === null ? (
             <>
-              <Button size='sm' onClick={() => onDecide('learning')}>
+              {preview !== null && (
+                <Button size='sm' disabled={preview.stale || approveDraft.isPending} onClick={() => approveDraft.mutate()}>
+                  Approve draft
+                </Button>
+              )}
+              <Button size='sm' variant={preview === null ? 'default' : 'outline'} onClick={() => onDecide('learning')}>
                 Approve as learning
               </Button>
               <Button size='sm' variant='outline' onClick={() => onDecide('edit')}>
@@ -506,11 +566,10 @@ export const KbProposals = ({
   const proposals = useQuery({
     queryKey: ['kb-proposals', boardId],
     queryFn: () => api.proposals(boardId),
-    // Routing runs in the background: poll while any item waits for it.
-    refetchInterval: (query) =>
-      (query.state.data ?? []).some((i) => i.status === 'open' && i.processing === 'pending') ? 5_000 : false,
+    // Routing and drafting run in the background: poll while any item waits for either.
+    refetchInterval: (query) => ((query.state.data ?? []).some(inPipeline) ? 5_000 : false),
   });
-  const [deciding, setDeciding] = useState<{ item: KbItem; decision: Decision } | null>(null);
+  const [deciding, setDeciding] = useState<{ item: KbItemView; decision: Decision } | null>(null);
 
   const items = proposals.data ?? [];
   const open = items.filter((i) => i.status === 'open');

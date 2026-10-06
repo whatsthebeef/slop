@@ -67,10 +67,10 @@ export interface Tx {
   /** A board's KB items, oldest first, optionally with one status. */
   listKbItems(boardId: number, status?: KbItemStatus): Promise<KbItem[]>;
   /**
-   * The oldest open item on any board still waiting for the pipeline (`pending`) whose
-   * `processAfter` is unset or not after `now`.
+   * The oldest open item on any board still waiting for the pipeline (`pending` routing or
+   * `routed`, waiting for its draft) whose `processAfter` is unset or not after `now`.
    */
-  nextPendingKbItem(now: string): Promise<KbItem | null>;
+  nextKbItemToProcess(now: string): Promise<KbItem | null>;
   /** Writes `item` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateKbItem(item: KbItem, expectedVersion: number): Promise<boolean>;
 

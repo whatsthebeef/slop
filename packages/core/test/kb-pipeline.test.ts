@@ -193,7 +193,8 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(dedupe?.prompt).toContain('## Test\n\nRun vitest.');
     expect(dedupe?.prompt).not.toContain('Run eslint.');
     expect(notifier.hints).toContainEqual({ kind: 'board.changed', boardId });
-    expect(await pipeline.processNext()).toBeNull();
+    // Next in line: its draft.
+    expect((await store.transaction((tx) => tx.nextKbItemToProcess(now)))?.id).toBe(id);
   });
 
   it("routes to an agent file's board rules and flags a catalog candidate with its reason", async () => {
@@ -253,7 +254,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const first = await routedAlone();
     const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated', evidence: 'Tester note' });
     llm.answer(toNewDoc('testing'), json({ duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
-    await pipeline.processNext();
+    expect(await pipeline.process(second)).toBe(true);
 
     expect(llm.calls[2]?.prompt).toContain(`- ${first} (gotcha): Generated files live in src/gen/`);
     expect(await item(second)).toMatchObject({ status: 'merged', duplicateOf: first, processing: 'routed' });
@@ -382,7 +383,7 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(await item(id)).toMatchObject({ processing: 'pending', processingError: 'The dedupe answer was not usable JSON' });
   });
 
-  it('skips routing for document proposals: the target is that document', async () => {
+  it('skips routing and drafting for document proposals: the target is that document, the proposal its draft', async () => {
     const proposal = {
       area: 'architecture',
       audience: ['implementer'],
@@ -392,7 +393,8 @@ describe('KB pipeline: routing and dedupe', () => {
     const fresh = await submit({ sourceGlobId: null, document: { ...proposal, name: 'architecture' } });
     const replacing = await submit({ sourceGlobId: null, document: { ...proposal, name: 'build_test_lint' } });
     expect(await item(fresh)).toMatchObject({
-      processing: 'routed',
+      processing: 'drafted',
+      draft: null,
       target: {
         kind: 'doc',
         name: 'architecture',
@@ -400,14 +402,19 @@ describe('KB pipeline: routing and dedupe', () => {
         newDocument: { area: 'architecture', audience: ['implementer'], description: 'How the code is laid out' },
       },
     });
-    expect(await item(replacing)).toMatchObject({ processing: 'routed', target: { name: 'build_test_lint', newDocument: null } });
+    expect(await item(replacing)).toMatchObject({ processing: 'drafted', target: { name: 'build_test_lint', newDocument: null } });
     expect(await pipeline.processNext()).toBeNull();
 
-    // A document proposal from before routing (pending after the migration) is routed without the LLM.
+    // A document proposal from before routing (pending after the migration) is routed without the LLM...
     const legacy = await item(fresh);
     await store.transaction((tx) => tx.updateKbItem({ ...legacy, processing: 'pending', target: null }, legacy.version));
     expect(await pipeline.processNext()).toBe(fresh);
-    expect(await item(fresh)).toMatchObject({ processing: 'routed', target: { name: 'architecture' } });
+    expect(await item(fresh)).toMatchObject({ processing: 'drafted', target: { name: 'architecture' } });
+    // ...and one routed before drafting existed is marked drafted, also without it.
+    const routed = await item(replacing);
+    await store.transaction((tx) => tx.updateKbItem({ ...routed, processing: 'routed' }, routed.version));
+    expect(await pipeline.processNext()).toBe(replacing);
+    expect(await item(replacing)).toMatchObject({ processing: 'drafted', draft: null });
     expect(llm.calls).toHaveLength(0);
   });
 
@@ -442,10 +449,10 @@ describe('KB pipeline: routing and dedupe', () => {
     await store.transaction((tx) =>
       tx.updateKbItem({ ...held, processAfter: '2026-10-05T12:05:00.000Z', version: held.version + 1 }, held.version),
     );
-    expect(await second.processNext()).toBeNull();
+    expect(await second.process(crashed)).toBe(false);
     advance(5 * 60_000);
     llm.answer(toNewDoc('testing'), NO_MATCH);
-    expect(await second.processNext()).toBe(crashed);
+    expect(await second.process(crashed)).toBe(true);
   });
 
   it('drops its result when the item is decided while it is processed', async () => {
@@ -465,7 +472,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const first = await routedAlone();
     const second = await submit();
     llm.answer(toNewDoc('testing'), json({ duplicateOf: first }));
-    await pipeline.processNext();
+    await pipeline.process(second);
     const merged = await item(second);
     expect(merged.status).toBe('merged');
     expect(errorCode(await knowledge.approve(ADMIN, second, merged.version, { as: 'learning' }))).toBe('invalid_input');

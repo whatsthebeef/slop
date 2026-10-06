@@ -418,14 +418,14 @@ export class PgStore implements Store {
           .orderBy(asc(schema.kbProposals.createdAt), asc(schema.kbProposals.id));
         return rows.map(toKbItem);
       },
-      nextPendingKbItem: async (now) => {
+      nextKbItemToProcess: async (now) => {
         const [row] = await t
           .select()
           .from(schema.kbProposals)
           .where(
             and(
               eq(schema.kbProposals.status, 'open'),
-              eq(schema.kbProposals.processing, 'pending'),
+              inArray(schema.kbProposals.processing, ['pending', 'routed']),
               or(isNull(schema.kbProposals.processAfter), lte(schema.kbProposals.processAfter, new Date(now))),
             ),
           )

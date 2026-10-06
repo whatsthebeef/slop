@@ -413,7 +413,7 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'submit_learning',
     {
       description:
-        "Submit one learning from a run (orchestrator phase 6, /finalise) as a KB item for the board's admins to review; nothing changes the knowledge base until it is approved. Returns its ID (s1k3) straight away; slop then routes it to a document or agent file and deduplicates it against other items in the background. Pass the agent-set version from .claude/slop-agent-set.json; routines pass their run ID. /kb-bootstrap proposes a whole new document with `document`; approving it creates or updates that document.",
+        "Submit one learning from a run (orchestrator phase 6, /finalise) as a KB item for the board's admins to review; nothing changes the knowledge base until it is approved. Returns its ID (s1k3) straight away; slop then routes it to a document or agent file, deduplicates it against other items and drafts the change in the background. Pass the agent-set version from .claude/slop-agent-set.json; routines pass their run ID. /kb-bootstrap proposes a whole new document with `document`; approving it creates or updates that document.",
       inputSchema: {
         board: z.number().int(),
         sourceGlobId: z

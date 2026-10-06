@@ -1,10 +1,20 @@
 import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
-import { composeAgentSet, overlayProblem } from '../domain/agent-set.js';
+import { composeAgentSet, contextDiff, overlayProblem } from '../domain/agent-set.js';
 import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../domain/agent-set.js';
-import { isLearningType, UNPROCESSED } from '../domain/kb.js';
-import type { KbItem, KbItemStatus, KbOutcome, KbTarget, LearningType, ProposedDocument } from '../domain/kb.js';
+import { isLearningType, needsDraft, UNPROCESSED } from '../domain/kb.js';
+import type {
+  DraftPreview,
+  KbItem,
+  KbItemStatus,
+  KbItemView,
+  KbOutcome,
+  KbTarget,
+  LearningType,
+  NewDocumentMeta,
+  ProposedDocument,
+} from '../domain/kb.js';
 import {
   agentSetKind,
   docName,
@@ -14,6 +24,7 @@ import {
   renderFrontmatter,
 } from '../domain/knowledge.js';
 import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
+import { splicePreview } from '../domain/sections.js';
 import type { Board } from '../domain/types.js';
 import type { Catalog, CatalogAgentSet, Clock, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
@@ -85,8 +96,9 @@ export interface NewLearning {
 
 /**
  * How an admin approves a KB item: keep the statement as an approved learning, apply it by hand as
- * new content for an existing document or agent-set file, or (document proposals) create or update
- * the proposed document. The statement or content may be edited first. For an agent-set file the
+ * new content for an existing document or agent-set file, (document proposals) create or update
+ * the proposed document, or apply the item's draft to its target (one click, or with the drafted
+ * section edited first). The statement or content may be edited first. For an agent-set file the
  * content is the board's layer: its overlay on a catalog file, or the whole file the board owns.
  */
 export type Approval =
@@ -97,7 +109,24 @@ export type Approval =
       readonly content: string;
       readonly statement?: string;
     }
-  | { readonly as: 'document'; readonly content?: string };
+  | { readonly as: 'document'; readonly content?: string }
+  | {
+      readonly as: 'draft';
+      /** Edited section text (or a new document's body) in place of the draft's. */
+      readonly content?: string;
+      /** The heading the edited content replaces, or null to append it; defaults to the draft's. */
+      readonly section?: string | null;
+      readonly statement?: string;
+    };
+
+/** An admin's choice of target for an item; drafting starts again against it (routing is skipped). */
+export interface TargetChange {
+  readonly kind: KnowledgeKind;
+  readonly name: string;
+  readonly section: string | null;
+  /** Required when the document doesn't exist yet. */
+  readonly newDocument?: NewDocumentMeta | null;
+}
 
 /** An approved learning as `get_conventions(board)` serves it. */
 export interface ApprovedLearning {
@@ -147,6 +176,50 @@ export const documentTarget = async (tx: Tx, boardId: number, document: Proposed
   const existing = await tx.getKnowledge(boardId, 'doc', document.name);
   const { area, audience, description } = document;
   return { kind: 'doc', name: document.name, section: null, newDocument: existing === null ? { area, audience, description } : null };
+};
+
+/** The current text a draft for a target is spliced into, and the version it has. */
+export interface TargetState {
+  /** A document's body (without frontmatter), or the board's layer of an agent-set file (empty when it has none). */
+  readonly text: string;
+  /** The document's or board row's version; 0 when there is none yet. */
+  readonly version: number;
+  readonly existing: KnowledgeDoc | null;
+  /** For an overlay: the catalog's text, read-only context. Null for documents and files the board owns. */
+  readonly catalog: string | null;
+  /** The target is a document the board doesn't have yet. */
+  readonly newDocument: boolean;
+}
+
+/** A target's current state, or null when it is gone (or a document that neither exists nor has proposed metadata). */
+export const targetState = async (
+  tx: Tx,
+  catalog: CatalogAgentSet,
+  boardId: number,
+  target: KbTarget,
+): Promise<TargetState | null> => {
+  const existing = await tx.getKnowledge(boardId, target.kind, target.name);
+  if (target.kind === 'doc') {
+    if (existing !== null) return { text: existing.content, version: existing.version, existing, catalog: null, newDocument: false };
+    return target.newDocument === null ? null : { text: '', version: 0, existing: null, catalog: null, newDocument: true };
+  }
+  const catalogText = catalog.files.find((f) => f.path === target.name)?.content ?? null;
+  if (existing === null && catalogText === null) return null;
+  return {
+    text: existing?.content ?? '',
+    version: existing?.version ?? 0,
+    existing,
+    catalog: existing?.layer === 'file' ? null : catalogText,
+    newDocument: false,
+  };
+};
+
+/** Agent-set kinds a learning (prose) can target. */
+const PROSE_KINDS: readonly KnowledgeKind[] = ['agent', 'command', 'claude_md'];
+
+const cleanHeading = (section: string | null): string | null => {
+  const heading = section?.replace(/^#+\s*/, '').trim() ?? '';
+  return heading === '' ? null : heading;
 };
 
 export interface NewDocument {
@@ -381,11 +454,11 @@ export class KnowledgeService {
         sourceGlobIds.push(glob.id);
       }
       const id = formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
-      // Document proposals already name their target, so the pipeline has nothing to route.
+      // Document proposals name their target and are their own draft, so the pipeline has nothing to do.
       const routed =
         document === null
           ? UNPROCESSED
-          : { ...UNPROCESSED, processing: 'routed' as const, target: await documentTarget(tx, boardId, document) };
+          : { ...UNPROCESSED, processing: 'drafted' as const, target: await documentTarget(tx, boardId, document) };
       const inserted = await tx.insertKbItem({
         id,
         boardId,
@@ -413,12 +486,48 @@ export class KnowledgeService {
     });
   }
 
-  /** The board's KB items, oldest first, optionally with one status. Members may read them. */
-  async proposals(email: string, boardId: number, status?: KbItemStatus): Promise<Result<KbItem[]>> {
+  /**
+   * The board's KB items, oldest first, optionally with one status, each open drafted item with a
+   * preview of its draft against the target's current text. Members may read them.
+   */
+  async proposals(email: string, boardId: number, status?: KbItemStatus): Promise<Result<KbItemView[]>> {
+    const catalog = await this.deps.catalog.agentSet();
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
-      return ok(await tx.listKbItems(boardId, status));
+      const views: KbItemView[] = [];
+      for (const item of await tx.listKbItems(boardId, status)) {
+        views.push({ ...item, preview: await this.preview(tx, catalog, item) });
+      }
+      return ok(views);
+    });
+  }
+
+  /**
+   * Admins point an open item at another document or agent file (or a new document): its draft is
+   * cleared and it is drafted again against that target, without routing it again.
+   */
+  async changeTarget(email: string, itemId: string, version: number, change: TargetChange): Promise<Result<KbItem>> {
+    const catalog = await this.deps.catalog.agentSet();
+    return this.deps.store.transaction(async (tx) => {
+      const item = await tx.getKbItem(itemId);
+      if (item === null) return notFound(`No KB item ${itemId}`);
+      const actor = await adminOf(tx, email, item.boardId);
+      if (!actor.ok) return actor;
+      const stale = (current: KbItem) =>
+        err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: current });
+      if (item.version !== version) return stale(item);
+      if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
+      if (item.document !== null) return invalidInput(`${item.id} proposes a document; its target is that document`);
+      const target = await this.checkTarget(tx, catalog, item.boardId, change);
+      if (!target.ok) return target;
+      const next = needsDraft(item, target.value);
+      if (!(await tx.updateKbItem(next, item.version))) {
+        const current = await tx.getKbItem(itemId);
+        return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
+      }
+      this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
+      return ok(next);
     });
   }
 
@@ -449,7 +558,8 @@ export class KnowledgeService {
    */
   async approve(email: string, itemId: string, version: number, approval: Approval): Promise<Result<KbItem>> {
     return this.decide(email, itemId, version, async (tx, item) => {
-      if (approval.as === 'document') {
+      // A document proposal is its own draft.
+      if (approval.as === 'document' || (approval.as === 'draft' && item.document !== null)) {
         if (item.document === null) return invalidInput(`${item.id} is not a document proposal`);
         const document = checkDocument({ ...item.document, content: approval.content ?? item.document.content });
         if (!document.ok) return document;
@@ -461,6 +571,10 @@ export class KnowledgeService {
       const statement = approval.statement?.trim() ?? item.statement;
       if (statement === '') return invalidInput('A learning needs a statement');
       if (approval.as === 'learning') return ok({ statement, outcome: { kind: 'learning' } });
+      if (approval.as === 'draft') {
+        const outcome = await this.applyDraft(tx, email, item, approval);
+        return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
+      }
 
       const { kind, name } = approval.target;
       if (approval.content.trim() === '') return invalidInput('The new content is empty');
@@ -526,6 +640,84 @@ export class KnowledgeService {
   }
 
   /**
+   * Applies an item's draft (or the admin's edit of it) to the target's current text, refusing a
+   * draft made against an older version of the target: the item then goes back to be drafted again.
+   */
+  private async applyDraft(
+    tx: Tx,
+    email: string,
+    item: KbItem,
+    approval: Extract<Approval, { as: 'draft' }>,
+  ): Promise<Result<KbOutcome>> {
+    const { target } = item;
+    if (target === null) return invalidInput(`${item.id} has no target yet`);
+    const draft =
+      approval.content === undefined
+        ? item.draft
+        : {
+            section: approval.section === undefined ? (item.draft?.section ?? null) : cleanHeading(approval.section),
+            content: approval.content,
+          };
+    if (draft === null) return invalidInput(`${item.id} has no draft yet`);
+    if (draft.content.trim() === '') return invalidInput('The draft is empty');
+    const state = await targetState(tx, await this.deps.catalog.agentSet(), item.boardId, target);
+    if (state === null) return notFound(`${target.name} is no longer on board ${item.boardId}`);
+    if (item.draft !== null && item.draftedAgainstVersion !== null && state.version !== item.draftedAgainstVersion) {
+      const requeued = needsDraft(item);
+      if (!(await tx.updateKbItem(requeued, item.version))) throw new StaleKbItem(item.id);
+      this.deps.notifier.publish({ kind: 'board.changed', boardId: item.boardId });
+      return err({
+        code: 'version_conflict',
+        message: `${target.name} changed since ${item.id} was drafted; it is being drafted again`,
+        currentItem: requeued,
+      });
+    }
+    const { after } = splicePreview(state.text, draft.section, draft.content, state.newDocument);
+    if (target.kind === 'doc') {
+      const meta = state.existing ?? target.newDocument;
+      if (meta === null) return notFound(`No document ${target.name} on board ${item.boardId}`);
+      if (state.existing === null && !PLAIN_NAME.test(target.name)) return invalidInput(`${target.name} is not a document name`);
+      // A document keeps its frontmatter; a new one gets the proposed area, audience and description.
+      return this.apply(tx, email, item, 'doc', target.name, renderFrontmatter(meta) + after);
+    }
+    return this.applyAgentSetEdit(tx, email, item, target.kind, target.name, after, state.existing);
+  }
+
+  /** What approving an open item's draft would change now; null without a draft or a target. */
+  private async preview(tx: Tx, catalog: CatalogAgentSet, item: KbItem): Promise<DraftPreview | null> {
+    if (item.status !== 'open' || item.draft === null || item.target === null) return null;
+    const state = await targetState(tx, catalog, item.boardId, item.target);
+    if (state === null) return null;
+    const { diff } = splicePreview(state.text, item.draft.section, item.draft.content, state.newDocument);
+    return { version: state.version, stale: state.version !== item.draftedAgainstVersion, diff: contextDiff(diff) };
+  }
+
+  /** An admin's target, checked against the board: an existing document, a new one with its metadata, or a prose agent file. */
+  private async checkTarget(tx: Tx, catalog: CatalogAgentSet, boardId: number, change: TargetChange): Promise<Result<KbTarget>> {
+    const section = cleanHeading(change.section);
+    if (section !== null && !SINGLE_LINE.test(section)) return invalidInput('A section is one heading');
+    if (change.kind === 'doc') {
+      const name = docName(change.name);
+      if (!PLAIN_NAME.test(name)) return invalidInput('A document name is letters, digits, _, . or -');
+      if ((await tx.getKnowledge(boardId, 'doc', name)) !== null) return ok({ kind: 'doc', name, section, newDocument: null });
+      const meta = change.newDocument ?? null;
+      if (meta === null) return notFound(`No document ${name} on board ${boardId}; a new document needs an area and description`);
+      const checked = checkDocument({ ...meta, name, content: '-' });
+      if (!checked.ok) return checked;
+      const { area, audience, description } = checked.value;
+      return ok({ kind: 'doc', name, section: null, newDocument: { area, audience, description } });
+    }
+    if (!PROSE_KINDS.includes(change.kind) || agentSetKind(change.name) !== change.kind) {
+      return invalidInput(`${change.name} is not an agent, command or CLAUDE.md file`);
+    }
+    const { entries } = await this.compose(tx, catalog, boardId);
+    if (!entries.some((e) => e.path === change.name && e.status !== 'orphaned')) {
+      return notFound(`No agent-set file ${change.name} on board ${boardId}`);
+    }
+    return ok({ kind: change.kind, name: change.name, section, newDocument: null });
+  }
+
+  /**
    * An approved edit to an agent-set file writes the board's layer: the whole file for a file the
    * board owns, otherwise its overlay on the catalog file (created on first use).
    */
@@ -560,7 +752,7 @@ export class KnowledgeService {
     content: string,
     layer: KnowledgeLayer = 'file',
   ): Promise<Result<KbOutcome>> {
-    const written = await this.write(tx, email, item.boardId, [{ kind, name, content, layer, source: `kb:${item.id}` }]);
+    const written = await this.write(tx, email, item.boardId, [{ kind, name, content, layer, source: `kb:${item.id}` }], item.id);
     if (!written.ok) return written;
     const saved = await tx.getKnowledge(item.boardId, kind, name);
     if (saved === null) throw new Error(`${name} was not saved`);
@@ -603,13 +795,24 @@ export class KnowledgeService {
     throw new BoardChanged(boardId);
   }
 
-  /** Writes documents, versioning only real changes; any agent-set change bumps the set's version. */
-  private async write(tx: Tx, email: string, boardId: number, items: readonly WriteItem[]): Promise<Result<ImportResult>> {
+  /**
+   * Writes documents, versioning only real changes; any agent-set change bumps the set's version.
+   * Open items drafted against a changed target go back to be drafted again (except `decidingItem`,
+   * the item whose approval is writing).
+   */
+  private async write(
+    tx: Tx,
+    email: string,
+    boardId: number,
+    items: readonly WriteItem[],
+    decidingItem: string | null = null,
+  ): Promise<Result<ImportResult>> {
     const board = await tx.getBoard(boardId);
     if (board === null) return notFound(`No board ${boardId}`);
     const created: string[] = [];
     const updated: string[] = [];
     const unchanged: string[] = [];
+    const changed: { kind: KnowledgeKind; name: string }[] = [];
     let agentSetChanged = false;
     const now = this.deps.clock.now();
 
@@ -647,8 +850,10 @@ export class KnowledgeService {
         updatedAt: now,
       });
       (existing === null ? created : updated).push(item.name);
+      changed.push({ kind: item.kind, name: item.name });
       if (isAgentSetKind(item.kind)) agentSetChanged = true;
     }
+    if (changed.length > 0) await this.redraftAgainst(tx, boardId, changed, decidingItem);
 
     if (agentSetChanged) {
       const next: Board = { ...board, agentSetVersion: board.agentSetVersion + 1, version: board.version + 1 };
@@ -656,5 +861,24 @@ export class KnowledgeService {
     }
     if (created.length + updated.length > 0) this.deps.notifier.publish({ kind: 'board.changed', boardId });
     return ok({ created, updated, unchanged });
+  }
+
+  /**
+   * Every write to a target goes through `write`, so re-queueing here catches each draft whose
+   * target moved, in the same transaction; approving a stale draft is refused as a backstop.
+   */
+  private async redraftAgainst(
+    tx: Tx,
+    boardId: number,
+    changed: readonly { kind: KnowledgeKind; name: string }[],
+    decidingItem: string | null,
+  ): Promise<void> {
+    for (const item of await tx.listKbItems(boardId, 'open')) {
+      const { target } = item;
+      if (item.id === decidingItem || item.processing !== 'drafted' || item.document !== null || target === null) continue;
+      if (!changed.some((c) => c.kind === target.kind && c.name === target.name)) continue;
+      // A lost conditional write means the item changed meanwhile; approving it still checks the version.
+      await tx.updateKbItem(needsDraft(item), item.version);
+    }
   }
 }
