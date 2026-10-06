@@ -57,6 +57,13 @@ describe('routine run instructions', () => {
     expect(text).toContain('git checkout -B s16b1 origin/s16b1');
   });
 
+  it('for a conflict run say to merge the base branch in, not to start the glob again', () => {
+    const text = runInstructions(glob, 'run-1', null, 'main');
+    expect(text).toContain('git fetch origin main && git merge origin/main');
+    expect(text).toContain('do not run /run-glob');
+    expect(text).not.toContain('Run /run-glob s16b1');
+  });
+
   it('leave the repository out for a board without one', () => {
     expect(runInstructions(glob, 'run-1', null)).not.toContain('Repository:');
   });

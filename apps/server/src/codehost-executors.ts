@@ -113,7 +113,11 @@ export const codeHostExecutors = (
       await lookUpSubGate(repo, glob, sha, globs);
       if (state === 'pending') return 'done';
       const passed = state === 'passed' || state === 'behind';
-      await globs.applyEvent(glob.id, (g, ctx) => machine.checksCompleted(g, { sha, passed }, ctx));
+      // A conflict after slop updated the branch is its own failure, not a failing check.
+      const conflict = state === 'conflict' ? { base: repo.base, files: await host.conflictFiles(repo, glob.pr.number) } : undefined;
+      await globs.applyEvent(glob.id, (g, ctx) =>
+        machine.checksCompleted(g, conflict === undefined ? { sha, passed } : { sha, passed, conflict }, ctx),
+      );
       return 'done';
     },
 
@@ -132,7 +136,10 @@ export const codeHostExecutors = (
           // The update pushes a new head; its checks resume the merge.
           break;
         case 'conflict':
-          await globs.applyEvent(glob.id, (g, ctx) => machine.mergeFailed(g, 'Merge conflict with the base branch', ctx));
+          {
+            const conflict = { base: repo.base, files: await host.conflictFiles(repo, prNumber) };
+            await globs.applyEvent(glob.id, (g, ctx) => machine.mergeFailed(g, machine.conflictReason(conflict), ctx, conflict));
+          }
           break;
         case 'refused':
           await globs.applyEvent(glob.id, (g, ctx) => machine.mergeFailed(g, result.reason, ctx));
@@ -141,11 +148,16 @@ export const codeHostExecutors = (
       return 'done';
     },
 
-    mark_pr_ready: async (_effect, glob) => {
+    mark_pr_ready: async (_effect, glob, { globs }) => {
       if (glob?.pr == null) return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
-      await host.markReady(repo, glob.pr.number);
+      const { wasDraft, sha } = await host.markReady(repo, glob.pr.number);
+      // An already-ready PR (a re-triggered or conflict-resolving run) raises no ready event: record it here.
+      if (!wasDraft) {
+        const number = glob.pr.number;
+        await globs.applyEvent(glob.id, (g, ctx) => machine.prReadyForReview(g, { number, headSha: sha }, ctx));
+      }
       return 'done';
     },
 
@@ -182,7 +194,7 @@ export const codeHostExecutors = (
         return 'done';
       }
       const repo = await repoFor(glob.boardId);
-      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`));
+      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`, run.resolveConflictWith));
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));

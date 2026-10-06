@@ -287,18 +287,45 @@ export class GitHub implements CodeHost {
     }
   }
 
-  async markReady(repo: Repo, prNumber: number): Promise<void> {
+  async markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
       owner: repo.owner,
       repo: repo.name,
       pull_number: prNumber,
     });
-    if (!data.draft) return;
+    if (!data.draft) return { wasDraft: false, sha: data.head.sha };
     // REST has no endpoint for this; GraphQL does.
     await gh.graphql('mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }', {
       id: data.node_id,
     });
+    return { wasDraft: true, sha: data.head.sha };
+  }
+
+  async conflictFiles(repo: Repo, prNumber: number): Promise<string[]> {
+    try {
+      const gh = await this.octokit(repo);
+      const { data: pr } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+        owner: repo.owner,
+        repo: repo.name,
+        pull_number: prNumber,
+      });
+      const changed = async (basehead: string) => {
+        const { data } = await gh.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+          owner: repo.owner,
+          repo: repo.name,
+          basehead,
+          per_page: 300,
+        });
+        return (data.files ?? []).map((f) => f.filename);
+      };
+      // `a...b` lists what b changed since the two diverged, so the overlap is where both sides edited.
+      const onBranch = new Set(await changed(`${repo.base}...${pr.head.sha}`));
+      return (await changed(`${pr.head.sha}...${repo.base}`)).filter((f) => onBranch.has(f));
+    } catch {
+      // Naming the files is a courtesy; the conflict is reported without them.
+      return [];
+    }
   }
 
   async diffSummary(repo: Repo, sha: string): Promise<DiffSummary> {

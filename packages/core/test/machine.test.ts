@@ -641,6 +641,38 @@ describe('checks and merging (slice 2)', () => {
     expect(fail.glob.status).toBe('failed');
   });
 
+  it('a conflict after updating the branch fails the glob as a merge conflict, not failing checks', () => {
+    const merging = { ...ready, status: 'merging' as const };
+    const conflict = { base: 'main', files: ['a.ts', 'b.ts'] };
+    const failed = value(m.checksCompleted(merging, { sha: 'bbb', passed: false, conflict }, ctx(null))).glob;
+    expect(failed.status).toBe('failed');
+    expect(failed.failure?.reason).toBe('Merge conflict with main in a.ts, b.ts');
+    expect(failed.failure?.conflict).toEqual(conflict);
+    const noFiles = value(m.checksCompleted(merging, { sha: 'bbb', passed: false, conflict: { base: 'main', files: [] } }, ctx(null)));
+    expect(noFiles.glob.failure?.reason).toBe('Merge conflict with main');
+    const checks = value(m.checksCompleted(merging, { sha: 'bbb', passed: false }, ctx(null))).glob;
+    expect(checks.failure?.reason).toBe('Checks failed after updating the branch');
+    expect(checks.failure?.conflict).toBeUndefined();
+  });
+
+  it('resolve conflict: a routine run continues on the same branch, only for an unowned conflict failure', () => {
+    const conflict = { base: 'main', files: [] };
+    const failed = glob({ type: 'sub', status: 'failed', failure: { reason: 'Merge conflict with main', at: NOW, conflict } });
+    expect(m.allowedActions(failed, dev)).toContain('resolve_conflict');
+    expect(m.allowedActions(glob({ type: 'sub', status: 'failed', failure: { reason: 'x', at: NOW } }), dev)).not.toContain('resolve_conflict');
+    const owned = { ...failed, implementer: other.email };
+    expect(m.allowedActions(owned, dev)).not.toContain('resolve_conflict');
+    expect(m.allowedActions(owned, dev)).toContain('start_again');
+    expect(errorCode(m.resolveConflict(owned, ctx()))).toBe('invalid_transition');
+
+    const t = value(m.resolveConflict(failed, ctx()));
+    expect(t.glob.status).toBe('implementing');
+    expect(t.glob.failure).toBeNull();
+    expect(m.currentRun(t.glob)?.resolveConflictWith).toBe('main');
+    expect(effectKinds(t)).toEqual(['reopen_pr', 'fire_routine']);
+    expect(effectKinds(t)).not.toContain('delete_branch');
+  });
+
   it('type and environment changes sync the PR labels', () => {
     const t = value(m.changeFields(glob({ status: 'in_progress' }), { environment: 'dev' }, board, ctx()));
     expect(effectKinds(t)).toEqual(['sync_pr_labels']);
