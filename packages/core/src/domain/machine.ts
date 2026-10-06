@@ -853,7 +853,7 @@ export const checksCompleted = (
 ): Result<Transition> => {
   if (glob.pr?.headSha !== checks.sha) return unchanged(glob);
   const b = new Builder(glob, ctx)
-    .set({ headChecks: { sha: checks.sha, state: checks.passed ? 'passed' : 'failed' } })
+    .set({ headChecks: { sha: checks.sha, state: checks.passed ? 'passed' : 'failed', at: ctx.now } })
     .event('BuildCompleted', { sha: checks.sha, passed: checks.passed });
   // Slop updated the branch while merging: the checks on the new head decide (rows 12, 14, 16).
   if (glob.status === 'merging') {

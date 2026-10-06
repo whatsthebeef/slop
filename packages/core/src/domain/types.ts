@@ -90,6 +90,8 @@ export type MergeMode = 'continue';
 export interface HeadChecks {
   readonly sha: string;
   readonly state: 'pending' | 'passed' | 'failed';
+  /** When the result was recorded; absent on results stored before slop kept it. */
+  readonly at?: string;
 }
 
 /** `none` until the glob first enters Doing: branches and draft PRs are created when work starts. */

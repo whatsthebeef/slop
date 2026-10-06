@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readiness, recentRoutineFailures, routineFailureFix, stuckHint } from '../src/domain/readiness.js';
+import { ignoredFailedChecks, readiness, recentRoutineFailures, routineFailureFix, stuckHint } from '../src/domain/readiness.js';
 import type { ReadinessFacts } from '../src/domain/readiness.js';
-import { NOW, board, glob } from './fixtures.js';
+import { NOW, board, glob, run } from './fixtures.js';
 
 const ready: ReadinessFacts = {
   board: {
@@ -106,5 +106,46 @@ describe('stuck hints on cards', () => {
   it('shows the fix for a known routine failure, and nothing for ordinary globs', () => {
     expect(stuckHint(glob({ failure: { reason: 'Repository not found', at: NOW } }), later)).toMatch(/routine's repositories/);
     expect(stuckHint(glob({ status: 'in_progress' }), later)).toBeNull();
+  });
+});
+
+describe('a watching run that ignores failed checks', () => {
+  const later = new Date(Date.parse(NOW) + 20 * 60_000).toISOString();
+  const head = 'abc1234';
+  const watched = (patch: Parameters<typeof glob>[0] = {}, runPatch: Parameters<typeof run>[0] = {}) =>
+    glob({
+      type: 'sub',
+      status: 'pr_open',
+      pr: { number: 3, state: 'ready', headSha: head },
+      headChecks: { sha: head, state: 'failed', at: NOW },
+      runs: [run({ state: 'watching', lastProgressAt: NOW, sessionUrl: 'https://claude.ai/code/x', ...runPatch })],
+      ...patch,
+    });
+
+  it('hints after 15 minutes of silence, with take over and the session', () => {
+    expect(stuckHint(watched(), new Date(Date.parse(NOW) + 5 * 60_000).toISOString())).toBeNull();
+    const hint = stuckHint(watched(), later);
+    expect(hint).toMatch(/sstor --glob .* --take-over/);
+    expect(hint).toMatch(/claude\.ai\/code\/x/);
+  });
+
+  it('clears on a push, a run progress, the run ending or a take over', () => {
+    expect(ignoredFailedChecks(watched({ headChecks: null }), later)).toBe(false);
+    expect(ignoredFailedChecks(watched({ headChecks: { sha: 'old', state: 'failed', at: NOW } }), later)).toBe(false);
+    expect(ignoredFailedChecks(watched({}, { lastProgressAt: later }), later)).toBe(false);
+    expect(ignoredFailedChecks(watched({}, { state: 'ended' }), later)).toBe(false);
+    expect(ignoredFailedChecks(watched({ implementer: 'dev@example.com' }), later)).toBe(false);
+  });
+
+  it('ignores passed or pending checks', () => {
+    expect(ignoredFailedChecks(watched({ headChecks: { sha: head, state: 'passed', at: NOW } }), later)).toBe(false);
+    expect(ignoredFailedChecks(watched({ headChecks: { sha: head, state: 'pending' } }), later)).toBe(false);
+  });
+
+  it('turns the Claude GitHub App item red', () => {
+    const items = readiness({ ...ready, silentRuns: ['s1t4'] });
+    const app = items.find((i) => i.key === 'claude_app');
+    expect(app).toMatchObject({ state: 'failing' });
+    expect(app?.detail).toMatch(/s1t4.*hasn't reacted/);
   });
 });

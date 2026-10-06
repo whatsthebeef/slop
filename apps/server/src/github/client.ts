@@ -211,6 +211,16 @@ export class GitHub implements CodeHost {
     }
   }
 
+  private async headHasFailedCheck(gh: Octokit, repo: Repo, sha: string): Promise<boolean> {
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
+      owner: repo.owner,
+      repo: repo.name,
+      ref: sha,
+      per_page: 100,
+    });
+    return data.check_runs.some((c) => c.conclusion === 'failure' || c.conclusion === 'timed_out' || c.conclusion === 'cancelled');
+  }
+
   /** GitHub's view of whether the PR's head can merge: required checks, conflicts, up to date. */
   async mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState }> {
     const gh = await this.octokit(repo);
@@ -219,12 +229,17 @@ export class GitHub implements CodeHost {
       repo: repo.name,
       pull_number: prNumber,
     });
+    // `unstable` means a check on the head is failing; `blocked` is failing or still running.
+    const failing =
+      (data.mergeable_state === 'unstable' || data.mergeable_state === 'blocked') &&
+      (await this.headHasFailedCheck(gh, repo, data.head.sha));
     const state: MergeState = ((): MergeState => {
+      if (failing) return 'failed';
       switch (data.mergeable_state) {
         case 'clean':
-        case 'unstable':
         case 'has_hooks':
           return 'passed';
+        case 'unstable':
         case 'blocked':
           return 'pending';
         case 'behind':

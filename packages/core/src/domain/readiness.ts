@@ -1,3 +1,4 @@
+import { currentRun } from './machine.js';
 import type { Board, Glob } from './types.js';
 
 /**
@@ -55,6 +56,8 @@ export interface ReadinessFacts {
   readonly ticks: ReadinessTicks;
   /** Recent routine failures on the board's globs, newest first. */
   readonly recentFailures: readonly { readonly globId: string; readonly reason: string }[];
+  /** Globs whose watching run hasn't reacted to failed checks on the head (see `ignoredFailedChecks`). */
+  readonly silentRuns?: readonly string[];
 }
 
 /**
@@ -171,10 +174,14 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
   for (const key of MANUAL_READINESS_KEYS) {
     const failure = facts.recentFailures.find((f) => routineFailureFix(f.reason)?.key === key);
     const fix = failure === undefined ? null : routineFailureFix(failure.reason);
+    // Auto-fix of failed checks goes through the Claude GitHub App: a run that stays silent points to it.
+    const silent = key === 'claude_app' ? (facts.silentRuns ?? [])[0] : undefined;
     items.push(
       failure !== undefined && fix !== null
         ? item(key, MANUAL[key], 'failing', `${failure.globId} failed: ${failure.reason}. ${fix.fix}`, settings)
-        : facts.ticks[key] === true
+        : silent !== undefined
+          ? item(key, MANUAL[key], 'failing', `${silent}'s routine run hasn't reacted to failed checks for ${String(STUCK_MINUTES)} minutes: is the Claude GitHub App installed on the repo?`, settings)
+          : facts.ticks[key] === true
           ? item(key, MANUAL[key], 'ok', 'Ticked by an admin', null)
           : item(key, MANUAL[key], 'missing', "slop can't check this: tick it in board settings once it's done", settings),
     );
@@ -196,13 +203,36 @@ export const recentRoutineFailures = (
 const STUCK_MINUTES = 15;
 
 /**
+ * Whether the glob's routine run is watching a PR whose head checks failed at least
+ * STUCK_MINUTES ago, with no push or slop call from the run since. A push resets the head's
+ * checks, and an ended run or a take-over leaves no watching run, so the hint clears itself.
+ */
+export const ignoredFailedChecks = (glob: Glob, now: string): boolean => {
+  const run = currentRun(glob);
+  const checks = glob.headChecks;
+  if (run === null || run.state !== 'watching' || glob.status !== 'pr_open' || glob.implementer !== null) return false;
+  if (checks === null || checks.state !== 'failed' || checks.at === undefined || checks.sha !== glob.pr?.headSha) return false;
+  if ((Date.parse(now) - Date.parse(checks.at)) / 60_000 < STUCK_MINUTES) return false;
+  return run.lastProgressAt === null || run.lastProgressAt <= checks.at;
+};
+
+/** Globs whose routine run is ignoring failed checks, for the readiness item on the Claude GitHub App. */
+export const silentRunGlobs = (globs: readonly Glob[], now: string): string[] =>
+  globs.filter((g) => ignoredFailedChecks(g, now)).map((g) => g.id);
+
+/**
  * A short hint on a card when a glob looks stuck on setup rather than on work: a ready sub with no
- * sub-gate result, a sub whose gate passed but hasn't merged, or a routine failure with a known fix.
+ * sub-gate result, a sub whose gate passed but hasn't merged, a routine failure with a known fix,
+ * or a watching run that left failed checks alone.
  */
 export const stuckHint = (glob: Glob, now: string): string | null => {
   if (glob.failure !== null) {
     const fix = routineFailureFix(glob.failure.reason);
     if (fix !== null) return fix.fix;
+  }
+  if (ignoredFailedChecks(glob, now)) {
+    const url = currentRun(glob)?.sessionUrl ?? null;
+    return `Checks failed on the head ${String(STUCK_MINUTES)}+ minutes ago and the routine hasn't pushed or reported since: take over with sstor --glob ${glob.id} --take-over${url === null ? '' : `, or open its session at ${url}`}`;
   }
   if (glob.type !== 'sub' || glob.status !== 'pr_open') return null;
   const minutes = (Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000;
