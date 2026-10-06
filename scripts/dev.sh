@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# (`watch` restarts the server and rebuilds the board on file changes.)
 # Runs the local slop stack: Postgres (Docker), a fresh board build, the server on :3000
 # (Cognito mode when apps/server/.env.cognito exists, otherwise dev sign-in) and, if
 # SLOP_TUNNEL_DOMAIN is set in .slop-dev, an ngrok tunnel for webhooks and connectors.
@@ -16,6 +17,9 @@ Usage: scripts/dev.sh [command]
                If another checkout's server is running, it is stopped first.
   restart      Stop and start again, from this checkout.
   stop         Stop the server and the tunnel. Postgres keeps running.
+  watch        Like start, but the server restarts and the board rebuilds when files change
+               (apps/server, packages/core, catalog, apps/web); reload the browser tab to see
+               board changes. A new migration is snapshotted before the restart that runs it.
   foreground   Run the server in this terminal (sstor's server window), stopping any other copy.
   snapshots    List database snapshots, newest first.
   restore [f]  Stop the server and restore the database from a snapshot (default: the newest).
@@ -133,6 +137,7 @@ check_tunnel() {
 }
 
 start() {
+  local watching="${1:-}"
   if tmux has-session -t "$session" 2>/dev/null; then
     local other
     other="$(running_root)"
@@ -155,9 +160,19 @@ start() {
   # LOCAL_SIGN_IN_WITHOUT_COOKIE: Chrome drops the sign-in state cookie on plain-http localhost.
   local env_args=(-e "LOCAL_SIGN_IN_WITHOUT_COOKIE=true")
   [[ -n "${AWS_PROFILE:-}" ]] && env_args+=(-e "AWS_PROFILE=$AWS_PROFILE")
+  local server_cmd="node $env_file --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts"
+  if [[ "$watching" == watch ]]; then
+    server_cmd="node $root/scripts/dev-watch.mjs $root/apps/server $env_file --env-file-if-exists=.env.local"
+    env_args+=(-e "SLOP_DEV_PRESTART=$root/scripts/dev.sh check-migrations")
+  fi
   tmux new-session -d -s "$session" ${env_args[@]+"${env_args[@]}"} -n server -c "$root/apps/server" \
-    "node $env_file --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts; read"
+    "$server_cmd; read"
   tmux set-environment -t "$session" SLOP_DEV_ROOT "$root"
+  if [[ "$watching" == watch ]]; then
+    # The server serves the built board as static files, so rebuild it on change.
+    tmux new-window -t "$session" -n board -c "$root/apps/web" \
+      "node node_modules/vite/bin/vite.js build --watch --logLevel warn; read"
+  fi
   if [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]]; then
     tmux new-window -t "$session" -n tunnel "ngrok http --url=$SLOP_TUNNEL_DOMAIN 3000; read"
   fi
@@ -209,6 +224,8 @@ restore() {
 case "$action" in
   foreground) foreground; exit 0 ;;
   start) start ;;
+  watch) start watch ;;
+  check-migrations) postgres_up; check_migrations; exit 0 ;;
   stop) stop ;;
   restart) stop; start ;;
   snapshots) list_snapshots; exit 0 ;;
