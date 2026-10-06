@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
-import type { Catalog } from '@slop/core';
-import { parseFrontmatter } from '@slop/core';
+import { join, relative, sep } from 'node:path';
+import type { Catalog, CatalogAgentSet } from '@slop/core';
+import { agentSetKind, parseFrontmatter } from '@slop/core';
 
 const walk = async (dir: string): Promise<string[]> => {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -11,8 +12,25 @@ const walk = async (dir: string): Promise<string[]> => {
   return files.flat();
 };
 
+/**
+ * A stable hash of an agent set: the delivered files' paths and contents, sorted by path (files
+ * that aren't delivered, like the README, don't count).
+ */
+export const hashAgentSet = (files: readonly { path: string; content: string }[]): string => {
+  const hash = createHash('sha256');
+  const delivered = files.filter((f) => agentSetKind(f.path) !== null);
+  for (const file of delivered.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
+    // Lengths frame each field, so no path or content can run into the next.
+    hash.update(`${String(file.path.length)}:${file.path}\n${String(Buffer.byteLength(file.content))}:`);
+    hash.update(file.content);
+  }
+  return hash.digest('hex');
+};
+
 /** The generic catalog shipped in slop's repo (`catalog/kb`, `catalog/agents`), read from disk. */
 export class FsCatalog implements Catalog {
+  private agents: Promise<CatalogAgentSet> | null = null;
+
   constructor(private readonly root: string) {}
 
   async kbEntries(): Promise<{ id: string; version: number; fileName: string; content: string }[]> {
@@ -27,12 +45,25 @@ export class FsCatalog implements Catalog {
     );
   }
 
-  async agentSet(): Promise<{ path: string; content: string }[]> {
+  /**
+   * Read once per process: the agent-set version a board serves follows the catalog hash recorded
+   * at start (`KnowledgeService.syncCatalogAgentSet`), so served files must not drift from it.
+   */
+  agentSet(): Promise<CatalogAgentSet> {
+    this.agents ??= this.readAgentSet().catch((error: unknown) => {
+      this.agents = null;
+      throw error;
+    });
+    return this.agents;
+  }
+
+  private async readAgentSet(): Promise<CatalogAgentSet> {
     const dir = join(this.root, 'agents');
-    const files = await walk(dir);
-    return Promise.all(
-      files.sort().map(async (file) => ({ path: relative(dir, file), content: await readFile(file, 'utf8') })),
+    const paths = await walk(dir);
+    const files = await Promise.all(
+      paths.sort().map(async (file) => ({ path: relative(dir, file).split(sep).join('/'), content: await readFile(file, 'utf8') })),
     );
+    return { hash: hashAgentSet(files), files };
   }
 }
 

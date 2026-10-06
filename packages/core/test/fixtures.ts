@@ -18,6 +18,7 @@ export const board: Board = {
   deploy: { provider: 'codebuild', region: 'us-east-1', defaultProject: 'deploy', projects: {} },
   readinessTicks: {},
   agentSetVersion: 1,
+  agentCatalogHash: null,
   runNoProgressHours: 2,
   runReadyHours: 8,
   subMaxChangedLines: 2000,

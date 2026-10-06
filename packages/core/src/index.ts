@@ -4,6 +4,7 @@ export * from './domain/events.js';
 export * from './domain/ids.js';
 export * from './domain/matrix.js';
 export * from './domain/knowledge.js';
+export * from './domain/agent-set.js';
 export * from './domain/kb.js';
 export * from './domain/sub-gate.js';
 export * from './domain/attention.js';

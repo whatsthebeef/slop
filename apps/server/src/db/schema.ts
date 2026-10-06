@@ -1,5 +1,5 @@
 import type { Board, DeployIntegration, DomainEvent, Effect, Environment, Glob, KbOutcome, Provenance, ProposedDocument } from '@slop/core';
-import { DEPLOY_STATES, DEPLOY_TRIGGERS, LEARNING_TYPES } from '@slop/core';
+import { DEPLOY_STATES, DEPLOY_TRIGGERS, KNOWLEDGE_LAYERS, LEARNING_TYPES } from '@slop/core';
 import {
   bigserial,
   boolean,
@@ -33,6 +33,8 @@ export const boards = pgTable('boards', {
   environments: jsonb('environments').$type<Environment[]>().notNull(),
   sensitivePaths: jsonb('sensitive_paths').$type<string[]>().notNull(),
   agentSetVersion: integer('agent_set_version').notNull().default(0),
+  /** The catalog agent set's hash the board's agent-set version last followed. */
+  agentCatalogHash: text('agent_catalog_hash'),
   runNoProgressHours: integer('run_no_progress_hours').notNull().default(2),
   runReadyHours: integer('run_ready_hours').notNull().default(8),
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
@@ -161,6 +163,8 @@ export const knowledge = pgTable(
     audience: jsonb('audience').$type<string[]>().notNull(),
     description: text('description').notNull(),
     content: text('content').notNull(),
+    /** Agent-set rows: `overlay` (the board's additions to a catalog file) or `file` (a whole board file). */
+    layer: text('layer', { enum: KNOWLEDGE_LAYERS }).notNull().default('file'),
     version: integer('version').notNull(),
     source: text('source').notNull(),
     updatedBy: text('updated_by').notNull(),
@@ -182,6 +186,7 @@ export const knowledgeHistory = pgTable(
     audience: jsonb('audience').$type<string[]>().notNull(),
     description: text('description').notNull(),
     content: text('content').notNull(),
+    layer: text('layer', { enum: KNOWLEDGE_LAYERS }).notNull().default('file'),
     source: text('source').notNull(),
     updatedBy: text('updated_by').notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),

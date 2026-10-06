@@ -1,6 +1,8 @@
 import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
+import { composeAgentSet, overlayProblem } from '../domain/agent-set.js';
+import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../domain/agent-set.js';
 import { isLearningType } from '../domain/kb.js';
 import type { KbItem, KbItemStatus, KbOutcome, LearningType, ProposedDocument } from '../domain/kb.js';
 import {
@@ -11,9 +13,9 @@ import {
   parseFrontmatter,
   renderFrontmatter,
 } from '../domain/knowledge.js';
-import type { KnowledgeDoc, KnowledgeKind } from '../domain/knowledge.js';
+import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
 import type { Board } from '../domain/types.js';
-import type { Catalog, Clock, Notifier, Store, Tx } from '../ports.js';
+import type { Catalog, CatalogAgentSet, Clock, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 
 export interface IndexEntry {
@@ -25,9 +27,41 @@ export interface IndexEntry {
   readonly source: string;
 }
 
+/** The agent set as served: catalog files with the board's layers applied, plus the board's own files. */
 export interface AgentSet {
   readonly version: number;
   readonly files: readonly { readonly path: string; readonly content: string }[];
+}
+
+/** Every path in the board's agent set and how it is served, for the Knowledge page. */
+export interface AgentSetIndex {
+  readonly version: number;
+  readonly entries: readonly AgentSetEntry[];
+}
+
+/** One agent-set file for editing: the board's layer, the catalog's text beside it, and the result. */
+export interface AgentSetFileView {
+  readonly path: string;
+  readonly kind: KnowledgeKind;
+  readonly status: AgentSetEntryStatus;
+  /** What an edit writes: the overlay (empty when the board has none yet) or the whole board file. */
+  readonly layer: KnowledgeLayer;
+  readonly content: string;
+  /** The board row's version; null when the file comes from the catalog with no board row. */
+  readonly version: number | null;
+  /** The catalog's text, read-only; null for a file the catalog doesn't have. */
+  readonly catalog: string | null;
+  /** The file as served (placeholders unfilled); null for an orphaned overlay, which isn't served. */
+  readonly served: string | null;
+}
+
+interface WriteItem {
+  readonly kind: KnowledgeKind;
+  readonly name: string;
+  readonly content: string;
+  readonly source: string;
+  /** Agent-set rows only; documents are always `file`. */
+  readonly layer?: KnowledgeLayer;
 }
 
 export interface ImportResult {
@@ -52,7 +86,8 @@ export interface NewLearning {
 /**
  * How an admin approves a KB item: keep the statement as an approved learning, apply it by hand as
  * new content for an existing document or agent-set file, or (document proposals) create or update
- * the proposed document. The statement or content may be edited first.
+ * the proposed document. The statement or content may be edited first. For an agent-set file the
+ * content is the board's layer: its overlay on a catalog file, or the whole file the board owns.
  */
 export type Approval =
   | { readonly as: 'learning'; readonly statement?: string }
@@ -154,18 +189,58 @@ export class KnowledgeService {
     });
   }
 
-  /** `get_agent_set(board)`: every agent-set file and the set's version. */
+  /** `get_agent_set(board)`: every agent-set file as served (catalog plus the board's layers) and the set's version. */
   async agentSet(email: string, boardId: number): Promise<Result<AgentSet>> {
+    const catalog = await this.deps.catalog.agentSet();
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      return this.served(tx, catalog, boardId);
+    });
+  }
+
+  /**
+   * The agent set as served, without a membership check: for signed download links, whose
+   * signature is the authorisation (issued to a member through the authenticated MCP).
+   */
+  async agentSetForDownload(boardId: number): Promise<Result<AgentSet>> {
+    const catalog = await this.deps.catalog.agentSet();
+    return this.deps.store.transaction((tx) => this.served(tx, catalog, boardId));
+  }
+
+  /** Every path in the board's agent set with how it is served (catalog, overlay, board file, override, orphaned). */
+  async agentSetIndex(email: string, boardId: number): Promise<Result<AgentSetIndex>> {
+    const catalog = await this.deps.catalog.agentSet();
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
       const board = await tx.getBoard(boardId);
       if (board === null) return notFound(`No board ${boardId}`);
-      const files = (await tx.listKnowledge(boardId))
-        .filter((d) => isAgentSetKind(d.kind))
-        .map((d) => ({ path: d.name, content: d.content }))
-        .sort((a, b) => a.path.localeCompare(b.path));
-      return ok({ version: board.agentSetVersion, files });
+      const { entries } = await this.compose(tx, catalog, boardId);
+      return ok({ version: board.agentSetVersion, entries });
+    });
+  }
+
+  /** One agent-set file: the board's layer to edit, with the catalog's text and the served result. */
+  async agentSetFile(email: string, boardId: number, path: string): Promise<Result<AgentSetFileView>> {
+    const catalog = await this.deps.catalog.agentSet();
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      const composed = await this.compose(tx, catalog, boardId);
+      const entry = composed.entries.find((e) => e.path === path);
+      if (entry === undefined) return notFound(`No agent-set file ${path} on board ${boardId}`);
+      const row = await tx.getKnowledge(boardId, entry.kind, path);
+      return ok({
+        path,
+        kind: entry.kind,
+        status: entry.status,
+        layer: row?.layer ?? 'overlay',
+        content: row?.content ?? '',
+        version: row?.version ?? null,
+        catalog: catalog.files.find((f) => f.path === path)?.content ?? null,
+        served: composed.files.find((f) => f.path === path)?.content ?? null,
+      });
     });
   }
 
@@ -207,19 +282,59 @@ export class KnowledgeService {
     });
   }
 
-  /** Forks the catalog's agent set into the board (a new board, or adopting catalog changes). */
-  async forkAgentSet(email: string, boardId: number): Promise<Result<ImportResult>> {
-    const files = await this.deps.catalog.agentSet();
-    return this.deps.store.transaction(async (tx) => {
-      const actor = await adminOf(tx, email, boardId);
-      if (!actor.ok) return actor;
-      const items: { kind: KnowledgeKind; name: string; content: string; source: string }[] = [];
-      for (const file of files) {
-        const kind = agentSetKind(file.path);
-        if (kind !== null) items.push({ kind, name: file.path, content: file.content, source: 'catalog:agents' });
+  /**
+   * A new board follows the catalog's agent set: nothing is copied (catalog files are served
+   * through layering); the board records the catalog's hash and its agent set gets a version.
+   */
+  async adoptCatalogAgentSet(email: string, boardId: number): Promise<Result<{ version: number }>> {
+    const actor = await this.deps.store.transaction((tx) => adminOf(tx, email, boardId));
+    if (!actor.ok) return actor;
+    const { hash } = await this.deps.catalog.agentSet();
+    const version = await this.followCatalog(boardId, hash);
+    return version === null ? notFound(`No board ${boardId}`) : ok({ version });
+  }
+
+  /**
+   * At server start: every board whose agent set followed a different catalog gets a new
+   * agent-set version (so routines and readiness see the catalog change). Returns the boards bumped.
+   */
+  async syncCatalogAgentSet(): Promise<number[]> {
+    const { hash } = await this.deps.catalog.agentSet();
+    const boards = await this.deps.store.transaction((tx) => tx.listAllBoards());
+    const bumped: number[] = [];
+    for (const board of boards) {
+      if (board.agentCatalogHash === hash) continue;
+      if ((await this.followCatalog(board.id, hash)) !== null) bumped.push(board.id);
+    }
+    return bumped;
+  }
+
+  /**
+   * Admins turn a whole board file that shadows a catalog file (a legacy fork) back into the
+   * catalog file plus board rules, with the given overlay (default none).
+   */
+  async useCatalogVersion(email: string, boardId: number, path: string, overlay = ''): Promise<Result<{ version: number }>> {
+    const kind = agentSetKind(path);
+    if (kind === null) return invalidInput(`${path} is not an agent-set path`);
+    const catalog = await this.deps.catalog.agentSet();
+    if (!catalog.files.some((f) => f.path === path)) return notFound(`${path} is not in the catalog`);
+    const problem = overlayProblem(kind, overlay);
+    if (problem !== null) return invalidInput(problem);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.deps.store.transaction(async (tx) => {
+          const actor = await adminOf(tx, email, boardId);
+          if (!actor.ok) return actor;
+          const existing = await tx.getKnowledge(boardId, kind, path);
+          if (existing?.layer !== 'file') return invalidInput(`${path} already follows the catalog`);
+          const written = await this.write(tx, email, boardId, [{ kind, name: path, content: overlay, layer: 'overlay', source: 'edit' }]);
+          if (!written.ok) return written;
+          return ok({ version: existing.version + 1 });
+        });
+      } catch (error) {
+        if (!(error instanceof BoardChanged) || attempt >= 4) throw error;
       }
-      return this.write(tx, email, boardId, items);
-    });
+    }
   }
 
   /**
@@ -334,11 +449,13 @@ export class KnowledgeService {
       if (approval.as === 'learning') return ok({ statement, outcome: { kind: 'learning' } });
 
       const { kind, name } = approval.target;
-      const existing = await tx.getKnowledge(item.boardId, kind, name);
-      if (existing === null) {
-        return notFound(`No ${kind === 'doc' ? 'document' : 'agent-set file'} ${name} on board ${item.boardId}`);
-      }
       if (approval.content.trim() === '') return invalidInput('The new content is empty');
+      const existing = await tx.getKnowledge(item.boardId, kind, name);
+      if (isAgentSetKind(kind)) {
+        const outcome = await this.applyAgentSetEdit(tx, email, item, kind, name, approval.content, existing);
+        return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
+      }
+      if (existing === null) return notFound(`No document ${name} on board ${item.boardId}`);
       // A document edited without frontmatter keeps its area, audience and description.
       const content =
         kind === 'doc' && !hasFrontmatter(approval.content) ? renderFrontmatter(existing) + approval.content : approval.content;
@@ -391,6 +508,31 @@ export class KnowledgeService {
     }
   }
 
+  /**
+   * An approved edit to an agent-set file writes the board's layer: the whole file for a file the
+   * board owns, otherwise its overlay on the catalog file (created on first use).
+   */
+  private async applyAgentSetEdit(
+    tx: Tx,
+    email: string,
+    item: KbItem,
+    kind: KnowledgeKind,
+    name: string,
+    content: string,
+    existing: KnowledgeDoc | null,
+  ): Promise<Result<KbOutcome>> {
+    if (existing?.layer === 'file') return this.apply(tx, email, item, kind, name, content, 'file');
+    if (existing === null) {
+      const catalog = await this.deps.catalog.agentSet();
+      if (!catalog.files.some((f) => f.path === name && agentSetKind(f.path) === kind)) {
+        return notFound(`No agent-set file ${name} on board ${item.boardId}`);
+      }
+    }
+    const problem = overlayProblem(kind, content);
+    if (problem !== null) return invalidInput(problem);
+    return this.apply(tx, email, item, kind, name, content, 'overlay');
+  }
+
   /** Writes an approved change to a document or agent-set file and returns the outcome with its new version. */
   private async apply(
     tx: Tx,
@@ -399,21 +541,53 @@ export class KnowledgeService {
     kind: KnowledgeKind,
     name: string,
     content: string,
+    layer: KnowledgeLayer = 'file',
   ): Promise<Result<KbOutcome>> {
-    const written = await this.write(tx, email, item.boardId, [{ kind, name, content, source: `kb:${item.id}` }]);
+    const written = await this.write(tx, email, item.boardId, [{ kind, name, content, layer, source: `kb:${item.id}` }]);
     if (!written.ok) return written;
     const saved = await tx.getKnowledge(item.boardId, kind, name);
     if (saved === null) throw new Error(`${name} was not saved`);
     return ok({ kind: 'applied', target: kind, name, version: saved.version });
   }
 
+  /** The board's agent-set rows composed over the catalog. */
+  private async compose(tx: Tx, catalog: CatalogAgentSet, boardId: number): Promise<ComposedAgentSet> {
+    const rows = (await tx.listKnowledge(boardId)).filter((d) => isAgentSetKind(d.kind));
+    return composeAgentSet(catalog.files, rows);
+  }
+
+  private async served(tx: Tx, catalog: CatalogAgentSet, boardId: number): Promise<Result<AgentSet>> {
+    const board = await tx.getBoard(boardId);
+    if (board === null) return notFound(`No board ${boardId}`);
+    const { files } = await this.compose(tx, catalog, boardId);
+    return ok({ version: board.agentSetVersion, files });
+  }
+
+  /**
+   * Records that the board's agent set follows the catalog with `hash`, bumping its agent-set
+   * version if it followed another. Retries a lost conditional write; null when there's no board.
+   */
+  private async followCatalog(boardId: number, hash: string): Promise<number | null> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const outcome = await this.deps.store.transaction(async (tx) => {
+        const board = await tx.getBoard(boardId);
+        if (board === null) return { kind: 'missing' as const };
+        if (board.agentCatalogHash === hash) return { kind: 'unchanged' as const, version: board.agentSetVersion };
+        const next: Board = { ...board, agentSetVersion: board.agentSetVersion + 1, version: board.version + 1, agentCatalogHash: hash };
+        return (await tx.updateBoard(next, board.version))
+          ? { kind: 'bumped' as const, version: next.agentSetVersion }
+          : { kind: 'conflict' as const };
+      });
+      if (outcome.kind === 'missing') return null;
+      if (outcome.kind === 'conflict') continue;
+      if (outcome.kind === 'bumped') this.deps.notifier.publish({ kind: 'board.changed', boardId });
+      return outcome.version;
+    }
+    throw new BoardChanged(boardId);
+  }
+
   /** Writes documents, versioning only real changes; any agent-set change bumps the set's version. */
-  private async write(
-    tx: Tx,
-    email: string,
-    boardId: number,
-    items: readonly { kind: KnowledgeKind; name: string; content: string; source: string }[],
-  ): Promise<Result<ImportResult>> {
+  private async write(tx: Tx, email: string, boardId: number, items: readonly WriteItem[]): Promise<Result<ImportResult>> {
     const board = await tx.getBoard(boardId);
     if (board === null) return notFound(`No board ${boardId}`);
     const created: string[] = [];
@@ -428,9 +602,11 @@ export class KnowledgeService {
         item.kind === 'doc'
           ? parseFrontmatter(item.content)
           : { area: null, audience: [], description: '', body: item.content };
+      const layer = item.kind === 'doc' ? 'file' : (item.layer ?? 'file');
       const existing = await tx.getKnowledge(boardId, item.kind, item.name);
       const same =
         existing !== null &&
+        existing.layer === layer &&
         existing.content === meta.body &&
         existing.area === meta.area &&
         existing.description === meta.description &&
@@ -447,6 +623,7 @@ export class KnowledgeService {
         audience: meta.audience,
         description: meta.description,
         content: meta.body,
+        layer,
         version: (existing?.version ?? 0) + 1,
         source: item.source,
         updatedBy: email,

@@ -13,6 +13,8 @@ const unwrap = <T>(result: Result<T>): T => {
   return result.value;
 };
 
+const errorCode = <T>(result: Result<T>): string | null => (result.ok ? null : result.error.code);
+
 const ADMIN = 'admin@example.com';
 const DEV = 'dev@example.com';
 
@@ -35,12 +37,15 @@ const catalog: Catalog = {
       { id: 'typescript_conventions', version: 2, fileName: 'typescript_conventions.md', content: '---\narea: conventions\naudience: [implementer, change_reviewer]\ndescription: TS.\n---\nNo any.\n' },
     ]),
   agentSet: () =>
-    Promise.resolve([
-      { path: 'agents/orchestrator.md', content: '---\nname: orchestrator\n---\nRun the phases.\n' },
-      { path: 'commands/run-glob.md', content: 'Run a glob.\n' },
-      { path: 'settings.json', content: '{}\n' },
-      { path: 'README.md', content: 'not part of the delivered set' },
-    ]),
+    Promise.resolve({
+      hash: 'catalog-1',
+      files: [
+        { path: 'agents/orchestrator.md', content: '---\nname: orchestrator\n---\nRun the phases.\n' },
+        { path: 'commands/run-glob.md', content: 'Run a glob.\n' },
+        { path: 'settings.json', content: '{}\n' },
+        { path: 'README.md', content: 'not part of the delivered set' },
+      ],
+    }),
 };
 
 describe('frontmatter and names', () => {
@@ -93,15 +98,14 @@ describe('knowledge and artifacts', () => {
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
-  it('forks the agent set and bumps its version only when something changed', async () => {
-    const first = unwrap(await knowledge.forkAgentSet(ADMIN, boardId));
-    expect(first.created).toEqual(['agents/orchestrator.md', 'commands/run-glob.md', 'settings.json']);
+  it('adopts the catalog agent set without copying it, and versions it only once per catalog', async () => {
+    expect(errorCode(await knowledge.adoptCatalogAgentSet(DEV, boardId))).toBe('forbidden');
+    expect(unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, boardId))).toEqual({ version: 1 });
     const set = unwrap(await knowledge.agentSet(DEV, boardId));
     expect(set.version).toBe(1);
     expect(set.files.map((f) => f.path)).toEqual(['agents/orchestrator.md', 'commands/run-glob.md', 'settings.json']);
-    const again = unwrap(await knowledge.forkAgentSet(ADMIN, boardId));
-    expect(again.unchanged).toHaveLength(3);
-    expect(unwrap(await knowledge.agentSet(DEV, boardId)).version).toBe(1);
+    expect(await store.transaction((tx) => tx.listKnowledge(boardId))).toEqual([]);
+    expect(unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, boardId))).toEqual({ version: 1 });
   });
 
   it('imports documents for admins only, versioning real changes', async () => {

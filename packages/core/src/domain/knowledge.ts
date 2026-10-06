@@ -8,6 +8,13 @@ export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
 /** Everything except documents belongs to the agent set and changes its version. */
 export const isAgentSetKind = (kind: KnowledgeKind): boolean => kind !== 'doc';
 
+/**
+ * Agent-set rows are a layer over slop's catalog (`domain/agent-set.ts`): the board's `overlay` on
+ * a catalog file, or a whole `file` the board owns. Documents are always `file`.
+ */
+export const KNOWLEDGE_LAYERS = ['overlay', 'file'] as const;
+export type KnowledgeLayer = (typeof KNOWLEDGE_LAYERS)[number];
+
 export interface KnowledgeDoc {
   readonly boardId: number;
   readonly kind: KnowledgeKind;
@@ -17,7 +24,9 @@ export interface KnowledgeDoc {
   /** The agents that must always be given this document. */
   readonly audience: readonly string[];
   readonly description: string;
+  /** Overlay rows: only the board's additions; the catalog supplies the rest. */
   readonly content: string;
+  readonly layer: KnowledgeLayer;
   readonly version: number;
   /** Where it came from: `catalog:<id>@<version>`, `upload`, `import`, or `edit`. */
   readonly source: string;

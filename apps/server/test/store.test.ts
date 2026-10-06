@@ -174,6 +174,7 @@ describe('PgStore', () => {
       audience: ['implementer'],
       description: '',
       content: 'one',
+      layer: 'file' as const,
       version: 1,
       source: 'upload',
       updatedBy: 'dev@example.com',

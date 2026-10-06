@@ -1,5 +1,5 @@
 import type { Artifact, ArtifactSummary, Board, Deploy, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, DEPLOY_STATES, DEPLOY_TRIGGERS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, LEARNING_TYPES } from '@slop/core';
+import { ARTIFACT_KINDS, DEPLOY_STATES, DEPLOY_TRIGGERS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES } from '@slop/core';
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -41,6 +41,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   environments: row.environments,
   sensitivePaths: row.sensitivePaths,
   agentSetVersion: row.agentSetVersion,
+  agentCatalogHash: row.agentCatalogHash,
   runNoProgressHours: row.runNoProgressHours,
   runReadyHours: row.runReadyHours,
   subMaxChangedLines: row.subMaxChangedLines,
@@ -77,6 +78,7 @@ const deployRow = (d: Deploy): typeof schema.deploys.$inferInsert => ({
 const toKnowledge = (row: typeof schema.knowledge.$inferSelect): KnowledgeDoc => ({
   ...row,
   kind: oneOf(KNOWLEDGE_KINDS, row.kind),
+  layer: oneOf(KNOWLEDGE_LAYERS, row.layer),
   updatedAt: row.updatedAt.toISOString(),
 });
 
@@ -201,6 +203,7 @@ export class PgStore implements Store {
             environments: [...board.environments],
             sensitivePaths: [...board.sensitivePaths],
             agentSetVersion: board.agentSetVersion,
+            agentCatalogHash: board.agentCatalogHash,
             runNoProgressHours: board.runNoProgressHours,
             runReadyHours: board.runReadyHours,
             deploy: board.deploy,
@@ -277,10 +280,10 @@ export class PgStore implements Store {
         );
         const [previous] = await t.select().from(schema.knowledge).where(key);
         if (previous !== undefined) {
-          const { boardId, kind, name, version, area, audience, description, content, source, updatedBy, updatedAt } = previous;
+          const { boardId, kind, name, version, area, audience, description, content, layer, source, updatedBy, updatedAt } = previous;
           await t
             .insert(schema.knowledgeHistory)
-            .values({ boardId, kind, name, version, area, audience, description, content, source, updatedBy, updatedAt });
+            .values({ boardId, kind, name, version, area, audience, description, content, layer, source, updatedBy, updatedAt });
         }
         const values = { ...doc, audience: [...doc.audience], updatedAt: new Date(doc.updatedAt) };
         await t

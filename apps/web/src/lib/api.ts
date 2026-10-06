@@ -1,5 +1,7 @@
 import type {
   Action,
+  AgentSetEntry,
+  AgentSetFileView,
   Approval,
   ArtifactKind,
   ArtifactSummary,
@@ -53,7 +55,13 @@ export interface KnowledgeIndex {
     readonly version: number;
     readonly source: string;
   }[];
-  readonly agentSet: { readonly version: number; readonly files: readonly string[] };
+  readonly agentSet: {
+    readonly version: number;
+    /** The paths served. */
+    readonly files: readonly string[];
+    /** Every path with how it is served, orphaned overlays included. */
+    readonly entries: readonly AgentSetEntry[];
+  };
 }
 
 export interface CatalogEntry {
@@ -196,9 +204,10 @@ export const api = {
     request<ImportResult>('POST', `/api/boards/${boardId}/kb/catalog-imports`, { ids }),
   upload: (boardId: number, documents: { fileName: string; content: string }[]) =>
     request<ImportResult>('POST', `/api/boards/${boardId}/kb/uploads`, { documents }),
-  forkAgentSet: (boardId: number) => request<ImportResult>('POST', `/api/boards/${boardId}/kb/agent-set/fork`),
   agentSetFile: (boardId: number, path: string) =>
-    request<{ path: string; content: string }>('GET', `/api/boards/${boardId}/kb/agent-set/file?path=${encodeURIComponent(path)}`),
+    request<AgentSetFileView>('GET', `/api/boards/${boardId}/kb/agent-set/file?path=${encodeURIComponent(path)}`),
+  useCatalogVersion: (boardId: number, path: string, overlay = '') =>
+    request<{ version: number }>('POST', `/api/boards/${boardId}/kb/agent-set/use-catalog`, { path, overlay }),
   proposals: (boardId: number, status?: KbItemStatus) =>
     request<KbItem[]>('GET', `/api/boards/${boardId}/kb/proposals${status === undefined ? '' : `?status=${status}`}`),
   approveProposal: (id: string, version: number, approval: Approval) =>

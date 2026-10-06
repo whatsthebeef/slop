@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Link, useParams } from 'react-router';
+import { AgentSetFiles } from '@/components/agent-set-files';
 import { KbProposals } from '@/components/kb-proposals';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -50,11 +51,6 @@ export const KnowledgePage = () => {
   });
   const upload = useMutation({
     mutationFn: (documents: { fileName: string; content: string }[]) => api.upload(boardId, documents),
-    onSuccess: done,
-    onError: (e) => toast(message(e)),
-  });
-  const fork = useMutation({
-    mutationFn: () => api.forkAgentSet(boardId),
     onSuccess: done,
     onError: (e) => toast(message(e)),
   });
@@ -161,18 +157,10 @@ export const KnowledgePage = () => {
       <section className='grid gap-2'>
         <h2 className='text-sm font-semibold'>Agent set · version {kb.data.agentSet.version}</h2>
         <p className='text-xs text-muted-foreground'>
-          Written into each checkout by <code>sstor init</code>, and refreshed by routines at the start of a run.
+          Written into each checkout by <code>sstor init</code>, and refreshed by routines at the start of a run. Each file is
+          slop's catalog version plus this board's rules, so catalog updates arrive on their own.
         </p>
-        <ul className='grid gap-0.5 font-mono text-xs'>
-          {kb.data.agentSet.files.map((f) => (
-            <li key={f}>{f}</li>
-          ))}
-        </ul>
-        {admin && (
-          <Button variant='outline' size='sm' className='w-fit' disabled={fork.isPending} onClick={() => fork.mutate()}>
-            Update from the catalog
-          </Button>
-        )}
+        <AgentSetFiles boardId={boardId} admin={admin} entries={kb.data.agentSet.entries} />
       </section>
 
       {viewing !== null && (

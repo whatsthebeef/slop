@@ -21,7 +21,7 @@ const NOW = '2026-10-05T12:00:00.000Z';
 
 const catalog: Catalog = {
   kbEntries: () => Promise.resolve([]),
-  agentSet: () => Promise.resolve([]),
+  agentSet: () => Promise.resolve({ hash: 'empty', files: [] }),
 };
 
 describe('submit_learning', () => {
@@ -264,6 +264,7 @@ describe('KB review', () => {
         audience: [],
         description: '',
         content: 'Implement the plan.\n',
+        layer: 'file',
         version: 1,
         source: 'catalog:agents',
         updatedBy: ADMIN,

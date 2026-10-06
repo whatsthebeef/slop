@@ -68,10 +68,13 @@ export const mountKnowledge = (
   app.get('/api/boards/:b/kb', async (c) => {
     const boardId = Number(c.req.param('b'));
     const email = c.get('email');
-    const [index, set] = await Promise.all([knowledge.index(email, boardId), knowledge.agentSet(email, boardId)]);
+    const [index, set] = await Promise.all([knowledge.index(email, boardId), knowledge.agentSetIndex(email, boardId)]);
     if (!index.ok) return send(c, index);
     if (!set.ok) return send(c, set);
-    return c.json({ documents: index.value, agentSet: { version: set.value.version, files: set.value.files.map((f) => f.path) } });
+    const { version, entries } = set.value;
+    // `files`: the paths served (orphaned overlays aren't); `entries`: every path with how it is served.
+    const files = entries.filter((e) => e.status !== 'orphaned').map((e) => e.path);
+    return c.json({ documents: index.value, agentSet: { version, files, entries } });
   });
 
   app.get('/api/boards/:b/kb/docs/:name', async (c) =>
@@ -100,16 +103,16 @@ export const mountKnowledge = (
     return send(c, await knowledge.importDocuments(c.get('email'), Number(c.req.param('b')), body.documents, 'upload'));
   });
 
-  app.post('/api/boards/:b/kb/agent-set/fork', async (c) =>
-    send(c, await knowledge.forkAgentSet(c.get('email'), Number(c.req.param('b')))),
+  // One agent-set file (placeholders unfilled): the board's layer to edit, the catalog's text beside it, and the result.
+  app.get('/api/boards/:b/kb/agent-set/file', async (c) =>
+    send(c, await knowledge.agentSetFile(c.get('email'), Number(c.req.param('b')), c.req.query('path') ?? '')),
   );
 
-  // One agent-set file as stored (placeholders unfilled), for editing it while applying a KB item.
-  app.get('/api/boards/:b/kb/agent-set/file', async (c) => {
-    const set = await knowledge.agentSet(c.get('email'), Number(c.req.param('b')));
-    if (!set.ok) return send(c, set);
-    const file = set.value.files.find((f) => f.path === c.req.query('path'));
-    return file === undefined ? c.json({ code: 'not_found', message: 'No such agent-set file' }, 404) : c.json(file);
+  // Admins turn a board file that overrides a catalog file back into the catalog file plus board rules.
+  app.post('/api/boards/:b/kb/agent-set/use-catalog', async (c) => {
+    const body = await parse(c, z.object({ path: z.string().min(1), overlay: z.string().max(500_000).default('') }));
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.useCatalogVersion(c.get('email'), Number(c.req.param('b')), body.path, body.overlay));
   });
 
   // KB items (proposals); members read them, admins decide them.

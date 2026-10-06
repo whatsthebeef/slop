@@ -104,8 +104,8 @@ const app = createApp({
   hub,
   outbox,
   onBoardCreated: async (email, boardId) => {
-    const forked = await knowledge.forkAgentSet(email, boardId);
-    if (!forked.ok) logError('board created', `Agent set fork failed for board ${boardId}: ${forked.error.message}`);
+    const adopted = await knowledge.adoptCatalogAgentSet(email, boardId);
+    if (!adopted.ok) logError('board created', `Adopting the catalog agent set failed for board ${boardId}: ${adopted.error.message}`);
   },
 });
 mountDeploys(app, { deploys, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
@@ -119,16 +119,12 @@ app.get('/downloads/agent-set/:board', async (c) => {
   if (!links.verify(c.req.path, Number(c.req.query('expires')), c.req.query('signature') ?? '')) {
     return c.json({ error: 'This download link is invalid or has expired' }, 403);
   }
-  const files = await store.transaction(async (tx) => {
-    const board = await tx.getBoard(boardId);
-    if (board === null) return null;
-    const docs = (await tx.listKnowledge(boardId)).filter((d) => d.kind !== 'doc');
-    return {
-      version: board.agentSetVersion,
-      files: docs.map((d) => ({ path: d.name, content: renderAgentSetFile(d.content, agentSetValues) })),
-    };
+  const set = await knowledge.agentSetForDownload(boardId);
+  if (!set.ok) return c.json({ error: 'No such board' }, 404);
+  return c.json({
+    version: set.value.version,
+    files: set.value.files.map((f) => ({ path: f.path, content: renderAgentSetFile(f.content, agentSetValues) })),
   });
-  return files === null ? c.json({ error: 'No such board' }, 404) : c.json(files);
 });
 mountMcp(app, {
   auth,
@@ -167,6 +163,14 @@ if (config.WEB_DIST !== undefined) {
   app.use('/*', serveStatic({ root }));
   // The board is a single-page app: unknown paths get index.html.
   app.get('*', (c) => c.html(index));
+}
+
+// Catalog agent files reach boards through layering; a changed catalog gives each board a new agent-set version.
+try {
+  const bumped = await knowledge.syncCatalogAgentSet();
+  if (bumped.length > 0) console.log(`[agent set] catalog changed: new agent-set version for boards ${bumped.join(', ')}`);
+} catch (error) {
+  logError('agent set sync', error instanceof Error ? (error.stack ?? error.message) : String(error));
 }
 
 outbox.start();

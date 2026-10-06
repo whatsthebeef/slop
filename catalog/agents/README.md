@@ -1,6 +1,6 @@
 # Agent set
 
-The catalog's generic agent set. A new board imports (forks) it into its knowledge base as `agent` items; from then on the board's copy changes through approved proposals, and changes made here reach each board as a proposal with the diff. Everything here is generic and non-sensitive: the agents describe how to fetch board knowledge through slop's authenticated MCP, never the knowledge itself.
+The catalog's generic agent set. Every board serves these files with its own layer on top: board rules appended under `## Board rules` (markdown files), JSON merged into `settings.json`, or files the board adds. Changes made here reach every board when slop restarts, with a new agent-set version; boards change only their own layer, through approved proposals. Everything here is generic and non-sensitive: the agents describe how to fetch board knowledge through slop's authenticated MCP, never the knowledge itself.
 
 At run time the agents fetch the rest through slop's MCP tools, which require the person's or routine's OAuth login: the board's settings (`get_board`), its knowledge (`get_conventions`), each glob's context (`get_context`) and search. Project knowledge (build commands, conventions, review checklists, architecture docs) never lives in this repo.
 

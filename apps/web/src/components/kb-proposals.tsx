@@ -236,25 +236,34 @@ const DecisionDialog = ({
   const [target, setTarget] = useState(suggested === undefined ? '' : targetKey(suggested.kind, suggested.name));
   const [content, setContent] = useState(item.document?.content ?? '');
   const [loaded, setLoaded] = useState(decision !== 'edit');
+  // Agent-set files: what the edit writes (the board's overlay or its whole file) and the catalog text beside it.
+  const [layer, setLayer] = useState<{ kind: 'overlay' | 'file'; catalog: string | null } | null>(null);
   const [reason, setReason] = useState('');
   const chosen = targets.find((t) => targetKey(t.kind, t.name) === target) ?? null;
 
   const chosenKind = chosen?.kind ?? null;
   const chosenName = chosen?.name ?? null;
 
-  // Pre-fill the editor with the target's current content (a document's body, without frontmatter).
+  // Pre-fill the editor with the target's current content: a document's body (without frontmatter),
+  // or an agent-set file's board layer (its overlay, or the whole file the board owns).
   useEffect(() => {
     if (decision !== 'edit' || chosenKind === null || chosenName === null) return;
     let cancelled = false;
     setLoaded(false);
+    setLayer(null);
     const current =
       chosenKind === 'doc'
-        ? api.knowledgeDoc(boardId, chosenName).then((docs) => docs.find((d) => d.name === chosenName)?.content ?? '')
-        : api.agentSetFile(boardId, chosenName).then((file) => file.content);
+        ? api
+            .knowledgeDoc(boardId, chosenName)
+            .then((docs) => ({ text: docs.find((d) => d.name === chosenName)?.content ?? '', layer: null }))
+        : api
+            .agentSetFile(boardId, chosenName)
+            .then((file) => ({ text: file.content, layer: { kind: file.layer, catalog: file.catalog } }));
     current
-      .then((text) => {
+      .then((loadedTarget) => {
         if (cancelled) return;
-        setContent(text);
+        setContent(loadedTarget.text);
+        setLayer(loadedTarget.layer);
         setLoaded(true);
       })
       .catch((e: unknown) => toast(message(e)));
@@ -330,18 +339,29 @@ const DecisionDialog = ({
                 </Select>
               </Label>
               {chosen !== null && (
-                <Label>
-                  New content
-                  {chosen.kind === 'doc'
-                    ? ' (its frontmatter is kept unless you add one)'
-                    : " (approving raises the board's agent-set version)"}
-                  <Textarea
-                    className='min-h-80 font-mono text-xs'
-                    value={loaded ? content : 'Loading…'}
-                    disabled={!loaded}
-                    onChange={(e) => setContent(e.target.value)}
-                  />
-                </Label>
+                <>
+                  {layer?.kind === 'overlay' && layer.catalog !== null && (
+                    <details className='text-xs'>
+                      <summary className='cursor-pointer text-muted-foreground'>Catalog version (read-only)</summary>
+                      <pre className='mt-1 max-h-64 overflow-auto rounded-md border p-2 whitespace-pre-wrap'>{layer.catalog}</pre>
+                    </details>
+                  )}
+                  <Label>
+                    {chosen.kind === 'doc'
+                      ? 'New content (its frontmatter is kept unless you add one)'
+                      : layer?.kind === 'overlay'
+                        ? chosen.kind === 'settings'
+                          ? "Board settings (JSON merged onto the catalog's; approving raises the board's agent-set version)"
+                          : "Board rules (appended to the catalog file under “## Board rules”; approving raises the board's agent-set version)"
+                        : "New content of the board's own file (approving raises the board's agent-set version)"}
+                    <Textarea
+                      className='min-h-80 font-mono text-xs'
+                      value={loaded ? content : 'Loading…'}
+                      disabled={!loaded}
+                      onChange={(e) => setContent(e.target.value)}
+                    />
+                  </Label>
+                </>
               )}
             </>
           )}

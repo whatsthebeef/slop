@@ -33,7 +33,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'runNoProgressHours' | 'runReadyHours' | 'subMaxChangedLines' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'subMaxChangedLines' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   listBoards(email: string): Promise<Board[]>;
   /** Every board, for background jobs. */
@@ -108,10 +108,16 @@ export interface Notifier {
   publish(hint: Hint): void;
 }
 
+/** The catalog's agent set: its files and a stable hash of them (paths and contents). */
+export interface CatalogAgentSet {
+  readonly hash: string;
+  readonly files: readonly { readonly path: string; readonly content: string }[];
+}
+
 /** The generic catalog shipped with slop (`catalog/`): starter KB entries and the agent set. */
 export interface Catalog {
   kbEntries(): Promise<{ id: string; version: number; fileName: string; content: string }[]>;
-  agentSet(): Promise<{ path: string; content: string }[]>;
+  agentSet(): Promise<CatalogAgentSet>;
 }
 
 export interface Clock {

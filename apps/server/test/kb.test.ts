@@ -31,7 +31,7 @@ describe('KB items in Postgres', () => {
     };
     knowledge = new KnowledgeService({
       ...deps,
-      catalog: { kbEntries: () => Promise.resolve([]), agentSet: () => Promise.resolve([]) },
+      catalog: { kbEntries: () => Promise.resolve([]), agentSet: () => Promise.resolve({ hash: 'empty', files: [] }) },
     });
     const globs = new GlobService({
       ...deps,
@@ -194,6 +194,7 @@ describe('KB items in Postgres', () => {
         audience: [],
         description: '',
         content: 'Test it.\n',
+        layer: 'file',
         version: 1,
         source: 'catalog:agents',
         updatedBy: ADMIN,
@@ -236,6 +237,7 @@ describe('KB items in Postgres', () => {
           audience: [],
           description: '',
           content: 'Old.\n',
+          layer: 'file',
           version: 1,
           source: 'catalog:agents',
           updatedBy: ADMIN,
