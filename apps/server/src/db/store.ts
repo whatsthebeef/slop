@@ -120,6 +120,7 @@ const kbItemColumns = (item: KbItem) => ({
   duplicateOf: item.duplicateOf,
   suppressedBy: item.suppressedBy,
   coveredBy: item.coveredBy,
+  possiblyCoveredBy: item.possiblyCoveredBy,
   contradicts: [...item.contradicts],
   draft: item.draft,
   draftedAgainstVersion: item.draftedAgainstVersion,

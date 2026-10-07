@@ -1,5 +1,14 @@
 import { composeAgentSet } from '../domain/agent-set.js';
-import type { KbContradiction, KbCoverage, KbDraft, KbItem, KbProcessing, KbTarget, NewDocumentMeta } from '../domain/kb.js';
+import type {
+  KbContradiction,
+  KbCoverage,
+  KbDraft,
+  KbItem,
+  KbPossibleCoverage,
+  KbProcessing,
+  KbTarget,
+  NewDocumentMeta,
+} from '../domain/kb.js';
 import { agentSetKind, docName, hasFrontmatter, isAgentSetKind, parseFrontmatter, PROSE_KINDS } from '../domain/knowledge.js';
 import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
 import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
@@ -53,11 +62,11 @@ export const DEDUPE_SYSTEM = `You compare a new learning, submitted by a coding 
 You get the new learning, then lists of open items (awaiting review), approved items, rejected items (with the reason), and the current text where the new learning would go.
 
 Respond with one JSON object and nothing else:
-{"suppressedBy": string | null, "duplicateOf": string | null, "coveredBy": {"kind": "item", "id": string} | {"kind": "target"} | null, "contradicts": [{"kind": "item" | "target", "ref": string, "note": string}]}
+{"suppressedBy": string | null, "duplicateOf": string | null, "coveredBy": {"kind": "item", "id": string, "quote": string} | {"kind": "target", "quote": string, "reason": string} | null, "contradicts": [{"kind": "item" | "target", "ref": string, "quote": string, "note": string}]}
 - suppressedBy: the ID of a rejected item that says the same thing; otherwise null.
 - duplicateOf: the ID of an open item that says the same thing; otherwise null.
-- coveredBy: an approved item that already says it ({"kind": "item", "id": ...}), or {"kind": "target"} when the current text already says it; otherwise null.
-- contradicts: open or approved items, or the current text, that the new learning conflicts with (both cannot be followed), each with a one-line note; [] if none. For the current text, ref is the heading it conflicts with, or "".
+- coveredBy: an approved item that already says it ({"kind": "item", "id": ...}), or {"kind": "target"} when the current text already says it; otherwise null. quote is the exact sentence or phrase, copied word for word from that approved item's statement or from the current text, that states the same fact as the new learning; reason is one short line on why it does. When no sentence states the same fact, answer null: the same topic is not the same fact, so text that is merely related, or that only mentions the same tool or area, does not cover the learning.
+- contradicts: open or approved items, or the current text, that the new learning conflicts with (both cannot be followed), each with quote (the exact words, copied from that item's statement or from the current text, that conflict) and a one-line note; [] if none. For the current text, ref is the heading it conflicts with, or "".
 "The same thing" means the same rule or fact, however it is worded; related but different learnings are not duplicates. Use IDs exactly as given.`;
 
 export const DRAFT_SYSTEM = `You draft one change to a software project's knowledge base: the edit that puts a reviewed learning, submitted by a coding agent, into the document or agent file it was routed to. An admin approves your draft as is or edits it first.
@@ -106,11 +115,14 @@ interface Routing {
 interface Dedupe {
   readonly suppressedBy: string | null;
   readonly duplicateOf: string | null;
+  /** An approved item that says it, quote verified: the only coverage that closes an item. */
   readonly coveredBy: KbCoverage | null;
+  /** The target's text that may say it, quote verified: flagged on the open item, never closes it. */
+  readonly possiblyCoveredBy: KbPossibleCoverage | null;
   readonly contradicts: readonly KbContradiction[];
 }
 
-const NO_MATCH: Dedupe = { suppressedBy: null, duplicateOf: null, coveredBy: null, contradicts: [] };
+const NO_MATCH: Dedupe = { suppressedBy: null, duplicateOf: null, coveredBy: null, possiblyCoveredBy: null, contradicts: [] };
 
 interface Drafted {
   readonly draft: KbDraft;
@@ -341,7 +353,7 @@ export class KbPipeline {
         }),
         snapshot,
         routing.target,
-        targetText !== null,
+        targetText,
       );
       return dedupe === null ? { failure: 'The dedupe answer was not usable JSON' } : { routing, dedupe };
     } catch (error) {
@@ -422,13 +434,11 @@ export class KbPipeline {
           next = { ...next, status: 'suppressed', suppressedBy: dedupe.suppressedBy };
         } else if (dedupe.duplicateOf !== null && (await addEvidence(dedupe.duplicateOf, 'open'))) {
           next = { ...next, status: 'merged', duplicateOf: dedupe.duplicateOf };
-        } else if (
-          dedupe.coveredBy !== null &&
-          (dedupe.coveredBy.kind === 'knowledge' || (await addEvidence(dedupe.coveredBy.id, 'approved')))
-        ) {
+        } else if (dedupe.coveredBy?.kind === 'item' && (await addEvidence(dedupe.coveredBy.id, 'approved'))) {
           next = { ...next, status: 'covered', coveredBy: dedupe.coveredBy };
         } else {
-          next = { ...next, contradicts: dedupe.contradicts };
+          // Coverage by the target's text is only a hint: the item stays open for an admin to decide.
+          next = { ...next, possiblyCoveredBy: dedupe.possiblyCoveredBy, contradicts: dedupe.contradicts };
         }
         if (!(await tx.updateKbItem(next, current.version))) throw new StaleItem(item.id);
       });
@@ -583,44 +593,74 @@ const parseRouting = (answer: string, snapshot: Snapshot): Routing | null => {
 
 /**
  * The dedupe answer, keeping only references to items and text it was shown (anything else is
- * ignored rather than failing the item); null when it isn't a JSON object. `sawTargetText` is false
- * when the model was told the target has no text yet (a new document, an empty overlay or
- * document), so the target can't cover or contradict the learning.
+ * ignored rather than failing the item); null when it isn't a JSON object. Every coverage and
+ * contradiction claim must quote the text it was shown (`targetText`, or the item's statement),
+ * else it is dropped. `targetText` is null when the model was told the target has no text yet (a
+ * new document, an empty overlay or document), so the target can't cover or contradict the learning.
  */
-const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, sawTargetText: boolean): Dedupe | null => {
+const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targetText: string | null): Dedupe | null => {
   const parsed = parseJson(answer);
   if (!isObject(parsed)) return null;
-  const idIn = (items: readonly KbItem[], value: unknown) => {
+  const itemIn = (items: readonly KbItem[], value: unknown) => {
     const id = text(value)?.trim();
-    return items.find((i) => i.id === id)?.id ?? null;
+    return items.find((i) => i.id === id) ?? null;
   };
   const covered = field(parsed, 'coveredBy');
   let coveredBy: KbCoverage | null = null;
-  if (field(covered, 'kind') === 'target' && sawTargetText) {
-    coveredBy = { kind: 'knowledge', knowledgeKind: target.kind, name: target.name, section: target.section };
+  let possiblyCoveredBy: KbPossibleCoverage | null = null;
+  if (field(covered, 'kind') === 'target') {
+    const quote = verifiedQuote(field(covered, 'quote'), targetText);
+    if (quote !== null) {
+      const reason = text(field(covered, 'reason'))?.trim() ?? '';
+      possiblyCoveredBy = {
+        knowledgeKind: target.kind,
+        name: target.name,
+        section: target.section,
+        quote,
+        reason: SINGLE_LINE.test(reason) ? reason : '',
+      };
+    }
   } else if (field(covered, 'kind') === 'item') {
-    const id = idIn(snapshot.approved, field(covered, 'id'));
-    if (id !== null) coveredBy = { kind: 'item', id };
+    const approved = itemIn(snapshot.approved, field(covered, 'id'));
+    if (approved !== null && verifiedQuote(field(covered, 'quote'), approved.statement) !== null) {
+      coveredBy = { kind: 'item', id: approved.id };
+    }
   }
   const contradicts = list(field(parsed, 'contradicts')).flatMap((entry): KbContradiction[] => {
     const note = text(field(entry, 'note'))?.trim() ?? '';
     if (field(entry, 'kind') === 'target') {
-      if (!sawTargetText) return [];
+      if (verifiedQuote(field(entry, 'quote'), targetText) === null) return [];
       const heading = cleanSection(field(entry, 'ref'));
       return [{ kind: 'knowledge', ref: heading === null ? target.name : `${target.name} § ${heading}`, note }];
     }
     if (field(entry, 'kind') === 'item') {
-      const id = idIn([...snapshot.open, ...snapshot.approved], field(entry, 'ref'));
-      return id === null ? [] : [{ kind: 'item', ref: id, note }];
+      const other = itemIn([...snapshot.open, ...snapshot.approved], field(entry, 'ref'));
+      return other === null || verifiedQuote(field(entry, 'quote'), other.statement) === null
+        ? []
+        : [{ kind: 'item', ref: other.id, note }];
     }
     return [];
   });
   return {
-    suppressedBy: idIn(snapshot.rejected, field(parsed, 'suppressedBy')),
-    duplicateOf: idIn(snapshot.open, field(parsed, 'duplicateOf')),
+    suppressedBy: itemIn(snapshot.rejected, field(parsed, 'suppressedBy'))?.id ?? null,
+    duplicateOf: itemIn(snapshot.open, field(parsed, 'duplicateOf'))?.id ?? null,
     coveredBy,
+    possiblyCoveredBy,
     contradicts,
   };
+};
+
+const squash = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * The model's quote, when it really appears (ignoring case and whitespace) in the text it was
+ * shown; null otherwise, so a claim it can't back up is dropped. `shown` is null when the model
+ * saw no text (a new document, an empty overlay), which nothing can quote.
+ */
+const verifiedQuote = (value: unknown, shown: string | null): string | null => {
+  const quote = text(value)?.trim() ?? '';
+  if (shown === null || quote === '' || !squash(shown).includes(squash(quote))) return null;
+  return quote;
 };
 
 const titled = (heading: string, text: string) => `${heading}\n<<<\n${text.trim() === '' ? '(empty)' : text}\n>>>`;

@@ -59,6 +59,18 @@ export type KbCoverage =
   | { readonly kind: 'item'; readonly id: string }
   | { readonly kind: 'knowledge'; readonly knowledgeKind: KnowledgeKind; readonly name: string; readonly section: string | null };
 
+/**
+ * An open item the dedupe step thinks the target's own text may already say: a hint for the admin,
+ * never a decision. `quote` is the sentence it found (checked against the text it was shown).
+ */
+export interface KbPossibleCoverage {
+  readonly knowledgeKind: KnowledgeKind;
+  readonly name: string;
+  readonly section: string | null;
+  readonly quote: string;
+  readonly reason: string;
+}
+
 /** Something an open item contradicts: another item (by ID) or a document or agent file (by name). */
 export interface KbContradiction {
   readonly kind: 'item' | 'knowledge';
@@ -160,6 +172,8 @@ export interface KbItem {
   readonly suppressedBy: string | null;
   /** `covered`: what already says it. */
   readonly coveredBy: KbCoverage | null;
+  /** `open`: the target's text that may already say it (flagged for the admin, who decides). */
+  readonly possiblyCoveredBy: KbPossibleCoverage | null;
   /** Open items that conflict with active knowledge or approved items. */
   readonly contradicts: readonly KbContradiction[];
   /** The drafted change, the target version it was drafted against (0: none yet), and why, in one line. */
@@ -185,6 +199,7 @@ export const UNPROCESSED: Pick<
   | 'duplicateOf'
   | 'suppressedBy'
   | 'coveredBy'
+  | 'possiblyCoveredBy'
   | 'contradicts'
   | 'draft'
   | 'draftedAgainstVersion'
@@ -202,6 +217,7 @@ export const UNPROCESSED: Pick<
   duplicateOf: null,
   suppressedBy: null,
   coveredBy: null,
+  possiblyCoveredBy: null,
   contradicts: [],
   draft: null,
   draftedAgainstVersion: null,
