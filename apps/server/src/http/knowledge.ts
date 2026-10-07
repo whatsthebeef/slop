@@ -1,7 +1,7 @@
 import type { ArtifactService, BoardService, Catalog, IntakeService, KnowledgeService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
-import { ARTIFACT_KINDS, CATEGORIES, KB_ITEM_STATUSES, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
 import { parseFrontmatter } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -28,7 +28,32 @@ const approvalSchema = z.discriminatedUnion('as', [
     statement: z.string().max(4000).optional(),
   }),
   z.object({ as: z.literal('document'), version, content: z.string().min(1).max(500_000).optional() }),
+  z.object({
+    as: z.literal('draft'),
+    version,
+    content: z.string().min(1).max(500_000).optional(),
+    section: z.string().max(400).nullable().optional(),
+    statement: z.string().max(4000).optional(),
+  }),
 ]);
+
+/** An admin's new target for a KB item (see `TargetChange` in core). */
+const targetSchema = z.object({
+  version,
+  target: z.object({
+    kind: z.enum(KNOWLEDGE_KINDS),
+    name: z.string().min(1).max(400),
+    section: z.string().max(400).nullable(),
+    newDocument: z
+      .object({
+        area: z.string().min(1).max(200),
+        audience: z.array(z.string().min(1).max(100)).max(50),
+        description: z.string().min(1).max(1000),
+      })
+      .nullable()
+      .optional(),
+  }),
+});
 
 const parse = async <S extends z.ZodType>(c: Context<Env>, schema: S): Promise<z.infer<S> | Response> => {
   const body: unknown = await c.req.json().catch(() => ({}));
@@ -68,10 +93,19 @@ export const mountKnowledge = (
   app.get('/api/boards/:b/kb', async (c) => {
     const boardId = Number(c.req.param('b'));
     const email = c.get('email');
-    const [index, set] = await Promise.all([knowledge.index(email, boardId), knowledge.agentSet(email, boardId)]);
+    const [index, set, updates] = await Promise.all([
+      knowledge.index(email, boardId),
+      knowledge.agentSetIndex(email, boardId),
+      knowledge.catalogUpdates(email, boardId),
+    ]);
     if (!index.ok) return send(c, index);
     if (!set.ok) return send(c, set);
-    return c.json({ documents: index.value, agentSet: { version: set.value.version, files: set.value.files.map((f) => f.path) } });
+    if (!updates.ok) return send(c, updates);
+    const { version, entries } = set.value;
+    // `files`: the paths served (orphaned overlays aren't); `entries`: every path with how it is served.
+    const files = entries.filter((e) => e.status !== 'orphaned').map((e) => e.path);
+    // `catalogUpdates`: documents forked from a catalog entry that has moved on (shown, never applied).
+    return c.json({ documents: index.value, agentSet: { version, files, entries }, catalogUpdates: updates.value });
   });
 
   app.get('/api/boards/:b/kb/docs/:name', async (c) =>
@@ -100,23 +134,24 @@ export const mountKnowledge = (
     return send(c, await knowledge.importDocuments(c.get('email'), Number(c.req.param('b')), body.documents, 'upload'));
   });
 
-  app.post('/api/boards/:b/kb/agent-set/fork', async (c) =>
-    send(c, await knowledge.forkAgentSet(c.get('email'), Number(c.req.param('b')))),
+  // One agent-set file (placeholders unfilled): the board's layer to edit, the catalog's text beside it, and the result.
+  app.get('/api/boards/:b/kb/agent-set/file', async (c) =>
+    send(c, await knowledge.agentSetFile(c.get('email'), Number(c.req.param('b')), c.req.query('path') ?? '')),
   );
 
-  // One agent-set file as stored (placeholders unfilled), for editing it while applying a KB item.
-  app.get('/api/boards/:b/kb/agent-set/file', async (c) => {
-    const set = await knowledge.agentSet(c.get('email'), Number(c.req.param('b')));
-    if (!set.ok) return send(c, set);
-    const file = set.value.files.find((f) => f.path === c.req.query('path'));
-    return file === undefined ? c.json({ code: 'not_found', message: 'No such agent-set file' }, 404) : c.json(file);
+  // Admins turn a board file that overrides a catalog file back into the catalog file plus board rules.
+  app.post('/api/boards/:b/kb/agent-set/use-catalog', async (c) => {
+    const body = await parse(c, z.object({ path: z.string().min(1), overlay: z.string().max(500_000).default('') }));
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.useCatalogVersion(c.get('email'), Number(c.req.param('b')), body.path, body.overlay));
   });
 
-  // KB items (proposals); members read them, admins decide them.
+  // KB items (proposals): every open one, and the newest `limit` decided and closed ones. Members
+  // read them, admins decide them.
   app.get('/api/boards/:b/kb/proposals', async (c) => {
-    const status = c.req.query('status');
-    const parsed = z.enum(KB_ITEM_STATUSES).optional().safeParse(status === '' ? undefined : status);
-    if (!parsed.success) return c.json({ code: 'invalid_input', message: 'status is open, approved or rejected' }, 422);
+    const limit = c.req.query('limit');
+    const parsed = z.coerce.number().int().min(1).max(KB_HISTORY_MAX).optional().safeParse(limit === '' ? undefined : limit);
+    if (!parsed.success) return c.json({ code: 'invalid_input', message: `limit is a whole number from 1 to ${KB_HISTORY_MAX}` }, 422);
     return send(c, await knowledge.proposals(c.get('email'), Number(c.req.param('b')), parsed.data));
   });
 
@@ -124,6 +159,27 @@ export const mountKnowledge = (
     const body = await parse(c, approvalSchema);
     if (body instanceof Response) return body;
     return send(c, await knowledge.approve(c.get('email'), c.req.param('itemId'), body.version, body));
+  });
+
+  // Admins point an item at another target; it is drafted again against it.
+  app.post('/api/kb/:itemId/target', async (c) => {
+    const body = await parse(c, targetSchema);
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.changeTarget(c.get('email'), c.req.param('itemId'), body.version, body.target));
+  });
+
+  // Admins send an item the pipeline gave up on back to routing or drafting.
+  app.post('/api/kb/:itemId/retry', async (c) => {
+    const body = await parse(c, z.object({ version }));
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.retryProcessing(c.get('email'), c.req.param('itemId'), body.version));
+  });
+
+  // Admins reopen an item the pipeline closed (merged, suppressed or covered); it is drafted again.
+  app.post('/api/kb/:itemId/reopen', async (c) => {
+    const body = await parse(c, z.object({ version }));
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.reopen(c.get('email'), c.req.param('itemId'), body.version));
   });
 
   app.post('/api/kb/:itemId/reject', async (c) => {

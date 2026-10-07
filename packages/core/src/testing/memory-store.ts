@@ -113,7 +113,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, runNoProgressHours: 2, runReadyHours: 8, subMaxChangedLines: 2000 };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, subMaxChangedLines: 2000 };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -206,6 +206,26 @@ export class MemoryStore implements Store {
       listKbItems: (boardId, status) =>
         Promise.resolve(
           [...s.kbItems.values()].filter((i) => i.boardId === boardId && (status === undefined || i.status === status)),
+        ),
+      listRecentKbItems: (boardId, statuses, limit) => {
+        // Newest by decision, else by submission; later inserts first among equals.
+        const all = [...s.kbItems.values()]
+          .map((item, index) => ({ item, index }))
+          .filter(({ item }) => item.boardId === boardId && statuses.includes(item.status))
+          .sort((a, b) => (b.item.decidedAt ?? b.item.createdAt).localeCompare(a.item.decidedAt ?? a.item.createdAt) || b.index - a.index)
+          .map(({ item }) => item);
+        return Promise.resolve({ items: all.slice(0, limit), total: all.length });
+      },
+      nextKbItemToProcess: (now) =>
+        Promise.resolve(
+          [...s.kbItems.values()]
+            .filter(
+              (i) =>
+                i.status === 'open' &&
+                (i.processing === 'pending' || i.processing === 'routed') &&
+                (i.processAfter === null || i.processAfter <= now),
+            )
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] ?? null,
         ),
       updateKbItem: (item, expectedVersion) => {
         if (s.kbItems.get(item.id)?.version !== expectedVersion) return Promise.resolve(false);

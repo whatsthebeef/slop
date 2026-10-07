@@ -4,6 +4,7 @@ import { GlobService } from '../src/app/glob-service.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { Approval, NewLearning } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
+import { UNPROCESSED } from '../src/domain/kb.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -21,7 +22,7 @@ const NOW = '2026-10-05T12:00:00.000Z';
 
 const catalog: Catalog = {
   kbEntries: () => Promise.resolve([]),
-  agentSet: () => Promise.resolve([]),
+  agentSet: () => Promise.resolve({ hash: 'empty', files: [] }),
 };
 
 describe('submit_learning', () => {
@@ -122,6 +123,7 @@ describe('submit_learning', () => {
       decisionReason: null,
       document: null,
       outcome: null,
+      ...UNPROCESSED,
       version: 1,
     });
     const open = await store.transaction((tx) => tx.listKbItems(boardId, 'open'));
@@ -180,6 +182,7 @@ describe('submit_learning', () => {
 describe('KB review', () => {
   let store: MemoryStore;
   let knowledge: KnowledgeService;
+  let notifier: RecordingNotifier;
   let boardId: number;
   let globId: string;
   const later = '2026-10-06T09:00:00.000Z';
@@ -216,7 +219,7 @@ describe('KB review', () => {
 
   beforeEach(async () => {
     store = new MemoryStore();
-    const notifier = new RecordingNotifier();
+    notifier = new RecordingNotifier();
     const clock = { now: () => later };
     const boards = new BoardService({ store, notifier });
     knowledge = new KnowledgeService({ store, clock, catalog, notifier });
@@ -264,12 +267,79 @@ describe('KB review', () => {
         audience: [],
         description: '',
         content: 'Implement the plan.\n',
+        layer: 'file',
         version: 1,
         source: 'catalog:agents',
         updatedBy: ADMIN,
         updatedAt: NOW,
       }),
     );
+  });
+
+  it('hints the Knowledge page on submits and decisions, and the board only when its agent-set version moves', async () => {
+    const kb = { kind: 'board.kb', boardId };
+    notifier.hints.length = 0;
+    const first = await submit();
+    expect(notifier.hints).toEqual([kb]);
+
+    notifier.hints.length = 0;
+    expect(errorCode(await knowledge.reject(ADMIN, first, 7, 'Stale'))).toBe('version_conflict');
+    const empty = { sourceGlobId: globId, type: 'gotcha', statement: '', evidence: 'x' };
+    expect(errorCode(await knowledge.submitLearning(DEV, boardId, empty))).toBe('invalid_input');
+    expect(notifier.hints).toEqual([]);
+    unwrap(await knowledge.reject(ADMIN, first, 1, 'Already known'));
+    expect(notifier.hints).toEqual([kb]);
+
+    // A document edit changes only knowledge; an agent file also moves the board's agent-set version.
+    const second = await submit();
+    notifier.hints.length = 0;
+    const docEdit = { as: 'edit', target: { kind: 'doc', name: 'build' }, content: 'Run pnpm -r build.\n' } as const;
+    unwrap(await knowledge.approve(ADMIN, second, 1, docEdit));
+    expect(notifier.hints).toEqual([kb]);
+    const third = await submit({ type: 'agent-behaviour' });
+    notifier.hints.length = 0;
+    unwrap(
+      await knowledge.approve(ADMIN, third, 1, {
+        as: 'edit',
+        target: { kind: 'agent', name: 'agents/implementer.md' },
+        content: 'Implement the plan.\nTest first.\n',
+      }),
+    );
+    expect(notifier.hints).toEqual(expect.arrayContaining([kb, { kind: 'board.changed', boardId }]));
+    expect(notifier.hints).toHaveLength(2);
+
+    notifier.hints.length = 0;
+    unwrap(await knowledge.importDocuments(ADMIN, boardId, [{ fileName: 'notes.md', content: 'Notes.\n' }], 'upload'));
+    expect(notifier.hints).toEqual([kb]);
+    // Re-importing the same content changes nothing, so it hints nothing.
+    notifier.hints.length = 0;
+    unwrap(await knowledge.importDocuments(ADMIN, boardId, [{ fileName: 'notes.md', content: 'Notes.\n' }], 'upload'));
+    expect(notifier.hints).toEqual([]);
+  });
+
+  it('publishes KB hints only after the write has committed', async () => {
+    const reads: Promise<string | undefined>[] = [];
+    const watching = new KnowledgeService({
+      store,
+      clock: { now: () => later },
+      catalog,
+      notifier: {
+        publish: () => {
+          // A client refetching on the hint must find the change.
+          reads.push(store.transaction(async (tx) => (await tx.listKbItems(boardId)).at(-1)?.status));
+        },
+      },
+    });
+    const { id } = unwrap(
+      await watching.submitLearning(DEV, boardId, {
+        sourceGlobId: globId,
+        type: 'gotcha',
+        statement: 'Generated files live in src/gen/',
+        evidence: 'Review finding',
+      }),
+    );
+    unwrap(await watching.reject(ADMIN, id, 1, 'No'));
+    expect(await Promise.all(reads)).toEqual(['open', 'rejected']);
   });
 
   it('lets only board admins approve or reject', async () => {
@@ -386,9 +456,44 @@ describe('KB review', () => {
       outcome: null,
       version: 2,
     });
-    expect(unwrap(await knowledge.proposals(DEV, boardId, 'rejected')).map((i) => i.id)).toEqual([id]);
-    expect(unwrap(await knowledge.proposals(DEV, boardId, 'open'))).toEqual([]);
+    const listed = unwrap(await knowledge.proposals(DEV, boardId));
+    expect(listed.decided).toMatchObject({ items: [{ id, status: 'rejected' }], total: 1 });
+    expect(listed.open).toEqual([]);
+    expect(listed.closed).toEqual({ items: [], total: 0 });
     expect(errorCode(await knowledge.proposals(OUTSIDER, boardId))).toBe('forbidden');
+  });
+
+  it('lists decided items newest decision first, so an old item decided just now leads the page', async () => {
+    const ids: string[] = [];
+    for (let n = 0; n < 3; n++) ids.push(await submit({ statement: `Rule ${n}` }));
+    const decideAt = async (id: string, at: string) => {
+      const item = await store.transaction((tx) => tx.getKbItem(id));
+      if (item === null) throw new Error('no item');
+      await store.transaction((tx) =>
+        tx.updateKbItem({ ...item, status: 'rejected', decidedBy: ADMIN, decidedAt: at, decisionReason: 'No', version: item.version + 1 }, item.version),
+      );
+    };
+    // The newer submissions are decided first; the oldest one last.
+    await decideAt(ids[1] ?? '', '2026-10-06T10:00:00.000Z');
+    await decideAt(ids[2] ?? '', '2026-10-06T11:00:00.000Z');
+    await decideAt(ids[0] ?? '', '2026-10-06T12:00:00.000Z');
+    const listed = unwrap(await knowledge.proposals(DEV, boardId, 2));
+    expect(listed.decided.items.map((i) => i.id)).toEqual([ids[0], ids[2]]);
+    expect(listed.decided.total).toBe(3);
+  });
+
+  it('lists the newest decided items up to the limit, with their total', async () => {
+    const ids: string[] = [];
+    for (let n = 0; n < 3; n++) {
+      const id = await submit({ statement: `Rule ${n}` });
+      unwrap(await knowledge.reject(ADMIN, id, 1, 'No'));
+      ids.push(id);
+    }
+    const open = await submit({ statement: 'Still open' });
+    const listed = unwrap(await knowledge.proposals(DEV, boardId, 2));
+    expect(listed.open.map((i) => i.id)).toEqual([open]);
+    expect(listed.decided.items.map((i) => i.id)).toEqual([ids[2], ids[1]]);
+    expect(listed.decided.total).toBe(3);
   });
 
   it('records a document proposal, without a source glob, and approving it creates the document', async () => {

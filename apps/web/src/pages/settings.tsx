@@ -2,7 +2,7 @@ import { ROLES } from '@slop/core';
 import type { DeployIntegration, Environment, Role } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { GroupChip } from '@/components/glob-card';
 import { GlobDialog } from '@/components/glob-dialog';
 import { ReadinessChecklist } from '@/components/readiness';
@@ -357,6 +357,20 @@ export const SignedOffPage = () => {
   const toast = useToast();
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
   const [open, setOpen] = useState<GlobView | null>(null);
+  // A link to one glob (`?glob=<id>`) opens it; the board page sends links here for globs no longer on it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linked = searchParams.get('glob');
+  useEffect(() => {
+    if (linked === null) return;
+    setSearchParams(
+      (params) => {
+        params.delete('glob');
+        return params;
+      },
+      { replace: true },
+    );
+    void api.glob(linked).then(setOpen, () => toast(`Couldn't open ${linked}`));
+  }, [linked, setSearchParams, toast]);
 
   /** Runs a change from the glob view; the view shows the glob as it is afterwards. */
   const change = async (work: () => Promise<unknown>): Promise<boolean> => {

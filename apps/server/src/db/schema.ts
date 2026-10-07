@@ -1,5 +1,20 @@
-import type { Board, DeployIntegration, DomainEvent, Effect, Environment, Glob, KbOutcome, Provenance, ProposedDocument } from '@slop/core';
-import { DEPLOY_STATES, DEPLOY_TRIGGERS, LEARNING_TYPES } from '@slop/core';
+import type {
+  Board,
+  DeployIntegration,
+  DomainEvent,
+  Effect,
+  Environment,
+  ExtraEvidence,
+  Glob,
+  KbContradiction,
+  KbCoverage,
+  KbDraft,
+  KbOutcome,
+  KbTarget,
+  Provenance,
+  ProposedDocument,
+} from '@slop/core';
+import { DEPLOY_STATES, DEPLOY_TRIGGERS, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_LAYERS, LEARNING_TYPES } from '@slop/core';
 import {
   bigserial,
   boolean,
@@ -33,6 +48,8 @@ export const boards = pgTable('boards', {
   environments: jsonb('environments').$type<Environment[]>().notNull(),
   sensitivePaths: jsonb('sensitive_paths').$type<string[]>().notNull(),
   agentSetVersion: integer('agent_set_version').notNull().default(0),
+  /** The catalog agent set's hash the board's agent-set version last followed. */
+  agentCatalogHash: text('agent_catalog_hash'),
   runNoProgressHours: integer('run_no_progress_hours').notNull().default(2),
   runReadyHours: integer('run_ready_hours').notNull().default(8),
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
@@ -161,6 +178,8 @@ export const knowledge = pgTable(
     audience: jsonb('audience').$type<string[]>().notNull(),
     description: text('description').notNull(),
     content: text('content').notNull(),
+    /** Agent-set rows: `overlay` (the board's additions to a catalog file) or `file` (a whole board file). */
+    layer: text('layer', { enum: KNOWLEDGE_LAYERS }).notNull().default('file'),
     version: integer('version').notNull(),
     source: text('source').notNull(),
     updatedBy: text('updated_by').notNull(),
@@ -182,6 +201,7 @@ export const knowledgeHistory = pgTable(
     audience: jsonb('audience').$type<string[]>().notNull(),
     description: text('description').notNull(),
     content: text('content').notNull(),
+    layer: text('layer', { enum: KNOWLEDGE_LAYERS }).notNull().default('file'),
     source: text('source').notNull(),
     updatedBy: text('updated_by').notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
@@ -215,7 +235,7 @@ export const kbProposals = pgTable(
     boardId: integer('board_id')
       .notNull()
       .references(() => boards.id, { onDelete: 'cascade' }),
-    status: text('status', { enum: ['open', 'approved', 'rejected'] }).notNull(),
+    status: text('status', { enum: KB_ITEM_STATUSES }).notNull(),
     type: text('type', { enum: LEARNING_TYPES }).notNull(),
     statement: text('statement').notNull(),
     evidence: text('evidence').notNull(),
@@ -232,9 +252,30 @@ export const kbProposals = pgTable(
     document: jsonb('document').$type<ProposedDocument>(),
     /** What approving it did: kept as a learning, or applied to a document or agent file (with the version written). */
     outcome: jsonb('outcome').$type<KbOutcome>(),
+    /** The background pipeline (routing and dedupe, then drafting): see `KbPipeline`. */
+    processing: text('processing', { enum: KB_PROCESSING_STATES }).notNull().default('pending'),
+    processingError: text('processing_error'),
+    processingAttempts: integer('processing_attempts').notNull().default(0),
+    /** Retry backoff, or a claimed item's lease. */
+    processAfter: timestamp('process_after', { withTimezone: true }),
+    target: jsonb('target').$type<KbTarget>(),
+    catalogCandidate: boolean('catalog_candidate').notNull().default(false),
+    catalogReason: text('catalog_reason'),
+    occurrenceCount: integer('occurrence_count').notNull().default(1),
+    extraEvidence: jsonb('extra_evidence').$type<ExtraEvidence[]>().notNull().default([]),
+    duplicateOf: text('duplicate_of'),
+    suppressedBy: text('suppressed_by'),
+    coveredBy: jsonb('covered_by').$type<KbCoverage>(),
+    contradicts: jsonb('contradicts').$type<KbContradiction[]>().notNull().default([]),
+    draft: jsonb('draft').$type<KbDraft>(),
+    draftedAgainstVersion: integer('drafted_against_version'),
+    rationale: text('rationale'),
     version: integer('version').notNull(),
   },
-  (t) => [index('kb_proposals_board_status_idx').on(t.boardId, t.status)],
+  (t) => [
+    index('kb_proposals_board_status_idx').on(t.boardId, t.status),
+    index('kb_proposals_processing_idx').on(t.processing, t.createdAt),
+  ],
 );
 
 /** Branch deploys: one row per request, queued per environment (one running, one waiting). */

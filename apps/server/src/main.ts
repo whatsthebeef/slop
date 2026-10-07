@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { ArtifactService, BoardService, DeployService, GlobService, IntakeService, KnowledgeService } from '@slop/core';
+import { ArtifactService, BoardService, DeployService, GlobService, IntakeService, KbPipeline, KnowledgeService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -29,6 +29,7 @@ import { FileRoutines } from './routines.js';
 import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
 import { DeployWatch } from './jobs/deploy-watch.js';
+import { KbPipelineJob } from './jobs/kb-pipeline.js';
 
 const config = loadConfig();
 await runMigrations(config.DATABASE_URL, config.MIGRATIONS_DIR);
@@ -85,11 +86,17 @@ const catalog = new FsCatalog(config.CATALOG_DIR);
 const clock = { now: () => new Date().toISOString() };
 const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub });
 const artifacts = new ArtifactService({ store, clock, notifier: hub });
-const intake = new IntakeService({
+const logUsage = (u: { model: string; input: number; output: number }) =>
+  console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
+const intake = new IntakeService({ store, llm: new BedrockLlm(config.INTAKE_MODEL, config.BEDROCK_REGION, logUsage) });
+const kbPipeline = new KbPipeline({
   store,
-  llm: new BedrockLlm(config.INTAKE_MODEL, config.BEDROCK_REGION, (u) =>
-    console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`),
-  ),
+  clock,
+  catalog,
+  notifier: hub,
+  route: new BedrockLlm(config.KB_ROUTE_MODEL, config.BEDROCK_REGION, logUsage),
+  // Sonnet 5.5 takes no sampling parameters other than the defaults.
+  draft: new BedrockLlm(config.KB_DRAFT_MODEL, config.BEDROCK_REGION, logUsage, null),
 });
 
 if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
@@ -104,8 +111,8 @@ const app = createApp({
   hub,
   outbox,
   onBoardCreated: async (email, boardId) => {
-    const forked = await knowledge.forkAgentSet(email, boardId);
-    if (!forked.ok) logError('board created', `Agent set fork failed for board ${boardId}: ${forked.error.message}`);
+    const adopted = await knowledge.adoptCatalogAgentSet(email, boardId);
+    if (!adopted.ok) logError('board created', `Adopting the catalog agent set failed for board ${boardId}: ${adopted.error.message}`);
   },
 });
 mountDeploys(app, { deploys, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
@@ -119,16 +126,12 @@ app.get('/downloads/agent-set/:board', async (c) => {
   if (!links.verify(c.req.path, Number(c.req.query('expires')), c.req.query('signature') ?? '')) {
     return c.json({ error: 'This download link is invalid or has expired' }, 403);
   }
-  const files = await store.transaction(async (tx) => {
-    const board = await tx.getBoard(boardId);
-    if (board === null) return null;
-    const docs = (await tx.listKnowledge(boardId)).filter((d) => d.kind !== 'doc');
-    return {
-      version: board.agentSetVersion,
-      files: docs.map((d) => ({ path: d.name, content: renderAgentSetFile(d.content, agentSetValues) })),
-    };
+  const set = await knowledge.agentSetForDownload(boardId);
+  if (!set.ok) return c.json({ error: 'No such board' }, 404);
+  return c.json({
+    version: set.value.version,
+    files: set.value.files.map((f) => ({ path: f.path, content: renderAgentSetFile(f.content, agentSetValues) })),
   });
-  return files === null ? c.json({ error: 'No such board' }, 404) : c.json(files);
 });
 mountMcp(app, {
   auth,
@@ -169,11 +172,24 @@ if (config.WEB_DIST !== undefined) {
   app.get('*', (c) => c.html(index));
 }
 
+// Catalog agent files reach boards through layering; a changed catalog gives each board a new agent-set version.
+try {
+  const { bumped, failed } = await knowledge.syncCatalogAgentSet();
+  if (bumped.length > 0) console.log(`[agent set] catalog changed: new agent-set version for boards ${bumped.join(', ')}`);
+  for (const { boardId, error } of failed) {
+    logError('agent set sync', `board ${boardId}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+} catch (error) {
+  logError('agent set sync', error instanceof Error ? (error.stack ?? error.message) : String(error));
+}
+
 outbox.start();
 const runWatch = new RunWatch(store, globs, logError);
 runWatch.start();
 const deployWatch = new DeployWatch(deploys, logError);
 deployWatch.start();
+const kbPipelineJob = new KbPipelineJob(kbPipeline, logError);
+kbPipelineJob.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -182,6 +198,7 @@ const shutdown = () => {
   outbox.stop();
   runWatch.stop();
   deployWatch.stop();
+  kbPipelineJob.stop();
   server.close();
   void database.close();
 };

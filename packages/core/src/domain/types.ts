@@ -198,6 +198,11 @@ export interface Board {
   readonly readinessTicks: Readonly<Partial<Record<'routines' | 'routine_repo' | 'claude_app', boolean>>>;
   /** Increases with every approved change to the board's agent set. */
   readonly agentSetVersion: number;
+  /**
+   * The hash of the catalog agent set the board's version last followed; a different catalog
+   * hash bumps `agentSetVersion` (catalog files reach the board through layering). Null before the first.
+   */
+  readonly agentCatalogHash: string | null;
   /** A run with no slop call or push for this long is failed. */
   readonly runNoProgressHours: number;
   /** A run that has not marked its PR ready for review within this long is failed. */

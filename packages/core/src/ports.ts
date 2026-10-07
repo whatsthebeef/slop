@@ -33,7 +33,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'runNoProgressHours' | 'runReadyHours' | 'subMaxChangedLines' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'subMaxChangedLines' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   listBoards(email: string): Promise<Board[]>;
   /** Every board, for background jobs. */
@@ -66,6 +66,16 @@ export interface Tx {
   getKbItem(id: string): Promise<KbItem | null>;
   /** A board's KB items, oldest first, optionally with one status. */
   listKbItems(boardId: number, status?: KbItemStatus): Promise<KbItem[]>;
+  /**
+   * A board's newest `limit` KB items with one of `statuses`, newest first by `decidedAt` (else
+   * `createdAt`), and how many there are in all.
+   */
+  listRecentKbItems(boardId: number, statuses: readonly KbItemStatus[], limit: number): Promise<{ items: KbItem[]; total: number }>;
+  /**
+   * The oldest open item on any board still waiting for the pipeline (`pending` routing or
+   * `routed`, waiting for its draft) whose `processAfter` is unset or not after `now`.
+   */
+  nextKbItemToProcess(now: string): Promise<KbItem | null>;
   /** Writes `item` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateKbItem(item: KbItem, expectedVersion: number): Promise<boolean>;
 
@@ -101,17 +111,25 @@ export type Hint =
   | { readonly kind: 'glob.artifacts'; readonly boardId: number; readonly globId: string }
   /** A glob's deploys changed: they don't bump the glob's version, so clients refetch regardless. */
   | { readonly kind: 'glob.deploys'; readonly boardId: number; readonly globId: string }
-  | { readonly kind: 'board.changed'; readonly boardId: number };
+  | { readonly kind: 'board.changed'; readonly boardId: number }
+  /** The board's KB items, documents or agent-set files changed (the board itself only on an agent-set version bump). */
+  | { readonly kind: 'board.kb'; readonly boardId: number };
 
 /** Publishes small change hints to open boards after a commit. */
 export interface Notifier {
   publish(hint: Hint): void;
 }
 
+/** The catalog's agent set: its files and a stable hash of them (paths and contents). */
+export interface CatalogAgentSet {
+  readonly hash: string;
+  readonly files: readonly { readonly path: string; readonly content: string }[];
+}
+
 /** The generic catalog shipped with slop (`catalog/`): starter KB entries and the agent set. */
 export interface Catalog {
   kbEntries(): Promise<{ id: string; version: number; fileName: string; content: string }[]>;
-  agentSet(): Promise<{ path: string; content: string }[]>;
+  agentSet(): Promise<CatalogAgentSet>;
 }
 
 export interface Clock {

@@ -4,7 +4,7 @@ import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
-import { agentSetKind, docName, parseFrontmatter } from '../src/domain/knowledge.js';
+import { agentSetKind, catalogFork, catalogUpdates, docName, parseFrontmatter } from '../src/domain/knowledge.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -12,6 +12,8 @@ const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
   return result.value;
 };
+
+const errorCode = <T>(result: Result<T>): string | null => (result.ok ? null : result.error.code);
 
 const ADMIN = 'admin@example.com';
 const DEV = 'dev@example.com';
@@ -35,12 +37,15 @@ const catalog: Catalog = {
       { id: 'typescript_conventions', version: 2, fileName: 'typescript_conventions.md', content: '---\narea: conventions\naudience: [implementer, change_reviewer]\ndescription: TS.\n---\nNo any.\n' },
     ]),
   agentSet: () =>
-    Promise.resolve([
-      { path: 'agents/orchestrator.md', content: '---\nname: orchestrator\n---\nRun the phases.\n' },
-      { path: 'commands/run-glob.md', content: 'Run a glob.\n' },
-      { path: 'settings.json', content: '{}\n' },
-      { path: 'README.md', content: 'not part of the delivered set' },
-    ]),
+    Promise.resolve({
+      hash: 'catalog-1',
+      files: [
+        { path: 'agents/orchestrator.md', content: '---\nname: orchestrator\n---\nRun the phases.\n' },
+        { path: 'commands/run-glob.md', content: 'Run a glob.\n' },
+        { path: 'settings.json', content: '{}\n' },
+        { path: 'README.md', content: 'not part of the delivered set' },
+      ],
+    }),
 };
 
 describe('frontmatter and names', () => {
@@ -54,6 +59,29 @@ describe('frontmatter and names', () => {
 
   it('treats documents without frontmatter as plain content', () => {
     expect(parseFrontmatter('# Hello\n')).toMatchObject({ area: null, audience: [], body: '# Hello\n' });
+  });
+
+  it('finds documents forked from an older catalog version', () => {
+    expect(catalogFork('catalog:typescript_conventions@1')).toEqual({ id: 'typescript_conventions', version: 1 });
+    expect(catalogFork('kb:s1k2')).toBeNull();
+    expect(catalogFork('catalog:agents')).toBeNull();
+    const entries = [
+      { id: 'ts', version: 3, content: '---\ncatalog: ts\nversion: 3\n---\nNew text.\n' },
+      { id: 'review', version: 1, content: 'Review.\n' },
+    ];
+    const doc = (name: string, source: string) => ({ kind: 'doc' as const, name, source, content: 'Board text.\n' });
+    expect(
+      catalogUpdates(
+        [
+          doc('ts', 'catalog:ts@2'),
+          doc('review', 'catalog:review@1'),
+          doc('edited', 'edit'),
+          doc('gone', 'catalog:gone@1'),
+          { kind: 'agent', name: 'agents/x.md', source: 'catalog:ts@1', content: '' },
+        ],
+        entries,
+      ),
+    ).toEqual([{ name: 'ts', catalogId: 'ts', forkedVersion: 2, catalogVersion: 3, board: 'Board text.\n', catalog: 'New text.\n' }]);
   });
 
   it('names documents after their file and classifies agent-set paths', () => {
@@ -93,15 +121,14 @@ describe('knowledge and artifacts', () => {
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
-  it('forks the agent set and bumps its version only when something changed', async () => {
-    const first = unwrap(await knowledge.forkAgentSet(ADMIN, boardId));
-    expect(first.created).toEqual(['agents/orchestrator.md', 'commands/run-glob.md', 'settings.json']);
+  it('adopts the catalog agent set without copying it, and versions it only once per catalog', async () => {
+    expect(errorCode(await knowledge.adoptCatalogAgentSet(DEV, boardId))).toBe('forbidden');
+    expect(unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, boardId))).toEqual({ version: 1 });
     const set = unwrap(await knowledge.agentSet(DEV, boardId));
     expect(set.version).toBe(1);
     expect(set.files.map((f) => f.path)).toEqual(['agents/orchestrator.md', 'commands/run-glob.md', 'settings.json']);
-    const again = unwrap(await knowledge.forkAgentSet(ADMIN, boardId));
-    expect(again.unchanged).toHaveLength(3);
-    expect(unwrap(await knowledge.agentSet(DEV, boardId)).version).toBe(1);
+    expect(await store.transaction((tx) => tx.listKnowledge(boardId))).toEqual([]);
+    expect(unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, boardId))).toEqual({ version: 1 });
   });
 
   it('imports documents for admins only, versioning real changes', async () => {
@@ -115,6 +142,26 @@ describe('knowledge and artifacts', () => {
     expect(entry).toMatchObject({ name: 'build_test_lint', area: 'build', version: 2, source: 'upload' });
     // Importing documents never changes the agent set.
     expect(unwrap(await knowledge.agentSet(DEV, boardId)).version).toBe(0);
+  });
+
+  it('lists catalog documents with a newer catalog version for members, without changing them', async () => {
+    unwrap(await knowledge.importCatalogEntries(ADMIN, boardId, ['typescript_conventions']));
+    expect(unwrap(await knowledge.catalogUpdates(DEV, boardId))).toEqual([]);
+    // A board that forked version 1 of the entry (the catalog is at 2 now).
+    const forked = await store.transaction((tx) => tx.getKnowledge(boardId, 'doc', 'typescript_conventions'));
+    if (forked === null) throw new Error('not imported');
+    await store.transaction((tx) => tx.saveKnowledge({ ...forked, content: 'Avoid any.\n', source: 'catalog:typescript_conventions@1' }));
+    expect(unwrap(await knowledge.catalogUpdates(DEV, boardId))).toEqual([
+      {
+        name: 'typescript_conventions',
+        catalogId: 'typescript_conventions',
+        forkedVersion: 1,
+        catalogVersion: 2,
+        board: 'Avoid any.\n',
+        catalog: 'No any.\n',
+      },
+    ]);
+    expect(errorCode(await knowledge.catalogUpdates('stranger@example.com', boardId))).toBe('forbidden');
   });
 
   it('serves documents by area or by name', async () => {

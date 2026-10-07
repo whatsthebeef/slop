@@ -8,6 +8,16 @@ export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
 /** Everything except documents belongs to the agent set and changes its version. */
 export const isAgentSetKind = (kind: KnowledgeKind): boolean => kind !== 'doc';
 
+/** Agent-set kinds a learning (prose) can target; settings, hooks and mcp.json aren't. */
+export const PROSE_KINDS: readonly KnowledgeKind[] = ['agent', 'command', 'claude_md'];
+
+/**
+ * Agent-set rows are a layer over slop's catalog (`domain/agent-set.ts`): the board's `overlay` on
+ * a catalog file, or a whole `file` the board owns. Documents are always `file`.
+ */
+export const KNOWLEDGE_LAYERS = ['overlay', 'file'] as const;
+export type KnowledgeLayer = (typeof KNOWLEDGE_LAYERS)[number];
+
 export interface KnowledgeDoc {
   readonly boardId: number;
   readonly kind: KnowledgeKind;
@@ -17,7 +27,9 @@ export interface KnowledgeDoc {
   /** The agents that must always be given this document. */
   readonly audience: readonly string[];
   readonly description: string;
+  /** Overlay rows: only the board's additions; the catalog supplies the rest. */
   readonly content: string;
+  readonly layer: KnowledgeLayer;
   readonly version: number;
   /** Where it came from: `catalog:<id>@<version>`, `upload`, `import`, or `edit`. */
   readonly source: string;
@@ -91,6 +103,49 @@ export const renderFrontmatter = (meta: {
 /** A document's name from a file name: `.sstor/docs/build_test_lint.md` → `build_test_lint`. */
 export const docName = (fileName: string): string =>
   (fileName.split('/').pop() ?? fileName).replace(/\.md$/i, '').trim();
+
+/** The catalog entry and version a document was forked from, read from its source (`catalog:<id>@<version>`). */
+export const catalogFork = (source: string): { readonly id: string; readonly version: number } | null => {
+  const match = /^catalog:(.+)@(\d+)$/.exec(source);
+  if (match === null) return null;
+  return { id: match[1] ?? '', version: Number(match[2]) };
+};
+
+/**
+ * A board document forked from a catalog entry the catalog has since moved past. Catalog KB
+ * documents stay forked (no sync): the Knowledge page shows the two texts so an admin can copy
+ * changes across by hand.
+ */
+export interface CatalogUpdate {
+  readonly name: string;
+  readonly catalogId: string;
+  readonly forkedVersion: number;
+  readonly catalogVersion: number;
+  /** The board document's body and the catalog entry's, both without frontmatter. */
+  readonly board: string;
+  readonly catalog: string;
+}
+
+/** The board documents whose catalog entry has a newer version than the one they were forked from. */
+export const catalogUpdates = (
+  docs: readonly Pick<KnowledgeDoc, 'kind' | 'name' | 'source' | 'content'>[],
+  entries: readonly { readonly id: string; readonly version: number; readonly content: string }[],
+): CatalogUpdate[] =>
+  docs.flatMap((doc) => {
+    const fork = doc.kind === 'doc' ? catalogFork(doc.source) : null;
+    const entry = fork === null ? undefined : entries.find((e) => e.id === fork.id);
+    if (fork === null || entry === undefined || entry.version <= fork.version) return [];
+    return [
+      {
+        name: doc.name,
+        catalogId: entry.id,
+        forkedVersion: fork.version,
+        catalogVersion: entry.version,
+        board: doc.content,
+        catalog: parseFrontmatter(entry.content).body,
+      },
+    ];
+  });
 
 /** Maps a path inside the agent set to its kind. */
 export const agentSetKind = (path: string): KnowledgeKind | null => {

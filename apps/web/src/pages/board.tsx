@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import type { ArtifactRef } from '@/components/artifacts';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
@@ -211,6 +211,26 @@ export const BoardPage = () => {
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId), ...KEEP_TRYING });
   const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId), ...KEEP_TRYING });
   const motion = useBoardMotion(globs.data, live);
+  // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens it here, or on the signed-off
+  // page when it is no longer on the board.
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linked = searchParams.get('glob');
+  useEffect(() => {
+    if (linked === null || globs.data === undefined) return;
+    if (globs.data.some((g) => g.id === linked)) {
+      setOpenId(linked);
+      setSearchParams(
+        (params) => {
+          params.delete('glob');
+          return params;
+        },
+        { replace: true },
+      );
+    } else {
+      void navigate(`/boards/${boardId}/signed-off?glob=${encodeURIComponent(linked)}`, { replace: true });
+    }
+  }, [linked, globs.data, boardId, navigate, setSearchParams]);
   // Deploy state lives beside the globs; read it for the globs on the board.
   const boardGlobIds = (globs.data ?? []).map((g) => g.id).sort();
   const deployState = useQuery({
