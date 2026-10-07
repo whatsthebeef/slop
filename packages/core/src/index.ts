@@ -23,3 +23,4 @@ export * from './app/artifact-service.js';
 export * from './app/intake-service.js';
 export * from './app/kb-pipeline.js';
 export * from './app/deploy-service.js';
+export * from './domain/checks.js';

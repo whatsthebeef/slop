@@ -34,6 +34,7 @@ export const DOMAIN_EVENT_TYPES = [
   'DeployStarted',
   'DeployFailed',
   'BuildCompleted',
+  'BaseChecksChanged',
   'ATFCompleted',
   'Deployed',
   'GlobDeleted',
@@ -92,6 +93,13 @@ export type Effect =
   | { readonly kind: 'check_conflict'; readonly globId: string; readonly generation: number; readonly since: string | null }
   /** Ask the Claude GitHub App, in a PR comment, to merge the base branch in and resolve the conflict. */
   | { readonly kind: 'request_conflict_fix'; readonly globId: string; readonly generation: number }
+  /**
+   * Read the base branch head's check result (a check ran on the base branch) and record it on the board. Board-wide,
+   * so `globId` is `board-<id>` and it isn't generation-checked; re-reading is idempotent.
+   */
+  | { readonly kind: 'refresh_base_checks'; readonly globId: string; readonly boardId: number }
+  /** Bring the glob's PR branch up to date with the base branch so its checks run again (the base went green). */
+  | { readonly kind: 'update_branch'; readonly globId: string; readonly generation: number; readonly sha: string }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
   | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number };
 

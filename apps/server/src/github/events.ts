@@ -1,6 +1,6 @@
 import type { Board, Glob, GlobService } from '@slop/core';
 import { machine, parseId } from '@slop/core';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/store.js';
@@ -32,7 +32,7 @@ const pullRequestPayload = z.object({
 });
 
 const checkPayload = z.object({
-  check_suite: z.object({ head_branch: z.string().nullable() }).optional(),
+  check_suite: z.object({ head_branch: z.string().nullable(), status: z.string().nullable().optional() }).optional(),
   check_run: z
     .object({
       name: z.string(),
@@ -94,6 +94,29 @@ const handle = async (
     if (row === undefined) return null;
     const board = await deps.boardOf(row.data.boardId);
     return board?.repo?.toLowerCase() === repo.toLowerCase() ? row.data : null;
+  };
+
+  /**
+   * A check finished on a board's base branch: read the head's result (the base may have turned red or green). One
+   * pending read per board is enough; it looks at the branch's head when it runs.
+   */
+  const queueBaseChecks = async (branch: string, repo: string): Promise<void> => {
+    const rows = await deps.db.select().from(schema.boards).where(eq(schema.boards.baseBranch, branch));
+    for (const board of rows.filter((b) => b.repo?.toLowerCase() === repo.toLowerCase())) {
+      const globId = `board-${String(board.id)}`;
+      const [pending] = await deps.db
+        .select({ id: schema.outbox.id })
+        .from(schema.outbox)
+        .where(sql`${schema.outbox.kind} = 'refresh_base_checks' and ${schema.outbox.globId} = ${globId} and ${schema.outbox.state} = 'pending' and ${schema.outbox.attempts} = 0`)
+        .limit(1);
+      if (pending !== undefined) continue;
+      await deps.db.insert(schema.outbox).values({
+        kind: 'refresh_base_checks',
+        globId,
+        effect: { kind: 'refresh_base_checks', globId, boardId: board.id },
+      });
+      await deps.db.execute(sql`select pg_notify('slop_outbox', '')`);
+    }
   };
 
   const apply = (glob: Glob, step: Parameters<GlobService['applyEvent']>[1]) =>
@@ -161,6 +184,8 @@ const handle = async (
     case 'check_run': {
       const event = checkPayload.parse(delivery.payload);
       const branch = event.check_suite?.head_branch ?? event.check_run?.check_suite.head_branch;
+      const finished = event.check_run?.status === 'completed' || event.check_suite?.status === 'completed';
+      if (finished && branch != null) await queueBaseChecks(branch, event.repository.full_name);
       const glob = await globFor(branch, event.repository.full_name);
       if (glob === null) return true;
       await apply(glob, (g, ctx) => machine.checksChanged(g, ctx));

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readiness, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
+import { queuedRunNotice, readiness, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
 import type { ReadinessFacts } from '../src/domain/readiness.js';
-import { NOW, board, glob } from './fixtures.js';
+import { NOW, board, glob, run } from './fixtures.js';
 
 const ready: ReadinessFacts = {
   board: {
@@ -163,5 +163,26 @@ describe('watching run that ignores failed checks', () => {
     expect(unreactedCheckFailures([watched(), watched({ id: 's1t2', headChecks: null })], at(20))).toEqual(['s1t1']);
     const items = readiness({ ...ready, unreactedCheckFailures: ['s1t1'] });
     expect(items.find((i) => i.key === 'claude_app')).toMatchObject({ state: 'failing' });
+  });
+});
+
+describe('runs that never start', () => {
+  const g = (patch = {}) => glob({ status: 'implementing', runs: [run({ state: 'queued', queuedAt: NOW, startedAt: null, sessionUrl: 'https://claude.ai/code/s1' })], ...patch });
+  const at = (minutes: number) => new Date(Date.parse(NOW) + minutes * 60_000).toISOString();
+
+  it('says how long a run has been queued once it passes 10 minutes, with the session', () => {
+    expect(queuedRunNotice(g(), at(9))).toBeNull();
+    expect(queuedRunNotice(g(), at(25))).toBe('Routine run queued for 25 min: open the session https://claude.ai/code/s1');
+    expect(queuedRunNotice(g({ runs: [run({ state: 'active' })] }), at(25))).toBeNull();
+  });
+
+  it('counts runs that never started toward the routines item only when it repeats', () => {
+    const facts = (n: number): ReadinessFacts => ({
+      ...ready,
+      recentFailures: Array.from({ length: n }, (_, i) => ({ globId: `s1t${String(i + 1)}`, reason: 'Routine run never started (queued at 2026-10-07 02:01 UTC)' })),
+    });
+    expect(stateOf(facts(1)).routines).toBe('ok');
+    expect(stateOf(facts(2)).routines).toBe('failing');
+    expect(readiness(facts(2)).find((i) => i.key === 'routines')?.detail).toMatch(/2 routine runs never started \(latest s1t1\)/);
   });
 });

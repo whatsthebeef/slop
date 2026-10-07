@@ -1,5 +1,5 @@
 import type { Action, ArtifactSummary, DomainError, Glob, Role } from '@slop/core';
-import { listOf, machine } from '@slop/core';
+import { checksExplanation, listOf, machine } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /**
@@ -15,6 +15,8 @@ export const globView = (
   list: listOf(glob.status),
   branch: glob.id,
   currentRun: machine.currentRun(glob),
+  /** Why the head's checks failed, and whether the base branch is red the same way (then it isn't this glob's change). */
+  failedChecks: checksExplanation(glob),
   ...(allowedActions === null ? {} : { allowedActions }),
   ...(artifacts === null ? {} : { artifacts: artifacts.map(artifactView) }),
 });

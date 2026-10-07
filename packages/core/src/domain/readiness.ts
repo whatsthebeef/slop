@@ -1,3 +1,4 @@
+import { failureSummary } from './checks.js';
 import type { Board, Glob } from './types.js';
 
 /**
@@ -173,10 +174,14 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
   for (const key of MANUAL_READINESS_KEYS) {
     const failure = facts.recentFailures.find((f) => routineFailureFix(f.reason)?.key === key);
     const fix = failure === undefined ? null : routineFailureFix(failure.reason);
+    // One run that never started can be a hiccup; repeats point at the routine itself.
+    const neverStarted = key === 'routines' ? facts.recentFailures.filter((f) => /^Routine run never started/.test(f.reason)) : [];
     const unreacted = key === 'claude_app' ? facts.unreactedCheckFailures[0] : undefined;
     items.push(
       failure !== undefined && fix !== null
         ? item(key, MANUAL[key], 'failing', `${failure.globId} failed: ${failure.reason}. ${fix.fix}`, settings)
+        : neverStarted.length >= 2
+          ? item(key, MANUAL[key], 'failing', `${neverStarted.length} routine runs never started (latest ${neverStarted[0]?.globId ?? ''}): check the routine's fire URL and token, and that its session can reach slop`, settings)
         : unreacted !== undefined
           ? item(key, MANUAL[key], 'failing', `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo`, settings)
         : facts.ticks[key] === true
@@ -212,6 +217,8 @@ const minutesUnreacted = (glob: Glob, now: string): number | null => {
   const head = glob.pr?.headSha ?? null;
   const checks = glob.headChecks;
   if (head === null || checks === null || checks.sha !== head || checks.state !== 'failed' || checks.at === undefined) return null;
+  // Red because the base branch is: nothing for the routine to push.
+  if (checks.inheritedFrom !== undefined) return null;
   const since = Math.max(Date.parse(checks.at), Date.parse(run.lastProgressAt ?? checks.at));
   return (Date.parse(now) - since) / 60_000;
 };
@@ -268,4 +275,42 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
     return `No sub-gate result after ${String(STUCK_MINUTES)} minutes: is .github/workflows/sub-gate.yml on the base branch?`;
   }
   return null;
+};
+
+/** What a card says about checks that failed on the glob's current head. */
+export interface ChecksExplanation {
+  /** One line: the failing step and its first error, or that the base branch is red. */
+  readonly text: string;
+  /** The failing log's first error lines. */
+  readonly lines: readonly string[];
+  /** The run on the code host. */
+  readonly url: string | null;
+  /** The base branch fails the same way: not this glob's change. */
+  readonly inherited: boolean;
+}
+
+/** Why the glob's head checks failed, from what slop read of the failing run; null when they haven't failed on the head. */
+export const checksExplanation = (glob: Glob): ChecksExplanation | null => {
+  const checks = glob.headChecks;
+  if (checks === null || checks.state !== 'failed' || checks.sha !== glob.pr?.headSha) return null;
+  const failure = checks.failure;
+  const detail = failure === undefined ? 'Checks failed' : failureSummary(failure);
+  const lines = failure?.lines ?? [];
+  const url = failure?.url ?? null;
+  const inherited = checks.inheritedFrom;
+  if (inherited === undefined) return { text: detail, lines, url, inherited: false };
+  const since = inherited.since === null ? '' : ` (since ${inherited.since})`;
+  return { text: `${inherited.base} is red${since}: not this glob's change. ${detail}`, lines, url, inherited: true };
+};
+
+/** After this long queued, the card says how long (the run may have never started). */
+const QUEUED_NOTICE_MINUTES = 10;
+
+/** `Routine run queued for 25 min: open the session`, once a run has waited a while without calling slop; else null. */
+export const queuedRunNotice = (glob: Glob, now: string): string | null => {
+  const run = glob.runs[glob.runs.length - 1];
+  if (run === undefined || run.state !== 'queued') return null;
+  const minutes = Math.floor((Date.parse(now) - Date.parse(run.queuedAt)) / 60_000);
+  if (minutes < QUEUED_NOTICE_MINUTES) return null;
+  return `Routine run queued for ${String(minutes)} min: ${run.sessionUrl === null ? 'no session yet' : `open the session ${run.sessionUrl}`}`;
 };

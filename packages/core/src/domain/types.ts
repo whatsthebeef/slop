@@ -92,6 +92,40 @@ export interface HeadChecks {
   readonly state: 'pending' | 'passed' | 'failed';
   /** When the checks were first seen failed on this head; absent on results recorded before it was kept. */
   readonly at?: string;
+  /** What failed, from the failing check run's log (state `failed` only; absent when the log couldn't be read). */
+  readonly failure?: CheckFailure;
+  /** Set when the base branch fails the same check with the same first error: not this glob's change. */
+  readonly inheritedFrom?: InheritedFailure;
+}
+
+/** The failing check on a commit, short enough for a card: the step and the first error lines of its log. */
+export interface CheckFailure {
+  /** The check run's name, e.g. `Type check`. */
+  readonly name: string;
+  /** The step that failed, when the run reports one. */
+  readonly step: string | null;
+  /** The first error lines from the end of the job log, a few lines at most. */
+  readonly lines: readonly string[];
+  /** Link to the run on the code host. */
+  readonly url: string | null;
+}
+
+/** A glob's failed checks that the base branch fails too. `since` is the glob whose merge turned the base red. */
+export interface InheritedFailure {
+  readonly base: string;
+  readonly since: string | null;
+}
+
+/** The latest check result for the head of a board's base branch. */
+export interface BaseChecks {
+  readonly sha: string;
+  readonly state: 'passed' | 'failed';
+  readonly failure?: CheckFailure;
+  /** The glob whose merge turned the base red (from the squash commit's `<id>: <title>`); null when unknown or green. */
+  readonly since: string | null;
+  /** When the base was first seen red, kept across new commits that stay red. */
+  readonly redAt?: string;
+  readonly checkedAt: string;
 }
 
 /** `none` until the glob first enters Doing: branches and draft PRs are created when work starts. */
@@ -198,6 +232,8 @@ export interface Board {
   readonly readinessTicks: Readonly<Partial<Record<'routines' | 'routine_repo' | 'claude_app', boolean>>>;
   /** Increases with every approved change to the board's agent set. */
   readonly agentSetVersion: number;
+  /** The latest check result on the base branch head; null until the first check result arrives. */
+  readonly baseChecks?: BaseChecks | null;
   /**
    * The hash of the catalog agent set the board's version last followed; a different catalog
    * hash bumps `agentSetVersion` (catalog files reach the board through layering). Null before the first.
@@ -205,6 +241,8 @@ export interface Board {
   readonly agentCatalogHash: string | null;
   /** A run with no slop call or push for this long is failed. */
   readonly runNoProgressHours: number;
+  /** A queued run that hasn't called slop within this many minutes never started and is failed. */
+  readonly runStartMinutes: number;
   /** A run that has not marked its PR ready for review within this long is failed. */
   readonly runReadyHours: number;
   /** Sub gate: subs changing more lines than this convert to sames. */

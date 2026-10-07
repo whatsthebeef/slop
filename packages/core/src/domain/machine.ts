@@ -7,13 +7,17 @@ import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from 
 import type { Result } from './errors.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
 import type { ArtifactSummary } from './knowledge.js';
+import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
 import type {
   Actor,
   Board,
   Category,
+  BaseChecks,
+  CheckFailure,
   ChecklistItem,
   Glob,
+  HeadChecks,
   LabelName,
   LabelState,
   Labels,
@@ -873,13 +877,28 @@ export const runFired = (
     .done();
 };
 
+const minutesSince = (from: string, now: string): number => (Date.parse(now) - Date.parse(from)) / 60_000;
+
+/** `2026-10-07 02:01 UTC`: a time in a failure reason. */
+const queuedAtText = (at: string): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+
 /**
  * Run failure detection: a run with no progress (no slop call or push) for too long, or that
  * has not marked its PR ready in time, is failed like a `report_failure` (rows 17 and 25).
  */
-export const runTimeoutReason = (glob: Glob, board: Pick<Board, 'runNoProgressHours' | 'runReadyHours'>, now: string): string | null => {
+export const runTimeoutReason = (
+  glob: Glob,
+  board: Pick<Board, 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes'>,
+  now: string,
+): string | null => {
   const run = currentRun(glob);
-  if (run === null || run.state === 'ended' || run.state === 'queued') return null;
+  if (run === null || run.state === 'ended') return null;
+  // Queued runs have made no slop call yet: one that never starts (no session, a session that never called slop).
+  if (run.state === 'queued') {
+    return minutesSince(run.queuedAt, now) >= board.runStartMinutes
+      ? `Routine run never started (queued at ${queuedAtText(run.queuedAt)})`
+      : null;
+  }
   const hours = (from: string | null) => (from === null ? 0 : (Date.parse(now) - Date.parse(from)) / 3_600_000);
   const lastProgress = run.lastProgressAt ?? run.startedAt ?? run.queuedAt;
   if (hours(lastProgress) >= board.runNoProgressHours) {
@@ -937,10 +956,21 @@ export const checksChanged = (glob: Glob, ctx: Context): Result<Transition> => {
 /** Required checks finished on a commit; only the PR's current head counts. */
 export const checksCompleted = (
   glob: Glob,
-  checks: { sha: string; passed: boolean; conflict?: MergeConflict },
+  checks: {
+    sha: string;
+    passed: boolean;
+    conflict?: MergeConflict;
+    /** Why they failed, read from the failing run's log; null/absent when it couldn't be read. */
+    failure?: CheckFailure | null;
+    /** The base branch's result when the checks failed: the failure is inherited if the base fails the same way. */
+    base?: BaseChecks | null;
+    baseBranch?: string;
+  },
   ctx: Context,
 ): Result<Transition> => {
   if (glob.pr?.headSha !== checks.sha) return unchanged(glob);
+  const failure = checks.passed ? undefined : (checks.failure ?? undefined);
+  const inherited = inheritedFailure(failure, checks.base, checks.baseBranch ?? 'the base branch');
   const b = new Builder(glob, ctx)
     .set({
       headChecks: {
@@ -948,9 +978,16 @@ export const checksCompleted = (
         state: checks.passed ? 'passed' : 'failed',
         // A re-read of the same failure keeps its first time.
         ...(!checks.passed && { at: glob.headChecks?.sha === checks.sha && glob.headChecks.state === 'failed' ? (glob.headChecks.at ?? ctx.now) : ctx.now }),
+        ...(failure !== undefined && { failure }),
+        ...(inherited !== null && { inheritedFrom: inherited }),
       },
     })
-    .event('BuildCompleted', { sha: checks.sha, passed: checks.passed });
+    .event('BuildCompleted', {
+      sha: checks.sha,
+      passed: checks.passed,
+      ...(failure !== undefined && { failure: failureSummary(failure) }),
+      ...(inherited !== null && { inheritedFrom: inherited.base }),
+    });
   // Slop updated the branch while merging: the checks on the new head decide (rows 12, 14, 16).
   if (glob.status === 'merging') {
     if (checks.conflict !== undefined) {
@@ -963,7 +1000,13 @@ export const checksCompleted = (
     }
     if (!checks.passed) {
       return b
-        .set({ failure: { reason: 'Checks failed after updating the branch', at: ctx.now }, mergeMode: null })
+        .set({
+          failure: {
+            reason: `Checks failed after updating the branch${failure === undefined ? '' : `: ${failureSummary(failure)}`}`,
+            at: ctx.now,
+          },
+          mergeMode: null,
+        })
         .event('MergeFailed', { reason: 'checks failed after update' })
         .status('failed')
         .done();
@@ -971,6 +1014,50 @@ export const checksCompleted = (
     b.effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: checks.sha });
   }
   return b.done();
+};
+
+/** Whether the glob's head failed checks that a base-branch result can explain (or stop explaining). */
+const hasFailedHead = (glob: Glob): boolean =>
+  glob.pr?.headSha != null &&
+  glob.headChecks?.sha === glob.pr.headSha &&
+  glob.headChecks.state === 'failed' &&
+  (glob.status === 'pr_open' || glob.status === 'in_progress');
+
+/**
+ * The base branch's check result changed: a failed head that fails the same way as a red base is marked inherited, and
+ * the mark goes when the base no longer fails like it (a fixed base, or a different failure).
+ */
+export const baseChecksChanged = (
+  glob: Glob,
+  base: { checks: BaseChecks; branch: string },
+  ctx: Context,
+): Result<Transition> => {
+  const checks = glob.headChecks;
+  if (!hasFailedHead(glob) || checks === null) return unchanged(glob);
+  const inherited = inheritedFailure(checks.failure, base.checks, base.branch);
+  if (JSON.stringify(inherited) === JSON.stringify(checks.inheritedFrom ?? null)) return unchanged(glob);
+  const kept: HeadChecks = {
+    sha: checks.sha,
+    state: checks.state,
+    ...(checks.at !== undefined && { at: checks.at }),
+    ...(checks.failure !== undefined && { failure: checks.failure }),
+    ...(inherited !== null && { inheritedFrom: inherited }),
+  };
+  return new Builder(glob, ctx)
+    .set({ headChecks: kept })
+    .event('BaseChecksChanged', { base: base.branch, inherited: inherited !== null })
+    .done();
+};
+
+/**
+ * The base branch went green again: a glob whose failed checks were inherited from it is brought up to date with it, so
+ * its checks run again on the fixed base. The update's push resets the head checks (row 21).
+ */
+export const baseTurnedGreen = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (!hasFailedHead(glob) || glob.headChecks?.inheritedFrom === undefined || glob.pr?.headSha == null) return unchanged(glob);
+  return new Builder(glob, ctx)
+    .effect({ kind: 'update_branch', globId: glob.id, generation: glob.generation, sha: glob.pr.headSha })
+    .done();
 };
 
 /** Where `mark_ready` came from: the board offers it to supers only, once the postplan is at the head. */
