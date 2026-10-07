@@ -1,5 +1,7 @@
 import type { ContextDiffLine } from './agent-set.js';
+import type { EffectCheck } from './effect-check.js';
 import type { KnowledgeKind } from './knowledge.js';
+import type { KbSignal } from './signals.js';
 
 /**
  * KB items (`s<board>k<n>`): proposed changes to a board's knowledge base or agent set. Nothing
@@ -60,16 +62,39 @@ export type KbCoverage =
   | { readonly kind: 'knowledge'; readonly knowledgeKind: KnowledgeKind; readonly name: string; readonly section: string | null };
 
 /**
- * An open item the dedupe step thinks the target's own text may already say: a hint for the admin,
- * never a decision. `quote` is the sentence it found (checked against the text it was shown).
+ * An open item the dedupe step thinks may already be said: a hint for the admin, never a decision. `quote` is the
+ * sentence it found (checked against the text it was shown). Either the target's own text (stored before `kind`
+ * existed, so it has none), or another item on a quote too short to close the item on (`longEnoughQuote`): an
+ * approved item that may cover it (no `claim`, stored before `claim` existed), an open item it may repeat
+ * (`claim: 'duplicate'`) or a rejected item it may match (`claim: 'suppressed'`). For those two, `quote` is from
+ * that item's statement and `ownQuote` from the item's own; both were found verbatim, and one was too short.
  */
-export interface KbPossibleCoverage {
-  readonly knowledgeKind: KnowledgeKind;
-  readonly name: string;
-  readonly section: string | null;
-  readonly quote: string;
-  readonly reason: string;
-}
+export type KbPossibleCoverage =
+  | {
+      readonly kind?: 'knowledge';
+      readonly knowledgeKind: KnowledgeKind;
+      readonly name: string;
+      readonly section: string | null;
+      readonly quote: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: 'item';
+      readonly id: string;
+      readonly quote: string;
+      readonly shortQuote: true;
+      readonly claim?: 'duplicate' | 'suppressed';
+      readonly ownQuote?: string;
+      /** For a `claim`: which quote was too short, the other item's (`quote`), the item's own (`ownQuote`) or both. */
+      readonly tooShort?: 'quote' | 'ownQuote' | 'both';
+      /** The target's text may say it too (a hint this one hides): the sentence found there and the model's reason. */
+      readonly alsoTarget?: { readonly quote: string; readonly reason: string };
+      /**
+       * Carried from an item merged into this one on intake (its ID): `ownQuote` is from that item's statement. Only a
+       * `claim: 'suppressed'` hint is carried, and never with `alsoTarget`.
+       */
+      readonly via?: string;
+    };
 
 /** Something an open item contradicts: another item (by ID) or a document or agent file (by name). */
 export interface KbContradiction {
@@ -100,9 +125,14 @@ export interface DraftPreview {
   readonly diff: readonly ContextDiffLine[];
 }
 
-/** A KB item as the Knowledge page lists it: open drafted items carry their preview. */
+/**
+ * A KB item as the Knowledge page lists it: open drafted items carry their preview, and every item its evidence
+ * count and freshest evidence (the open queue's order, worked out in core).
+ */
 export interface KbItemView extends KbItem {
   readonly preview: DraftPreview | null;
+  readonly evidenceCount: number;
+  readonly lastEvidenceAt: string;
 }
 
 /** The newest items of a history group (decided, or closed by the pipeline) and how many there are in all. */
@@ -112,7 +142,7 @@ export interface KbItemPage {
 }
 
 /**
- * The Knowledge page's proposals: every open item, oldest first, and the newest decided and
+ * The Knowledge page's proposals: every open item, by evidence (`byEvidence`), and the newest decided and
  * closed items (bounded, since they only grow).
  */
 export interface KbProposalList {
@@ -125,7 +155,7 @@ export interface KbProposalList {
 export const KB_HISTORY_PAGE = 50;
 export const KB_HISTORY_MAX = 1000;
 
-/** `submitted` by an agent through `submit_learning`; `mined` from signals by slop's jobs (later). */
+/** `submitted` by an agent through `submit_learning`; `mined` from signals by slop's weekly mining job. */
 export const KB_ITEM_SOURCES = ['submitted', 'mined'] as const;
 export type KbItemSource = (typeof KB_ITEM_SOURCES)[number];
 
@@ -141,6 +171,8 @@ export interface KbItem {
   /** The globs that produced it; near-duplicates add theirs later. */
   readonly sourceGlobIds: readonly string[];
   readonly source: KbItemSource;
+  /** Mined items: the signal that raised it and the figures behind it (refreshed weekly while open). */
+  readonly signal: KbSignal | null;
   /** The board's agent-set version the submitting run used (`.claude/slop-agent-set.json`). */
   readonly agentSetVersion: number | null;
   readonly submittedBy: string;
@@ -183,9 +215,93 @@ export interface KbItem {
   readonly draft: KbDraft | null;
   readonly draftedAgainstVersion: number | null;
   readonly rationale: string | null;
+  /**
+   * `open`: when weekly consolidation flagged it stale, and why (`staleReason`). Only a flag for the admin, who
+   * rejects or keeps it; new evidence clears it.
+   */
+  readonly staleSince: string | null;
+  readonly staleReason: KbStaleReason | null;
+  /** When an admin last kept a stale item: it isn't flagged again for `STALE_KEEP_MS`. */
+  readonly staleDismissedAt: string | null;
+  /** Items an admin separated from this one by reopening a merge: consolidation never merges them again. */
+  readonly keptApartFrom: readonly string[];
+  /**
+   * `merged` (by weekly consolidation or intake dedupe) or `suppressed` (by intake dedupe): the verified quotes it
+   * closed on.
+   */
+  readonly mergeNote: KbMergeNote | null;
+  /** `approved` with a signal: whether the change worked (`EffectCheck`), refreshed daily while watching. */
+  readonly effectCheck: EffectCheck | null;
   /** For conditional writes (approve, reject). */
   readonly version: number;
 }
+
+/** Why consolidation flagged an open item stale (a documented rule, never a model's say-so). */
+export const KB_STALE_REASONS = ['no_recent_evidence', 'signal_below_threshold'] as const;
+export type KbStaleReason = (typeof KB_STALE_REASONS)[number];
+
+/**
+ * What closed an item, and on which words: its own (`quote`, from its statement) and the other item's
+ * (`survivorQuote`), each found verbatim in that statement, and when. `by: 'consolidation'`: weekly consolidation
+ * merged it into the survivor. `by: 'intake'`: intake dedupe merged it into an open item (`duplicateOf`) or
+ * suppressed it against a rejected one (`suppressedBy`, whose words `survivorQuote` then holds).
+ */
+export interface KbMergeNote {
+  readonly by: 'consolidation' | 'intake';
+  readonly quote: string;
+  readonly survivorQuote: string;
+  readonly at: string;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** An open item with no evidence newer than this is flagged stale (in days for the Knowledge page's wording). */
+export const STALE_AFTER_DAYS = 60;
+export const STALE_AFTER_MS = STALE_AFTER_DAYS * DAY_MS;
+/** A mined item whose signal has been below its threshold this many weekly runs in a row is flagged stale. */
+export const STALE_BELOW_THRESHOLD_RUNS = 4;
+/** Keeping a stale item ("Not stale") suppresses the flag this long. */
+export const STALE_KEEP_DAYS = 60;
+export const STALE_KEEP_MS = STALE_KEEP_DAYS * DAY_MS;
+
+/** How much evidence an item has: its occurrences (it and its near-duplicates), or its source globs if more. */
+export const evidenceCount = (item: Pick<KbItem, 'occurrenceCount' | 'sourceGlobIds'>): number =>
+  Math.max(item.occurrenceCount, item.sourceGlobIds.length);
+
+/** The newest evidence an item has: its submission, a near-duplicate merged into it, or its signal's last measurement. */
+export const lastEvidenceAt = (item: Pick<KbItem, 'createdAt' | 'extraEvidence' | 'signal'>): string => {
+  const times = [item.createdAt, ...item.extraEvidence.map((e) => e.at), ...(item.signal === null ? [] : [item.signal.measuredAt])];
+  return times.reduce((latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest));
+};
+
+/**
+ * The open queue's order: the most evidence first (repeats are the strongest sign a rule is missing), then the
+ * freshest evidence, so an item that keeps coming back rises instead of sinking under new ones; then the oldest.
+ */
+export const byEvidence = (a: KbItem, b: KbItem): number =>
+  evidenceCount(b) - evidenceCount(a) ||
+  Date.parse(lastEvidenceAt(b)) - Date.parse(lastEvidenceAt(a)) ||
+  Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+  a.id.localeCompare(b.id);
+
+/**
+ * Whether an open item is stale at `now`, and why: no evidence newer than `STALE_AFTER_MS`, or (a mined item)
+ * its signal below its threshold for `STALE_BELOW_THRESHOLD_RUNS` runs in a row (`belowThresholdRuns`, null
+ * when it has no signal row). Null while an admin's Keep holds, and for anything not open.
+ */
+export const staleReasonAt = (
+  item: Pick<KbItem, 'status' | 'createdAt' | 'extraEvidence' | 'signal' | 'staleDismissedAt'>,
+  now: string,
+  belowThresholdRuns: number | null,
+): KbStaleReason | null => {
+  if (item.status !== 'open') return null;
+  const at = Date.parse(now);
+  if (item.staleDismissedAt !== null && at - Date.parse(item.staleDismissedAt) < STALE_KEEP_MS) return null;
+  if (at - Date.parse(lastEvidenceAt(item)) >= STALE_AFTER_MS) return 'no_recent_evidence';
+  if (item.signal !== null && belowThresholdRuns !== null && belowThresholdRuns >= STALE_BELOW_THRESHOLD_RUNS) {
+    return 'signal_below_threshold';
+  }
+  return null;
+};
 
 /**
  * Starts `processingError` while an item waits for the LLM to be usable again (expired sign-in,
@@ -219,6 +335,12 @@ export const UNPROCESSED: Pick<
   | 'draft'
   | 'draftedAgainstVersion'
   | 'rationale'
+  | 'staleSince'
+  | 'staleReason'
+  | 'staleDismissedAt'
+  | 'keptApartFrom'
+  | 'mergeNote'
+  | 'effectCheck'
 > = {
   processing: 'pending',
   processingError: null,
@@ -237,6 +359,12 @@ export const UNPROCESSED: Pick<
   draft: null,
   draftedAgainstVersion: null,
   rationale: null,
+  staleSince: null,
+  staleReason: null,
+  staleDismissedAt: null,
+  keptApartFrom: [],
+  mergeNote: null,
+  effectCheck: null,
 };
 
 export const isLearningType = (value: string): value is LearningType =>
@@ -266,6 +394,12 @@ export type KbOutcome =
       readonly target: KnowledgeKind;
       readonly name: string;
       readonly version: number;
+      /**
+       * An agent-set file: the first agent-set version with the change (the effect check's basis), the board's version
+       * after the approval. Absent when the approval changed nothing (its check goes by time), on documents and on
+       * approvals recorded before effect checks.
+       */
+      readonly agentSetVersion?: number;
     };
 
 /**

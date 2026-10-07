@@ -210,7 +210,8 @@ describe('KB items in Postgres', () => {
         content: 'Test it against Postgres.\n',
       }),
     );
-    expect(approved.outcome).toEqual({ kind: 'applied', target: 'agent', name: 'agents/tester.md', version: 2 });
+    // The outcome records the board's agent-set version after the approval (the effect check's basis).
+    expect(approved.outcome).toEqual({ kind: 'applied', target: 'agent', name: 'agents/tester.md', version: 2, agentSetVersion: before + 1 });
     expect((await store.transaction((tx) => tx.getBoard(boardId)))?.agentSetVersion).toBe(before + 1);
   });
 

@@ -161,12 +161,26 @@ export const agentSetKind = (path: string): KnowledgeKind | null => {
 export const ARTIFACT_KINDS = ['plan', 'implementation_plan', 'postplan', 'local_review', 'attachment'] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
+export const RISK_TIERS = ['low', 'normal', 'high'] as const;
+export type RiskTier = (typeof RISK_TIERS)[number];
+
+/** How a local review's cycle went, as the orchestrator reports it with `put_artifact` (mined signals). */
+export interface ReviewStats {
+  readonly riskTier: RiskTier;
+  readonly reviewRounds: number;
+  readonly maxReviewRounds: number;
+  /** Tester FAIL → implementer fix loops before the review. */
+  readonly testFailRounds: number;
+}
+
 /** Who produced an artifact: a person, sessionator, or a model with its prompt and agent-set version. */
 export interface Provenance {
   readonly by: 'human' | 'sessionator' | 'routine';
   readonly actor: string;
   readonly runId: string | null;
   readonly agentSetVersion: number | null;
+  /** Local reviews only, when the orchestrator passed them. */
+  readonly reviewStats?: ReviewStats;
 }
 
 export interface Artifact {

@@ -216,7 +216,7 @@ describe('layered agent set on a board', () => {
     const approved = unwrap(
       await knowledge.approve(ADMIN, id, 1, { as: 'edit', target: { kind: 'agent', name: 'agents/tester.md' }, content: '- Write the test first.\n' }),
     );
-    expect(approved.outcome).toEqual({ kind: 'applied', target: 'agent', name: 'agents/tester.md', version: 1 });
+    expect(approved.outcome).toEqual({ kind: 'applied', target: 'agent', name: 'agents/tester.md', version: 1, agentSetVersion: 2 });
     expect(await row('agent', 'agents/tester.md')).toMatchObject({ layer: 'overlay', content: '- Write the test first.\n', source: `kb:${id}` });
     expect((await board()).agentSetVersion).toBe(2);
     const served = unwrap(await knowledge.agentSet(DEV, boardId)).files.find((f) => f.path === 'agents/tester.md');

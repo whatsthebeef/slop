@@ -3,7 +3,7 @@ import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
 import { composeAgentSet, contextDiff, overlayProblem } from '../domain/agent-set.js';
 import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../domain/agent-set.js';
-import { isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE, needsDraft, UNPROCESSED } from '../domain/kb.js';
+import { byEvidence, evidenceCount, isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE, lastEvidenceAt, needsDraft, UNPROCESSED } from '../domain/kb.js';
 import type {
   DraftPreview,
   KbItem,
@@ -28,6 +28,9 @@ import {
   renderFrontmatter,
 } from '../domain/knowledge.js';
 import type { CatalogUpdate, KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
+import { effectBasisOf, effectItemOf, isEffectMeasured, startEffectCheck } from '../domain/effect-check.js';
+import type { EffectCheck } from '../domain/effect-check.js';
+import type { KbSignal } from '../domain/signals.js';
 import { splicePreview } from '../domain/sections.js';
 import type { Board } from '../domain/types.js';
 import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
@@ -105,7 +108,7 @@ export interface NewLearning {
  * section edited first). The statement or content may be edited first. For an agent-set file the
  * content is the board's layer: its overlay on a catalog file, or the whole file the board owns.
  */
-export type Approval =
+export type Approval = (
   | { readonly as: 'learning'; readonly statement?: string }
   | {
       readonly as: 'edit';
@@ -121,7 +124,22 @@ export type Approval =
       /** The heading the edited content replaces, or null to append it; defaults to the draft's. */
       readonly section?: string | null;
       readonly statement?: string;
-    };
+    }
+) & {
+  /**
+   * A submitted item (it has no signal): the key of one of the board's measured signals for the effect check to
+   * watch (`watchableSignals`). Absent: none.
+   */
+  readonly watchSignal?: string;
+};
+
+/**
+ * The board's signals as measured now (the mining service), for the signal an admin picks to watch when approving
+ * a submitted item.
+ */
+export interface SignalMeasure {
+  measure(tx: Tx, boardId: number, now: string): Promise<readonly KbSignal[]>;
+}
 
 /** An admin's choice of target for an item; drafting starts again against it (routing is skipped). */
 export interface TargetChange {
@@ -147,6 +165,17 @@ class BoardChanged extends Error {
     super(`Board ${boardId} changed during the write; retry`);
   }
 }
+
+/** An item as the Knowledge page lists it. */
+const view = (item: KbItem, preview: DraftPreview | null): KbItemView => ({
+  ...item,
+  preview,
+  evidenceCount: evidenceCount(item),
+  lastEvidenceAt: lastEvidenceAt(item),
+});
+
+/** `ids` with `id` added once. */
+const apart = (ids: readonly string[], id: string): string[] => (ids.includes(id) ? [...ids] : [...ids, id]);
 
 /** A decision's conditional write lost to a concurrent one; thrown so the transaction rolls back. */
 class StaleKbItem extends Error {
@@ -174,6 +203,9 @@ const checkDocument = (document: ProposedDocument): Result<ProposedDocument> => 
   if (body === '') return invalidInput('A proposed document needs content');
   return ok({ name, area, audience, description, content: `${body}\n` });
 };
+
+/** The next KB item ID on a board (`s<board>k<n>`), for submitted and mined items alike. */
+export const newKbItemId = async (tx: Tx, boardId: number): Promise<string> => formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
 
 /** A document proposal's target: that document, with its proposed frontmatter when the board doesn't have it yet. */
 export const documentTarget = async (tx: Tx, boardId: number, document: ProposedDocument): Promise<KbTarget> => {
@@ -238,7 +270,14 @@ export interface NewDocument {
  */
 export class KnowledgeService {
   constructor(
-    private readonly deps: { store: Store; clock: Clock; catalog: Catalog; notifier: Notifier },
+    private readonly deps: {
+      store: Store;
+      clock: Clock;
+      catalog: Catalog;
+      notifier: Notifier;
+      /** Absent: no signal can be picked to watch on approval. */
+      signals?: SignalMeasure;
+    },
   ) {}
 
   /** Hints raised in each open write transaction, published once it commits. */
@@ -497,7 +536,7 @@ export class KnowledgeService {
         if (glob?.boardId !== boardId) return notFound(`No glob ${sourceGlobId} on board ${boardId}`);
         sourceGlobIds.push(glob.id);
       }
-      const id = formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
+      const id = await newKbItemId(tx, boardId);
       // Document proposals name their target and are their own draft, so the pipeline has nothing to do.
       const routed =
         document === null
@@ -513,6 +552,7 @@ export class KnowledgeService {
         suggestedTarget: suggestedTarget === '' ? null : suggestedTarget,
         sourceGlobIds,
         source: 'submitted',
+        signal: null,
         agentSetVersion,
         submittedBy: email,
         createdAt: this.deps.clock.now(),
@@ -532,9 +572,10 @@ export class KnowledgeService {
   }
 
   /**
-   * The board's open KB items, oldest first, each drafted one with a preview of its draft against
-   * the target's current text; and the newest `historyLimit` decided items (by decision, so the one
-   * just decided is listed first) and closed items, with their totals. Members may read them.
+   * The board's open KB items, by evidence (`byEvidence`: the most evidence first, then the freshest), each
+   * drafted one with a preview of its draft against the target's current text; and the newest `historyLimit`
+   * decided items (by decision, so the one just decided is listed first) and closed items, with their totals.
+   * Members may read them.
    */
   async proposals(email: string, boardId: number, historyLimit = KB_HISTORY_PAGE): Promise<Result<KbProposalList>> {
     const catalog = await this.deps.catalog.agentSet();
@@ -543,12 +584,12 @@ export class KnowledgeService {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
       const open: KbItemView[] = [];
-      for (const item of await tx.listKbItems(boardId, 'open')) {
-        open.push({ ...item, preview: await this.preview(tx, catalog, item) });
+      for (const item of [...(await tx.listKbItems(boardId, 'open'))].sort(byEvidence)) {
+        open.push(view(item, await this.preview(tx, catalog, item)));
       }
       const page = async (statuses: readonly KbItemStatus[]): Promise<KbItemPage> => {
         const { items, total } = await tx.listRecentKbItems(boardId, statuses, limit);
-        return { items: items.map((item) => ({ ...item, preview: null })), total };
+        return { items: items.map((item) => view(item, null)), total };
       };
       return ok({ open, decided: await page(['approved', 'rejected']), closed: await page(['merged', 'suppressed', 'covered']) });
     });
@@ -618,7 +659,8 @@ export class KnowledgeService {
    * item without a target is refused (the pipeline always routes before it closes, so this
    * shouldn't happen): reopening it could only send it back through routing and dedupe. The
    * other item keeps the evidence and count the closing added to it: they are only evidence, and
-   * that item may have been decided since.
+   * that item may have been decided since. A reopened merge records the pair in both items'
+   * `keptApartFrom`, in the same transaction, so weekly consolidation never merges them again.
    */
   async reopen(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
     return this.transaction(async (tx) => {
@@ -632,7 +674,17 @@ export class KnowledgeService {
       if (!(item.status === 'merged' || item.status === 'suppressed' || item.status === 'covered')) {
         return invalidInput(`${item.id} is ${item.status}; only items the pipeline closed can be reopened`);
       }
-      const reopened: KbItem = { ...item, status: 'open', duplicateOf: null, suppressedBy: null, coveredBy: null };
+      // A merge the admin undid keeps the pair apart: weekly consolidation never merges them again.
+      const former = item.status === 'merged' ? item.duplicateOf : null;
+      const reopened: KbItem = {
+        ...item,
+        status: 'open',
+        duplicateOf: null,
+        suppressedBy: null,
+        coveredBy: null,
+        mergeNote: null,
+        keptApartFrom: former === null ? item.keptApartFrom : apart(item.keptApartFrom, former),
+      };
       if (item.document === null && item.target === null) {
         return invalidInput(`${item.id} has no target, so reopening it would route and deduplicate it again`);
       }
@@ -640,6 +692,49 @@ export class KnowledgeService {
         item.document !== null
           ? { ...reopened, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
           : needsDraft(reopened);
+      if (!(await tx.updateKbItem(next, item.version))) {
+        const current = await tx.getKbItem(itemId);
+        return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
+      }
+      const other = former === null ? null : await tx.getKbItem(former);
+      if (other !== null && !other.keptApartFrom.includes(item.id)) {
+        const separated: KbItem = { ...other, keptApartFrom: apart(other.keptApartFrom, item.id), version: other.version + 1 };
+        // The other item changed between the read and the write: roll the reopen back too, as a conflict.
+        if (!(await tx.updateKbItem(separated, other.version))) throw new StaleKbItem(other.id);
+      }
+      this.kbChanged(tx, item.boardId);
+      return ok(next);
+    }).catch(async (error: unknown) => {
+      if (!(error instanceof StaleKbItem)) throw error;
+      const current = await this.deps.store.transaction((tx) => tx.getKbItem(itemId));
+      return current === null
+        ? notFound(`No KB item ${itemId}`)
+        : err({ code: 'version_conflict', message: `${itemId} changed meanwhile; try again`, currentItem: current });
+    });
+  }
+
+  /**
+   * Admins keep an open item weekly consolidation flagged stale: the flag is cleared and not raised again for
+   * `STALE_KEEP_MS`. (Reject is the other answer to a stale flag; nothing closes an item for being stale.)
+   */
+  async keepStale(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
+    return this.transaction(async (tx) => {
+      const item = await tx.getKbItem(itemId);
+      if (item === null) return notFound(`No KB item ${itemId}`);
+      const actor = await adminOf(tx, email, item.boardId);
+      if (!actor.ok) return actor;
+      const stale = (current: KbItem) =>
+        err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: current });
+      if (item.version !== version) return stale(item);
+      if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
+      if (item.staleSince === null) return invalidInput(`${item.id} isn't flagged stale`);
+      const next: KbItem = {
+        ...item,
+        staleSince: null,
+        staleReason: null,
+        staleDismissedAt: this.deps.clock.now(),
+        version: item.version + 1,
+      };
       if (!(await tx.updateKbItem(next, item.version))) {
         const current = await tx.getKbItem(itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
@@ -686,38 +781,79 @@ export class KnowledgeService {
    */
   async approve(email: string, itemId: string, version: number, approval: Approval): Promise<Result<KbItem>> {
     return this.decide(email, itemId, version, async (tx, item) => {
-      // A document proposal is its own draft.
-      if (approval.as === 'document' || (approval.as === 'draft' && item.document !== null)) {
-        if (item.document === null) return invalidInput(`${item.id} is not a document proposal`);
-        const document = checkDocument({ ...item.document, content: approval.content ?? item.document.content });
-        if (!document.ok) return document;
-        const { name, content } = document.value;
-        const outcome = await this.apply(tx, email, item, 'doc', name, renderFrontmatter(document.value) + content);
-        return outcome.ok ? ok({ statement: item.statement, outcome: outcome.value }) : outcome;
-      }
-      if (item.document !== null) return invalidInput(`${item.id} proposes a document; approve it as that document`);
-      const statement = approval.statement?.trim() ?? item.statement;
-      if (statement === '') return invalidInput('A learning needs a statement');
-      if (approval.as === 'learning') return ok({ statement, outcome: { kind: 'learning' } });
-      if (approval.as === 'draft') {
-        const outcome = await this.applyDraft(tx, email, item, approval);
-        return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
-      }
-
-      const { kind, name } = approval.target;
-      if (approval.content.trim() === '') return invalidInput('The new content is empty');
-      const existing = await tx.getKnowledge(item.boardId, kind, name);
-      if (isAgentSetKind(kind)) {
-        const outcome = await this.applyAgentSetEdit(tx, email, item, kind, name, approval.content, existing);
-        return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
-      }
-      if (existing === null) return notFound(`No document ${name} on board ${item.boardId}`);
-      // A document edited without frontmatter keeps its area, audience and description.
-      const content =
-        kind === 'doc' && !hasFrontmatter(approval.content) ? renderFrontmatter(existing) + approval.content : approval.content;
-      const outcome = await this.apply(tx, email, item, kind, name, content);
-      return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
+      // A watched signal is claimed in `kb_signals` under mining's lock, so a mining run neither overwrites the claim
+      // with the row it read before nor raises the signal meanwhile; taken first, so the measurement sees its rows.
+      if (approval.watchSignal !== undefined) await tx.lockBoardJob(item.boardId, 'mining');
+      // Checked before anything is written: a refused decision commits nothing it wrote.
+      const watched = await this.watchedSignal(tx, item, approval.watchSignal);
+      if (!watched.ok) return watched;
+      const applied = await this.applyApproval(tx, email, item, approval);
+      return applied.ok ? ok({ ...applied.value, signal: watched.value }) : applied;
     });
+  }
+
+  /**
+   * The board's signals as measured now, for the Watch signal choice when approving a submitted item; admins only
+   * (only they approve). Empty when signals aren't measured here.
+   */
+  async watchableSignals(email: string, boardId: number): Promise<Result<KbSignal[]>> {
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await adminOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      const signals = this.deps.signals === undefined ? [] : await this.deps.signals.measure(tx, boardId, this.deps.clock.now());
+      return ok(signals.filter((s) => isEffectMeasured(s.key)).sort((a, b) => a.key.localeCompare(b.key)));
+    });
+  }
+
+  /** The measured signal an admin chose to watch for a submitted item, or null when none was chosen. */
+  private async watchedSignal(tx: Tx, item: KbItem, key: string | undefined): Promise<Result<KbSignal | null>> {
+    if (key === undefined) return ok(null);
+    if (item.document !== null) return invalidInput(`${item.id} proposes a document; a document proposal doesn't watch a signal`);
+    if (!isEffectMeasured(key)) return invalidInput(`Effect checks don't measure ${key}`);
+    if (item.signal !== null) return invalidInput(`${item.id} already has a signal (${item.signal.label}); its effect check watches that`);
+    const signals = this.deps.signals === undefined ? [] : await this.deps.signals.measure(tx, item.boardId, this.deps.clock.now());
+    const found = signals.find((s) => s.key === key);
+    return found === undefined ? invalidInput(`No signal ${key} is measured on board ${item.boardId} now`) : ok(found);
+  }
+
+  /** What an approval writes, and the statement and outcome it records. */
+  private async applyApproval(
+    tx: Tx,
+    email: string,
+    item: KbItem,
+    approval: Approval,
+  ): Promise<Result<{ statement: string; outcome: KbOutcome }>> {
+    // A document proposal is its own draft.
+    if (approval.as === 'document' || (approval.as === 'draft' && item.document !== null)) {
+      if (item.document === null) return invalidInput(`${item.id} is not a document proposal`);
+      const document = checkDocument({ ...item.document, content: approval.content ?? item.document.content });
+      if (!document.ok) return document;
+      const { name, content } = document.value;
+      const outcome = await this.apply(tx, email, item, 'doc', name, renderFrontmatter(document.value) + content);
+      return outcome.ok ? ok({ statement: item.statement, outcome: outcome.value }) : outcome;
+    }
+    if (item.document !== null) return invalidInput(`${item.id} proposes a document; approve it as that document`);
+    const statement = approval.statement?.trim() ?? item.statement;
+    if (statement === '') return invalidInput('A learning needs a statement');
+    if (approval.as === 'learning') return ok({ statement, outcome: { kind: 'learning' } });
+    if (approval.as === 'draft') {
+      const outcome = await this.applyDraft(tx, email, item, approval);
+      return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
+    }
+
+    const { kind, name } = approval.target;
+    if (approval.content.trim() === '') return invalidInput('The new content is empty');
+    const existing = await tx.getKnowledge(item.boardId, kind, name);
+    if (isAgentSetKind(kind)) {
+      const outcome = await this.applyAgentSetEdit(tx, email, item, kind, name, approval.content, existing);
+      return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
+    }
+    if (existing === null) return notFound(`No document ${name} on board ${item.boardId}`);
+    // A document edited without frontmatter keeps its area, audience and description.
+    const content =
+      kind === 'doc' && !hasFrontmatter(approval.content) ? renderFrontmatter(existing) + approval.content : approval.content;
+    const outcome = await this.apply(tx, email, item, kind, name, content);
+    return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
   }
 
   /** Admins reject an open KB item with a reason; it is kept so repeats can be suppressed later. */
@@ -735,7 +871,10 @@ export class KnowledgeService {
     email: string,
     itemId: string,
     version: number,
-    decision: (tx: Tx, item: KbItem) => Promise<Result<{ statement: string; outcome: KbOutcome } | { reason: string }>>,
+    decision: (
+      tx: Tx,
+      item: KbItem,
+    ) => Promise<Result<{ statement: string; outcome: KbOutcome; signal?: KbSignal | null } | { reason: string }>>,
   ): Promise<Result<KbItem>> {
     const stale = (item: KbItem) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
     try {
@@ -748,11 +887,19 @@ export class KnowledgeService {
         if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
         const decided = await decision(tx, item);
         if (!decided.ok) return decided;
-        const base = { ...item, decidedBy: email, decidedAt: this.deps.clock.now(), version: item.version + 1 };
-        const next: KbItem =
-          'reason' in decided.value
-            ? { ...base, status: 'rejected', decisionReason: decided.value.reason }
-            : { ...base, status: 'approved', statement: decided.value.statement, outcome: decided.value.outcome };
+        const decidedAt = this.deps.clock.now();
+        const base = { ...item, decidedBy: email, decidedAt, version: item.version + 1 };
+        let next: KbItem;
+        if ('reason' in decided.value) next = { ...base, status: 'rejected', decisionReason: decided.value.reason };
+        else {
+          const { statement, outcome } = decided.value;
+          const chosen = decided.value.signal ?? null;
+          const signal = chosen ?? item.signal;
+          // An approved change with a signal the check measures is watched (the daily effect check).
+          const effectCheck = signal === null || !isEffectMeasured(signal.key) ? null : await this.effectCheckFor(tx, item.boardId, signal, outcome, decidedAt);
+          next = { ...base, status: 'approved', statement, outcome, signal, effectCheck };
+          if (chosen !== null) await this.claimSignal(tx, next, chosen);
+        }
         if (!(await tx.updateKbItem(next, item.version))) throw new StaleKbItem(item.id);
         this.kbChanged(tx, item.boardId);
         return ok(next);
@@ -766,6 +913,38 @@ export class KnowledgeService {
         ? err({ code: 'version_conflict', message: 'The board changed meanwhile; try again', currentItem: current })
         : stale(current);
     }
+  }
+
+  /**
+   * A new effect check for an approval. A revise-or-revert item (`effect:` signal) watches the key its original
+   * watched, so approving the revision is checked against the same signal.
+   */
+  private async effectCheckFor(tx: Tx, boardId: number, signal: KbSignal, outcome: KbOutcome, decidedAt: string): Promise<EffectCheck> {
+    const board = await tx.getBoard(boardId);
+    if (board === null) throw new Error(`No board ${boardId}`);
+    const originalId = effectItemOf(signal.key);
+    const original = originalId === null ? null : await tx.getKbItem(originalId);
+    const watch = original?.effectCheck ?? original?.signal ?? signal;
+    return startEffectCheck({ key: watch.key, label: watch.label }, effectBasisOf(outcome, decidedAt), board.effectCheckGlobs);
+  }
+
+  /**
+   * A signal an admin chose to watch belongs to the approved item from now on (`kb_signals`), so mining doesn't raise
+   * it again while the effect check owns it; an open item already raised for it keeps it (mining refreshes that one).
+   */
+  private async claimSignal(tx: Tx, item: KbItem, signal: KbSignal): Promise<void> {
+    const row = (await tx.listKbSignals(item.boardId)).find((r) => r.key === signal.key);
+    const holder = row?.itemId == null ? null : await tx.getKbItem(row.itemId);
+    if (holder?.status === 'open') return;
+    await tx.upsertKbSignal({
+      boardId: item.boardId,
+      key: signal.key,
+      itemId: item.id,
+      lastFigures: row?.lastFigures ?? signal.figures,
+      lastMeasuredAt: row?.lastMeasuredAt ?? signal.measuredAt,
+      raisedAt: row?.raisedAt ?? null,
+      belowThresholdRuns: row?.belowThresholdRuns ?? 0,
+    });
   }
 
   /**
@@ -859,7 +1038,10 @@ export class KnowledgeService {
     content: string,
     existing: KnowledgeDoc | null,
   ): Promise<Result<KbOutcome>> {
-    if (existing?.layer === 'file') return this.apply(tx, email, item, kind, name, content, 'file');
+    const before = await tx.getBoard(item.boardId);
+    if (before === null) throw new Error(`No board ${item.boardId}`);
+    const versioned = async (outcome: Result<KbOutcome>) => this.withAgentSetVersion(tx, before, outcome);
+    if (existing?.layer === 'file') return versioned(await this.apply(tx, email, item, kind, name, content, 'file'));
     if (existing === null) {
       const catalog = await this.deps.catalog.agentSet();
       if (!catalog.files.some((f) => f.path === name && agentSetKind(f.path) === kind)) {
@@ -868,7 +1050,20 @@ export class KnowledgeService {
     }
     const problem = overlayProblem(kind, content);
     if (problem !== null) return invalidInput(problem);
-    return this.apply(tx, email, item, kind, name, content, 'overlay');
+    return versioned(await this.apply(tx, email, item, kind, name, content, 'overlay'));
+  }
+
+  /**
+   * An agent-set outcome with the first agent-set version that has the change, the version the effect check starts
+   * at: the board's version after the write. A write that changed nothing bumps no version and gets none, so its check
+   * goes by time (the content was already being served, and no glob might ever reach a next version).
+   */
+  private async withAgentSetVersion(tx: Tx, before: Board, outcome: Result<KbOutcome>): Promise<Result<KbOutcome>> {
+    if (!outcome.ok || outcome.value.kind !== 'applied') return outcome;
+    const board = await tx.getBoard(before.id);
+    if (board === null) throw new Error(`No board ${before.id}`);
+    if (board.agentSetVersion <= before.agentSetVersion) return outcome;
+    return ok({ ...outcome.value, agentSetVersion: board.agentSetVersion });
   }
 
   /** Writes an approved change to a document or agent-set file and returns the outcome with its new version. */

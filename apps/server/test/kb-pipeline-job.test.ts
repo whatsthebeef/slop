@@ -111,6 +111,14 @@ describe('KbPipelineJob', () => {
     expect(logged).toHaveLength(2);
   });
 
+  it('logs errors under its task name (the findings queue runs its own instance)', async () => {
+    const tasks: string[] = [];
+    const pipeline = { processNext: (): Promise<string | null> => Promise.reject(new Error('store down')) };
+    await new KbPipelineJob(pipeline, (task) => tasks.push(task), { isDown: () => false }).drain();
+    await new KbPipelineJob(pipeline, (task) => tasks.push(task), { isDown: () => false }, Date.now, 'findings').drain();
+    expect(tasks).toEqual(['kb-pipeline', 'findings']);
+  });
+
   it('stops claiming as soon as a call finds the LLM down mid-drain, and waits an interval to probe', async () => {
     let now = 0;
     let down = false;

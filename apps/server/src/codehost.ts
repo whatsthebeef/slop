@@ -40,6 +40,12 @@ export interface RepoConnection {
   readonly appName: string | null;
 }
 
+/** What one commit changed: its first parent (null for a root commit) and its files. */
+export interface CommitFiles {
+  readonly parent: string | null;
+  readonly files: readonly { readonly path: string; readonly previousPath: string | null; readonly status: 'added' | 'removed' | 'modified' | 'renamed' | 'other' }[];
+}
+
 export interface CodeHost {
   /** True once the host integration is configured (e.g. the GitHub App exists). */
   readonly configured: boolean;
@@ -59,8 +65,10 @@ export interface CodeHost {
   mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState }>;
   /** The latest completed check run named `name` on commit `sha`, or null if none has completed yet. */
   completedCheckRun(repo: Repo, sha: string, name: string): Promise<{ sha: string; passed: boolean } | null>;
-  /** A file's text on a branch, or null when the file (or branch) doesn't exist. */
-  readFile(repo: Repo, ref: string, path: string): Promise<string | null>;
+  /** A file's text on a branch, or null when the file (or branch) doesn't exist. `signal` aborts the request. */
+  readFile(repo: Repo, ref: string, path: string, signal?: AbortSignal): Promise<string | null>;
+  /** The files commit `sha` changed against its first parent (mined signals read its dependency manifests). */
+  commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles>;
   /** Marks a draft PR ready for review. */
   markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }>;
   /** Files changed on both the PR's branch and the base branch since they diverged: where a conflict can be. Best effort; empty when unknown. */
@@ -69,6 +77,8 @@ export interface CodeHost {
   commentOnce(repo: Repo, prNumber: number, marker: string, body: string): Promise<'posted' | 'exists'>;
   /** Lines changed and files touched between the base branch and `sha`. */
   diffSummary(repo: Repo, sha: string): Promise<DiffSummary>;
+  /** Lines changed (the commit's stats) and files touched by commit `sha` against its first parent: a merged sub's size. */
+  commitDiffSummary(repo: Repo, sha: string, signal?: AbortSignal): Promise<DiffSummary>;
   /** The head commit of `ref` (a branch) and its subject line; null when the branch doesn't exist. */
   headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string } | null>;
   /**

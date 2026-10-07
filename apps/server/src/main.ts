@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, DeployService, GlobService, IntakeService, KbPipeline, KnowledgeService } from '@slop/core';
+import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, SubLimitService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -30,6 +30,9 @@ import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
 import { DeployWatch } from './jobs/deploy-watch.js';
 import { KbPipelineJob } from './jobs/kb-pipeline.js';
+import { LearningJobs } from './jobs/learning-jobs.js';
+import { CodeHostManifests } from './jobs/manifests.js';
+import { CodeHostSubDiffs } from './jobs/sub-diffs.js';
 
 const config = loadConfig();
 await runMigrations(config.DATABASE_URL, config.MIGRATIONS_DIR);
@@ -84,8 +87,11 @@ const outbox = new OutboxRunner(
 
 const catalog = new FsCatalog(config.CATALOG_DIR);
 const clock = { now: () => new Date().toISOString() };
-const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub });
+// Mining measures the board's signals: the weekly job, and the signal an admin picks to watch when approving.
+const mining = new MiningService({ store, notifier: hub });
+const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub, signals: mining });
 const artifacts = new ArtifactService({ store, clock, notifier: hub });
+const findings = new FindingsService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
 // Credential and access failures mark a model down (logged once per change); no hint yet, since no
@@ -100,20 +106,52 @@ const intake = new IntakeService({
     config.INTAKE_MODEL,
   ),
 });
+// Opus 5.5 takes no sampling parameters other than the defaults. Routing, dedupe and weekly consolidation share it.
+const kbRouteLlm = llmHealth.track(
+  new BedrockLlm({ id: config.KB_ROUTE_MODEL, configKey: 'KB_ROUTE_MODEL' }, config.BEDROCK_REGION, logUsage, null),
+  config.KB_ROUTE_MODEL,
+);
 const kbPipeline = new KbPipeline({
   store,
   clock,
   catalog,
   notifier: hub,
-  // Opus 5.5 takes no sampling parameters other than the defaults.
-  route: llmHealth.track(
-    new BedrockLlm({ id: config.KB_ROUTE_MODEL, configKey: 'KB_ROUTE_MODEL' }, config.BEDROCK_REGION, logUsage, null),
-    config.KB_ROUTE_MODEL,
-  ),
+  route: kbRouteLlm,
   draft: llmHealth.track(
     new BedrockLlm({ id: config.KB_DRAFT_MODEL, configKey: 'KB_DRAFT_MODEL' }, config.BEDROCK_REGION, logUsage, null),
     config.KB_DRAFT_MODEL,
   ),
+});
+
+// Haiku: splitting and classifying review findings, and checking bug reports for the learned sub limit.
+const findingsLlm = llmHealth.track(
+  new BedrockLlm({ id: config.FINDINGS_MODEL, configKey: 'FINDINGS_MODEL' }, config.BEDROCK_REGION, logUsage),
+  config.FINDINGS_MODEL,
+);
+const findingsPipeline = new FindingsPipeline({ store, clock, notifier: hub, llm: findingsLlm });
+
+// Weekly mining: signals from the board's own activity become mined KB items for the KB pipeline. Weekly
+// consolidation then merges same-fact open items (verified quotes) and flags stale ones; it waits while its model is down.
+// Daily effect checks compare each approved change's signal before and after it. Hourly, the sub size limit learns
+// from merged subs' outcomes.
+const subLimit = new SubLimitService({
+  store,
+  notifier: hub,
+  llm: findingsLlm,
+  findingsDown: () => llmHealth.isDown([config.FINDINGS_MODEL]),
+  diffs: new CodeHostSubDiffs(github, logError),
+});
+const learningJobs = new LearningJobService({
+  store,
+  clock,
+  notifier: hub,
+  mining,
+  effectChecks: new EffectCheckService({ store, notifier: hub, mining }),
+  consolidation: new KbConsolidation({ store, clock, notifier: hub, llm: kbRouteLlm }),
+  consolidationDown: () => llmHealth.isDown([config.KB_ROUTE_MODEL]),
+  subLimit,
+  manifests: new CodeHostManifests(github, logError),
+  log: logError,
 });
 
 if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
@@ -134,7 +172,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
-mountKnowledge(app, { knowledge, artifacts, catalog, intake, boards, host: github });
+mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, logError });
 mountHealth(app, { llm: llmHealth, boards });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
@@ -174,7 +212,7 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, github, boardOf }),
+  handle: githubDeliveryHandler({ db, globs, findings, github, boardOf }),
 });
 
 app.onError((error, c) => {
@@ -204,6 +242,11 @@ deployWatch.start();
 const kbModels = [config.KB_ROUTE_MODEL, config.KB_DRAFT_MODEL];
 const kbPipelineJob = new KbPipelineJob(kbPipeline, logError, { isDown: () => llmHealth.isDown(kbModels) });
 kbPipelineJob.start();
+// Findings pause on the findings model only, like the KB pipeline on its own.
+const findingsJob = new KbPipelineJob(findingsPipeline, logError, { isDown: () => llmHealth.isDown([config.FINDINGS_MODEL]) }, Date.now, 'findings');
+findingsJob.start();
+const learningJobsRunner = new LearningJobs(learningJobs, logError);
+learningJobsRunner.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -213,6 +256,8 @@ const shutdown = () => {
   runWatch.stop();
   deployWatch.stop();
   kbPipelineJob.stop();
+  findingsJob.stop();
+  learningJobsRunner.stop();
   server.close();
   void database.close();
 };

@@ -41,9 +41,22 @@ describe('sub gate policy', () => {
   });
 
   it('passes small changes outside sensitive paths and flags the rest', () => {
-    expect(subGatePolicy({ changedLines: 40, files: ['src/a.ts'] }, board)).toEqual({ passed: true, reason: null });
+    expect(subGatePolicy({ changedLines: 40, files: ['src/a.ts'] }, board)).toEqual({ passed: true, reason: null, cause: null, changedLines: 40 });
     expect(subGatePolicy({ changedLines: 400, files: ['src/a.ts'] }, board).reason).toMatch(/400 lines/);
     expect(subGatePolicy({ changedLines: 5, files: ['infra/x.ts', 'src/a.ts'] }, board).reason).toMatch(/infra\/x.ts/);
+  });
+
+  it('says why a sub converted and records its size, for the learned limit', () => {
+    expect(subGatePolicy({ changedLines: 400, files: ['src/a.ts'] }, board)).toEqual({
+      passed: false,
+      reason: 'Changes 400 lines (limit 100)',
+      cause: 'size',
+      changedLines: 400,
+    });
+    // A sensitive path wins over size: the size alone wouldn't teach the limit anything.
+    expect(subGatePolicy({ changedLines: 400, files: ['infra/x.ts'] }, board)).toMatchObject({ passed: false, cause: 'sensitive', changedLines: 400 });
+    // Exactly at the limit passes.
+    expect(subGatePolicy({ changedLines: 100, files: ['src/a.ts'] }, board)).toMatchObject({ passed: true, cause: null });
   });
 });
 

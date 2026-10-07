@@ -1,6 +1,6 @@
-import type { Artifact, ArtifactSummary, Board, Deploy, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, DEPLOY_STATES, DEPLOY_TRIGGERS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES } from '@slop/core';
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, Glob, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES } from '@slop/core';
+import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type { PostgresJsDatabase, PostgresJsQueryResultHKT } from 'drizzle-orm/postgres-js';
@@ -46,6 +46,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   runReadyHours: row.runReadyHours,
   runStartMinutes: row.runStartMinutes,
   subMaxChangedLines: row.subMaxChangedLines,
+  effectCheckGlobs: row.effectCheckGlobs,
   deploy: row.deploy,
   readinessTicks: row.readinessTicks,
   baseChecks: row.baseChecks,
@@ -58,6 +59,18 @@ const oneOf = <T extends string>(values: readonly T[], value: string): T => {
   if (found === undefined) throw new Error(`Unexpected stored value: ${value}`);
   return found;
 };
+
+const toSubLimitChange = (row: typeof schema.subLimitChanges.$inferSelect): SubLimitChange => ({
+  id: row.id,
+  boardId: row.boardId,
+  at: row.at.toISOString(),
+  fromLines: row.fromLines,
+  toLines: row.toLines,
+  outcome: oneOf(SUB_LIMIT_OUTCOMES, row.outcome),
+  globId: row.globId,
+  changedLines: row.changedLines,
+  evidence: row.evidence,
+});
 
 const toDeploy = (row: typeof schema.deploys.$inferSelect): Deploy => ({
   ...row,
@@ -90,6 +103,25 @@ const toArtifact = (row: typeof schema.artifacts.$inferSelect): Artifact => ({
   createdAt: row.createdAt.toISOString(),
 });
 
+const toReviewSource = (row: typeof schema.reviewSources.$inferSelect): ReviewSource => ({
+  ...row,
+  kind: oneOf(REVIEW_SOURCE_KINDS, row.kind),
+  state: oneOf(REVIEW_SOURCE_STATES, row.state),
+  processAfter: row.processAfter?.toISOString() ?? null,
+  createdAt: row.createdAt.toISOString(),
+});
+
+const toFinding = (row: typeof schema.reviewFindings.$inferSelect): ReviewFinding => ({
+  ...row,
+  source: oneOf(FINDING_SOURCES, row.source),
+  severity: oneOf(FINDING_SEVERITIES, row.severity),
+  class: row.class === null ? null : oneOf(FINDING_CLASSES, row.class),
+  state: oneOf(FINDING_STATES, row.state),
+  processAfter: row.processAfter?.toISOString() ?? null,
+  createdAt: row.createdAt.toISOString(),
+  classifiedAt: row.classifiedAt?.toISOString() ?? null,
+});
+
 const toKbItem = (row: typeof schema.kbProposals.$inferSelect): KbItem => ({
   ...row,
   status: oneOf(KB_ITEM_STATUSES, row.status),
@@ -99,12 +131,33 @@ const toKbItem = (row: typeof schema.kbProposals.$inferSelect): KbItem => ({
   createdAt: row.createdAt.toISOString(),
   decidedAt: row.decidedAt?.toISOString() ?? null,
   processAfter: row.processAfter?.toISOString() ?? null,
+  staleSince: row.staleSince?.toISOString() ?? null,
+  staleReason: row.staleReason === null ? null : oneOf(KB_STALE_REASONS, row.staleReason),
+  staleDismissedAt: row.staleDismissedAt?.toISOString() ?? null,
+});
+
+const toKbSignal = (row: typeof schema.kbSignals.$inferSelect): KbSignalState => ({
+  ...row,
+  lastMeasuredAt: row.lastMeasuredAt?.toISOString() ?? null,
+  raisedAt: row.raisedAt?.toISOString() ?? null,
+});
+
+// The job's state stays out: only the job itself reads it (`getBoardJobState`).
+const toBoardJob = (row: typeof schema.boardJobs.$inferSelect): BoardJob => ({
+  boardId: row.boardId,
+  job: oneOf(BOARD_JOBS, row.job),
+  lastResult: row.lastResult,
+  lastRunAt: row.lastRunAt?.toISOString() ?? null,
+  runningUntil: row.runningUntil?.toISOString() ?? null,
 });
 
 /** The columns a KB item writes (everything but its ID, board and creation, which never change). */
 const kbItemColumns = (item: KbItem) => ({
   status: item.status,
   statement: item.statement,
+  // Mined items' figures and evidence are refreshed weekly while they are open.
+  evidence: item.evidence,
+  signal: item.signal,
   sourceGlobIds: [...item.sourceGlobIds],
   decidedBy: item.decidedBy,
   decidedAt: item.decidedAt === null ? null : new Date(item.decidedAt),
@@ -127,6 +180,12 @@ const kbItemColumns = (item: KbItem) => ({
   draft: item.draft,
   draftedAgainstVersion: item.draftedAgainstVersion,
   rationale: item.rationale,
+  staleSince: item.staleSince === null ? null : new Date(item.staleSince),
+  staleReason: item.staleReason,
+  staleDismissedAt: item.staleDismissedAt === null ? null : new Date(item.staleDismissedAt),
+  keptApartFrom: [...item.keptApartFrom],
+  mergeNote: item.mergeNote,
+  effectCheck: item.effectCheck,
   version: item.version,
 });
 
@@ -173,6 +232,8 @@ export class PgStore implements Store {
         return rows.length === 1;
       },
       deleteGlob: async (id) => {
+        await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
+        await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
         await t.delete(schema.globs).where(eq(schema.globs.id, id));
       },
@@ -242,13 +303,38 @@ export class PgStore implements Store {
             runStartMinutes: board.runStartMinutes,
             deploy: board.deploy,
             readinessTicks: board.readinessTicks,
-            subMaxChangedLines: board.subMaxChangedLines,
+            // Not the learned sub limit: `setSubLimit` writes it, so a settings save doesn't undo a learned move.
+            effectCheckGlobs: board.effectCheckGlobs,
             version: board.version,
           })
           .where(and(eq(schema.boards.id, board.id), eq(schema.boards.version, expectedVersion)))
           .returning({ id: schema.boards.id });
         return rows.length === 1;
       },
+      setSubLimit: async (boardId, from, to) => {
+        const rows = await t
+          .update(schema.boards)
+          .set({ subMaxChangedLines: to })
+          .where(and(eq(schema.boards.id, boardId), eq(schema.boards.subMaxChangedLines, from)))
+          .returning({ id: schema.boards.id });
+        return rows.length === 1;
+      },
+      insertSubLimitChange: async (change) => {
+        const rows = await t
+          .insert(schema.subLimitChanges)
+          .values({ ...change, at: new Date(change.at) })
+          .onConflictDoNothing()
+          .returning({ id: schema.subLimitChanges.id });
+        return rows.length === 1;
+      },
+      listSubLimitChanges: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.subLimitChanges)
+            .where(eq(schema.subLimitChanges.boardId, boardId))
+            .orderBy(desc(schema.subLimitChanges.at), desc(schema.subLimitChanges.id))
+        ).map(toSubLimitChange),
       setBaseChecks: async (boardId, baseChecks) => {
         await t.update(schema.boards).set({ baseChecks }).where(eq(schema.boards.id, boardId));
       },
@@ -503,6 +589,224 @@ export class PgStore implements Store {
       findDeployByProviderRef: async (providerRef) => {
         const [row] = await t.select().from(schema.deploys).where(eq(schema.deploys.providerRef, providerRef));
         return row === undefined ? null : toDeploy(row);
+      },
+
+      insertReviewSource: async (input) => {
+        const rows = await t
+          .insert(schema.reviewSources)
+          .values({ ...input, createdAt: new Date(input.createdAt) })
+          .onConflictDoNothing()
+          .returning();
+        const [row] = rows;
+        return row === undefined ? null : toReviewSource(row);
+      },
+      getReviewSource: async (id) => {
+        const [row] = await t.select().from(schema.reviewSources).where(eq(schema.reviewSources.id, id));
+        return row === undefined ? null : toReviewSource(row);
+      },
+      listReviewSources: async (globId) => {
+        const rows = await t
+          .select()
+          .from(schema.reviewSources)
+          .where(eq(schema.reviewSources.globId, globId))
+          .orderBy(asc(schema.reviewSources.createdAt), asc(schema.reviewSources.id));
+        return rows.map(toReviewSource);
+      },
+      nextReviewSourceToSplit: async (now) => {
+        const r = schema.reviewSources;
+        const [row] = await t
+          .select()
+          .from(r)
+          .where(and(eq(r.state, 'pending'), or(isNull(r.processAfter), lte(r.processAfter, new Date(now)))))
+          .orderBy(asc(r.createdAt), asc(r.id))
+          .limit(1);
+        return row === undefined ? null : toReviewSource(row);
+      },
+      updateReviewSource: async (source, expectedVersion) => {
+        const rows = await t
+          .update(schema.reviewSources)
+          .set({
+            state: source.state,
+            attempts: source.attempts,
+            processAfter: source.processAfter === null ? null : new Date(source.processAfter),
+            error: source.error,
+            version: source.version,
+          })
+          .where(and(eq(schema.reviewSources.id, source.id), eq(schema.reviewSources.version, expectedVersion)))
+          .returning({ id: schema.reviewSources.id });
+        return rows.length === 1;
+      },
+      getArtifact: async (id) => {
+        const [row] = await t.select().from(schema.artifacts).where(eq(schema.artifacts.id, id));
+        return row === undefined ? null : toArtifact(row);
+      },
+      insertFindings: async (findings, createdAt) => {
+        if (findings.length === 0) return 0;
+        const rows = await t
+          .insert(schema.reviewFindings)
+          .values(findings.map((f) => ({ ...f, createdAt: new Date(createdAt) })))
+          .onConflictDoNothing({
+            target: [schema.reviewFindings.globId, schema.reviewFindings.source, schema.reviewFindings.fingerprint],
+          })
+          .returning({ id: schema.reviewFindings.id });
+        return rows.length;
+      },
+      getFinding: async (id) => {
+        const [row] = await t.select().from(schema.reviewFindings).where(eq(schema.reviewFindings.id, id));
+        return row === undefined ? null : toFinding(row);
+      },
+      nextFindingToClassify: async (now) => {
+        const f = schema.reviewFindings;
+        const [row] = await t
+          .select()
+          .from(f)
+          .where(and(eq(f.state, 'pending'), or(isNull(f.processAfter), lte(f.processAfter, new Date(now)))))
+          .orderBy(asc(f.createdAt), asc(f.id))
+          .limit(1);
+        return row === undefined ? null : toFinding(row);
+      },
+      updateFinding: async (finding, expectedVersion) => {
+        const rows = await t
+          .update(schema.reviewFindings)
+          .set({
+            class: finding.class,
+            classNote: finding.classNote,
+            state: finding.state,
+            attempts: finding.attempts,
+            processAfter: finding.processAfter === null ? null : new Date(finding.processAfter),
+            error: finding.error,
+            classifiedAt: finding.classifiedAt === null ? null : new Date(finding.classifiedAt),
+            version: finding.version,
+          })
+          .where(and(eq(schema.reviewFindings.id, finding.id), eq(schema.reviewFindings.version, expectedVersion)))
+          .returning({ id: schema.reviewFindings.id });
+        return rows.length === 1;
+      },
+      listFindings: async (globId) => {
+        const rows = await t
+          .select()
+          .from(schema.reviewFindings)
+          .where(eq(schema.reviewFindings.globId, globId))
+          .orderBy(asc(schema.reviewFindings.createdAt), asc(schema.reviewFindings.id));
+        return rows.map(toFinding);
+      },
+      listBoardFindings: async (boardId, since, until) => {
+        const f = schema.reviewFindings;
+        const r = schema.reviewSources;
+        // Windowed by the review's time: a backfill or a delayed split creates findings long after it.
+        const rows = await t
+          .select({ finding: f })
+          .from(f)
+          .innerJoin(r, eq(r.id, f.sourceId))
+          .where(and(eq(f.boardId, boardId), gte(r.createdAt, new Date(since)), lte(r.createdAt, new Date(until))))
+          .orderBy(asc(r.createdAt), asc(f.id));
+        return rows.map((row) => toFinding(row.finding));
+      },
+
+      listBoardEvents: async (boardId, since, types) => {
+        const e = schema.events;
+        const conditions = [eq(schema.globs.boardId, boardId), gte(e.at, new Date(since))];
+        if (types !== undefined) {
+          if (types.length === 0) return [];
+          conditions.push(inArray(e.type, [...types]));
+        }
+        const rows = await t
+          .select({ globId: e.globId, type: e.type, actor: e.actor, at: e.at, data: e.data })
+          .from(e)
+          .innerJoin(schema.globs, eq(schema.globs.id, e.globId))
+          .where(and(...conditions))
+          .orderBy(asc(e.at), asc(e.id));
+        // An event type this code doesn't know (written by newer code) is left out rather than failing the read.
+        return rows.flatMap((row): DomainEvent[] => {
+          const type = DOMAIN_EVENT_TYPES.find((known) => known === row.type);
+          return type === undefined ? [] : [{ type, globId: row.globId, actor: row.actor, at: row.at.toISOString(), data: row.data }];
+        });
+      },
+      listArtifactMeta: async (boardId, kinds, since) => {
+        if (kinds.length === 0) return [];
+        const a = schema.artifacts;
+        const withContent = sql.join(ARTIFACT_KINDS_WITH_CONTENT.map((k) => sql`${k}`), sql`, `);
+        const rows = await t
+          .select({
+            id: a.id,
+            globId: a.globId,
+            kind: a.kind,
+            label: a.label,
+            version: a.version,
+            commitSha: a.commitSha,
+            provenance: a.provenance,
+            createdAt: a.createdAt,
+            content: sql<string | null>`case when ${a.kind} in (${withContent}) then ${a.content} end`,
+          })
+          .from(a)
+          .innerJoin(schema.globs, eq(schema.globs.id, a.globId))
+          .where(and(eq(schema.globs.boardId, boardId), inArray(a.kind, [...kinds]), gte(a.createdAt, new Date(since))))
+          .orderBy(asc(a.createdAt), asc(a.id));
+        return rows.map((row): ArtifactMeta => ({ ...row, kind: oneOf(ARTIFACT_KINDS, row.kind), createdAt: row.createdAt.toISOString() }));
+      },
+      listKbSignals: async (boardId) =>
+        (await t.select().from(schema.kbSignals).where(eq(schema.kbSignals.boardId, boardId)).orderBy(asc(schema.kbSignals.key))).map(toKbSignal),
+      upsertKbSignal: async (state) => {
+        const columns = {
+          itemId: state.itemId,
+          lastFigures: state.lastFigures,
+          lastMeasuredAt: state.lastMeasuredAt === null ? null : new Date(state.lastMeasuredAt),
+          raisedAt: state.raisedAt === null ? null : new Date(state.raisedAt),
+          belowThresholdRuns: state.belowThresholdRuns,
+        };
+        await t
+          .insert(schema.kbSignals)
+          .values({ boardId: state.boardId, key: state.key, ...columns })
+          .onConflictDoUpdate({ target: [schema.kbSignals.boardId, schema.kbSignals.key], set: columns });
+      },
+      getBoardJob: async (boardId, job) => {
+        const [row] = await t
+          .select()
+          .from(schema.boardJobs)
+          .where(and(eq(schema.boardJobs.boardId, boardId), eq(schema.boardJobs.job, job)));
+        return row === undefined ? null : toBoardJob(row);
+      },
+      claimBoardJob: async (boardId, job, now, leaseMs) => {
+        const j = schema.boardJobs;
+        const until = new Date(Date.parse(now) + leaseMs);
+        // Takes the lease only when nobody holds it: the conditional update returns nothing otherwise.
+        const [row] = await t
+          .insert(j)
+          .values({ boardId, job, runningUntil: until })
+          .onConflictDoUpdate({
+            target: [j.boardId, j.job],
+            set: { runningUntil: until },
+            setWhere: or(isNull(j.runningUntil), lte(j.runningUntil, new Date(now))),
+          })
+          .returning();
+        return row === undefined ? null : toBoardJob(row);
+      },
+      finishBoardJob: async (job, lease) => {
+        const j = schema.boardJobs;
+        // A run that outlived its lease leaves the next holder's lease and result alone.
+        const rows = await t
+          .update(j)
+          .set({ lastRunAt: job.lastRunAt === null ? null : new Date(job.lastRunAt), lastResult: job.lastResult, runningUntil: null })
+          .where(and(eq(j.boardId, job.boardId), eq(j.job, job.job), eq(j.runningUntil, new Date(lease))))
+          .returning({ boardId: j.boardId });
+        return rows.length > 0;
+      },
+      getBoardJobState: async (boardId, job) => {
+        const [row] = await t
+          .select({ state: schema.boardJobs.state })
+          .from(schema.boardJobs)
+          .where(and(eq(schema.boardJobs.boardId, boardId), eq(schema.boardJobs.job, job)));
+        return row?.state ?? null;
+      },
+      setBoardJobState: async (boardId, job, state) => {
+        const j = schema.boardJobs;
+        await t
+          .insert(j)
+          .values({ boardId, job, state })
+          .onConflictDoUpdate({ target: [j.boardId, j.job], set: { state } });
+      },
+      lockBoardJob: async (boardId, job) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`board_jobs:${String(boardId)}:${job}`}))`);
       },
 
       appendEvents: async (events) => {

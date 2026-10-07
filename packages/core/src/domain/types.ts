@@ -247,6 +247,8 @@ export interface Board {
   readonly runReadyHours: number;
   /** Sub gate: subs changing more lines than this convert to sames. */
   readonly subMaxChangedLines: number;
+  /** Effect checks: how many globs each side of an approved change is compared over (admins set 3 to 50). */
+  readonly effectCheckGlobs: number;
   readonly version: number;
 }
 

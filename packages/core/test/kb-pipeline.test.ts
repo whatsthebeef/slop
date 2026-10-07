@@ -9,7 +9,7 @@ import type { NewLearning } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
 import { llmWaitingReason } from '../src/domain/kb.js';
 import type { KbItem } from '../src/domain/kb.js';
-import type { Catalog } from '../src/ports.js';
+import type { Catalog, Tx } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
 const unwrap = <T>(result: Result<T>): T => {
@@ -37,17 +37,20 @@ const catalog: Catalog = {
     }),
 };
 
-/** A fake LLM answering from a queue of canned answers (or errors), recording each request. */
+type Answer = string | Error | (() => Promise<string>);
+
+/** A fake LLM answering from a queue of canned answers (or errors, or calls), recording each request. */
 class FakeLlm implements Llm {
   readonly calls: { system: string; prompt: string }[] = [];
-  constructor(private readonly answers: (string | Error)[] = []) {}
-  answer(...answers: (string | Error)[]): void {
+  constructor(private readonly answers: Answer[] = []) {}
+  answer(...answers: Answer[]): void {
     this.answers.push(...answers);
   }
   complete(request: { system: string; prompt: string; maxTokens: number }): Promise<string> {
     this.calls.push({ system: request.system, prompt: request.prompt });
     const next = this.answers.shift();
     if (next === undefined) return Promise.reject(new Error('No canned answer'));
+    if (typeof next === 'function') return next();
     return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
   }
 }
@@ -82,6 +85,11 @@ const toNewDoc = (name: string) =>
 /** How many probes the waiting test makes: more than the attempts that would fail an item. */
 const MAX_PROBES = 4;
 const NO_MATCH = json({ suppressedBy: null, duplicateOf: null, coveredBy: null, contradicts: [] });
+/** The default statement, and one that says the same in other words (both long enough to close on). */
+const GEN = 'Generated files live in src/gen/';
+const GEN_AGAIN = 'Code in src/gen/ is generated';
+/** A merge or suppression claim on `id`: a quote from its statement and one from the new item's (`newQuote`). */
+const claim = (id: string, quote = GEN, newQuote = GEN_AGAIN) => ({ id, quote, newQuote });
 
 describe('KB pipeline: routing and dedupe', () => {
   let store: MemoryStore;
@@ -270,11 +278,16 @@ describe('KB pipeline: routing and dedupe', () => {
   it('merges a near-duplicate of an open item into it, adding its evidence, count and globs', async () => {
     const first = await routedAlone();
     const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated', evidence: 'Tester note' });
-    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: claim(first), suppressedBy: null, coveredBy: null, contradicts: [] }));
     expect(await pipeline.process(second)).toBe(true);
 
     expect(llm.calls[2]?.prompt).toContain(`- ${first} (gotcha): Generated files live in src/gen/`);
-    expect(await item(second)).toMatchObject({ status: 'merged', duplicateOf: first, processing: 'routed' });
+    expect(await item(second)).toMatchObject({
+      status: 'merged',
+      duplicateOf: first,
+      processing: 'routed',
+      mergeNote: { by: 'intake', quote: GEN_AGAIN, survivorQuote: GEN, at: START },
+    });
     const merged = await item(first);
     expect(merged).toMatchObject({
       status: 'open',
@@ -287,6 +300,19 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(open.map((i) => i.id)).toEqual([first]);
   });
 
+  it('leaves open a near-duplicate an admin kept apart from the item it matches, holding nothing on either (s15f8)', async () => {
+    const first = await routedAlone();
+    const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
+    // An admin reopened a merge between them (or between one and an item the other holds).
+    const pending = await item(second);
+    await store.transaction((tx) => tx.updateKbItem({ ...pending, keptApartFrom: [first], version: pending.version + 1 }, pending.version));
+    const before = await item(first);
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: claim(first), suppressedBy: null, coveredBy: null, contradicts: [] }));
+    expect(await pipeline.process(second)).toBe(true);
+    expect(await item(second)).toMatchObject({ status: 'open', duplicateOf: null, processing: 'routed' });
+    expect(await item(first)).toEqual(before);
+  });
+
   it('makes an open item it merges into due again at once, so a claim running on it is redone without waiting out the lease', async () => {
     const first = await routedAlone();
     // A worker has claimed the first item for drafting (its lease runs for five minutes).
@@ -294,12 +320,12 @@ describe('KB pipeline: routing and dedupe', () => {
     const lease = '2026-10-05T12:05:00.000Z';
     await store.transaction((tx) => tx.updateKbItem({ ...claimed, processAfter: lease, version: claimed.version + 1 }, claimed.version));
     const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
-    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: claim(first), suppressedBy: null, coveredBy: null, contradicts: [] }));
     expect(await pipeline.processNext()).toBe(second);
     expect(await item(first)).toMatchObject({ occurrenceCount: 2, processing: 'routed', processAfter: null });
 
     // An item backing off after a failure keeps its backoff.
-    const third = await submit({ statement: 'Generated code: src/gen/' });
+    const third = await submit({ statement: 'Generated code is kept in src/gen/' });
     const backingOff = await item(first);
     const backoff = '2026-10-05T12:01:00.000Z';
     await store.transaction((tx) =>
@@ -308,7 +334,10 @@ describe('KB pipeline: routing and dedupe', () => {
         backingOff.version,
       ),
     );
-    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
+    llm.answer(
+      toNewDoc('testing'),
+      json({ checked: classed('same fact', first), duplicateOf: claim(first, GEN, 'Generated code is kept in src/gen/'), contradicts: [] }),
+    );
     expect(await pipeline.process(third)).toBe(true);
     expect(await item(first)).toMatchObject({ occurrenceCount: 3, processAfter: backoff });
   });
@@ -317,12 +346,377 @@ describe('KB pipeline: routing and dedupe', () => {
     const rejected = await submit();
     const decided = await item(rejected);
     unwrap(await knowledge.reject(ADMIN, rejected, decided.version, 'Not true here'));
-    const id = await submit({ statement: 'src/gen/ holds generated code' });
-    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', rejected), suppressedBy: rejected, duplicateOf: null, coveredBy: null, contradicts: [] }));
+    const id = await submit({ statement: GEN_AGAIN });
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', rejected), suppressedBy: claim(rejected), duplicateOf: null, coveredBy: null, contradicts: [] }));
     expect(await pipeline.processNext()).toBe(id);
 
     expect(llm.calls[1]?.prompt).toContain(`- ${rejected}: Generated files live in src/gen/ (rejected: Not true here)`);
-    expect(await item(id)).toMatchObject({ status: 'suppressed', suppressedBy: rejected });
+    expect(await item(id)).toMatchObject({
+      status: 'suppressed',
+      suppressedBy: rejected,
+      mergeNote: { by: 'intake', quote: GEN_AGAIN, survivorQuote: GEN, at: START },
+    });
+  });
+
+  it('closes on quotes the model ended with punctuation the statements lack (s15b8)', async () => {
+    const rejected = await submit();
+    unwrap(await knowledge.reject(ADMIN, rejected, (await item(rejected)).version, 'Not true here'));
+    const id = await submit({ statement: GEN_AGAIN });
+    const value = claim(rejected, `"${GEN}."`, `${GEN_AGAIN}.`);
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', rejected), suppressedBy: value, contradicts: [] }));
+    expect(await pipeline.process(id)).toBe(true);
+    expect(await item(id)).toMatchObject({
+      status: 'suppressed',
+      suppressedBy: rejected,
+      mergeNote: { quote: GEN_AGAIN, survivorQuote: GEN },
+    });
+  });
+
+  describe.each([
+    ['merge', 'duplicateOf', 'duplicate', 'merged'],
+    ['suppression', 'suppressedBy', 'suppressed', 'suppressed'],
+  ] as const)('a %s claim closes the item only on two verbatim quotes long enough (s15b8)', (_, answerField, claimKind, closedAs) => {
+    /** The item the claim names (open, or rejected), and a new item saying the same in other words. */
+    const setUp = async () => {
+      let other: string;
+      if (claimKind === 'duplicate') {
+        other = await routedAlone();
+      } else {
+        other = await submit();
+        unwrap(await knowledge.reject(ADMIN, other, (await item(other)).version, 'Not true here'));
+      }
+      const id = await submit({ sourceGlobId: otherGlobId, statement: GEN_AGAIN });
+      return { other, id, before: await item(other) };
+    };
+    const answer = (other: string, value: unknown) =>
+      llm.answer(toNewDoc('testing'), json({ fact: 'src/gen/ is generated', checked: classed('same fact', other), [answerField]: value, contradicts: [] }));
+
+    it('closes on both quotes and keeps them on the closed item', async () => {
+      const { other, id } = await setUp();
+      answer(other, claim(other, ` generated FILES live in  src/gen/`, 'code in src/gen/ is generated'));
+      expect(await pipeline.process(id)).toBe(true);
+      expect(await item(id)).toMatchObject({
+        status: closedAs,
+        [answerField]: other,
+        possiblyCoveredBy: null,
+        mergeNote: { by: 'intake', quote: 'code in src/gen/ is generated', survivorQuote: 'generated FILES live in  src/gen/', at: START },
+      });
+      // A suppression adds nothing to the rejected item; a merge adds the evidence to the open one.
+      expect((await item(other)).occurrenceCount).toBe(claimKind === 'duplicate' ? 2 : 1);
+
+      // Reopening it clears the note, so its card no longer says what it closed on.
+      const reopened = unwrap(await knowledge.reopen(ADMIN, id, (await item(id)).version));
+      expect(reopened).toMatchObject({ status: 'open', duplicateOf: null, suppressedBy: null, mergeNote: null });
+    });
+
+    it.each([
+      ['no quotes (the ID alone)', (other: string) => other],
+      ['a missing quote from the new item', (other: string) => ({ id: other, quote: GEN })],
+      ['a missing quote from the matched item', (other: string) => ({ id: other, newQuote: GEN_AGAIN })],
+      ['an unverifiable quote from the matched item', (other: string) => claim(other, 'Generated files are checked in', GEN_AGAIN)],
+      ['an unverifiable quote from the new item', (other: string) => claim(other, GEN, 'Code in src/gen/ is hand written')],
+      ['swapped quotes (each in the other statement)', (other: string) => claim(other, GEN_AGAIN, GEN)],
+    ])('leaves the item open, with no hint, on %s', async (_, value) => {
+      const { other, id, before } = await setUp();
+      answer(other, value(other));
+      expect(await pipeline.process(id)).toBe(true);
+      expect(await item(id)).toMatchObject({
+        status: 'open',
+        processing: 'routed',
+        duplicateOf: null,
+        suppressedBy: null,
+        mergeNote: null,
+        possiblyCoveredBy: null,
+      });
+      expect(await item(other)).toEqual(before);
+    });
+
+    it.each([
+      ['the matched item', 'Generated files', GEN_AGAIN, 'quote'],
+      ['the new item', GEN, 'is generated', 'ownQuote'],
+      ['both items', 'Generated files', 'is generated', 'both'],
+    ] as const)('leaves the item open but flags it when the quote from %s is verbatim but too short', async (...test) => {
+      const [, quote, newQuote, tooShort] = test;
+      const { other, id, before } = await setUp();
+      answer(other, claim(other, quote, newQuote));
+      expect(await pipeline.process(id)).toBe(true);
+      expect(await item(id)).toMatchObject({
+        status: 'open',
+        processing: 'routed',
+        duplicateOf: null,
+        suppressedBy: null,
+        mergeNote: null,
+        possiblyCoveredBy: {
+          kind: 'item',
+          id: other,
+          quote,
+          ownQuote: newQuote,
+          shortQuote: true,
+          claim: claimKind,
+          tooShort,
+        },
+      });
+      expect(await item(other)).toEqual(before);
+    });
+  });
+
+  describe('one hint at a time, beside any contradictions (s15b8)', () => {
+    /** An open, a rejected and an approved item, and a new item routed to a section with text. */
+    const setUp = async () => {
+      const open = await routedAlone();
+      const rejected = await submit();
+      unwrap(await knowledge.reject(ADMIN, rejected, (await item(rejected)).version, 'Not true here'));
+      const approved = await submit({ statement: 'Generated files are committed to git' });
+      unwrap(await knowledge.approve(ADMIN, approved, (await item(approved)).version, { as: 'learning' }));
+      const id = await submit({ sourceGlobId: otherGlobId, statement: GEN_AGAIN });
+      return { open, rejected, approved, id };
+    };
+    const short = (id: string) => claim(id, 'Generated files', GEN_AGAIN);
+    const hint = (id: string, kind: 'duplicate' | 'suppressed') => ({
+      kind: 'item',
+      id,
+      quote: 'Generated files',
+      ownQuote: GEN_AGAIN,
+      shortQuote: true,
+      claim: kind,
+      tooShort: 'quote',
+    });
+
+    it("keeps suppression's hint over merge's", async () => {
+      const { open, rejected, id } = await setUp();
+      llm.answer(
+        toDoc('build_test_lint', 'Test'),
+        json({
+          checked: classed('same fact', rejected, open),
+          suppressedBy: short(rejected),
+          duplicateOf: short(open),
+          contradicts: [],
+        }),
+      );
+      expect(await pipeline.process(id)).toBe(true);
+      const result = await item(id);
+      expect(result).toMatchObject({ status: 'open', suppressedBy: null, duplicateOf: null, contradicts: [] });
+      expect(result.possiblyCoveredBy).toEqual(hint(rejected, 'suppressed'));
+    });
+
+    it("keeps merge's hint over the target's, with the target's quote and reason beside it", async () => {
+      const { open, id } = await setUp();
+      llm.answer(
+        toDoc('build_test_lint', 'Test'),
+        json({
+          checked: classed('same fact', open, 'current text'),
+          duplicateOf: short(open),
+          coveredBy: { kind: 'target', quote: 'Run vitest.', reason: 'Names the runner' },
+          contradicts: [],
+        }),
+      );
+      expect(await pipeline.process(id)).toBe(true);
+      const result = await item(id);
+      expect(result).toMatchObject({ status: 'open', duplicateOf: null, coveredBy: null });
+      expect(result.possiblyCoveredBy).toEqual({
+        ...hint(open, 'duplicate'),
+        alsoTarget: { quote: 'Run vitest', reason: 'Names the runner' },
+      });
+    });
+
+    /** Marks the new item as kept apart from `other`, as reopening a merge between them would. */
+    const keepApart = async (id: string, other: string) => {
+      const pending = await item(id);
+      await store.transaction((tx) =>
+        tx.updateKbItem({ ...pending, keptApartFrom: [other], version: pending.version + 1 }, pending.version),
+      );
+    };
+
+    it('names no item an admin kept apart from this one, showing a target hint it hid instead', async () => {
+      const { rejected, id } = await setUp();
+      await keepApart(id, rejected);
+      llm.answer(
+        toDoc('build_test_lint', 'Test'),
+        json({
+          checked: classed('same fact', rejected, 'current text'),
+          suppressedBy: short(rejected),
+          coveredBy: { kind: 'target', quote: 'Run vitest.', reason: 'Names the runner' },
+          contradicts: [],
+        }),
+      );
+      expect(await pipeline.process(id)).toBe(true);
+      const result = await item(id);
+      expect(result).toMatchObject({ status: 'open', suppressedBy: null });
+      expect(result.possiblyCoveredBy).toEqual({
+        knowledgeKind: 'doc',
+        name: 'build_test_lint',
+        section: 'Test',
+        quote: 'Run vitest',
+        reason: 'Names the runner',
+      });
+    });
+
+    it.each([
+      ['an open item it may repeat', 'open'],
+      ['an approved item that may cover it', 'approved'],
+    ] as const)('names no %s when an admin kept them apart, and no hint when none is hidden', async (_, which) => {
+      const ids = await setUp();
+      const other = ids[which];
+      await keepApart(ids.id, other);
+      llm.answer(
+        toDoc('build_test_lint', 'Test'),
+        json({
+          checked: classed('same fact', other),
+          duplicateOf: which === 'open' ? short(other) : null,
+          coveredBy: which === 'approved' ? { kind: 'item', id: other, quote: 'Generated files' } : null,
+          contradicts: [],
+        }),
+      );
+      expect(await pipeline.process(ids.id)).toBe(true);
+      expect(await item(ids.id)).toMatchObject({ status: 'open', duplicateOf: null, coveredBy: null, possiblyCoveredBy: null });
+    });
+
+    it("stores merge's hint and a verified contradiction together", async () => {
+      const { open, approved, id } = await setUp();
+      llm.answer(
+        toDoc('build_test_lint', 'Test'),
+        json({
+          checked: [...classed('same fact', open), ...classed('contradicts', approved)],
+          duplicateOf: short(open),
+          contradicts: [{ kind: 'item', ref: approved, quote: 'Generated files are committed', note: 'Says they are committed' }],
+        }),
+      );
+      expect(await pipeline.process(id)).toBe(true);
+      const result = await item(id);
+      expect(result).toMatchObject({
+        status: 'open',
+        duplicateOf: null,
+        contradicts: [{ kind: 'item', ref: approved, note: 'Says they are committed' }],
+      });
+      expect(result.possiblyCoveredBy).toEqual(hint(open, 'duplicate'));
+    });
+  });
+
+  describe('a merge carries a short-quote match with a rejected item to the item merged into (s15b8)', () => {
+    /** An open item, a rejected one, and a new item merging into the open one while it may match the rejected one. */
+    const setUp = async () => {
+      const open = await routedAlone();
+      const rejected = await submit({ statement: 'Generated files are committed to git' });
+      unwrap(await knowledge.reject(ADMIN, rejected, (await item(rejected)).version, 'Not true here'));
+      const id = await submit({ sourceGlobId: otherGlobId, statement: GEN_AGAIN });
+      llm.answer(
+        toDoc('build_test_lint', 'Test'),
+        json({
+          checked: classed('same fact', open, rejected, 'current text'),
+          duplicateOf: claim(open),
+          suppressedBy: claim(rejected, 'Generated files', GEN_AGAIN),
+          coveredBy: { kind: 'target', quote: 'Run vitest.', reason: 'Names the runner' },
+          contradicts: [],
+        }),
+      );
+      return { open, rejected, id };
+    };
+
+    it('flags the open item with the hint, naming the merged item its own quote is from', async () => {
+      const { open, rejected, id } = await setUp();
+      expect(await pipeline.process(id)).toBe(true);
+      expect(await item(id)).toMatchObject({ status: 'merged', duplicateOf: open, possiblyCoveredBy: null });
+      const survivor = await item(open);
+      expect(survivor).toMatchObject({ status: 'open', occurrenceCount: 2, contradicts: [] });
+      expect(survivor.possiblyCoveredBy).toEqual({
+        kind: 'item',
+        id: rejected,
+        quote: 'Generated files',
+        ownQuote: GEN_AGAIN,
+        shortQuote: true,
+        claim: 'suppressed',
+        tooShort: 'quote',
+        via: id,
+      });
+    });
+
+    it('keeps a hint the open item already has', async () => {
+      const { open, id } = await setUp();
+      const own = { knowledgeKind: 'doc' as const, name: 'testing', section: null, quote: 'Its own', reason: 'Earlier' };
+      const current = await item(open);
+      await store.transaction((tx) =>
+        tx.updateKbItem({ ...current, possiblyCoveredBy: own, version: current.version + 1 }, current.version),
+      );
+      expect(await pipeline.process(id)).toBe(true);
+      expect((await item(open)).possiblyCoveredBy).toEqual(own);
+    });
+
+    it('carries nothing when the open item is kept apart from the rejected one', async () => {
+      const { open, rejected, id } = await setUp();
+      const current = await item(open);
+      await store.transaction((tx) =>
+        tx.updateKbItem({ ...current, keptApartFrom: [rejected], version: current.version + 1 }, current.version),
+      );
+      expect(await pipeline.process(id)).toBe(true);
+      expect(await item(open)).toMatchObject({ occurrenceCount: 2, possiblyCoveredBy: null });
+    });
+  });
+
+  describe('a suppression re-reads the rejected item when it writes (s15b8)', () => {
+    const setUp = async () => {
+      const rejected = await submit();
+      unwrap(await knowledge.reject(ADMIN, rejected, (await item(rejected)).version, 'Not true here'));
+      const id = await submit({ sourceGlobId: otherGlobId, statement: GEN_AGAIN });
+      return { rejected, id };
+    };
+    const answer = (rejected: string) =>
+      json({ checked: classed('same fact', rejected), suppressedBy: claim(rejected), duplicateOf: null, contradicts: [] });
+
+    it('leaves the item open when an admin kept it apart from the rejected item', async () => {
+      const { rejected, id } = await setUp();
+      const pending = await item(id);
+      await store.transaction((tx) =>
+        tx.updateKbItem({ ...pending, keptApartFrom: [rejected], version: pending.version + 1 }, pending.version),
+      );
+      llm.answer(toNewDoc('testing'), answer(rejected));
+      expect(await pipeline.process(id)).toBe(true);
+      expect(await item(id)).toMatchObject({ status: 'open', processing: 'routed', suppressedBy: null, mergeNote: null });
+    });
+
+    it('writes nothing when the rejected item changes after it is re-read, before the write commits', async () => {
+      const { rejected, id } = await setUp();
+      const before = await item(rejected);
+      // A change another transaction commits between the re-read and this one's commit (Postgres, read committed):
+      // seen here as a write right after the re-read.
+      let armed = false;
+      const transaction = store.transaction.bind(store);
+      store.transaction = <T>(work: (tx: Tx) => Promise<T>) =>
+        transaction((tx) =>
+          work({
+            ...tx,
+            getKbItem: async (itemId) => {
+              const read = await tx.getKbItem(itemId);
+              if (armed && itemId === rejected && read !== null) {
+                armed = false;
+                await tx.updateKbItem({ ...read, decisionReason: 'Edited', version: read.version + 1 }, read.version);
+              }
+              return read;
+            },
+          }),
+        );
+      llm.answer(toNewDoc('testing'), () => {
+        armed = true;
+        return Promise.resolve(answer(rejected));
+      });
+      expect(await pipeline.process(id)).toBe(true);
+      // Rolled back: still pending, to be retried when its lease ends, and the rejected item unchanged.
+      expect(await item(id)).toMatchObject({ status: 'open', processing: 'pending', suppressedBy: null, mergeNote: null });
+      expect(await item(rejected)).toEqual(before);
+    });
+
+    it('leaves the item open when the rejected item is no longer rejected by the time it writes', async () => {
+      const { rejected, id } = await setUp();
+      llm.answer(toNewDoc('testing'), async () => {
+        // Changed while the dedupe call ran (no service does this today: the check is a defence).
+        const current = await item(rejected);
+        await store.transaction((tx) =>
+          tx.updateKbItem({ ...current, status: 'open', version: current.version + 1 }, current.version),
+        );
+        return answer(rejected);
+      });
+      expect(await pipeline.process(id)).toBe(true);
+      expect(await item(id)).toMatchObject({ status: 'open', processing: 'routed', suppressedBy: null, mergeNote: null });
+    });
   });
 
   it('closes an item covered by an approved item, adding its evidence to the approved one without changing the decision', async () => {
@@ -342,6 +736,78 @@ describe('KB pipeline: routing and dedupe', () => {
       sourceGlobIds: [globId, otherGlobId],
       extraEvidence: [{ itemId: id }],
     });
+  });
+
+  it("never closes a revise-or-revert item against its original or another item raised for it (s15f8)", async () => {
+    const originalId = await submit();
+    unwrap(await knowledge.approve(ADMIN, originalId, (await item(originalId)).version, { as: 'learning' }));
+    const original = await item(originalId);
+    const signal = {
+      key: `effect:${originalId}`,
+      kind: 'ci_after_local' as const,
+      agent: null,
+      label: 'CI failing after local checks passed',
+      window: { from: START, to: START },
+      figures: { affected: 1, eligible: 3, rate: 0.333, count: 1 },
+      globIds: [],
+      examples: [],
+      measuredAt: START,
+    };
+    /** A submitted item made into one raised for the original, quoting it as the effect check does. */
+    const raisedFor = async (sourceGlobId: string) => {
+      const id = await submit({ sourceGlobId });
+      const current = await item(id);
+      const statement = `Revise or revert ${originalId} (${original.statement}): after 3 globs the rate of CI failing after local checks passed is 33% (1/3), against 33% (1/3) before.`;
+      await store.transaction((tx) => tx.updateKbItem({ ...current, statement, signal, version: current.version + 1 }, current.version));
+      return id;
+    };
+    // An earlier one for the same original, rejected.
+    const earlier = await raisedFor(globId);
+    const earlierItem = await item(earlier);
+    unwrap(await knowledge.reject(ADMIN, earlier, earlierItem.version, 'Not now'));
+    const id = await raisedFor(otherGlobId);
+    const before = await item(originalId);
+    llm.answer(
+      toDoc('build_test_lint', 'Test'),
+      json({
+        checked: [...classed('same fact', originalId), ...classed('same fact', earlier)],
+        coveredBy: { kind: 'item', id: originalId, quote: 'generated files live in src/gen/' },
+        // Both quotes verbatim and long enough: only the exclusion keeps it open.
+        suppressedBy: claim(earlier, 'the rate of CI failing after local checks passed', 'the rate of CI failing after local checks passed'),
+        duplicateOf: null,
+        contradicts: [],
+      }),
+    );
+    await pipeline.processNext();
+
+    const dedupePrompt = llm.calls[1]?.prompt ?? '';
+    expect(dedupePrompt).not.toContain(`- ${originalId} `);
+    expect(dedupePrompt).not.toContain(`- ${earlier}:`);
+    expect(await item(id)).toMatchObject({ status: 'open', coveredBy: null, suppressedBy: null, possiblyCoveredBy: null });
+    expect(await item(originalId)).toEqual(before);
+  });
+
+  it.each([
+    ['too few words', 'src/gen/'],
+    ['too few characters', 'files live in src'],
+  ])('leaves an item open, only flagged, when its coverage quote from the approved item has %s (s15f8)', async (_, quote) => {
+    const approvedId = await submit();
+    unwrap(await knowledge.approve(ADMIN, approvedId, (await item(approvedId)).version, { as: 'learning' }));
+    const before = await item(approvedId);
+    const id = await submit({ sourceGlobId: otherGlobId });
+    llm.answer(
+      toDoc('build_test_lint', 'Test'),
+      json({ checked: classed('same fact', approvedId), coveredBy: { kind: 'item', id: approvedId, quote }, contradicts: [] }),
+    );
+    await pipeline.processNext();
+
+    expect(await item(id)).toMatchObject({
+      status: 'open',
+      processing: 'routed',
+      coveredBy: null,
+      possiblyCoveredBy: { kind: 'item', id: approvedId, quote, shortQuote: true },
+    });
+    expect(await item(approvedId)).toEqual(before);
   });
 
   it('lets an admin reopen a closed item: back to drafting with its target, never deduplicated again', async () => {
@@ -399,7 +865,7 @@ describe('KB pipeline: routing and dedupe', () => {
       status: 'open',
       processing: 'routed',
       coveredBy: null,
-      possiblyCoveredBy: { knowledgeKind: 'doc', name: 'build_test_lint', section: 'Test', quote: 'run  VITEST.', reason: 'Names the runner' },
+      possiblyCoveredBy: { knowledgeKind: 'doc', name: 'build_test_lint', section: 'Test', quote: 'run  VITEST', reason: 'Names the runner' },
     });
   });
 
@@ -457,7 +923,7 @@ describe('KB pipeline: routing and dedupe', () => {
       toDoc('build_test_lint', 'Test'),
       json({
         checked: [...classed('same fact', 's99k1', 's99k2'), ...classed('contradicts', 'current text', approvedId, 's99k3')],
-        duplicateOf: 's99k1',
+        duplicateOf: claim('s99k1', GEN, 'Tests run with jest'),
         coveredBy: { kind: 'item', id: 's99k2' },
         contradicts: [
           { kind: 'target', ref: '## Test', quote: 'Run vitest.', note: 'The doc says vitest' },
@@ -596,7 +1062,7 @@ describe('KB pipeline: routing and dedupe', () => {
         fact: 'src/gen/ holds generated code',
         checked: [{ ref: first, relation: 'same fact' }],
         suppressedBy: null,
-        duplicateOf: first,
+        duplicateOf: claim(first),
         coveredBy: null,
         contradicts: [],
       }),
@@ -620,7 +1086,7 @@ describe('KB pipeline: routing and dedupe', () => {
           { ref: openId, relation: 'unrelated' },
         ],
         suppressedBy: null,
-        duplicateOf: openId,
+        duplicateOf: claim(openId, 'Never edit src/gen/ by hand', 'Run vitest with --reporter=dot in agent runs'),
         coveredBy: { kind: 'target', quote: 'Run vitest.', reason: 'Mentions vitest' },
         contradicts: [
           { kind: 'target', ref: 'Test', quote: 'Run vitest.', note: 'x' },
@@ -651,7 +1117,7 @@ describe('KB pipeline: routing and dedupe', () => {
       }),
     );
     expect(await pipeline.process(covered)).toBe(true);
-    expect(await item(covered)).toMatchObject({ status: 'open', possiblyCoveredBy: { quote: 'Run vitest.' } });
+    expect(await item(covered)).toMatchObject({ status: 'open', possiblyCoveredBy: { quote: 'Run vitest' } });
   });
 
   it('closes and flags nothing for a candidate the answer did not class, and reads relations loosely spelled', async () => {
@@ -659,18 +1125,32 @@ describe('KB pipeline: routing and dedupe', () => {
     const unlisted = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
     llm.answer(
       toNewDoc('testing'),
-      json({ fact: 'src/gen/ is generated', checked: classed('related topic only', 's1k77'), duplicateOf: first, contradicts: [] }),
+      json({ fact: 'src/gen/ is generated', checked: classed('related topic only', 's1k77'), duplicateOf: claim(first), contradicts: [] }),
     );
     expect(await pipeline.process(unlisted)).toBe(true);
-    expect(await item(unlisted)).toMatchObject({ status: 'open', duplicateOf: null });
+    expect(await item(unlisted)).toMatchObject({ status: 'open', duplicateOf: null, possiblyCoveredBy: null });
     expect(await item(first)).toMatchObject({ occurrenceCount: 1 });
+    // Nor does a short quote on it flag the item.
+    const shortQuote = await submit({ sourceGlobId: otherGlobId, statement: GEN_AGAIN });
+    llm.answer(
+      toNewDoc('testing'),
+      json({ checked: classed('related topic only', 's1k77'), duplicateOf: claim(first, 'Generated files', GEN_AGAIN), contradicts: [] }),
+    );
+    expect(await pipeline.process(shortQuote)).toBe(true);
+    expect(await item(shortQuote)).toMatchObject({ status: 'open', duplicateOf: null, possiblyCoveredBy: null });
 
     const spelled = await submit({ sourceGlobId: otherGlobId, statement: 'src/gen/ holds generated code' });
-    llm.answer(toNewDoc('testing'), json({ checked: [{ ref: ` ${first} `, relation: 'Same_Fact' }], duplicateOf: first }));
+    llm.answer(
+      toNewDoc('testing'),
+      json({ checked: [{ ref: ` ${first} `, relation: 'Same_Fact' }], duplicateOf: claim(first, GEN, 'src/gen/ holds generated code') }),
+    );
     expect(await pipeline.process(spelled)).toBe(true);
     expect(await item(spelled)).toMatchObject({ status: 'merged', duplicateOf: first });
-    const hyphenated = await submit({ sourceGlobId: otherGlobId, statement: 'Generated: src/gen/' });
-    llm.answer(toNewDoc('testing'), json({ checked: [{ ref: first, relation: 'same-fact' }], duplicateOf: first }));
+    const hyphenated = await submit({ sourceGlobId: otherGlobId, statement: 'Generated sources sit under src/gen/' });
+    llm.answer(
+      toNewDoc('testing'),
+      json({ checked: [{ ref: first, relation: 'same-fact' }], duplicateOf: claim(first, GEN, 'Generated sources sit under src/gen/') }),
+    );
     expect(await pipeline.process(hyphenated)).toBe(true);
     expect(await item(hyphenated)).toMatchObject({ status: 'merged' });
   });
@@ -791,7 +1271,7 @@ describe('KB pipeline: routing and dedupe', () => {
   it('refuses to decide items the pipeline closed', async () => {
     const first = await routedAlone();
     const second = await submit();
-    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: first }));
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: claim(first, GEN, GEN) }));
     await pipeline.process(second);
     const merged = await item(second);
     expect(merged.status).toBe('merged');

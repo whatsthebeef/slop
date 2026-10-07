@@ -49,6 +49,8 @@ class FakeHost implements CodeHost {
   commentOnce = () => Promise.resolve('posted' as const);
   diffSummary = () => Promise.resolve({ changedLines: 1, files: [] });
   readFile = () => Promise.resolve(null);
+  commitFiles = () => Promise.resolve({ parent: null, files: [] });
+  commitDiffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
   squashMerge = () => Promise.resolve({ outcome: 'merged' as const, sha: 'm9' });
   headOf = () => Promise.resolve(this.baseHead);
   commitChecks = (_repo: unknown, sha: string) => Promise.resolve(this.checks[sha] ?? { state: 'passed' as const, failure: null });
@@ -99,7 +101,9 @@ describe('a red base branch', () => {
     });
     host = new FakeHost();
     executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), boards);
-    handle = githubDeliveryHandler({ db: database.db, globs, boardOf, github: { deleteBranch: () => Promise.resolve() } });
+    // These deliveries never carry review comments.
+    const findings = { recordCodeRabbitComment: () => Promise.reject(new Error('not used here')) };
+    handle = githubDeliveryHandler({ db: database.db, globs, findings, boardOf, github: { deleteBranch: () => Promise.resolve() } });
   });
 
   afterAll(() => drop());

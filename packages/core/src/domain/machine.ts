@@ -7,6 +7,7 @@ import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from 
 import type { Result } from './errors.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
 import type { ArtifactSummary } from './knowledge.js';
+import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
 import type {
@@ -179,7 +180,10 @@ class Builder {
     return this;
   }
 
-  /** Ends the current run if it has not ended. `detail` adds to a RunFailed event (e.g. the agent-set version). */
+  /**
+   * Ends the current run if it has not ended. `detail` adds to its RunFailed event (e.g. the agent-set version) or
+   * RunEnded event (a superseded run's `cause`, which mined signals count).
+   */
   endRun(outcome: RunOutcome, failureReason: string | null = null, detail: { readonly [key: string]: JsonValue } = {}): this {
     const run = currentRun(this.glob);
     if (run === null || run.state === 'ended') return this;
@@ -187,7 +191,7 @@ class Builder {
     this.set({ runs: [...this.glob.runs.slice(0, -1), ended] });
     return outcome === 'failed'
       ? this.event('RunFailed', { ...detail, runId: run.id, reason: failureReason })
-      : this.event('RunEnded', { runId: run.id, outcome });
+      : this.event('RunEnded', { ...detail, runId: run.id, outcome });
   }
 
   updateRun(patch: Partial<Run>): this {
@@ -393,7 +397,7 @@ export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOp
       return invalidTransition(glob, actor, 'Take over applies to implementing or pr_open globs');
     }
     const b = new Builder(glob, ctx)
-      .endRun('superseded')
+      .endRun('superseded', null, { cause: 'take_over' })
       .bumpGeneration()
       .set({ implementer: actor.email })
       .event('PickedUp', { takeOver: true });
@@ -411,12 +415,12 @@ export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOp
     case 'planning':
     case 'failed':
       // Row 6.
-      b.endRun('superseded').set({ implementer: actor.email, failure: null }).status('in_progress');
+      b.endRun('superseded', null, { cause: 'pick_up' }).set({ implementer: actor.email, failure: null }).status('in_progress');
       break;
     case 'pr_open':
     case 'in_progress':
       // Rows 7 and 9.
-      b.endRun('superseded').set({ implementer: actor.email });
+      b.endRun('superseded', null, { cause: 'pick_up' }).set({ implementer: actor.email });
       break;
     default:
       return invalidTransition(glob, actor, `A glob in ${glob.status} cannot be picked up`);
@@ -537,7 +541,7 @@ export const startAgain = (glob: Glob, ctx: Context): Result<Transition> => {
   if (glob.status === 'reviewing' || glob.status === 'signed_off') {
     return invalidTransition(glob, actor, 'A merged glob cannot be started again');
   }
-  const b = new Builder(glob, ctx).endRun('superseded').bumpGeneration();
+  const b = new Builder(glob, ctx).endRun('superseded', null, { cause: 'start_again' }).bumpGeneration();
   const generation = b.current.generation;
   b.set({
     implementer: glob.type === 'super' ? glob.creator : null,
@@ -590,7 +594,7 @@ export const requestMerge = (
 /** Row 24: delete the glob and everything it owns. */
 export const remove = (glob: Glob, ctx: Context): Result<Transition> =>
   new Builder(glob, ctx)
-    .endRun('superseded')
+    .endRun('superseded', null, { cause: 'deleted' })
     .event('GlobDeleted', { status: glob.status })
     .effect({ kind: 'delete_glob_data', globId: glob.id, boardId: glob.boardId, prNumber: glob.pr?.number ?? null })
     .done();
@@ -832,7 +836,7 @@ export const provisioningFailed =(glob: Glob, reason: string, ctx: Context) =>
 /** A push to the glob branch: records the new head; results for older commits stop counting. */
 export const commitPushed = (
   glob: Glob,
-  push: { sha: string; runId: string | null; message?: string | null },
+  push: { sha: string; runId: string | null; message?: string | null; agentSetVersion?: number | null },
   ctx: Context,
 ): Result<Transition> => {
   const b = new Builder(glob, ctx);
@@ -860,7 +864,15 @@ export const commitPushed = (
   if (glob.environment !== null && !superseded && !isStart && listOf(glob.status) === 'doing') {
     b.effect({ kind: 'request_deploy', globId: glob.id, generation: glob.generation, sha: push.sha });
   }
-  return b.event('CommitPushed', { sha: push.sha, runId: push.runId, fromSupersededRun: superseded }).done();
+  // The commit's `Slop-Agent-Set` trailer, when it has one: which agent set produced the glob's work.
+  return b
+    .event('CommitPushed', {
+      sha: push.sha,
+      runId: push.runId,
+      fromSupersededRun: superseded,
+      ...(push.agentSetVersion != null && { agentSetVersion: push.agentSetVersion }),
+    })
+    .done();
 };
 
 /** The routine was fired: records its cloud session (if the fire response returned one). */
@@ -1108,7 +1120,15 @@ export const subGateCheckCompleted = (
 /** Rows 12–13: the sub gate's verdict on a commit. */
 export const subGateCompleted = (
   glob: Glob,
-  gate: { sha: string; passed: boolean; reason: string | null },
+  gate: {
+    sha: string;
+    passed: boolean;
+    reason: string | null;
+    /** Recorded for the learned sub limit: why it converted, the lines it changes and the limit applied. */
+    cause?: SubGateCause | null;
+    changedLines?: number;
+    limit?: number;
+  },
   ctx: Context,
 ): Result<Transition> => {
   if (glob.status !== 'pr_open' || glob.type !== 'sub' || glob.pr?.headSha !== gate.sha) {
@@ -1118,6 +1138,9 @@ export const subGateCompleted = (
     sha: gate.sha,
     passed: gate.passed,
     reason: gate.reason,
+    ...(gate.cause !== undefined && { cause: gate.cause }),
+    ...(gate.changedLines !== undefined && { changedLines: gate.changedLines }),
+    ...(gate.limit !== undefined && { limit: gate.limit }),
   });
   if (gate.passed) {
     return b
@@ -1235,7 +1258,7 @@ export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
   b.event('PRClosed', {});
   if (glob.status !== 'pr_open') return b.done();
   return b
-    .endRun('superseded')
+    .endRun('superseded', null, { cause: 'pr_closed' })
     .set({ failure: { reason: 'PR closed without merging', at: ctx.now } })
     .status('failed')
     .done();

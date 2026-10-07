@@ -1,5 +1,6 @@
 import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN } from '../domain/effect-check.js';
 import { recordBaseChecks } from '../domain/checks.js';
 import type { BaseChecksChange } from '../domain/checks.js';
 import type { BaseChecks, Board, CheckFailure, Environment, Member, Role } from '../domain/types.js';
@@ -13,6 +14,7 @@ export interface CreateBoardInput {
   readonly environments: readonly Environment[];
 }
 
+/** What admins set. The sub size limit isn't here: slop learns it from outcomes (`sub-limit.ts`). */
 export type BoardSettings = Partial<
   Pick<
     Board,
@@ -26,7 +28,7 @@ export type BoardSettings = Partial<
     | 'runNoProgressHours'
     | 'runReadyHours'
     | 'runStartMinutes'
-    | 'subMaxChangedLines'
+    | 'effectCheckGlobs'
     | 'deploy'
     | 'readinessTicks'
   >
@@ -53,9 +55,13 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
   if (settings.timeZone !== undefined && !isTimeZone(settings.timeZone)) {
     return invalidInput(`Unknown time zone ${settings.timeZone}`);
   }
-  for (const key of ['runNoProgressHours', 'runReadyHours', 'runStartMinutes', 'subMaxChangedLines'] as const) {
+  for (const key of ['runNoProgressHours', 'runReadyHours', 'runStartMinutes'] as const) {
     const value = settings[key];
     if (value !== undefined && (!Number.isFinite(value) || value <= 0)) return invalidInput(`${key} must be positive`);
+  }
+  const globs = settings.effectCheckGlobs;
+  if (globs !== undefined && (!Number.isInteger(globs) || globs < EFFECT_CHECK_GLOBS_MIN || globs > EFFECT_CHECK_GLOBS_MAX)) {
+    return invalidInput(`Effect checks compare ${EFFECT_CHECK_GLOBS_MIN} to ${EFFECT_CHECK_GLOBS_MAX} globs a side`);
   }
   if (settings.environments !== undefined) {
     const names = settings.environments.map((e) => e.name.trim());

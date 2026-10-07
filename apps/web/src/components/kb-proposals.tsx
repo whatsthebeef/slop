@@ -1,11 +1,32 @@
-import { agentSetKind, KB_HISTORY_MAX, KB_HISTORY_PAGE, llmWaitingReason, MAX_PROCESSING_ATTEMPTS, PROSE_KINDS, sameHeading, sectionText, spliceHeadings } from '@slop/core';
+import {
+  agentSetKind,
+  basisText,
+  failedRetryMs,
+  KB_HISTORY_MAX,
+  KB_HISTORY_PAGE,
+  llmWaitingReason,
+  MAX_PROCESSING_ATTEMPTS,
+  PROSE_KINDS,
+  sameHeading,
+  sectionText,
+  spliceHeadings,
+  STALE_AFTER_DAYS,
+  STALE_BELOW_THRESHOLD_RUNS,
+  STALE_KEEP_DAYS,
+} from '@slop/core';
 import type {
   AgentSetEntry,
   Approval,
+  BoardJobResult,
+  BoardJobStatus,
   ContextDiffLine,
   DraftPreview,
+  EffectCheck,
+  EffectFigures,
   KbItem,
   KbItemView,
+  KbPossibleCoverage,
+  KbSignal,
   KbTarget,
   KnowledgeKind,
   ProposedDocument,
@@ -13,7 +34,7 @@ import type {
 } from '@slop/core';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { MarkdownView } from '@/components/markdown-view';
@@ -57,16 +78,6 @@ const PIPELINE_POLL_MS = 15_000;
 /** Whether the background pipeline still has work to do on an item (routing, or its draft). */
 const inPipeline = (item: KbItem) => item.status === 'open' && (item.processing === 'pending' || item.processing === 'routed');
 
-/** The newest evidence an item has: its own submission or a near-duplicate merged into it. */
-const lastEvidenceAt = (item: KbItem) => item.extraEvidence.reduce((latest, e) => (e.at > latest ? e.at : latest), item.createdAt);
-
-/**
- * Open items: the most repeated first (repeats are the strongest sign a rule is missing), then the
- * freshest evidence, so an item that keeps coming back rises instead of sinking under new ones.
- */
-const byPriority = (a: KbItem, b: KbItem) =>
-  b.occurrenceCount - a.occurrenceCount || lastEvidenceAt(b).localeCompare(lastEvidenceAt(a));
-
 /**
  * Card motion as on the board (`useCardMotion`): an item that moves between the open list and the
  * decided or closed sections steps across, and the cards it displaces (or a reordering by
@@ -108,6 +119,8 @@ interface Board {
   readonly documents: readonly BoardDocument[];
   readonly owned: ReadonlySet<string>;
   readonly onOpenDocument: (name: string) => void;
+  /** Every listed item by ID, to follow a raised item to where it ended up. */
+  readonly items: ReadonlyMap<string, KbItem>;
 }
 
 /** A link to a glob on the board (its view opens there, or on the signed-off page). */
@@ -142,6 +155,15 @@ const KnowledgeRef = ({ board, name, rest }: { board: Board; name: string; rest?
 
 const outcomeText = (item: KbItem, board: Board): ReactNode => {
   if (item.status === 'merged') {
+    const note = item.mergeNote;
+    if (note !== null) {
+      return (
+        <span data-testid='merge-note'>
+          Merged {note.by === 'intake' ? 'on intake' : 'by weekly consolidation'} into{' '}
+          <ItemLink id={item.duplicateOf ?? '?'} />: “{note.quote}” states the same fact as “{note.survivorQuote}”
+        </span>
+      );
+    }
     return (
       <>
         Merged into <ItemLink id={item.duplicateOf ?? '?'} /> (a near-duplicate)
@@ -149,10 +171,16 @@ const outcomeText = (item: KbItem, board: Board): ReactNode => {
     );
   }
   if (item.status === 'suppressed') {
+    const note = item.mergeNote;
     return (
-      <>
+      <span data-testid={note === null ? undefined : 'merge-note'}>
         Suppressed: matches rejected <ItemLink id={item.suppressedBy ?? '?'} />
-      </>
+        {note !== null && (
+          <>
+            : “{note.quote}” states the same fact as “{note.survivorQuote}”
+          </>
+        )}
+      </span>
     );
   }
   if (item.status === 'covered') {
@@ -389,6 +417,11 @@ const Evidence = ({ boardId, item }: { boardId: number; item: KbItem }) => (
   <div className='grid gap-1 text-xs' data-testid='evidence'>
     <span className='font-medium'>
       Evidence{item.occurrenceCount > 1 && <span className='ml-1 rounded bg-muted px-1.5 font-normal'>seen {item.occurrenceCount}×</span>}
+      {item.sourceGlobIds.length > 1 && (
+        <span className='ml-1 rounded bg-muted px-1.5 font-normal' data-testid='evidence-globs'>
+          evidence from {item.sourceGlobIds.length} globs
+        </span>
+      )}
     </span>
     <ul className='ml-4 list-disc'>
       <li className='whitespace-pre-wrap'>
@@ -417,6 +450,356 @@ const Evidence = ({ boardId, item }: { boardId: number; item: KbItem }) => (
   </div>
 );
 
+const percent = (rate: number) => `${Math.round(rate * 100)}%`;
+
+/**
+ * A mined item's signal: the figures behind it, as last measured (refreshed weekly while open). Occurrences
+ * show only when they say more than the affected count (several findings or failed commits per glob).
+ */
+const SignalFigures = ({ signal }: { signal: KbSignal }) => {
+  const occurrences = signal.figures.count !== signal.figures.affected;
+  return (
+    <table className='w-fit text-xs' data-testid='signal'>
+      <thead className='text-muted-foreground'>
+        <tr>
+          <th className='pr-4 text-left font-normal'>Signal</th>
+          <th className='pr-4 text-right font-normal'>Affected</th>
+          <th className='pr-4 text-right font-normal'>Of</th>
+          <th className='pr-4 text-right font-normal'>Rate</th>
+          {occurrences && <th className='pr-4 text-right font-normal'>Occurrences</th>}
+          <th className='text-left font-normal'>Window</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td className='pr-4'>
+            {signal.label}
+            {signal.agent !== null && <span className='text-muted-foreground'> ({signal.agent})</span>}
+          </td>
+          <td className='pr-4 text-right tabular-nums'>{signal.figures.affected}</td>
+          <td className='pr-4 text-right tabular-nums'>{signal.figures.eligible}</td>
+          <td className='pr-4 text-right tabular-nums'>{percent(signal.figures.rate)}</td>
+          {occurrences && <td className='pr-4 text-right tabular-nums'>{signal.figures.count}</td>}
+          <td className='text-muted-foreground'>
+            {signal.window.from.slice(0, 10)} – {signal.window.to.slice(0, 10)}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+};
+
+const EFFECT_VERDICTS: Record<Exclude<EffectCheck['state'], 'watching'>, string> = {
+  improved: 'improved',
+  not_improved: 'not improved',
+  worse_elsewhere: 'improved, but another signal got markedly worse',
+  unmeasurable: 'unmeasurable (no eligible glob merged before the approval)',
+};
+
+/** What a check's basis counts from, in a few words: "since v12", or "since 2026-10-07". */
+const sinceText = (check: EffectCheck): string =>
+  check.basis.kind === 'agent_set' ? `since v${check.basis.fromVersion}` : `since ${check.basis.since.slice(0, 10)}`;
+
+/** One side's row of the before/after table. */
+const EffectRow = ({ boardId, name, figures }: { boardId: number; name: string; figures: EffectFigures }) => (
+  <tr>
+    <td className='pr-4'>{name}</td>
+    <td className='pr-4 text-right tabular-nums'>{figures.affected}</td>
+    <td className='pr-4 text-right tabular-nums'>{figures.eligible}</td>
+    <td className='pr-4 text-right tabular-nums'>{percent(figures.rate)}</td>
+    <td className='text-muted-foreground'>
+      {figures.affectedGlobIds.length === 0 ? '—' : <GlobLinks boardId={boardId} ids={figures.affectedGlobIds} />}
+    </td>
+  </tr>
+);
+
+/**
+ * Where an item ended up: itself, or the item consolidation or dedupe merged it into (followed while it is listed).
+ * A merged revise-or-revert item hands its `effect:` signal to a survivor without one, whose approval watches it.
+ */
+const survivorOf = (id: string, items: ReadonlyMap<string, KbItem>): string => {
+  const seen = new Set<string>();
+  let at = id;
+  for (;;) {
+    const item = items.get(at);
+    if (item?.status !== 'merged' || item.duplicateOf === null || seen.has(at)) return at;
+    seen.add(at);
+    at = item.duplicateOf;
+  }
+};
+
+/** The revise-or-revert item a check raised, followed to where it ended up, with its status once decided or closed. */
+const RaisedItem = ({ id, items }: { id: string; items: ReadonlyMap<string, KbItem> }) => {
+  const survivor = survivorOf(id, items);
+  const status = items.get(survivor)?.status;
+  return (
+    <p>
+      Raised <ItemLink id={id} />
+      {survivor !== id && (
+        <>
+          {' '}
+          (merged into <ItemLink id={survivor} />)
+        </>
+      )}{' '}
+      to revise or revert the change{status !== undefined && status !== 'open' && ` (${status})`}.
+    </p>
+  );
+};
+
+/**
+ * An approved change's effect check: watching with the after side's progress, or the verdict; the before and after
+ * figures (and any signal that got markedly worse), with the affected globs, and the revise-or-revert item it raised.
+ */
+const EffectCheckView = ({ board, check }: { board: Board; check: EffectCheck }) => {
+  const { boardId } = board;
+  const { before, after } = check;
+  const status =
+    check.state === 'watching'
+      ? `watching (${after?.eligible ?? 0}/${check.n} globs ${sinceText(check)})`
+      : EFFECT_VERDICTS[check.state];
+  return (
+    <div className='grid gap-1 rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='effect-check'>
+      <p>
+        <span className='font-medium'>Effect check: </span>
+        {status}
+        <span className='text-muted-foreground'>
+          {' '}
+          · {check.label}, {check.n} globs a side with {basisText(check.basis)}
+          {check.checkedAt !== null && ` · checked ${when(check.checkedAt)}`}
+        </span>
+      </p>
+      {before === null || after === null ? (
+        <p className='text-muted-foreground'>The figures come with the next check.</p>
+      ) : (
+        <table className='w-fit' data-testid='effect-figures'>
+          <thead className='text-muted-foreground'>
+            <tr>
+              <th className='pr-4 text-left font-normal'></th>
+              <th className='pr-4 text-right font-normal'>Affected</th>
+              <th className='pr-4 text-right font-normal'>Of</th>
+              <th className='pr-4 text-right font-normal'>Rate</th>
+              <th className='text-left font-normal'>Affected globs</th>
+            </tr>
+          </thead>
+          <tbody>
+            <EffectRow boardId={boardId} name='Before' figures={before} />
+            <EffectRow boardId={boardId} name={check.state === 'watching' ? 'After so far' : 'After'} figures={after} />
+            {check.worse.flatMap((w) => [
+              <EffectRow key={`${w.key}-before`} boardId={boardId} name={`${w.label}, before`} figures={w.before} />,
+              <EffectRow key={`${w.key}-after`} boardId={boardId} name={`${w.label}, after`} figures={w.after} />,
+            ])}
+          </tbody>
+        </table>
+      )}
+      {check.raisedItemId !== null && <RaisedItem id={check.raisedItemId} items={board.items} />}
+    </div>
+  );
+};
+
+/**
+ * For a submitted item an admin approves: a signal for the effect check to watch, from the board's signals as measured
+ * now (none by default). Mined items watch their own signal.
+ */
+const WatchSignal = ({ boardId, value, onChange }: { boardId: number; value: string; onChange: (key: string) => void }) => {
+  const signals = useQuery({ queryKey: ['kb-signals', boardId], queryFn: () => api.boardSignals(boardId) });
+  return (
+    <Label className='text-xs'>
+      Watch signal (effect check)
+      <Select value={value} onChange={(e) => onChange(e.target.value)} disabled={signals.data === undefined} data-testid='watch-signal'>
+        <option value=''>None</option>
+        {(signals.data ?? []).map((s) => (
+          <option key={s.key} value={s.key}>
+            {s.label} ({s.figures.affected}/{s.figures.eligible}, {percent(s.figures.rate)})
+          </option>
+        ))}
+      </Select>
+    </Label>
+  );
+};
+
+/** The approval's Watch signal field: only when one was chosen. */
+const watching = (key: string): { watchSignal?: string } => (key === '' ? {} : { watchSignal: key });
+
+/** Whether an open item can be given a signal to watch on approval: submitted statements without one. */
+const canWatch = (item: KbItem): boolean => item.status === 'open' && item.document === null && item.signal === null;
+
+/** Whether a board job's lease is held (it is running on a server now), as the server worked it out. */
+const isJobRunning = (job: BoardJobStatus | undefined): boolean => job?.running ?? false;
+
+/** A job's last run in a few words. */
+const jobSummary = (result: BoardJobResult): string => {
+  switch (result.kind) {
+    case 'failed':
+      // The next try backs off with each failure in a row (`failedRetryMs`); a failure recorded before the backoff
+      // has no time and waits for the weekly run.
+      return result.at === undefined
+        ? `the last run failed: ${result.error}`
+        : `the last run failed: ${result.error}; it tries again after ${when(
+            new Date(Date.parse(result.at) + failedRetryMs(result.failures ?? 1)).toISOString(),
+          )}`;
+    case 'skipped':
+      return `waiting: ${result.reason}; it tries again within the hour`;
+    case 'mining':
+      return `${result.measured} signals measured, ${result.raised.length} raised`;
+    case 'sub_limit': {
+      const moved = result.changes.filter((c) => c.from !== c.to).length;
+      return `limit ${result.limit.toLocaleString('en')} lines, ${result.changes.length} outcomes recorded (${moved} moved it)${result.waiting > 0 ? `, ${result.waiting} waiting` : ''}${(result.gaveUp ?? 0) > 0 ? `, ${result.gaveUp} bug references skipped without a usable answer` : ''}`;
+    }
+    case 'effect_check':
+      return `${result.watching} watching, ${result.decided.length} decided, ${result.raised.length} revise-or-revert items raised`;
+    case 'consolidation': {
+      const checked = result.alreadyChecked ?? 0;
+      // No candidate-pair call: nothing new to compare since the last run, not a search that found nothing.
+      if (result.unchanged === true)
+        return `candidates unchanged since the last run${checked > 0 ? ` (${checked} pairs already checked)` : ''}, ${result.flaggedStale} flagged stale`;
+      return `${result.proposed} pairs proposed${checked > 0 ? ` (${checked} already checked)` : ''}, ${result.merged.length} merged, ${result.flaggedStale} flagged stale`;
+    }
+  }
+};
+
+type JobName = 'mining' | 'consolidation' | 'effect_check' | 'sub_limit';
+
+const JOB_LABELS: Record<JobName, { title: string; name: string }> = {
+  mining: { title: 'Mined weekly', name: 'Mining' },
+  consolidation: { title: 'Consolidated weekly', name: 'Consolidation' },
+  effect_check: { title: 'Effect checks daily', name: 'The effect check' },
+  sub_limit: { title: 'Learned hourly', name: 'Sub-limit learning' },
+};
+
+/**
+ * A board job (weekly mining or consolidation, daily effect checks, the hourly sub limit): when it last ran and what it did, or that it is running, with Run now for
+ * admins. Run now starts the job and returns; the `board.kb` hint, reconnects and a slow poll while it runs show the
+ * result. The jobs share one query (the board's job list).
+ */
+export const JobStatus = ({ boardId, admin, job }: { boardId: number; admin: boolean; job: JobName }) => {
+  const client = useQueryClient();
+  const toast = useToast();
+  const { title, name } = JOB_LABELS[job];
+  const jobs = useQuery({
+    queryKey: ['kb-jobs', boardId],
+    queryFn: () => api.boardJobs(boardId),
+    refetchInterval: (query) => (query.state.data?.some(isJobRunning) === true ? PIPELINE_POLL_MS : false),
+  });
+  const run = useMutation({
+    mutationFn: () => api.runBoardJob(boardId, job),
+    onSuccess: () => {
+      toast(`${name} started: the results show here when it is done`);
+      refresh(client, boardId);
+    },
+    onError: (e) => {
+      // Someone else's run (another admin, or the weekly one) holds the lease: not a failure.
+      if (e instanceof RequestError && e.body.code === 'run_active') {
+        toast(`${name} is already running`);
+        refresh(client, boardId);
+      } else toast(message(e));
+    },
+  });
+  const status = jobs.data?.find((j) => j.job === job);
+  const running = isJobRunning(status);
+  const leaseEnds = running ? (status?.runningUntil ?? null) : null;
+  // A run whose server died holds its lease until it expires: refetch then, so the badge clears.
+  useEffect(() => {
+    if (leaseEnds === null) return;
+    const timer = setTimeout(
+      () => void client.invalidateQueries({ queryKey: ['kb-jobs', boardId] }),
+      Math.max(0, Date.parse(leaseEnds) - Date.now()) + 1000,
+    );
+    return () => clearTimeout(timer);
+  }, [client, boardId, leaseEnds]);
+  const result = status?.lastResult ?? null;
+  const last =
+    status === undefined || result === null
+      ? 'not run yet'
+      : result.kind === 'failed' || result.kind === 'skipped'
+        ? jobSummary(result)
+        : `last run ${when(status.lastRunAt)}: ${jobSummary(result)}`;
+  return (
+    <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground' data-testid={`${job}-status`}>
+      <span>
+        {title} · {running ? 'running now…' : last}
+      </span>
+      {admin && (
+        <Button size='sm' variant='outline' disabled={run.isPending || running} onClick={() => run.mutate()}>
+          {run.isPending || running ? 'Running…' : 'Run now'}
+        </Button>
+      )}
+    </div>
+  );
+};
+
+/** Why consolidation flagged an item stale, in words. */
+const staleText = (item: KbItem): string =>
+  item.staleReason === 'signal_below_threshold'
+    ? `its signal has been below its threshold for ${STALE_BELOW_THRESHOLD_RUNS} weekly runs or more`
+    : `no new evidence for ${STALE_AFTER_DAYS} days`;
+
+/** What a short-quote hint on another item says the item may be, by the claim it rests on. */
+const HINT_LEAD = {
+  covered: { lead: 'May already be covered by ', item: 'approved item', action: 'reject as already covered' },
+  duplicate: { lead: 'May repeat ', item: 'open item', action: 'reject as a repeat' },
+  suppressed: { lead: 'May match ', item: 'rejected item', action: 'reject it again' },
+} as const;
+
+/**
+ * Which quote of a repeat or match hint was too short (`either` on a hint stored before that was recorded). On a hint
+ * carried from an item merged into this one (`via`), the item's own quote is that item's.
+ */
+const TOO_SHORT = {
+  quote: 'the quote from that item was',
+  ownQuote: 'the quote from this item was',
+  viaOwnQuote: 'the quote from the merged-in item was',
+  both: 'both quotes were',
+  either: 'a quote was',
+} as const;
+
+/** Which `TOO_SHORT` text an item hint shows. */
+const tooShortOf = (coverage: Extract<KbPossibleCoverage, { kind: 'item' }>): keyof typeof TOO_SHORT =>
+  coverage.via !== undefined && coverage.tooShort === 'ownQuote' ? 'viaOwnQuote' : (coverage.tooShort ?? 'either');
+
+/**
+ * Text the dedupe step thinks may already say the item: the target's, or another item's (approved, open or rejected)
+ * on a quote too short to close the item on.
+ */
+const PossiblyCovered = ({ coverage, board }: { coverage: KbPossibleCoverage; board: Board }) => {
+  const hint = HINT_LEAD[coverage.kind === 'item' ? (coverage.claim ?? 'covered') : 'covered'];
+  return (
+    <p className='rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='possibly-covered'>
+      <span className='font-medium'>{hint.lead}</span>
+      {coverage.kind === 'item' ? (
+        <>
+          {hint.item} <ItemLink id={coverage.id} />
+        </>
+      ) : (
+        <KnowledgeRef board={board} name={coverage.name} rest={coverage.section === null ? '' : ` › ${coverage.section}`} />
+      )}
+      <span className='font-medium'>: </span>
+      <span className='text-muted-foreground'>
+        “{coverage.quote}”
+        {coverage.kind !== 'item' ? (
+          coverage.reason !== '' && ` (${coverage.reason})`
+        ) : coverage.ownQuote === undefined ? (
+          ' (too short a quote to close it on)'
+        ) : (
+          <>
+            {' '}
+            ({coverage.via === undefined ? 'this item' : <>merged-in <ItemLink id={coverage.via} /></>}: “
+            {coverage.ownQuote}”; {TOO_SHORT[tooShortOf(coverage)]} too short to close it on)
+          </>
+        )}
+        .
+        {coverage.kind === 'item' && coverage.alsoTarget !== undefined && (
+          <>
+            {' '}
+            The current text may say it too: “{coverage.alsoTarget.quote}”
+            {coverage.alsoTarget.reason !== '' && ` (${coverage.alsoTarget.reason})`}.
+          </>
+        )}{' '}
+        Approve, {hint.action}, or keep it.
+      </span>
+    </p>
+  );
+};
+
 /** What the pipeline flagged: a suggested catalog change, and contradictions with other items or knowledge. */
 const Flags = ({ item, board }: { item: KbItem; board: Board }) => (
   <>
@@ -428,21 +811,7 @@ const Flags = ({ item, board }: { item: KbItem; board: Board }) => (
         </span>
       </p>
     )}
-    {item.possiblyCoveredBy !== null && (
-      <p className='rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='possibly-covered'>
-        <span className='font-medium'>May already be covered by </span>
-        <KnowledgeRef
-          board={board}
-          name={item.possiblyCoveredBy.name}
-          rest={item.possiblyCoveredBy.section === null ? '' : ` › ${item.possiblyCoveredBy.section}`}
-        />
-        <span className='font-medium'>: </span>
-        <span className='text-muted-foreground'>
-          “{item.possiblyCoveredBy.quote}”{item.possiblyCoveredBy.reason !== '' && ` (${item.possiblyCoveredBy.reason})`}. Approve, reject as already
-          covered, or keep it.
-        </span>
-      </p>
-    )}
+    {item.possiblyCoveredBy !== null && <PossiblyCovered coverage={item.possiblyCoveredBy} board={board} />}
     {item.contradicts.length > 0 && (
       <div className='rounded-md border border-required-border bg-red-soft/15 p-2 text-xs' data-testid='contradictions'>
         <span className='font-medium'>Contradicts:</span>
@@ -498,8 +867,9 @@ const ProposalCard = ({
   const client = useQueryClient();
   const toast = useToast();
   const preview = open && item.draft !== null ? item.preview : null;
+  const [watch, setWatch] = useState('');
   const approveDraft = useMutation({
-    mutationFn: () => api.approveProposal(item.id, item.version, { as: 'draft' }),
+    mutationFn: () => api.approveProposal(item.id, item.version, { as: 'draft', ...watching(watch) }),
     onSuccess: (decided) => {
       markLocal(decided.id);
       toast(appliedText(decided));
@@ -525,6 +895,14 @@ const ProposalCard = ({
     },
     onError: (e) => reportError(client, boardId, toast, e),
   });
+  const keep = useMutation({
+    mutationFn: () => api.keepProposal(item.id, item.version),
+    onSuccess: (kept) => {
+      toast(`${kept.id} is marked not stale: it won't be flagged again for ${STALE_KEEP_DAYS} days`);
+      void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] });
+    },
+    onError: (e) => reportError(client, boardId, toast, e),
+  });
   const closedByPipeline = CLOSED_BY_PIPELINE.includes(item.status);
   const blocker = open && item.document === null ? approveBlocker(item) : null;
 
@@ -538,6 +916,11 @@ const ProposalCard = ({
       <div className='flex flex-wrap items-center gap-2'>
         <span className='font-mono text-xs font-semibold'>{item.id}</span>
         <span className='rounded bg-muted px-1.5 text-xs'>{item.type}</span>
+        {item.source === 'mined' && (
+          <span className='rounded bg-muted px-1.5 text-xs font-medium' title='Raised by slop from its own data' data-testid='mined'>
+            Mined
+          </span>
+        )}
         {item.document !== null && (
           <span className='rounded bg-muted px-1.5 text-xs'>
             {existing === null ? 'new document' : `replaces ${existing.name} (v${existing.version})`}
@@ -558,9 +941,19 @@ const ProposalCard = ({
       {item.suggestedTarget !== null && open && (
         <p className='text-xs text-muted-foreground'>Suggested by the submitter: {item.suggestedTarget}</p>
       )}
+      {item.signal !== null && <SignalFigures signal={item.signal} />}
+      {item.effectCheck !== null && <EffectCheckView board={board} check={item.effectCheck} />}
       <ProcessingState item={item} admin={admin} onRetry={() => retry.mutate()} retrying={retry.isPending} />
       {preview !== null && <DraftView rationale={item.rationale} preview={preview} />}
       <Evidence boardId={boardId} item={item} />
+      {open && item.staleSince !== null && (
+        <p className='rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='stale'>
+          <span className='font-medium'>Stale since {when(item.staleSince)}: </span>
+          <span className='text-muted-foreground'>
+            {staleText(item)}. Weekly consolidation only flags it: mark it not stale, or reject it.
+          </span>
+        </p>
+      )}
       {open && <Flags item={item} board={board} />}
       {item.document !== null && (
         <div className='grid gap-1 text-xs'>
@@ -605,6 +998,11 @@ const ProposalCard = ({
           </Button>
         </div>
       )}
+      {open && admin && canWatch(item) && item.draft !== null && (
+        <div className='w-fit'>
+          <WatchSignal boardId={boardId} value={watch} onChange={setWatch} />
+        </div>
+      )}
       {open && admin && (
         <div className='mt-1 flex flex-wrap items-center gap-2'>
           {item.document === null ? (
@@ -622,6 +1020,11 @@ const ProposalCard = ({
           ) : (
             <Button size='sm' onClick={() => onOpen({ kind: 'decision', decision: 'document' })}>
               Approve document
+            </Button>
+          )}
+          {item.staleSince !== null && (
+            <Button size='sm' variant='outline' disabled={keep.isPending} onClick={() => keep.mutate()}>
+              Not stale
             </Button>
           )}
           <Button size='sm' variant='outline' onClick={() => onOpen({ kind: 'decision', decision: 'reject' })}>
@@ -660,11 +1063,13 @@ const DecisionDialog = ({
   const [statement, setStatement] = useState(item.statement);
   const [content, setContent] = useState(item.document?.content ?? '');
   const [reason, setReason] = useState('');
+  const [watch, setWatch] = useState('');
 
   const decide = useMutation({
     mutationFn: () => {
       if (decision === 'reject') return api.rejectProposal(item.id, item.version, reason);
-      const approval: Approval = decision === 'learning' ? { as: 'learning', statement } : { as: 'document', content };
+      const approval: Approval =
+        decision === 'learning' ? { as: 'learning', statement, ...watching(watch) } : { as: 'document', content };
       return api.approveProposal(item.id, item.version, approval);
     },
     onSuccess: (decided) => {
@@ -700,6 +1105,7 @@ const DecisionDialog = ({
                 Statement
                 <Textarea value={statement} onChange={(e) => setStatement(e.target.value)} />
               </Label>
+              {canWatch(item) && <WatchSignal boardId={boardId} value={watch} onChange={setWatch} />}
             </>
           )}
           {decision === 'document' && item.document !== null && (
@@ -758,6 +1164,7 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
   const wanted = item.draft?.section ?? target.section;
   const [section, setSection] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(item.draft?.content ?? null);
+  const [watch, setWatch] = useState('');
   // Until the admin picks one: the draft's heading when the target has it (matched as core's splice
   // matches it, ignoring case), otherwise append.
   const matched = wanted === null ? undefined : headings.find((h) => sameHeading(h, wanted.replace(/^#+\s*/, '')));
@@ -767,7 +1174,12 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
 
   const approve = useMutation({
     mutationFn: () =>
-      api.approveProposal(item.id, item.version, { as: 'draft', content: body ?? '', section: isNew || chosen === '' ? null : chosen }),
+      api.approveProposal(item.id, item.version, {
+        as: 'draft',
+        content: body ?? '',
+        section: isNew || chosen === '' ? null : chosen,
+        ...watching(watch),
+      }),
     onSuccess: (decided) => {
       markLocal(decided.id);
       toast(appliedText(decided));
@@ -815,6 +1227,7 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
           onChange={(e) => setContent(e.target.value)}
         />
       </Label>
+      {canWatch(item) && <WatchSignal boardId={boardId} value={watch} onChange={setWatch} />}
       <div className='flex justify-end gap-2'>
         <Button type='button' variant='outline' size='sm' onClick={onClose}>
           Cancel
@@ -1080,9 +1493,9 @@ export const KbProposals = ({
   });
   const [opened, setOpened] = useState<{ item: KbItemView; opening: Opening } | null>(null);
 
-  const board: Board = { boardId, admin, documents, owned: ownedPaths(agentEntries), onOpenDocument };
   const { data } = proposals;
-  const open = useMemo(() => [...(data?.open ?? [])].sort(byPriority), [data]);
+  // Core orders the open queue (by evidence, then the freshest).
+  const open = useMemo(() => data?.open ?? [], [data]);
   const decided = data?.decided ?? { items: [], total: 0 };
   const closed = data?.closed ?? { items: [], total: 0 };
   // Every listed card, in a list that keeps its identity until the data changes (what the motion compares).
@@ -1091,6 +1504,8 @@ export const KbProposals = ({
     [data, open],
   );
   const motion = useCardMotion(listed, live, KB_MOTION);
+  const items = useMemo(() => new Map((listed ?? []).map((i) => [i.id, i])), [listed]);
+  const board: Board = { boardId, admin, documents, owned: ownedPaths(agentEntries), onOpenDocument, items };
   // The route lists at most KB_HISTORY_MAX of each group.
   const hasMore = historyLimit < KB_HISTORY_MAX && (decided.total > decided.items.length || closed.total > closed.items.length);
   const showMore = hasMore && (
@@ -1124,10 +1539,17 @@ export const KbProposals = ({
       >
         <h2 className='text-sm font-semibold'>Proposals</h2>
         <p className='text-xs text-muted-foreground'>
-          Learnings and documents submitted by agents, routed to a target, checked for repeats and drafted as a change in the
-          background. Nothing reaches the knowledge base or the agent set until an admin approves it. The most repeated come
-          first, then the freshest evidence.
+          Learnings and documents submitted by agents, and signals slop mines from its own data each week, routed to a target,
+          checked for repeats and drafted as a change in the background. Nothing reaches the knowledge base or the agent set
+          until an admin approves it. The most evidence comes first, then the freshest. Each week slop also merges open items
+          that state the same fact (only on quotes it checks) and flags stale ones for you to mark not stale or reject. Each
+          day it checks whether approved changes with a signal worked, and proposes revising or reverting one that didn't.
         </p>
+        <div className='flex flex-wrap items-center gap-x-6 gap-y-1'>
+          <JobStatus boardId={boardId} admin={admin} job='mining' />
+          <JobStatus boardId={boardId} admin={admin} job='consolidation' />
+          <JobStatus boardId={boardId} admin={admin} job='effect_check' />
+        </div>
         {proposals.isPending && <p className='text-sm text-muted-foreground'>Loading…</p>}
         {proposals.data !== undefined && open.length === 0 && <p className='text-sm text-muted-foreground'>No open proposals.</p>}
         {open.map((item) => (

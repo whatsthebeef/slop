@@ -24,6 +24,8 @@ const unwrap = <T>(result: Result<T>): T => {
 /** A code host that records what slop asked of it; only the calls these tests make do anything. */
 class FakeHost implements CodeHost {
   readonly configured = true;
+  commitFiles = () => Promise.resolve({ parent: null, files: [] });
+  commitDiffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
   readonly opened: string[] = [];
   readonly deleted: string[] = [];
   nextPr: { number: number; headSha: string } | null = { number: 8, headSha: 'd4' };
@@ -94,7 +96,9 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
     const boardOf = (boardId: number): Promise<Board | null> =>
       store.transaction((tx) => tx.getBoard(boardId));
     host = new FakeHost();
-    handle = githubDeliveryHandler({ db: database.db, globs, boardOf, github: host });
+    // These deliveries never carry review comments.
+    const findings = { recordCodeRabbitComment: () => Promise.reject(new Error('not used here')) };
+    handle = githubDeliveryHandler({ db: database.db, globs, findings, boardOf, github: host });
     executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), new BoardService({ store, notifier: { publish: () => undefined } }));
   });
 

@@ -304,7 +304,10 @@ describe('knowledge and artifacts', () => {
         data: { kind: 'local_review', label: '', version: 1, commitSha: 'abc123', runId: null, agentSetVersion: 4 },
       },
     ]);
-    expect(notifier.hints).toEqual([{ kind: 'glob.artifacts', boardId, globId: glob.id }]);
+    expect(notifier.hints).toEqual([
+      { kind: 'glob.artifacts', boardId, globId: glob.id },
+      { kind: 'glob.findings', boardId, globId: glob.id },
+    ]);
     expect(unwrap(await globs.get(DEV, glob.id)).glob.version).toBe(glob.version);
   });
 

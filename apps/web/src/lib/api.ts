@@ -6,6 +6,8 @@ import type {
   ArtifactKind,
   ArtifactSummary,
   Board,
+  BoardJob,
+  BoardJobStatus,
   CatalogUpdate,
   Category,
   Deploy,
@@ -13,8 +15,10 @@ import type {
   ReadinessItem,
   Environment,
   Glob,
+  GlobFindings,
   KbItem,
   KbProposalList,
+  KbSignal,
   LabelCommand,
   LabelName,
   List,
@@ -22,6 +26,7 @@ import type {
   Role,
   Run,
   SlopType,
+  SubLimitView,
   TargetChange,
 } from '@slop/core';
 
@@ -222,8 +227,15 @@ export const api = {
     request<KbItem>('POST', `/api/kb/${id}/target`, { version, target }),
   retryProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/retry`, { version }),
   reopenProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/reopen`, { version }),
+  keepProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/keep`, { version }),
   rejectProposal: (id: string, version: number, reason: string) =>
     request<KbItem>('POST', `/api/kb/${id}/reject`, { version, reason }),
+  boardJobs: (boardId: number) => request<BoardJobStatus[]>('GET', `/api/boards/${boardId}/kb/jobs`),
+  runBoardJob: (boardId: number, job: BoardJob['job']) => request<BoardJob>('POST', `/api/boards/${boardId}/kb/jobs/${job}/run`),
+  /** The board's signals as measured now: what an approval of a submitted item can watch (admins). */
+  boardSignals: (boardId: number) => request<KbSignal[]>('GET', `/api/boards/${boardId}/kb/signals`),
+  /** The board's learned sub size limit, its bounds and its history (members). */
+  subLimit: (boardId: number) => request<SubLimitView>('GET', `/api/boards/${boardId}/sub-limit`),
   plan: (id: string) =>
     request<{ current: ArtifactView | null; versions: { version: number; createdAt: string; by: string }[] }>(
       'GET',
@@ -233,6 +245,7 @@ export const api = {
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
   artifactVersions: (id: string, kind: ArtifactKind, label: string) =>
     request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts/${kind}?label=${encodeURIComponent(label)}`),
+  findings: (id: string) => request<GlobFindings>('GET', `/api/globs/${id}/findings`),
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel: (id: string, label: LabelName, command: LabelCommand, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/labels/${label}`, { command, version }),

@@ -1,23 +1,29 @@
 import type {
   BaseChecks,
   Board,
+  BoardJobResult,
   DeployIntegration,
   DomainEvent,
+  EffectCheck,
   Effect,
   Environment,
   ExtraEvidence,
   Glob,
   KbContradiction,
+  KbMergeNote,
   KbPossibleCoverage,
   KbCoverage,
   KbDraft,
   KbOutcome,
+  KbSignal,
   KbTarget,
   Provenance,
   ProposedDocument,
+  SignalFigures,
 } from '@slop/core';
-import { DEPLOY_STATES, DEPLOY_TRIGGERS, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_LAYERS, LEARNING_TYPES } from '@slop/core';
+import { BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES } from '@slop/core';
 import {
+  bigint,
   bigserial,
   boolean,
   index,
@@ -55,7 +61,10 @@ export const boards = pgTable('boards', {
   runNoProgressHours: integer('run_no_progress_hours').notNull().default(2),
   runReadyHours: integer('run_ready_hours').notNull().default(8),
   runStartMinutes: integer('run_start_minutes').notNull().default(30),
+  /** The learned sub size limit (`sub_limit_changes` holds its history); not an admin setting. */
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
+  /** Effect checks: globs compared on each side of an approved change. */
+  effectCheckGlobs: integer('effect_check_globs').notNull().default(EFFECT_CHECK_GLOBS_DEFAULT),
   /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
   deploy: jsonb('deploy').$type<DeployIntegration>(),
   /** The latest check result on the base branch head; written by check events, not by settings changes. */
@@ -247,6 +256,8 @@ export const kbProposals = pgTable(
     suggestedTarget: text('suggested_target'),
     sourceGlobIds: jsonb('source_glob_ids').$type<string[]>().notNull(),
     source: text('source', { enum: ['submitted', 'mined'] }).notNull(),
+    /** Mined items: the signal that raised it, with its figures. */
+    signal: jsonb('signal').$type<KbSignal>(),
     agentSetVersion: integer('agent_set_version'),
     submittedBy: text('submitted_by').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
@@ -276,6 +287,16 @@ export const kbProposals = pgTable(
     draft: jsonb('draft').$type<KbDraft>(),
     draftedAgainstVersion: integer('drafted_against_version'),
     rationale: text('rationale'),
+    /** Weekly consolidation: a stale flag (never a closure), and when an admin last kept the item. */
+    staleSince: timestamp('stale_since', { withTimezone: true }),
+    staleReason: text('stale_reason', { enum: KB_STALE_REASONS }),
+    staleDismissedAt: timestamp('stale_dismissed_at', { withTimezone: true }),
+    /** Items an admin separated from this one by reopening a merge. */
+    keptApartFrom: jsonb('kept_apart_from').$type<string[]>().notNull().default([]),
+    /** Merged (by weekly consolidation or intake) or suppressed (intake): the verified quotes it closed on. */
+    mergeNote: jsonb('merge_note').$type<KbMergeNote>(),
+    /** Approved with a signal: whether the change worked, refreshed daily while watching. */
+    effectCheck: jsonb('effect_check').$type<EffectCheck>(),
     version: integer('version').notNull(),
   },
   (t) => [
@@ -314,4 +335,135 @@ export const deploys = pgTable(
     uniqueIndex('deploys_one_running_idx').on(t.boardId, t.environment).where(sql`${t.state} = 'running'`),
     uniqueIndex('deploys_one_waiting_idx').on(t.boardId, t.environment).where(sql`${t.state} = 'waiting'`),
   ],
+);
+
+/** Reviews queued for splitting into findings: a local review artifact, or one CodeRabbit inline comment. */
+export const reviewSources = pgTable(
+  'review_sources',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    globId: text('glob_id').notNull(),
+    kind: text('kind', { enum: REVIEW_SOURCE_KINDS }).notNull(),
+    artifactId: bigint('artifact_id', { mode: 'number' }),
+    externalId: text('external_id'),
+    commitSha: text('commit_sha'),
+    agentSetVersion: integer('agent_set_version'),
+    /** CodeRabbit comments only; local reviews are read from their artifact. */
+    content: text('content'),
+    path: text('path'),
+    line: text('line'),
+    state: text('state', { enum: REVIEW_SOURCE_STATES }).notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    /** Retry backoff, or a claimed source's lease. */
+    processAfter: timestamp('process_after', { withTimezone: true }),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    version: integer('version').notNull().default(1),
+  },
+  (t) => [
+    uniqueIndex('review_sources_artifact_idx').on(t.artifactId),
+    uniqueIndex('review_sources_external_idx').on(t.externalId),
+    index('review_sources_queue_idx').on(t.state, t.processAfter),
+    index('review_sources_glob_idx').on(t.globId),
+  ],
+);
+
+/** Classified review findings per glob and commit (spec, self-improvement signals). */
+export const reviewFindings = pgTable(
+  'review_findings',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    globId: text('glob_id').notNull(),
+    sourceId: bigint('source_id', { mode: 'number' })
+      .notNull()
+      .references(() => reviewSources.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: FINDING_SOURCES }).notNull(),
+    commitSha: text('commit_sha'),
+    agentSetVersion: integer('agent_set_version'),
+    severity: text('severity', { enum: FINDING_SEVERITIES }).notNull(),
+    round: integer('round'),
+    path: text('path'),
+    line: text('line'),
+    text: text('text').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    class: text('class', { enum: FINDING_CLASSES }),
+    classNote: text('class_note'),
+    state: text('state', { enum: FINDING_STATES }).notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    processAfter: timestamp('process_after', { withTimezone: true }),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    classifiedAt: timestamp('classified_at', { withTimezone: true }),
+    version: integer('version').notNull().default(1),
+  },
+  (t) => [
+    uniqueIndex('review_findings_fingerprint_idx').on(t.globId, t.source, t.fingerprint),
+    index('review_findings_queue_idx').on(t.state, t.processAfter),
+    index('review_findings_board_created_idx').on(t.boardId, t.createdAt),
+    index('review_findings_glob_idx').on(t.globId),
+  ],
+);
+
+/** Mined-signal state per board and signal key, so a signal isn't raised again every week (re-raise rules). */
+export const kbSignals = pgTable(
+  'kb_signals',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    itemId: text('item_id'),
+    lastFigures: jsonb('last_figures').$type<SignalFigures>(),
+    lastMeasuredAt: timestamp('last_measured_at', { withTimezone: true }),
+    raisedAt: timestamp('raised_at', { withTimezone: true }),
+    belowThresholdRuns: integer('below_threshold_runs').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.key] })],
+);
+
+/** Per-board self-improvement jobs (mining, later consolidation and effect checks): last run and a lease. */
+export const boardJobs = pgTable(
+  'board_jobs',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    job: text('job', { enum: BOARD_JOBS }).notNull(),
+    lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+    lastResult: jsonb('last_result').$type<BoardJobResult>(),
+    /** Set while a server runs the job; another server doesn't start it before then. */
+    runningUntil: timestamp('running_until', { withTimezone: true }),
+    /** What the job keeps between runs (consolidation's checked pairs), narrowed by core. */
+    state: jsonb('state').$type<unknown>(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.job] })],
+);
+
+/**
+ * The learned sub size limit's history: each sub outcome recorded, once per board, glob and outcome (so the hourly
+ * job is idempotent), with the limit before and after it.
+ */
+export const subLimitChanges = pgTable(
+  'sub_limit_changes',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    fromLines: integer('from_lines').notNull(),
+    toLines: integer('to_lines').notNull(),
+    outcome: text('outcome', { enum: SUB_LIMIT_OUTCOMES }).notNull(),
+    globId: text('glob_id').notNull(),
+    /** Null when neither the gate verdict nor the merge commit gave a count (it is evidence only). */
+    changedLines: integer('changed_lines'),
+    evidence: text('evidence').notNull(),
+  },
+  (t) => [uniqueIndex('sub_limit_changes_outcome_idx').on(t.boardId, t.globId, t.outcome)],
 );
