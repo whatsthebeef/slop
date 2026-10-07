@@ -182,12 +182,16 @@ describe('KB pipeline in Postgres', () => {
     };
     const workers = [0, 1].map(() => new KbPipeline({ store, clock, catalog, notifier, route, draft: route }));
     const results = await Promise.all(
-      workers.map((w) =>
-        w.processNext().then((r) => {
-          if (r === null) release();
-          return r;
-        }),
-      ),
+      workers.map(async (w) => {
+        let claimed: string | null = null;
+        try {
+          claimed = await w.processNext();
+          return claimed;
+        } finally {
+          // The losing worker releases the gate; on a store error too, so the test fails fast.
+          if (claimed === null) release();
+        }
+      }),
     );
     expect(results.filter((r) => r === first)).toHaveLength(1);
     expect(routeCalls).toBe(1);

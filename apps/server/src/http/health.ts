@@ -1,5 +1,5 @@
 import { forbidden } from '@slop/core';
-import type { BoardService } from '@slop/core';
+import type { BoardService, Result } from '@slop/core';
 import type { Hono } from 'hono';
 import type { LlmHealth, LlmHealthState } from '../llm-health.js';
 import type { Env } from './app.js';
@@ -16,11 +16,11 @@ const view = (h: LlmHealthState) =>
 /** Whether slop's LLM is usable (the worst model's state), for a member of any board. */
 export const mountHealth = (app: Hono<Env>, deps: { readonly llm: LlmHealth; readonly boards: BoardService }): void => {
   app.get('/api/health', async (c) => {
-    if ((await deps.boards.memberships(c.get('email'))).length === 0) {
-      const denied = forbidden('Only board members can see the AI status');
-      // Always taken: `forbidden` returns an error result.
-      if (!denied.ok) return c.json(errorBody(denied.error), statusOf(denied.error));
-    }
+    const access: Result<true> =
+      (await deps.boards.memberships(c.get('email'))).length === 0
+        ? forbidden('Only board members can see the AI status')
+        : { ok: true, value: true };
+    if (!access.ok) return c.json(errorBody(access.error), statusOf(access.error));
     return c.json({ llm: view(deps.llm.state()) });
   });
 };
