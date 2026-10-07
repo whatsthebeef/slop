@@ -1,8 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { serve } from '@hono/node-server';
-import { serveStatic } from '@hono/node-server/serve-static';
 import { ArtifactService, BoardService, DeployService, GlobService, IntakeService, KbPipeline, KnowledgeService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -22,6 +19,7 @@ import { mountGitHubWebhooks } from './github/webhooks.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { mountDeploys } from './http/deploys.js';
+import { mountWeb } from './http/web.js';
 import { mountReadiness } from './http/readiness.js';
 import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
@@ -184,13 +182,7 @@ app.onError((error, c) => {
   return c.json({ code: 'internal', message: 'Something went wrong' }, 500);
 });
 
-if (config.WEB_DIST !== undefined) {
-  const root = config.WEB_DIST;
-  const index = await readFile(join(root, 'index.html'), 'utf8');
-  app.use('/*', serveStatic({ root }));
-  // The board is a single-page app: unknown paths get index.html.
-  app.get('*', (c) => c.html(index));
-}
+if (config.WEB_DIST !== undefined) mountWeb(app, config.WEB_DIST);
 
 // Catalog agent files reach boards through layering; a changed catalog gives each board a new agent-set version.
 try {
