@@ -1,6 +1,6 @@
 import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, IntakeService, KnowledgeService, Result } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
-import { CATEGORIES, LABEL_NAMES, LEARNING_TYPES, SLOP_TYPES, STATUSES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, LABEL_NAMES, LEARNING_TYPES, SLOP_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -53,7 +53,7 @@ const reply = <T>(result: Result<T>, map: (value: T) => unknown = (v) => v): Cal
 
 /** The private MCP tools, acting as the signed-in person with their board role. */
 /** `origin` is the address the client used, so links it receives point back the same way. */
-const buildServer = (deps: McpDeps, email: string, origin: string): McpServer => {
+export const buildServer = (deps: McpDeps, email: string, origin: string): McpServer => {
   const { boards, globs } = deps;
   const server = new McpServer({ name: 'slop', version: '0.1.0' });
 
@@ -463,13 +463,23 @@ const buildServer = (deps: McpDeps, email: string, origin: string): McpServer =>
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields, plan.md (the postplan for supers), the implementation plan, attachments, and the board's repo and base branch.",
-      inputSchema: { id: z.string(), runId: z.string().optional() },
+        "The glob's context bundle: its fields, plan.md (the postplan for supers) in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), and the board's repo and base branch. Pass `include` to get more in full: 'implementation_plan', 'local_review', 'attachment:<label>', or 'all'.",
+      inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
-    async ({ id, runId }) => {
+    async ({ id, runId, include }) => {
       if (runId !== undefined) await deps.globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
-      return reply(await artifacts.context(email, id));
+      return reply(await artifacts.context(email, id, include ?? []));
     },
+  );
+
+  server.registerTool(
+    'get_artifact',
+    {
+      description:
+        "The latest version of one artifact of a glob in full: kind is 'implementation_plan', 'postplan', 'local_review' or 'attachment' (with its label).",
+      inputSchema: { id: z.string(), kind: z.enum(ARTIFACT_KINDS), label: z.string().optional() },
+    },
+    async ({ id, kind, label }) => reply(await artifacts.artifact(email, id, kind, label ?? '')),
   );
 
   server.registerTool(

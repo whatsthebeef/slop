@@ -11,9 +11,40 @@ export interface GlobContext {
   readonly board: { readonly id: number; readonly repo: string | null; readonly baseBranch: string };
   /** plan.md (a super's postplan once it has one): the latest version, or the summary when no plan has been written yet. */
   readonly plan: { readonly version: number; readonly content: string } | null;
+  /** The implementation plan (a super's decision log), in full only when asked for with `include`. */
   readonly implementationPlan: { readonly version: number; readonly content: string } | null;
+  /** Attachments in full: Clarifications and Assumptions always (they carry intent), others when asked for with `include`. */
   readonly attachments: readonly { readonly label: string; readonly content: string; readonly link: string | null }[];
+  /** Every other artifact, not in full: fetch one with `get_artifact` or `include` on `get_context`. */
+  readonly available: readonly ArtifactListing[];
+  readonly fetch: string;
 }
+
+export interface ArtifactListing {
+  readonly kind: ArtifactKind;
+  readonly label: string;
+  readonly version: number;
+  readonly commitSha: string | null;
+  /** Characters of content. */
+  readonly size: number;
+  /** The first line of the content, or the link. */
+  readonly description: string;
+}
+
+/** Attachments with these labels always come inline: agents must follow them and pass them verbatim. */
+const INLINE_LABELS = new Set(['clarifications', 'assumptions']);
+
+/** `include` entries: a kind (`implementation_plan`, `local_review`, ...), `attachment:<label>`, or `all`. */
+const wanted = (include: readonly string[], a: Artifact): boolean =>
+  include.includes('all') ||
+  include.includes(a.kind) ||
+  (a.kind === 'attachment' && include.some((i) => i.toLowerCase() === `attachment:${a.label}`.toLowerCase()));
+
+const describe = (a: Artifact): string => {
+  const line = a.content.split('\n').map((l) => l.replace(/^[#>*\-\s]+/, '').trim()).find((l) => l !== '');
+  const text = line ?? a.link ?? '';
+  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+};
 
 /** A result from a superseded routine run: recorded as ignored, not stored. */
 export interface Ignored {
@@ -113,8 +144,11 @@ export class ArtifactService {
     });
   }
 
-  /** `get_context` (basic): the glob, plan.md and attachments. Decisions, meetings and search come in slice 8. */
-  async context(email: string, globId: string): Promise<Result<GlobContext>> {
+  /**
+   * `get_context` (basic): the glob and its plan in full, Clarifications and Assumptions in full, and a listing of
+   * every other artifact. `include` returns more in full. Decisions, meetings and search come in slice 8.
+   */
+  async context(email: string, globId: string, include: readonly string[] = []): Promise<Result<GlobContext>> {
     return this.deps.store.transaction(async (tx) => {
       const glob = await tx.getGlob(globId);
       if (glob === null) return notFound(`No glob ${globId}`);
@@ -127,6 +161,10 @@ export class ArtifactService {
       // A super's postplan replaces plan.md once it exists; until then plan.md is its plan.
       const plan = (glob.type === 'super' ? latest('postplan') : null) ?? latest('plan');
       const implementation = latest('implementation_plan');
+      // listArtifacts returns the latest version of each (kind, label).
+      const full = (a: Artifact) =>
+        (a.kind === 'attachment' && INLINE_LABELS.has(a.label.toLowerCase())) || wanted(include, a);
+      const others = artifacts.filter((a) => a.kind !== 'plan' && a.kind !== 'postplan' && !full(a));
       return ok({
         glob: {
           id: glob.id,
@@ -146,12 +184,32 @@ export class ArtifactService {
               ? null
               : { version: 0, content: glob.summary },
         implementationPlan:
-          implementation === null ? null : { version: implementation.version, content: implementation.content },
+          implementation === null || !full(implementation)
+            ? null
+            : { version: implementation.version, content: implementation.content },
         attachments: artifacts
-          .filter((a) => a.kind === 'attachment')
+          .filter((a) => a.kind === 'attachment' && full(a))
           .map((a) => ({ label: a.label, content: a.content, link: a.link })),
+        available: others.map((a) => ({
+          kind: a.kind,
+          label: a.label,
+          version: a.version,
+          commitSha: a.commitSha,
+          size: a.content.length,
+          description: describe(a),
+        })),
+        fetch:
+          "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['implementation_plan', 'local_review', 'attachment:<label>', 'all']).",
       });
     });
+  }
+
+  /** The latest version of one artifact (kind and, for attachments, label) in full. */
+  async artifact(email: string, globId: string, kind: ArtifactKind, label: string): Promise<Result<Artifact>> {
+    const versions = await this.versions(email, globId, kind, label);
+    if (!versions.ok) return versions;
+    const latest = versions.value.at(-1);
+    return latest === undefined ? notFound(`${globId} has no ${kind}${label === '' ? '' : ` "${label}"`}`) : ok(latest);
   }
 
   private async put(
