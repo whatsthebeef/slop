@@ -1,4 +1,5 @@
 import { composeAgentSet } from '../domain/agent-set.js';
+import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import type {
   KbContradiction,
   KbCoverage,
@@ -13,6 +14,7 @@ import { agentSetKind, docName, hasFrontmatter, isAgentSetKind, parseFrontmatter
 import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
 import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
 import type { Catalog, Clock, Notifier, Store, Tx } from '../ports.js';
+import { LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
 import { documentTarget, targetState } from './knowledge-service.js';
 import type { TargetState } from './knowledge-service.js';
@@ -29,8 +31,13 @@ const LEASE_MS = 5 * 60_000;
 export const LLM_TIMEOUT_MS = 2 * 60_000;
 const backoffMs = (attempts: number) => 30_000 * 2 ** (attempts - 1);
 /**
+ * How long an item waits after an `LlmUnavailable` (expired sign-in, no model access) before it is
+ * tried again. No attempt is counted: only a person can fix it, and items shouldn't fail meanwhile.
+ */
+export const LLM_WAIT_MS = 60_000;
+/**
  * Dedupe compares against at most this many items per group (open, approved, rejected), newest
- * first, to keep one Haiku call small. Older items fall out of comparison; weekly consolidation
+ * first, to keep one call small. Older items fall out of comparison; weekly consolidation
  * (later) catches repeats across the whole queue.
  */
 const CANDIDATE_CAP = 100;
@@ -57,17 +64,24 @@ Respond with one JSON object and nothing else:
 - name: a document name from the index, a new document name, or an agent file path exactly as listed.
 - newDocument: only for a document not in the index; otherwise null.`;
 
-export const DEDUPE_SYSTEM = `You compare a new learning, submitted by a coding agent, with what a software project's knowledge base already holds, so the review queue has no repeats.
+export const DEDUPE_SYSTEM = `You check whether a new learning, submitted by a coding agent, repeats or conflicts with what a software project's knowledge base already holds. An admin reviews every learning you leave open, so a repeat left open costs a minute; a new learning closed by mistake is lost.
 
 You get the new learning, then lists of open items (awaiting review), approved items, rejected items (with the reason), and the current text where the new learning would go.
 
+Work in this order:
+1. fact: restate the new learning's specific fact or rule in one sentence.
+2. checked: for the few candidates closest to it (at most 5; [] if none comes close), the relation of that candidate to the fact: "same fact" (it states this fact or rule, however worded), "related topic only" (same tool, area or subject, but not this fact), "unrelated", or "contradicts" (both cannot be followed).
+3. The answer, from those relations only.
+
+The default answer is new: every field null and contradicts []. Only a "same fact" candidate may set suppressedBy, duplicateOf or coveredBy, and only a "contradicts" candidate may go in contradicts. Overlapping topic, tool or area is not coverage, and a more general rule does not cover a specific fact. When unsure, answer new.
+
 Respond with one JSON object and nothing else:
-{"suppressedBy": string | null, "duplicateOf": string | null, "coveredBy": {"kind": "item", "id": string, "quote": string} | {"kind": "target", "quote": string, "reason": string} | null, "contradicts": [{"kind": "item" | "target", "ref": string, "quote": string, "note": string}]}
-- suppressedBy: the ID of a rejected item that says the same thing; otherwise null.
-- duplicateOf: the ID of an open item that says the same thing; otherwise null.
-- coveredBy: an approved item that already says it ({"kind": "item", "id": ...}), or {"kind": "target"} when the current text already says it; otherwise null. quote is the exact sentence or phrase, copied word for word from that approved item's statement or from the current text, that states the same fact as the new learning; reason is one short line on why it does. When no sentence states the same fact, answer null: the same topic is not the same fact, so text that is merely related, or that only mentions the same tool or area, does not cover the learning.
-- contradicts: open or approved items, or the current text, that the new learning conflicts with (both cannot be followed), each with quote (the exact words, copied from that item's statement or from the current text, that conflict) and a one-line note; [] if none. For the current text, ref is the heading it conflicts with, or "".
-"The same thing" means the same rule or fact, however it is worded; related but different learnings are not duplicates. Use IDs exactly as given.`;
+{"fact": string, "checked": [{"ref": string, "relation": "same fact" | "related topic only" | "unrelated" | "contradicts"}], "suppressedBy": string | null, "duplicateOf": string | null, "coveredBy": {"kind": "item", "id": string, "quote": string} | {"kind": "target", "quote": string, "reason": string} | null, "contradicts": [{"kind": "item" | "target", "ref": string, "quote": string, "note": string}]}
+- checked ref: an item ID, or "current text".
+- suppressedBy: a rejected item; duplicateOf: an open item; coveredBy: an approved item ({"kind": "item"}) or the current text ({"kind": "target"}).
+- quote: the exact sentence or phrase, copied word for word from that item's statement or from the current text, that states the same fact (for coveredBy) or conflicts (for contradicts). No such sentence means no claim.
+- reason, note: one short line each. For a contradiction in the current text, ref is the heading it conflicts with, or "".
+Use IDs exactly as given.`;
 
 export const DRAFT_SYSTEM = `You draft one change to a software project's knowledge base: the edit that puts a reviewed learning, submitted by a coding agent, into the document or agent file it was routed to. An admin approves your draft as is or edits it first.
 
@@ -162,9 +176,9 @@ const describeItem = (item: KbItem) => {
 
 /**
  * The KB pipeline (spec, self-improvement processing): a background job claims each newly
- * submitted item and, with one Haiku call each, routes it to a document or agent file and
+ * submitted item and, with one LLM call each, routes it to a document or agent file and
  * deduplicates it against open, approved and rejected items and the target's current text. Each
- * routed item is then claimed again and drafted (one Sonnet call): the new text of one section of
+ * routed item is then claimed again and drafted (one more call): the new text of one section of
  * its target, or a whole new document. Nothing reaches the knowledge base here; it only prepares
  * items for an admin's decision.
  */
@@ -175,9 +189,9 @@ export class KbPipeline {
       clock: Clock;
       catalog: Catalog;
       notifier: Notifier;
-      /** Haiku: routing and dedupe. */
+      /** Routing and dedupe. */
       route: Llm;
-      /** Sonnet: drafting. */
+      /** Drafting. */
       draft: Llm;
       /** Deadline for each LLM call; defaults to LLM_TIMEOUT_MS. */
       llmTimeoutMs?: number;
@@ -254,7 +268,8 @@ export class KbPipeline {
     }
     const snapshot = await this.snapshot(item);
     const decided = await this.ask(item, snapshot);
-    if ('failure' in decided) await this.fail(item, decided.failure, 'pending');
+    if ('unavailable' in decided) await this.wait(item, decided.unavailable);
+    else if ('failure' in decided) await this.fail(item, decided.failure, 'pending');
     else await this.finish(item, () => Promise.resolve(decided));
   }
 
@@ -297,7 +312,8 @@ export class KbPipeline {
         state,
       );
     } catch (error) {
-      await this.fail(item, error instanceof Error ? error.message : String(error), 'routed');
+      if (error instanceof LlmUnavailable) await this.wait(item, error.reason);
+      else await this.fail(item, error instanceof Error ? error.message : String(error), 'routed');
       return;
     }
     if (typeof drafted === 'string') {
@@ -333,8 +349,14 @@ export class KbPipeline {
     });
   }
 
-  /** The routing call, then the dedupe call against the routed target; a failure says why either went wrong. */
-  private async ask(item: KbItem, snapshot: Snapshot): Promise<{ routing: Routing; dedupe: Dedupe } | { failure: string }> {
+  /**
+   * The routing call, then the dedupe call against the routed target; a failure says why either
+   * went wrong, and `unavailable` why the LLM can't be used at all.
+   */
+  private async ask(
+    item: KbItem,
+    snapshot: Snapshot,
+  ): Promise<{ routing: Routing; dedupe: Dedupe } | { failure: string } | { unavailable: string }> {
     try {
       const routing = parseRouting(
         await this.complete(this.deps.route, { system: ROUTE_SYSTEM, prompt: routePrompt(item, snapshot), maxTokens: 600 }),
@@ -349,7 +371,8 @@ export class KbPipeline {
         await this.complete(this.deps.route, {
           system: DEDUPE_SYSTEM,
           prompt: dedupePrompt(item, snapshot, routing.target, targetText),
-          maxTokens: 800,
+          // The fact and up to five relations come before the answer.
+          maxTokens: 1_000,
         }),
         snapshot,
         routing.target,
@@ -357,6 +380,7 @@ export class KbPipeline {
       );
       return dedupe === null ? { failure: 'The dedupe answer was not usable JSON' } : { routing, dedupe };
     } catch (error) {
+      if (error instanceof LlmUnavailable) return { unavailable: error.reason };
       return { failure: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -476,6 +500,24 @@ export class KbPipeline {
     if (recorded) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
   }
 
+  /**
+   * Releases an item the LLM couldn't be used for (credentials, model access) at the same stage,
+   * to be tried again after `LLM_WAIT_MS`. Not a failed attempt: the count is unchanged and the item
+   * never ends `failed` this way; `processingError` says why it waits.
+   */
+  private async wait(item: KbItem, reason: string): Promise<void> {
+    const now = this.deps.clock.now();
+    const message = `${LLM_WAITING_PREFIX}${reason}`.slice(0, 500);
+    const wrote = await this.write(item, (current) => ({
+      ...current,
+      processingError: message,
+      processAfter: this.later(now, LLM_WAIT_MS),
+    }));
+    // Each probe while the LLM is down releases the item again; the page only needs to hear of the
+    // first (the write only lands on the claimed version, so `item` is what it replaced).
+    if (wrote && item.processingError !== message) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
+  }
+
   private later(now: string, ms: number): string {
     return new Date(Date.parse(now) + ms).toISOString();
   }
@@ -591,24 +633,41 @@ const parseRouting = (answer: string, snapshot: Snapshot): Routing | null => {
   return { target: routed, catalogCandidate, catalogReason: catalogCandidate && reason !== '' ? reason : null };
 };
 
+/** The `checked` ref for the target's current text. */
+const TARGET_REF = 'current text';
+
 /**
  * The dedupe answer, keeping only references to items and text it was shown (anything else is
  * ignored rather than failing the item); null when it isn't a JSON object. Every coverage and
  * contradiction claim must quote the text it was shown (`targetText`, or the item's statement),
  * else it is dropped. `targetText` is null when the model was told the target has no text yet (a
  * new document, an empty overlay or document), so the target can't cover or contradict the learning.
+ * `fact` (the model's restatement) is only there to focus the model and isn't kept. `checked` isn't
+ * kept either, but a claim on a candidate it classed otherwise (a duplicate it called "related
+ * topic only") is dropped; a claim on a candidate it didn't list stands on its quote alone.
  */
 const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targetText: string | null): Dedupe | null => {
   const parsed = parseJson(answer);
   if (!isObject(parsed)) return null;
-  const itemIn = (items: readonly KbItem[], value: unknown) => {
+  const relations = new Map<string, string>();
+  for (const entry of list(field(parsed, 'checked'))) {
+    const ref = text(field(entry, 'ref'))?.trim().toLowerCase() ?? '';
+    const relation = text(field(entry, 'relation'))?.trim().toLowerCase() ?? '';
+    if (ref !== '' && relation !== '') relations.set(ref, relation);
+  }
+  const classedAs = (ref: string, relation: 'same fact' | 'contradicts') => {
+    const given = relations.get(ref.toLowerCase());
+    return given === undefined || given === relation;
+  };
+  const itemIn = (items: readonly KbItem[], value: unknown, relation: 'same fact' | 'contradicts') => {
     const id = text(value)?.trim();
-    return items.find((i) => i.id === id) ?? null;
+    const found = items.find((i) => i.id === id) ?? null;
+    return found !== null && classedAs(found.id, relation) ? found : null;
   };
   const covered = field(parsed, 'coveredBy');
   let coveredBy: KbCoverage | null = null;
   let possiblyCoveredBy: KbPossibleCoverage | null = null;
-  if (field(covered, 'kind') === 'target') {
+  if (field(covered, 'kind') === 'target' && classedAs(TARGET_REF, 'same fact')) {
     const quote = verifiedQuote(field(covered, 'quote'), targetText);
     if (quote !== null) {
       const reason = text(field(covered, 'reason'))?.trim() ?? '';
@@ -621,7 +680,7 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targe
       };
     }
   } else if (field(covered, 'kind') === 'item') {
-    const approved = itemIn(snapshot.approved, field(covered, 'id'));
+    const approved = itemIn(snapshot.approved, field(covered, 'id'), 'same fact');
     if (approved !== null && verifiedQuote(field(covered, 'quote'), approved.statement) !== null) {
       coveredBy = { kind: 'item', id: approved.id };
     }
@@ -629,12 +688,12 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targe
   const contradicts = list(field(parsed, 'contradicts')).flatMap((entry): KbContradiction[] => {
     const note = text(field(entry, 'note'))?.trim() ?? '';
     if (field(entry, 'kind') === 'target') {
-      if (verifiedQuote(field(entry, 'quote'), targetText) === null) return [];
+      if (!classedAs(TARGET_REF, 'contradicts') || verifiedQuote(field(entry, 'quote'), targetText) === null) return [];
       const heading = cleanSection(field(entry, 'ref'));
       return [{ kind: 'knowledge', ref: heading === null ? target.name : `${target.name} § ${heading}`, note }];
     }
     if (field(entry, 'kind') === 'item') {
-      const other = itemIn([...snapshot.open, ...snapshot.approved], field(entry, 'ref'));
+      const other = itemIn([...snapshot.open, ...snapshot.approved], field(entry, 'ref'), 'contradicts');
       return other === null || verifiedQuote(field(entry, 'quote'), other.statement) === null
         ? []
         : [{ kind: 'item', ref: other.id, note }];
@@ -642,8 +701,8 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targe
     return [];
   });
   return {
-    suppressedBy: itemIn(snapshot.rejected, field(parsed, 'suppressedBy'))?.id ?? null,
-    duplicateOf: itemIn(snapshot.open, field(parsed, 'duplicateOf'))?.id ?? null,
+    suppressedBy: itemIn(snapshot.rejected, field(parsed, 'suppressedBy'), 'same fact')?.id ?? null,
+    duplicateOf: itemIn(snapshot.open, field(parsed, 'duplicateOf'), 'same fact')?.id ?? null,
     coveredBy,
     possiblyCoveredBy,
     contradicts,

@@ -200,7 +200,7 @@ const runWatch = new RunWatch(store, globs, logError);
 runWatch.start();
 const deployWatch = new DeployWatch(deploys, logError);
 deployWatch.start();
-const kbPipelineJob = new KbPipelineJob(kbPipeline, logError);
+const kbPipelineJob = new KbPipelineJob(kbPipeline, logError, llmHealth);
 kbPipelineJob.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
