@@ -34,3 +34,4 @@ export * from './app/mining-service.js';
 export * from './app/effect-check-service.js';
 export * from './app/learning-jobs.js';
 export * from './app/deploy-service.js';
+export * from './domain/checks.js';

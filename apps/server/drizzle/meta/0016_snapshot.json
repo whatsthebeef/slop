@@ -1,6 +1,6 @@
 {
-  "id": "d78cdc8f-46e7-44fd-8a07-240a0fb71c14",
-  "prevId": "ee073059-167c-44e1-91b1-4e0633f5ad28",
+  "id": "ee073059-167c-44e1-91b1-4e0633f5ad28",
+  "prevId": "c607fdf1-2884-4c02-95d7-6b3b5fcb8fdf",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -111,71 +111,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.board_jobs": {
-      "name": "board_jobs",
-      "schema": "",
-      "columns": {
-        "board_id": {
-          "name": "board_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "job": {
-          "name": "job",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "last_run_at": {
-          "name": "last_run_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_result": {
-          "name": "last_result",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "running_until": {
-          "name": "running_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "board_jobs_board_id_boards_id_fk": {
-          "name": "board_jobs_board_id_boards_id_fk",
-          "tableFrom": "board_jobs",
-          "tableTo": "boards",
-          "columnsFrom": [
-            "board_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "board_jobs_board_id_job_pk": {
-          "name": "board_jobs_board_id_job_pk",
-          "columns": [
-            "board_id",
-            "job"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.boards": {
       "name": "boards",
       "schema": "",
@@ -266,6 +201,13 @@
           "notNull": true,
           "default": 8
         },
+        "run_start_minutes": {
+          "name": "run_start_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 30
+        },
         "sub_max_changed_lines": {
           "name": "sub_max_changed_lines",
           "type": "integer",
@@ -275,6 +217,12 @@
         },
         "deploy": {
           "name": "deploy",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_checks": {
+          "name": "base_checks",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
@@ -906,12 +854,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "signal": {
-          "name": "signal",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "agent_set_version": {
           "name": "agent_set_version",
           "type": "integer",
@@ -1135,84 +1077,6 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.kb_signals": {
-      "name": "kb_signals",
-      "schema": "",
-      "columns": {
-        "board_id": {
-          "name": "board_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key": {
-          "name": "key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "item_id": {
-          "name": "item_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_figures": {
-          "name": "last_figures",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_measured_at": {
-          "name": "last_measured_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "raised_at": {
-          "name": "raised_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "below_threshold_runs": {
-          "name": "below_threshold_runs",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "kb_signals_board_id_boards_id_fk": {
-          "name": "kb_signals_board_id_boards_id_fk",
-          "tableFrom": "kb_signals",
-          "tableTo": "boards",
-          "columnsFrom": [
-            "board_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "kb_signals_board_id_key_pk": {
-          "name": "kb_signals_board_id_key_pk",
-          "columns": [
-            "board_id",
-            "key"
-          ]
-        }
-      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

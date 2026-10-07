@@ -1,4 +1,4 @@
-import { GlobService, machine } from '@slop/core';
+import { BoardService, GlobService, machine } from '@slop/core';
 import type { Board, DiffSummary, Effect, Glob, Result } from '@slop/core';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -52,6 +52,9 @@ class FakeHost implements CodeHost {
   };
   diffSummary = () => Promise.resolve(this.diff);
   readFile = () => Promise.resolve(null);
+  headOf = () => Promise.resolve(null);
+  commitChecks = () => Promise.resolve({ state: 'passed' as const, failure: null });
+  updateBranch = () => Promise.resolve('up_to_date' as const);
   squashMerge = () => Promise.resolve({ outcome: 'merged' as const, sha: 'm1' });
 }
 
@@ -88,7 +91,7 @@ describe('conflicts flagged after a merge', () => {
     });
     const boardOf = (boardId: number): Promise<Board | null> => store.transaction((tx) => tx.getBoard(boardId));
     host = new FakeHost();
-    executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'));
+    executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), new BoardService({ store, notifier: { publish: () => undefined } }));
   });
 
   afterAll(() => drop());

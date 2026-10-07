@@ -1,6 +1,6 @@
 {
-  "id": "c0e65e64-b22a-40eb-91aa-4bb411110ed7",
-  "prevId": "2ea1d692-2bc9-470b-89b3-628bd6e8b2b4",
+  "id": "2ea1d692-2bc9-470b-89b3-628bd6e8b2b4",
+  "prevId": "d78cdc8f-46e7-44fd-8a07-240a0fb71c14",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -272,6 +272,13 @@
           "notNull": true,
           "default": 8
         },
+        "run_start_minutes": {
+          "name": "run_start_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 30
+        },
         "sub_max_changed_lines": {
           "name": "sub_max_changed_lines",
           "type": "integer",
@@ -279,15 +286,14 @@
           "notNull": true,
           "default": 2000
         },
-        "effect_check_globs": {
-          "name": "effect_check_globs",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 10
-        },
         "deploy": {
           "name": "deploy",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_checks": {
+          "name": "base_checks",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
@@ -1108,12 +1114,6 @@
         },
         "merge_note": {
           "name": "merge_note",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "effect_check": {
-          "name": "effect_check",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false

@@ -111,28 +111,35 @@
       "idx": 15,
       "version": "7",
       "when": 1791300009000,
-      "tag": "0015_review_findings",
+      "tag": "0015_base_checks",
       "breakpoints": true
     },
     {
       "idx": 16,
       "version": "7",
       "when": 1791300010000,
-      "tag": "0016_kb_signals",
+      "tag": "0016_review_findings",
       "breakpoints": true
     },
     {
       "idx": 17,
       "version": "7",
       "when": 1791300011000,
-      "tag": "0017_kb_consolidation",
+      "tag": "0017_kb_signals",
       "breakpoints": true
     },
     {
       "idx": 18,
       "version": "7",
       "when": 1791300012000,
-      "tag": "0018_kb_effect_check",
+      "tag": "0018_kb_consolidation",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791300013000,
+      "tag": "0019_kb_effect_check",
       "breakpoints": true
     }
   ]

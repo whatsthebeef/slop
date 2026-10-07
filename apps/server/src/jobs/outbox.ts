@@ -104,6 +104,7 @@ export class OutboxRunner {
     const stale =
       effect.kind !== 'delete_glob_data' &&
       effect.kind !== 'start_deploy' &&
+      effect.kind !== 'refresh_base_checks' &&
       (glob === null || ('generation' in effect && effect.generation < glob.generation));
 
     let state: 'done' | 'dropped' | 'pending' | 'failed';

@@ -420,6 +420,7 @@ describe('Manifest changes and commit trailers', () => {
     agentCatalogHash: null,
     runNoProgressHours: 2,
     runReadyHours: 8,
+    runStartMinutes: 30,
     subMaxChangedLines: 2000,
     effectCheckGlobs: 10,
     version: 1,

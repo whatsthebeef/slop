@@ -791,7 +791,7 @@ describe('run sessions and timeouts', () => {
   });
 
   it('times out a run with no progress, or one that never marks its PR ready', () => {
-    const limits = { runNoProgressHours: 2, runReadyHours: 8 };
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30 };
     const at = (hours: number) => new Date(Date.parse('2026-10-05T00:00:00.000Z') + hours * 3_600_000).toISOString();
     const active = (lastProgress: number) =>
       glob({ status: 'implementing', runs: [run({ state: 'active', startedAt: at(0), lastProgressAt: at(lastProgress) })] });
@@ -800,7 +800,20 @@ describe('run sessions and timeouts', () => {
     expect(m.runTimeoutReason(active(8.5), limits, at(9))).toMatch(/not marked ready/);
     const watching = glob({ status: 'pr_open', runs: [run({ state: 'watching', startedAt: at(0), lastProgressAt: at(8.5) })] });
     expect(m.runTimeoutReason(watching, limits, at(9))).toBeNull();
-    expect(m.runTimeoutReason(glob({ runs: [run({ state: 'queued' })] }), limits, at(30))).toBeNull();
+  });
+
+  it('fails a queued run that never started after the board\'s time, and leaves younger ones', () => {
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30 };
+    const queuedAt = '2026-10-07T02:01:55.115Z';
+    const after = (minutes: number) => new Date(Date.parse(queuedAt) + minutes * 60_000).toISOString();
+    const queued = glob({ status: 'implementing', runs: [run({ state: 'queued', queuedAt, startedAt: null })] });
+    expect(m.runTimeoutReason(queued, limits, after(29))).toBeNull();
+    expect(m.runTimeoutReason(queued, limits, after(30))).toBe('Routine run never started (queued at 2026-10-07 02:01 UTC)');
+    expect(m.runTimeoutReason(queued, { ...limits, runStartMinutes: 60 }, after(45))).toBeNull();
+    // Starting (a slop call) makes it active, which the existing timeouts cover; the hours are unchanged.
+    const started = value(m.runProgress(queued, 'run-0', { ...ctx(null), now: after(5) }));
+    expect(m.runTimeoutReason(started.glob, limits, after(60))).toBeNull();
+    expect(m.runTimeoutReason(started.glob, limits, after(5 + 121))).toMatch(/No progress for 2 hours/);
   });
 });
 

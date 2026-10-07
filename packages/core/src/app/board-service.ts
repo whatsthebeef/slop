@@ -1,7 +1,9 @@
 import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN } from '../domain/effect-check.js';
-import type { Board, Environment, Member, Role } from '../domain/types.js';
+import { recordBaseChecks } from '../domain/checks.js';
+import type { BaseChecksChange } from '../domain/checks.js';
+import type { BaseChecks, Board, CheckFailure, Environment, Member, Role } from '../domain/types.js';
 import type { Notifier, Store, Tx } from '../ports.js';
 
 export interface CreateBoardInput {
@@ -24,6 +26,7 @@ export type BoardSettings = Partial<
     | 'sensitivePaths'
     | 'runNoProgressHours'
     | 'runReadyHours'
+    | 'runStartMinutes'
     | 'subMaxChangedLines'
     | 'effectCheckGlobs'
     | 'deploy'
@@ -52,7 +55,7 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
   if (settings.timeZone !== undefined && !isTimeZone(settings.timeZone)) {
     return invalidInput(`Unknown time zone ${settings.timeZone}`);
   }
-  for (const key of ['runNoProgressHours', 'runReadyHours', 'subMaxChangedLines'] as const) {
+  for (const key of ['runNoProgressHours', 'runReadyHours', 'runStartMinutes', 'subMaxChangedLines'] as const) {
     const value = settings[key];
     if (value !== undefined && (!Number.isFinite(value) || value <= 0)) return invalidInput(`${key} must be positive`);
   }
@@ -152,6 +155,26 @@ export class BoardService {
     });
     if (result.ok) this.deps.notifier.publish({ kind: 'board.changed', boardId });
     return result;
+  }
+
+  /**
+   * Integrations' write of the base branch's latest check result. Returns what changed, or null for an unknown board.
+   * Idempotent: the same result again changes nothing.
+   */
+  async recordBaseChecks(
+    boardId: number,
+    result: { sha: string; passed: boolean; failure: CheckFailure | null; merged: string | null },
+    now: string,
+  ): Promise<{ checks: BaseChecks; change: BaseChecksChange } | null> {
+    const recorded = await this.deps.store.transaction(async (tx) => {
+      const board = await tx.getBoard(boardId);
+      if (board === null) return null;
+      const change = recordBaseChecks(board.baseChecks, result, now);
+      if (change.changed) await tx.setBaseChecks(boardId, change.next);
+      return { checks: change.next, change };
+    });
+    if (recorded?.change.changed === true) this.deps.notifier.publish({ kind: 'board.changed', boardId });
+    return recorded;
   }
 
   async members(email: string, boardId: number): Promise<Result<Member[]>> {

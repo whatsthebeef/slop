@@ -176,7 +176,7 @@ describe('Review findings in Postgres', () => {
         createdAt: '2026-09-01T10:00:00.000Z',
       }),
     );
-    const migration = await readFile(new URL('../drizzle/0015_review_findings.sql', import.meta.url), 'utf8');
+    const migration = await readFile(new URL('../drizzle/0016_review_findings.sql', import.meta.url), 'utf8');
     const statements = migration.split('--> statement-breakpoint');
     for (let run = 0; run < 2; run++) {
       for (const statement of statements) await database.db.execute(sql.raw(statement));

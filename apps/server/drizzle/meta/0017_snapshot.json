@@ -1,6 +1,6 @@
 {
-  "id": "2ea1d692-2bc9-470b-89b3-628bd6e8b2b4",
-  "prevId": "d78cdc8f-46e7-44fd-8a07-240a0fb71c14",
+  "id": "d78cdc8f-46e7-44fd-8a07-240a0fb71c14",
+  "prevId": "ee073059-167c-44e1-91b1-4e0633f5ad28",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -144,12 +144,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "state": {
-          "name": "state",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {},
@@ -272,6 +266,13 @@
           "notNull": true,
           "default": 8
         },
+        "run_start_minutes": {
+          "name": "run_start_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 30
+        },
         "sub_max_changed_lines": {
           "name": "sub_max_changed_lines",
           "type": "integer",
@@ -281,6 +282,12 @@
         },
         "deploy": {
           "name": "deploy",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_checks": {
+          "name": "base_checks",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
@@ -1071,37 +1078,6 @@
         "rationale": {
           "name": "rationale",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "stale_since": {
-          "name": "stale_since",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "stale_reason": {
-          "name": "stale_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "stale_dismissed_at": {
-          "name": "stale_dismissed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "kept_apart_from": {
-          "name": "kept_apart_from",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "merge_note": {
-          "name": "merge_note",
-          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },

@@ -74,7 +74,7 @@ const outbox = new OutboxRunner(
   db,
   { globs },
   {
-    ...codeHostExecutors(github, boardOf, routines),
+    ...codeHostExecutors(github, boardOf, routines, boards),
     ...deployExecutors(
       deploys,
       new Deployers({ codebuild: new CodeBuildDeployer() }),

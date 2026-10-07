@@ -38,7 +38,7 @@ const NOW = '2026-10-07T12:00:00.000Z';
 const at = (ms: number) => new Date(Date.parse(NOW) + ms).toISOString();
 
 /** This strand's migration: a renumber (when another migration lands first) changes only this. */
-const MIGRATION = '0018_kb_effect_check';
+const MIGRATION = '0019_kb_effect_check';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -64,6 +64,9 @@ const host: CodeHost = {
   diffSummary: unused,
   squashMerge: unused,
   commentOnce: unused,
+  headOf: unused,
+  commitChecks: unused,
+  updateBranch: unused,
 };
 const catalog = {
   kbEntries: () => Promise.resolve([]),

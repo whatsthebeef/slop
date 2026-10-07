@@ -56,10 +56,13 @@ const host: CodeHost = {
   diffSummary: unused,
   squashMerge: unused,
   commentOnce: unused,
+  headOf: unused,
+  commitChecks: unused,
+  updateBranch: unused,
 };
 
 /** This strand's migration: a renumber (when another migration lands first) changes only this. */
-const MIGRATION = '0017_kb_consolidation';
+const MIGRATION = '0018_kb_consolidation';
 
 const json = (value: unknown) => JSON.stringify(value);
 const QUOTE = 'run vitest with --reporter=dot';

@@ -1,4 +1,5 @@
 import type {
+  BaseChecks,
   Board,
   BoardJobResult,
   DeployIntegration,
@@ -59,11 +60,14 @@ export const boards = pgTable('boards', {
   agentCatalogHash: text('agent_catalog_hash'),
   runNoProgressHours: integer('run_no_progress_hours').notNull().default(2),
   runReadyHours: integer('run_ready_hours').notNull().default(8),
+  runStartMinutes: integer('run_start_minutes').notNull().default(30),
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
   /** Effect checks: globs compared on each side of an approved change. */
   effectCheckGlobs: integer('effect_check_globs').notNull().default(EFFECT_CHECK_GLOBS_DEFAULT),
   /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
   deploy: jsonb('deploy').$type<DeployIntegration>(),
+  /** The latest check result on the base branch head; written by check events, not by settings changes. */
+  baseChecks: jsonb('base_checks').$type<BaseChecks>(),
   /** Readiness items slop can't check, ticked by an admin. */
   readinessTicks: jsonb('readiness_ticks').$type<Board['readinessTicks']>().notNull().default({}),
   version: integer('version').notNull(),
