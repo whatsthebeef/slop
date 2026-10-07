@@ -44,6 +44,7 @@ const host: CodeHost = {
   markReady: unused,
   diffSummary: unused,
   squashMerge: unused,
+  commentOnce: unused,
 };
 
 const TS_V2 =

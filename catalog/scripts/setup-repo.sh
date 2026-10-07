@@ -2,7 +2,8 @@
 # Prepares a GitHub repository for slop, using your gh login.
 #   - merge settings: squash only, PR title as the squash commit title, delete merged branches
 #   - optional --protect <check>...: branch protection on the base branch (required checks,
-#     up to date before merging, no direct pushes)
+#     up to date before merging, no direct pushes); pass `checks` (every PR's lint, type check
+#     and tests) and `sub-gate`
 #   - prints the links to install slop's GitHub App and the Claude GitHub App on the repo
 #     (GitHub only allows that in the browser or with a classic personal access token)
 # Usage: setup-repo.sh <owner/repo> --app <slop-app-slug> [--base main] [--protect <check> ...]
