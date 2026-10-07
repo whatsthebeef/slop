@@ -23,6 +23,10 @@ Usage: scripts/dev.sh [command]
                `foreground watch` watches as `watch` does.
   snapshots    List database snapshots, newest first.
   restore [f]  Stop the server and restore the database from a snapshot (default: the newest).
+  renumber-migrations [base]
+               After merging main: renumber this branch's Drizzle migrations after main's
+               (base defaults to origin/HEAD), rechain and fold the snapshots, update test
+               references, and check drizzle-kit reports no drift.
   help         Show this help.
 
 Snapshots are taken automatically before code with new migrations starts, and kept (newest
@@ -255,6 +259,7 @@ case "$action" in
   check-migrations) check_migrations; exit 0 ;;
   board-watch) build_board_watch; exit 0 ;;
   snapshots) list_snapshots; exit 0 ;;
+  renumber-migrations) exec node "$root/scripts/renumber-migrations.mjs" "${2:-}" ;;
   restore) restore "${2:-}"; exit 0 ;;
   help|-h|--help) usage; exit 0 ;;
   *) usage >&2; exit 1 ;;
