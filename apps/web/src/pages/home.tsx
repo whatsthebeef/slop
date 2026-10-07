@@ -2,7 +2,7 @@ import { LABEL_NAMES } from '@slop/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
 import { NewBoardForm } from '@/components/new-board';
 import { Attention, Reviews, Running, StatusBar, Supers } from '@/components/status-bar';
 import { Button } from '@/components/ui/button';
@@ -13,20 +13,21 @@ import { boardVisits, lastBoard } from '@/lib/recent-boards';
 export const LoginPage = () => {
   const [email, setEmail] = useState('');
   const navigate = useNavigate();
+  const returnTo = useSearchParams()[0].get('returnTo') ?? undefined;
   const config = useQuery({ queryKey: ['auth-config'], queryFn: api.authConfig });
   const client = useQueryClient();
 
   const submit = async (event: SyntheticEvent) => {
     event.preventDefault();
-    await api.devLogin(email);
+    const result = await api.devLogin(email, returnTo);
     await client.invalidateQueries();
-    void navigate('/');
+    void navigate(result.returnTo);
   };
 
   if (config.data?.mode === 'cognito') {
     return (
       <main className='grid min-h-dvh place-items-center'>
-        <a className='rounded-md bg-primary px-4 py-2 text-primary-foreground' href='/auth/login'>
+        <a className='rounded-md bg-primary px-4 py-2 text-primary-foreground' href={returnTo === undefined ? '/auth/login' : `/auth/login?returnTo=${encodeURIComponent(returnTo)}`}>
           Sign in
         </a>
       </main>
