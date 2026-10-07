@@ -1,0 +1,49 @@
+# Slop checks for slop's own repo (from catalog/scripts/checks.yml): lint, type check and tests on
+# the head of every ready PR (sub, same or super), including the head after slop updates the
+# branch from main. Make the `checks` check required on main so nothing merges without it.
+name: checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+# One run per PR: a newer push cancels the one in progress.
+concurrency:
+  group: checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # The server tests create throwaway databases next to this one.
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: slop
+          POSTGRES_PASSWORD: slop
+          POSTGRES_DB: slop
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U slop" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      # The pnpm version comes from package.json's packageManager.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Type check
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test

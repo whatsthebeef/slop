@@ -39,12 +39,12 @@ const host: CodeHost = {
   reopenPr: unused,
   mergeState: unused,
   conflictFiles: unused,
-  commentOnce: unused,
   completedCheckRun: unused,
   readFile: unused,
   markReady: unused,
   diffSummary: unused,
   squashMerge: unused,
+  commentOnce: unused,
 };
 
 const TS_V2 =
