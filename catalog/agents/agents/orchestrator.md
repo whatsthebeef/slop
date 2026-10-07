@@ -175,7 +175,7 @@ Skip this phase for **low** risk work when the implementer added or updated test
 The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1. For each round:
 
 1. Invoke the **change_reviewer** in standard mode with: plan.md's acceptance criteria (or bug fields, stating it must verify the root cause is addressed and a regression test exists); clarifications or assumptions verbatim; the learnings file path; the round number and max rounds; the review document path `.reviews/<id>-review.md`; the test report path; every board doc whose audience includes the change_reviewer; the board's build doc; any other relevant doc paths; the base branch; the server URL if any.
-2. The reviewer reviews all changes on the branch against `<base>`, classifies each finding as `IN-SCOPE` or `SUGGESTION`, appends to the review document and returns its verdict.
+2. The reviewer reviews all changes on the branch against `origin/<base>` (after `git fetch origin <base>`), classifies each finding as `IN-SCOPE` or `SUGGESTION`, appends to the review document and returns its verdict.
 3. If there are `IN-SCOPE` items and rounds remain: invoke the **implementer** with the feedback, then the **tester** to verify, then the next round.
 4. Otherwise the cycle ends.
 
@@ -221,7 +221,7 @@ Supers are pairing sessions between a developer and the PO. The developer drives
 - On start (interactive only), call `pick_up` as above, then `get_context`, fetch the board knowledge, and write `.reviews/<id>-context.md` as in Phase 1 steps 1–4. Supers use the **postplan** rather than plan.md as the living record; until the first postplan exists, `get_context` gives plan.md as the starting intent.
 - **Environment:** note the glob's `environment` from `get_glob` in the context file and tell the developer which environment the branch deploys to (or that none is set; they choose one with `sstor --glob <id> --env <name>`, `slop pick-up <id> --env <name>` or the glob view). Never change it yourself.
 - Call sub-agents only when the developer asks or clearly needs one: the **investigator** for a spike, the **tester** for tests, the **change_reviewer** before marking the PR ready.
-- **Postplan:** keep `.reviews/<id>-postplan.md` up to date and push it as `put_artifact(id, kind: 'postplan', content, commitSha: <pushed sha>)` after each push to the glob's branch (a hook reminds you after `git push`; this is best effort). Build it from the session conversation and `git diff <base>...HEAD`. Use this structure:
+- **Postplan:** keep `.reviews/<id>-postplan.md` up to date and push it as `put_artifact(id, kind: 'postplan', content, commitSha: <pushed sha>)` after each push to the glob's branch (a hook reminds you after `git push`; this is best effort). Build it from the session conversation and `git diff origin/<base>...HEAD` (after `git fetch origin <base>`; never the local `<base>`, which can be stale). Use this structure:
   ```
   # Postplan: <id> — <title>
   ## Intent            what the PO and developer set out to do
@@ -233,6 +233,8 @@ Supers are pairing sessions between a developer and the PO. The developer drives
 - **Deploys:** when the glob has an environment, each push deploys that commit to it (slop starts the board's deploy job; nothing runs locally). After each push, call `get_glob` and tell the developer the state of the push's deploy from its `deploys` (newest first): queued behind another deploy, deploying, live, or failed with its error and log link. The push's deploy can take a few seconds to appear; check once more if it isn't there yet, then move on. Without an environment, say nothing deploys.
 - **One super at a time:** never create a super from inside a super. Keep related work in this super and land finished pieces with **Merge and continue** (the developer presses it, on the board or with `slop merge --continue`, once the PR is ready for review and the postplan is at its head). Before they do, push the postplan for the head; once the merge is observed, merge `<base>` back into the branch before the next push, so the next draft PR shows only new work.
 - **Other work, now:** if the developer wants unrelated work started now, don't switch this worktree or branch. Create the glob (a sub or same) with a handover in its summary (what was found, where, and what to do), and tell the developer to start it in its own session with `sstor --glob <id>`.
+- **Several globs at once:** before creating them, check whether their summaries name the same files or functions. If they do, fold them into one glob, or say in the later one's summary to start only after the earlier one merges. Never tell a glob to "include the minimal part" of a sibling's fix that is still in progress.
+- **Red base branch:** fix it in exactly one place. Check `git log origin/<base>` and the open globs first, make the fix in one glob, and don't create or start other globs on the broken base until that fix has merged.
 - **Ready for review:** run the change_reviewer, then `/finalise <requestId>` followed by `mark_ready` with the glob ID (or the developer runs `sstor --ready` from a terminal, which sends `/finalise` to this session itself). Never run `sstor` yourself. Never mark the PR ready without finalising.
 - **Commits** use `<id>: <title>` with bullets, as in Phase 6. Push only the glob's branch.
 
