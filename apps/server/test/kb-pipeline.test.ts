@@ -202,10 +202,15 @@ describe('KB pipeline in Postgres', () => {
     });
 
     const second = await submit('Use the dot reporter for vitest');
-    const answers = [NEW_DOC, JSON.stringify({ checked: [{ ref: first, relation: 'same fact' }], duplicateOf: first })];
+    const duplicateOf = { id: first, quote: 'Run vitest with --reporter=dot', newQuote: 'Use the dot reporter for vitest' };
+    const answers = [NEW_DOC, JSON.stringify({ checked: [{ ref: first, relation: 'same fact' }], duplicateOf })];
     const dedupe: Llm = { complete: () => Promise.resolve(answers.shift() ?? '') };
     await new KbPipeline({ store, clock, catalog, notifier, route: dedupe, draft: dedupe }).process(second);
-    expect(await get(second)).toMatchObject({ status: 'merged', duplicateOf: first });
+    expect(await get(second)).toMatchObject({
+      status: 'merged',
+      duplicateOf: first,
+      mergeNote: { by: 'intake', quote: 'Use the dot reporter for vitest', survivorQuote: 'Run vitest with --reporter=dot' },
+    });
     expect(await get(first)).toMatchObject({ status: 'open', occurrenceCount: 2, extraEvidence: [{ itemId: second }] });
   });
 

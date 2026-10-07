@@ -6,6 +6,7 @@ import type {
   KbCoverage,
   KbDraft,
   KbItem,
+  KbMergeNote,
   KbPossibleCoverage,
   KbProcessing,
   KbTarget,
@@ -79,10 +80,11 @@ Work in this order:
 The default answer is new: every field null and contradicts []. Only a "same fact" candidate may set suppressedBy, duplicateOf or coveredBy, and only a "contradicts" candidate may go in contradicts. Overlapping topic, tool or area is not coverage, and a more general rule does not cover a specific fact. When unsure, answer new.
 
 Respond with one JSON object and nothing else:
-{"fact": string, "checked": [{"ref": string, "relation": "same fact" | "related topic only" | "unrelated" | "contradicts"}], "suppressedBy": string | null, "duplicateOf": string | null, "coveredBy": {"kind": "item", "id": string, "quote": string} | {"kind": "target", "quote": string, "reason": string} | null, "contradicts": [{"kind": "item" | "target", "ref": string, "quote": string, "note": string}]}
+{"fact": string, "checked": [{"ref": string, "relation": "same fact" | "related topic only" | "unrelated" | "contradicts"}], "suppressedBy": {"id": string, "quote": string, "newQuote": string} | null, "duplicateOf": {"id": string, "quote": string, "newQuote": string} | null, "coveredBy": {"kind": "item", "id": string, "quote": string} | {"kind": "target", "quote": string, "reason": string} | null, "contradicts": [{"kind": "item" | "target", "ref": string, "quote": string, "note": string}]}
 - checked ref: an item ID, or "current text".
 - suppressedBy: a rejected item; duplicateOf: an open item; coveredBy: an approved item ({"kind": "item"}) or the current text ({"kind": "target"}).
-- quote: the exact sentence or phrase, copied word for word from that item's statement or from the current text, that states the same fact (for coveredBy) or conflicts (for contradicts). No such sentence means no claim.
+- quote: for suppressedBy and duplicateOf, the whole sentence, copied word for word from that item's statement, that states the same fact; for coveredBy and contradicts, the exact sentence or phrase, copied word for word from that item's statement or from the current text, that states the same fact (coveredBy) or conflicts (contradicts). No such sentence means no claim.
+- newQuote (suppressedBy, duplicateOf): the whole sentence, copied word for word from the new learning's statement, that states that fact. No such sentence means no claim.
 - reason, note: one short line each. For a contradiction in the current text, ref is the heading it conflicts with, or "".
 Use IDs exactly as given.`;
 
@@ -129,14 +131,28 @@ interface Routing {
   readonly catalogReason: string | null;
 }
 
+/** A hint naming another item (approved, open or rejected) on a quote too short to close on. */
+type ItemHint = Extract<KbPossibleCoverage, { kind: 'item' }>;
+
+/** A "same fact" item the new one closes against, with both quotes verified and long enough (`longEnoughQuote`). */
+interface ClosingMatch {
+  readonly id: string;
+  /** From the matched item's statement. */
+  readonly quote: string;
+  /** From the new item's statement. */
+  readonly ownQuote: string;
+}
+
 interface Dedupe {
-  readonly suppressedBy: string | null;
-  readonly duplicateOf: string | null;
+  /** A rejected item it matches: closes it as `suppressed`. */
+  readonly suppressedBy: ClosingMatch | null;
+  /** An open item it repeats: closes it as `merged`. */
+  readonly duplicateOf: ClosingMatch | null;
   /** An approved item that says it, quote verified: the only coverage that closes an item. */
   readonly coveredBy: KbCoverage | null;
   /**
-   * The target's text that may say it, or an approved item with a quote too short to close on (quote verified
-   * either way): flagged on the open item, never closes it.
+   * The target's text that may say it, or an item (approved, open or rejected) with a quote too short to close on
+   * (quotes verified either way): flagged on the open item, never closes it.
    */
   readonly possiblyCoveredBy: KbPossibleCoverage | null;
   readonly contradicts: readonly KbContradiction[];
@@ -360,6 +376,7 @@ export class KbPipeline {
           // The fact and up to five relations come before the answer.
           maxTokens: 1_000,
         }),
+        item,
         snapshot,
         routing.target,
         targetText,
@@ -434,23 +451,76 @@ export class KbPipeline {
           processAfter: null,
           version: current.version + 1,
         };
-        const addEvidence = async (id: string, status: 'open' | 'approved'): Promise<boolean> => {
+        const addEvidence = async (
+          id: string,
+          status: 'open' | 'approved',
+          adjust?: (merged: KbItem) => KbItem,
+        ): Promise<boolean> => {
           const other = await tx.getKbItem(id);
           // An admin separated them (reopening a merge): the item stays open rather than joining it again.
           if (other?.status !== status || keptApart(other, current)) return false;
-          if (!(await addEvidenceTo(tx, other, current))) throw new StaleItem(id);
+          if (!(await addEvidenceTo(tx, other, current, adjust))) throw new StaleItem(id);
           return true;
         };
-        if (dedupe.suppressedBy !== null) {
-          next = { ...next, status: 'suppressed', suppressedBy: dedupe.suppressedBy };
-        } else if (dedupe.duplicateOf !== null && (await addEvidence(dedupe.duplicateOf, 'open'))) {
-          next = { ...next, status: 'merged', duplicateOf: dedupe.duplicateOf };
+        // The verified quotes go on the closed item, so its card shows what it closed on.
+        const noteOn = (match: ClosingMatch): KbMergeNote => ({
+          by: 'intake',
+          quote: match.ownQuote,
+          survivorQuote: match.quote,
+          at: this.deps.clock.now(),
+        });
+        // A suppression adds nothing to the rejected item, but checks it as a merge or coverage does: still rejected,
+        // and not kept apart from this one. Like theirs, the check holds at the write: the rejected item is written
+        // back unchanged on the version read, so a change committed since fails it (and the item is retried), and
+        // the row stays locked until this transaction commits.
+        const stillRejected = async (id: string): Promise<boolean> => {
+          const other = await tx.getKbItem(id);
+          if (other?.status !== 'rejected' || keptApart(other, current)) return false;
+          if (!(await tx.updateKbItem(other, other.version))) throw new StaleItem(id);
+          return true;
+        };
+        // A short-quote hint on an item is only shown when an admin hasn't kept that item apart from this one, as a
+        // closure on it would be refused; a target hint it hid is shown instead.
+        const shownHint = async (hint: KbPossibleCoverage | null): Promise<KbPossibleCoverage | null> => {
+          if (hint === null || hint.kind !== 'item') return hint;
+          const other = await tx.getKbItem(hint.id);
+          if (other === null || !keptApart(other, current)) return hint;
+          const { kind, name, section } = routing.target;
+          return hint.alsoTarget === undefined ? null : { knowledgeKind: kind, name, section, ...hint.alsoTarget };
+        };
+        // A merge closes the item, so a short-quote match with a rejected item would go unseen: it moves to the open
+        // item merged into (when that has no hint of its own, and isn't kept apart from the rejected item), with
+        // `via` naming this item, whose statement its `ownQuote` is from. The target hint beside it is this item's
+        // target's, so it stays behind.
+        const hint = dedupe.possiblyCoveredBy;
+        const rejectedHint = hint?.kind === 'item' && hint.claim === 'suppressed' ? hint : null;
+        const hinted = rejectedHint === null ? null : await tx.getKbItem(rejectedHint.id);
+        const carryHint = (survivor: KbItem): KbItem => {
+          if (rejectedHint === null || hinted === null) return survivor;
+          if (survivor.possiblyCoveredBy !== null || keptApart(hinted, survivor)) return survivor;
+          const carried: ItemHint = { ...rejectedHint, alsoTarget: undefined, via: current.id };
+          return { ...survivor, possiblyCoveredBy: carried };
+        };
+        if (dedupe.suppressedBy !== null && (await stillRejected(dedupe.suppressedBy.id))) {
+          next = {
+            ...next,
+            status: 'suppressed',
+            suppressedBy: dedupe.suppressedBy.id,
+            mergeNote: noteOn(dedupe.suppressedBy),
+          };
+        } else if (dedupe.duplicateOf !== null && (await addEvidence(dedupe.duplicateOf.id, 'open', carryHint))) {
+          next = {
+            ...next,
+            status: 'merged',
+            duplicateOf: dedupe.duplicateOf.id,
+            mergeNote: noteOn(dedupe.duplicateOf),
+          };
         } else if (dedupe.coveredBy?.kind === 'item' && (await addEvidence(dedupe.coveredBy.id, 'approved'))) {
           next = { ...next, status: 'covered', coveredBy: dedupe.coveredBy };
         } else {
-          // Coverage by the target's text, or by an approved item on a short quote, is only a hint: the item stays
+          // Coverage by the target's text, or a match with an item on a short quote, is only a hint: the item stays
           // open for an admin to decide.
-          next = { ...next, possiblyCoveredBy: dedupe.possiblyCoveredBy, contradicts: dedupe.contradicts };
+          next = { ...next, possiblyCoveredBy: await shownHint(dedupe.possiblyCoveredBy), contradicts: dedupe.contradicts };
         }
         if (!(await tx.updateKbItem(next, current.version))) throw new StaleItem(item.id);
       });
@@ -626,10 +696,12 @@ const TARGET_REF = 'current text';
 
 /**
  * The dedupe answer, keeping only references to items and text it was shown (anything else is
- * ignored rather than failing the item); null when it isn't a JSON object. Every coverage and
- * contradiction claim must quote the text it was shown (`targetText`, or the item's statement),
- * else it is dropped; the quote for coverage by an approved item, which closes the item, must also be long enough
- * (`longEnoughQuote`), and a shorter one is only flagged (`possiblyCoveredBy`). `targetText` is null when the model was told the target has no text yet (a
+ * ignored rather than failing the item); null when it isn't a JSON object. Every claim must quote the text it was
+ * shown (`targetText`, or the item's statement), else it is dropped. A claim that closes the item needs more: a
+ * merge (`duplicateOf`) or suppression (`suppressedBy`) quotes both the matched item's statement and the new
+ * item's own, and those quotes, like coverage by an approved item's, must be long enough (`longEnoughQuote`); a
+ * claim whose quotes are verbatim but too short is only flagged (`possiblyCoveredBy`). A dropped claim leaves the
+ * item open. `targetText` is null when the model was told the target has no text yet (a
  * new document, an empty overlay or document), so the target can't cover or contradict the learning.
  * `fact` (the model's restatement) is only there to focus the model and isn't kept. `checked` isn't
  * kept either, but every claim needs it: a candidate closes or flags the item only when `checked`
@@ -637,7 +709,13 @@ const TARGET_REF = 'current text';
  * claim on a candidate it classed otherwise, or didn't class, contradicts its own reasoning, which
  * is the unsure case: the item stays new.
  */
-const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targetText: string | null): Dedupe | null => {
+const parseDedupe = (
+  answer: string,
+  item: KbItem,
+  snapshot: Snapshot,
+  target: KbTarget,
+  targetText: string | null,
+): Dedupe | null => {
   const parsed = parseJson(answer);
   if (!isObject(parsed)) return null;
   const relations = new Map<string, string>();
@@ -652,20 +730,45 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targe
     const found = items.find((i) => i.id === id) ?? null;
     return found !== null && classedAs(found.id, relation) ? found : null;
   };
+  /**
+   * A merge or suppression claim on one of `items`: it closes the item (`match`) when both quotes are verbatim (the
+   * matched item's statement, the new item's own) and long enough, and is only a hint when verbatim but either is
+   * too short; otherwise it is dropped (null).
+   */
+  const closingClaim = (
+    items: readonly KbItem[],
+    value: unknown,
+    claim: 'duplicate' | 'suppressed',
+  ): { match: ClosingMatch } | { hint: ItemHint } | null => {
+    const other = itemIn(items, field(value, 'id'), 'same fact');
+    if (other === null) return null;
+    const quote = verifiedQuote(field(value, 'quote'), other.statement);
+    const ownQuote = verifiedQuote(field(value, 'newQuote'), item.statement);
+    if (quote === null || ownQuote === null) return null;
+    const quoteOk = longEnoughQuote(quote);
+    const ownOk = longEnoughQuote(ownQuote);
+    if (quoteOk && ownOk) return { match: { id: other.id, quote, ownQuote } };
+    const tooShort = quoteOk ? 'ownQuote' : ownOk ? 'quote' : 'both';
+    return { hint: { kind: 'item', id: other.id, quote, shortQuote: true, claim, ownQuote, tooShort } };
+  };
+  const suppression = closingClaim(snapshot.rejected, field(parsed, 'suppressedBy'), 'suppressed');
+  const merge = closingClaim(snapshot.open, field(parsed, 'duplicateOf'), 'duplicate');
+  const matchOf = (c: typeof merge) => (c !== null && 'match' in c ? c.match : null);
+  const hintOf = (c: typeof merge) => (c !== null && 'hint' in c ? c.hint : null);
+  // One hint is shown: suppression's, then merge's, then coverage's. A target hint it hides stays beside it.
+  const itemHint = hintOf(suppression) ?? hintOf(merge);
+  let possiblyCoveredBy: KbPossibleCoverage | null = itemHint;
   const covered = field(parsed, 'coveredBy');
   let coveredBy: KbCoverage | null = null;
-  let possiblyCoveredBy: KbPossibleCoverage | null = null;
   if (field(covered, 'kind') === 'target' && classedAs(TARGET_REF, 'same fact')) {
     const quote = verifiedQuote(field(covered, 'quote'), targetText);
     if (quote !== null) {
-      const reason = text(field(covered, 'reason'))?.trim() ?? '';
-      possiblyCoveredBy = {
-        knowledgeKind: target.kind,
-        name: target.name,
-        section: target.section,
-        quote,
-        reason: SINGLE_LINE.test(reason) ? reason : '',
-      };
+      const said = text(field(covered, 'reason'))?.trim() ?? '';
+      const reason = SINGLE_LINE.test(said) ? said : '';
+      possiblyCoveredBy =
+        itemHint === null
+          ? { knowledgeKind: target.kind, name: target.name, section: target.section, quote, reason }
+          : { ...itemHint, alsoTarget: { quote, reason } };
     }
   } else if (field(covered, 'kind') === 'item') {
     const approved = itemIn(snapshot.approved, field(covered, 'id'), 'same fact');
@@ -674,7 +777,7 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targe
     // quote only flags the item, so the admin still sees what the model thought.
     if (approved !== null && quote !== null) {
       if (longEnoughQuote(quote)) coveredBy = { kind: 'item', id: approved.id };
-      else possiblyCoveredBy = { kind: 'item', id: approved.id, quote, shortQuote: true };
+      else possiblyCoveredBy ??= { kind: 'item', id: approved.id, quote, shortQuote: true };
     }
   }
   const contradicts = list(field(parsed, 'contradicts')).flatMap((entry): KbContradiction[] => {
@@ -693,8 +796,8 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targe
     return [];
   });
   return {
-    suppressedBy: itemIn(snapshot.rejected, field(parsed, 'suppressedBy'), 'same fact')?.id ?? null,
-    duplicateOf: itemIn(snapshot.open, field(parsed, 'duplicateOf'), 'same fact')?.id ?? null,
+    suppressedBy: matchOf(suppression),
+    duplicateOf: matchOf(merge),
     coveredBy,
     possiblyCoveredBy,
     contradicts,

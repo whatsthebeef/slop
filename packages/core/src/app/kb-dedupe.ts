@@ -18,23 +18,28 @@ export const normalised = (value: unknown): string =>
 /** Text as quotes are compared: whitespace collapsed, lower case. */
 export const squash = (value: string): string => value.replace(/\s+/g, ' ').trim().toLowerCase();
 
+/** Sentence punctuation and quote marks at either end of a quote, which a model adds or drops when copying. */
+const QUOTE_ENDS = /^[\s.!?;:,"'“”‘’]+|[\s.!?;:,"'“”‘’]+$/g;
+
 /**
- * The model's quote, when it really appears (ignoring case and whitespace) in the text it was
- * shown; null otherwise, so a claim it can't back up is dropped. `shown` is null when the model
- * saw no text (a new document, an empty overlay), which nothing can quote. The findings pipeline
- * uses it too: a split finding is kept only when its quote is in the review.
+ * The model's quote, when it really appears (ignoring case and whitespace, and sentence punctuation and quote marks
+ * at either end) in the text it was shown; null otherwise, so a claim it can't back up is dropped. It is returned
+ * without those ends, so a period the model added neither fails the check nor counts towards `longEnoughQuote`.
+ * `shown` is null when the model saw no text (a new document, an empty overlay), which nothing can quote. The
+ * findings pipeline uses it too: a split finding is kept only when its quote is in the review.
  */
 export const verifiedQuote = (value: unknown, shown: string | null): string | null => {
-  const quote = text(value)?.trim() ?? '';
+  const quote = text(value)?.replace(QUOTE_ENDS, '') ?? '';
   if (shown === null || quote === '' || !squash(shown).includes(squash(quote))) return null;
   return quote;
 };
 
 /**
- * The shortest quote a closure rests on (whitespace collapsed): a consolidation merge's quote on each side, and an
- * intake coverage's quote from the approved item. A word or two found in a statement checks nothing, and either
- * closure takes the item's own wording out of the queue. A shorter quote leaves the item open for an admin. The
- * target hint (which only flags), contradictions and the findings pipeline don't use it.
+ * The shortest quote a closure rests on (whitespace collapsed): a consolidation merge's quote on each side, an
+ * intake merge's or suppression's quote on each side, and an intake coverage's quote from the approved item. A word
+ * or two found in a statement checks nothing, and every closure takes the item's own wording out of the queue. A
+ * shorter quote leaves the item open for an admin. The target hint (which only flags), contradictions and the
+ * findings pipeline don't use it.
  */
 export const MIN_MERGE_QUOTE_WORDS = 4;
 export const MIN_MERGE_QUOTE_CHARS = 20;

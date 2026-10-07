@@ -64,7 +64,10 @@ export type KbCoverage =
 /**
  * An open item the dedupe step thinks may already be said: a hint for the admin, never a decision. `quote` is the
  * sentence it found (checked against the text it was shown). Either the target's own text (stored before `kind`
- * existed, so it has none), or an approved item whose quote was too short to close the item on (`longEnoughQuote`).
+ * existed, so it has none), or another item on a quote too short to close the item on (`longEnoughQuote`): an
+ * approved item that may cover it (no `claim`, stored before `claim` existed), an open item it may repeat
+ * (`claim: 'duplicate'`) or a rejected item it may match (`claim: 'suppressed'`). For those two, `quote` is from
+ * that item's statement and `ownQuote` from the item's own; both were found verbatim, and one was too short.
  */
 export type KbPossibleCoverage =
   | {
@@ -75,7 +78,23 @@ export type KbPossibleCoverage =
       readonly quote: string;
       readonly reason: string;
     }
-  | { readonly kind: 'item'; readonly id: string; readonly quote: string; readonly shortQuote: true };
+  | {
+      readonly kind: 'item';
+      readonly id: string;
+      readonly quote: string;
+      readonly shortQuote: true;
+      readonly claim?: 'duplicate' | 'suppressed';
+      readonly ownQuote?: string;
+      /** For a `claim`: which quote was too short, the other item's (`quote`), the item's own (`ownQuote`) or both. */
+      readonly tooShort?: 'quote' | 'ownQuote' | 'both';
+      /** The target's text may say it too (a hint this one hides): the sentence found there and the model's reason. */
+      readonly alsoTarget?: { readonly quote: string; readonly reason: string };
+      /**
+       * Carried from an item merged into this one on intake (its ID): `ownQuote` is from that item's statement. Only a
+       * `claim: 'suppressed'` hint is carried, and never with `alsoTarget`.
+       */
+      readonly via?: string;
+    };
 
 /** Something an open item contradicts: another item (by ID) or a document or agent file (by name). */
 export interface KbContradiction {
@@ -206,7 +225,10 @@ export interface KbItem {
   readonly staleDismissedAt: string | null;
   /** Items an admin separated from this one by reopening a merge: consolidation never merges them again. */
   readonly keptApartFrom: readonly string[];
-  /** `merged` by weekly consolidation: the verified quotes it merged on. */
+  /**
+   * `merged` (by weekly consolidation or intake dedupe) or `suppressed` (by intake dedupe): the verified quotes it
+   * closed on.
+   */
   readonly mergeNote: KbMergeNote | null;
   /** `approved` with a signal: whether the change worked (`EffectCheck`), refreshed daily while watching. */
   readonly effectCheck: EffectCheck | null;
@@ -219,11 +241,13 @@ export const KB_STALE_REASONS = ['no_recent_evidence', 'signal_below_threshold']
 export type KbStaleReason = (typeof KB_STALE_REASONS)[number];
 
 /**
- * What weekly consolidation merged an item on: its own words (`quote`, from its statement) and the survivor's
- * (`survivorQuote`), each found verbatim in that statement, and when.
+ * What closed an item, and on which words: its own (`quote`, from its statement) and the other item's
+ * (`survivorQuote`), each found verbatim in that statement, and when. `by: 'consolidation'`: weekly consolidation
+ * merged it into the survivor. `by: 'intake'`: intake dedupe merged it into an open item (`duplicateOf`) or
+ * suppressed it against a rejected one (`suppressedBy`, whose words `survivorQuote` then holds).
  */
 export interface KbMergeNote {
-  readonly by: 'consolidation';
+  readonly by: 'consolidation' | 'intake';
   readonly quote: string;
   readonly survivorQuote: string;
   readonly at: string;

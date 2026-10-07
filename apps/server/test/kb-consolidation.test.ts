@@ -431,7 +431,7 @@ describe('Weekly consolidation in Postgres', () => {
     const dedupe = json({
       fact: 'f',
       checked: [{ ref: survivor.id, relation: 'same fact' }],
-      duplicateOf: survivor.id,
+      duplicateOf: { id: survivor.id, quote: QUOTE, newQuote: QUOTE },
       suppressedBy: null,
       coveredBy: null,
       contradicts: [],

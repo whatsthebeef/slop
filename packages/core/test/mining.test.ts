@@ -351,7 +351,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
 
     route.answer(
       JSON.stringify({ target: { kind: 'document', name: 'build_test_lint', section: '## Test', newDocument: null }, catalogCandidate: false, catalogReason: null }),
-      JSON.stringify({ checked: [{ ref: submitted.id, relation: 'same fact' }], suppressedBy: null, duplicateOf: submitted.id, coveredBy: null, contradicts: [] }),
+      JSON.stringify({ checked: [{ ref: submitted.id, relation: 'same fact' }], suppressedBy: null, duplicateOf: { id: submitted.id, quote: 'Say why when starting again', newQuote: 'someone taking over or starting again' }, coveredBy: null, contradicts: [] }),
     );
     expect(await pipeline.processNext()).toBe(mined);
     expect(await item(mined ?? '')).toMatchObject({ status: 'merged', duplicateOf: submitted.id });

@@ -159,8 +159,8 @@ const outcomeText = (item: KbItem, board: Board): ReactNode => {
     if (note !== null) {
       return (
         <span data-testid='merge-note'>
-          Merged by weekly consolidation into <ItemLink id={item.duplicateOf ?? '?'} />: “{note.quote}” states the same fact as “
-          {note.survivorQuote}”
+          Merged {note.by === 'intake' ? 'on intake' : 'by weekly consolidation'} into{' '}
+          <ItemLink id={item.duplicateOf ?? '?'} />: “{note.quote}” states the same fact as “{note.survivorQuote}”
         </span>
       );
     }
@@ -171,10 +171,16 @@ const outcomeText = (item: KbItem, board: Board): ReactNode => {
     );
   }
   if (item.status === 'suppressed') {
+    const note = item.mergeNote;
     return (
-      <>
+      <span data-testid={note === null ? undefined : 'merge-note'}>
         Suppressed: matches rejected <ItemLink id={item.suppressedBy ?? '?'} />
-      </>
+        {note !== null && (
+          <>
+            : “{note.quote}” states the same fact as “{note.survivorQuote}”
+          </>
+        )}
+      </span>
     );
   }
   if (item.status === 'covered') {
@@ -722,30 +728,72 @@ const staleText = (item: KbItem): string =>
     ? `its signal has been below its threshold for ${STALE_BELOW_THRESHOLD_RUNS} weekly runs or more`
     : `no new evidence for ${STALE_AFTER_DAYS} days`;
 
+/** What a short-quote hint on another item says the item may be, by the claim it rests on. */
+const HINT_LEAD = {
+  covered: { lead: 'May already be covered by ', item: 'approved item', action: 'reject as already covered' },
+  duplicate: { lead: 'May repeat ', item: 'open item', action: 'reject as a repeat' },
+  suppressed: { lead: 'May match ', item: 'rejected item', action: 'reject it again' },
+} as const;
+
 /**
- * Text the dedupe step thinks may already say the item: the target's, or an approved item's on a quote too short to
- * close the item on.
+ * Which quote of a repeat or match hint was too short (`either` on a hint stored before that was recorded). On a hint
+ * carried from an item merged into this one (`via`), the item's own quote is that item's.
  */
-const PossiblyCovered = ({ coverage, board }: { coverage: KbPossibleCoverage; board: Board }) => (
-  <p className='rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='possibly-covered'>
-    <span className='font-medium'>May already be covered by </span>
-    {coverage.kind === 'item' ? (
-      <>
-        approved item <ItemLink id={coverage.id} />
-      </>
-    ) : (
-      <KnowledgeRef board={board} name={coverage.name} rest={coverage.section === null ? '' : ` › ${coverage.section}`} />
-    )}
-    <span className='font-medium'>: </span>
-    <span className='text-muted-foreground'>
-      “{coverage.quote}”
-      {coverage.kind === 'item'
-        ? ' (too short a quote to close it on)'
-        : coverage.reason !== '' && ` (${coverage.reason})`}
-      . Approve, reject as already covered, or keep it.
-    </span>
-  </p>
-);
+const TOO_SHORT = {
+  quote: 'the quote from that item was',
+  ownQuote: 'the quote from this item was',
+  viaOwnQuote: 'the quote from the merged-in item was',
+  both: 'both quotes were',
+  either: 'a quote was',
+} as const;
+
+/** Which `TOO_SHORT` text an item hint shows. */
+const tooShortOf = (coverage: Extract<KbPossibleCoverage, { kind: 'item' }>): keyof typeof TOO_SHORT =>
+  coverage.via !== undefined && coverage.tooShort === 'ownQuote' ? 'viaOwnQuote' : (coverage.tooShort ?? 'either');
+
+/**
+ * Text the dedupe step thinks may already say the item: the target's, or another item's (approved, open or rejected)
+ * on a quote too short to close the item on.
+ */
+const PossiblyCovered = ({ coverage, board }: { coverage: KbPossibleCoverage; board: Board }) => {
+  const hint = HINT_LEAD[coverage.kind === 'item' ? (coverage.claim ?? 'covered') : 'covered'];
+  return (
+    <p className='rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='possibly-covered'>
+      <span className='font-medium'>{hint.lead}</span>
+      {coverage.kind === 'item' ? (
+        <>
+          {hint.item} <ItemLink id={coverage.id} />
+        </>
+      ) : (
+        <KnowledgeRef board={board} name={coverage.name} rest={coverage.section === null ? '' : ` › ${coverage.section}`} />
+      )}
+      <span className='font-medium'>: </span>
+      <span className='text-muted-foreground'>
+        “{coverage.quote}”
+        {coverage.kind !== 'item' ? (
+          coverage.reason !== '' && ` (${coverage.reason})`
+        ) : coverage.ownQuote === undefined ? (
+          ' (too short a quote to close it on)'
+        ) : (
+          <>
+            {' '}
+            ({coverage.via === undefined ? 'this item' : <>merged-in <ItemLink id={coverage.via} /></>}: “
+            {coverage.ownQuote}”; {TOO_SHORT[tooShortOf(coverage)]} too short to close it on)
+          </>
+        )}
+        .
+        {coverage.kind === 'item' && coverage.alsoTarget !== undefined && (
+          <>
+            {' '}
+            The current text may say it too: “{coverage.alsoTarget.quote}”
+            {coverage.alsoTarget.reason !== '' && ` (${coverage.alsoTarget.reason})`}.
+          </>
+        )}{' '}
+        Approve, {hint.action}, or keep it.
+      </span>
+    </p>
+  );
+};
 
 /** What the pipeline flagged: a suggested catalog change, and contradictions with other items or knowledge. */
 const Flags = ({ item, board }: { item: KbItem; board: Board }) => (

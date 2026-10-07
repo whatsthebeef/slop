@@ -292,7 +292,7 @@ export const kbProposals = pgTable(
     staleDismissedAt: timestamp('stale_dismissed_at', { withTimezone: true }),
     /** Items an admin separated from this one by reopening a merge. */
     keptApartFrom: jsonb('kept_apart_from').$type<string[]>().notNull().default([]),
-    /** Merged by weekly consolidation: the verified quotes. */
+    /** Merged (by weekly consolidation or intake) or suppressed (intake): the verified quotes it closed on. */
     mergeNote: jsonb('merge_note').$type<KbMergeNote>(),
     /** Approved with a signal: whether the change worked, refreshed daily while watching. */
     effectCheck: jsonb('effect_check').$type<EffectCheck>(),
