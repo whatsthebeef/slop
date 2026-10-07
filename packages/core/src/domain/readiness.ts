@@ -220,6 +220,27 @@ const minutesUnreacted = (glob: Glob, now: string): number | null => {
 export const unreactedCheckFailures = (globs: readonly Glob[], now: string): string[] =>
   globs.filter((g) => (minutesUnreacted(g, now) ?? 0) >= STUCK_MINUTES).map((g) => g.id);
 
+/** How long after asking the Claude GitHub App to resolve a conflict the card suggests resolving it locally. */
+const CONFLICT_FIX_MINUTES = 15;
+
+/**
+ * A conflict flagged on an open PR. A human implementer resolves it locally from the start; for the rest the card
+ * suggests that once the Claude GitHub App was asked and the PR still conflicts after a while.
+ */
+const conflictHint = (glob: Glob, now: string): string | null => {
+  const conflict = glob.conflict;
+  if (conflict == null) return null;
+  const shown = conflict.files.slice(0, 5).join(', ');
+  const more = conflict.files.length > 5 ? ` and ${String(conflict.files.length - 5)} more` : '';
+  const files = conflict.files.length === 0 ? '' : `: ${shown}${more}`;
+  const cause = conflict.since === null ? '' : ` since ${conflict.since} merged`;
+  const hint = `Conflicts with ${conflict.base}${cause}${files}`;
+  const waited =
+    conflict.requestedAt !== undefined &&
+    (Date.parse(now) - Date.parse(conflict.requestedAt)) / 60_000 >= CONFLICT_FIX_MINUTES;
+  return glob.implementer !== null || waited ? `${hint}. Resolve locally: sstor --glob ${glob.id} --resolve` : hint;
+};
+
 /**
  * A short hint on a card when a glob looks stuck on setup rather than on work: a ready sub with no
  * sub-gate result, a sub whose gate passed but hasn't merged, or a routine failure with a known fix.
@@ -229,6 +250,8 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
     const fix = routineFailureFix(glob.failure.reason);
     if (fix !== null) return fix.fix;
   }
+  const conflict = conflictHint(glob, now);
+  if (conflict !== null) return conflict;
   const unreacted = minutesUnreacted(glob, now);
   if (unreacted !== null && unreacted >= STUCK_MINUTES) {
     const session = glob.runs[glob.runs.length - 1]?.sessionUrl ?? null;

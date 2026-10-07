@@ -66,6 +66,16 @@ export class GlobService {
     });
   }
 
+  /** Integrations' read of one glob, with no signed-in person. */
+  async peek(id: string): Promise<Glob | null> {
+    return this.deps.store.transaction((tx) => tx.getGlob(id));
+  }
+
+  /** Integrations' read of a board's globs, with no signed-in person. */
+  async peekAll(boardId: number, filter: GlobFilter): Promise<Glob[]> {
+    return this.deps.store.transaction((tx) => tx.listGlobs(boardId, filter));
+  }
+
   async list(email: string, boardId: number, filter: GlobFilter): Promise<Result<Glob[]>> {
     return this.deps.store.transaction(async (tx) => {
       const actor = await this.actorFor(tx, email, boardId);

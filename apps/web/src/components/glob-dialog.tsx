@@ -31,7 +31,7 @@ const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLoc
 const ACTION_TIPS: Partial<Record<Action, string>> = {
   merge_continue: "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
   mark_ready: 'Marks the draft PR ready for review',
-  resolve_conflict: 'A routine merges the base branch into this branch and resolves the conflicts',
+  resolve_conflict: 'Asks the Claude GitHub App, in a PR comment, to merge the base branch into this branch and resolve the conflicts',
 };
 
 const { POSTPLAN_NOT_AT_HEAD } = machine;
@@ -166,11 +166,11 @@ export const GlobDialog = ({
           {glob.failure !== null && (
             <p className='rounded border border-red/40 bg-red/10 p-2 text-sm'>Failed: {glob.failure.reason}</p>
           )}
-          {glob.failure?.conflict !== undefined && glob.implementer !== null && (
+          {(glob.failure?.conflict ?? glob.conflict) != null && glob.implementer !== null && (
             <div className='grid gap-1 rounded border border-edge p-2 text-sm'>
               <span>Resolve it locally, then push (Start again stays available):</span>
               <code className='block whitespace-pre-wrap font-mono text-xs'>
-                {`git fetch origin ${glob.failure.conflict.base} && git checkout ${glob.branch} && git merge origin/${glob.failure.conflict.base}\n# resolve the conflicts, commit\ngit push origin ${glob.branch}`}
+                {`sstor --glob ${glob.id} --resolve\n# or by hand:\ngit fetch origin ${(glob.failure?.conflict ?? glob.conflict)?.base ?? ''} && git checkout ${glob.branch} && git merge origin/${(glob.failure?.conflict ?? glob.conflict)?.base ?? ''}\n# resolve the conflicts, commit\ngit push origin ${glob.branch}`}
               </code>
             </div>
           )}

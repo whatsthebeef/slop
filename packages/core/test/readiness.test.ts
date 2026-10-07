@@ -104,6 +104,20 @@ describe('stuck hints on cards', () => {
     expect(stuckHint(sub({ headChecks: { sha: head, state: 'passed' } }), later)).toMatch(/passed but slop hasn't merged/);
   });
 
+  it('says which glob caused a conflict, and suggests resolving locally when needed', () => {
+    const conflict = { base: 'main', files: ['a.ts', 'b.ts'], since: 's1t2', at: NOW };
+    const open = sub({ status: 'in_progress', conflict });
+    expect(stuckHint(open, NOW)).toBe('Conflicts with main since s1t2 merged: a.ts, b.ts');
+    expect(stuckHint(sub({ conflict: { ...conflict, since: null, files: [] } }), NOW)).toBe('Conflicts with main');
+    // Asked the Claude GitHub App, and the PR still conflicts later.
+    const asked = sub({ conflict: { ...conflict, requestedAt: NOW } });
+    expect(stuckHint(asked, NOW)).not.toMatch(/Resolve locally/);
+    expect(stuckHint(asked, later)).toMatch(/Resolve locally: sstor --glob s1t1 --resolve/);
+    // A human implementer resolves locally from the start; a cleared conflict shows nothing.
+    expect(stuckHint(sub({ conflict, implementer: 'dev@example.com' }), NOW)).toMatch(/Resolve locally/);
+    expect(stuckHint(sub({ conflict: null }), NOW)).toBeNull();
+  });
+
   it('shows the fix for a known routine failure, and nothing for ordinary globs', () => {
     expect(stuckHint(glob({ failure: { reason: 'Repository not found', at: NOW } }), later)).toMatch(/routine's repositories/);
     expect(stuckHint(glob({ status: 'in_progress' }), later)).toBeNull();

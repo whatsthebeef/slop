@@ -65,8 +65,6 @@ export interface Run {
   /** The cloud session started by the fire request, for Open in Claude and Continue locally. */
   readonly sessionId: string | null;
   readonly sessionUrl: string | null;
-  /** Set on a run started by Resolve conflict: the base branch to merge into the glob's branch. */
-  readonly resolveConflictWith?: string;
 }
 
 export type PrState = 'draft' | 'ready' | 'closed' | 'merged';
@@ -113,6 +111,15 @@ export interface MergeConflict {
   readonly files: readonly string[];
 }
 
+/** A conflict between an open PR and the base branch, found after a merge or when a merge failed on one. */
+export interface OpenConflict extends MergeConflict {
+  /** The glob whose merge caused it; null when not known (a failed merge). */
+  readonly since: string | null;
+  readonly at: string;
+  /** When Resolve conflict asked the Claude GitHub App to fix it; one request per conflict. */
+  readonly requestedAt?: string;
+}
+
 export interface Glob {
   readonly id: string;
   readonly boardId: number;
@@ -140,6 +147,8 @@ export interface Glob {
   /** Every routine run, oldest first; the last one is the current run. */
   readonly runs: readonly Run[];
   readonly failure: Failure | null;
+  /** Set while the open PR conflicts with the base branch; cleared when it merges cleanly again. */
+  readonly conflict?: OpenConflict | null;
   readonly provisioning: ProvisioningState;
   readonly createdAt: string;
   readonly updatedAt: string;
