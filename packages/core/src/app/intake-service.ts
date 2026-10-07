@@ -33,6 +33,8 @@ export class LlmUnavailable extends Error {
     readonly reason: string,
     /** What a person can do about it; never secrets or raw provider messages. */
     readonly fix: string,
+    /** Set when the cause is an expired SSO sign-in, which a person can redo in the app (see `signInOffered`). */
+    readonly code?: 'sso_expired',
   ) {
     super(`${reason}. ${fix}`);
     this.name = 'LlmUnavailable';

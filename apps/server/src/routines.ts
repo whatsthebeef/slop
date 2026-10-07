@@ -41,7 +41,8 @@ export class FileRoutines implements RoutineDirectory {
 export type FireResult =
   | { readonly outcome: 'fired'; readonly sessionId: string | null; readonly sessionUrl: string | null }
   | { readonly outcome: 'retry'; readonly reason: string }
-  | { readonly outcome: 'failed'; readonly reason: string };
+  /** `status` is the HTTP status that refused it, so a rejected credential can be told from a bad request. */
+  | { readonly outcome: 'failed'; readonly reason: string; readonly status: number };
 
 const fireResponse = z.object({
   claude_code_session_id: z.string().optional(),
@@ -72,7 +73,7 @@ export const fireRoutine = async (secret: RoutineSecret, text: string): Promise<
   // Rate limits and server errors are retried with backoff; anything else needs a person.
   return response.status === 429 || response.status >= 500
     ? { outcome: 'retry', reason: message }
-    : { outcome: 'failed', reason: message };
+    : { outcome: 'failed', reason: message, status: response.status };
 };
 
 /** The text a routine run receives: which glob, which run, which repository, and how to start. */

@@ -10,6 +10,7 @@ export * from './domain/sections.js';
 export * from './domain/sub-gate.js';
 export * from './domain/attention.js';
 export * from './domain/readiness.js';
+export * from './domain/integration-health.js';
 export * as deploys from './domain/deploys.js';
 export { DEPLOY_STATES, DEPLOY_TRIGGERS } from './domain/deploys.js';
 export type { Deploy, DeployChange, DeployIndicator, DeployState, DeployTrigger } from './domain/deploys.js';

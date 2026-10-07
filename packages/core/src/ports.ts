@@ -1,6 +1,7 @@
 import type { Deploy, DeployState } from './domain/deploys.js';
 import type { DomainEvent, Effect } from './domain/events.js';
 import type { IdLetter } from './domain/ids.js';
+import type { IntegrationAction, IntegrationHealth, IntegrationId } from './domain/integration-health.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { BaseChecks, Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
@@ -115,7 +116,9 @@ export type Hint =
   | { readonly kind: 'glob.deploys'; readonly boardId: number; readonly globId: string }
   | { readonly kind: 'board.changed'; readonly boardId: number }
   /** The board's KB items, documents or agent-set files changed (the board itself only on an agent-set version bump). */
-  | { readonly kind: 'board.kb'; readonly boardId: number };
+  | { readonly kind: 'board.kb'; readonly boardId: number }
+  /** An integration's health changed (it is server-wide, so every board gets the hint). */
+  | { readonly kind: 'board.health'; readonly boardId: number };
 
 /** Publishes small change hints to open boards after a commit. */
 export interface Notifier {
@@ -149,3 +152,15 @@ export interface RoutineDirectory {
 }
 
 export type { Role };
+
+/** What slop currently knows about each integration it depends on. */
+export interface IntegrationHealthSource {
+  report(): readonly IntegrationHealth[];
+}
+
+/** Where adapters report what their calls learned; only a success or an auth failure changes the state. */
+export interface HealthSink {
+  markOk(id: IntegrationId): void;
+  markDegraded(id: IntegrationId, reason: string, fix: string): void;
+  markDown(id: IntegrationId, reason: string, fix: string, action?: IntegrationAction): void;
+}

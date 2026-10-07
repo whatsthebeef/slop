@@ -5,12 +5,15 @@ import { api, RequestError } from './api';
 import type { GlobView } from './api';
 
 interface Hint {
-  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'glob.deploys' | 'board.changed' | 'board.kb';
+  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'glob.deploys' | 'board.changed' | 'board.kb' | 'board.health';
   readonly globId?: string;
   readonly version?: number;
 }
 
 export type LiveState = 'connecting' | 'live' | 'reconnecting' | 'paused';
+
+/** Integration health (the banner on every board page); refetched on `board.health` hints and every minute. */
+export const healthKey = ['health'] as const;
 
 export const globsKey = (boardId: number) => ['globs', boardId] as const;
 
@@ -43,6 +46,7 @@ const useBoardEvents = (
   boardId: number,
   handlers: { onHint: (hint: Hint) => void; onReconnect: () => void },
 ): LiveState => {
+  const client = useQueryClient();
   const [state, setState] = useState<LiveState>('connecting');
   // The latest handlers, without reopening the stream when they change.
   const latest = useRef(handlers);
@@ -59,10 +63,18 @@ const useBoardEvents = (
       const next = new EventSource(`/api/boards/${boardId}/events`);
       next.addEventListener('ready', () => {
         setState('live');
-        if (connectedBefore) latest.current.onReconnect();
+        if (connectedBefore) {
+          void client.invalidateQueries({ queryKey: healthKey });
+          latest.current.onReconnect();
+        }
         connectedBefore = true;
       });
-      next.addEventListener('hint', (event: MessageEvent<string>) => latest.current.onHint(JSON.parse(event.data) as Hint));
+      next.addEventListener('hint', (event: MessageEvent<string>) => {
+        const hint = JSON.parse(event.data) as Hint;
+        // Every page shows the integration banner, so this is handled here rather than per page.
+        if (hint.kind === 'board.health') void client.invalidateQueries({ queryKey: healthKey });
+        else latest.current.onHint(hint);
+      });
       next.onerror = () => setState('reconnecting');
       source = next;
     };
@@ -88,7 +100,7 @@ const useBoardEvents = (
       document.removeEventListener('visibilitychange', onVisibility);
       close();
     };
-  }, [boardId]);
+  }, [boardId, client]);
 
   return state;
 };

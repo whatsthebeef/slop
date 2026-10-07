@@ -1,6 +1,6 @@
 import { App } from '@octokit/app';
-import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
-import { machine } from '@slop/core';
+import type { CheckFailure, DiffSummary, Glob, HealthSink } from '@slop/core';
+import { classifyHttpAuthFailure, machine } from '@slop/core';
 import type { CodeHost, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
 import { readCommitChecks } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
@@ -12,6 +12,8 @@ const status = (error: unknown): number | null =>
   typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number'
     ? error.status
     : null;
+
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : '');
 
 const isStatus = (error: unknown, ...codes: number[]) => {
   const code = status(error);
@@ -28,7 +30,11 @@ export class GitHub implements CodeHost {
   private app: App | null = null;
   private appId: number | null = null;
 
-  constructor(private readonly credentials: AppCredentialsStore) {}
+  constructor(
+    private readonly credentials: AppCredentialsStore,
+    /** Told whether the App authenticates, for the board's integration banner. */
+    private readonly health: HealthSink | null = null,
+  ) {}
 
   get configured(): boolean {
     return this.credentials.get() !== null;
@@ -36,7 +42,10 @@ export class GitHub implements CodeHost {
 
   private getApp(): App {
     const credentials = this.credentials.get();
-    if (credentials === null) throw new Error('The GitHub App is not set up (/setup/github-app)');
+    if (credentials === null) {
+      this.health?.markDegraded('github_app', "The GitHub App isn't set up", 'Set it up at /setup/github-app');
+      throw new Error('The GitHub App is not set up (/setup/github-app)');
+    }
     if (this.app === null || this.appId !== credentials.id) {
       this.app = new App({ appId: credentials.id, privateKey: credentials.pem });
       this.appId = credentials.id;
@@ -51,7 +60,9 @@ export class GitHub implements CodeHost {
     const installUrl = `https://github.com/apps/${credentials.slug}/installations/new`;
     try {
       // 404 when the app is not installed on the account, or the installation excludes the repo.
-      await this.getApp().octokit.request('GET /repos/{owner}/{repo}/installation', { owner: repo.owner, repo: repo.name });
+      await this.reporting(() =>
+        this.getApp().octokit.request('GET /repos/{owner}/{repo}/installation', { owner: repo.owner, repo: repo.name }),
+      );
       const octokit = await this.octokit(repo);
       await octokit.request('GET /repos/{owner}/{repo}', { owner: repo.owner, repo: repo.name });
       return { configured: true, connected: true, installUrl, appName: credentials.slug };
@@ -62,18 +73,38 @@ export class GitHub implements CodeHost {
     }
   }
 
+  /**
+   * Runs a call that authenticates as the App (its JWT, then an installation token): success says
+   * the credential works, a rejected credential marks the App down, and any other failure (404,
+   * rate limits, outages) says nothing about it.
+   */
+  private async reporting<T>(call: () => Promise<T>): Promise<T> {
+    try {
+      const result = await call();
+      this.health?.markOk('github_app');
+      return result;
+    } catch (error) {
+      const failure = classifyHttpAuthFailure(status(error), 'github', messageOf(error));
+      if (failure !== null) this.health?.markDown('github_app', failure.reason, failure.fix);
+      else if (isStatus(error, 404)) this.health?.markOk('github_app');
+      throw error;
+    }
+  }
+
   private async octokit(repo: Repo): Promise<Octokit> {
     const key = `${repo.owner}/${repo.name}`;
     const cached = this.installations.get(key);
     if (cached !== undefined) return cached;
-    const app = this.getApp();
-    const { data } = await app.octokit.request('GET /repos/{owner}/{repo}/installation', {
-      owner: repo.owner,
-      repo: repo.name,
+    return this.reporting(async () => {
+      const app = this.getApp();
+      const { data } = await app.octokit.request('GET /repos/{owner}/{repo}/installation', {
+        owner: repo.owner,
+        repo: repo.name,
+      });
+      const octokit = await app.getInstallationOctokit(data.id);
+      this.installations.set(key, octokit);
+      return octokit;
     });
-    const octokit = await app.getInstallationOctokit(data.id);
-    this.installations.set(key, octokit);
-    return octokit;
   }
 
   /**

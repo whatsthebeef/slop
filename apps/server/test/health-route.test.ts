@@ -9,6 +9,7 @@ import { createApp } from '../src/http/app.js';
 import type { Env } from '../src/http/app.js';
 import { mountHealth } from '../src/http/health.js';
 import { OutboxRunner } from '../src/jobs/outbox.js';
+import { IntegrationRegistry } from '../src/integration-health.js';
 import { LlmHealth } from '../src/llm-health.js';
 import { HintHub } from '../src/notifier.js';
 import { SignedLinks } from '../src/signed-links.js';
@@ -20,6 +21,7 @@ describe('GET /api/health', () => {
   let app: Hono<Env>;
   let boards: BoardService;
   const health = new LlmHealth(undefined, () => '2026-10-07T09:00:00.000Z');
+  const integrations = new IntegrationRegistry(undefined, () => '2026-10-07T09:00:00.000Z');
 
   beforeAll(async () => {
     ({ database, drop } = await createTestDatabase('health_route'));
@@ -44,7 +46,7 @@ describe('GET /api/health', () => {
       outbox: new OutboxRunner(db, { globs }, {}, () => undefined),
       onBoardCreated: () => Promise.resolve(),
     });
-    mountHealth(app, { llm: health, boards });
+    mountHealth(app, { llm: health, boards, integrations, awsSignInAvailable: true });
     await store.transaction((tx) => tx.upsertUser({ email: 'member@example.com', name: 'Member', active: true }));
     const created = await boards.create('member@example.com', { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
     if (!created.ok) throw new Error(created.error.message);
@@ -69,15 +71,32 @@ describe('GET /api/health', () => {
     const signedIn = { authorization: 'Bearer dev:member@example.com' };
     const before = await get(signedIn);
     expect(before.status).toBe(200);
-    expect(await before.json()).toEqual({ llm: { state: 'unknown' } });
+    expect(await before.json()).toEqual({
+      llm: { state: 'unknown' },
+      integrations: [],
+      awsSignIn: { available: true, canStart: true },
+    });
 
     const tracked = health.track(
       { complete: () => Promise.reject(new LlmUnavailable('AWS sign-in expired', 'Run `aws sso login`')) },
       'us.anthropic.claude-opus-5-5',
     );
     await expect(tracked.complete({ system: 's', prompt: 'p', maxTokens: 1 })).rejects.toBeInstanceOf(LlmUnavailable);
-    expect(await (await get(signedIn)).json()).toEqual({
+    expect(await (await get(signedIn)).json()).toMatchObject({
       llm: { state: 'down', reason: 'AWS sign-in expired', fix: 'Run `aws sso login`', since: '2026-10-07T09:00:00.000Z' },
     });
+  });
+
+  it('lists the integrations that have something to say, with the fix and the sign-in action, and no more', async () => {
+    integrations.markDown('github_app', "GitHub App can't authenticate", 'Re-run /setup/github-app', undefined);
+    integrations.markDown('bedrock', 'AWS sign-in expired', 'Run `aws sso login`', 'aws_sign_in');
+    const body: unknown = await (await get({ authorization: 'Bearer dev:member@example.com' })).json();
+    expect(body).toMatchObject({
+      integrations: [
+        { id: 'github_app', state: 'down', reason: "GitHub App can't authenticate", fix: 'Re-run /setup/github-app' },
+        { id: 'bedrock', state: 'down', action: 'aws_sign_in', since: '2026-10-07T09:00:00.000Z' },
+      ],
+    });
+    expect(JSON.stringify(body)).not.toMatch(/arn:|profile|token|secret/i);
   });
 });

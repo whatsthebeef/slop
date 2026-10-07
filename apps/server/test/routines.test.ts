@@ -1,8 +1,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FileRoutines, runInstructions } from '../src/routines.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FileRoutines, fireRoutine, runInstructions } from '../src/routines.js';
 
 describe('routine directory', () => {
   let dir = '';
@@ -59,5 +59,26 @@ describe('routine run instructions', () => {
 
   it('leave the repository out for a board without one', () => {
     expect(runInstructions(glob, 'run-1', null)).not.toContain('Repository:');
+  });
+});
+
+describe('fireRoutine', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const fireWith = (status: number) => {
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response(JSON.stringify({}), { status })));
+    return fireRoutine({ url: 'https://example.com/fire', token: 't' }, 'go');
+  };
+
+  it('returns the refusing status when a credential is rejected, so it can be told from a bad request', async () => {
+    expect(await fireWith(401)).toEqual({ outcome: 'failed', reason: 'Routine fire failed (401)', status: 401 });
+    expect(await fireWith(403)).toMatchObject({ outcome: 'failed', status: 403 });
+  });
+
+  it('retries rate limits and outages instead of failing', async () => {
+    expect((await fireWith(429)).outcome).toBe('retry');
+    expect((await fireWith(503)).outcome).toBe('retry');
   });
 });

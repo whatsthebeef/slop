@@ -13,6 +13,7 @@ import type {
   ReadinessItem,
   Environment,
   Glob,
+  IntegrationHealth,
   KbItem,
   KbProposalList,
   LabelCommand,
@@ -94,6 +95,25 @@ export interface ArtifactView {
   readonly provenance: { readonly by: string; readonly actor: string };
 }
 
+/** `/api/health`: what the board's integration banner shows. */
+export interface HealthView {
+  readonly integrations: readonly IntegrationHealth[];
+  readonly awsSignIn: { readonly available: boolean; readonly canStart: boolean };
+}
+
+/** The AWS sign-in flow as the server reports it (no device code or secret ever reaches the page). */
+export type AwsSignInView =
+  | { readonly state: 'idle' }
+  | {
+      readonly state: 'waiting';
+      readonly verificationUri: string;
+      readonly verificationUriComplete: string;
+      readonly userCode: string;
+      readonly expiresAt: string;
+    }
+  | { readonly state: 'done' }
+  | { readonly state: 'failed'; readonly message: string };
+
 export interface ApiError {
   readonly code: string;
   readonly message: string;
@@ -162,6 +182,9 @@ export const api = {
     request<{ email: string; returnTo: string }>('POST', '/auth/dev-login', { email, returnTo }),
   logout: () => request<object>('POST', '/auth/logout'),
   me: () => request<{ email: string; boards: BoardView[] }>('GET', '/api/me'),
+  health: () => request<HealthView>('GET', '/api/health'),
+  awsSignInStart: () => request<AwsSignInView>('POST', '/api/aws-sign-in'),
+  awsSignInStatus: () => request<AwsSignInView>('GET', '/api/aws-sign-in'),
 
   createBoard: (input: { name: string; repo: string | null; baseBranch: string; timeZone: string; environments: Environment[] }) =>
     request<Board>('POST', '/api/boards', input),

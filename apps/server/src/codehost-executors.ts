@@ -1,7 +1,7 @@
-import type { Board, BoardService, CheckFailure, EffectKind, Glob, GlobService } from '@slop/core';
+import type { Board, BoardService, CheckFailure, EffectKind, Glob, GlobService, HealthSink } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { FileRoutines } from './routines.js';
-import { machine, parseId, subGatePolicy } from '@slop/core';
+import { classifyHttpAuthFailure, machine, parseId, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -18,6 +18,7 @@ export const codeHostExecutors = (
   routines: FileRoutines,
   boards: Pick<BoardService, 'recordBaseChecks'>,
   now: () => string = () => new Date().toISOString(),
+  health: HealthSink | null = null,
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -314,9 +315,12 @@ export const codeHostExecutors = (
       const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`));
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
+        const rejected = classifyHttpAuthFailure(result.status, 'routine');
+        if (rejected !== null) health?.markDown('routines', rejected.reason, rejected.fix);
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));
         return 'done';
       }
+      health?.markOk('routines');
       await globs.applyEvent(glob.id, (g, ctx) =>
         machine.runFired(g, { runId: effect.runId, sessionId: result.sessionId, sessionUrl: result.sessionUrl }, ctx),
       );

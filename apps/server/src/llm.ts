@@ -33,7 +33,7 @@ const signInFix = (profile: string | undefined): string =>
 const unloadedCredentials = (profile: string | undefined): LlmUnavailable =>
   profile === undefined
     ? new LlmUnavailable("The server's AWS credentials couldn't be loaded", "Check the server's IAM role (or its AWS environment credentials)")
-    : new LlmUnavailable('AWS sign-in expired', signInFix(profile));
+    : new LlmUnavailable('AWS sign-in expired', signInFix(profile), 'sso_expired');
 
 /** Bedrock's own wording for a model ID it can't use (it writes "isn’t" with a typographic apostrophe), and nothing broader. */
 const MODEL_ID_INVALID =
@@ -68,12 +68,12 @@ export const classifyBedrockError = (error: unknown, site: CallSite): LlmUnavail
         );
       }
       if (/expired|sso|re-?authenticate|aws login/i.test(message)) {
-        return new LlmUnavailable('AWS sign-in expired', signInFix(site.profile));
+        return new LlmUnavailable('AWS sign-in expired', signInFix(site.profile), 'sso_expired');
       }
       return unloadedCredentials(site.profile);
     case 'ExpiredTokenException':
     case 'ExpiredToken':
-      return new LlmUnavailable('AWS sign-in expired', signInFix(site.profile));
+      return new LlmUnavailable('AWS sign-in expired', signInFix(site.profile), 'sso_expired');
     case 'UnrecognizedClientException':
       return new LlmUnavailable('AWS credentials are not valid', signInFix(site.profile));
     case 'AccessDeniedException':
