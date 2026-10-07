@@ -12,7 +12,7 @@ import type { HintHub } from '../notifier.js';
 import type { SignedLinks } from '../signed-links.js';
 import { labelCommandSchema } from './labels.js';
 import { requestOrigin } from './origin.js';
-import { checkSignInState, issueSignInState } from './sign-in-state.js';
+import { checkSignInState, issueSignInState, safeReturnPath } from './sign-in-state.js';
 import { errorBody, globView, globViewFor, onBoard, statusOf } from './views.js';
 
 export interface AppDeps {
@@ -130,12 +130,12 @@ export const createApp = (deps: AppDeps) => {
 
   if (auth.config.AUTH_MODE === 'dev') {
     app.post('/auth/dev-login', async (c) => {
-      const body = await parse(c, z.object({ email: z.email(), name: z.string().optional() }));
+      const body = await parse(c, z.object({ email: z.email(), name: z.string().optional(), returnTo: z.string().optional() }));
       if (body instanceof Response) return body;
       const email = body.email.toLowerCase();
       const session = await auth.createSession({ email, name: body.name ?? email });
       setCookie(c, SESSION_COOKIE, session, { httpOnly: true, sameSite: 'Lax', path: '/', maxAge: SESSION_MAX_AGE });
-      return c.json({ email });
+      return c.json({ email, returnTo: safeReturnPath(body.returnTo) });
     });
   }
 
@@ -143,7 +143,7 @@ export const createApp = (deps: AppDeps) => {
 
   if (auth.config.AUTH_MODE === 'cognito') {
     app.get('/auth/login', (c) => {
-      const { state, nonce } = issueSignInState(deps.links);
+      const { state, nonce } = issueSignInState(deps.links, c.req.query('returnTo'));
       setCookie(c, STATE_COOKIE, nonce, { httpOnly: true, sameSite: 'Lax', path: '/auth', maxAge: 600 });
       return c.redirect(auth.authorizeUrl(state, auth.boardRedirectUri(originOf(c))));
     });
@@ -175,7 +175,7 @@ export const createApp = (deps: AppDeps) => {
         secure: originOf(c).startsWith('https:'),
         maxAge: SESSION_MAX_AGE,
       });
-      return c.redirect('/');
+      return c.redirect(check.returnTo);
     });
   }
 

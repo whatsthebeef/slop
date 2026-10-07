@@ -158,7 +158,8 @@ export type ActionPath =
 
 export const api = {
   authConfig: () => request<{ mode: 'dev' | 'cognito' }>('GET', '/auth/config'),
-  devLogin: (email: string) => request<{ email: string }>('POST', '/auth/dev-login', { email }),
+  devLogin: (email: string, returnTo?: string) =>
+    request<{ email: string; returnTo: string }>('POST', '/auth/dev-login', { email, returnTo }),
   logout: () => request<object>('POST', '/auth/logout'),
   me: () => request<{ email: string; boards: BoardView[] }>('GET', '/api/me'),
 
