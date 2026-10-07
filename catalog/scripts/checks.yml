@@ -1,0 +1,31 @@
+# Slop checks: the repo's own checks on every ready PR (sub, same or super), reported as the
+# `checks` check run, including on the head after slop updates the branch. Make `checks` a
+# required status check on the base branch (setup-repo.sh --protect checks sub-gate). Copy to
+# .github/workflows/checks.yml and adjust the check steps to the project's build doc.
+name: checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install
+        run: if [ -f package-lock.json ]; then npm ci; elif [ -f package.json ]; then npm install --no-audit --no-fund; fi
+      - name: Lint
+        run: npm run lint --if-present
+      - name: Type check
+        run: npm run typecheck --if-present
+      - name: Test
+        run: npm test --if-present

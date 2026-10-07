@@ -116,7 +116,7 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     facts.subGateWorkflow === null
       ? item('sub_gate', 'Sub-gate workflow', 'unknown', "slop can't read the repo yet", null)
       : facts.subGateWorkflow
-        ? item('sub_gate', 'Sub-gate workflow', 'ok', `${subGatePath} is on ${board.baseBranch}; make sub-gate a required status check on ${board.baseBranch} so merges honour it`, null)
+        ? item('sub_gate', 'Sub-gate workflow', 'ok', `${subGatePath} is on ${board.baseBranch}; make checks (.github/workflows/checks.yml, run on every PR) and sub-gate required status checks on ${board.baseBranch} so merges honour them`, null)
         : item('sub_gate', 'Sub-gate workflow', 'missing', `Subs can't merge themselves without ${subGatePath} on ${board.baseBranch}`, {
             kind: 'link',
             label: 'Add the workflow',
