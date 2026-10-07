@@ -13,3 +13,4 @@ cdk.out/
 .routines.json
 .slop-dev
 .slop-dev-snapshots/
+.donotcommit.txt
