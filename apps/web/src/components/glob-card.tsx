@@ -81,17 +81,61 @@ export const GroupChip = ({ name }: { name: string }) => {
   );
 };
 
+/** Cut to one line of at most `max` characters. */
+const oneLine = (text: string, max = 90): string => {
+  const line = (text.split('\n')[0] ?? '').trim();
+  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+};
+
+/** The first sentence of a stuck hint, without its "Fix: …" advice. */
+const hintSentence = (hint: string): string => oneLine((hint.split(/\.\s|\s+Fix:/)[0] ?? hint).replace(/\.$/, ''));
+
+interface StatusLine {
+  readonly kind: 'base-red' | 'checks' | 'failure' | 'stuck';
+  readonly text: string;
+  readonly tone: string;
+  readonly tip: string;
+}
+
+/** The one problem a card shows, in plain words, most important first; the rest go in its tooltip. */
+const statusLine = (glob: GlobView, hint: string | null, checks: ReturnType<typeof checksExplanation>): StatusLine | null => {
+  const failed = glob.status === 'failed' || glob.failure !== null;
+  const reason = glob.failure?.reason ?? 'Routine run failed';
+  const session = glob.currentRun?.sessionUrl ?? null;
+  const candidates: StatusLine[] = [];
+  if (checks !== null) {
+    const details = [checks.text, ...checks.lines.slice(1, 4), checks.url ?? ''].filter((l) => l !== '');
+    if (checks.inherited) {
+      const head = /^(.*?not this glob's change)/.exec(checks.text)?.[1] ?? "The base branch is red: not this glob's change";
+      candidates.push({ kind: 'base-red', text: oneLine(head), tone: 'text-required', tip: details.join('\n') });
+    } else {
+      const failure = glob.headChecks?.failure;
+      const first = failure?.lines[0];
+      const text = failure === undefined ? 'Checks failed' : first === undefined ? `${failure.name} failed` : `${failure.name} failed: ${first}`;
+      candidates.push({ kind: 'checks', text: oneLine(text), tone: 'text-red', tip: details.join('\n') });
+    }
+  }
+  if (failed) {
+    const tip = `${reason}${glob.failure?.reason.startsWith('Routine run never started') === true && session !== null ? `\nSession: ${session}` : ''}`;
+    candidates.push({ kind: 'failure', text: oneLine(reason), tone: 'text-red', tip });
+  }
+  if (hint !== null) candidates.push({ kind: 'stuck', text: hintSentence(hint), tone: 'text-required', tip: hint });
+  const [top, ...rest] = candidates;
+  if (top === undefined) return null;
+  const ALSO = { 'base-red': 'the base branch is red', checks: 'checks failed', failure: 'the routine run failed', stuck: 'looks stuck' } as const;
+  const also = rest.length === 0 ? '' : `\nAlso: ${rest.map((c) => ALSO[c.kind]).join(', ')}`;
+  return { ...top, tip: `${top.tip}${also}` };
+};
+
 const RunIndicator = ({ glob }: { glob: GlobView }) => {
   const run = glob.currentRun;
-  if (run === null) return null;
-  const label = run.state === 'ended' ? (run.outcome ?? 'ended') : run.state;
+  // Ended runs are covered by the status line.
+  if (run === null || run.state === 'ended') return null;
+  const label = run.state;
   return (
     <Tip text={queuedRunNotice(glob, new Date().toISOString()) ?? `Routine run ${label}: owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`}>
     <span
-      className={cn(
-        'inline-flex items-center gap-1 font-mono text-[11px]',
-        run.outcome === 'failed' ? 'text-red' : 'text-muted-foreground',
-      )}
+      className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground'
     >
       {run.state === 'active' ? <Loader2 className='h-3 w-3 animate-spin' /> : <Bot className='h-3 w-3' />}
       {label}
@@ -247,6 +291,7 @@ export const GlobCard = ({
   const age = aging(glob);
   const hint = stuckHint(glob, new Date().toISOString());
   const checks = checksExplanation(glob);
+  const status = statusLine(glob, hint, checks);
   const preview = moves.find((m) => m.action === previewing);
 
   return (
@@ -298,26 +343,11 @@ export const GlobCard = ({
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         {deploy !== undefined && <DeployChip deploy={deploy} />}
-        {hint !== null && (
-          <Tip text={hint}>
-            <span className='font-mono text-[11px] text-required' data-testid='stuck-hint'>
-              stuck?
+        {status !== null && (
+          <Tip text={status.tip}>
+            <span className={cn('font-mono text-[11px]', status.tone)} data-testid='status-line' data-kind={status.kind}>
+              {status.text}
             </span>
-          </Tip>
-        )}
-        {checks !== null && (
-          <Tip text={[checks.text, ...checks.lines.slice(1, 4), checks.url ?? ''].filter((l) => l !== '').join('\n')}>
-            <span
-              className={cn('font-mono text-[11px]', checks.inherited ? 'text-required' : 'font-semibold text-red')}
-              data-testid='checks-failed'
-            >
-              {checks.inherited ? 'base is red' : 'checks failed'}
-            </span>
-          </Tip>
-        )}
-        {failed && (
-          <Tip text={`Failed: ${glob.failure?.reason ?? 'the routine run failed'}${glob.failure?.reason.startsWith('Routine run never started') === true && glob.currentRun?.sessionUrl != null ? `. Session: ${glob.currentRun.sessionUrl}` : ''}`}>
-            <span className='font-mono text-[11px] font-semibold text-red'>! failed</span>
           </Tip>
         )}
         {age !== 'neutral' && glob.pr?.state === 'draft' && (
