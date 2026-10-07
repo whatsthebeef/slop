@@ -1,4 +1,4 @@
-import { invalidInput, ok } from '../domain/errors.js';
+import { invalidInput, llmUnavailable, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { isValidCombination } from '../domain/matrix.js';
 import { CATEGORIES, SLOP_TYPES } from '../domain/types.js';
@@ -20,6 +20,23 @@ export interface LlmRequest {
 
 export interface Llm {
   complete(request: LlmRequest): Promise<string>;
+}
+
+/**
+ * The model can't be used for reasons outside the request: the adapter's credentials expired or
+ * are missing, or it lacks access to the model. Retrying won't help until someone acts on `fix`,
+ * unlike throttling, timeouts and model errors, which adapters throw as ordinary errors.
+ */
+export class LlmUnavailable extends Error {
+  constructor(
+    /** What is wrong, in plain language (e.g. "AWS sign-in expired"). */
+    readonly reason: string,
+    /** What a person can do about it; never secrets or raw provider messages. */
+    readonly fix: string,
+  ) {
+    super(`${reason}. ${fix}`);
+    this.name = 'LlmUnavailable';
+  }
 }
 
 export interface IntakeInput {
@@ -113,8 +130,14 @@ export class IntakeService {
       'Request:',
       input.text.trim(),
     ].join('\n');
-    const answer = parseJson(await this.deps.llm.complete({ system: INTAKE_SYSTEM, prompt, maxTokens: 1200 }));
-    return ok(this.validate(answer, input, groups, environments));
+    let completion: string;
+    try {
+      completion = await this.deps.llm.complete({ system: INTAKE_SYSTEM, prompt, maxTokens: 1200 });
+    } catch (error) {
+      if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
+      throw error;
+    }
+    return ok(this.validate(parseJson(completion), input, groups, environments));
   }
 
   private validate(

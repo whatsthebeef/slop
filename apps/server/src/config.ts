@@ -54,10 +54,14 @@ const schema = z.object({
   BEDROCK_REGION: z.string().default('us-east-1'),
   /** Haiku 4.5 for intake and classification. */
   INTAKE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
-  /** Haiku 4.5 routes and deduplicates submitted KB items. */
-  KB_ROUTE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
-  /** Sonnet 5.5 (US cross-region inference profile) drafts KB changes. Override in apps/server/.env.local if Bedrock names it differently. */
-  KB_DRAFT_MODEL: z.string().default('us.anthropic.claude-sonnet-5-5'),
+  /**
+   * Opus 5.5 (US cross-region inference profile) routes and deduplicates submitted KB items: the KB
+   * pipeline is the most important part of the system. Override in apps/server/.env.local if Bedrock
+   * names it differently.
+   */
+  KB_ROUTE_MODEL: z.string().default('us.anthropic.claude-opus-5-5'),
+  /** Opus 5.5 (US cross-region inference profile) drafts KB changes. */
+  KB_DRAFT_MODEL: z.string().default('us.anthropic.claude-opus-5-5'),
 });
 
 export type Config = z.infer<typeof schema>;

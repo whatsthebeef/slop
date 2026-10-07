@@ -51,6 +51,8 @@ export const statusOf = (error: DomainError): ContentfulStatusCode => {
     case 'invalid_combination':
     case 'invalid_input':
       return 422;
+    case 'llm_unavailable':
+      return 503;
   }
 };
 

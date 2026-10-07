@@ -25,6 +25,8 @@ import { mountDeploys } from './http/deploys.js';
 import { mountReadiness } from './http/readiness.js';
 import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
+import { LlmHealth } from './llm-health.js';
+import { mountHealth } from './http/health.js';
 import { FileRoutines } from './routines.js';
 import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
@@ -88,15 +90,24 @@ const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub })
 const artifacts = new ArtifactService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
-const intake = new IntakeService({ store, llm: new BedrockLlm(config.INTAKE_MODEL, config.BEDROCK_REGION, logUsage) });
+// Credential and access failures mark the LLM down. The hub only fans out per board, so the change
+// reaches open boards as a board.changed hint on each.
+const llmHealth = new LlmHealth((h) => {
+  console.log(h.state === 'down' ? `[llm] unavailable: ${h.reason}. ${h.fix}` : `[llm] ${h.state}`);
+  for (const boardId of hub.boardIds()) hub.publish({ kind: 'board.changed', boardId });
+});
+const intake = new IntakeService({
+  store,
+  llm: llmHealth.track(new BedrockLlm(config.INTAKE_MODEL, config.BEDROCK_REGION, logUsage)),
+});
 const kbPipeline = new KbPipeline({
   store,
   clock,
   catalog,
   notifier: hub,
-  route: new BedrockLlm(config.KB_ROUTE_MODEL, config.BEDROCK_REGION, logUsage),
-  // Sonnet 5.5 takes no sampling parameters other than the defaults.
-  draft: new BedrockLlm(config.KB_DRAFT_MODEL, config.BEDROCK_REGION, logUsage, null),
+  // Opus 5.5 takes no sampling parameters other than the defaults.
+  route: llmHealth.track(new BedrockLlm(config.KB_ROUTE_MODEL, config.BEDROCK_REGION, logUsage, null)),
+  draft: llmHealth.track(new BedrockLlm(config.KB_DRAFT_MODEL, config.BEDROCK_REGION, logUsage, null)),
 });
 
 if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
@@ -118,6 +129,7 @@ const app = createApp({
 mountDeploys(app, { deploys, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
 mountKnowledge(app, { knowledge, artifacts, catalog, intake, boards, host: github });
+mountHealth(app, { llm: llmHealth });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
 const agentSetValues = { SLOP_URL: config.PUBLIC_URL, COGNITO_CLAUDE_CODE_CLIENT_ID: config.CLAUDE_CODE_CLIENT_ID };

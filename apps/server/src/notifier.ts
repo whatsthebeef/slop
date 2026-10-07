@@ -10,6 +10,11 @@ export class HintHub implements Notifier {
     for (const listener of this.listeners.get(hint.boardId) ?? []) listener(hint);
   }
 
+  /** Boards with an open event stream (a hint that isn't about one board goes to each of these). */
+  boardIds(): number[] {
+    return [...this.listeners.keys()];
+  }
+
   subscribe(boardId: number, listener: Listener): () => void {
     const set = this.listeners.get(boardId) ?? new Set<Listener>();
     set.add(listener);
