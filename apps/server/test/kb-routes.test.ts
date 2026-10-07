@@ -5,12 +5,14 @@ import {
   GlobService,
   IntakeService,
   KnowledgeService,
+  LearningJobService,
   MAX_PROCESSING_ATTEMPTS,
+  MiningService,
 } from '@slop/core';
-import type { Catalog, KbItem, Result } from '@slop/core';
+import type { BoardJob, BoardJobStatus, Catalog, KbItem, Result } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { CodeHost } from '../src/codehost.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
@@ -42,6 +44,7 @@ const host: CodeHost = {
   conflictFiles: unused,
   completedCheckRun: unused,
   readFile: unused,
+  commitFiles: unused,
   markReady: unused,
   diffSummary: unused,
   squashMerge: unused,
@@ -100,6 +103,8 @@ describe('KB routes: retrying failed items and catalog updates', () => {
       intake: new IntakeService({ store, llm: { complete: unused } }),
       boards: new BoardService(deps),
       host,
+      jobs: new LearningJobService({ ...deps, mining: new MiningService(deps), manifests: null }),
+      logError: () => undefined,
     });
     boardId = await store.transaction(async (tx) => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
@@ -258,5 +263,92 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     expect(await member.json()).toEqual({ findings: [], byClass: [], pending: 0, failed: 0, sources: { pending: 0, failed: 0 }, waiting: null });
     expect((await get(outsider)).status).toBe(403);
     expect((await get(DEV, 's999t1')).status).toBe(404);
+  });
+
+  it('POST /api/boards/:b/kb/jobs/:job/run runs mining for admins only, and GET lists the last run', async () => {
+    const path = (job: string) => `/api/boards/${String(boardId)}/kb/jobs/${job}/run`;
+    expect((await post(path('mining'), {}, DEV)).status).toBe(403);
+    expect((await post(path('nonsense'), {})).status).toBe(404);
+    expect((await post(path('consolidation'), {})).status).toBe(422);
+
+    // Run now answers 202 with the claimed job and runs it after the response.
+    const response = await post(path('mining'), {});
+    expect(response.status).toBe(202);
+    const job = (await response.json()) as BoardJob;
+    expect(job).toMatchObject({ boardId, job: 'mining', lastRunAt: null });
+    expect(job.runningUntil).not.toBeNull();
+
+    const listJobs = async () => {
+      const listed = await app.request(`/api/boards/${String(boardId)}/kb/jobs`, { headers: { 'x-test-email': DEV } });
+      expect(listed.status).toBe(200);
+      return (await listed.json()) as BoardJob[];
+    };
+    await vi.waitFor(async () => {
+      const [mining] = await listJobs();
+      expect(mining).toMatchObject({ job: 'mining', runningUntil: null, lastResult: { kind: 'mining', raised: [], refreshed: [] } });
+      expect(mining?.lastRunAt).not.toBeNull();
+    });
+    // The lease was released: a second Run now runs again.
+    expect((await post(path('mining'), {})).status).toBe(202);
+    await vi.waitFor(async () => expect((await listJobs())[0]?.runningUntil).toBeNull());
+    expect((await listJobs()).map((j) => j.job)).toEqual(['mining']);
+  });
+
+  it('POST /api/boards/:b/kb/jobs/mining/run answers 202 before the run ends, 409 while it runs, and logs a failed run (s15f8)', async () => {
+    // A run held in its manifest read: the route must answer without waiting for it. The read then fails.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const deps = { store, notifier: { publish: () => undefined }, clock: { now: () => new Date().toISOString() } };
+    const jobs = new LearningJobService({
+      ...deps,
+      mining: new MiningService(deps),
+      manifests: {
+        manifestChanges: () =>
+          held.then(() => {
+            throw new Error('GitHub is down');
+          }),
+      },
+    });
+    const logged: [string, string][] = [];
+    const heldApp = new Hono<Env>();
+    heldApp.use('/api/*', async (c, next) => {
+      c.set('email', ADMIN);
+      await next();
+    });
+    mountKnowledge(heldApp, {
+      knowledge,
+      artifacts: new ArtifactService(deps),
+      findings: new FindingsService(deps),
+      catalog,
+      intake: new IntakeService({ store, llm: { complete: unused } }),
+      boards: new BoardService(deps),
+      host,
+      jobs,
+      logError: (task, message) => logged.push([task, message]),
+    });
+    const heldBoard = await store.transaction(async (tx) => {
+      const board = await tx.insertBoard({ name: 'held', repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] });
+      await tx.upsertMember({ boardId: board.id, email: ADMIN, role: 'admin' });
+      return board.id;
+    });
+    const run = () => heldApp.request(`/api/boards/${String(heldBoard)}/kb/jobs/mining/run`, { method: 'POST' });
+    const getJobs = async () => (await (await heldApp.request(`/api/boards/${String(heldBoard)}/kb/jobs`)).json()) as BoardJobStatus[];
+
+    const started = await run();
+    expect(started.status).toBe(202);
+    const claimed = (await started.json()) as BoardJob;
+    expect(claimed).toMatchObject({ job: 'mining', lastRunAt: null });
+    expect(claimed.runningUntil).not.toBeNull();
+    // Still running: the Knowledge page shows it, and a second Run now is refused.
+    expect((await getJobs())[0]).toMatchObject({ job: 'mining', lastRunAt: null, runningUntil: claimed.runningUntil, running: true });
+    const again = await run();
+    expect(again.status).toBe(409);
+    expect(logged).toEqual([]);
+    release();
+    await vi.waitFor(async () =>
+      expect((await getJobs())[0]).toMatchObject({ runningUntil: null, running: false, lastResult: { kind: 'failed', error: 'GitHub is down' } }),
+    );
+    // The failure reaches the server's error log, as the weekly run's do.
+    await vi.waitFor(() => expect(logged).toEqual([['mining', `board ${String(heldBoard)}: GitHub is down`]]));
   });
 });

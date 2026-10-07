@@ -31,7 +31,7 @@ export const artifactKey = (globId: string, kind: string, label: string) => ['ar
  * Invalidated by `board.kb` (and `board.changed`) hints, on reconnect, and after the page's own writes.
  */
 export const invalidateKnowledge = (client: QueryClient, boardId: number) => {
-  for (const key of ['kb-proposals', 'kb', 'kb-doc', 'kb-agent-file', 'kb-target-text']) {
+  for (const key of ['kb-proposals', 'kb', 'kb-doc', 'kb-agent-file', 'kb-target-text', 'kb-jobs']) {
     void client.invalidateQueries({ queryKey: [key, boardId] });
   }
 };

@@ -1,6 +1,6 @@
 import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, IntakeService, KnowledgeService, Result } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
-import { ARTIFACT_KINDS, CATEGORIES, LABEL_NAMES, LEARNING_TYPES, SLOP_TYPES, STATUSES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, LABEL_NAMES, LEARNING_TYPES, RISK_TIERS, SLOP_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -507,7 +507,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'put_artifact',
     {
       description:
-        'Store an implementation plan, postplan or local review on the glob as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json.',
+        'Store an implementation plan, postplan or local review on the glob as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
       inputSchema: {
         id: z.string(),
         kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
@@ -515,9 +515,17 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         commitSha: z.string().optional(),
         runId: z.string().optional(),
         agentSetVersion: z.number().int().nonnegative().optional(),
+        reviewStats: z
+          .object({
+            riskTier: z.enum(RISK_TIERS),
+            reviewRounds: z.number().int().min(0).max(20),
+            maxReviewRounds: z.number().int().min(0).max(20),
+            testFailRounds: z.number().int().min(0).max(20),
+          })
+          .optional(),
       },
     },
-    async ({ id, kind, content, commitSha, runId, agentSetVersion }) => {
+    async ({ id, kind, content, commitSha, runId, agentSetVersion, reviewStats }) => {
       if (runId !== undefined) {
         // A routine's slop call is progress for its run (and marks a queued run active).
         await deps.globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
@@ -527,6 +535,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           commitSha: commitSha ?? null,
           runId: runId ?? null,
           agentSetVersion: agentSetVersion ?? null,
+          reviewStats: reviewStats ?? null,
         }),
         (a) => ('ignored' in a ? a : { id: a.id, kind: a.kind, version: a.version }),
       );

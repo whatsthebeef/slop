@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeService, KnowledgeService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeService, KnowledgeService, LearningJobService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -72,6 +72,9 @@ export const mountKnowledge = (
     intake: IntakeService;
     boards: BoardService;
     host: CodeHost;
+    jobs: LearningJobService;
+    /** The server's error log (console and the `errors` table), for Run now's background run. */
+    logError: (task: string, message: string) => void;
   },
 ) => {
   const { knowledge, artifacts, catalog } = deps;
@@ -154,6 +157,28 @@ export const mountKnowledge = (
     const parsed = z.coerce.number().int().min(1).max(KB_HISTORY_MAX).optional().safeParse(limit === '' ? undefined : limit);
     if (!parsed.success) return c.json({ code: 'invalid_input', message: `limit is a whole number from 1 to ${KB_HISTORY_MAX}` }, 422);
     return send(c, await knowledge.proposals(c.get('email'), Number(c.req.param('b')), parsed.data));
+  });
+
+  // The board's self-improvement jobs (weekly mining) with their last runs; admins run one now.
+  app.get('/api/boards/:b/kb/jobs', async (c) => send(c, await deps.jobs.jobs(c.get('email'), Number(c.req.param('b')))));
+
+  // Run now starts the job and answers 202 straight away: the job can outlast a request (manifest reads on the
+  // code host), and the `board.kb` hint refreshes the page when it is done.
+  app.post('/api/boards/:b/kb/jobs/:job/run', async (c) => {
+    const boardId = Number(c.req.param('b'));
+    const job = c.req.param('job');
+    const started = await deps.jobs.runNow(c.get('email'), boardId, job);
+    if (!started.ok) return send(c, started);
+    // The run's errors go to the server's error log, as the weekly run's do.
+    void started.value.finished.then(
+      (finished) => {
+        if (finished.lastResult?.kind === 'failed') deps.logError(job, `board ${String(boardId)}: ${finished.lastResult.error}`);
+      },
+      (error: unknown) => {
+        deps.logError(job, `board ${String(boardId)}: recording the run failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+      },
+    );
+    return c.json(started.value.job, 202);
   });
 
   app.post('/api/kb/:itemId/approve', async (c) => {

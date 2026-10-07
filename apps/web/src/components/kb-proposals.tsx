@@ -2,10 +2,12 @@ import { agentSetKind, KB_HISTORY_MAX, KB_HISTORY_PAGE, llmWaitingReason, MAX_PR
 import type {
   AgentSetEntry,
   Approval,
+  BoardJobStatus,
   ContextDiffLine,
   DraftPreview,
   KbItem,
   KbItemView,
+  KbSignal,
   KbTarget,
   KnowledgeKind,
   ProposedDocument,
@@ -13,7 +15,7 @@ import type {
 } from '@slop/core';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { MarkdownView } from '@/components/markdown-view';
@@ -417,6 +419,105 @@ const Evidence = ({ boardId, item }: { boardId: number; item: KbItem }) => (
   </div>
 );
 
+const percent = (rate: number) => `${Math.round(rate * 100)}%`;
+
+/**
+ * A mined item's signal: the figures behind it, as last measured (refreshed weekly while open). Occurrences
+ * show only when they say more than the affected count (several findings or failed commits per glob).
+ */
+const SignalFigures = ({ signal }: { signal: KbSignal }) => {
+  const occurrences = signal.figures.count !== signal.figures.affected;
+  return (
+    <table className='w-fit text-xs' data-testid='signal'>
+      <thead className='text-muted-foreground'>
+        <tr>
+          <th className='pr-4 text-left font-normal'>Signal</th>
+          <th className='pr-4 text-right font-normal'>Affected</th>
+          <th className='pr-4 text-right font-normal'>Of</th>
+          <th className='pr-4 text-right font-normal'>Rate</th>
+          {occurrences && <th className='pr-4 text-right font-normal'>Occurrences</th>}
+          <th className='text-left font-normal'>Window</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td className='pr-4'>
+            {signal.label}
+            {signal.agent !== null && <span className='text-muted-foreground'> ({signal.agent})</span>}
+          </td>
+          <td className='pr-4 text-right tabular-nums'>{signal.figures.affected}</td>
+          <td className='pr-4 text-right tabular-nums'>{signal.figures.eligible}</td>
+          <td className='pr-4 text-right tabular-nums'>{percent(signal.figures.rate)}</td>
+          {occurrences && <td className='pr-4 text-right tabular-nums'>{signal.figures.count}</td>}
+          <td className='text-muted-foreground'>
+            {signal.window.from.slice(0, 10)} – {signal.window.to.slice(0, 10)}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+};
+
+/** Whether a board job's lease is held (it is running on a server now), as the server worked it out. */
+const isJobRunning = (job: BoardJobStatus | undefined): boolean => job?.running ?? false;
+
+/**
+ * The weekly mining run: when it last ran and what it found, or that it is running, with Run now for admins.
+ * Run now starts the job and returns; the `board.kb` hint, reconnects and a slow poll while it runs show the result.
+ */
+const MiningStatus = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const client = useQueryClient();
+  const toast = useToast();
+  const jobs = useQuery({
+    queryKey: ['kb-jobs', boardId],
+    queryFn: () => api.boardJobs(boardId),
+    refetchInterval: (query) => (isJobRunning(query.state.data?.find((j) => j.job === 'mining')) ? PIPELINE_POLL_MS : false),
+  });
+  const run = useMutation({
+    mutationFn: () => api.runBoardJob(boardId, 'mining'),
+    onSuccess: () => {
+      toast('Mining started: the results show here when it is done');
+      refresh(client, boardId);
+    },
+    onError: (e) => {
+      // Someone else's run (another admin, or the weekly one) holds the lease: not a failure.
+      if (e instanceof RequestError && e.body.code === 'run_active') {
+        toast('Mining is already running');
+        refresh(client, boardId);
+      } else toast(message(e));
+    },
+  });
+  const mining = jobs.data?.find((j) => j.job === 'mining');
+  const running = isJobRunning(mining);
+  const leaseEnds = running ? (mining?.runningUntil ?? null) : null;
+  // A run whose server died holds its lease until it expires: refetch then, so the badge clears.
+  useEffect(() => {
+    if (leaseEnds === null) return;
+    const timer = setTimeout(
+      () => void client.invalidateQueries({ queryKey: ['kb-jobs', boardId] }),
+      Math.max(0, Date.parse(leaseEnds) - Date.now()) + 1000,
+    );
+    return () => clearTimeout(timer);
+  }, [client, boardId, leaseEnds]);
+  const result = mining?.lastResult ?? null;
+  const last =
+    mining === undefined || (mining.lastRunAt === null && result === null)
+      ? 'not run yet'
+      : result?.kind === 'failed'
+        ? `the last run failed: ${result.error}`
+        : `last run ${when(mining.lastRunAt)}: ${result?.measured ?? 0} signals measured, ${result?.raised.length ?? 0} raised`;
+  return (
+    <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground' data-testid='mining-status'>
+      <span>Mined weekly · {running ? 'running now…' : last}</span>
+      {admin && (
+        <Button size='sm' variant='outline' disabled={run.isPending || running} onClick={() => run.mutate()}>
+          {run.isPending || running ? 'Running…' : 'Run now'}
+        </Button>
+      )}
+    </div>
+  );
+};
+
 /** What the pipeline flagged: a suggested catalog change, and contradictions with other items or knowledge. */
 const Flags = ({ item, board }: { item: KbItem; board: Board }) => (
   <>
@@ -538,6 +639,11 @@ const ProposalCard = ({
       <div className='flex flex-wrap items-center gap-2'>
         <span className='font-mono text-xs font-semibold'>{item.id}</span>
         <span className='rounded bg-muted px-1.5 text-xs'>{item.type}</span>
+        {item.source === 'mined' && (
+          <span className='rounded bg-muted px-1.5 text-xs font-medium' title='Raised by slop from its own data' data-testid='mined'>
+            Mined
+          </span>
+        )}
         {item.document !== null && (
           <span className='rounded bg-muted px-1.5 text-xs'>
             {existing === null ? 'new document' : `replaces ${existing.name} (v${existing.version})`}
@@ -558,6 +664,7 @@ const ProposalCard = ({
       {item.suggestedTarget !== null && open && (
         <p className='text-xs text-muted-foreground'>Suggested by the submitter: {item.suggestedTarget}</p>
       )}
+      {item.signal !== null && <SignalFigures signal={item.signal} />}
       <ProcessingState item={item} admin={admin} onRetry={() => retry.mutate()} retrying={retry.isPending} />
       {preview !== null && <DraftView rationale={item.rationale} preview={preview} />}
       <Evidence boardId={boardId} item={item} />
@@ -1124,10 +1231,11 @@ export const KbProposals = ({
       >
         <h2 className='text-sm font-semibold'>Proposals</h2>
         <p className='text-xs text-muted-foreground'>
-          Learnings and documents submitted by agents, routed to a target, checked for repeats and drafted as a change in the
-          background. Nothing reaches the knowledge base or the agent set until an admin approves it. The most repeated come
-          first, then the freshest evidence.
+          Learnings and documents submitted by agents, and signals slop mines from its own data each week, routed to a target,
+          checked for repeats and drafted as a change in the background. Nothing reaches the knowledge base or the agent set
+          until an admin approves it. The most repeated come first, then the freshest evidence.
         </p>
+        <MiningStatus boardId={boardId} admin={admin} />
         {proposals.isPending && <p className='text-sm text-muted-foreground'>Loading…</p>}
         {proposals.data !== undefined && open.length === 0 && <p className='text-sm text-muted-foreground'>No open proposals.</p>}
         {open.map((item) => (

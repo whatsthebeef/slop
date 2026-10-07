@@ -29,10 +29,11 @@ describe('MCP get_context include and get_artifact', () => {
   let drop: () => Promise<void>;
   let client: Client;
   let globId: string;
+  let store: PgStore;
 
   beforeAll(async () => {
     ({ database, drop } = await createTestDatabase('mcp_context'));
-    const store = new PgStore(database.db);
+    store = new PgStore(database.db);
     const deps = {
       store,
       notifier: { publish: () => undefined },
@@ -141,6 +142,26 @@ describe('MCP get_context include and get_artifact', () => {
     expect((await call('get_context', { id: globId, include: ['all'] })).body.available).toEqual(
       [],
     );
+  });
+
+  it('put_artifact keeps valid reviewStats on a local review and refuses invalid ones (s15f8)', async () => {
+    const stats = { riskTier: 'high', reviewRounds: 3, maxReviewRounds: 3, testFailRounds: 1 };
+    const latest = async () => (await store.transaction((tx) => tx.listArtifacts(globId, 'local_review'))).at(-1);
+    const before = (await latest())?.version ?? 0;
+    const put = (reviewStats: Record<string, unknown>) =>
+      client.callTool({ name: 'put_artifact', arguments: { id: globId, kind: 'local_review', content: '# Review\n\nRound 3.', reviewStats } });
+    expect((await put(stats)).isError).not.toBe(true);
+    expect(await latest()).toMatchObject({ version: before + 1, provenance: { reviewStats: stats } });
+    for (const bad of [
+      { ...stats, riskTier: 'extreme' },
+      { ...stats, reviewRounds: 21 },
+      { ...stats, testFailRounds: -1 },
+      { ...stats, maxReviewRounds: 1.5 },
+      { riskTier: 'normal', reviewRounds: 1 },
+    ]) {
+      expect((await put(bad)).isError).toBe(true);
+    }
+    expect((await latest())?.version).toBe(before + 1);
   });
 
   it('get_artifact returns one artifact in full, or an error when there is none', async () => {

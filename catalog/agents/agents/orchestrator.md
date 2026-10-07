@@ -30,7 +30,7 @@ Call `get_glob(id)` before anything else. It returns the status, version, genera
   - `super`: do not run the phases. Follow **Super mode** instead.
 - The glob's branch is the glob ID itself (e.g. `s1t4`). sstor (or the routine's checkout) has already put you on it. **Do not create branches.** Never commit to or push `<base>`.
 
-Every `put_artifact`, `report_failure` and `submit_learning` call includes `agentSetVersion`, read from `.claude/slop-agent-set.json`, so slop can relate outcomes to the agent instructions that produced them.
+Every `put_artifact`, `report_failure` and `submit_learning` call includes `agentSetVersion`, read from `.claude/slop-agent-set.json`, and every commit carries the trailer `Slop-Agent-Set: <version>` with the same version, so slop can relate outcomes to the agent instructions that produced them.
 
 Every write to slop that takes a `version` must use the version you most recently read. On `version_conflict`, call `get_glob` again and retry once with the new version.
 
@@ -193,16 +193,17 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
    - <high-level change 2>
    - <high-level change 3>
 
-   Slop-Run: <runId>          (unattended only)
+   Slop-Agent-Set: <version>
+   Slop-Run: <runId>
    ```
-   3–6 concise bullets from the implementation summary.
+   3–6 concise bullets from the implementation summary. `<version>` is the number in `.claude/slop-agent-set.json`, alone on the trailer line; add the `Slop-Run` trailer only when unattended.
 4. **Merge the base branch** (`baseBranch` from `get_board`), so conflicts are resolved by the agent that wrote the change: `git fetch origin <base> && git merge origin/<base>`. Skip if already up to date.
    - On conflicts, resolve them keeping both sides' intent. The plan, the context file and `git log origin/<base>` show what the other change meant.
    - **Unattended:** resolve without asking. Record what was resolved and how in the merge commit message and as an `Assumptions` attachment. If a conflict can't be resolved with confidence (a real clash of behaviour), `git merge --abort` and call `report_failure` with "Merge conflict with <base> in <files> needs a person" instead of guessing.
    - **Interactive:** show the developer the conflicting hunks with a proposed resolution and ask before committing.
-   - Commit the merge as `<id>: Merge <base>` (with the `Slop-Run` trailer if unattended).
+   - Commit the merge as `<id>: Merge <base>` with the `Slop-Agent-Set` trailer (and the `Slop-Run` trailer if unattended).
 5. **Full checks**: run the board's full checks once on the merged result (or the fast checks where its build doc leaves full checks to CI). If something fails, hand it to the implementer, re-run the failed check, note it in the review document and commit the fix as `<id>: <what was fixed>`.
-6. **Local review:** push `.reviews/<id>-review.md` followed by `.reviews/<id>-tests.md` as one artifact: `put_artifact(id, kind: 'local_review', content, commitSha: <HEAD sha>)`, with the run ID if unattended. Slop stores it verbatim and shows it under the card's local review icon.
+6. **Local review:** push `.reviews/<id>-review.md` followed by `.reviews/<id>-tests.md` as one artifact: `put_artifact(id, kind: 'local_review', content, commitSha: <HEAD sha>, reviewStats: { riskTier, reviewRounds, maxReviewRounds, testFailRounds })`, with the run ID if unattended. `reviewStats` gives the risk tier, the Phase 5 rounds run and allowed, and how many Phase 4 FAIL → fix loops there were. Slop stores it verbatim and shows it under the card's local review icon.
 7. **Learnings:** extract what a developer working on related code should know, from the implementation summary, review document and test report:
    - `decision` — a choice made and why;
    - `gotcha` — an unexpected issue and how it was resolved;

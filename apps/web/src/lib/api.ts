@@ -6,6 +6,8 @@ import type {
   ArtifactKind,
   ArtifactSummary,
   Board,
+  BoardJob,
+  BoardJobStatus,
   CatalogUpdate,
   Category,
   Deploy,
@@ -224,6 +226,8 @@ export const api = {
   reopenProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/reopen`, { version }),
   rejectProposal: (id: string, version: number, reason: string) =>
     request<KbItem>('POST', `/api/kb/${id}/reject`, { version, reason }),
+  boardJobs: (boardId: number) => request<BoardJobStatus[]>('GET', `/api/boards/${boardId}/kb/jobs`),
+  runBoardJob: (boardId: number, job: BoardJob['job']) => request<BoardJob>('POST', `/api/boards/${boardId}/kb/jobs/${job}/run`),
   plan: (id: string) =>
     request<{ current: ArtifactView | null; versions: { version: number; createdAt: string; by: string }[] }>(
       'GET',

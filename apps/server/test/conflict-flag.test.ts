@@ -22,6 +22,7 @@ const unwrap = <T>(result: Result<T>): T => {
 /** A code host whose `sub-gate` check run on the head may already have completed. */
 class FakeHost implements CodeHost {
   readonly configured = true;
+  commitFiles = () => Promise.resolve({ parent: null, files: [] });
   /** The completed `sub-gate` run on HEAD, or null while it is still running. */
   subGate: { passed: boolean } | null = null;
   readonly lookups: string[] = [];

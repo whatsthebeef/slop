@@ -2,6 +2,8 @@ import type { Deploy } from '../domain/deploys.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import type { KbItem } from '../domain/kb.js';
+import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
+import type { BoardJob, KbSignalState } from '../domain/signals.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
@@ -22,6 +24,8 @@ interface State {
   deploys: Map<string, Deploy>;
   reviewSources: ReviewSource[];
   findings: ReviewFinding[];
+  kbSignals: Map<string, KbSignalState>;
+  boardJobs: Map<string, BoardJob>;
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -42,6 +46,8 @@ const clone = (state: State): State => ({
   deploys: new Map(state.deploys),
   reviewSources: [...state.reviewSources],
   findings: [...state.findings],
+  kbSignals: new Map(state.kbSignals),
+  boardJobs: new Map(state.boardJobs),
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -64,6 +70,8 @@ export class MemoryStore implements Store {
     deploys: new Map(),
     reviewSources: [],
     findings: [],
+    kbSignals: new Map(),
+    boardJobs: new Map(),
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -337,8 +345,70 @@ export class MemoryStore implements Store {
         return Promise.resolve(true);
       },
       listFindings: (globId) => Promise.resolve(s.findings.filter((f) => f.globId === globId)),
-      listBoardFindings: (boardId, since) =>
-        Promise.resolve(s.findings.filter((f) => f.boardId === boardId && f.createdAt >= since)),
+      listBoardFindings: (boardId, since, until) => {
+        const written = new Map(s.reviewSources.map((r) => [r.id, r.createdAt]));
+        const inWindow = (f: ReviewFinding) => {
+          const at = written.get(f.sourceId);
+          return at !== undefined && at >= since && at <= until;
+        };
+        return Promise.resolve(
+          s.findings
+            .filter((f) => f.boardId === boardId && inWindow(f))
+            .sort((a, b) => (written.get(a.sourceId) ?? '').localeCompare(written.get(b.sourceId) ?? '') || a.id - b.id),
+        );
+      },
+      listBoardEvents: (boardId, since, types) =>
+        Promise.resolve(
+          s.events
+            .map((event, index) => ({ event, index }))
+            .filter(
+              ({ event }) =>
+                s.globs.get(event.globId)?.glob.boardId === boardId &&
+                event.at >= since &&
+                (types === undefined || types.includes(event.type)),
+            )
+            .sort((a, b) => a.event.at.localeCompare(b.event.at) || a.index - b.index)
+            .map(({ event }) => event),
+        ),
+      listArtifactMeta: (boardId, kinds, since) =>
+        Promise.resolve(
+          s.artifacts
+            .filter((a) => s.globs.get(a.globId)?.glob.boardId === boardId && kinds.includes(a.kind) && a.createdAt >= since)
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)
+            .map((a) => ({
+              id: a.id,
+              globId: a.globId,
+              kind: a.kind,
+              label: a.label,
+              version: a.version,
+              commitSha: a.commitSha,
+              provenance: a.provenance,
+              createdAt: a.createdAt,
+              content: ARTIFACT_KINDS_WITH_CONTENT.includes(a.kind) ? a.content : null,
+            })),
+        ),
+      listKbSignals: (boardId) => Promise.resolve([...s.kbSignals.values()].filter((k) => k.boardId === boardId)),
+      upsertKbSignal: (state) => {
+        s.kbSignals.set(`${state.boardId}:${state.key}`, state);
+        return Promise.resolve();
+      },
+      getBoardJob: (boardId, job) => Promise.resolve(s.boardJobs.get(`${boardId}:${job}`) ?? null),
+      claimBoardJob: (boardId, job, now, leaseMs) => {
+        const key = `${boardId}:${job}`;
+        const current = s.boardJobs.get(key) ?? { boardId, job, lastRunAt: null, lastResult: null, runningUntil: null };
+        if (current.runningUntil !== null && current.runningUntil > now) return Promise.resolve(null);
+        const claimed = { ...current, runningUntil: new Date(Date.parse(now) + leaseMs).toISOString() };
+        s.boardJobs.set(key, claimed);
+        return Promise.resolve(claimed);
+      },
+      finishBoardJob: (job, lease) => {
+        const key = `${job.boardId}:${job.job}`;
+        if (s.boardJobs.get(key)?.runningUntil !== lease) return Promise.resolve(false);
+        s.boardJobs.set(key, { ...job, runningUntil: null });
+        return Promise.resolve(true);
+      },
+      // Memory transactions run one at a time, so there is nothing to serialise.
+      lockBoardJob: () => Promise.resolve(),
       appendEvents: (events) => {
         s.events.push(...events);
         return Promise.resolve();

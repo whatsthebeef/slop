@@ -175,6 +175,9 @@ const checkDocument = (document: ProposedDocument): Result<ProposedDocument> => 
   return ok({ name, area, audience, description, content: `${body}\n` });
 };
 
+/** The next KB item ID on a board (`s<board>k<n>`), for submitted and mined items alike. */
+export const newKbItemId = async (tx: Tx, boardId: number): Promise<string> => formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
+
 /** A document proposal's target: that document, with its proposed frontmatter when the board doesn't have it yet. */
 export const documentTarget = async (tx: Tx, boardId: number, document: ProposedDocument): Promise<KbTarget> => {
   const existing = await tx.getKnowledge(boardId, 'doc', document.name);
@@ -497,7 +500,7 @@ export class KnowledgeService {
         if (glob?.boardId !== boardId) return notFound(`No glob ${sourceGlobId} on board ${boardId}`);
         sourceGlobIds.push(glob.id);
       }
-      const id = formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
+      const id = await newKbItemId(tx, boardId);
       // Document proposals name their target and are their own draft, so the pipeline has nothing to do.
       const routed =
         document === null
@@ -513,6 +516,7 @@ export class KnowledgeService {
         suggestedTarget: suggestedTarget === '' ? null : suggestedTarget,
         sourceGlobIds,
         source: 'submitted',
+        signal: null,
         agentSetVersion,
         submittedBy: email,
         createdAt: this.deps.clock.now(),

@@ -1,7 +1,7 @@
 import { App } from '@octokit/app';
 import type { DiffSummary, Glob } from '@slop/core';
 import { machine } from '@slop/core';
-import type { CodeHost, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
+import type { CodeHost, CommitFiles, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
 
@@ -356,7 +356,7 @@ export class GitHub implements CodeHost {
     };
   }
 
-  async readFile(repo: Repo, ref: string, path: string): Promise<string | null> {
+  async readFile(repo: Repo, ref: string, path: string, signal?: AbortSignal): Promise<string | null> {
     const gh = await this.octokit(repo);
     try {
       const { data } = await gh.request('GET /repos/{owner}/{repo}/contents/{path}', {
@@ -364,6 +364,7 @@ export class GitHub implements CodeHost {
         repo: repo.name,
         path,
         ref,
+        request: { signal },
       });
       if (Array.isArray(data) || data.type !== 'file' || !('content' in data)) return null;
       return Buffer.from(data.content, 'base64').toString('utf8');
@@ -371,6 +372,20 @@ export class GitHub implements CodeHost {
       if (isStatus(error, 404)) return null;
       throw error;
     }
+  }
+
+  async commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner: repo.owner, repo: repo.name, ref: sha, request: { signal } });
+    const statuses = ['added', 'removed', 'modified', 'renamed'] as const;
+    return {
+      parent: data.parents[0]?.sha ?? null,
+      files: (data.files ?? []).map((f) => ({
+        path: f.filename,
+        previousPath: f.previous_filename ?? null,
+        status: statuses.find((s) => s === f.status) ?? 'other',
+      })),
+    };
   }
 
   private async branchHead(repo: Repo, branch: string): Promise<string | null> {

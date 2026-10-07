@@ -150,8 +150,10 @@ describe('Review findings in Postgres', () => {
     expect(await store.transaction((tx) => tx.updateReviewSource(leased, 1))).toBe(true);
     expect(await store.transaction((tx) => tx.updateReviewSource({ ...leased, version: 3 }, 1))).toBe(false);
     expect(await store.transaction((tx) => tx.nextReviewSourceToSplit(now))).not.toMatchObject({ id: sourceId });
-    expect((await store.transaction((tx) => tx.listBoardFindings(boardId, now))).filter((f) => f.globId === globId)).toHaveLength(3);
-    expect(await store.transaction((tx) => tx.listBoardFindings(boardId, '2026-10-06T00:00:00.000Z'))).toEqual([]);
+    expect((await store.transaction((tx) => tx.listBoardFindings(boardId, now, now))).filter((f) => f.globId === globId)).toHaveLength(3);
+    expect(await store.transaction((tx) => tx.listBoardFindings(boardId, '2026-10-06T00:00:00.000Z', '2026-10-07T00:00:00.000Z'))).toEqual([]);
+    // Windowed by when the review was written: findings split later from an older review count from its time.
+    expect(await store.transaction((tx) => tx.listBoardFindings(boardId, '2026-09-01T00:00:00.000Z', '2026-10-04T00:00:00.000Z'))).toEqual([]);
 
     await store.transaction((tx) => tx.deleteGlob(globId));
     expect(await store.transaction((tx) => tx.listFindings(globId))).toEqual([]);

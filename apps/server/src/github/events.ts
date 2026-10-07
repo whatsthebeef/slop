@@ -7,6 +7,7 @@ import type { Db } from '../db/store.js';
 import type { CodeHost } from '../codehost.js';
 import { SUB_GATE_CHECK, repoOf } from '../codehost.js';
 import { handleReviewComment } from './reviews.js';
+import { agentSetTrailer } from './trailers.js';
 import type { Delivery } from './webhooks.js';
 
 const repository = z.object({ full_name: z.string() });
@@ -117,7 +118,11 @@ const handle = async (
       }
       const runId = SLOP_RUN.exec(push.head_commit?.message ?? '')?.[1] ?? null;
       await apply(glob, (g, ctx) =>
-        machine.commitPushed(g, { sha: push.after, runId, message: push.head_commit?.message ?? null }, ctx),
+        machine.commitPushed(
+          g,
+          { sha: push.after, runId, message: push.head_commit?.message ?? null, agentSetVersion: agentSetTrailer(push.head_commit?.message) },
+          ctx,
+        ),
       );
       return true;
     }

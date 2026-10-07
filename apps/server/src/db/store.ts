@@ -1,5 +1,5 @@
-import type { Artifact, ArtifactSummary, Board, Deploy, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
+import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, Glob, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -118,10 +118,26 @@ const toKbItem = (row: typeof schema.kbProposals.$inferSelect): KbItem => ({
   processAfter: row.processAfter?.toISOString() ?? null,
 });
 
+const toKbSignal = (row: typeof schema.kbSignals.$inferSelect): KbSignalState => ({
+  ...row,
+  lastMeasuredAt: row.lastMeasuredAt?.toISOString() ?? null,
+  raisedAt: row.raisedAt?.toISOString() ?? null,
+});
+
+const toBoardJob = (row: typeof schema.boardJobs.$inferSelect): BoardJob => ({
+  ...row,
+  job: oneOf(BOARD_JOBS, row.job),
+  lastRunAt: row.lastRunAt?.toISOString() ?? null,
+  runningUntil: row.runningUntil?.toISOString() ?? null,
+});
+
 /** The columns a KB item writes (everything but its ID, board and creation, which never change). */
 const kbItemColumns = (item: KbItem) => ({
   status: item.status,
   statement: item.statement,
+  // Mined items' figures and evidence are refreshed weekly while they are open.
+  evidence: item.evidence,
+  signal: item.signal,
   sourceGlobIds: [...item.sourceGlobIds],
   decidedBy: item.decidedBy,
   decidedAt: item.decidedAt === null ? null : new Date(item.decidedAt),
@@ -619,14 +635,109 @@ export class PgStore implements Store {
           .orderBy(asc(schema.reviewFindings.createdAt), asc(schema.reviewFindings.id));
         return rows.map(toFinding);
       },
-      listBoardFindings: async (boardId, since) => {
+      listBoardFindings: async (boardId, since, until) => {
         const f = schema.reviewFindings;
+        const r = schema.reviewSources;
+        // Windowed by the review's time: a backfill or a delayed split creates findings long after it.
         const rows = await t
-          .select()
+          .select({ finding: f })
           .from(f)
-          .where(and(eq(f.boardId, boardId), gte(f.createdAt, new Date(since))))
-          .orderBy(asc(f.createdAt), asc(f.id));
-        return rows.map(toFinding);
+          .innerJoin(r, eq(r.id, f.sourceId))
+          .where(and(eq(f.boardId, boardId), gte(r.createdAt, new Date(since)), lte(r.createdAt, new Date(until))))
+          .orderBy(asc(r.createdAt), asc(f.id));
+        return rows.map((row) => toFinding(row.finding));
+      },
+
+      listBoardEvents: async (boardId, since, types) => {
+        const e = schema.events;
+        const conditions = [eq(schema.globs.boardId, boardId), gte(e.at, new Date(since))];
+        if (types !== undefined) {
+          if (types.length === 0) return [];
+          conditions.push(inArray(e.type, [...types]));
+        }
+        const rows = await t
+          .select({ globId: e.globId, type: e.type, actor: e.actor, at: e.at, data: e.data })
+          .from(e)
+          .innerJoin(schema.globs, eq(schema.globs.id, e.globId))
+          .where(and(...conditions))
+          .orderBy(asc(e.at), asc(e.id));
+        // An event type this code doesn't know (written by newer code) is left out rather than failing the read.
+        return rows.flatMap((row): DomainEvent[] => {
+          const type = DOMAIN_EVENT_TYPES.find((known) => known === row.type);
+          return type === undefined ? [] : [{ type, globId: row.globId, actor: row.actor, at: row.at.toISOString(), data: row.data }];
+        });
+      },
+      listArtifactMeta: async (boardId, kinds, since) => {
+        if (kinds.length === 0) return [];
+        const a = schema.artifacts;
+        const withContent = sql.join(ARTIFACT_KINDS_WITH_CONTENT.map((k) => sql`${k}`), sql`, `);
+        const rows = await t
+          .select({
+            id: a.id,
+            globId: a.globId,
+            kind: a.kind,
+            label: a.label,
+            version: a.version,
+            commitSha: a.commitSha,
+            provenance: a.provenance,
+            createdAt: a.createdAt,
+            content: sql<string | null>`case when ${a.kind} in (${withContent}) then ${a.content} end`,
+          })
+          .from(a)
+          .innerJoin(schema.globs, eq(schema.globs.id, a.globId))
+          .where(and(eq(schema.globs.boardId, boardId), inArray(a.kind, [...kinds]), gte(a.createdAt, new Date(since))))
+          .orderBy(asc(a.createdAt), asc(a.id));
+        return rows.map((row): ArtifactMeta => ({ ...row, kind: oneOf(ARTIFACT_KINDS, row.kind), createdAt: row.createdAt.toISOString() }));
+      },
+      listKbSignals: async (boardId) =>
+        (await t.select().from(schema.kbSignals).where(eq(schema.kbSignals.boardId, boardId)).orderBy(asc(schema.kbSignals.key))).map(toKbSignal),
+      upsertKbSignal: async (state) => {
+        const columns = {
+          itemId: state.itemId,
+          lastFigures: state.lastFigures,
+          lastMeasuredAt: state.lastMeasuredAt === null ? null : new Date(state.lastMeasuredAt),
+          raisedAt: state.raisedAt === null ? null : new Date(state.raisedAt),
+          belowThresholdRuns: state.belowThresholdRuns,
+        };
+        await t
+          .insert(schema.kbSignals)
+          .values({ boardId: state.boardId, key: state.key, ...columns })
+          .onConflictDoUpdate({ target: [schema.kbSignals.boardId, schema.kbSignals.key], set: columns });
+      },
+      getBoardJob: async (boardId, job) => {
+        const [row] = await t
+          .select()
+          .from(schema.boardJobs)
+          .where(and(eq(schema.boardJobs.boardId, boardId), eq(schema.boardJobs.job, job)));
+        return row === undefined ? null : toBoardJob(row);
+      },
+      claimBoardJob: async (boardId, job, now, leaseMs) => {
+        const j = schema.boardJobs;
+        const until = new Date(Date.parse(now) + leaseMs);
+        // Takes the lease only when nobody holds it: the conditional update returns nothing otherwise.
+        const [row] = await t
+          .insert(j)
+          .values({ boardId, job, runningUntil: until })
+          .onConflictDoUpdate({
+            target: [j.boardId, j.job],
+            set: { runningUntil: until },
+            setWhere: or(isNull(j.runningUntil), lte(j.runningUntil, new Date(now))),
+          })
+          .returning();
+        return row === undefined ? null : toBoardJob(row);
+      },
+      finishBoardJob: async (job, lease) => {
+        const j = schema.boardJobs;
+        // A run that outlived its lease leaves the next holder's lease and result alone.
+        const rows = await t
+          .update(j)
+          .set({ lastRunAt: job.lastRunAt === null ? null : new Date(job.lastRunAt), lastResult: job.lastResult, runningUntil: null })
+          .where(and(eq(j.boardId, job.boardId), eq(j.job, job.job), eq(j.runningUntil, new Date(lease))))
+          .returning({ boardId: j.boardId });
+        return rows.length > 0;
+      },
+      lockBoardJob: async (boardId, job) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`board_jobs:${String(boardId)}:${job}`}))`);
       },
 
       appendEvents: async (events) => {

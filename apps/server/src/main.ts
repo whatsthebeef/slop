@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, GlobService, IntakeService, KbPipeline, KnowledgeService } from '@slop/core';
+import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, GlobService, IntakeService, KbPipeline, KnowledgeService, LearningJobService, MiningService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -32,6 +32,8 @@ import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
 import { DeployWatch } from './jobs/deploy-watch.js';
 import { KbPipelineJob } from './jobs/kb-pipeline.js';
+import { LearningJobs } from './jobs/learning-jobs.js';
+import { CodeHostManifests } from './jobs/manifests.js';
 
 const config = loadConfig();
 await runMigrations(config.DATABASE_URL, config.MIGRATIONS_DIR);
@@ -129,6 +131,16 @@ const findingsPipeline = new FindingsPipeline({
   ),
 });
 
+// Weekly mining: signals from the board's own activity become mined KB items for the KB pipeline.
+const learningJobs = new LearningJobService({
+  store,
+  clock,
+  notifier: hub,
+  mining: new MiningService({ store, notifier: hub }),
+  manifests: new CodeHostManifests(github, logError),
+  log: logError,
+});
+
 if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
   console.warn('[auth] SIGNING_SECRET is not set: sign-ins and download links in flight fail across restarts and instances');
 }
@@ -147,7 +159,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
-mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github });
+mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, logError });
 mountHealth(app, { llm: llmHealth, boards });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
@@ -226,6 +238,8 @@ kbPipelineJob.start();
 // Findings pause on the findings model only, like the KB pipeline on its own.
 const findingsJob = new KbPipelineJob(findingsPipeline, logError, { isDown: () => llmHealth.isDown([config.FINDINGS_MODEL]) }, Date.now, 'findings');
 findingsJob.start();
+const learningJobsRunner = new LearningJobs(learningJobs, logError);
+learningJobsRunner.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -236,6 +250,7 @@ const shutdown = () => {
   deployWatch.stop();
   kbPipelineJob.stop();
   findingsJob.stop();
+  learningJobsRunner.stop();
   server.close();
   void database.close();
 };

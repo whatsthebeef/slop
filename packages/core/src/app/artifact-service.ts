@@ -1,6 +1,6 @@
 import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
-import type { Artifact, ArtifactKind, Provenance } from '../domain/knowledge.js';
+import type { Artifact, ArtifactKind, Provenance, ReviewStats } from '../domain/knowledge.js';
 import { currentRun } from '../domain/machine.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Notifier, Store } from '../ports.js';
@@ -56,6 +56,8 @@ export interface PutOptions {
   readonly commitSha: string | null;
   readonly runId: string | null;
   readonly agentSetVersion: number | null;
+  /** Local reviews: the review cycle's figures, kept in the provenance (other kinds ignore them). */
+  readonly reviewStats?: ReviewStats | null;
 }
 
 /**
@@ -240,6 +242,7 @@ export class ArtifactService {
         actor: email,
         runId: options.runId,
         agentSetVersion: options.agentSetVersion,
+        ...(kind === 'local_review' && options.reviewStats != null && { reviewStats: options.reviewStats }),
       };
       const now = this.deps.clock.now();
       const artifact = await tx.insertArtifact({

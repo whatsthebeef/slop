@@ -1,9 +1,10 @@
 import type { Deploy, DeployState } from './domain/deploys.js';
-import type { DomainEvent, Effect } from './domain/events.js';
+import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
+import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
 import type { Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
 export interface GlobFilter {
@@ -116,8 +117,38 @@ export interface Tx {
   updateFinding(finding: ReviewFinding, expectedVersion: number): Promise<boolean>;
   /** A glob's findings, oldest first. */
   listFindings(globId: string): Promise<ReviewFinding[]>;
-  /** A board's findings created at or after `since`, oldest first (for mining and effect checks). */
-  listBoardFindings(boardId: number, since: string): Promise<ReviewFinding[]>;
+  /**
+   * A board's findings from sources (reviews, comments) created from `since` to `until`, oldest source first (for
+   * mining and effect checks): windowed by when the review was written, not when it was split into findings.
+   */
+  listBoardFindings(boardId: number, since: string, until: string): Promise<ReviewFinding[]>;
+
+  /** A board's events at or after `since` (of `types`, when given), oldest first (events carry no board: joined through globs). */
+  listBoardEvents(boardId: number, since: string, types?: readonly DomainEventType[]): Promise<DomainEvent[]>;
+  /**
+   * A board's artifact versions of `kinds` created at or after `since`, oldest first, without content except
+   * for `ARTIFACT_KINDS_WITH_CONTENT` (mining reads review rounds and plan changes).
+   */
+  listArtifactMeta(boardId: number, kinds: readonly ArtifactKind[], since: string): Promise<ArtifactMeta[]>;
+  /** A board's mined-signal state, one row per signal key. */
+  listKbSignals(boardId: number): Promise<KbSignalState[]>;
+  upsertKbSignal(state: KbSignalState): Promise<void>;
+  getBoardJob(boardId: number, job: BoardJobName): Promise<BoardJob | null>;
+  /**
+   * Takes a board job's lease until `now + leaseMs` unless another server holds it (its `runningUntil` is after
+   * `now`); returns the claimed row, or null when it is held.
+   */
+  claimBoardJob(boardId: number, job: BoardJobName, now: string, leaseMs: number): Promise<BoardJob | null>;
+  /**
+   * Records a run's result and releases its lease, only while the run still holds it (the stored `runningUntil`
+   * is still `lease`, what `claimBoardJob` returned); returns false when it doesn't. `job.runningUntil` is ignored.
+   */
+  finishBoardJob(job: BoardJob, lease: string): Promise<boolean>;
+  /**
+   * Serialises a board job's work until the transaction ends, so two runs that both got past the lease (or
+   * skipped it) don't read and raise the same signals at once (a no-op where transactions don't overlap).
+   */
+  lockBoardJob(boardId: number, job: BoardJobName): Promise<void>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
@@ -157,6 +188,14 @@ export interface CatalogAgentSet {
 export interface Catalog {
   kbEntries(): Promise<{ id: string; version: number; fileName: string; content: string }[]>;
   agentSet(): Promise<CatalogAgentSet>;
+}
+
+/**
+ * The code host's view of what merged commits did to dependency manifests (mined signals). Null when the
+ * board's repo can't be read, so the dependency signal isn't measured.
+ */
+export interface ManifestSource {
+  manifestChanges(board: Board, commits: readonly MergedCommit[]): Promise<ManifestChange[] | null>;
 }
 
 export interface Clock {

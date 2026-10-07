@@ -164,6 +164,8 @@ describe('pick up (rows 6–10)', () => {
     expect(t.glob.status).toBe('in_progress');
     expect(t.glob.generation).toBe(2);
     expect(m.currentRun(t.glob)?.outcome).toBe('superseded');
+    // Mined signals count runs someone had to take over.
+    expect(t.events.find((e) => e.type === 'RunEnded')?.data).toMatchObject({ outcome: 'superseded', cause: 'take_over' });
 
     const watching = value(
       m.pickUp(glob({ status: 'pr_open', runs: [run({ state: 'watching' })] }), ctx(), board, { takeOver: true }),
@@ -387,12 +389,29 @@ describe('re-trigger, start again, delete (rows 20, 23, 24)', () => {
     expect(sub.glob.status).toBe('implementing');
     expect(effectKinds(sub)).toEqual(['close_pr', 'delete_branch', 'provision', 'fire_routine']);
     expect(sub.glob.runs.at(-2)?.outcome).toBe('superseded');
+    expect(sub.events.find((e) => e.type === 'RunEnded')?.data).toMatchObject({ outcome: 'superseded', cause: 'start_again' });
 
     const sup = value(m.startAgain(glob({ type: 'super', status: 'failed', implementer: other.email, creator: dev.email }), ctx()));
     expect(sup.glob.status).toBe('in_progress');
     expect(sup.glob.implementer).toBe(dev.email);
 
     expect(errorCode(m.startAgain(glob({ status: 'reviewing' }), ctx()))).toBe('invalid_transition');
+  });
+
+  it("records a push's Slop-Agent-Set trailer version on its CommitPushed event", () => {
+    const pushed = value(m.commitPushed(glob({ status: 'in_progress' }), { sha: 'ccc', runId: null, agentSetVersion: 12 }, ctx(null)));
+    expect(pushed.events.find((e) => e.type === 'CommitPushed')?.data).toEqual({ sha: 'ccc', runId: null, fromSupersededRun: false, agentSetVersion: 12 });
+    const plain = value(m.commitPushed(glob({ status: 'in_progress' }), { sha: 'ddd', runId: null }, ctx(null)));
+    expect(plain.events.find((e) => e.type === 'CommitPushed')?.data).toEqual({ sha: 'ddd', runId: null, fromSupersededRun: false });
+  });
+
+  it('records the cause of every other superseded run: pick up, PR closed, delete (s15f8)', () => {
+    const cause = (t: Transition) => t.events.find((e) => e.type === 'RunEnded')?.data;
+    const queued = run({ state: 'queued', startedAt: null });
+    expect(cause(value(m.pickUp(glob({ runs: [queued] }), ctx(), board, { takeOver: false })))).toMatchObject({ outcome: 'superseded', cause: 'pick_up' });
+    expect(cause(value(m.pickUp(glob({ status: 'pr_open', runs: [queued] }), ctx(), board, { takeOver: false })))).toMatchObject({ cause: 'pick_up' });
+    expect(cause(value(m.prClosed(glob({ status: 'pr_open', runs: [run({ state: 'watching' })] }), ctx(null))))).toMatchObject({ outcome: 'superseded', cause: 'pr_closed' });
+    expect(cause(value(m.remove(glob({ status: 'implementing', runs: [run()] }), ctx())))).toMatchObject({ outcome: 'superseded', cause: 'deleted' });
   });
 
   it('row 24: delete supersedes the run and queues the clean-up', () => {

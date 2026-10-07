@@ -24,6 +24,7 @@ const unwrap = <T>(result: Result<T>): T => {
 /** A code host that records what slop asked of it; only the calls these tests make do anything. */
 class FakeHost implements CodeHost {
   readonly configured = true;
+  commitFiles = () => Promise.resolve({ parent: null, files: [] });
   readonly opened: string[] = [];
   readonly deleted: string[] = [];
   nextPr: { number: number; headSha: string } | null = { number: 8, headSha: 'd4' };

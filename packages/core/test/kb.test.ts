@@ -115,6 +115,7 @@ describe('submit_learning', () => {
       suggestedTarget: 'agents/implementer.md',
       sourceGlobIds: [globId],
       source: 'submitted',
+      signal: null,
       agentSetVersion: 7,
       submittedBy: DEV,
       createdAt: NOW,

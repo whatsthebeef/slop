@@ -1,6 +1,6 @@
 import { FindingsService, GlobService } from '@slop/core';
 import type { Board, Result } from '@slop/core';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import * as schema from '../src/db/schema.js';
 import { PgStore } from '../src/db/store.js';
@@ -110,6 +110,22 @@ describe('GitHub webhook deliveries', () => {
       },
     });
     expect((await current()).pr?.headSha).toBe('b2');
+  });
+
+  it('records the agent-set version from the Slop-Agent-Set trailer on the push event', async () => {
+    const push = (sha: string, message: string) =>
+      handle({ id: id(), event: 'push', payload: { ref: `refs/heads/${globId}`, after: sha, head_commit: { message }, repository: { full_name: REPO } } });
+    await push('c3', `${globId}: work\n\n- a change\n\nSlop-Agent-Set: 12\nSlop-Run: run-9`);
+    await push('d4', `${globId}: more work`);
+    const pushed = await database.db
+      .select({ data: schema.events.data })
+      .from(schema.events)
+      .where(and(eq(schema.events.globId, globId), eq(schema.events.type, 'CommitPushed')))
+      .orderBy(schema.events.id);
+    expect(pushed.map((e) => e.data)).toEqual([
+      { sha: 'c3', runId: 'run-9', fromSupersededRun: true, agentSetVersion: 12 },
+      { sha: 'd4', runId: null, fromSupersededRun: false },
+    ]);
   });
 
   it('moves the glob through ready for review and merge', async () => {

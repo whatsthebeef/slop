@@ -1,5 +1,6 @@
 import type { ContextDiffLine } from './agent-set.js';
 import type { KnowledgeKind } from './knowledge.js';
+import type { KbSignal } from './signals.js';
 
 /**
  * KB items (`s<board>k<n>`): proposed changes to a board's knowledge base or agent set. Nothing
@@ -125,7 +126,7 @@ export interface KbProposalList {
 export const KB_HISTORY_PAGE = 50;
 export const KB_HISTORY_MAX = 1000;
 
-/** `submitted` by an agent through `submit_learning`; `mined` from signals by slop's jobs (later). */
+/** `submitted` by an agent through `submit_learning`; `mined` from signals by slop's weekly mining job. */
 export const KB_ITEM_SOURCES = ['submitted', 'mined'] as const;
 export type KbItemSource = (typeof KB_ITEM_SOURCES)[number];
 
@@ -141,6 +142,8 @@ export interface KbItem {
   /** The globs that produced it; near-duplicates add theirs later. */
   readonly sourceGlobIds: readonly string[];
   readonly source: KbItemSource;
+  /** Mined items: the signal that raised it and the figures behind it (refreshed weekly while open). */
+  readonly signal: KbSignal | null;
   /** The board's agent-set version the submitting run used (`.claude/slop-agent-set.json`). */
   readonly agentSetVersion: number | null;
   readonly submittedBy: string;

@@ -1,5 +1,6 @@
 import type {
   Board,
+  BoardJobResult,
   DeployIntegration,
   DomainEvent,
   Effect,
@@ -11,11 +12,13 @@ import type {
   KbCoverage,
   KbDraft,
   KbOutcome,
+  KbSignal,
   KbTarget,
   Provenance,
   ProposedDocument,
+  SignalFigures,
 } from '@slop/core';
-import { DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
+import { BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -244,6 +247,8 @@ export const kbProposals = pgTable(
     suggestedTarget: text('suggested_target'),
     sourceGlobIds: jsonb('source_glob_ids').$type<string[]>().notNull(),
     source: text('source', { enum: ['submitted', 'mined'] }).notNull(),
+    /** Mined items: the signal that raised it, with its figures. */
+    signal: jsonb('signal').$type<KbSignal>(),
     agentSetVersion: integer('agent_set_version'),
     submittedBy: text('submitted_by').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
@@ -384,4 +389,37 @@ export const reviewFindings = pgTable(
     index('review_findings_board_created_idx').on(t.boardId, t.createdAt),
     index('review_findings_glob_idx').on(t.globId),
   ],
+);
+
+/** Mined-signal state per board and signal key, so a signal isn't raised again every week (re-raise rules). */
+export const kbSignals = pgTable(
+  'kb_signals',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    itemId: text('item_id'),
+    lastFigures: jsonb('last_figures').$type<SignalFigures>(),
+    lastMeasuredAt: timestamp('last_measured_at', { withTimezone: true }),
+    raisedAt: timestamp('raised_at', { withTimezone: true }),
+    belowThresholdRuns: integer('below_threshold_runs').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.key] })],
+);
+
+/** Per-board self-improvement jobs (mining, later consolidation and effect checks): last run and a lease. */
+export const boardJobs = pgTable(
+  'board_jobs',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    job: text('job', { enum: BOARD_JOBS }).notNull(),
+    lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+    lastResult: jsonb('last_result').$type<BoardJobResult>(),
+    /** Set while a server runs the job; another server doesn't start it before then. */
+    runningUntil: timestamp('running_until', { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.job] })],
 );
