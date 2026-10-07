@@ -105,6 +105,7 @@ describe('KB pipeline in Postgres', () => {
       catalogCandidate: false,
       occurrenceCount: 1,
       extraEvidence: [],
+      possiblyCoveredBy: null,
       contradicts: [],
       draft: null,
     });
@@ -123,6 +124,7 @@ describe('KB pipeline in Postgres', () => {
       duplicateOf: 's1k8',
       suppressedBy: 's1k7',
       coveredBy: { kind: 'knowledge', knowledgeKind: 'doc', name: 'build', section: null },
+      possiblyCoveredBy: { knowledgeKind: 'doc', name: 'build', section: 'Test', quote: 'Run vitest.', reason: 'Names the runner' },
       contradicts: [{ kind: 'item', ref: 's1k6', note: 'Conflicts' }],
       draft: { section: 'Testing', content: '### Testing\n\n- New rule\n' },
       draftedAgainstVersion: 4,

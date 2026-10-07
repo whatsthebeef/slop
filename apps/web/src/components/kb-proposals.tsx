@@ -419,6 +419,21 @@ const Flags = ({ item, board }: { item: KbItem; board: Board }) => (
         </span>
       </p>
     )}
+    {item.possiblyCoveredBy !== null && (
+      <p className='rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='possibly-covered'>
+        <span className='font-medium'>May already be covered by </span>
+        <KnowledgeRef
+          board={board}
+          name={item.possiblyCoveredBy.name}
+          rest={item.possiblyCoveredBy.section === null ? '' : ` › ${item.possiblyCoveredBy.section}`}
+        />
+        <span className='font-medium'>: </span>
+        <span className='text-muted-foreground'>
+          “{item.possiblyCoveredBy.quote}”{item.possiblyCoveredBy.reason !== '' && ` (${item.possiblyCoveredBy.reason})`}. Approve, reject as already
+          covered, or keep it.
+        </span>
+      </p>
+    )}
     {item.contradicts.length > 0 && (
       <div className='rounded-md border border-required-border bg-red-soft/15 p-2 text-xs' data-testid='contradictions'>
         <span className='font-medium'>Contradicts:</span>

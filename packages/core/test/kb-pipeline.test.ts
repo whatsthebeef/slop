@@ -324,7 +324,7 @@ describe('KB pipeline: routing and dedupe', () => {
     unwrap(await knowledge.approve(ADMIN, approvedId, (await item(approvedId)).version, { as: 'learning' }));
     const before = await item(approvedId);
     const id = await submit({ sourceGlobId: otherGlobId });
-    llm.answer(toNewDoc('testing'), json({ coveredBy: { kind: 'item', id: approvedId }, contradicts: [] }));
+    llm.answer(toNewDoc('testing'), json({ coveredBy: { kind: 'item', id: approvedId, quote: 'generated files live in  src/gen/' }, contradicts: [] }));
     await pipeline.processNext();
 
     expect(await item(id)).toMatchObject({ status: 'covered', coveredBy: { kind: 'item', id: approvedId } });
@@ -342,7 +342,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const approvedId = await submit();
     unwrap(await knowledge.approve(ADMIN, approvedId, (await item(approvedId)).version, { as: 'learning' }));
     const id = await submit({ sourceGlobId: otherGlobId });
-    llm.answer(toDoc('build_test_lint', 'Test'), json({ coveredBy: { kind: 'item', id: approvedId }, contradicts: [] }));
+    llm.answer(toDoc('build_test_lint', 'Test'), json({ coveredBy: { kind: 'item', id: approvedId, quote: 'generated files live in  src/gen/' }, contradicts: [] }));
     await pipeline.processNext();
     const closed = await item(id);
     expect(closed.status).toBe('covered');
@@ -382,14 +382,40 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(await item(id)).toMatchObject({ status: 'merged', processing: 'pending' });
   });
 
-  it('closes an item the target already says as covered by that knowledge', async () => {
+  it('keeps an item open and flags it when the target text may already say it, never closing it', async () => {
     const id = await submit({ statement: 'Tests run with vitest' });
-    llm.answer(toDoc('build_test_lint', 'Test'), json({ coveredBy: { kind: 'target' } }));
+    llm.answer(
+      toDoc('build_test_lint', 'Test'),
+      json({ coveredBy: { kind: 'target', quote: 'run  VITEST.', reason: 'Names the runner' } }),
+    );
     await pipeline.processNext();
     expect(await item(id)).toMatchObject({
-      status: 'covered',
-      coveredBy: { kind: 'knowledge', knowledgeKind: 'doc', name: 'build_test_lint', section: 'Test' },
+      status: 'open',
+      processing: 'routed',
+      coveredBy: null,
+      possiblyCoveredBy: { knowledgeKind: 'doc', name: 'build_test_lint', section: 'Test', quote: 'run  VITEST.', reason: 'Names the runner' },
     });
+  });
+
+  it('drops a coverage claim whose quote is not in the text it was shown', async () => {
+    const approvedId = await submit();
+    unwrap(await knowledge.approve(ADMIN, approvedId, (await item(approvedId)).version, { as: 'learning' }));
+    const targetId = await submit({ statement: 'Run aws sso login when Bedrock calls fail' });
+    llm.answer(
+      toDoc('build_test_lint', 'Test'),
+      json({ coveredBy: { kind: 'target', quote: 'Run aws sso login', reason: 'Run locally' } }),
+    );
+    await pipeline.processNext();
+    expect(await item(targetId)).toMatchObject({ status: 'open', coveredBy: null, possiblyCoveredBy: null });
+
+    const itemId = await submit({ sourceGlobId: otherGlobId });
+    llm.answer(
+      toDoc('build_test_lint', 'Test'),
+      json({ coveredBy: { kind: 'item', id: approvedId, quote: 'Docker compose from worktrees' }, contradicts: [] }),
+    );
+    await pipeline.processNext();
+    expect(await item(itemId)).toMatchObject({ status: 'open', coveredBy: null, possiblyCoveredBy: null });
+    expect(await item(approvedId)).toMatchObject({ occurrenceCount: 1, extraEvidence: [] });
   });
 
   it('ignores target coverage and target contradictions when the target had no text to show (a new document)', async () => {
@@ -398,10 +424,10 @@ describe('KB pipeline: routing and dedupe', () => {
     llm.answer(
       toNewDoc('testing_conventions'),
       json({
-        coveredBy: { kind: 'target' },
+        coveredBy: { kind: 'target', quote: 'Run vitest.', reason: 'x' },
         contradicts: [
-          { kind: 'target', ref: '', note: 'Says otherwise' },
-          { kind: 'item', ref: first, note: 'Conflicts' },
+          { kind: 'target', ref: '', quote: 'Run vitest.', note: 'Says otherwise' },
+          { kind: 'item', ref: first, quote: 'Generated files live in src/gen/', note: 'Conflicts' },
         ],
       }),
     );
@@ -411,6 +437,7 @@ describe('KB pipeline: routing and dedupe', () => {
       status: 'open',
       processing: 'routed',
       coveredBy: null,
+      possiblyCoveredBy: null,
       contradicts: [{ kind: 'item', ref: first, note: 'Conflicts' }],
     });
   });
@@ -425,9 +452,10 @@ describe('KB pipeline: routing and dedupe', () => {
         duplicateOf: 's99k1',
         coveredBy: { kind: 'item', id: 's99k2' },
         contradicts: [
-          { kind: 'target', ref: '## Test', note: 'The doc says vitest' },
-          { kind: 'item', ref: approvedId, note: 'Conflicts' },
-          { kind: 'item', ref: 's99k3', note: 'Unknown' },
+          { kind: 'target', ref: '## Test', quote: 'Run vitest.', note: 'The doc says vitest' },
+          { kind: 'item', ref: approvedId, quote: 'Generated files live in src/gen/', note: 'Conflicts' },
+          { kind: 'item', ref: 's99k3', quote: 'x', note: 'Unknown' },
+          { kind: 'target', ref: '## Test', quote: 'Made up sentence', note: 'Hallucinated' },
         ],
       }),
     );
