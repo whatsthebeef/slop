@@ -169,7 +169,8 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `whoami` | — | user, boards, role per board | Sessionator, Claude app |
 | `create_glob` | board, input, idempotencyKey; optional title, summary, type, category, group, environment, links, autoTrigger | `{ id, version, branch, provisioning: none \| ok \| failed, status, type, category, group, environment, summary }` (same glob returned for a repeated key) | All |
 | `get_glob` | id | full glob: status, version, generation, fields, labels, PR, PRs merged with Merge and continue, current run (state, runId, owner, triggeredBy, started, last progress, cloud session ID and URL), run history, flags, artifact list, latest deploys (environment, commit, state, error, log link; super mode reports them after each push) | All |
-| `get_context` | id | assembled context bundle with citations | Routines, sessionator |
+| `get_context` | id; optional include | assembled context bundle with citations: the plan in full, other artifacts listed (see Context assembly) | Routines, sessionator |
+| `get_artifact` | id, kind, optional label | one artifact's latest version in full | Agents |
 | `list_globs` | board; optional status, type, group, person | glob summaries | Claude app |
 | `update_glob` | id, version; optional title, summary, type, category, group, environment | updated glob | All |
 | `attach` | id, version, text or link, label | attachment reference | All |
@@ -534,6 +535,8 @@ Slop is a context manager: it holds what is known about the work, decides what i
 - A core use case, `assembleContext(glob, purpose, tokenBudget)`, returns a cited bundle: the plan (or postplan for supers), active decisions linked to the glob or its topic, the most relevant recent communication excerpts, related past globs with their change summaries, current test results and relevant conventions.
 - It serves routines and sessionator (`get_context`), plan drafting for sames, glob generation from inbox meetings, and the board chat.
 - Two modes: slop pushes a curated bundle; agents pull anything further through the search tools.
+- **Only the plan in full.** `get_context` always includes plan.md (the postplan for supers) in full, and attachments labelled Clarifications or Assumptions in full (they carry intent that agents must follow and pass verbatim). Every other artifact (implementation plan, local reviews, other attachments) is listed with kind, label, version, commitSha, size and a one-line description, so a revisited glob doesn't flood an agent's context with overlapping documents. `include` (e.g. `['implementation_plan', 'attachment:Notes', 'local_review']`, or `'all'` for everything) returns the named artifacts in full, and `get_artifact(id, kind, label?)` returns one artifact's latest version.
+- **Supers keep a decision log.** A super's `implementation_plan` is a decision log condensed from the implementers' notes (decisions with why, rejected alternatives, trade-offs and traps), pushed alongside each postplan and at finalise. Sames and subs push their Phase 2 plan as before.
 
 **In the architecture**
 

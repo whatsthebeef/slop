@@ -193,7 +193,29 @@ describe('knowledge and artifacts', () => {
     unwrap(await artifacts.attach(DEV, glob.id, { label: 'Meeting', text: 'We decided X.', link: null }));
     const context = unwrap(await artifacts.context(DEV, glob.id));
     expect(context.plan).toEqual({ version: 1, content: '# Plan\n\nDone when: it works.' });
-    expect(context.attachments).toEqual([{ label: 'Meeting', content: 'We decided X.', link: null }]);
+    // Other attachments are listed, not sent in full; Clarifications and Assumptions stay inline.
+    expect(context.attachments).toEqual([]);
+    expect(context.available).toEqual([
+      { kind: 'attachment', label: 'Meeting', version: 1, commitSha: null, size: 13, description: 'We decided X.' },
+    ]);
+    unwrap(await artifacts.attach(DEV, glob.id, { label: 'Clarifications', text: 'Use Postgres.', link: null }));
+    unwrap(await artifacts.attach(DEV, glob.id, { label: 'Assumptions', text: 'Single tenant.', link: null }));
+    unwrap(await artifacts.putArtifact(DEV, glob.id, 'implementation_plan', '# Impl\n\nDetails', { commitSha: 'abc', runId: null, agentSetVersion: null }));
+    const lean = unwrap(await artifacts.context(DEV, glob.id));
+    expect(lean.attachments.map((a) => a.label).sort()).toEqual(['Assumptions', 'Clarifications']);
+    expect(lean.implementationPlan).toBeNull();
+    expect(lean.available.map((a) => a.kind).sort()).toEqual(['attachment', 'implementation_plan']);
+    expect(lean.available.find((a) => a.kind === 'implementation_plan')).toMatchObject({ commitSha: 'abc', size: 15, description: 'Impl' });
+
+    const asked = unwrap(await artifacts.context(DEV, glob.id, ['implementation_plan', 'attachment:meeting']));
+    expect(asked.implementationPlan).toEqual({ version: 1, content: '# Impl\n\nDetails' });
+    expect(asked.attachments.map((a) => a.label).sort()).toEqual(['Assumptions', 'Clarifications', 'Meeting']);
+    expect(asked.available).toEqual([]);
+    expect(unwrap(await artifacts.context(DEV, glob.id, ['all'])).available).toEqual([]);
+
+    expect(unwrap(await artifacts.artifact(DEV, glob.id, 'implementation_plan', '')).content).toBe('# Impl\n\nDetails');
+    expect(unwrap(await artifacts.artifact(DEV, glob.id, 'attachment', 'Meeting')).content).toBe('We decided X.');
+    expect((await artifacts.artifact(DEV, glob.id, 'local_review', '')).ok).toBe(false);
     expect(unwrap(await artifacts.plan(DEV, glob.id, null)).versions).toHaveLength(1);
   });
 
