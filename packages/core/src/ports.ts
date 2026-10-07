@@ -36,7 +36,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'subMaxChangedLines' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'subMaxChangedLines' | 'effectCheckGlobs' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   listBoards(email: string): Promise<Board[]>;
   /** Every board, for background jobs. */

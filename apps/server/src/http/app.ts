@@ -63,6 +63,8 @@ const settingsSchema = z.object({
   defaultRoutineOwner: z.string().nullable().optional(),
   environments: z.array(environmentSchema).optional(),
   sensitivePaths: z.array(z.string()).optional(),
+  // Core checks the range (3 to 50).
+  effectCheckGlobs: z.number().int().optional(),
   deploy: z
     .discriminatedUnion('provider', [
       z.object({

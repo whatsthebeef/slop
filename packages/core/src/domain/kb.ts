@@ -1,4 +1,5 @@
 import type { ContextDiffLine } from './agent-set.js';
+import type { EffectCheck } from './effect-check.js';
 import type { KnowledgeKind } from './knowledge.js';
 import type { KbSignal } from './signals.js';
 
@@ -207,6 +208,8 @@ export interface KbItem {
   readonly keptApartFrom: readonly string[];
   /** `merged` by weekly consolidation: the verified quotes it merged on. */
   readonly mergeNote: KbMergeNote | null;
+  /** `approved` with a signal: whether the change worked (`EffectCheck`), refreshed daily while watching. */
+  readonly effectCheck: EffectCheck | null;
   /** For conditional writes (approve, reject). */
   readonly version: number;
 }
@@ -313,6 +316,7 @@ export const UNPROCESSED: Pick<
   | 'staleDismissedAt'
   | 'keptApartFrom'
   | 'mergeNote'
+  | 'effectCheck'
 > = {
   processing: 'pending',
   processingError: null,
@@ -336,6 +340,7 @@ export const UNPROCESSED: Pick<
   staleDismissedAt: null,
   keptApartFrom: [],
   mergeNote: null,
+  effectCheck: null,
 };
 
 export const isLearningType = (value: string): value is LearningType =>
@@ -365,6 +370,12 @@ export type KbOutcome =
       readonly target: KnowledgeKind;
       readonly name: string;
       readonly version: number;
+      /**
+       * An agent-set file: the first agent-set version with the change (the effect check's basis), the board's version
+       * after the approval. Absent when the approval changed nothing (its check goes by time), on documents and on
+       * approvals recorded before effect checks.
+       */
+      readonly agentSetVersion?: number;
     };
 
 /**

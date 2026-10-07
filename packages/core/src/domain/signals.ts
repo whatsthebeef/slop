@@ -1,3 +1,4 @@
+import type { EffectState } from './effect-check.js';
 import type { DomainEvent, JsonValue } from './events.js';
 import { FINDING_CLASS_DESCRIPTIONS } from './findings.js';
 import type { FindingClass, ReviewFinding } from './findings.js';
@@ -268,6 +269,32 @@ export const lineChange = (before: string, after: string): number => {
   return 1 - kept / larger;
 };
 
+/** `compute` once per activity: effect checks call `perGlob` for every glob and key of one activity. */
+const memoised = <T extends object>(compute: (activity: BoardActivity) => T): ((activity: BoardActivity) => T) => {
+  const cache = new WeakMap<BoardActivity, T>();
+  return (activity) => {
+    const cached = cache.get(activity);
+    if (cached !== undefined) return cached;
+    const value = compute(activity);
+    cache.set(activity, value);
+    return value;
+  };
+};
+
+/** The activity's events and artifacts by glob, once per activity (`globAgentSetVersion` runs for every merged glob). */
+const activityByGlob = memoised((activity: BoardActivity) => {
+  const events = new Map<string, DomainEvent[]>();
+  const artifacts = new Map<string, ArtifactMeta[]>();
+  const add = <T>(map: Map<string, T[]>, globId: string, value: T) => {
+    const list = map.get(globId);
+    if (list === undefined) map.set(globId, [value]);
+    else list.push(value);
+  };
+  for (const e of activity.events) add(events, e.globId, e);
+  for (const a of activity.artifacts) add(artifacts, a.globId, a);
+  return { events, artifacts };
+});
+
 /**
  * The agent-set version a glob ran with: its commits' `Slop-Agent-Set` trailer, else the highest version on
  * its artifacts, failures or learnings, else null (unknown: left out of agent-file effect windows).
@@ -277,11 +304,12 @@ export const globAgentSetVersion = (activity: BoardActivity, globId: string): nu
     const known = values.filter((v): v is number => v !== null);
     return known.length === 0 ? null : Math.max(...known);
   };
-  const events = activity.events.filter((e) => e.globId === globId);
+  const { events: byGlob, artifacts } = activityByGlob(activity);
+  const events = byGlob.get(globId) ?? [];
   const trailer = highest(events.filter((e) => e.type === 'CommitPushed').map((e) => whole(field(e, 'agentSetVersion'))));
   if (trailer !== null) return trailer;
   return highest([
-    ...activity.artifacts.filter((a) => a.globId === globId).map((a) => a.provenance.agentSetVersion),
+    ...(artifacts.get(globId) ?? []).map((a) => a.provenance.agentSetVersion),
     ...events.filter((e) => e.type === 'RunFailed' || e.type === 'StatusChanged').map((e) => whole(field(e, 'agentSetVersion'))),
     ...activity.learnings.filter((l) => l.globIds.includes(globId)).map((l) => l.agentSetVersion),
   ]);
@@ -304,18 +332,6 @@ interface Spec {
   readonly crosses: (tally: Tally) => boolean;
   readonly statement: (measurement: Measurement) => string;
 }
-
-/** `compute` once per activity: effect checks call `perGlob` for every glob and key of one activity. */
-const memoised = <T extends object>(compute: (activity: BoardActivity) => T): ((activity: BoardActivity) => T) => {
-  const cache = new WeakMap<BoardActivity, T>();
-  return (activity) => {
-    const cached = cache.get(activity);
-    if (cached !== undefined) return cached;
-    const value = compute(activity);
-    cache.set(activity, value);
-    return value;
-  };
-};
 
 const define = (spec: Spec): SignalDefinition => {
   const tallies = memoised(spec.tallies);
@@ -892,6 +908,15 @@ export type BoardJobResult =
       /** Open items flagged stale this run, and flags cleared (new evidence). */
       readonly flaggedStale: number;
       readonly clearedStale: number;
+    }
+  | {
+      readonly kind: 'effect_check';
+      /** Approved items still watching after the run (their partial figures refreshed). */
+      readonly watching: number;
+      /** Checks that reached a verdict this run, with it. */
+      readonly decided: readonly { readonly id: string; readonly state: EffectState }[];
+      /** Revise-or-revert items raised. */
+      readonly raised: readonly string[];
     }
   /**
    * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.

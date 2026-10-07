@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService } from '@slop/core';
+import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -88,7 +88,9 @@ const outbox = new OutboxRunner(
 
 const catalog = new FsCatalog(config.CATALOG_DIR);
 const clock = { now: () => new Date().toISOString() };
-const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub });
+// Mining measures the board's signals: the weekly job, and the signal an admin picks to watch when approving.
+const mining = new MiningService({ store, notifier: hub });
+const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub, signals: mining });
 const artifacts = new ArtifactService({ store, clock, notifier: hub });
 const findings = new FindingsService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
@@ -134,11 +136,13 @@ const findingsPipeline = new FindingsPipeline({
 
 // Weekly mining: signals from the board's own activity become mined KB items for the KB pipeline. Weekly
 // consolidation then merges same-fact open items (verified quotes) and flags stale ones; it waits while its model is down.
+// Daily effect checks compare each approved change's signal before and after it.
 const learningJobs = new LearningJobService({
   store,
   clock,
   notifier: hub,
-  mining: new MiningService({ store, notifier: hub }),
+  mining,
+  effectChecks: new EffectCheckService({ store, notifier: hub, mining }),
   consolidation: new KbConsolidation({ store, clock, notifier: hub, llm: kbRouteLlm }),
   consolidationDown: () => llmHealth.isDown([config.KB_ROUTE_MODEL]),
   manifests: new CodeHostManifests(github, logError),

@@ -357,6 +357,54 @@ describe('KB pipeline: routing and dedupe', () => {
     });
   });
 
+  it("never closes a revise-or-revert item against its original or another item raised for it (s15f8)", async () => {
+    const originalId = await submit();
+    unwrap(await knowledge.approve(ADMIN, originalId, (await item(originalId)).version, { as: 'learning' }));
+    const original = await item(originalId);
+    const signal = {
+      key: `effect:${originalId}`,
+      kind: 'ci_after_local' as const,
+      agent: null,
+      label: 'CI failing after local checks passed',
+      window: { from: START, to: START },
+      figures: { affected: 1, eligible: 3, rate: 0.333, count: 1 },
+      globIds: [],
+      examples: [],
+      measuredAt: START,
+    };
+    /** A submitted item made into one raised for the original, quoting it as the effect check does. */
+    const raisedFor = async (sourceGlobId: string) => {
+      const id = await submit({ sourceGlobId });
+      const current = await item(id);
+      const statement = `Revise or revert ${originalId} (${original.statement}): after 3 globs the rate of CI failing after local checks passed is 33% (1/3), against 33% (1/3) before.`;
+      await store.transaction((tx) => tx.updateKbItem({ ...current, statement, signal, version: current.version + 1 }, current.version));
+      return id;
+    };
+    // An earlier one for the same original, rejected.
+    const earlier = await raisedFor(globId);
+    const earlierItem = await item(earlier);
+    unwrap(await knowledge.reject(ADMIN, earlier, earlierItem.version, 'Not now'));
+    const id = await raisedFor(otherGlobId);
+    const before = await item(originalId);
+    llm.answer(
+      toDoc('build_test_lint', 'Test'),
+      json({
+        checked: [...classed('same fact', originalId), ...classed('same fact', earlier)],
+        coveredBy: { kind: 'item', id: originalId, quote: 'generated files live in src/gen/' },
+        suppressedBy: earlier,
+        duplicateOf: null,
+        contradicts: [],
+      }),
+    );
+    await pipeline.processNext();
+
+    const dedupePrompt = llm.calls[1]?.prompt ?? '';
+    expect(dedupePrompt).not.toContain(`- ${originalId} `);
+    expect(dedupePrompt).not.toContain(`- ${earlier}:`);
+    expect(await item(id)).toMatchObject({ status: 'open', coveredBy: null, suppressedBy: null, possiblyCoveredBy: null });
+    expect(await item(originalId)).toEqual(before);
+  });
+
   it.each([
     ['too few words', 'src/gen/'],
     ['too few characters', 'files live in src'],

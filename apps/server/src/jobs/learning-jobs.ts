@@ -15,6 +15,12 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
         ...result.merged.map((m) => `${m.id} into ${m.into}`),
         `${result.skipped} skipped, ${result.flaggedStale} flagged stale, ${result.clearedStale} cleared`,
       ].join('; ');
+    case 'effect_check':
+      return [
+        `${result.watching} watching`,
+        ...result.decided.map((d) => `${d.id} ${d.state.replace('_', ' ')}`),
+        `${result.raised.length} raised${result.raised.length === 0 ? '' : ` (${result.raised.join(', ')})`}`,
+      ].join('; ');
     case 'skipped':
       return `skipped (${result.reason}); the next check tries again`;
   }
@@ -22,7 +28,7 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
 
 /**
  * Checks hourly for the self-improvement pipeline's per-board jobs that are due (mining, then consolidation, a
- * week after the board's last run of each, sooner after a skipped or failed run: `isJobDue`) and runs them through `LearningJobService`, which takes each job's lease so two servers
+ * week after the board's last run of each, then effect checks, a day after theirs, sooner after a skipped or failed run: `isJobDue`) and runs them through `LearningJobService`, which takes each job's lease so two servers
  * don't both run it. Also checks once on start, so a due run isn't left waiting an hour after a restart.
  */
 export class LearningJobs {

@@ -1,4 +1,5 @@
 import { composeAgentSet } from '../domain/agent-set.js';
+import { effectItemOf } from '../domain/effect-check.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import type {
   KbContradiction,
@@ -397,7 +398,13 @@ export class KbPipeline {
           served,
         });
       }
-      const others = (await tx.listKbItems(item.boardId)).filter((i) => i.id !== item.id && i.document === null);
+      // A revise-or-revert item (`effect:` signal) is about its original, and quotes it: dedupe never sees the original
+      // or another item raised for it, so it can't be closed as covered by (or a repeat of) the change it questions.
+      const original = item.signal === null ? null : effectItemOf(item.signal.key);
+      const aboutOriginal = (i: KbItem) => original !== null && (i.id === original || i.signal?.key === item.signal?.key);
+      const others = (await tx.listKbItems(item.boardId)).filter(
+        (i) => i.id !== item.id && i.document === null && !aboutOriginal(i),
+      );
       return {
         docs,
         agentFiles,

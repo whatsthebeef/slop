@@ -10,6 +10,7 @@ import { MAX_CONSOLIDATION_PAIRS } from './kb-consolidation.js';
 import type { KbConsolidation } from './kb-consolidation.js';
 import { LLM_TIMEOUT_MS } from './kb-pipeline.js';
 import type { MiningService } from './mining-service.js';
+import type { EffectCheckService } from './effect-check-service.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -17,11 +18,14 @@ const HOUR_MS = 60 * 60 * 1000;
 export const MINING_INTERVAL_MS = 7 * 24 * HOUR_MS;
 /** Consolidation runs when this long has passed since the board's last run, after mining when both are due. */
 export const CONSOLIDATION_INTERVAL_MS = 7 * 24 * HOUR_MS;
+/** Effect checks run daily: approved changes' figures are refreshed as globs merge. */
+export const EFFECT_CHECK_INTERVAL_MS = 24 * HOUR_MS;
 
 /** How often each job runs, in the order a board's due jobs run. */
 const INTERVALS: readonly (readonly [BoardJobName, number])[] = [
   ['mining', MINING_INTERVAL_MS],
   ['consolidation', CONSOLIDATION_INTERVAL_MS],
+  ['effect_check', EFFECT_CHECK_INTERVAL_MS],
 ];
 /** A board job's lease: another server doesn't start the same job meanwhile. */
 export const BOARD_JOB_LEASE_MS = 30 * 60 * 1000;
@@ -69,7 +73,7 @@ export const MAX_MANIFEST_COMMITS = 50;
 export const isBoardJobName = (value: string): value is BoardJobName => BOARD_JOBS.some((j) => j === value);
 
 /**
- * The self-improvement pipeline's per-board jobs: weekly mining, then weekly consolidation. Each run takes the
+ * The self-improvement pipeline's per-board jobs: weekly mining, then weekly consolidation, then daily effect checks. Each run takes the
  * board's `board_jobs` lease, so two servers don't both run it, and records its result for the Knowledge page.
  * Admins can run one now. While consolidation's AI is unavailable it is skipped (the last run stands), and the next
  * hourly check tries again; a failed run is tried again after a backoff (`failedRetryMs`).
@@ -85,6 +89,8 @@ export class LearningJobService {
       consolidation?: KbConsolidation;
       /** Whether consolidation's model is known to be down (`llmHealth`): the job then waits without calls. */
       consolidationDown?: () => boolean;
+      /** Absent: the effect-check job isn't available. */
+      effectChecks?: EffectCheckService;
       /** Null without a code host: the dependency signal isn't measured. */
       manifests: ManifestSource | null;
       /** Where a run that outlived its lease is reported (the server's error log). */
@@ -92,13 +98,18 @@ export class LearningJobService {
     },
   ) {}
 
-  /** The jobs that can run: mining, and consolidation when it has an LLM. */
+  /** The jobs that can run: mining, consolidation when it has an LLM, and effect checks when wired. */
   private runnable(): BoardJobName[] {
-    return this.deps.consolidation === undefined ? ['mining'] : ['mining', 'consolidation'];
+    return [
+      'mining',
+      ...(this.deps.consolidation === undefined ? [] : ['consolidation' as const]),
+      ...(this.deps.effectChecks === undefined ? [] : ['effect_check' as const]),
+    ];
   }
 
   /**
-   * Runs every board's due jobs (`isJobDue`: each a week after its last run, sooner after a skipped or failed one);
+   * Runs every board's due jobs (`isJobDue`: each its interval after its last run, a week or a day for effect checks,
+   * sooner after a skipped or failed one);
    * returns what ran. Mining runs first so consolidation's stale rule reads this week's below-threshold counts; the
    * items mining raises are still pending, so consolidation compares them once the pipeline has drafted them, the
    * next week. Consolidation isn't claimed while its model is down.
@@ -144,6 +155,20 @@ export class LearningJobService {
   }
 
   /**
+   * After an approval started an effect check (admins only, as Run now): its before figures come now rather than at
+   * the next daily run. Only the approved item is checked, and the job isn't recorded as run, so the board's daily
+   * schedule stands. The check takes the board's effect-check lock per item, so it doesn't clash with a running run.
+   * Throws as the job's run would; the caller logs it.
+   */
+  async checkApproval(email: string, boardId: number, itemId: string): Promise<Result<BoardJobResult>> {
+    const { effectChecks } = this.deps;
+    if (effectChecks === undefined) return invalidInput("The effect_check job isn't available yet");
+    const actor = await this.deps.store.transaction((tx) => adminOf(tx, email, boardId));
+    if (!actor.ok) return actor;
+    return ok(await effectChecks.check(boardId, this.deps.clock.now(), [itemId]));
+  }
+
+  /**
    * The board's jobs with their last runs, for members (the Knowledge page header). `running` is worked out
    * here, by the server's clock, so a browser with a skewed clock still sees an expired lease as not running.
    */
@@ -173,6 +198,11 @@ export class LearningJobService {
         if (error instanceof LlmUnavailable) return { kind: 'skipped', reason: `AI unavailable: ${error.reason}` };
         throw error;
       }
+    }
+    if (job === 'effect_check') {
+      const { effectChecks } = this.deps;
+      if (effectChecks === undefined) throw new Error('The effect-check job is not wired');
+      return effectChecks.check(board.id, started);
     }
     if (job !== 'mining') throw new Error(`The ${job} job can't run yet`);
     const commits = await this.deps.mining.mergedCommits(board.id, started);

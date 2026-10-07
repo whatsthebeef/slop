@@ -22,6 +22,7 @@ export const board: Board = {
   runNoProgressHours: 2,
   runReadyHours: 8,
   subMaxChangedLines: 2000,
+  effectCheckGlobs: 10,
   version: 1,
 };
 

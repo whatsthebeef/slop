@@ -18,6 +18,7 @@ import type {
   GlobFindings,
   KbItem,
   KbProposalList,
+  KbSignal,
   LabelCommand,
   LabelName,
   List,
@@ -230,6 +231,8 @@ export const api = {
     request<KbItem>('POST', `/api/kb/${id}/reject`, { version, reason }),
   boardJobs: (boardId: number) => request<BoardJobStatus[]>('GET', `/api/boards/${boardId}/kb/jobs`),
   runBoardJob: (boardId: number, job: BoardJob['job']) => request<BoardJob>('POST', `/api/boards/${boardId}/kb/jobs/${job}/run`),
+  /** The board's signals as measured now: what an approval of a submitted item can watch (admins). */
+  boardSignals: (boardId: number) => request<KbSignal[]>('GET', `/api/boards/${boardId}/kb/signals`),
   plan: (id: string) =>
     request<{ current: ArtifactView | null; versions: { version: number; createdAt: string; by: string }[] }>(
       'GET',

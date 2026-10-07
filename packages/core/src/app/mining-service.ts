@@ -58,9 +58,14 @@ export class MiningService {
     });
   }
 
-  /** Everything the signals read for the window ending at `now`. */
-  async activity(tx: Tx, boardId: number, now: string, manifestChanges: readonly ManifestChange[] | null): Promise<BoardActivity> {
-    const from = miningWindowFrom(now);
+  /** Everything the signals read for the window ending at `now` (by default the mining window; effect checks look further back). */
+  async activity(
+    tx: Tx,
+    boardId: number,
+    now: string,
+    manifestChanges: readonly ManifestChange[] | null,
+    from: string = miningWindowFrom(now),
+  ): Promise<BoardActivity> {
     // One transaction's queries run one after another.
     const globs = await tx.listGlobs(boardId, {});
     const events = await tx.listBoardEvents(boardId, from);
@@ -101,17 +106,7 @@ export class MiningService {
       const rows = new Map((await tx.listKbSignals(boardId)).map((r) => [r.key, r]));
       const raised: string[] = [];
       const refreshed: string[] = [];
-      const signalOf = (m: Measurement): KbSignal => ({
-        key: m.key,
-        kind: m.kind,
-        agent: signalDefinition(m.key)?.agent ?? null,
-        label: m.label,
-        window: activity.window,
-        figures: m.figures,
-        globIds: m.globIds,
-        examples: m.examples,
-        measuredAt: now,
-      });
+      const signalOf = (m: Measurement): KbSignal => signalFrom(m, activity, now);
 
       const raise = async (m: Measurement): Promise<string> => {
         const id = await this.insertItem(tx, board.id, board.agentSetVersion, m, signalOf(m), now);
@@ -196,6 +191,15 @@ export class MiningService {
     return result;
   }
 
+  /**
+   * The board's signals as measured now over the mining window, without the dependency signal (it needs the code
+   * host): the keys an admin can choose to watch when approving a submitted item. Reads only.
+   */
+  async measure(tx: Tx, boardId: number, now: string): Promise<KbSignal[]> {
+    const activity = await this.activity(tx, boardId, now, null);
+    return measureSignals(activity).map((m) => signalFrom(m, activity, now));
+  }
+
   private async insertItem(tx: Tx, boardId: number, agentSetVersion: number, m: Measurement, signal: KbSignal, now: string): Promise<string> {
     const definition = signalDefinition(m.key);
     const id = await newKbItemId(tx, boardId);
@@ -250,6 +254,19 @@ export class MiningService {
     return tx.updateKbItem(updated, item.version);
   }
 }
+
+/** A measurement as a KB item's signal. */
+const signalFrom = (m: Measurement, activity: BoardActivity, now: string): KbSignal => ({
+  key: m.key,
+  kind: m.kind,
+  agent: signalDefinition(m.key)?.agent ?? null,
+  label: m.label,
+  window: activity.window,
+  figures: m.figures,
+  globIds: m.globIds,
+  examples: m.examples,
+  measuredAt: now,
+});
 
 /**
  * The item that stands for `item` now: itself, or the one it was merged into or covered by; null when there is

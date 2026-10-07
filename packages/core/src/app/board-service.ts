@@ -1,5 +1,6 @@
 import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN } from '../domain/effect-check.js';
 import type { Board, Environment, Member, Role } from '../domain/types.js';
 import type { Notifier, Store, Tx } from '../ports.js';
 
@@ -24,6 +25,7 @@ export type BoardSettings = Partial<
     | 'runNoProgressHours'
     | 'runReadyHours'
     | 'subMaxChangedLines'
+    | 'effectCheckGlobs'
     | 'deploy'
     | 'readinessTicks'
   >
@@ -53,6 +55,10 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
   for (const key of ['runNoProgressHours', 'runReadyHours', 'subMaxChangedLines'] as const) {
     const value = settings[key];
     if (value !== undefined && (!Number.isFinite(value) || value <= 0)) return invalidInput(`${key} must be positive`);
+  }
+  const globs = settings.effectCheckGlobs;
+  if (globs !== undefined && (!Number.isInteger(globs) || globs < EFFECT_CHECK_GLOBS_MIN || globs > EFFECT_CHECK_GLOBS_MAX)) {
+    return invalidInput(`Effect checks compare ${EFFECT_CHECK_GLOBS_MIN} to ${EFFECT_CHECK_GLOBS_MAX} globs a side`);
   }
   if (settings.environments !== undefined) {
     const names = settings.environments.map((e) => e.name.trim());

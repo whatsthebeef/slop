@@ -1,6 +1,7 @@
 import type { Deploy } from '../domain/deploys.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
+import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import type { KbItem } from '../domain/kb.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
@@ -135,7 +136,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, subMaxChangedLines: 2000 };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, subMaxChangedLines: 2000, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },

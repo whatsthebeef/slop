@@ -16,21 +16,31 @@ const documentsSchema = z.object({
 });
 
 const version = z.number().int().positive();
+/** A submitted item: the measured signal its effect check watches (`KnowledgeService.watchableSignals`); not documents. */
+const watchSignal = z.string().min(1).max(200).optional();
 
 /** How an admin approves a KB item (see `Approval` in core). */
 const approvalSchema = z.discriminatedUnion('as', [
-  z.object({ as: z.literal('learning'), version, statement: z.string().max(4000).optional() }),
+  z.object({ as: z.literal('learning'), version, statement: z.string().max(4000).optional(), watchSignal }),
   z.object({
     as: z.literal('edit'),
     version,
+    watchSignal,
     target: z.object({ kind: z.enum(KNOWLEDGE_KINDS), name: z.string().min(1) }),
     content: z.string().min(1).max(500_000),
     statement: z.string().max(4000).optional(),
   }),
-  z.object({ as: z.literal('document'), version, content: z.string().min(1).max(500_000).optional() }),
+  z.object({
+    as: z.literal('document'),
+    version,
+    content: z.string().min(1).max(500_000).optional(),
+    // Refused rather than dropped, so a client that sends one learns that nothing is watched.
+    watchSignal: z.never({ error: "A document proposal doesn't watch a signal" }).optional(),
+  }),
   z.object({
     as: z.literal('draft'),
     version,
+    watchSignal,
     content: z.string().min(1).max(500_000).optional(),
     section: z.string().max(400).nullable().optional(),
     statement: z.string().max(4000).optional(),
@@ -159,17 +169,21 @@ export const mountKnowledge = (
     return send(c, await knowledge.proposals(c.get('email'), Number(c.req.param('b')), parsed.data));
   });
 
-  // The board's self-improvement jobs (weekly mining and consolidation) with their last runs; admins run one now.
+  // The board's self-improvement jobs (weekly mining and consolidation, daily effect checks) with their last runs;
+  // admins run one now.
   app.get('/api/boards/:b/kb/jobs', async (c) => send(c, await deps.jobs.jobs(c.get('email'), Number(c.req.param('b')))));
 
-  // Run now starts the job and answers 202 straight away: the job can outlast a request (manifest reads on the
-  // code host), and the `board.kb` hint refreshes the page when it is done.
-  app.post('/api/boards/:b/kb/jobs/:job/run', async (c) => {
-    const boardId = Number(c.req.param('b'));
-    const job = c.req.param('job');
-    const started = await deps.jobs.runNow(c.get('email'), boardId, job);
-    if (!started.ok) return send(c, started);
-    // The run's errors go to the server's error log, as the weekly run's do.
+  // The board's signals as measured now: what an admin can pick for a submitted item's effect check to watch.
+  app.get('/api/boards/:b/kb/signals', async (c) => send(c, await knowledge.watchableSignals(c.get('email'), Number(c.req.param('b')))));
+
+  /**
+   * Starts a job's run (Run now) without waiting for it: the job can outlast a request (manifest reads on the code
+   * host), and the `board.kb` hint refreshes the page when it is done. The run's errors go to the server's error log,
+   * as the scheduled runs' do.
+   */
+  const runInBackground = async (email: string, boardId: number, job: string) => {
+    const started = await deps.jobs.runNow(email, boardId, job);
+    if (!started.ok) return started;
     void started.value.finished.then(
       (finished) => {
         if (finished.lastResult?.kind === 'failed') deps.logError(job, `board ${String(boardId)}: ${finished.lastResult.error}`);
@@ -178,13 +192,39 @@ export const mountKnowledge = (
         deps.logError(job, `board ${String(boardId)}: recording the run failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
       },
     );
-    return c.json(started.value.job, 202);
+    return started;
+  };
+
+  // Run now answers 202 straight away.
+  app.post('/api/boards/:b/kb/jobs/:job/run', async (c) => {
+    const started = await runInBackground(c.get('email'), Number(c.req.param('b')), c.req.param('job'));
+    return started.ok ? c.json(started.value.job, 202) : send(c, started);
   });
 
   app.post('/api/kb/:itemId/approve', async (c) => {
     const body = await parse(c, approvalSchema);
     if (body instanceof Response) return body;
-    return send(c, await knowledge.approve(c.get('email'), c.req.param('itemId'), body.version, body));
+    const email = c.get('email');
+    const decided = await knowledge.approve(email, c.req.param('itemId'), body.version, body);
+    // A new effect check gets its before figures now rather than at the next daily run, without holding up or failing
+    // the approval, which has committed: its errors go to the error log. Not available is fine: the next run checks it.
+    if (decided.ok && decided.value.effectCheck?.state === 'watching') {
+      const { id, boardId } = decided.value;
+      const failed = (message: string) => {
+        deps.logError('effect_check', `board ${String(boardId)}: checking ${id} on approval: ${message}`);
+      };
+      void Promise.resolve()
+        .then(() => deps.jobs.checkApproval(email, boardId, id))
+        .then(
+          (checked) => {
+            if (checked.ok && checked.value.kind === 'failed') failed(checked.value.error);
+          },
+          (error: unknown) => {
+            failed(error instanceof Error ? (error.stack ?? error.message) : String(error));
+          },
+        );
+    }
+    return send(c, decided);
   });
 
   // Admins point an item at another target; it is drafted again against it.

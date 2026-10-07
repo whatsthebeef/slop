@@ -45,6 +45,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   runNoProgressHours: row.runNoProgressHours,
   runReadyHours: row.runReadyHours,
   subMaxChangedLines: row.subMaxChangedLines,
+  effectCheckGlobs: row.effectCheckGlobs,
   deploy: row.deploy,
   readinessTicks: row.readinessTicks,
   version: row.version,
@@ -170,6 +171,7 @@ const kbItemColumns = (item: KbItem) => ({
   staleDismissedAt: item.staleDismissedAt === null ? null : new Date(item.staleDismissedAt),
   keptApartFrom: [...item.keptApartFrom],
   mergeNote: item.mergeNote,
+  effectCheck: item.effectCheck,
   version: item.version,
 });
 
@@ -287,6 +289,7 @@ export class PgStore implements Store {
             deploy: board.deploy,
             readinessTicks: board.readinessTicks,
             subMaxChangedLines: board.subMaxChangedLines,
+            effectCheckGlobs: board.effectCheckGlobs,
             version: board.version,
           })
           .where(and(eq(schema.boards.id, board.id), eq(schema.boards.version, expectedVersion)))

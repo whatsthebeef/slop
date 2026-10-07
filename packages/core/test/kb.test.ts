@@ -426,7 +426,14 @@ describe('KB review', () => {
         content: 'Implement the plan.\nWrite the regression test before the fix.\n',
       }),
     );
-    expect(approved.outcome).toEqual({ kind: 'applied', target: 'agent', name: 'agents/implementer.md', version: 2 });
+    // The outcome records the board's agent-set version after the approval: the effect check's basis.
+    expect(approved.outcome).toEqual({
+      kind: 'applied',
+      target: 'agent',
+      name: 'agents/implementer.md',
+      version: 2,
+      agentSetVersion: (before ?? 0) + 1,
+    });
     expect((await doc('agent', 'agents/implementer.md'))?.content).toBe(
       'Implement the plan.\nWrite the regression test before the fix.\n',
     );

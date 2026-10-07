@@ -1,4 +1,4 @@
-import { ROLES } from '@slop/core';
+import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ROLES } from '@slop/core';
 import type { DeployIntegration, Environment, Role } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -33,6 +33,7 @@ export const SettingsPage = () => {
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<Role>('dev');
   const [deploy, setDeploy] = useState<DeployIntegration | null>(null);
+  const [effectCheckGlobs, setEffectCheckGlobs] = useState('');
 
   useEffect(() => {
     if (board.data === undefined) return;
@@ -41,6 +42,7 @@ export const SettingsPage = () => {
     setBaseBranch(board.data.baseBranch);
     setRepo(board.data.repo ?? '');
     setDeploy(board.data.deploy);
+    setEffectCheckGlobs(String(board.data.effectCheckGlobs));
   }, [board.data]);
 
   const save = useMutation({
@@ -52,6 +54,8 @@ export const SettingsPage = () => {
         baseBranch,
         repo: repo.trim() === '' ? null : repo.trim(),
         deploy,
+        // Checked by the server (3 to 50); a blank field leaves it as it is.
+        ...(effectCheckGlobs.trim() === '' ? {} : { effectCheckGlobs: Number(effectCheckGlobs) }),
       });
     },
     onSuccess: () => {
@@ -204,6 +208,20 @@ export const SettingsPage = () => {
             )}
           </div>
         ))}
+        <Label>
+          Effect checks: globs compared before and after an approved change ({EFFECT_CHECK_GLOBS_MIN}–{EFFECT_CHECK_GLOBS_MAX})
+          <Input
+            type='number'
+            min={EFFECT_CHECK_GLOBS_MIN}
+            max={EFFECT_CHECK_GLOBS_MAX}
+            step={1}
+            className='w-24'
+            value={effectCheckGlobs}
+            disabled={!admin}
+            onChange={(e) => setEffectCheckGlobs(e.target.value)}
+            data-testid='effect-check-globs'
+          />
+        </Label>
         <DeploySettings
           deploy={deploy}
           environments={envs.filter((e) => e.allowBranchDeploy && e.name.trim() !== '').map((e) => e.name)}

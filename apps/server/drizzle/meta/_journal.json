@@ -127,6 +127,13 @@
       "when": 1791300011000,
       "tag": "0017_kb_consolidation",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791300012000,
+      "tag": "0018_kb_effect_check",
+      "breakpoints": true
     }
   ]
 }

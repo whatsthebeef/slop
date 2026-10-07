@@ -1,5 +1,6 @@
 import {
   agentSetKind,
+  basisText,
   failedRetryMs,
   KB_HISTORY_MAX,
   KB_HISTORY_PAGE,
@@ -20,6 +21,8 @@ import type {
   BoardJobStatus,
   ContextDiffLine,
   DraftPreview,
+  EffectCheck,
+  EffectFigures,
   KbItem,
   KbItemView,
   KbPossibleCoverage,
@@ -116,6 +119,8 @@ interface Board {
   readonly documents: readonly BoardDocument[];
   readonly owned: ReadonlySet<string>;
   readonly onOpenDocument: (name: string) => void;
+  /** Every listed item by ID, to follow a raised item to where it ended up. */
+  readonly items: ReadonlyMap<string, KbItem>;
 }
 
 /** A link to a glob on the board (its view opens there, or on the signed-off page). */
@@ -478,6 +483,140 @@ const SignalFigures = ({ signal }: { signal: KbSignal }) => {
   );
 };
 
+const EFFECT_VERDICTS: Record<Exclude<EffectCheck['state'], 'watching'>, string> = {
+  improved: 'improved',
+  not_improved: 'not improved',
+  worse_elsewhere: 'improved, but another signal got markedly worse',
+  unmeasurable: 'unmeasurable (no eligible glob merged before the approval)',
+};
+
+/** What a check's basis counts from, in a few words: "since v12", or "since 2026-10-07". */
+const sinceText = (check: EffectCheck): string =>
+  check.basis.kind === 'agent_set' ? `since v${check.basis.fromVersion}` : `since ${check.basis.since.slice(0, 10)}`;
+
+/** One side's row of the before/after table. */
+const EffectRow = ({ boardId, name, figures }: { boardId: number; name: string; figures: EffectFigures }) => (
+  <tr>
+    <td className='pr-4'>{name}</td>
+    <td className='pr-4 text-right tabular-nums'>{figures.affected}</td>
+    <td className='pr-4 text-right tabular-nums'>{figures.eligible}</td>
+    <td className='pr-4 text-right tabular-nums'>{percent(figures.rate)}</td>
+    <td className='text-muted-foreground'>
+      {figures.affectedGlobIds.length === 0 ? '—' : <GlobLinks boardId={boardId} ids={figures.affectedGlobIds} />}
+    </td>
+  </tr>
+);
+
+/**
+ * Where an item ended up: itself, or the item consolidation or dedupe merged it into (followed while it is listed).
+ * A merged revise-or-revert item hands its `effect:` signal to a survivor without one, whose approval watches it.
+ */
+const survivorOf = (id: string, items: ReadonlyMap<string, KbItem>): string => {
+  const seen = new Set<string>();
+  let at = id;
+  for (;;) {
+    const item = items.get(at);
+    if (item?.status !== 'merged' || item.duplicateOf === null || seen.has(at)) return at;
+    seen.add(at);
+    at = item.duplicateOf;
+  }
+};
+
+/** The revise-or-revert item a check raised, followed to where it ended up, with its status once decided or closed. */
+const RaisedItem = ({ id, items }: { id: string; items: ReadonlyMap<string, KbItem> }) => {
+  const survivor = survivorOf(id, items);
+  const status = items.get(survivor)?.status;
+  return (
+    <p>
+      Raised <ItemLink id={id} />
+      {survivor !== id && (
+        <>
+          {' '}
+          (merged into <ItemLink id={survivor} />)
+        </>
+      )}{' '}
+      to revise or revert the change{status !== undefined && status !== 'open' && ` (${status})`}.
+    </p>
+  );
+};
+
+/**
+ * An approved change's effect check: watching with the after side's progress, or the verdict; the before and after
+ * figures (and any signal that got markedly worse), with the affected globs, and the revise-or-revert item it raised.
+ */
+const EffectCheckView = ({ board, check }: { board: Board; check: EffectCheck }) => {
+  const { boardId } = board;
+  const { before, after } = check;
+  const status =
+    check.state === 'watching'
+      ? `watching (${after?.eligible ?? 0}/${check.n} globs ${sinceText(check)})`
+      : EFFECT_VERDICTS[check.state];
+  return (
+    <div className='grid gap-1 rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='effect-check'>
+      <p>
+        <span className='font-medium'>Effect check: </span>
+        {status}
+        <span className='text-muted-foreground'>
+          {' '}
+          · {check.label}, {check.n} globs a side with {basisText(check.basis)}
+          {check.checkedAt !== null && ` · checked ${when(check.checkedAt)}`}
+        </span>
+      </p>
+      {before === null || after === null ? (
+        <p className='text-muted-foreground'>The figures come with the next check.</p>
+      ) : (
+        <table className='w-fit' data-testid='effect-figures'>
+          <thead className='text-muted-foreground'>
+            <tr>
+              <th className='pr-4 text-left font-normal'></th>
+              <th className='pr-4 text-right font-normal'>Affected</th>
+              <th className='pr-4 text-right font-normal'>Of</th>
+              <th className='pr-4 text-right font-normal'>Rate</th>
+              <th className='text-left font-normal'>Affected globs</th>
+            </tr>
+          </thead>
+          <tbody>
+            <EffectRow boardId={boardId} name='Before' figures={before} />
+            <EffectRow boardId={boardId} name={check.state === 'watching' ? 'After so far' : 'After'} figures={after} />
+            {check.worse.flatMap((w) => [
+              <EffectRow key={`${w.key}-before`} boardId={boardId} name={`${w.label}, before`} figures={w.before} />,
+              <EffectRow key={`${w.key}-after`} boardId={boardId} name={`${w.label}, after`} figures={w.after} />,
+            ])}
+          </tbody>
+        </table>
+      )}
+      {check.raisedItemId !== null && <RaisedItem id={check.raisedItemId} items={board.items} />}
+    </div>
+  );
+};
+
+/**
+ * For a submitted item an admin approves: a signal for the effect check to watch, from the board's signals as measured
+ * now (none by default). Mined items watch their own signal.
+ */
+const WatchSignal = ({ boardId, value, onChange }: { boardId: number; value: string; onChange: (key: string) => void }) => {
+  const signals = useQuery({ queryKey: ['kb-signals', boardId], queryFn: () => api.boardSignals(boardId) });
+  return (
+    <Label className='text-xs'>
+      Watch signal (effect check)
+      <Select value={value} onChange={(e) => onChange(e.target.value)} disabled={signals.data === undefined} data-testid='watch-signal'>
+        <option value=''>None</option>
+        {(signals.data ?? []).map((s) => (
+          <option key={s.key} value={s.key}>
+            {s.label} ({s.figures.affected}/{s.figures.eligible}, {percent(s.figures.rate)})
+          </option>
+        ))}
+      </Select>
+    </Label>
+  );
+};
+
+/** The approval's Watch signal field: only when one was chosen. */
+const watching = (key: string): { watchSignal?: string } => (key === '' ? {} : { watchSignal: key });
+
+/** Whether an open item can be given a signal to watch on approval: submitted statements without one. */
+const canWatch = (item: KbItem): boolean => item.status === 'open' && item.document === null && item.signal === null;
+
 /** Whether a board job's lease is held (it is running on a server now), as the server worked it out. */
 const isJobRunning = (job: BoardJobStatus | undefined): boolean => job?.running ?? false;
 
@@ -496,6 +635,8 @@ const jobSummary = (result: BoardJobResult): string => {
       return `waiting: ${result.reason}; it tries again within the hour`;
     case 'mining':
       return `${result.measured} signals measured, ${result.raised.length} raised`;
+    case 'effect_check':
+      return `${result.watching} watching, ${result.decided.length} decided, ${result.raised.length} revise-or-revert items raised`;
     case 'consolidation': {
       const checked = result.alreadyChecked ?? 0;
       // No candidate-pair call: nothing new to compare since the last run, not a search that found nothing.
@@ -506,17 +647,20 @@ const jobSummary = (result: BoardJobResult): string => {
   }
 };
 
-const JOB_LABELS: Record<'mining' | 'consolidation', { title: string; name: string }> = {
+type JobName = 'mining' | 'consolidation' | 'effect_check';
+
+const JOB_LABELS: Record<JobName, { title: string; name: string }> = {
   mining: { title: 'Mined weekly', name: 'Mining' },
   consolidation: { title: 'Consolidated weekly', name: 'Consolidation' },
+  effect_check: { title: 'Effect checks daily', name: 'The effect check' },
 };
 
 /**
- * A weekly job (mining or consolidation): when it last ran and what it did, or that it is running, with Run now for
+ * A board job (weekly mining or consolidation, daily effect checks): when it last ran and what it did, or that it is running, with Run now for
  * admins. Run now starts the job and returns; the `board.kb` hint, reconnects and a slow poll while it runs show the
  * result. The jobs share one query (the board's job list).
  */
-const JobStatus = ({ boardId, admin, job }: { boardId: number; admin: boolean; job: 'mining' | 'consolidation' }) => {
+const JobStatus = ({ boardId, admin, job }: { boardId: number; admin: boolean; job: JobName }) => {
   const client = useQueryClient();
   const toast = useToast();
   const { title, name } = JOB_LABELS[job];
@@ -670,8 +814,9 @@ const ProposalCard = ({
   const client = useQueryClient();
   const toast = useToast();
   const preview = open && item.draft !== null ? item.preview : null;
+  const [watch, setWatch] = useState('');
   const approveDraft = useMutation({
-    mutationFn: () => api.approveProposal(item.id, item.version, { as: 'draft' }),
+    mutationFn: () => api.approveProposal(item.id, item.version, { as: 'draft', ...watching(watch) }),
     onSuccess: (decided) => {
       markLocal(decided.id);
       toast(appliedText(decided));
@@ -744,6 +889,7 @@ const ProposalCard = ({
         <p className='text-xs text-muted-foreground'>Suggested by the submitter: {item.suggestedTarget}</p>
       )}
       {item.signal !== null && <SignalFigures signal={item.signal} />}
+      {item.effectCheck !== null && <EffectCheckView board={board} check={item.effectCheck} />}
       <ProcessingState item={item} admin={admin} onRetry={() => retry.mutate()} retrying={retry.isPending} />
       {preview !== null && <DraftView rationale={item.rationale} preview={preview} />}
       <Evidence boardId={boardId} item={item} />
@@ -797,6 +943,11 @@ const ProposalCard = ({
           <Button size='sm' variant='outline' disabled={reopen.isPending} onClick={() => reopen.mutate()}>
             Reopen
           </Button>
+        </div>
+      )}
+      {open && admin && canWatch(item) && item.draft !== null && (
+        <div className='w-fit'>
+          <WatchSignal boardId={boardId} value={watch} onChange={setWatch} />
         </div>
       )}
       {open && admin && (
@@ -859,11 +1010,13 @@ const DecisionDialog = ({
   const [statement, setStatement] = useState(item.statement);
   const [content, setContent] = useState(item.document?.content ?? '');
   const [reason, setReason] = useState('');
+  const [watch, setWatch] = useState('');
 
   const decide = useMutation({
     mutationFn: () => {
       if (decision === 'reject') return api.rejectProposal(item.id, item.version, reason);
-      const approval: Approval = decision === 'learning' ? { as: 'learning', statement } : { as: 'document', content };
+      const approval: Approval =
+        decision === 'learning' ? { as: 'learning', statement, ...watching(watch) } : { as: 'document', content };
       return api.approveProposal(item.id, item.version, approval);
     },
     onSuccess: (decided) => {
@@ -899,6 +1052,7 @@ const DecisionDialog = ({
                 Statement
                 <Textarea value={statement} onChange={(e) => setStatement(e.target.value)} />
               </Label>
+              {canWatch(item) && <WatchSignal boardId={boardId} value={watch} onChange={setWatch} />}
             </>
           )}
           {decision === 'document' && item.document !== null && (
@@ -957,6 +1111,7 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
   const wanted = item.draft?.section ?? target.section;
   const [section, setSection] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(item.draft?.content ?? null);
+  const [watch, setWatch] = useState('');
   // Until the admin picks one: the draft's heading when the target has it (matched as core's splice
   // matches it, ignoring case), otherwise append.
   const matched = wanted === null ? undefined : headings.find((h) => sameHeading(h, wanted.replace(/^#+\s*/, '')));
@@ -966,7 +1121,12 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
 
   const approve = useMutation({
     mutationFn: () =>
-      api.approveProposal(item.id, item.version, { as: 'draft', content: body ?? '', section: isNew || chosen === '' ? null : chosen }),
+      api.approveProposal(item.id, item.version, {
+        as: 'draft',
+        content: body ?? '',
+        section: isNew || chosen === '' ? null : chosen,
+        ...watching(watch),
+      }),
     onSuccess: (decided) => {
       markLocal(decided.id);
       toast(appliedText(decided));
@@ -1014,6 +1174,7 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
           onChange={(e) => setContent(e.target.value)}
         />
       </Label>
+      {canWatch(item) && <WatchSignal boardId={boardId} value={watch} onChange={setWatch} />}
       <div className='flex justify-end gap-2'>
         <Button type='button' variant='outline' size='sm' onClick={onClose}>
           Cancel
@@ -1279,7 +1440,6 @@ export const KbProposals = ({
   });
   const [opened, setOpened] = useState<{ item: KbItemView; opening: Opening } | null>(null);
 
-  const board: Board = { boardId, admin, documents, owned: ownedPaths(agentEntries), onOpenDocument };
   const { data } = proposals;
   // Core orders the open queue (by evidence, then the freshest).
   const open = useMemo(() => data?.open ?? [], [data]);
@@ -1291,6 +1451,8 @@ export const KbProposals = ({
     [data, open],
   );
   const motion = useCardMotion(listed, live, KB_MOTION);
+  const items = useMemo(() => new Map((listed ?? []).map((i) => [i.id, i])), [listed]);
+  const board: Board = { boardId, admin, documents, owned: ownedPaths(agentEntries), onOpenDocument, items };
   // The route lists at most KB_HISTORY_MAX of each group.
   const hasMore = historyLimit < KB_HISTORY_MAX && (decided.total > decided.items.length || closed.total > closed.items.length);
   const showMore = hasMore && (
@@ -1327,11 +1489,13 @@ export const KbProposals = ({
           Learnings and documents submitted by agents, and signals slop mines from its own data each week, routed to a target,
           checked for repeats and drafted as a change in the background. Nothing reaches the knowledge base or the agent set
           until an admin approves it. The most evidence comes first, then the freshest. Each week slop also merges open items
-          that state the same fact (only on quotes it checks) and flags stale ones for you to mark not stale or reject.
+          that state the same fact (only on quotes it checks) and flags stale ones for you to mark not stale or reject. Each
+          day it checks whether approved changes with a signal worked, and proposes revising or reverting one that didn't.
         </p>
         <div className='flex flex-wrap items-center gap-x-6 gap-y-1'>
           <JobStatus boardId={boardId} admin={admin} job='mining' />
           <JobStatus boardId={boardId} admin={admin} job='consolidation' />
+          <JobStatus boardId={boardId} admin={admin} job='effect_check' />
         </div>
         {proposals.isPending && <p className='text-sm text-muted-foreground'>Loading…</p>}
         {proposals.data !== undefined && open.length === 0 && <p className='text-sm text-muted-foreground'>No open proposals.</p>}

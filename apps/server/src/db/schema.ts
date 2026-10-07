@@ -3,6 +3,7 @@ import type {
   BoardJobResult,
   DeployIntegration,
   DomainEvent,
+  EffectCheck,
   Effect,
   Environment,
   ExtraEvidence,
@@ -19,7 +20,7 @@ import type {
   ProposedDocument,
   SignalFigures,
 } from '@slop/core';
-import { BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
+import { BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -59,6 +60,8 @@ export const boards = pgTable('boards', {
   runNoProgressHours: integer('run_no_progress_hours').notNull().default(2),
   runReadyHours: integer('run_ready_hours').notNull().default(8),
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
+  /** Effect checks: globs compared on each side of an approved change. */
+  effectCheckGlobs: integer('effect_check_globs').notNull().default(EFFECT_CHECK_GLOBS_DEFAULT),
   /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
   deploy: jsonb('deploy').$type<DeployIntegration>(),
   /** Readiness items slop can't check, ticked by an admin. */
@@ -287,6 +290,8 @@ export const kbProposals = pgTable(
     keptApartFrom: jsonb('kept_apart_from').$type<string[]>().notNull().default([]),
     /** Merged by weekly consolidation: the verified quotes. */
     mergeNote: jsonb('merge_note').$type<KbMergeNote>(),
+    /** Approved with a signal: whether the change worked, refreshed daily while watching. */
+    effectCheck: jsonb('effect_check').$type<EffectCheck>(),
     version: integer('version').notNull(),
   },
   (t) => [
