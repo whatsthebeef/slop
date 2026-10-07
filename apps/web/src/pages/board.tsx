@@ -96,7 +96,7 @@ const Column = ({
   ghost: Preview | null;
 }) => (
   <section
-    className='list-well flex min-h-full min-w-64 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2'
+    className='list-well flex min-w-64 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2'
     aria-label={LIST_TITLES[list]}
     data-testid={`list-${list}`}
   >
@@ -396,50 +396,52 @@ export const BoardPage = () => {
         ref={(el) => {
           motion.container.current = el;
         }}
-        className='flex flex-1 gap-3 overflow-auto px-5 py-4'
+        className='flex-1 overflow-auto px-5 py-4'
       >
-        {LISTS.map((list) => {
-          const items = visible
-            .filter((g) => g.list === list)
-            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-          return (
-            <Column key={list} list={list} count={items.length} ghost={preview?.target === list ? preview : null}>
-              {items.map((glob) => {
-                const moves = movesFor(glob);
-                return (
-                  <GlobCard
-                    key={glob.id}
-                    glob={glob}
-                    onOpen={() => {
-                      setOpenArtifact(null);
-                      setOpenId(glob.id);
-                    }}
-                    onOpenArtifact={(kind) => {
-                      setOpenArtifact({ kind, label: '' });
-                      setOpenId(glob.id);
-                    }}
-                    onReviewLabel={reviewLabel(glob)}
-                    moves={moves.map((m) => m.move)}
-                    previewing={preview?.glob.id === glob.id ? preview.move.action : null}
-                    onPreview={(move) => {
-                      const target = moves.find((m) => m.move.action === move?.action)?.target;
-                      setPreview(move === null || target === undefined ? null : { glob, move, target });
-                    }}
-                    onMove={(move) => {
-                      const target = moves.find((m) => m.move.action === move.action)?.target;
-                      if (target !== undefined) runMove(glob, move, target);
-                    }}
-                    onArrow={(direction) => arrow(glob, direction)}
-                    lock={motion.locks[glob.id]}
-                    bump={bumps[glob.id]}
-                    tag={motion.tags[glob.id]}
-                    deploy={deployState.data?.indicators[glob.id]}
-                  />
-                );
-              })}
-            </Column>
-          );
-        })}
+        <div className='flex min-h-full min-w-full w-max items-stretch gap-3'>
+          {LISTS.map((list) => {
+            const items = visible
+              .filter((g) => g.list === list)
+              .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+            return (
+              <Column key={list} list={list} count={items.length} ghost={preview?.target === list ? preview : null}>
+                {items.map((glob) => {
+                  const moves = movesFor(glob);
+                  return (
+                    <GlobCard
+                      key={glob.id}
+                      glob={glob}
+                      onOpen={() => {
+                        setOpenArtifact(null);
+                        setOpenId(glob.id);
+                      }}
+                      onOpenArtifact={(kind) => {
+                        setOpenArtifact({ kind, label: '' });
+                        setOpenId(glob.id);
+                      }}
+                      onReviewLabel={reviewLabel(glob)}
+                      moves={moves.map((m) => m.move)}
+                      previewing={preview?.glob.id === glob.id ? preview.move.action : null}
+                      onPreview={(move) => {
+                        const target = moves.find((m) => m.move.action === move?.action)?.target;
+                        setPreview(move === null || target === undefined ? null : { glob, move, target });
+                      }}
+                      onMove={(move) => {
+                        const target = moves.find((m) => m.move.action === move.action)?.target;
+                        if (target !== undefined) runMove(glob, move, target);
+                      }}
+                      onArrow={(direction) => arrow(glob, direction)}
+                      lock={motion.locks[glob.id]}
+                      bump={bumps[glob.id]}
+                      tag={motion.tags[glob.id]}
+                      deploy={deployState.data?.indicators[glob.id]}
+                    />
+                  );
+                })}
+              </Column>
+            );
+          })}
+        </div>
       </main>
 
       <CreateGlobDialog
