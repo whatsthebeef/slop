@@ -18,6 +18,7 @@ describe('GET /api/health', () => {
   let database: Database;
   let drop: () => Promise<void>;
   let app: Hono<Env>;
+  let boards: BoardService;
   const health = new LlmHealth(undefined, () => '2026-10-07T09:00:00.000Z');
 
   beforeAll(async () => {
@@ -32,17 +33,21 @@ describe('GET /api/health', () => {
       ids: { runId: () => crypto.randomUUID() },
       routines: { hasRoutine: () => Promise.resolve(true) },
     });
+    boards = new BoardService({ store, notifier: hub });
     // The real app and its sign-in check (dev mode: `Bearer dev:<email>`).
     app = createApp({
       auth: new Auth(db, loadConfig({})),
       links: new SignedLinks('test'),
-      boards: new BoardService({ store, notifier: hub }),
+      boards,
       globs,
       hub,
       outbox: new OutboxRunner(db, { globs }, {}, () => undefined),
       onBoardCreated: () => Promise.resolve(),
     });
-    mountHealth(app, { llm: health });
+    mountHealth(app, { llm: health, boards });
+    await store.transaction((tx) => tx.upsertUser({ email: 'member@example.com', name: 'Member', active: true }));
+    const created = await boards.create('member@example.com', { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
+    if (!created.ok) throw new Error(created.error.message);
   });
 
   afterAll(async () => {
@@ -55,15 +60,21 @@ describe('GET /api/health', () => {
     expect((await get()).status).toBe(401);
   });
 
+  it('is for board members only', async () => {
+    const response = await get({ authorization: 'Bearer dev:nobody@example.com' });
+    expect(response.status).toBe(403);
+  });
+
   it("reports the LLM's state: unknown, then down with the reason and fix", async () => {
     const signedIn = { authorization: 'Bearer dev:member@example.com' };
     const before = await get(signedIn);
     expect(before.status).toBe(200);
     expect(await before.json()).toEqual({ llm: { state: 'unknown' } });
 
-    const tracked = health.track({
-      complete: () => Promise.reject(new LlmUnavailable('AWS sign-in expired', 'Run `aws sso login`')),
-    });
+    const tracked = health.track(
+      { complete: () => Promise.reject(new LlmUnavailable('AWS sign-in expired', 'Run `aws sso login`')) },
+      'us.anthropic.claude-opus-5-5',
+    );
     await expect(tracked.complete({ system: 's', prompt: 'p', maxTokens: 1 })).rejects.toBeInstanceOf(LlmUnavailable);
     expect(await (await get(signedIn)).json()).toEqual({
       llm: { state: 'down', reason: 'AWS sign-in expired', fix: 'Run `aws sso login`', since: '2026-10-07T09:00:00.000Z' },

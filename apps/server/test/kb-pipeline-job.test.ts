@@ -57,6 +57,38 @@ describe('KbPipelineJob', () => {
     expect(pipeline.claims).toBe(11);
   });
 
+  it('does not count a probe that found nothing due, so the item is probed on the next tick', async () => {
+    let now = 0;
+    let due = false;
+    const claims: (string | null)[] = [];
+    const pipeline = {
+      processNext: (): Promise<string | null> => {
+        const id = due ? 's1k1' : null;
+        claims.push(id);
+        due = false;
+        return Promise.resolve(id);
+      },
+    };
+    const job = new KbPipelineJob(pipeline, () => undefined, { isDown: () => true }, () => now);
+    due = true;
+    await job.drain();
+    expect(claims).toEqual(['s1k1']);
+    // A minute on, the item isn't quite due yet (its wait started a moment after the claim).
+    now += PROBE_MS;
+    await job.drain();
+    expect(claims).toEqual(['s1k1', null]);
+    // The next tick probes it.
+    now += 5_000;
+    due = true;
+    await job.drain();
+    expect(claims).toEqual(['s1k1', null, 's1k1']);
+    // Then it waits a minute again.
+    now += 5_000;
+    due = true;
+    await job.drain();
+    expect(claims).toHaveLength(3);
+  });
+
   it('stops claiming as soon as a call finds the LLM down mid-drain, and waits an interval to probe', async () => {
     let now = 0;
     let down = false;

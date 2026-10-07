@@ -71,7 +71,7 @@ You get the new learning, then lists of open items (awaiting review), approved i
 Work in this order:
 1. fact: restate the new learning's specific fact or rule in one sentence.
 2. checked: for the few candidates closest to it (at most 5; [] if none comes close), the relation of that candidate to the fact: "same fact" (it states this fact or rule, however worded), "related topic only" (same tool, area or subject, but not this fact), "unrelated", or "contradicts" (both cannot be followed).
-3. The answer, from those relations only.
+3. The answer, from those relations only: a candidate you name in it must be in checked with the matching relation.
 
 The default answer is new: every field null and contradicts []. Only a "same fact" candidate may set suppressedBy, duplicateOf or coveredBy, and only a "contradicts" candidate may go in contradicts. Overlapping topic, tool or area is not coverage, and a more general rule does not cover a specific fact. When unsure, answer new.
 
@@ -205,6 +205,8 @@ export class KbPipeline {
     try {
       return await llm.complete({ ...request, signal });
     } catch (error) {
+      // An unusable LLM stays unusable when the deadline also fired: the item waits, no attempt counted.
+      if (error instanceof LlmUnavailable) throw error;
       if (signal.aborted) throw new Error(`The model did not answer within ${timeoutMs / 1000} s`, { cause: error });
       throw error;
     }
@@ -636,6 +638,13 @@ const parseRouting = (answer: string, snapshot: Snapshot): Routing | null => {
 /** The `checked` ref for the target's current text. */
 const TARGET_REF = 'current text';
 
+/** A `checked` ref or relation as compared: lower case, `_` and `-` as spaces, spaces collapsed ("Same_Fact" is "same fact"). */
+const normalised = (value: unknown): string =>
+  (text(value) ?? '')
+    .toLowerCase()
+    .replace(/[\s_-]+/g, ' ')
+    .trim();
+
 /**
  * The dedupe answer, keeping only references to items and text it was shown (anything else is
  * ignored rather than failing the item); null when it isn't a JSON object. Every coverage and
@@ -643,22 +652,21 @@ const TARGET_REF = 'current text';
  * else it is dropped. `targetText` is null when the model was told the target has no text yet (a
  * new document, an empty overlay or document), so the target can't cover or contradict the learning.
  * `fact` (the model's restatement) is only there to focus the model and isn't kept. `checked` isn't
- * kept either, but a claim on a candidate it classed otherwise (a duplicate it called "related
- * topic only") is dropped; a claim on a candidate it didn't list stands on its quote alone.
+ * kept either, but every claim needs it: a candidate closes or flags the item only when `checked`
+ * classes it "same fact" (suppressedBy, duplicateOf, coveredBy) or "contradicts" (contradicts). A
+ * claim on a candidate it classed otherwise, or didn't class, contradicts its own reasoning, which
+ * is the unsure case: the item stays new.
  */
 const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targetText: string | null): Dedupe | null => {
   const parsed = parseJson(answer);
   if (!isObject(parsed)) return null;
   const relations = new Map<string, string>();
   for (const entry of list(field(parsed, 'checked'))) {
-    const ref = text(field(entry, 'ref'))?.trim().toLowerCase() ?? '';
-    const relation = text(field(entry, 'relation'))?.trim().toLowerCase() ?? '';
+    const ref = normalised(field(entry, 'ref'));
+    const relation = normalised(field(entry, 'relation'));
     if (ref !== '' && relation !== '') relations.set(ref, relation);
   }
-  const classedAs = (ref: string, relation: 'same fact' | 'contradicts') => {
-    const given = relations.get(ref.toLowerCase());
-    return given === undefined || given === relation;
-  };
+  const classedAs = (ref: string, relation: 'same fact' | 'contradicts') => relations.get(normalised(ref)) === relation;
   const itemIn = (items: readonly KbItem[], value: unknown, relation: 'same fact' | 'contradicts') => {
     const id = text(value)?.trim();
     const found = items.find((i) => i.id === id) ?? null;

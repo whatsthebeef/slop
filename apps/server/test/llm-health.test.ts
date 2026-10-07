@@ -21,14 +21,14 @@ describe('LlmHealth', () => {
   const setup = () => {
     const changes: LlmHealthState[] = [];
     let tick = 0;
-    const health = new LlmHealth((s) => changes.push(s), () => `2026-10-07T00:00:0${String(tick++)}.000Z`);
+    const health = new LlmHealth((_model, s) => changes.push(s), () => `2026-10-07T00:00:0${String(tick++)}.000Z`);
     return { health, changes };
   };
 
   it('starts unknown, goes ok on success and down on LlmUnavailable, telling the listener once per change', async () => {
     const { health, changes } = setup();
     const a = scripted();
-    const tracked = health.track(a.llm);
+    const tracked = health.track(a.llm, 'opus');
     expect(health.state()).toEqual({ state: 'unknown' });
     expect(health.isDown()).toBe(false);
 
@@ -57,26 +57,36 @@ describe('LlmHealth', () => {
     ]);
   });
 
-  it('leaves the state alone on ordinary failures and shares one state across tracked instances', async () => {
+  it('leaves the state alone on ordinary failures and tracks each model on its own', async () => {
     const { health, changes } = setup();
     const intake = scripted();
     const draft = scripted();
-    const trackedIntake = health.track(intake.llm);
-    const trackedDraft = health.track(draft.llm);
+    const trackedIntake = health.track(intake.llm, 'haiku');
+    const trackedDraft = health.track(draft.llm, 'opus');
 
     const throttled = new Error('Too many requests');
     draft.fail(throttled);
     await expect(trackedDraft.complete(REQUEST)).rejects.toBe(throttled);
     expect(health.state()).toEqual({ state: 'unknown' });
 
-    draft.fail(new LlmUnavailable('AWS sign-in expired', 'Run `aws sso login`'));
+    draft.fail(new LlmUnavailable('No access to the Bedrock model opus', 'Enable it'));
     await expect(trackedDraft.complete(REQUEST)).rejects.toBeInstanceOf(LlmUnavailable);
     draft.fail(throttled);
     await expect(trackedDraft.complete(REQUEST)).rejects.toBe(throttled);
-    expect(health.isDown()).toBe(true);
+    expect(health.isDown(['opus'])).toBe(true);
 
+    // Intake working says nothing about the KB model: no flapping, and the worst state is reported.
     await trackedIntake.complete(REQUEST);
-    expect(health.isDown()).toBe(false);
+    await trackedIntake.complete(REQUEST);
+    expect(health.isDown(['opus'])).toBe(true);
+    expect(health.isDown(['haiku'])).toBe(false);
+    expect(health.isDown()).toBe(true);
+    expect(health.state()).toMatchObject({ state: 'down', reason: 'No access to the Bedrock model opus' });
     expect(changes.map((c) => c.state)).toEqual(['down', 'ok']);
+
+    draft.succeed();
+    await trackedDraft.complete(REQUEST);
+    expect(health.isDown()).toBe(false);
+    expect(health.state()).toMatchObject({ state: 'ok' });
   });
 });

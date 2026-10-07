@@ -313,7 +313,7 @@ const ProcessingState = ({ item, admin, onRetry, retrying }: { item: KbItem; adm
   if (waiting !== null) {
     return (
       <p className='text-xs text-muted-foreground' data-testid='processing-waiting'>
-        Waiting: AI unavailable — {waiting}. {item.target === null ? 'Routing' : 'Drafting'} resumes once it works again.
+        Waiting: AI unavailable — {waiting}. {stage} resumes once it works again.
       </p>
     );
   }

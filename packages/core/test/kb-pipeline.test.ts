@@ -64,6 +64,8 @@ class HangingLlm implements Llm {
 }
 
 const json = (value: unknown) => JSON.stringify(value);
+/** The dedupe answer's `checked` entries: each ref with the same relation. */
+const classed = (relation: string, ...refs: string[]) => refs.map((ref) => ({ ref, relation }));
 const toDoc = (name: string, section: string | null = null) =>
   json({ target: { kind: 'document', name, section, newDocument: null }, catalogCandidate: false, catalogReason: null });
 const toNewDoc = (name: string) =>
@@ -268,7 +270,7 @@ describe('KB pipeline: routing and dedupe', () => {
   it('merges a near-duplicate of an open item into it, adding its evidence, count and globs', async () => {
     const first = await routedAlone();
     const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated', evidence: 'Tester note' });
-    llm.answer(toNewDoc('testing'), json({ duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
     expect(await pipeline.process(second)).toBe(true);
 
     expect(llm.calls[2]?.prompt).toContain(`- ${first} (gotcha): Generated files live in src/gen/`);
@@ -292,7 +294,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const lease = '2026-10-05T12:05:00.000Z';
     await store.transaction((tx) => tx.updateKbItem({ ...claimed, processAfter: lease, version: claimed.version + 1 }, claimed.version));
     const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
-    llm.answer(toNewDoc('testing'), json({ duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
     expect(await pipeline.processNext()).toBe(second);
     expect(await item(first)).toMatchObject({ occurrenceCount: 2, processing: 'routed', processAfter: null });
 
@@ -306,7 +308,7 @@ describe('KB pipeline: routing and dedupe', () => {
         backingOff.version,
       ),
     );
-    llm.answer(toNewDoc('testing'), json({ duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
     expect(await pipeline.process(third)).toBe(true);
     expect(await item(first)).toMatchObject({ occurrenceCount: 3, processAfter: backoff });
   });
@@ -316,7 +318,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const decided = await item(rejected);
     unwrap(await knowledge.reject(ADMIN, rejected, decided.version, 'Not true here'));
     const id = await submit({ statement: 'src/gen/ holds generated code' });
-    llm.answer(toNewDoc('testing'), json({ suppressedBy: rejected, duplicateOf: null, coveredBy: null, contradicts: [] }));
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', rejected), suppressedBy: rejected, duplicateOf: null, coveredBy: null, contradicts: [] }));
     expect(await pipeline.processNext()).toBe(id);
 
     expect(llm.calls[1]?.prompt).toContain(`- ${rejected}: Generated files live in src/gen/ (rejected: Not true here)`);
@@ -328,7 +330,7 @@ describe('KB pipeline: routing and dedupe', () => {
     unwrap(await knowledge.approve(ADMIN, approvedId, (await item(approvedId)).version, { as: 'learning' }));
     const before = await item(approvedId);
     const id = await submit({ sourceGlobId: otherGlobId });
-    llm.answer(toNewDoc('testing'), json({ coveredBy: { kind: 'item', id: approvedId, quote: 'generated files live in  src/gen/' }, contradicts: [] }));
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', approvedId), coveredBy: { kind: 'item', id: approvedId, quote: 'generated files live in  src/gen/' }, contradicts: [] }));
     await pipeline.processNext();
 
     expect(await item(id)).toMatchObject({ status: 'covered', coveredBy: { kind: 'item', id: approvedId } });
@@ -346,7 +348,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const approvedId = await submit();
     unwrap(await knowledge.approve(ADMIN, approvedId, (await item(approvedId)).version, { as: 'learning' }));
     const id = await submit({ sourceGlobId: otherGlobId });
-    llm.answer(toDoc('build_test_lint', 'Test'), json({ coveredBy: { kind: 'item', id: approvedId, quote: 'generated files live in  src/gen/' }, contradicts: [] }));
+    llm.answer(toDoc('build_test_lint', 'Test'), json({ checked: classed('same fact', approvedId), coveredBy: { kind: 'item', id: approvedId, quote: 'generated files live in  src/gen/' }, contradicts: [] }));
     await pipeline.processNext();
     const closed = await item(id);
     expect(closed.status).toBe('covered');
@@ -390,7 +392,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const id = await submit({ statement: 'Tests run with vitest' });
     llm.answer(
       toDoc('build_test_lint', 'Test'),
-      json({ coveredBy: { kind: 'target', quote: 'run  VITEST.', reason: 'Names the runner' } }),
+      json({ checked: classed('same fact', 'current text'), coveredBy: { kind: 'target', quote: 'run  VITEST.', reason: 'Names the runner' } }),
     );
     await pipeline.processNext();
     expect(await item(id)).toMatchObject({
@@ -407,7 +409,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const targetId = await submit({ statement: 'Run aws sso login when Bedrock calls fail' });
     llm.answer(
       toDoc('build_test_lint', 'Test'),
-      json({ coveredBy: { kind: 'target', quote: 'Run aws sso login', reason: 'Run locally' } }),
+      json({ checked: classed('same fact', 'current text'), coveredBy: { kind: 'target', quote: 'Run aws sso login', reason: 'Run locally' } }),
     );
     await pipeline.processNext();
     expect(await item(targetId)).toMatchObject({ status: 'open', coveredBy: null, possiblyCoveredBy: null });
@@ -415,7 +417,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const itemId = await submit({ sourceGlobId: otherGlobId });
     llm.answer(
       toDoc('build_test_lint', 'Test'),
-      json({ coveredBy: { kind: 'item', id: approvedId, quote: 'Docker compose from worktrees' }, contradicts: [] }),
+      json({ checked: classed('same fact', approvedId), coveredBy: { kind: 'item', id: approvedId, quote: 'Docker compose from worktrees' }, contradicts: [] }),
     );
     await pipeline.processNext();
     expect(await item(itemId)).toMatchObject({ status: 'open', coveredBy: null, possiblyCoveredBy: null });
@@ -428,6 +430,7 @@ describe('KB pipeline: routing and dedupe', () => {
     llm.answer(
       toNewDoc('testing_conventions'),
       json({
+        checked: classed('contradicts', 'current text', first),
         coveredBy: { kind: 'target', quote: 'Run vitest.', reason: 'x' },
         contradicts: [
           { kind: 'target', ref: '', quote: 'Run vitest.', note: 'Says otherwise' },
@@ -453,6 +456,7 @@ describe('KB pipeline: routing and dedupe', () => {
     llm.answer(
       toDoc('build_test_lint', 'Test'),
       json({
+        checked: [...classed('same fact', 's99k1', 's99k2'), ...classed('contradicts', 'current text', approvedId, 's99k3')],
         duplicateOf: 's99k1',
         coveredBy: { kind: 'item', id: 's99k2' },
         contradicts: [
@@ -650,6 +654,48 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(await item(covered)).toMatchObject({ status: 'open', possiblyCoveredBy: { quote: 'Run vitest.' } });
   });
 
+  it('closes and flags nothing for a candidate the answer did not class, and reads relations loosely spelled', async () => {
+    const first = await routedAlone();
+    const unlisted = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
+    llm.answer(
+      toNewDoc('testing'),
+      json({ fact: 'src/gen/ is generated', checked: classed('related topic only', 's1k77'), duplicateOf: first, contradicts: [] }),
+    );
+    expect(await pipeline.process(unlisted)).toBe(true);
+    expect(await item(unlisted)).toMatchObject({ status: 'open', duplicateOf: null });
+    expect(await item(first)).toMatchObject({ occurrenceCount: 1 });
+
+    const spelled = await submit({ sourceGlobId: otherGlobId, statement: 'src/gen/ holds generated code' });
+    llm.answer(toNewDoc('testing'), json({ checked: [{ ref: ` ${first} `, relation: 'Same_Fact' }], duplicateOf: first }));
+    expect(await pipeline.process(spelled)).toBe(true);
+    expect(await item(spelled)).toMatchObject({ status: 'merged', duplicateOf: first });
+    const hyphenated = await submit({ sourceGlobId: otherGlobId, statement: 'Generated: src/gen/' });
+    llm.answer(toNewDoc('testing'), json({ checked: [{ ref: first, relation: 'same-fact' }], duplicateOf: first }));
+    expect(await pipeline.process(hyphenated)).toBe(true);
+    expect(await item(hyphenated)).toMatchObject({ status: 'merged' });
+  });
+
+  it('waits rather than counting an attempt when the deadline fires on a call that found the LLM unavailable', async () => {
+    const unavailableOnAbort: Llm = {
+      complete: (request: LlmRequest) =>
+        new Promise((_, reject) => {
+          request.signal?.addEventListener('abort', () => reject(new LlmUnavailable('AWS sign-in expired', 'Run `aws sso login`')));
+        }),
+    };
+    const timed = new KbPipeline({
+      store,
+      clock: { now: () => now },
+      catalog,
+      notifier,
+      route: unavailableOnAbort,
+      draft: unavailableOnAbort,
+      llmTimeoutMs: 20,
+    });
+    const id = await submit();
+    expect(await timed.processNext()).toBe(id);
+    expect(await item(id)).toMatchObject({ processing: 'pending', processingAttempts: 0, processingError: 'AI unavailable: AWS sign-in expired' });
+  });
+
   it('fails an item when the dedupe answer is unusable', async () => {
     const id = await submit();
     llm.answer(toDoc('build_test_lint', 'Test'), 'not json');
@@ -745,7 +791,7 @@ describe('KB pipeline: routing and dedupe', () => {
   it('refuses to decide items the pipeline closed', async () => {
     const first = await routedAlone();
     const second = await submit();
-    llm.answer(toNewDoc('testing'), json({ duplicateOf: first }));
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: first }));
     await pipeline.process(second);
     const merged = await item(second);
     expect(merged.status).toBe('merged');

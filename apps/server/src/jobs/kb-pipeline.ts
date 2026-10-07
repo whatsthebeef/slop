@@ -17,7 +17,11 @@ export class KbPipelineJob {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private stopped = false;
-  /** When an item was last claimed (ms), so a probe waits PROBE_MS from the call that found the LLM down. */
+  /**
+   * When a claimed item's processing ended (ms), so a probe waits PROBE_MS from the call that found
+   * the LLM down. Stamped after the call, so that item (due a minute after its own wait began) is
+   * due by the next probe; a claim that found nothing due isn't a probe and doesn't count.
+   */
   private lastClaim = Number.NEGATIVE_INFINITY;
 
   constructor(
@@ -44,8 +48,8 @@ export class KbPipelineJob {
     this.running = true;
     try {
       while (!this.stopped && this.mayClaim()) {
-        this.lastClaim = this.now();
         if ((await this.pipeline.processNext()) === null) break;
+        this.lastClaim = this.now();
       }
     } catch (error) {
       // A store error leaves the claimed item leased; it is retried when the lease ends.
