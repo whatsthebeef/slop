@@ -1,5 +1,6 @@
 import type { Deploy } from '../domain/deploys.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
+import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import type { KbItem } from '../domain/kb.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
@@ -19,6 +20,8 @@ interface State {
   artifacts: Artifact[];
   kbItems: Map<string, KbItem>;
   deploys: Map<string, Deploy>;
+  reviewSources: ReviewSource[];
+  findings: ReviewFinding[];
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -37,6 +40,8 @@ const clone = (state: State): State => ({
   artifacts: [...state.artifacts],
   kbItems: new Map(state.kbItems),
   deploys: new Map(state.deploys),
+  reviewSources: [...state.reviewSources],
+  findings: [...state.findings],
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -57,7 +62,11 @@ export class MemoryStore implements Store {
     artifacts: [],
     kbItems: new Map(),
     deploys: new Map(),
+    reviewSources: [],
+    findings: [],
   };
+  /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
+  private nextRowId = 1;
 
   async transaction<T>(work: (tx: Tx) => Promise<T>): Promise<T> {
     const draft = clone(this.state);
@@ -83,6 +92,8 @@ export class MemoryStore implements Store {
       deleteGlob: (id) => {
         s.globs.delete(id);
         s.artifacts = s.artifacts.filter((a) => a.globId !== id);
+        s.findings = s.findings.filter((f) => f.globId !== id);
+        s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
         return Promise.resolve();
       },
       findGlobByCreationKey: (boardId, key) =>
@@ -262,6 +273,72 @@ export class MemoryStore implements Store {
       lockDeployQueue: () => Promise.resolve(),
       findDeployByProviderRef: (ref) =>
         Promise.resolve([...s.deploys.values()].find((d) => d.providerRef === ref) ?? null),
+      insertReviewSource: (input) => {
+        const taken = s.reviewSources.some(
+          (r) =>
+            (input.artifactId !== null && r.artifactId === input.artifactId) ||
+            (input.externalId !== null && r.externalId === input.externalId),
+        );
+        if (taken) return Promise.resolve(null);
+        const source: ReviewSource = { ...input, id: this.nextRowId++, state: 'pending', attempts: 0, processAfter: null, error: null, version: 1 };
+        s.reviewSources.push(source);
+        return Promise.resolve(source);
+      },
+      getReviewSource: (id) => Promise.resolve(s.reviewSources.find((r) => r.id === id) ?? null),
+      listReviewSources: (globId) => Promise.resolve(s.reviewSources.filter((r) => r.globId === globId)),
+      nextReviewSourceToSplit: (now) =>
+        Promise.resolve(
+          s.reviewSources
+            .filter((r) => r.state === 'pending' && (r.processAfter === null || r.processAfter <= now))
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)[0] ?? null,
+        ),
+      updateReviewSource: (source, expectedVersion) => {
+        const index = s.reviewSources.findIndex((r) => r.id === source.id);
+        if (s.reviewSources[index]?.version !== expectedVersion) return Promise.resolve(false);
+        s.reviewSources[index] = source;
+        return Promise.resolve(true);
+      },
+      getArtifact: (id) => Promise.resolve(s.artifacts.find((a) => a.id === id) ?? null),
+      insertFindings: (findings, createdAt) => {
+        let inserted = 0;
+        for (const input of findings) {
+          const exists = s.findings.some(
+            (f) => f.globId === input.globId && f.source === input.source && f.fingerprint === input.fingerprint,
+          );
+          if (exists) continue;
+          s.findings.push({
+            ...input,
+            id: this.nextRowId++,
+            class: null,
+            classNote: null,
+            state: 'pending',
+            attempts: 0,
+            processAfter: null,
+            error: null,
+            createdAt,
+            classifiedAt: null,
+            version: 1,
+          });
+          inserted++;
+        }
+        return Promise.resolve(inserted);
+      },
+      getFinding: (id) => Promise.resolve(s.findings.find((f) => f.id === id) ?? null),
+      nextFindingToClassify: (now) =>
+        Promise.resolve(
+          s.findings
+            .filter((f) => f.state === 'pending' && (f.processAfter === null || f.processAfter <= now))
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)[0] ?? null,
+        ),
+      updateFinding: (finding, expectedVersion) => {
+        const index = s.findings.findIndex((f) => f.id === finding.id);
+        if (s.findings[index]?.version !== expectedVersion) return Promise.resolve(false);
+        s.findings[index] = finding;
+        return Promise.resolve(true);
+      },
+      listFindings: (globId) => Promise.resolve(s.findings.filter((f) => f.globId === globId)),
+      listBoardFindings: (boardId, since) =>
+        Promise.resolve(s.findings.filter((f) => f.boardId === boardId && f.createdAt >= since)),
       appendEvents: (events) => {
         s.events.push(...events);
         return Promise.resolve();

@@ -15,8 +15,9 @@ import type {
   Provenance,
   ProposedDocument,
 } from '@slop/core';
-import { DEPLOY_STATES, DEPLOY_TRIGGERS, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_LAYERS, LEARNING_TYPES } from '@slop/core';
+import { DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
 import {
+  bigint,
   bigserial,
   boolean,
   index,
@@ -309,5 +310,78 @@ export const deploys = pgTable(
     // The queue's invariant, as a backstop to the per-environment lock: one running, one waiting.
     uniqueIndex('deploys_one_running_idx').on(t.boardId, t.environment).where(sql`${t.state} = 'running'`),
     uniqueIndex('deploys_one_waiting_idx').on(t.boardId, t.environment).where(sql`${t.state} = 'waiting'`),
+  ],
+);
+
+/** Reviews queued for splitting into findings: a local review artifact, or one CodeRabbit inline comment. */
+export const reviewSources = pgTable(
+  'review_sources',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    globId: text('glob_id').notNull(),
+    kind: text('kind', { enum: REVIEW_SOURCE_KINDS }).notNull(),
+    artifactId: bigint('artifact_id', { mode: 'number' }),
+    externalId: text('external_id'),
+    commitSha: text('commit_sha'),
+    agentSetVersion: integer('agent_set_version'),
+    /** CodeRabbit comments only; local reviews are read from their artifact. */
+    content: text('content'),
+    path: text('path'),
+    line: text('line'),
+    state: text('state', { enum: REVIEW_SOURCE_STATES }).notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    /** Retry backoff, or a claimed source's lease. */
+    processAfter: timestamp('process_after', { withTimezone: true }),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    version: integer('version').notNull().default(1),
+  },
+  (t) => [
+    uniqueIndex('review_sources_artifact_idx').on(t.artifactId),
+    uniqueIndex('review_sources_external_idx').on(t.externalId),
+    index('review_sources_queue_idx').on(t.state, t.processAfter),
+    index('review_sources_glob_idx').on(t.globId),
+  ],
+);
+
+/** Classified review findings per glob and commit (spec, self-improvement signals). */
+export const reviewFindings = pgTable(
+  'review_findings',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    globId: text('glob_id').notNull(),
+    sourceId: bigint('source_id', { mode: 'number' })
+      .notNull()
+      .references(() => reviewSources.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: FINDING_SOURCES }).notNull(),
+    commitSha: text('commit_sha'),
+    agentSetVersion: integer('agent_set_version'),
+    severity: text('severity', { enum: FINDING_SEVERITIES }).notNull(),
+    round: integer('round'),
+    path: text('path'),
+    line: text('line'),
+    text: text('text').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    class: text('class', { enum: FINDING_CLASSES }),
+    classNote: text('class_note'),
+    state: text('state', { enum: FINDING_STATES }).notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    processAfter: timestamp('process_after', { withTimezone: true }),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    classifiedAt: timestamp('classified_at', { withTimezone: true }),
+    version: integer('version').notNull().default(1),
+  },
+  (t) => [
+    uniqueIndex('review_findings_fingerprint_idx').on(t.globId, t.source, t.fingerprint),
+    index('review_findings_queue_idx').on(t.state, t.processAfter),
+    index('review_findings_board_created_idx').on(t.boardId, t.createdAt),
+    index('review_findings_glob_idx').on(t.globId),
   ],
 );

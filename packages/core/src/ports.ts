@@ -1,5 +1,6 @@
 import type { Deploy, DeployState } from './domain/deploys.js';
 import type { DomainEvent, Effect } from './domain/events.js';
+import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
@@ -26,6 +27,7 @@ export interface Tx {
   insertGlob(glob: Glob, creationKey: string | null): Promise<boolean>;
   /** Writes `glob` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateGlob(glob: Glob, expectedVersion: number): Promise<boolean>;
+  /** Deletes the glob with its artifacts, review sources and findings. */
   deleteGlob(id: string): Promise<void>;
   findGlobByCreationKey(boardId: number, key: string): Promise<Glob | null>;
   listGlobs(boardId: number, filter: GlobFilter): Promise<Glob[]>;
@@ -94,6 +96,29 @@ export interface Tx {
    */
   lockDeployQueue(boardId: number, environment: string): Promise<void>;
 
+  /** Records a review to split into findings; null when its artifact or external ID is already recorded. */
+  insertReviewSource(source: NewReviewSource): Promise<ReviewSource | null>;
+  getReviewSource(id: number): Promise<ReviewSource | null>;
+  /** A glob's review sources, oldest first. */
+  listReviewSources(globId: string): Promise<ReviewSource[]>;
+  /** The oldest pending source on any board whose `processAfter` is unset or not after `now`. */
+  nextReviewSourceToSplit(now: string): Promise<ReviewSource | null>;
+  /** Writes `source` if the stored version is still `expectedVersion`; returns false otherwise. */
+  updateReviewSource(source: ReviewSource, expectedVersion: number): Promise<boolean>;
+  /** One artifact version by its ID (the findings pipeline reads a local review's text). */
+  getArtifact(id: number): Promise<Artifact | null>;
+  /** Inserts findings, skipping any whose (globId, source, fingerprint) exists; returns how many were inserted. */
+  insertFindings(findings: readonly NewFinding[], createdAt: string): Promise<number>;
+  getFinding(id: number): Promise<ReviewFinding | null>;
+  /** The oldest pending finding on any board whose `processAfter` is unset or not after `now`. */
+  nextFindingToClassify(now: string): Promise<ReviewFinding | null>;
+  /** Writes `finding` if the stored version is still `expectedVersion`; returns false otherwise. */
+  updateFinding(finding: ReviewFinding, expectedVersion: number): Promise<boolean>;
+  /** A glob's findings, oldest first. */
+  listFindings(globId: string): Promise<ReviewFinding[]>;
+  /** A board's findings created at or after `since`, oldest first (for mining and effect checks). */
+  listBoardFindings(boardId: number, since: string): Promise<ReviewFinding[]>;
+
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
   enqueueEffects(effects: readonly Effect[]): Promise<void>;
@@ -111,6 +136,8 @@ export type Hint =
   | { readonly kind: 'glob.artifacts'; readonly boardId: number; readonly globId: string }
   /** A glob's deploys changed: they don't bump the glob's version, so clients refetch regardless. */
   | { readonly kind: 'glob.deploys'; readonly boardId: number; readonly globId: string }
+  /** A glob's review findings changed (split or classified): they don't bump the glob's version either. */
+  | { readonly kind: 'glob.findings'; readonly boardId: number; readonly globId: string }
   | { readonly kind: 'board.changed'; readonly boardId: number }
   /** The board's KB items, documents or agent-set files changed (the board itself only on an agent-set version bump). */
   | { readonly kind: 'board.kb'; readonly boardId: number };

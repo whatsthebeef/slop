@@ -1,6 +1,6 @@
-import type { Artifact, ArtifactSummary, Board, Deploy, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, Store, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, DEPLOY_STATES, DEPLOY_TRIGGERS, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES } from '@slop/core';
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import type { Artifact, ArtifactSummary, Board, Deploy, Glob, GlobFilter, KbItem, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
+import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type { PostgresJsDatabase, PostgresJsQueryResultHKT } from 'drizzle-orm/postgres-js';
@@ -88,6 +88,25 @@ const toArtifact = (row: typeof schema.artifacts.$inferSelect): Artifact => ({
   createdAt: row.createdAt.toISOString(),
 });
 
+const toReviewSource = (row: typeof schema.reviewSources.$inferSelect): ReviewSource => ({
+  ...row,
+  kind: oneOf(REVIEW_SOURCE_KINDS, row.kind),
+  state: oneOf(REVIEW_SOURCE_STATES, row.state),
+  processAfter: row.processAfter?.toISOString() ?? null,
+  createdAt: row.createdAt.toISOString(),
+});
+
+const toFinding = (row: typeof schema.reviewFindings.$inferSelect): ReviewFinding => ({
+  ...row,
+  source: oneOf(FINDING_SOURCES, row.source),
+  severity: oneOf(FINDING_SEVERITIES, row.severity),
+  class: row.class === null ? null : oneOf(FINDING_CLASSES, row.class),
+  state: oneOf(FINDING_STATES, row.state),
+  processAfter: row.processAfter?.toISOString() ?? null,
+  createdAt: row.createdAt.toISOString(),
+  classifiedAt: row.classifiedAt?.toISOString() ?? null,
+});
+
 const toKbItem = (row: typeof schema.kbProposals.$inferSelect): KbItem => ({
   ...row,
   status: oneOf(KB_ITEM_STATUSES, row.status),
@@ -171,6 +190,8 @@ export class PgStore implements Store {
         return rows.length === 1;
       },
       deleteGlob: async (id) => {
+        await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
+        await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
         await t.delete(schema.globs).where(eq(schema.globs.id, id));
       },
@@ -497,6 +518,115 @@ export class PgStore implements Store {
       findDeployByProviderRef: async (providerRef) => {
         const [row] = await t.select().from(schema.deploys).where(eq(schema.deploys.providerRef, providerRef));
         return row === undefined ? null : toDeploy(row);
+      },
+
+      insertReviewSource: async (input) => {
+        const rows = await t
+          .insert(schema.reviewSources)
+          .values({ ...input, createdAt: new Date(input.createdAt) })
+          .onConflictDoNothing()
+          .returning();
+        const [row] = rows;
+        return row === undefined ? null : toReviewSource(row);
+      },
+      getReviewSource: async (id) => {
+        const [row] = await t.select().from(schema.reviewSources).where(eq(schema.reviewSources.id, id));
+        return row === undefined ? null : toReviewSource(row);
+      },
+      listReviewSources: async (globId) => {
+        const rows = await t
+          .select()
+          .from(schema.reviewSources)
+          .where(eq(schema.reviewSources.globId, globId))
+          .orderBy(asc(schema.reviewSources.createdAt), asc(schema.reviewSources.id));
+        return rows.map(toReviewSource);
+      },
+      nextReviewSourceToSplit: async (now) => {
+        const r = schema.reviewSources;
+        const [row] = await t
+          .select()
+          .from(r)
+          .where(and(eq(r.state, 'pending'), or(isNull(r.processAfter), lte(r.processAfter, new Date(now)))))
+          .orderBy(asc(r.createdAt), asc(r.id))
+          .limit(1);
+        return row === undefined ? null : toReviewSource(row);
+      },
+      updateReviewSource: async (source, expectedVersion) => {
+        const rows = await t
+          .update(schema.reviewSources)
+          .set({
+            state: source.state,
+            attempts: source.attempts,
+            processAfter: source.processAfter === null ? null : new Date(source.processAfter),
+            error: source.error,
+            version: source.version,
+          })
+          .where(and(eq(schema.reviewSources.id, source.id), eq(schema.reviewSources.version, expectedVersion)))
+          .returning({ id: schema.reviewSources.id });
+        return rows.length === 1;
+      },
+      getArtifact: async (id) => {
+        const [row] = await t.select().from(schema.artifacts).where(eq(schema.artifacts.id, id));
+        return row === undefined ? null : toArtifact(row);
+      },
+      insertFindings: async (findings, createdAt) => {
+        if (findings.length === 0) return 0;
+        const rows = await t
+          .insert(schema.reviewFindings)
+          .values(findings.map((f) => ({ ...f, createdAt: new Date(createdAt) })))
+          .onConflictDoNothing({
+            target: [schema.reviewFindings.globId, schema.reviewFindings.source, schema.reviewFindings.fingerprint],
+          })
+          .returning({ id: schema.reviewFindings.id });
+        return rows.length;
+      },
+      getFinding: async (id) => {
+        const [row] = await t.select().from(schema.reviewFindings).where(eq(schema.reviewFindings.id, id));
+        return row === undefined ? null : toFinding(row);
+      },
+      nextFindingToClassify: async (now) => {
+        const f = schema.reviewFindings;
+        const [row] = await t
+          .select()
+          .from(f)
+          .where(and(eq(f.state, 'pending'), or(isNull(f.processAfter), lte(f.processAfter, new Date(now)))))
+          .orderBy(asc(f.createdAt), asc(f.id))
+          .limit(1);
+        return row === undefined ? null : toFinding(row);
+      },
+      updateFinding: async (finding, expectedVersion) => {
+        const rows = await t
+          .update(schema.reviewFindings)
+          .set({
+            class: finding.class,
+            classNote: finding.classNote,
+            state: finding.state,
+            attempts: finding.attempts,
+            processAfter: finding.processAfter === null ? null : new Date(finding.processAfter),
+            error: finding.error,
+            classifiedAt: finding.classifiedAt === null ? null : new Date(finding.classifiedAt),
+            version: finding.version,
+          })
+          .where(and(eq(schema.reviewFindings.id, finding.id), eq(schema.reviewFindings.version, expectedVersion)))
+          .returning({ id: schema.reviewFindings.id });
+        return rows.length === 1;
+      },
+      listFindings: async (globId) => {
+        const rows = await t
+          .select()
+          .from(schema.reviewFindings)
+          .where(eq(schema.reviewFindings.globId, globId))
+          .orderBy(asc(schema.reviewFindings.createdAt), asc(schema.reviewFindings.id));
+        return rows.map(toFinding);
+      },
+      listBoardFindings: async (boardId, since) => {
+        const f = schema.reviewFindings;
+        const rows = await t
+          .select()
+          .from(f)
+          .where(and(eq(f.boardId, boardId), gte(f.createdAt, new Date(since))))
+          .orderBy(asc(f.createdAt), asc(f.id));
+        return rows.map(toFinding);
       },
 
       appendEvents: async (events) => {

@@ -18,6 +18,7 @@ import { LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
 import { documentTarget, targetState } from './knowledge-service.js';
 import type { TargetState } from './knowledge-service.js';
+import { completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 
 /** Failures at one stage (LLM errors or unusable answers) before an item is marked `failed`. */
@@ -199,17 +200,8 @@ export class KbPipeline {
   ) {}
 
   /** One LLM call with a deadline; a timeout rejects with a readable reason, recorded like any other failure. */
-  private async complete(llm: Llm, request: Omit<LlmRequest, 'signal'>): Promise<string> {
-    const timeoutMs = this.deps.llmTimeoutMs ?? LLM_TIMEOUT_MS;
-    const signal = AbortSignal.timeout(timeoutMs);
-    try {
-      return await llm.complete({ ...request, signal });
-    } catch (error) {
-      // An unusable LLM stays unusable when the deadline also fired: the item waits, no attempt counted.
-      if (error instanceof LlmUnavailable) throw error;
-      if (signal.aborted) throw new Error(`The model did not answer within ${timeoutMs / 1000} s`, { cause: error });
-      throw error;
-    }
+  private complete(llm: Llm, request: Omit<LlmRequest, 'signal'>): Promise<string> {
+    return completeWithDeadline(llm, request, this.deps.llmTimeoutMs ?? LLM_TIMEOUT_MS);
   }
 
   /** Claims the oldest item due for routing or drafting and processes it; returns its ID, or null when none is due. */
@@ -722,9 +714,10 @@ const squash = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase(
 /**
  * The model's quote, when it really appears (ignoring case and whitespace) in the text it was
  * shown; null otherwise, so a claim it can't back up is dropped. `shown` is null when the model
- * saw no text (a new document, an empty overlay), which nothing can quote.
+ * saw no text (a new document, an empty overlay), which nothing can quote. The findings pipeline
+ * uses it too: a split finding is kept only when its quote is in the review.
  */
-const verifiedQuote = (value: unknown, shown: string | null): string | null => {
+export const verifiedQuote = (value: unknown, shown: string | null): string | null => {
   const quote = text(value)?.trim() ?? '';
   if (shown === null || quote === '' || !squash(shown).includes(squash(quote))) return null;
   return quote;

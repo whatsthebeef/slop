@@ -194,6 +194,22 @@ export class ArtifactService {
         provenance,
         createdAt: now,
       });
+      // Queued for the findings pipeline in the same transaction; nothing is parsed or asked here.
+      if (kind === 'local_review') {
+        await tx.insertReviewSource({
+          boardId: glob.boardId,
+          globId,
+          kind: 'local_review',
+          artifactId: artifact.id,
+          externalId: null,
+          commitSha: options.commitSha,
+          agentSetVersion: options.agentSetVersion,
+          content: null,
+          path: null,
+          line: null,
+          createdAt: now,
+        });
+      }
       await tx.appendEvents([
         {
           type: 'ArtifactAdded',
@@ -215,7 +231,11 @@ export class ArtifactService {
     if (!result.ok) return result;
     const { artifact, boardId } = result.value;
     // Artifacts don't bump the glob's version, so open boards get their own hint kind.
-    if (!('ignored' in artifact)) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId, globId });
+    if (!('ignored' in artifact)) {
+      this.deps.notifier.publish({ kind: 'glob.artifacts', boardId, globId });
+      // A queued review shows as being read in an open glob view straight away.
+      if (kind === 'local_review') this.deps.notifier.publish({ kind: 'glob.findings', boardId, globId });
+    }
     return ok(artifact);
   }
 }

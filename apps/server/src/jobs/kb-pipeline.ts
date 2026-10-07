@@ -1,5 +1,3 @@
-import type { KbPipeline } from '@slop/core';
-
 const POLL_MS = 5_000;
 /** While the LLM is down, how often one item is claimed to find out whether it works again. */
 export const PROBE_MS = 60_000;
@@ -7,7 +5,8 @@ export const PROBE_MS = 60_000;
 /**
  * Routes, deduplicates and drafts submitted KB items in the background, one step at a time: every
  * few seconds it processes items due for routing or drafting until none is left. `stop` lets the
- * item in hand finish.
+ * item in hand finish. The findings pipeline (splitting and classifying review findings) runs in
+ * its own instance, named by `task` in the error log.
  *
  * While the LLM is unavailable (expired sign-in, no model access) it claims at most one item a
  * minute: that item's call is the probe, and the first success marks the LLM ok again. Items the
@@ -25,10 +24,11 @@ export class KbPipelineJob {
   private lastClaim = Number.NEGATIVE_INFINITY;
 
   constructor(
-    private readonly pipeline: Pick<KbPipeline, 'processNext'>,
+    private readonly pipeline: { processNext(): Promise<string | null> },
     private readonly log: (task: string, message: string) => void,
     private readonly llm: { isDown(): boolean },
     private readonly now: () => number = Date.now,
+    private readonly task = 'kb-pipeline',
   ) {}
 
   start(): void {
@@ -55,7 +55,7 @@ export class KbPipelineJob {
       // A store error leaves the claimed item leased; it is retried when the lease ends. It may
       // follow an LLM call, so it counts as a probe: a failing store can't make one call per poll.
       this.lastClaim = this.now();
-      this.log('kb-pipeline', error instanceof Error ? (error.stack ?? error.message) : String(error));
+      this.log(this.task, error instanceof Error ? (error.stack ?? error.message) : String(error));
     } finally {
       this.running = false;
     }

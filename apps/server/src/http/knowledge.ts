@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, IntakeService, KnowledgeService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeService, KnowledgeService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -67,6 +67,7 @@ export const mountKnowledge = (
   deps: {
     knowledge: KnowledgeService;
     artifacts: ArtifactService;
+    findings: FindingsService;
     catalog: Catalog;
     intake: IntakeService;
     boards: BoardService;
@@ -229,6 +230,9 @@ export const mountKnowledge = (
     if (!kind.success) return c.json({ code: 'not_found', message: 'Unknown artifact kind' }, 404);
     return send(c, await artifacts.versions(c.get('email'), c.req.param('id'), kind.data, c.req.query('label') ?? ''));
   });
+
+  // The glob's review findings with their counts per class (members).
+  app.get('/api/globs/:id/findings', async (c) => send(c, await deps.findings.forGlob(c.get('email'), c.req.param('id'))));
 
   app.post('/api/globs/:id/attachments', async (c) => {
     const body = await parse(

@@ -1,4 +1,4 @@
-import type { Board, Glob, GlobService } from '@slop/core';
+import type { Board, FindingsService, Glob, GlobService } from '@slop/core';
 import { machine, parseId } from '@slop/core';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -6,6 +6,7 @@ import * as schema from '../db/schema.js';
 import type { Db } from '../db/store.js';
 import type { CodeHost } from '../codehost.js';
 import { SUB_GATE_CHECK, repoOf } from '../codehost.js';
+import { handleReviewComment } from './reviews.js';
 import type { Delivery } from './webhooks.js';
 
 const repository = z.object({ full_name: z.string() });
@@ -56,6 +57,7 @@ export const githubDeliveryHandler =
   (deps: {
     db: Db;
     globs: GlobService;
+    findings: Pick<FindingsService, 'recordCodeRabbitComment'>;
     github: Pick<CodeHost, 'deleteBranch'>;
     boardOf: (id: number) => Promise<Board | null>;
   }) =>
@@ -79,6 +81,7 @@ const handle = async (
   deps: {
     db: Db;
     globs: GlobService;
+    findings: Pick<FindingsService, 'recordCodeRabbitComment'>;
     github: Pick<CodeHost, 'deleteBranch'>;
     boardOf: (id: number) => Promise<Board | null>;
   },
@@ -171,6 +174,9 @@ const handle = async (
       }
       return true;
     }
+
+    case 'pull_request_review_comment':
+      return handleReviewComment(deps.findings, delivery.payload, globFor);
 
     default:
       // Reviews and comments are stored from slice 7 (CodeRabbit results).

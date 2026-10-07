@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { ArtifactService, BoardService, DeployService, GlobService, IntakeService, KbPipeline, KnowledgeService } from '@slop/core';
+import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, GlobService, IntakeService, KbPipeline, KnowledgeService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -88,6 +88,7 @@ const catalog = new FsCatalog(config.CATALOG_DIR);
 const clock = { now: () => new Date().toISOString() };
 const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub });
 const artifacts = new ArtifactService({ store, clock, notifier: hub });
+const findings = new FindingsService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
 // Credential and access failures mark a model down (logged once per change); no hint yet, since no
@@ -118,6 +119,16 @@ const kbPipeline = new KbPipeline({
   ),
 });
 
+const findingsPipeline = new FindingsPipeline({
+  store,
+  clock,
+  notifier: hub,
+  llm: llmHealth.track(
+    new BedrockLlm({ id: config.FINDINGS_MODEL, configKey: 'FINDINGS_MODEL' }, config.BEDROCK_REGION, logUsage),
+    config.FINDINGS_MODEL,
+  ),
+});
+
 if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
   console.warn('[auth] SIGNING_SECRET is not set: sign-ins and download links in flight fail across restarts and instances');
 }
@@ -136,7 +147,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
-mountKnowledge(app, { knowledge, artifacts, catalog, intake, boards, host: github });
+mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github });
 mountHealth(app, { llm: llmHealth, boards });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
@@ -176,7 +187,7 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, github, boardOf }),
+  handle: githubDeliveryHandler({ db, globs, findings, github, boardOf }),
 });
 
 app.onError((error, c) => {
@@ -212,6 +223,9 @@ deployWatch.start();
 const kbModels = [config.KB_ROUTE_MODEL, config.KB_DRAFT_MODEL];
 const kbPipelineJob = new KbPipelineJob(kbPipeline, logError, { isDown: () => llmHealth.isDown(kbModels) });
 kbPipelineJob.start();
+// Findings pause on the findings model only, like the KB pipeline on its own.
+const findingsJob = new KbPipelineJob(findingsPipeline, logError, { isDown: () => llmHealth.isDown([config.FINDINGS_MODEL]) }, Date.now, 'findings');
+findingsJob.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -221,6 +235,7 @@ const shutdown = () => {
   runWatch.stop();
   deployWatch.stop();
   kbPipelineJob.stop();
+  findingsJob.stop();
   server.close();
   void database.close();
 };

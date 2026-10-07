@@ -1,6 +1,7 @@
 import {
   ArtifactService,
   BoardService,
+  FindingsService,
   GlobService,
   IntakeService,
   KnowledgeService,
@@ -94,6 +95,7 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     mountKnowledge(app, {
       knowledge,
       artifacts: new ArtifactService(deps),
+      findings: new FindingsService(deps),
       catalog,
       intake: new IntakeService({ store, llm: { complete: unused } }),
       boards: new BoardService(deps),
@@ -245,5 +247,16 @@ describe('KB routes: retrying failed items and catalog updates', () => {
         catalog: 'No any.\nNo casts.\n',
       },
     ]);
+  });
+
+  it('GET /api/globs/:id/findings shows members the glob\'s findings and refuses others', async () => {
+    const outsider = 'outsider@example.com';
+    await store.transaction((tx) => tx.upsertUser({ email: outsider, name: 'Outsider', active: true }));
+    const get = (email: string, id = globId) => app.request(`/api/globs/${id}/findings`, { headers: { 'x-test-email': email } });
+    const member = await get(DEV);
+    expect(member.status).toBe(200);
+    expect(await member.json()).toEqual({ findings: [], byClass: [], pending: 0, failed: 0, sources: { pending: 0, failed: 0 }, waiting: null });
+    expect((await get(outsider)).status).toBe(403);
+    expect((await get(DEV, 's999t1')).status).toBe(404);
   });
 });

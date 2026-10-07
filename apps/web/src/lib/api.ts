@@ -13,6 +13,7 @@ import type {
   ReadinessItem,
   Environment,
   Glob,
+  GlobFindings,
   KbItem,
   KbProposalList,
   LabelCommand,
@@ -232,6 +233,7 @@ export const api = {
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
   artifactVersions: (id: string, kind: ArtifactKind, label: string) =>
     request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts/${kind}?label=${encodeURIComponent(label)}`),
+  findings: (id: string) => request<GlobFindings>('GET', `/api/globs/${id}/findings`),
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel: (id: string, label: LabelName, command: LabelCommand, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/labels/${label}`, { command, version }),

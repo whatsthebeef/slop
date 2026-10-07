@@ -1,4 +1,4 @@
-import { GlobService } from '@slop/core';
+import { FindingsService, GlobService } from '@slop/core';
 import type { Board, Result } from '@slop/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -54,6 +54,7 @@ describe('GitHub webhook deliveries', () => {
     handle = githubDeliveryHandler({
       db: database.db,
       globs,
+      findings: new FindingsService({ store, notifier: { publish: () => undefined }, clock: { now: () => new Date().toISOString() } }),
       boardOf,
       github: {
         deleteBranch: (_repo, branch) => {
@@ -141,6 +142,70 @@ describe('GitHub webhook deliveries', () => {
       payload: { ref: `refs/heads/${globId}`, after: 'c4', created: true, repository: { full_name: REPO } },
     });
     expect(deletedBranches).toContain(globId);
+  });
+
+  /** A `pull_request_review_comment` delivery on the glob's PR. */
+  const reviewComment = (commentId: number, patch: { action?: string; login?: string; repo?: string } = {}) => ({
+    id: id(),
+    event: 'pull_request_review_comment',
+    payload: {
+      action: patch.action ?? 'created',
+      comment: {
+        id: commentId,
+        body: '_⚠️ Potential issue_\n\n**Missing await** on `save`.\n\n<details>\n<summary>Prompt for AI Agents</summary>\nx\n</details>',
+        path: 'src/save.ts',
+        line: null,
+        original_line: 12,
+        commit_id: 'b2',
+        user: { login: patch.login ?? 'coderabbitai[bot]' },
+        html_url: 'https://github.com/acme/app/pull/7#discussion_r1',
+      },
+      pull_request: { number: 7, head: { ref: globId, sha: 'b2' } },
+      repository: { full_name: patch.repo ?? REPO },
+    },
+  });
+  const reviewSources = () => store.transaction((tx) => tx.listReviewSources(globId));
+
+  it('queues a CodeRabbit inline comment once as a review source', async () => {
+    const delivery = reviewComment(101);
+    expect(await handle(delivery)).toBe(true);
+    expect(await reviewSources()).toEqual([
+      expect.objectContaining({
+        kind: 'coderabbit_comment',
+        externalId: 'coderabbit:101',
+        path: 'src/save.ts',
+        line: '12',
+        commitSha: 'b2',
+        state: 'pending',
+        content: expect.stringContaining('**Missing await**') as unknown,
+      }),
+    ]);
+    // A redelivery of the same delivery, and the same comment in a new delivery, add nothing.
+    expect(await handle(delivery)).toBe(false);
+    await handle(reviewComment(101));
+    expect(await reviewSources()).toHaveLength(1);
+  });
+
+  it("ignores other people's comments, edits, and comments from another repo", async () => {
+    await handle(reviewComment(201, { login: 'octocat' }));
+    await handle(reviewComment(202, { action: 'edited' }));
+    await handle(reviewComment(203, { repo: 'evil/fork' }));
+    expect(await reviewSources()).toEqual([]);
+  });
+
+  it('prefers the current line to the original one, and ignores a comment on a branch with no glob (s15f8)', async () => {
+    const delivery = reviewComment(301);
+    const onLine = { ...delivery, payload: { ...delivery.payload, comment: { ...delivery.payload.comment, line: 30 } } };
+    expect(await handle(onLine)).toBe(true);
+    expect(await reviewSources()).toEqual([expect.objectContaining({ externalId: 'coderabbit:301', line: '30' })]);
+
+    const elsewhere = reviewComment(302);
+    expect(
+      await handle({ ...elsewhere, payload: { ...elsewhere.payload, pull_request: { number: 8, head: { ref: 'feature/no-glob', sha: 'c3' } } } }),
+    ).toBe(true);
+    expect(await store.transaction((tx) => tx.listReviewSources(globId))).toHaveLength(1);
+    const all = await database.db.select().from(schema.reviewSources).where(eq(schema.reviewSources.externalId, 'coderabbit:302'));
+    expect(all).toEqual([]);
   });
 
   it('forgets a delivery whose handling failed, so a redelivery retries it', async () => {

@@ -5,7 +5,7 @@ import { api, RequestError } from './api';
 import type { GlobView } from './api';
 
 interface Hint {
-  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'glob.deploys' | 'board.changed' | 'board.kb';
+  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'glob.deploys' | 'glob.findings' | 'board.changed' | 'board.kb';
   readonly globId?: string;
   readonly version?: number;
 }
@@ -19,6 +19,9 @@ export const deploysKey = (boardId: number) => ['deploys', boardId] as const;
 
 /** One glob's deploy history in the glob view. */
 export const globDeploysKey = (globId: string) => ['glob-deploys', globId] as const;
+
+/** One glob's review findings in the glob view; invalidated by `glob.findings` hints and on reconnect. */
+export const findingsKey = (globId: string) => ['findings', globId] as const;
 
 /** One artifact's versions in the glob view; invalidated by `glob.artifacts` hints. */
 export const artifactKey = (globId: string, kind: string, label: string) => ['artifact', globId, kind, label] as const;
@@ -139,6 +142,11 @@ export const useLiveBoard = (boardId: number): LiveState => {
       void client.invalidateQueries({ queryKey: globDeploysKey(id) });
       return;
     }
+    if (hint.kind === 'glob.findings') {
+      // Findings live beside the glob too; only the glob view reads them.
+      void client.invalidateQueries({ queryKey: findingsKey(id) });
+      return;
+    }
     if (hint.kind === 'glob.deleted') {
       replace(null, id);
       return;
@@ -166,6 +174,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
     void client.invalidateQueries({ queryKey: deploysKey(boardId) });
     void client.invalidateQueries({ queryKey: ['glob-deploys'] });
     void client.invalidateQueries({ queryKey: ['readiness', boardId] });
+    void client.invalidateQueries({ queryKey: ['findings'] });
   };
 
   return useBoardEvents(boardId, { onHint, onReconnect });

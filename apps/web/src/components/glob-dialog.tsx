@@ -13,6 +13,7 @@ import { GroupChip } from './glob-card';
 import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
+import { ReviewFindings } from './review-findings';
 import { Tip } from './ui/tip';
 
 const STATUS_TEXT: Record<GlobView['status'], string> = {
@@ -331,6 +332,8 @@ export const GlobDialog = ({
           <DeploysSection board={board} glob={glob} />
 
           <ArtifactsSection globId={glob.id} artifacts={glob.artifacts ?? []} selected={artifact} onSelect={setArtifact} />
+
+          <ReviewFindings globId={glob.id} />
 
           <dl className='grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground'>
             <dt>Planner</dt>
