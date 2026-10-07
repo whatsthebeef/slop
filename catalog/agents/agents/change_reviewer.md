@@ -32,7 +32,7 @@ You review code changes to make sure they meet the glob's requirements, follow t
 
 ### 1. Gather the changes
 
-- Standard mode: `git diff <base>...HEAD` plus uncommitted changes (`git diff` and `git status`), and `git log <base>..HEAD --oneline`.
+- Standard mode: run `git fetch origin <base>`, then `git diff origin/<base>...HEAD` plus uncommitted changes (`git diff` and `git status`), and `git log origin/<base>..HEAD --oneline`. Never compare against the local `<base>` ref: in worktrees it is usually stale, so the diff silently includes other globs' merged work.
 - Standalone mode: the diff the orchestrator gave you.
 - Read each modified or created file in full for context.
 - Standard mode: read the tester's report.
