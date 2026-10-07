@@ -396,7 +396,7 @@ export const BoardPage = () => {
         ref={(el) => {
           motion.container.current = el;
         }}
-        className='flex flex-1 items-start gap-3 overflow-auto px-5 py-4'
+        className='flex flex-1 gap-3 overflow-auto px-5 py-4'
       >
         {LISTS.map((list) => {
           const items = visible
