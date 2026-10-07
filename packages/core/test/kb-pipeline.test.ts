@@ -382,13 +382,34 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(await item(id)).toMatchObject({ status: 'merged', processing: 'pending' });
   });
 
-  it('closes an item the target already says as covered by that knowledge', async () => {
+  it('keeps an item the target may already say open, flagged with the model\'s reason', async () => {
+    const id = await submit({ statement: 'Tests run with vitest' });
+    llm.answer(
+      toDoc('build_test_lint', 'Test'),
+      json({ coveredBy: null, targetMayCover: { reason: 'The Test section names vitest' } }),
+    );
+    await pipeline.processNext();
+    expect(await item(id)).toMatchObject({
+      status: 'open',
+      processing: 'routed',
+      coveredBy: null,
+      possiblyCoveredBy: {
+        knowledgeKind: 'doc',
+        name: 'build_test_lint',
+        section: 'Test',
+        reason: 'The Test section names vitest',
+      },
+    });
+  });
+
+  it('flags target coverage in the old answer shape too, without a reason', async () => {
     const id = await submit({ statement: 'Tests run with vitest' });
     llm.answer(toDoc('build_test_lint', 'Test'), json({ coveredBy: { kind: 'target' } }));
     await pipeline.processNext();
     expect(await item(id)).toMatchObject({
-      status: 'covered',
-      coveredBy: { kind: 'knowledge', knowledgeKind: 'doc', name: 'build_test_lint', section: 'Test' },
+      status: 'open',
+      coveredBy: null,
+      possiblyCoveredBy: { name: 'build_test_lint', section: 'Test', reason: null },
     });
   });
 
@@ -399,6 +420,7 @@ describe('KB pipeline: routing and dedupe', () => {
       toNewDoc('testing_conventions'),
       json({
         coveredBy: { kind: 'target' },
+        targetMayCover: { reason: 'Says it' },
         contradicts: [
           { kind: 'target', ref: '', note: 'Says otherwise' },
           { kind: 'item', ref: first, note: 'Conflicts' },
@@ -411,6 +433,7 @@ describe('KB pipeline: routing and dedupe', () => {
       status: 'open',
       processing: 'routed',
       coveredBy: null,
+      possiblyCoveredBy: null,
       contradicts: [{ kind: 'item', ref: first, note: 'Conflicts' }],
     });
   });

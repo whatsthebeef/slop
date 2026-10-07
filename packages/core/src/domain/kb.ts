@@ -59,6 +59,18 @@ export type KbCoverage =
   | { readonly kind: 'item'; readonly id: string }
   | { readonly kind: 'knowledge'; readonly knowledgeKind: KnowledgeKind; readonly name: string; readonly section: string | null };
 
+/**
+ * An open item whose routed target's current text the model thinks already says it. Only a hint
+ * for the admin (the model often over-matches a related section), so it flags the item rather than closing it.
+ */
+export interface KbPossibleCoverage {
+  readonly knowledgeKind: KnowledgeKind;
+  readonly name: string;
+  readonly section: string | null;
+  /** The model's one-line reason, if it gave one. */
+  readonly reason: string | null;
+}
+
 /** Something an open item contradicts: another item (by ID) or a document or agent file (by name). */
 export interface KbContradiction {
   readonly kind: 'item' | 'knowledge';
@@ -160,6 +172,8 @@ export interface KbItem {
   readonly suppressedBy: string | null;
   /** `covered`: what already says it. */
   readonly coveredBy: KbCoverage | null;
+  /** Open item: the target's text may already say it (flagged for the admin, not closed). */
+  readonly possiblyCoveredBy: KbPossibleCoverage | null;
   /** Open items that conflict with active knowledge or approved items. */
   readonly contradicts: readonly KbContradiction[];
   /** The drafted change, the target version it was drafted against (0: none yet), and why, in one line. */
@@ -185,6 +199,7 @@ export const UNPROCESSED: Pick<
   | 'duplicateOf'
   | 'suppressedBy'
   | 'coveredBy'
+  | 'possiblyCoveredBy'
   | 'contradicts'
   | 'draft'
   | 'draftedAgainstVersion'
@@ -202,6 +217,7 @@ export const UNPROCESSED: Pick<
   duplicateOf: null,
   suppressedBy: null,
   coveredBy: null,
+  possiblyCoveredBy: null,
   contradicts: [],
   draft: null,
   draftedAgainstVersion: null,
