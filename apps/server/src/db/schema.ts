@@ -21,7 +21,7 @@ import type {
   ProposedDocument,
   SignalFigures,
 } from '@slop/core';
-import { BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
+import { BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -61,6 +61,7 @@ export const boards = pgTable('boards', {
   runNoProgressHours: integer('run_no_progress_hours').notNull().default(2),
   runReadyHours: integer('run_ready_hours').notNull().default(8),
   runStartMinutes: integer('run_start_minutes').notNull().default(30),
+  /** The learned sub size limit (`sub_limit_changes` holds its history); not an admin setting. */
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
   /** Effect checks: globs compared on each side of an approved change. */
   effectCheckGlobs: integer('effect_check_globs').notNull().default(EFFECT_CHECK_GLOBS_DEFAULT),
@@ -442,4 +443,27 @@ export const boardJobs = pgTable(
     state: jsonb('state').$type<unknown>(),
   },
   (t) => [primaryKey({ columns: [t.boardId, t.job] })],
+);
+
+/**
+ * The learned sub size limit's history: each sub outcome recorded, once per board, glob and outcome (so the hourly
+ * job is idempotent), with the limit before and after it.
+ */
+export const subLimitChanges = pgTable(
+  'sub_limit_changes',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    fromLines: integer('from_lines').notNull(),
+    toLines: integer('to_lines').notNull(),
+    outcome: text('outcome', { enum: SUB_LIMIT_OUTCOMES }).notNull(),
+    globId: text('glob_id').notNull(),
+    /** Null when neither the gate verdict nor the merge commit gave a count (it is evidence only). */
+    changedLines: integer('changed_lines'),
+    evidence: text('evidence').notNull(),
+  },
+  (t) => [uniqueIndex('sub_limit_changes_outcome_idx').on(t.boardId, t.globId, t.outcome)],
 );

@@ -1,5 +1,5 @@
-import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, Glob, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
+import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, Glob, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES } from '@slop/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -59,6 +59,18 @@ const oneOf = <T extends string>(values: readonly T[], value: string): T => {
   if (found === undefined) throw new Error(`Unexpected stored value: ${value}`);
   return found;
 };
+
+const toSubLimitChange = (row: typeof schema.subLimitChanges.$inferSelect): SubLimitChange => ({
+  id: row.id,
+  boardId: row.boardId,
+  at: row.at.toISOString(),
+  fromLines: row.fromLines,
+  toLines: row.toLines,
+  outcome: oneOf(SUB_LIMIT_OUTCOMES, row.outcome),
+  globId: row.globId,
+  changedLines: row.changedLines,
+  evidence: row.evidence,
+});
 
 const toDeploy = (row: typeof schema.deploys.$inferSelect): Deploy => ({
   ...row,
@@ -291,7 +303,7 @@ export class PgStore implements Store {
             runStartMinutes: board.runStartMinutes,
             deploy: board.deploy,
             readinessTicks: board.readinessTicks,
-            subMaxChangedLines: board.subMaxChangedLines,
+            // Not the learned sub limit: `setSubLimit` writes it, so a settings save doesn't undo a learned move.
             effectCheckGlobs: board.effectCheckGlobs,
             version: board.version,
           })
@@ -299,6 +311,30 @@ export class PgStore implements Store {
           .returning({ id: schema.boards.id });
         return rows.length === 1;
       },
+      setSubLimit: async (boardId, from, to) => {
+        const rows = await t
+          .update(schema.boards)
+          .set({ subMaxChangedLines: to })
+          .where(and(eq(schema.boards.id, boardId), eq(schema.boards.subMaxChangedLines, from)))
+          .returning({ id: schema.boards.id });
+        return rows.length === 1;
+      },
+      insertSubLimitChange: async (change) => {
+        const rows = await t
+          .insert(schema.subLimitChanges)
+          .values({ ...change, at: new Date(change.at) })
+          .onConflictDoNothing()
+          .returning({ id: schema.subLimitChanges.id });
+        return rows.length === 1;
+      },
+      listSubLimitChanges: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.subLimitChanges)
+            .where(eq(schema.subLimitChanges.boardId, boardId))
+            .orderBy(desc(schema.subLimitChanges.at), desc(schema.subLimitChanges.id))
+        ).map(toSubLimitChange),
       setBaseChecks: async (boardId, baseChecks) => {
         await t.update(schema.boards).set({ baseChecks }).where(eq(schema.boards.id, boardId));
       },

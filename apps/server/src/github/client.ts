@@ -1,4 +1,5 @@
 import { App } from '@octokit/app';
+import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { machine } from '@slop/core';
 import type { CodeHost, CommitFiles, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
@@ -7,6 +8,12 @@ import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
 
 type Octokit = Awaited<ReturnType<App['getInstallationOctokit']>>;
+
+/** The parts of `GET /repos/{owner}/{repo}/commits/{ref}` a merged sub's size is read from. */
+const commitStats = z.object({
+  stats: z.object({ additions: z.number().int().nonnegative(), deletions: z.number().int().nonnegative() }),
+  files: z.array(z.object({ filename: z.string() })).optional(),
+});
 
 const status = (error: unknown): number | null =>
   typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number'
@@ -379,12 +386,33 @@ export class GitHub implements CodeHost {
   }
 
   async diffSummary(repo: Repo, sha: string): Promise<DiffSummary> {
+    return this.compare(repo, `${repo.base}...${sha}`);
+  }
+
+  /**
+   * The commit's own `stats`, which GitHub computes from the commit's diff against its first parent: for a squash merge
+   * (one parent, the convention here) or a true merge commit (its first parent is the base) alike, that is the whole
+   * PR. A rebase merge lands several commits, so only the last one's lines are counted. The stats aren't subject to
+   * the 300-file list limit; the file names are the response's first page of files.
+   */
+  async commitDiffSummary(repo: Repo, sha: string, signal?: AbortSignal): Promise<DiffSummary> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner: repo.owner, repo: repo.name, ref: sha, request: { signal } });
+    const commit = commitStats.parse(data);
+    return {
+      changedLines: commit.stats.additions + commit.stats.deletions,
+      files: (commit.files ?? []).map((f) => f.filename),
+    };
+  }
+
+  private async compare(repo: Repo, basehead: string, signal?: AbortSignal): Promise<DiffSummary> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
       owner: repo.owner,
       repo: repo.name,
-      basehead: `${repo.base}...${sha}`,
+      basehead,
       per_page: 300,
+      request: { signal },
     });
     const files = data.files ?? [];
     return {

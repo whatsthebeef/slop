@@ -60,6 +60,7 @@ const host: CodeHost = {
   completedCheckRun: unused,
   readFile: unused,
   commitFiles: unused,
+  commitDiffSummary: unused,
   markReady: unused,
   diffSummary: unused,
   squashMerge: unused,

@@ -24,6 +24,7 @@ const unwrap = <T>(result: Result<T>): T => {
 class FakeHost implements CodeHost {
   readonly configured = true;
   commitFiles = () => Promise.resolve({ parent: null, files: [] });
+  commitDiffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
   /** The completed `sub-gate` run on HEAD, or null while it is still running. */
   subGate: { passed: boolean } | null = null;
   readonly lookups: string[] = [];
@@ -224,6 +225,29 @@ describe('a sub gate that completed before the PR was recorded as ready', () => 
     expect(glob.failure?.reason).toBe('Merge conflict with main in src/a.ts');
     expect(glob.failure?.conflict).toEqual({ base: 'main', files: ['src/a.ts'] });
     host.conflicting = [];
+  });
+
+  it('the gate decides with the learned limit as it is now, and records its cause, size and limit (s15f8)', async () => {
+    await store.transaction((tx) => tx.setSubLimit(1, 2000, 200));
+    try {
+      host.subGate = { passed: true };
+      host.diff = { changedLines: 250, files: ['src/a.ts'] };
+      await handle(readyForReview());
+      await run('refresh_sub_gate');
+      await run('evaluate_sub_gate');
+      const glob = await current();
+      expect(glob.type).toBe('same');
+      const verdicts = await store.transaction((tx) => tx.listBoardEvents(1, '2000-01-01T00:00:00.000Z', ['SubReviewCompleted']));
+      expect(verdicts.filter((e) => e.globId === globId).at(-1)?.data).toMatchObject({
+        passed: false,
+        reason: 'Changes 250 lines (limit 200)',
+        cause: 'size',
+        changedLines: 250,
+        limit: 200,
+      });
+    } finally {
+      await store.transaction((tx) => tx.setSubLimit(1, 200, 2000));
+    }
   });
 
   it('a failed gate found at ready is left to the routine', async () => {

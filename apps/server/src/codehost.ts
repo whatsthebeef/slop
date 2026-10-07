@@ -77,6 +77,8 @@ export interface CodeHost {
   commentOnce(repo: Repo, prNumber: number, marker: string, body: string): Promise<'posted' | 'exists'>;
   /** Lines changed and files touched between the base branch and `sha`. */
   diffSummary(repo: Repo, sha: string): Promise<DiffSummary>;
+  /** Lines changed (the commit's stats) and files touched by commit `sha` against its first parent: a merged sub's size. */
+  commitDiffSummary(repo: Repo, sha: string, signal?: AbortSignal): Promise<DiffSummary>;
   /** The head commit of `ref` (a branch) and its subject line; null when the branch doesn't exist. */
   headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string } | null>;
   /**

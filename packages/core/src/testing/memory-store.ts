@@ -6,6 +6,7 @@ import type { KbItem } from '../domain/kb.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
+import type { SubLimitChange } from '../domain/sub-limit.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
 
@@ -28,6 +29,7 @@ interface State {
   kbSignals: Map<string, KbSignalState>;
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
+  subLimitChanges: SubLimitChange[];
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -51,6 +53,7 @@ const clone = (state: State): State => ({
   kbSignals: new Map(state.kbSignals),
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
+  subLimitChanges: [...state.subLimitChanges],
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -76,6 +79,7 @@ export class MemoryStore implements Store {
     kbSignals: new Map(),
     boardJobs: new Map(),
     boardJobStates: new Map(),
+    subLimitChanges: [],
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -143,9 +147,25 @@ export class MemoryStore implements Store {
       updateBoard: (board, expectedVersion) => {
         const current = s.boards.get(board.id);
         if (current?.version !== expectedVersion) return Promise.resolve(false);
-        s.boards.set(board.id, board);
+        // As in Postgres, the learned sub limit has its own write.
+        s.boards.set(board.id, { ...board, subMaxChangedLines: current.subMaxChangedLines });
         return Promise.resolve(true);
       },
+      setSubLimit: (boardId, from, to) => {
+        const current = s.boards.get(boardId);
+        if (current?.subMaxChangedLines !== from) return Promise.resolve(false);
+        s.boards.set(boardId, { ...current, subMaxChangedLines: to });
+        return Promise.resolve(true);
+      },
+      insertSubLimitChange: (change) => {
+        if (s.subLimitChanges.some((c) => c.boardId === change.boardId && c.globId === change.globId && c.outcome === change.outcome)) {
+          return Promise.resolve(false);
+        }
+        s.subLimitChanges.push({ ...change, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listSubLimitChanges: (boardId) =>
+        Promise.resolve(s.subLimitChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
       setBaseChecks: (boardId, baseChecks) => {
         const current = s.boards.get(boardId);
         if (current !== undefined) s.boards.set(boardId, { ...current, baseChecks });

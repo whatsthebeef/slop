@@ -263,6 +263,37 @@ describe('PR and merge events (rows 11–16)', () => {
     expect(t.glob.status).toBe('pr_open');
   });
 
+  it('rows 12–13: the verdict records its cause, size and limit for the learned sub limit', () => {
+    const g = glob({ type: 'sub', status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } });
+    const converted = value(
+      m.subGateCompleted(
+        g,
+        { sha: 'bbb', passed: false, reason: 'Changes 2898 lines (limit 2000)', cause: 'size', changedLines: 2898, limit: 2000 },
+        ctx(null),
+      ),
+    );
+    expect(converted.events.find((e) => e.type === 'SubReviewCompleted')?.data).toEqual({
+      sha: 'bbb',
+      passed: false,
+      reason: 'Changes 2898 lines (limit 2000)',
+      cause: 'size',
+      changedLines: 2898,
+      limit: 2000,
+    });
+    const passed = value(m.subGateCompleted(g, { sha: 'bbb', passed: true, reason: null, cause: null, changedLines: 12, limit: 2000 }, ctx(null)));
+    expect(passed.events.find((e) => e.type === 'SubReviewCompleted')?.data).toEqual({
+      sha: 'bbb',
+      passed: true,
+      reason: null,
+      cause: null,
+      changedLines: 12,
+      limit: 2000,
+    });
+    // Callers that don't know them leave them out (the data is additive).
+    const bare = value(m.subGateCompleted(g, { sha: 'bbb', passed: true, reason: null }, ctx(null)));
+    expect(bare.events.find((e) => e.type === 'SubReviewCompleted')?.data).toEqual({ sha: 'bbb', passed: true, reason: null });
+  });
+
   it('row 14: Merge needs passing checks on the current head', () => {
     const g = glob({ status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } });
     expect(errorCode(m.requestMerge(g, ctx()))).toBe('invalid_transition');

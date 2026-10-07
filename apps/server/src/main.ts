@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService } from '@slop/core';
+import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, SubLimitService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -34,6 +34,7 @@ import { DeployWatch } from './jobs/deploy-watch.js';
 import { KbPipelineJob } from './jobs/kb-pipeline.js';
 import { LearningJobs } from './jobs/learning-jobs.js';
 import { CodeHostManifests } from './jobs/manifests.js';
+import { CodeHostSubDiffs } from './jobs/sub-diffs.js';
 
 const config = loadConfig();
 await runMigrations(config.DATABASE_URL, config.MIGRATIONS_DIR);
@@ -124,19 +125,24 @@ const kbPipeline = new KbPipeline({
   ),
 });
 
-const findingsPipeline = new FindingsPipeline({
-  store,
-  clock,
-  notifier: hub,
-  llm: llmHealth.track(
-    new BedrockLlm({ id: config.FINDINGS_MODEL, configKey: 'FINDINGS_MODEL' }, config.BEDROCK_REGION, logUsage),
-    config.FINDINGS_MODEL,
-  ),
-});
+// Haiku: splitting and classifying review findings, and checking bug reports for the learned sub limit.
+const findingsLlm = llmHealth.track(
+  new BedrockLlm({ id: config.FINDINGS_MODEL, configKey: 'FINDINGS_MODEL' }, config.BEDROCK_REGION, logUsage),
+  config.FINDINGS_MODEL,
+);
+const findingsPipeline = new FindingsPipeline({ store, clock, notifier: hub, llm: findingsLlm });
 
 // Weekly mining: signals from the board's own activity become mined KB items for the KB pipeline. Weekly
 // consolidation then merges same-fact open items (verified quotes) and flags stale ones; it waits while its model is down.
-// Daily effect checks compare each approved change's signal before and after it.
+// Daily effect checks compare each approved change's signal before and after it. Hourly, the sub size limit learns
+// from merged subs' outcomes.
+const subLimit = new SubLimitService({
+  store,
+  notifier: hub,
+  llm: findingsLlm,
+  findingsDown: () => llmHealth.isDown([config.FINDINGS_MODEL]),
+  diffs: new CodeHostSubDiffs(github, logError),
+});
 const learningJobs = new LearningJobService({
   store,
   clock,
@@ -145,6 +151,7 @@ const learningJobs = new LearningJobService({
   effectChecks: new EffectCheckService({ store, notifier: hub, mining }),
   consolidation: new KbConsolidation({ store, clock, notifier: hub, llm: kbRouteLlm }),
   consolidationDown: () => llmHealth.isDown([config.KB_ROUTE_MODEL]),
+  subLimit,
   manifests: new CodeHostManifests(github, logError),
   log: logError,
 });
@@ -167,7 +174,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
-mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, logError });
+mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, logError });
 mountHealth(app, { llm: llmHealth, boards });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.

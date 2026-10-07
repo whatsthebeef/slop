@@ -5,6 +5,7 @@ import type { IdLetter } from './domain/ids.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
+import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { BaseChecks, Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
 export interface GlobFilter {
@@ -38,6 +39,15 @@ export interface Tx {
   getBoard(id: number): Promise<Board | null>;
   insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'subMaxChangedLines' | 'effectCheckGlobs' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
+  /**
+   * Sets the board's learned sub size limit to `to` if it is still `from`; returns false otherwise. It has no board
+   * version, and `updateBoard` doesn't write it: settings saves don't overwrite a learned move.
+   */
+  setSubLimit(boardId: number, from: number, to: number): Promise<boolean>;
+  /** Records a sub-limit outcome; false when the board already has that glob's outcome (the learning is idempotent). */
+  insertSubLimitChange(change: NewSubLimitChange): Promise<boolean>;
+  /** A board's recorded sub-limit outcomes, newest first. */
+  listSubLimitChanges(boardId: number): Promise<SubLimitChange[]>;
   /** Records the base branch's latest check result. It has no board version: check results arrive on their own. */
   setBaseChecks(boardId: number, baseChecks: BaseChecks): Promise<void>;
   listBoards(email: string): Promise<Board[]>;
@@ -204,6 +214,12 @@ export interface Catalog {
  */
 export interface ManifestSource {
   manifestChanges(board: Board, commits: readonly MergedCommit[]): Promise<ManifestChange[] | null>;
+}
+
+/** The code host's line counts for merged commits (the learned sub limit, for gate verdicts recorded without them). */
+export interface SubDiffSource {
+  /** Lines the merge commit `sha` changed against its parent; null when the board's repo can't be read. */
+  mergedChangedLines(board: Board, sha: string): Promise<number | null>;
 }
 
 export interface Clock {

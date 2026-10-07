@@ -14,6 +14,7 @@ export interface CreateBoardInput {
   readonly environments: readonly Environment[];
 }
 
+/** What admins set. The sub size limit isn't here: slop learns it from outcomes (`sub-limit.ts`). */
 export type BoardSettings = Partial<
   Pick<
     Board,
@@ -27,7 +28,6 @@ export type BoardSettings = Partial<
     | 'runNoProgressHours'
     | 'runReadyHours'
     | 'runStartMinutes'
-    | 'subMaxChangedLines'
     | 'effectCheckGlobs'
     | 'deploy'
     | 'readinessTicks'
@@ -55,7 +55,7 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
   if (settings.timeZone !== undefined && !isTimeZone(settings.timeZone)) {
     return invalidInput(`Unknown time zone ${settings.timeZone}`);
   }
-  for (const key of ['runNoProgressHours', 'runReadyHours', 'runStartMinutes', 'subMaxChangedLines'] as const) {
+  for (const key of ['runNoProgressHours', 'runReadyHours', 'runStartMinutes'] as const) {
     const value = settings[key];
     if (value !== undefined && (!Number.isFinite(value) || value <= 0)) return invalidInput(`${key} must be positive`);
   }

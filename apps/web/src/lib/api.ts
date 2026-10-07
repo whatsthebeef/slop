@@ -26,6 +26,7 @@ import type {
   Role,
   Run,
   SlopType,
+  SubLimitView,
   TargetChange,
 } from '@slop/core';
 
@@ -233,6 +234,8 @@ export const api = {
   runBoardJob: (boardId: number, job: BoardJob['job']) => request<BoardJob>('POST', `/api/boards/${boardId}/kb/jobs/${job}/run`),
   /** The board's signals as measured now: what an approval of a submitted item can watch (admins). */
   boardSignals: (boardId: number) => request<KbSignal[]>('GET', `/api/boards/${boardId}/kb/signals`),
+  /** The board's learned sub size limit, its bounds and its history (members). */
+  subLimit: (boardId: number) => request<SubLimitView>('GET', `/api/boards/${boardId}/sub-limit`),
   plan: (id: string) =>
     request<{ current: ArtifactView | null; versions: { version: number; createdAt: string; by: string }[] }>(
       'GET',

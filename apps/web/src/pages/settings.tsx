@@ -1,10 +1,11 @@
 import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ROLES } from '@slop/core';
-import type { DeployIntegration, Environment, Role } from '@slop/core';
+import type { DeployIntegration, Environment, Role, SubLimitChange } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { GroupChip } from '@/components/glob-card';
 import { GlobDialog } from '@/components/glob-dialog';
+import { JobStatus } from '@/components/kb-proposals';
 import { ReadinessChecklist } from '@/components/readiness';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
@@ -222,6 +223,7 @@ export const SettingsPage = () => {
             data-testid='effect-check-globs'
           />
         </Label>
+        <SubLimit boardId={boardId} admin={admin} />
         <DeploySettings
           deploy={deploy}
           environments={envs.filter((e) => e.allowBranchDeploy && e.name.trim() !== '').map((e) => e.name)}
@@ -286,6 +288,94 @@ export const SettingsPage = () => {
 
 const CODEBUILD_DEFAULT: DeployIntegration = { provider: 'codebuild', region: 'us-east-1', defaultProject: '', projects: {} };
 const GITHUB_DEFAULT: DeployIntegration = { provider: 'github_actions', workflow: 'slop-deploy.yml' };
+
+const lines = (n: number) => n.toLocaleString('en');
+
+/** A sub's changed lines; unknown when neither its gate verdict nor its merge commit gave a count. */
+const changed = (n: number | null) => (n === null ? 'line count unknown' : `${lines(n)} lines`);
+
+/** Why an outcome moved the limit, in words. */
+const outcomeText = (change: SubLimitChange): string =>
+  change.outcome === 'merged_unchanged'
+    ? `Converted for its size (${changed(change.changedLines)}) and merged unchanged`
+    : `Passed the gate (${changed(change.changedLines)}) and needed fixes after merging`;
+
+/**
+ * The learned sub size limit: read-only (slop moves it with outcomes), with its history. Every value is rendered as
+ * text, including the evidence quotes, which come from labels' checklists and bug reports.
+ */
+const SubLimit = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const client = useQueryClient();
+  const limit = useQuery({ queryKey: ['sub-limit', boardId], queryFn: () => api.subLimit(boardId) });
+  // The job's status (shared with its Run now): a finished run refetches the limit and its history.
+  const jobs = useQuery({ queryKey: ['kb-jobs', boardId], queryFn: () => api.boardJobs(boardId) });
+  const lastRun = jobs.data === undefined ? undefined : (jobs.data.find((j) => j.job === 'sub_limit')?.lastRunAt ?? null);
+  // The run seen when the jobs first loaded: the limit was fetched after it, so only a later run refetches.
+  const seenRun = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (lastRun === undefined) return;
+    if (seenRun.current !== undefined && seenRun.current !== lastRun)
+      void client.invalidateQueries({ queryKey: ['sub-limit', boardId] });
+    seenRun.current = lastRun;
+  }, [client, boardId, lastRun]);
+  if (limit.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load the sub size limit.
+        <Button size='sm' variant='outline' onClick={() => void limit.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (limit.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the sub size limit…</p>;
+  const { current, bounds, history } = limit.data;
+  return (
+    <div className='grid gap-2' data-testid='sub-limit'>
+      <p className='text-sm'>
+        Sub size limit: {lines(current)} changed lines (learned from outcomes)
+      </p>
+      <p className='text-xs text-muted-foreground'>
+        Subs changing more lines convert to sames. A converted sub that merges unchanged raises the limit; a sub that
+        needed fixes after merging (a sign-off label asking for changes, or a bug report blaming it) lowers it. It stays
+        between {lines(bounds.min)} and {lines(bounds.max)}, in steps of {bounds.step}.
+      </p>
+      <JobStatus boardId={boardId} admin={admin} job='sub_limit' />
+      {history.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No outcomes recorded yet.</p>
+      ) : (
+        <table className='text-xs'>
+          <thead className='text-left text-muted-foreground'>
+            <tr>
+              <th className='pr-3 font-normal'>Date</th>
+              <th className='pr-3 font-normal'>Limit</th>
+              <th className='pr-3 font-normal'>Why</th>
+              <th className='font-normal'>Glob</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((change) => (
+              <tr key={change.id} className='align-top'>
+                <td className='pr-3 whitespace-nowrap'>{new Date(change.at).toLocaleDateString()}</td>
+                <td className='pr-3 whitespace-nowrap'>
+                  {lines(change.fromLines)} → {lines(change.toLines)}
+                </td>
+                <td className='pr-3'>
+                  {outcomeText(change)}
+                  <span className='block text-muted-foreground'>{change.evidence}</span>
+                </td>
+                <td>
+                  <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
+                    {change.globId}
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
 
 /**
  * How branch deploys run: none, CodeBuild (a project per environment, with a default) or GitHub

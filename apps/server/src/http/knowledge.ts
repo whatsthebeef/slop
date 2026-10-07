@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeService, KnowledgeService, LearningJobService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeService, KnowledgeService, LearningJobService, SubLimitService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -83,6 +83,8 @@ export const mountKnowledge = (
     boards: BoardService;
     host: CodeHost;
     jobs: LearningJobService;
+    /** The learned sub size limit; absent: its route isn't mounted. */
+    subLimit?: SubLimitService;
     /** The server's error log (console and the `errors` table), for Run now's background run. */
     logError: (task: string, message: string) => void;
   },
@@ -169,9 +171,15 @@ export const mountKnowledge = (
     return send(c, await knowledge.proposals(c.get('email'), Number(c.req.param('b')), parsed.data));
   });
 
-  // The board's self-improvement jobs (weekly mining and consolidation, daily effect checks) with their last runs;
+  // The board's self-improvement jobs (weekly mining and consolidation, daily effect checks, the hourly sub limit) with their last runs;
   // admins run one now.
   app.get('/api/boards/:b/kb/jobs', async (c) => send(c, await deps.jobs.jobs(c.get('email'), Number(c.req.param('b')))));
+
+  // The board's learned sub size limit, its bounds and its history (board settings), for members.
+  const { subLimit } = deps;
+  if (subLimit !== undefined) {
+    app.get('/api/boards/:b/sub-limit', async (c) => send(c, await subLimit.view(c.get('email'), Number(c.req.param('b')))));
+  }
 
   // The board's signals as measured now: what an admin can pick for a submitted item's effect check to watch.
   app.get('/api/boards/:b/kb/signals', async (c) => send(c, await knowledge.watchableSignals(c.get('email'), Number(c.req.param('b')))));

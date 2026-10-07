@@ -21,6 +21,12 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
         ...result.decided.map((d) => `${d.id} ${d.state.replace('_', ' ')}`),
         `${result.raised.length} raised${result.raised.length === 0 ? '' : ` (${result.raised.join(', ')})`}`,
       ].join('; ');
+    case 'sub_limit':
+      return [
+        `limit ${result.limit} lines`,
+        ...result.changes.map((c) => `${c.globId} ${c.outcome.replace('_', ' ')}: ${c.from} to ${c.to}`),
+        `${result.asked} bug references asked, ${result.waiting} waiting${(result.gaveUp ?? 0) > 0 ? `, ${result.gaveUp} skipped without a usable answer` : ''}`,
+      ].join('; ');
     case 'skipped':
       return `skipped (${result.reason}); the next check tries again`;
   }

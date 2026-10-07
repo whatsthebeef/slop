@@ -5,6 +5,7 @@ import type { FindingClass, ReviewFinding } from './findings.js';
 import type { LearningType } from './kb.js';
 import type { ArtifactKind, Provenance } from './knowledge.js';
 import type { SlopType, Status } from './types.js';
+import type { SubLimitOutcome } from './sub-limit.js';
 
 /**
  * Mined signals (spec, self-improvement: "Signals slop mines"): figures slop computes from its own
@@ -917,6 +918,18 @@ export type BoardJobResult =
       readonly decided: readonly { readonly id: string; readonly state: EffectState }[];
       /** Revise-or-revert items raised. */
       readonly raised: readonly string[];
+    }
+  | {
+      readonly kind: 'sub_limit';
+      /** The board's limit after the run. */
+      readonly limit: number;
+      /** Outcomes recorded this run, each with the limit before and after it. */
+      readonly changes: readonly { readonly globId: string; readonly outcome: SubLimitOutcome; readonly from: number; readonly to: number }[];
+      /** Bug references the model was asked about, and those left for the next run (AI unavailable or no usable answer yet). */
+      readonly asked: number;
+      readonly waiting: number;
+      /** Bug references skipped this run after `MAX_ANSWER_ATTEMPTS` asks without a usable answer (absent when none). */
+      readonly gaveUp?: number;
     }
   /**
    * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.

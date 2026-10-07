@@ -25,6 +25,7 @@ const unwrap = <T>(result: Result<T>): T => {
 class FakeHost implements CodeHost {
   readonly configured = true;
   commitFiles = () => Promise.resolve({ parent: null, files: [] });
+  commitDiffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
   readonly opened: string[] = [];
   readonly deleted: string[] = [];
   nextPr: { number: number; headSha: string } | null = { number: 8, headSha: 'd4' };

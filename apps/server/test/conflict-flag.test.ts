@@ -23,6 +23,7 @@ const unwrap = <T>(result: Result<T>): T => {
 class FakeHost implements CodeHost {
   readonly configured = true;
   commitFiles = () => Promise.resolve({ parent: null, files: [] });
+  commitDiffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
   /** The completed `sub-gate` run on HEAD, or null while it is still running. */
   subGate: { passed: boolean } | null = null;
   readonly lookups: string[] = [];

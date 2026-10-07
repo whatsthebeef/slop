@@ -8,6 +8,7 @@ import { keptApart, longEnoughQuote, mergeItems, normalised, verifiedQuote } fro
 import { LLM_TIMEOUT_MS } from './kb-pipeline.js';
 import { completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
+import { hash } from './text-hash.js';
 
 export type ConsolidationResult = Extract<BoardJobResult, { kind: 'consolidation' }>;
 
@@ -70,20 +71,6 @@ export interface ConsolidationMemory {
 }
 
 const EMPTY_MEMORY: ConsolidationMemory = { candidates: null, notSame: [] };
-
-/** cyrb53: a 53-bit string hash, as hex. A collision after an edit only keeps a pair from being asked again. */
-const hash = (value: string): string => {
-  let h1 = 0xdeadbeef;
-  let h2 = 0x41c6ce57;
-  for (let i = 0; i < value.length; i++) {
-    const c = value.charCodeAt(i);
-    h1 = Math.imul(h1 ^ c, 2654435761);
-    h2 = Math.imul(h2 ^ c, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
-};
 
 /** An item as the pair and verification calls see it: its ID and a hash of its type, target and statement. */
 const itemKey = (item: KbItem): string => {

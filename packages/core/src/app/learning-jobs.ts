@@ -11,6 +11,7 @@ import type { KbConsolidation } from './kb-consolidation.js';
 import { LLM_TIMEOUT_MS } from './kb-pipeline.js';
 import type { MiningService } from './mining-service.js';
 import type { EffectCheckService } from './effect-check-service.js';
+import type { SubLimitService } from './sub-limit-service.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -20,12 +21,18 @@ export const MINING_INTERVAL_MS = 7 * 24 * HOUR_MS;
 export const CONSOLIDATION_INTERVAL_MS = 7 * 24 * HOUR_MS;
 /** Effect checks run daily: approved changes' figures are refreshed as globs merge. */
 export const EFFECT_CHECK_INTERVAL_MS = 24 * HOUR_MS;
+/**
+ * The learned sub limit runs hourly: outcomes are recorded soon after they happen. A little under an hour, so the
+ * hourly check doesn't miss every other run on a few seconds' drift.
+ */
+export const SUB_LIMIT_INTERVAL_MS = 55 * 60 * 1000;
 
 /** How often each job runs, in the order a board's due jobs run. */
 const INTERVALS: readonly (readonly [BoardJobName, number])[] = [
   ['mining', MINING_INTERVAL_MS],
   ['consolidation', CONSOLIDATION_INTERVAL_MS],
   ['effect_check', EFFECT_CHECK_INTERVAL_MS],
+  ['sub_limit', SUB_LIMIT_INTERVAL_MS],
 ];
 /** A board job's lease: another server doesn't start the same job meanwhile. */
 export const BOARD_JOB_LEASE_MS = 30 * 60 * 1000;
@@ -73,7 +80,7 @@ export const MAX_MANIFEST_COMMITS = 50;
 export const isBoardJobName = (value: string): value is BoardJobName => BOARD_JOBS.some((j) => j === value);
 
 /**
- * The self-improvement pipeline's per-board jobs: weekly mining, then weekly consolidation, then daily effect checks. Each run takes the
+ * The self-improvement pipeline's per-board jobs: weekly mining, then weekly consolidation, then daily effect checks, and hourly the learned sub limit. Each run takes the
  * board's `board_jobs` lease, so two servers don't both run it, and records its result for the Knowledge page.
  * Admins can run one now. While consolidation's AI is unavailable it is skipped (the last run stands), and the next
  * hourly check tries again; a failed run is tried again after a backoff (`failedRetryMs`).
@@ -91,6 +98,8 @@ export class LearningJobService {
       consolidationDown?: () => boolean;
       /** Absent: the effect-check job isn't available. */
       effectChecks?: EffectCheckService;
+      /** Absent: the sub-limit learning isn't available. */
+      subLimit?: SubLimitService;
       /** Null without a code host: the dependency signal isn't measured. */
       manifests: ManifestSource | null;
       /** Where a run that outlived its lease is reported (the server's error log). */
@@ -98,12 +107,13 @@ export class LearningJobService {
     },
   ) {}
 
-  /** The jobs that can run: mining, consolidation when it has an LLM, and effect checks when wired. */
+  /** The jobs that can run: mining, consolidation when it has an LLM, and effect checks and the sub limit when wired. */
   private runnable(): BoardJobName[] {
     return [
       'mining',
       ...(this.deps.consolidation === undefined ? [] : ['consolidation' as const]),
       ...(this.deps.effectChecks === undefined ? [] : ['effect_check' as const]),
+      ...(this.deps.subLimit === undefined ? [] : ['sub_limit' as const]),
     ];
   }
 
@@ -187,7 +197,7 @@ export class LearningJobService {
   }
 
   /** One run of a job; a job whose AI is unavailable is `skipped`. */
-  private async run(board: Board, job: BoardJobName, started: string): Promise<BoardJobResult> {
+  private async run(board: Board, job: BoardJobName, started: string, lastRunAt: string | null): Promise<BoardJobResult> {
     if (job === 'consolidation') {
       const { consolidation } = this.deps;
       if (consolidation === undefined) throw new Error('The consolidation job has no LLM');
@@ -204,7 +214,11 @@ export class LearningJobService {
       if (effectChecks === undefined) throw new Error('The effect-check job is not wired');
       return effectChecks.check(board.id, started);
     }
-    if (job !== 'mining') throw new Error(`The ${job} job can't run yet`);
+    if (job === 'sub_limit') {
+      const { subLimit } = this.deps;
+      if (subLimit === undefined) throw new Error('The sub-limit job is not wired');
+      return subLimit.learn(board.id, started, lastRunAt);
+    }
     const commits = await this.deps.mining.mergedCommits(board.id, started);
     const manifestChanges =
       this.deps.manifests === null ? null : await this.deps.manifests.manifestChanges(board, commits.slice(-MAX_MANIFEST_COMMITS));
@@ -224,7 +238,7 @@ export class LearningJobService {
     const lease = claimed.runningUntil ?? started;
     let finished: BoardJob;
     try {
-      const result = await this.run(board, claimed.job, started);
+      const result = await this.run(board, claimed.job, started, claimed.lastRunAt);
       // Skipped (the AI is down): the last run stays as it was, and the next hourly check tries again. A skip keeps
       // the failures in a row before it, so an AI that alternates between down and failing still backs off.
       const failures = result.kind === 'skipped' ? failuresOf(claimed.lastResult) : undefined;

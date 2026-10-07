@@ -292,8 +292,10 @@ export const codeHostExecutors = (
       const board = await boardOf(glob.boardId);
       const repo = board === null ? null : repoOf(board);
       if (board === null || repo === null) return 'dropped';
+      // The board was read just now, so the verdict uses the learned limit as it is at this decision.
       const verdict = subGatePolicy(await host.diffSummary(repo, effect.sha), board);
-      await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCompleted(g, { sha: effect.sha, ...verdict }, ctx));
+      const limit = board.subMaxChangedLines;
+      await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCompleted(g, { sha: effect.sha, ...verdict, limit }, ctx));
       return 'done';
     },
 

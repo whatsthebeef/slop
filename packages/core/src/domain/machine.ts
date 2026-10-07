@@ -7,6 +7,7 @@ import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from 
 import type { Result } from './errors.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
 import type { ArtifactSummary } from './knowledge.js';
+import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
 import type {
@@ -1119,7 +1120,15 @@ export const subGateCheckCompleted = (
 /** Rows 12–13: the sub gate's verdict on a commit. */
 export const subGateCompleted = (
   glob: Glob,
-  gate: { sha: string; passed: boolean; reason: string | null },
+  gate: {
+    sha: string;
+    passed: boolean;
+    reason: string | null;
+    /** Recorded for the learned sub limit: why it converted, the lines it changes and the limit applied. */
+    cause?: SubGateCause | null;
+    changedLines?: number;
+    limit?: number;
+  },
   ctx: Context,
 ): Result<Transition> => {
   if (glob.status !== 'pr_open' || glob.type !== 'sub' || glob.pr?.headSha !== gate.sha) {
@@ -1129,6 +1138,9 @@ export const subGateCompleted = (
     sha: gate.sha,
     passed: gate.passed,
     reason: gate.reason,
+    ...(gate.cause !== undefined && { cause: gate.cause }),
+    ...(gate.changedLines !== undefined && { changedLines: gate.changedLines }),
+    ...(gate.limit !== undefined && { limit: gate.limit }),
   });
   if (gate.passed) {
     return b
