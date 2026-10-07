@@ -1,10 +1,28 @@
-import type { LearningJobService } from '@slop/core';
+import type { BoardJobResult, LearningJobService } from '@slop/core';
 
 const HOUR_MS = 60 * 60 * 1000;
 
+/** A finished run in one line, for the server log. */
+const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string => {
+  switch (result.kind) {
+    case 'mining':
+      return `${result.measured} signals measured, ${result.raised.length} raised, ${result.refreshed.length} refreshed`;
+    case 'consolidation':
+      return [
+        result.unchanged === true
+          ? `candidates unchanged, no pairs proposed (${result.alreadyChecked ?? 0} already checked)`
+          : `${result.proposed} pairs proposed (${result.alreadyChecked ?? 0} already checked), ${result.verified} verified, ${result.merged.length} merged`,
+        ...result.merged.map((m) => `${m.id} into ${m.into}`),
+        `${result.skipped} skipped, ${result.flaggedStale} flagged stale, ${result.clearedStale} cleared`,
+      ].join('; ');
+    case 'skipped':
+      return `skipped (${result.reason}); the next check tries again`;
+  }
+};
+
 /**
- * Checks hourly for the self-improvement pipeline's per-board jobs that are due (mining a week after the
- * board's last run) and runs them through `LearningJobService`, which takes each job's lease so two servers
+ * Checks hourly for the self-improvement pipeline's per-board jobs that are due (mining, then consolidation, a
+ * week after the board's last run of each, sooner after a skipped or failed run: `isJobDue`) and runs them through `LearningJobService`, which takes each job's lease so two servers
  * don't both run it. Also checks once on start, so a due run isn't left waiting an hour after a restart.
  */
 export class LearningJobs {
@@ -34,7 +52,7 @@ export class LearningJobs {
     try {
       for (const { boardId, job, result } of await this.service.runDue()) {
         if (result.kind === 'failed') this.log(job, `board ${boardId}: ${result.error}`);
-        else console.log(`[${job}] board ${boardId}: ${result.measured} signals measured, ${result.raised.length} raised, ${result.refreshed.length} refreshed`);
+        else console.log(`[${job}] board ${boardId}: ${summary(result)}`);
       }
     } catch (error) {
       this.log('learning jobs', error instanceof Error ? (error.stack ?? error.message) : String(error));

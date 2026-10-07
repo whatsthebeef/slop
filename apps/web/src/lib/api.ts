@@ -225,6 +225,7 @@ export const api = {
     request<KbItem>('POST', `/api/kb/${id}/target`, { version, target }),
   retryProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/retry`, { version }),
   reopenProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/reopen`, { version }),
+  keepProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/keep`, { version }),
   rejectProposal: (id: string, version: number, reason: string) =>
     request<KbItem>('POST', `/api/kb/${id}/reject`, { version, reason }),
   boardJobs: (boardId: number) => request<BoardJobStatus[]>('GET', `/api/boards/${boardId}/kb/jobs`),

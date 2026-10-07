@@ -61,16 +61,20 @@ export type KbCoverage =
   | { readonly kind: 'knowledge'; readonly knowledgeKind: KnowledgeKind; readonly name: string; readonly section: string | null };
 
 /**
- * An open item the dedupe step thinks the target's own text may already say: a hint for the admin,
- * never a decision. `quote` is the sentence it found (checked against the text it was shown).
+ * An open item the dedupe step thinks may already be said: a hint for the admin, never a decision. `quote` is the
+ * sentence it found (checked against the text it was shown). Either the target's own text (stored before `kind`
+ * existed, so it has none), or an approved item whose quote was too short to close the item on (`longEnoughQuote`).
  */
-export interface KbPossibleCoverage {
-  readonly knowledgeKind: KnowledgeKind;
-  readonly name: string;
-  readonly section: string | null;
-  readonly quote: string;
-  readonly reason: string;
-}
+export type KbPossibleCoverage =
+  | {
+      readonly kind?: 'knowledge';
+      readonly knowledgeKind: KnowledgeKind;
+      readonly name: string;
+      readonly section: string | null;
+      readonly quote: string;
+      readonly reason: string;
+    }
+  | { readonly kind: 'item'; readonly id: string; readonly quote: string; readonly shortQuote: true };
 
 /** Something an open item contradicts: another item (by ID) or a document or agent file (by name). */
 export interface KbContradiction {
@@ -101,9 +105,14 @@ export interface DraftPreview {
   readonly diff: readonly ContextDiffLine[];
 }
 
-/** A KB item as the Knowledge page lists it: open drafted items carry their preview. */
+/**
+ * A KB item as the Knowledge page lists it: open drafted items carry their preview, and every item its evidence
+ * count and freshest evidence (the open queue's order, worked out in core).
+ */
 export interface KbItemView extends KbItem {
   readonly preview: DraftPreview | null;
+  readonly evidenceCount: number;
+  readonly lastEvidenceAt: string;
 }
 
 /** The newest items of a history group (decided, or closed by the pipeline) and how many there are in all. */
@@ -113,7 +122,7 @@ export interface KbItemPage {
 }
 
 /**
- * The Knowledge page's proposals: every open item, oldest first, and the newest decided and
+ * The Knowledge page's proposals: every open item, by evidence (`byEvidence`), and the newest decided and
  * closed items (bounded, since they only grow).
  */
 export interface KbProposalList {
@@ -186,9 +195,86 @@ export interface KbItem {
   readonly draft: KbDraft | null;
   readonly draftedAgainstVersion: number | null;
   readonly rationale: string | null;
+  /**
+   * `open`: when weekly consolidation flagged it stale, and why (`staleReason`). Only a flag for the admin, who
+   * rejects or keeps it; new evidence clears it.
+   */
+  readonly staleSince: string | null;
+  readonly staleReason: KbStaleReason | null;
+  /** When an admin last kept a stale item: it isn't flagged again for `STALE_KEEP_MS`. */
+  readonly staleDismissedAt: string | null;
+  /** Items an admin separated from this one by reopening a merge: consolidation never merges them again. */
+  readonly keptApartFrom: readonly string[];
+  /** `merged` by weekly consolidation: the verified quotes it merged on. */
+  readonly mergeNote: KbMergeNote | null;
   /** For conditional writes (approve, reject). */
   readonly version: number;
 }
+
+/** Why consolidation flagged an open item stale (a documented rule, never a model's say-so). */
+export const KB_STALE_REASONS = ['no_recent_evidence', 'signal_below_threshold'] as const;
+export type KbStaleReason = (typeof KB_STALE_REASONS)[number];
+
+/**
+ * What weekly consolidation merged an item on: its own words (`quote`, from its statement) and the survivor's
+ * (`survivorQuote`), each found verbatim in that statement, and when.
+ */
+export interface KbMergeNote {
+  readonly by: 'consolidation';
+  readonly quote: string;
+  readonly survivorQuote: string;
+  readonly at: string;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** An open item with no evidence newer than this is flagged stale (in days for the Knowledge page's wording). */
+export const STALE_AFTER_DAYS = 60;
+export const STALE_AFTER_MS = STALE_AFTER_DAYS * DAY_MS;
+/** A mined item whose signal has been below its threshold this many weekly runs in a row is flagged stale. */
+export const STALE_BELOW_THRESHOLD_RUNS = 4;
+/** Keeping a stale item ("Not stale") suppresses the flag this long. */
+export const STALE_KEEP_DAYS = 60;
+export const STALE_KEEP_MS = STALE_KEEP_DAYS * DAY_MS;
+
+/** How much evidence an item has: its occurrences (it and its near-duplicates), or its source globs if more. */
+export const evidenceCount = (item: Pick<KbItem, 'occurrenceCount' | 'sourceGlobIds'>): number =>
+  Math.max(item.occurrenceCount, item.sourceGlobIds.length);
+
+/** The newest evidence an item has: its submission, a near-duplicate merged into it, or its signal's last measurement. */
+export const lastEvidenceAt = (item: Pick<KbItem, 'createdAt' | 'extraEvidence' | 'signal'>): string => {
+  const times = [item.createdAt, ...item.extraEvidence.map((e) => e.at), ...(item.signal === null ? [] : [item.signal.measuredAt])];
+  return times.reduce((latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest));
+};
+
+/**
+ * The open queue's order: the most evidence first (repeats are the strongest sign a rule is missing), then the
+ * freshest evidence, so an item that keeps coming back rises instead of sinking under new ones; then the oldest.
+ */
+export const byEvidence = (a: KbItem, b: KbItem): number =>
+  evidenceCount(b) - evidenceCount(a) ||
+  Date.parse(lastEvidenceAt(b)) - Date.parse(lastEvidenceAt(a)) ||
+  Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+  a.id.localeCompare(b.id);
+
+/**
+ * Whether an open item is stale at `now`, and why: no evidence newer than `STALE_AFTER_MS`, or (a mined item)
+ * its signal below its threshold for `STALE_BELOW_THRESHOLD_RUNS` runs in a row (`belowThresholdRuns`, null
+ * when it has no signal row). Null while an admin's Keep holds, and for anything not open.
+ */
+export const staleReasonAt = (
+  item: Pick<KbItem, 'status' | 'createdAt' | 'extraEvidence' | 'signal' | 'staleDismissedAt'>,
+  now: string,
+  belowThresholdRuns: number | null,
+): KbStaleReason | null => {
+  if (item.status !== 'open') return null;
+  const at = Date.parse(now);
+  if (item.staleDismissedAt !== null && at - Date.parse(item.staleDismissedAt) < STALE_KEEP_MS) return null;
+  if (at - Date.parse(lastEvidenceAt(item)) >= STALE_AFTER_MS) return 'no_recent_evidence';
+  if (item.signal !== null && belowThresholdRuns !== null && belowThresholdRuns >= STALE_BELOW_THRESHOLD_RUNS) {
+    return 'signal_below_threshold';
+  }
+  return null;
+};
 
 /**
  * Starts `processingError` while an item waits for the LLM to be usable again (expired sign-in,
@@ -222,6 +308,11 @@ export const UNPROCESSED: Pick<
   | 'draft'
   | 'draftedAgainstVersion'
   | 'rationale'
+  | 'staleSince'
+  | 'staleReason'
+  | 'staleDismissedAt'
+  | 'keptApartFrom'
+  | 'mergeNote'
 > = {
   processing: 'pending',
   processingError: null,
@@ -240,6 +331,11 @@ export const UNPROCESSED: Pick<
   draft: null,
   draftedAgainstVersion: null,
   rationale: null,
+  staleSince: null,
+  staleReason: null,
+  staleDismissedAt: null,
+  keptApartFrom: [],
+  mergeNote: null,
 };
 
 export const isLearningType = (value: string): value is LearningType =>

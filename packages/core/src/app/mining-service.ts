@@ -241,6 +241,9 @@ export class MiningService {
       signal: own ? signal : item.signal,
       evidence: `${item.evidence}\n${line}`,
       sourceGlobIds: [...new Set([...item.sourceGlobIds, ...m.globIds])],
+      // New evidence clears a stale flag (the signal crossed its threshold again).
+      staleSince: null,
+      staleReason: null,
       version: item.version + 1,
     };
     // A conflicting write (the pipeline has it) leaves the refresh to next week.

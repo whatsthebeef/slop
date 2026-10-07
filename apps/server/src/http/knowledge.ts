@@ -159,7 +159,7 @@ export const mountKnowledge = (
     return send(c, await knowledge.proposals(c.get('email'), Number(c.req.param('b')), parsed.data));
   });
 
-  // The board's self-improvement jobs (weekly mining) with their last runs; admins run one now.
+  // The board's self-improvement jobs (weekly mining and consolidation) with their last runs; admins run one now.
   app.get('/api/boards/:b/kb/jobs', async (c) => send(c, await deps.jobs.jobs(c.get('email'), Number(c.req.param('b')))));
 
   // Run now starts the job and answers 202 straight away: the job can outlast a request (manifest reads on the
@@ -206,6 +206,13 @@ export const mountKnowledge = (
     const body = await parse(c, z.object({ version }));
     if (body instanceof Response) return body;
     return send(c, await knowledge.reopen(c.get('email'), c.req.param('itemId'), body.version));
+  });
+
+  // Admins keep an item weekly consolidation flagged stale: the flag clears and stays off for 60 days.
+  app.post('/api/kb/:itemId/keep', async (c) => {
+    const body = await parse(c, z.object({ version }));
+    if (body instanceof Response) return body;
+    return send(c, await knowledge.keepStale(c.get('email'), c.req.param('itemId'), body.version));
   });
 
   app.post('/api/kb/:itemId/reject', async (c) => {

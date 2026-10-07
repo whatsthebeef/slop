@@ -1,5 +1,5 @@
 import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, Glob, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
+import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -116,6 +116,9 @@ const toKbItem = (row: typeof schema.kbProposals.$inferSelect): KbItem => ({
   createdAt: row.createdAt.toISOString(),
   decidedAt: row.decidedAt?.toISOString() ?? null,
   processAfter: row.processAfter?.toISOString() ?? null,
+  staleSince: row.staleSince?.toISOString() ?? null,
+  staleReason: row.staleReason === null ? null : oneOf(KB_STALE_REASONS, row.staleReason),
+  staleDismissedAt: row.staleDismissedAt?.toISOString() ?? null,
 });
 
 const toKbSignal = (row: typeof schema.kbSignals.$inferSelect): KbSignalState => ({
@@ -124,9 +127,11 @@ const toKbSignal = (row: typeof schema.kbSignals.$inferSelect): KbSignalState =>
   raisedAt: row.raisedAt?.toISOString() ?? null,
 });
 
+// The job's state stays out: only the job itself reads it (`getBoardJobState`).
 const toBoardJob = (row: typeof schema.boardJobs.$inferSelect): BoardJob => ({
-  ...row,
+  boardId: row.boardId,
   job: oneOf(BOARD_JOBS, row.job),
+  lastResult: row.lastResult,
   lastRunAt: row.lastRunAt?.toISOString() ?? null,
   runningUntil: row.runningUntil?.toISOString() ?? null,
 });
@@ -160,6 +165,11 @@ const kbItemColumns = (item: KbItem) => ({
   draft: item.draft,
   draftedAgainstVersion: item.draftedAgainstVersion,
   rationale: item.rationale,
+  staleSince: item.staleSince === null ? null : new Date(item.staleSince),
+  staleReason: item.staleReason,
+  staleDismissedAt: item.staleDismissedAt === null ? null : new Date(item.staleDismissedAt),
+  keptApartFrom: [...item.keptApartFrom],
+  mergeNote: item.mergeNote,
   version: item.version,
 });
 
@@ -735,6 +745,20 @@ export class PgStore implements Store {
           .where(and(eq(j.boardId, job.boardId), eq(j.job, job.job), eq(j.runningUntil, new Date(lease))))
           .returning({ boardId: j.boardId });
         return rows.length > 0;
+      },
+      getBoardJobState: async (boardId, job) => {
+        const [row] = await t
+          .select({ state: schema.boardJobs.state })
+          .from(schema.boardJobs)
+          .where(and(eq(schema.boardJobs.boardId, boardId), eq(schema.boardJobs.job, job)));
+        return row?.state ?? null;
+      },
+      setBoardJobState: async (boardId, job, state) => {
+        const j = schema.boardJobs;
+        await t
+          .insert(j)
+          .values({ boardId, job, state })
+          .onConflictDoUpdate({ target: [j.boardId, j.job], set: { state } });
       },
       lockBoardJob: async (boardId, job) => {
         await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`board_jobs:${String(boardId)}:${job}`}))`);

@@ -866,7 +866,48 @@ export type BoardJobResult =
       readonly raised: readonly string[];
       readonly refreshed: readonly string[];
     }
-  | { readonly kind: 'failed'; readonly error: string };
+  | {
+      readonly kind: 'consolidation';
+      /** Open items compared (settled statements, newest first). */
+      readonly candidates: number;
+      /** Pairs the model proposed (after dropping kept-apart pairs), pairs it verified as the same fact with both quotes. */
+      readonly proposed: number;
+      readonly verified: number;
+      /** Each merge: the item closed and the item it was merged into. */
+      readonly merged: readonly { readonly id: string; readonly into: string }[];
+      /**
+       * Pairs left alone for an unusable answer, a failed call or an item that changed meanwhile, and pairs already
+       * answered this run (merged together, or asked as another pair after a merge).
+       */
+      readonly skipped: number;
+      /**
+       * Pairs not verified again: an earlier run found them not the same fact and neither item's statement, type or
+       * target has changed since.
+       * The ones proposed anyway, or on an `unchanged` run every such pair among the candidates. Absent on runs
+       * recorded before consolidation remembered pairs.
+       */
+      readonly alreadyChecked?: number;
+      /** No candidate-pair call: the candidates (their statements, types and targets) were as the last run left them. */
+      readonly unchanged?: boolean;
+      /** Open items flagged stale this run, and flags cleared (new evidence). */
+      readonly flaggedStale: number;
+      readonly clearedStale: number;
+    }
+  /**
+   * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.
+   * `failures`: the failed runs in a row before the skip, kept for the next failure's backoff (absent when none).
+   */
+  | { readonly kind: 'skipped'; readonly reason: string; readonly failures?: number }
+  | {
+      readonly kind: 'failed';
+      readonly error: string;
+      /**
+       * When it failed, and how many runs in a row have failed: the next try waits longer after each
+       * (`failedRetryMs`). Absent on failures recorded before the backoff.
+       */
+      readonly at?: string;
+      readonly failures?: number;
+    };
 
 /** A board job's last run, and its lease while one server runs it (`runningUntil`). */
 export interface BoardJob {

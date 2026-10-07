@@ -25,6 +25,7 @@ export * from './app/knowledge-service.js';
 export * from './app/artifact-service.js';
 export * from './app/intake-service.js';
 export * from './app/kb-pipeline.js';
+export * from './app/kb-consolidation.js';
 export * from './app/llm-call.js';
 export * from './app/findings-pipeline.js';
 export * from './app/findings-service.js';

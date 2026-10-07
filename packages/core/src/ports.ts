@@ -145,6 +145,12 @@ export interface Tx {
    */
   finishBoardJob(job: BoardJob, lease: string): Promise<boolean>;
   /**
+   * What a board job keeps between its runs (consolidation's memory of pairs it checked), as stored: the job narrows
+   * it. Null when nothing is stored. Kept apart from the job's result, so a skipped or failed run leaves it alone.
+   */
+  getBoardJobState(boardId: number, job: BoardJobName): Promise<unknown>;
+  setBoardJobState(boardId: number, job: BoardJobName, state: unknown): Promise<void>;
+  /**
    * Serialises a board job's work until the transaction ends, so two runs that both got past the lease (or
    * skipped it) don't read and raise the same signals at once (a no-op where transactions don't overlap).
    */

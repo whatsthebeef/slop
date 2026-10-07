@@ -26,6 +26,7 @@ interface State {
   findings: ReviewFinding[];
   kbSignals: Map<string, KbSignalState>;
   boardJobs: Map<string, BoardJob>;
+  boardJobStates: Map<string, unknown>;
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -48,6 +49,7 @@ const clone = (state: State): State => ({
   findings: [...state.findings],
   kbSignals: new Map(state.kbSignals),
   boardJobs: new Map(state.boardJobs),
+  boardJobStates: new Map(state.boardJobStates),
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -72,6 +74,7 @@ export class MemoryStore implements Store {
     findings: [],
     kbSignals: new Map(),
     boardJobs: new Map(),
+    boardJobStates: new Map(),
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -406,6 +409,11 @@ export class MemoryStore implements Store {
         if (s.boardJobs.get(key)?.runningUntil !== lease) return Promise.resolve(false);
         s.boardJobs.set(key, { ...job, runningUntil: null });
         return Promise.resolve(true);
+      },
+      getBoardJobState: (boardId, job) => Promise.resolve(structuredClone(s.boardJobStates.get(`${boardId}:${job}`) ?? null)),
+      setBoardJobState: (boardId, job, state) => {
+        s.boardJobStates.set(`${boardId}:${job}`, structuredClone(state));
+        return Promise.resolve();
       },
       // Memory transactions run one at a time, so there is nothing to serialise.
       lockBoardJob: () => Promise.resolve(),

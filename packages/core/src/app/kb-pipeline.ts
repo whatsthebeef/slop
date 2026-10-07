@@ -18,6 +18,7 @@ import { LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
 import { documentTarget, targetState } from './knowledge-service.js';
 import type { TargetState } from './knowledge-service.js';
+import { addEvidenceTo, keptApart, longEnoughQuote, normalised, verifiedQuote } from './kb-dedupe.js';
 import { completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 
@@ -39,7 +40,7 @@ export const LLM_WAIT_MS = 60_000;
 /**
  * Dedupe compares against at most this many items per group (open, approved, rejected), newest
  * first, to keep one call small. Older items fall out of comparison; weekly consolidation
- * (later) catches repeats across the whole queue.
+ * catches repeats across the open queue.
  */
 const CANDIDATE_CAP = 100;
 /** A target with no section is compared whole up to this many characters, then truncated. */
@@ -132,7 +133,10 @@ interface Dedupe {
   readonly duplicateOf: string | null;
   /** An approved item that says it, quote verified: the only coverage that closes an item. */
   readonly coveredBy: KbCoverage | null;
-  /** The target's text that may say it, quote verified: flagged on the open item, never closes it. */
+  /**
+   * The target's text that may say it, or an approved item with a quote too short to close on (quote verified
+   * either way): flagged on the open item, never closes it.
+   */
   readonly possiblyCoveredBy: KbPossibleCoverage | null;
   readonly contradicts: readonly KbContradiction[];
 }
@@ -153,19 +157,6 @@ class StaleItem extends Error {
 }
 
 const newest = (items: readonly KbItem[]) => [...items].reverse().slice(0, CANDIDATE_CAP);
-
-const withEvidenceFrom = (into: KbItem, from: KbItem): KbItem => ({
-  ...into,
-  // A pending item may already carry near-duplicates of its own; they move with it.
-  occurrenceCount: into.occurrenceCount + from.occurrenceCount,
-  extraEvidence: [
-    ...into.extraEvidence,
-    { itemId: from.id, globIds: from.sourceGlobIds, evidence: from.evidence, submittedBy: from.submittedBy, at: from.createdAt },
-    ...from.extraEvidence,
-  ],
-  sourceGlobIds: [...new Set([...into.sourceGlobIds, ...from.sourceGlobIds])],
-  version: into.version + 1,
-});
 
 const targetLabel = (target: KbTarget) =>
   `${target.kind === 'doc' ? 'document' : 'agent file'} ${target.name}${target.section === null ? '' : `, section "${target.section}"`}`;
@@ -438,14 +429,9 @@ export class KbPipeline {
         };
         const addEvidence = async (id: string, status: 'open' | 'approved'): Promise<boolean> => {
           const other = await tx.getKbItem(id);
-          if (other?.status !== status) return false;
-          let merged = withEvidenceFrom(other, current);
-          // The write bumps its version, so a claim running on it now drops its result: make it due
-          // again at once rather than after the claim's lease. An item with an error is backing off
-          // after a failure (or retrying one); it keeps its time so a failing model isn't hammered.
-          const waiting = merged.processing === 'pending' || merged.processing === 'routed';
-          if (waiting && merged.processingError === null) merged = { ...merged, processAfter: null };
-          if (!(await tx.updateKbItem(merged, other.version))) throw new StaleItem(id);
+          // An admin separated them (reopening a merge): the item stays open rather than joining it again.
+          if (other?.status !== status || keptApart(other, current)) return false;
+          if (!(await addEvidenceTo(tx, other, current))) throw new StaleItem(id);
           return true;
         };
         if (dedupe.suppressedBy !== null) {
@@ -455,7 +441,8 @@ export class KbPipeline {
         } else if (dedupe.coveredBy?.kind === 'item' && (await addEvidence(dedupe.coveredBy.id, 'approved'))) {
           next = { ...next, status: 'covered', coveredBy: dedupe.coveredBy };
         } else {
-          // Coverage by the target's text is only a hint: the item stays open for an admin to decide.
+          // Coverage by the target's text, or by an approved item on a short quote, is only a hint: the item stays
+          // open for an admin to decide.
           next = { ...next, possiblyCoveredBy: dedupe.possiblyCoveredBy, contradicts: dedupe.contradicts };
         }
         if (!(await tx.updateKbItem(next, current.version))) throw new StaleItem(item.id);
@@ -630,18 +617,12 @@ const parseRouting = (answer: string, snapshot: Snapshot): Routing | null => {
 /** The `checked` ref for the target's current text. */
 const TARGET_REF = 'current text';
 
-/** A `checked` ref or relation as compared: lower case, `_` and `-` as spaces, spaces collapsed ("Same_Fact" is "same fact"). */
-const normalised = (value: unknown): string =>
-  (text(value) ?? '')
-    .toLowerCase()
-    .replace(/[\s_-]+/g, ' ')
-    .trim();
-
 /**
  * The dedupe answer, keeping only references to items and text it was shown (anything else is
  * ignored rather than failing the item); null when it isn't a JSON object. Every coverage and
  * contradiction claim must quote the text it was shown (`targetText`, or the item's statement),
- * else it is dropped. `targetText` is null when the model was told the target has no text yet (a
+ * else it is dropped; the quote for coverage by an approved item, which closes the item, must also be long enough
+ * (`longEnoughQuote`), and a shorter one is only flagged (`possiblyCoveredBy`). `targetText` is null when the model was told the target has no text yet (a
  * new document, an empty overlay or document), so the target can't cover or contradict the learning.
  * `fact` (the model's restatement) is only there to focus the model and isn't kept. `checked` isn't
  * kept either, but every claim needs it: a candidate closes or flags the item only when `checked`
@@ -681,8 +662,12 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targe
     }
   } else if (field(covered, 'kind') === 'item') {
     const approved = itemIn(snapshot.approved, field(covered, 'id'), 'same fact');
-    if (approved !== null && verifiedQuote(field(covered, 'quote'), approved.statement) !== null) {
-      coveredBy = { kind: 'item', id: approved.id };
+    const quote = approved === null ? null : verifiedQuote(field(covered, 'quote'), approved.statement);
+    // Coverage closes the item: a word or two found in the statement checks nothing (`longEnoughQuote`). A short
+    // quote only flags the item, so the admin still sees what the model thought.
+    if (approved !== null && quote !== null) {
+      if (longEnoughQuote(quote)) coveredBy = { kind: 'item', id: approved.id };
+      else possiblyCoveredBy = { kind: 'item', id: approved.id, quote, shortQuote: true };
     }
   }
   const contradicts = list(field(parsed, 'contradicts')).flatMap((entry): KbContradiction[] => {
@@ -707,20 +692,6 @@ const parseDedupe = (answer: string, snapshot: Snapshot, target: KbTarget, targe
     possiblyCoveredBy,
     contradicts,
   };
-};
-
-const squash = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
-
-/**
- * The model's quote, when it really appears (ignoring case and whitespace) in the text it was
- * shown; null otherwise, so a claim it can't back up is dropped. `shown` is null when the model
- * saw no text (a new document, an empty overlay), which nothing can quote. The findings pipeline
- * uses it too: a split finding is kept only when its quote is in the review.
- */
-export const verifiedQuote = (value: unknown, shown: string | null): string | null => {
-  const quote = text(value)?.trim() ?? '';
-  if (shown === null || quote === '' || !squash(shown).includes(squash(quote))) return null;
-  return quote;
 };
 
 const titled = (heading: string, text: string) => `${heading}\n<<<\n${text.trim() === '' ? '(empty)' : text}\n>>>`;

@@ -3,7 +3,7 @@ import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
 import { composeAgentSet, contextDiff, overlayProblem } from '../domain/agent-set.js';
 import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../domain/agent-set.js';
-import { isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE, needsDraft, UNPROCESSED } from '../domain/kb.js';
+import { byEvidence, evidenceCount, isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE, lastEvidenceAt, needsDraft, UNPROCESSED } from '../domain/kb.js';
 import type {
   DraftPreview,
   KbItem,
@@ -147,6 +147,17 @@ class BoardChanged extends Error {
     super(`Board ${boardId} changed during the write; retry`);
   }
 }
+
+/** An item as the Knowledge page lists it. */
+const view = (item: KbItem, preview: DraftPreview | null): KbItemView => ({
+  ...item,
+  preview,
+  evidenceCount: evidenceCount(item),
+  lastEvidenceAt: lastEvidenceAt(item),
+});
+
+/** `ids` with `id` added once. */
+const apart = (ids: readonly string[], id: string): string[] => (ids.includes(id) ? [...ids] : [...ids, id]);
 
 /** A decision's conditional write lost to a concurrent one; thrown so the transaction rolls back. */
 class StaleKbItem extends Error {
@@ -536,9 +547,10 @@ export class KnowledgeService {
   }
 
   /**
-   * The board's open KB items, oldest first, each drafted one with a preview of its draft against
-   * the target's current text; and the newest `historyLimit` decided items (by decision, so the one
-   * just decided is listed first) and closed items, with their totals. Members may read them.
+   * The board's open KB items, by evidence (`byEvidence`: the most evidence first, then the freshest), each
+   * drafted one with a preview of its draft against the target's current text; and the newest `historyLimit`
+   * decided items (by decision, so the one just decided is listed first) and closed items, with their totals.
+   * Members may read them.
    */
   async proposals(email: string, boardId: number, historyLimit = KB_HISTORY_PAGE): Promise<Result<KbProposalList>> {
     const catalog = await this.deps.catalog.agentSet();
@@ -547,12 +559,12 @@ export class KnowledgeService {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
       const open: KbItemView[] = [];
-      for (const item of await tx.listKbItems(boardId, 'open')) {
-        open.push({ ...item, preview: await this.preview(tx, catalog, item) });
+      for (const item of [...(await tx.listKbItems(boardId, 'open'))].sort(byEvidence)) {
+        open.push(view(item, await this.preview(tx, catalog, item)));
       }
       const page = async (statuses: readonly KbItemStatus[]): Promise<KbItemPage> => {
         const { items, total } = await tx.listRecentKbItems(boardId, statuses, limit);
-        return { items: items.map((item) => ({ ...item, preview: null })), total };
+        return { items: items.map((item) => view(item, null)), total };
       };
       return ok({ open, decided: await page(['approved', 'rejected']), closed: await page(['merged', 'suppressed', 'covered']) });
     });
@@ -622,7 +634,8 @@ export class KnowledgeService {
    * item without a target is refused (the pipeline always routes before it closes, so this
    * shouldn't happen): reopening it could only send it back through routing and dedupe. The
    * other item keeps the evidence and count the closing added to it: they are only evidence, and
-   * that item may have been decided since.
+   * that item may have been decided since. A reopened merge records the pair in both items'
+   * `keptApartFrom`, in the same transaction, so weekly consolidation never merges them again.
    */
   async reopen(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
     return this.transaction(async (tx) => {
@@ -636,7 +649,17 @@ export class KnowledgeService {
       if (!(item.status === 'merged' || item.status === 'suppressed' || item.status === 'covered')) {
         return invalidInput(`${item.id} is ${item.status}; only items the pipeline closed can be reopened`);
       }
-      const reopened: KbItem = { ...item, status: 'open', duplicateOf: null, suppressedBy: null, coveredBy: null };
+      // A merge the admin undid keeps the pair apart: weekly consolidation never merges them again.
+      const former = item.status === 'merged' ? item.duplicateOf : null;
+      const reopened: KbItem = {
+        ...item,
+        status: 'open',
+        duplicateOf: null,
+        suppressedBy: null,
+        coveredBy: null,
+        mergeNote: null,
+        keptApartFrom: former === null ? item.keptApartFrom : apart(item.keptApartFrom, former),
+      };
       if (item.document === null && item.target === null) {
         return invalidInput(`${item.id} has no target, so reopening it would route and deduplicate it again`);
       }
@@ -644,6 +667,49 @@ export class KnowledgeService {
         item.document !== null
           ? { ...reopened, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
           : needsDraft(reopened);
+      if (!(await tx.updateKbItem(next, item.version))) {
+        const current = await tx.getKbItem(itemId);
+        return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
+      }
+      const other = former === null ? null : await tx.getKbItem(former);
+      if (other !== null && !other.keptApartFrom.includes(item.id)) {
+        const separated: KbItem = { ...other, keptApartFrom: apart(other.keptApartFrom, item.id), version: other.version + 1 };
+        // The other item changed between the read and the write: roll the reopen back too, as a conflict.
+        if (!(await tx.updateKbItem(separated, other.version))) throw new StaleKbItem(other.id);
+      }
+      this.kbChanged(tx, item.boardId);
+      return ok(next);
+    }).catch(async (error: unknown) => {
+      if (!(error instanceof StaleKbItem)) throw error;
+      const current = await this.deps.store.transaction((tx) => tx.getKbItem(itemId));
+      return current === null
+        ? notFound(`No KB item ${itemId}`)
+        : err({ code: 'version_conflict', message: `${itemId} changed meanwhile; try again`, currentItem: current });
+    });
+  }
+
+  /**
+   * Admins keep an open item weekly consolidation flagged stale: the flag is cleared and not raised again for
+   * `STALE_KEEP_MS`. (Reject is the other answer to a stale flag; nothing closes an item for being stale.)
+   */
+  async keepStale(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
+    return this.transaction(async (tx) => {
+      const item = await tx.getKbItem(itemId);
+      if (item === null) return notFound(`No KB item ${itemId}`);
+      const actor = await adminOf(tx, email, item.boardId);
+      if (!actor.ok) return actor;
+      const stale = (current: KbItem) =>
+        err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: current });
+      if (item.version !== version) return stale(item);
+      if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
+      if (item.staleSince === null) return invalidInput(`${item.id} isn't flagged stale`);
+      const next: KbItem = {
+        ...item,
+        staleSince: null,
+        staleReason: null,
+        staleDismissedAt: this.deps.clock.now(),
+        version: item.version + 1,
+      };
       if (!(await tx.updateKbItem(next, item.version))) {
         const current = await tx.getKbItem(itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);

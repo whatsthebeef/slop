@@ -1,12 +1,28 @@
-import { agentSetKind, KB_HISTORY_MAX, KB_HISTORY_PAGE, llmWaitingReason, MAX_PROCESSING_ATTEMPTS, PROSE_KINDS, sameHeading, sectionText, spliceHeadings } from '@slop/core';
+import {
+  agentSetKind,
+  failedRetryMs,
+  KB_HISTORY_MAX,
+  KB_HISTORY_PAGE,
+  llmWaitingReason,
+  MAX_PROCESSING_ATTEMPTS,
+  PROSE_KINDS,
+  sameHeading,
+  sectionText,
+  spliceHeadings,
+  STALE_AFTER_DAYS,
+  STALE_BELOW_THRESHOLD_RUNS,
+  STALE_KEEP_DAYS,
+} from '@slop/core';
 import type {
   AgentSetEntry,
   Approval,
+  BoardJobResult,
   BoardJobStatus,
   ContextDiffLine,
   DraftPreview,
   KbItem,
   KbItemView,
+  KbPossibleCoverage,
   KbSignal,
   KbTarget,
   KnowledgeKind,
@@ -58,16 +74,6 @@ const PIPELINE_POLL_MS = 15_000;
 
 /** Whether the background pipeline still has work to do on an item (routing, or its draft). */
 const inPipeline = (item: KbItem) => item.status === 'open' && (item.processing === 'pending' || item.processing === 'routed');
-
-/** The newest evidence an item has: its own submission or a near-duplicate merged into it. */
-const lastEvidenceAt = (item: KbItem) => item.extraEvidence.reduce((latest, e) => (e.at > latest ? e.at : latest), item.createdAt);
-
-/**
- * Open items: the most repeated first (repeats are the strongest sign a rule is missing), then the
- * freshest evidence, so an item that keeps coming back rises instead of sinking under new ones.
- */
-const byPriority = (a: KbItem, b: KbItem) =>
-  b.occurrenceCount - a.occurrenceCount || lastEvidenceAt(b).localeCompare(lastEvidenceAt(a));
 
 /**
  * Card motion as on the board (`useCardMotion`): an item that moves between the open list and the
@@ -144,6 +150,15 @@ const KnowledgeRef = ({ board, name, rest }: { board: Board; name: string; rest?
 
 const outcomeText = (item: KbItem, board: Board): ReactNode => {
   if (item.status === 'merged') {
+    const note = item.mergeNote;
+    if (note !== null) {
+      return (
+        <span data-testid='merge-note'>
+          Merged by weekly consolidation into <ItemLink id={item.duplicateOf ?? '?'} />: “{note.quote}” states the same fact as “
+          {note.survivorQuote}”
+        </span>
+      );
+    }
     return (
       <>
         Merged into <ItemLink id={item.duplicateOf ?? '?'} /> (a near-duplicate)
@@ -391,6 +406,11 @@ const Evidence = ({ boardId, item }: { boardId: number; item: KbItem }) => (
   <div className='grid gap-1 text-xs' data-testid='evidence'>
     <span className='font-medium'>
       Evidence{item.occurrenceCount > 1 && <span className='ml-1 rounded bg-muted px-1.5 font-normal'>seen {item.occurrenceCount}×</span>}
+      {item.sourceGlobIds.length > 1 && (
+        <span className='ml-1 rounded bg-muted px-1.5 font-normal' data-testid='evidence-globs'>
+          evidence from {item.sourceGlobIds.length} globs
+        </span>
+      )}
     </span>
     <ul className='ml-4 list-disc'>
       <li className='whitespace-pre-wrap'>
@@ -461,35 +481,67 @@ const SignalFigures = ({ signal }: { signal: KbSignal }) => {
 /** Whether a board job's lease is held (it is running on a server now), as the server worked it out. */
 const isJobRunning = (job: BoardJobStatus | undefined): boolean => job?.running ?? false;
 
+/** A job's last run in a few words. */
+const jobSummary = (result: BoardJobResult): string => {
+  switch (result.kind) {
+    case 'failed':
+      // The next try backs off with each failure in a row (`failedRetryMs`); a failure recorded before the backoff
+      // has no time and waits for the weekly run.
+      return result.at === undefined
+        ? `the last run failed: ${result.error}`
+        : `the last run failed: ${result.error}; it tries again after ${when(
+            new Date(Date.parse(result.at) + failedRetryMs(result.failures ?? 1)).toISOString(),
+          )}`;
+    case 'skipped':
+      return `waiting: ${result.reason}; it tries again within the hour`;
+    case 'mining':
+      return `${result.measured} signals measured, ${result.raised.length} raised`;
+    case 'consolidation': {
+      const checked = result.alreadyChecked ?? 0;
+      // No candidate-pair call: nothing new to compare since the last run, not a search that found nothing.
+      if (result.unchanged === true)
+        return `candidates unchanged since the last run${checked > 0 ? ` (${checked} pairs already checked)` : ''}, ${result.flaggedStale} flagged stale`;
+      return `${result.proposed} pairs proposed${checked > 0 ? ` (${checked} already checked)` : ''}, ${result.merged.length} merged, ${result.flaggedStale} flagged stale`;
+    }
+  }
+};
+
+const JOB_LABELS: Record<'mining' | 'consolidation', { title: string; name: string }> = {
+  mining: { title: 'Mined weekly', name: 'Mining' },
+  consolidation: { title: 'Consolidated weekly', name: 'Consolidation' },
+};
+
 /**
- * The weekly mining run: when it last ran and what it found, or that it is running, with Run now for admins.
- * Run now starts the job and returns; the `board.kb` hint, reconnects and a slow poll while it runs show the result.
+ * A weekly job (mining or consolidation): when it last ran and what it did, or that it is running, with Run now for
+ * admins. Run now starts the job and returns; the `board.kb` hint, reconnects and a slow poll while it runs show the
+ * result. The jobs share one query (the board's job list).
  */
-const MiningStatus = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+const JobStatus = ({ boardId, admin, job }: { boardId: number; admin: boolean; job: 'mining' | 'consolidation' }) => {
   const client = useQueryClient();
   const toast = useToast();
+  const { title, name } = JOB_LABELS[job];
   const jobs = useQuery({
     queryKey: ['kb-jobs', boardId],
     queryFn: () => api.boardJobs(boardId),
-    refetchInterval: (query) => (isJobRunning(query.state.data?.find((j) => j.job === 'mining')) ? PIPELINE_POLL_MS : false),
+    refetchInterval: (query) => (query.state.data?.some(isJobRunning) === true ? PIPELINE_POLL_MS : false),
   });
   const run = useMutation({
-    mutationFn: () => api.runBoardJob(boardId, 'mining'),
+    mutationFn: () => api.runBoardJob(boardId, job),
     onSuccess: () => {
-      toast('Mining started: the results show here when it is done');
+      toast(`${name} started: the results show here when it is done`);
       refresh(client, boardId);
     },
     onError: (e) => {
       // Someone else's run (another admin, or the weekly one) holds the lease: not a failure.
       if (e instanceof RequestError && e.body.code === 'run_active') {
-        toast('Mining is already running');
+        toast(`${name} is already running`);
         refresh(client, boardId);
       } else toast(message(e));
     },
   });
-  const mining = jobs.data?.find((j) => j.job === 'mining');
-  const running = isJobRunning(mining);
-  const leaseEnds = running ? (mining?.runningUntil ?? null) : null;
+  const status = jobs.data?.find((j) => j.job === job);
+  const running = isJobRunning(status);
+  const leaseEnds = running ? (status?.runningUntil ?? null) : null;
   // A run whose server died holds its lease until it expires: refetch then, so the badge clears.
   useEffect(() => {
     if (leaseEnds === null) return;
@@ -499,16 +551,18 @@ const MiningStatus = ({ boardId, admin }: { boardId: number; admin: boolean }) =
     );
     return () => clearTimeout(timer);
   }, [client, boardId, leaseEnds]);
-  const result = mining?.lastResult ?? null;
+  const result = status?.lastResult ?? null;
   const last =
-    mining === undefined || (mining.lastRunAt === null && result === null)
+    status === undefined || result === null
       ? 'not run yet'
-      : result?.kind === 'failed'
-        ? `the last run failed: ${result.error}`
-        : `last run ${when(mining.lastRunAt)}: ${result?.measured ?? 0} signals measured, ${result?.raised.length ?? 0} raised`;
+      : result.kind === 'failed' || result.kind === 'skipped'
+        ? jobSummary(result)
+        : `last run ${when(status.lastRunAt)}: ${jobSummary(result)}`;
   return (
-    <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground' data-testid='mining-status'>
-      <span>Mined weekly · {running ? 'running now…' : last}</span>
+    <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground' data-testid={`${job}-status`}>
+      <span>
+        {title} · {running ? 'running now…' : last}
+      </span>
       {admin && (
         <Button size='sm' variant='outline' disabled={run.isPending || running} onClick={() => run.mutate()}>
           {run.isPending || running ? 'Running…' : 'Run now'}
@@ -517,6 +571,37 @@ const MiningStatus = ({ boardId, admin }: { boardId: number; admin: boolean }) =
     </div>
   );
 };
+
+/** Why consolidation flagged an item stale, in words. */
+const staleText = (item: KbItem): string =>
+  item.staleReason === 'signal_below_threshold'
+    ? `its signal has been below its threshold for ${STALE_BELOW_THRESHOLD_RUNS} weekly runs or more`
+    : `no new evidence for ${STALE_AFTER_DAYS} days`;
+
+/**
+ * Text the dedupe step thinks may already say the item: the target's, or an approved item's on a quote too short to
+ * close the item on.
+ */
+const PossiblyCovered = ({ coverage, board }: { coverage: KbPossibleCoverage; board: Board }) => (
+  <p className='rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='possibly-covered'>
+    <span className='font-medium'>May already be covered by </span>
+    {coverage.kind === 'item' ? (
+      <>
+        approved item <ItemLink id={coverage.id} />
+      </>
+    ) : (
+      <KnowledgeRef board={board} name={coverage.name} rest={coverage.section === null ? '' : ` › ${coverage.section}`} />
+    )}
+    <span className='font-medium'>: </span>
+    <span className='text-muted-foreground'>
+      “{coverage.quote}”
+      {coverage.kind === 'item'
+        ? ' (too short a quote to close it on)'
+        : coverage.reason !== '' && ` (${coverage.reason})`}
+      . Approve, reject as already covered, or keep it.
+    </span>
+  </p>
+);
 
 /** What the pipeline flagged: a suggested catalog change, and contradictions with other items or knowledge. */
 const Flags = ({ item, board }: { item: KbItem; board: Board }) => (
@@ -529,21 +614,7 @@ const Flags = ({ item, board }: { item: KbItem; board: Board }) => (
         </span>
       </p>
     )}
-    {item.possiblyCoveredBy !== null && (
-      <p className='rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='possibly-covered'>
-        <span className='font-medium'>May already be covered by </span>
-        <KnowledgeRef
-          board={board}
-          name={item.possiblyCoveredBy.name}
-          rest={item.possiblyCoveredBy.section === null ? '' : ` › ${item.possiblyCoveredBy.section}`}
-        />
-        <span className='font-medium'>: </span>
-        <span className='text-muted-foreground'>
-          “{item.possiblyCoveredBy.quote}”{item.possiblyCoveredBy.reason !== '' && ` (${item.possiblyCoveredBy.reason})`}. Approve, reject as already
-          covered, or keep it.
-        </span>
-      </p>
-    )}
+    {item.possiblyCoveredBy !== null && <PossiblyCovered coverage={item.possiblyCoveredBy} board={board} />}
     {item.contradicts.length > 0 && (
       <div className='rounded-md border border-required-border bg-red-soft/15 p-2 text-xs' data-testid='contradictions'>
         <span className='font-medium'>Contradicts:</span>
@@ -626,6 +697,14 @@ const ProposalCard = ({
     },
     onError: (e) => reportError(client, boardId, toast, e),
   });
+  const keep = useMutation({
+    mutationFn: () => api.keepProposal(item.id, item.version),
+    onSuccess: (kept) => {
+      toast(`${kept.id} is marked not stale: it won't be flagged again for ${STALE_KEEP_DAYS} days`);
+      void client.invalidateQueries({ queryKey: ['kb-proposals', boardId] });
+    },
+    onError: (e) => reportError(client, boardId, toast, e),
+  });
   const closedByPipeline = CLOSED_BY_PIPELINE.includes(item.status);
   const blocker = open && item.document === null ? approveBlocker(item) : null;
 
@@ -668,6 +747,14 @@ const ProposalCard = ({
       <ProcessingState item={item} admin={admin} onRetry={() => retry.mutate()} retrying={retry.isPending} />
       {preview !== null && <DraftView rationale={item.rationale} preview={preview} />}
       <Evidence boardId={boardId} item={item} />
+      {open && item.staleSince !== null && (
+        <p className='rounded-md border border-border bg-muted/40 p-2 text-xs' data-testid='stale'>
+          <span className='font-medium'>Stale since {when(item.staleSince)}: </span>
+          <span className='text-muted-foreground'>
+            {staleText(item)}. Weekly consolidation only flags it: mark it not stale, or reject it.
+          </span>
+        </p>
+      )}
       {open && <Flags item={item} board={board} />}
       {item.document !== null && (
         <div className='grid gap-1 text-xs'>
@@ -729,6 +816,11 @@ const ProposalCard = ({
           ) : (
             <Button size='sm' onClick={() => onOpen({ kind: 'decision', decision: 'document' })}>
               Approve document
+            </Button>
+          )}
+          {item.staleSince !== null && (
+            <Button size='sm' variant='outline' disabled={keep.isPending} onClick={() => keep.mutate()}>
+              Not stale
             </Button>
           )}
           <Button size='sm' variant='outline' onClick={() => onOpen({ kind: 'decision', decision: 'reject' })}>
@@ -1189,7 +1281,8 @@ export const KbProposals = ({
 
   const board: Board = { boardId, admin, documents, owned: ownedPaths(agentEntries), onOpenDocument };
   const { data } = proposals;
-  const open = useMemo(() => [...(data?.open ?? [])].sort(byPriority), [data]);
+  // Core orders the open queue (by evidence, then the freshest).
+  const open = useMemo(() => data?.open ?? [], [data]);
   const decided = data?.decided ?? { items: [], total: 0 };
   const closed = data?.closed ?? { items: [], total: 0 };
   // Every listed card, in a list that keeps its identity until the data changes (what the motion compares).
@@ -1233,9 +1326,13 @@ export const KbProposals = ({
         <p className='text-xs text-muted-foreground'>
           Learnings and documents submitted by agents, and signals slop mines from its own data each week, routed to a target,
           checked for repeats and drafted as a change in the background. Nothing reaches the knowledge base or the agent set
-          until an admin approves it. The most repeated come first, then the freshest evidence.
+          until an admin approves it. The most evidence comes first, then the freshest. Each week slop also merges open items
+          that state the same fact (only on quotes it checks) and flags stale ones for you to mark not stale or reject.
         </p>
-        <MiningStatus boardId={boardId} admin={admin} />
+        <div className='flex flex-wrap items-center gap-x-6 gap-y-1'>
+          <JobStatus boardId={boardId} admin={admin} job='mining' />
+          <JobStatus boardId={boardId} admin={admin} job='consolidation' />
+        </div>
         {proposals.isPending && <p className='text-sm text-muted-foreground'>Loading…</p>}
         {proposals.data !== undefined && open.length === 0 && <p className='text-sm text-muted-foreground'>No open proposals.</p>}
         {open.map((item) => (

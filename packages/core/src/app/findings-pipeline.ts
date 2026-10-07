@@ -13,7 +13,8 @@ import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import type { Clock, Notifier, Store } from '../ports.js';
 import { LlmUnavailable } from './intake-service.js';
 import type { Llm } from './intake-service.js';
-import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS, verifiedQuote } from './kb-pipeline.js';
+import { verifiedQuote } from './kb-dedupe.js';
+import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
 import { completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 

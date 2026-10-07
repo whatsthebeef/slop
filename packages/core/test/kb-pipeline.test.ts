@@ -287,6 +287,19 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(open.map((i) => i.id)).toEqual([first]);
   });
 
+  it('leaves open a near-duplicate an admin kept apart from the item it matches, holding nothing on either (s15f8)', async () => {
+    const first = await routedAlone();
+    const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
+    // An admin reopened a merge between them (or between one and an item the other holds).
+    const pending = await item(second);
+    await store.transaction((tx) => tx.updateKbItem({ ...pending, keptApartFrom: [first], version: pending.version + 1 }, pending.version));
+    const before = await item(first);
+    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: first, suppressedBy: null, coveredBy: null, contradicts: [] }));
+    expect(await pipeline.process(second)).toBe(true);
+    expect(await item(second)).toMatchObject({ status: 'open', duplicateOf: null, processing: 'routed' });
+    expect(await item(first)).toEqual(before);
+  });
+
   it('makes an open item it merges into due again at once, so a claim running on it is redone without waiting out the lease', async () => {
     const first = await routedAlone();
     // A worker has claimed the first item for drafting (its lease runs for five minutes).
@@ -342,6 +355,29 @@ describe('KB pipeline: routing and dedupe', () => {
       sourceGlobIds: [globId, otherGlobId],
       extraEvidence: [{ itemId: id }],
     });
+  });
+
+  it.each([
+    ['too few words', 'src/gen/'],
+    ['too few characters', 'files live in src'],
+  ])('leaves an item open, only flagged, when its coverage quote from the approved item has %s (s15f8)', async (_, quote) => {
+    const approvedId = await submit();
+    unwrap(await knowledge.approve(ADMIN, approvedId, (await item(approvedId)).version, { as: 'learning' }));
+    const before = await item(approvedId);
+    const id = await submit({ sourceGlobId: otherGlobId });
+    llm.answer(
+      toDoc('build_test_lint', 'Test'),
+      json({ checked: classed('same fact', approvedId), coveredBy: { kind: 'item', id: approvedId, quote }, contradicts: [] }),
+    );
+    await pipeline.processNext();
+
+    expect(await item(id)).toMatchObject({
+      status: 'open',
+      processing: 'routed',
+      coveredBy: null,
+      possiblyCoveredBy: { kind: 'item', id: approvedId, quote, shortQuote: true },
+    });
+    expect(await item(approvedId)).toEqual(before);
   });
 
   it('lets an admin reopen a closed item: back to drafting with its target, never deduplicated again', async () => {

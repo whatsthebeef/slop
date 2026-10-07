@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, GlobService, IntakeService, KbPipeline, KnowledgeService, LearningJobService, MiningService } from '@slop/core';
+import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -105,16 +105,17 @@ const intake = new IntakeService({
     config.INTAKE_MODEL,
   ),
 });
+// Opus 5.5 takes no sampling parameters other than the defaults. Routing, dedupe and weekly consolidation share it.
+const kbRouteLlm = llmHealth.track(
+  new BedrockLlm({ id: config.KB_ROUTE_MODEL, configKey: 'KB_ROUTE_MODEL' }, config.BEDROCK_REGION, logUsage, null),
+  config.KB_ROUTE_MODEL,
+);
 const kbPipeline = new KbPipeline({
   store,
   clock,
   catalog,
   notifier: hub,
-  // Opus 5.5 takes no sampling parameters other than the defaults.
-  route: llmHealth.track(
-    new BedrockLlm({ id: config.KB_ROUTE_MODEL, configKey: 'KB_ROUTE_MODEL' }, config.BEDROCK_REGION, logUsage, null),
-    config.KB_ROUTE_MODEL,
-  ),
+  route: kbRouteLlm,
   draft: llmHealth.track(
     new BedrockLlm({ id: config.KB_DRAFT_MODEL, configKey: 'KB_DRAFT_MODEL' }, config.BEDROCK_REGION, logUsage, null),
     config.KB_DRAFT_MODEL,
@@ -131,12 +132,15 @@ const findingsPipeline = new FindingsPipeline({
   ),
 });
 
-// Weekly mining: signals from the board's own activity become mined KB items for the KB pipeline.
+// Weekly mining: signals from the board's own activity become mined KB items for the KB pipeline. Weekly
+// consolidation then merges same-fact open items (verified quotes) and flags stale ones; it waits while its model is down.
 const learningJobs = new LearningJobService({
   store,
   clock,
   notifier: hub,
   mining: new MiningService({ store, notifier: hub }),
+  consolidation: new KbConsolidation({ store, clock, notifier: hub, llm: kbRouteLlm }),
+  consolidationDown: () => llmHealth.isDown([config.KB_ROUTE_MODEL]),
   manifests: new CodeHostManifests(github, logError),
   log: logError,
 });

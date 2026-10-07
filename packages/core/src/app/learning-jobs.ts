@@ -5,26 +5,74 @@ import type { BoardJob, BoardJobName, BoardJobResult, BoardJobStatus } from '../
 import type { Board } from '../domain/types.js';
 import type { Clock, ManifestSource, Notifier, Store } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
+import { LlmUnavailable } from './intake-service.js';
+import { MAX_CONSOLIDATION_PAIRS } from './kb-consolidation.js';
+import type { KbConsolidation } from './kb-consolidation.js';
+import { LLM_TIMEOUT_MS } from './kb-pipeline.js';
 import type { MiningService } from './mining-service.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 
 /** Mining runs when this long has passed since the board's last run (checked hourly). */
 export const MINING_INTERVAL_MS = 7 * 24 * HOUR_MS;
+/** Consolidation runs when this long has passed since the board's last run, after mining when both are due. */
+export const CONSOLIDATION_INTERVAL_MS = 7 * 24 * HOUR_MS;
+
+/** How often each job runs, in the order a board's due jobs run. */
+const INTERVALS: readonly (readonly [BoardJobName, number])[] = [
+  ['mining', MINING_INTERVAL_MS],
+  ['consolidation', CONSOLIDATION_INTERVAL_MS],
+];
 /** A board job's lease: another server doesn't start the same job meanwhile. */
 export const BOARD_JOB_LEASE_MS = 30 * 60 * 1000;
+/**
+ * Consolidation's lease covers its worst case: the candidate-pair call and every verification each running to the
+ * LLM deadline, a margin for the writes, and a whole mining run (its lease): each merge and the stale pass wait on
+ * mining's board lock, which a mining run started meanwhile (Run now) holds until it finishes.
+ */
+export const CONSOLIDATION_LEASE_MS =
+  (1 + MAX_CONSOLIDATION_PAIRS) * LLM_TIMEOUT_MS + 15 * 60 * 1000 + BOARD_JOB_LEASE_MS;
+const leaseOf = (job: BoardJobName): number => (job === 'consolidation' ? CONSOLIDATION_LEASE_MS : BOARD_JOB_LEASE_MS);
+
+/** After a failed run the next try waits this long, doubling with each failure in a row up to the cap. */
+export const FAILED_RETRY_MS = HOUR_MS;
+export const FAILED_RETRY_MAX_MS = 24 * HOUR_MS;
+/** How long after its `failures`-th failure in a row a job is tried again. */
+export const failedRetryMs = (failures: number): number =>
+  Math.min(FAILED_RETRY_MAX_MS, FAILED_RETRY_MS * 2 ** Math.max(0, failures - 1));
+
+/**
+ * The failed runs in a row before `result`: a failure's count (1 when recorded before the backoff), carried
+ * through a skip; undefined after a run that finished.
+ */
+const failuresOf = (result: BoardJobResult | null): number | undefined => {
+  if (result?.kind === 'failed') return result.failures ?? 1;
+  if (result?.kind === 'skipped') return result.failures;
+  return undefined;
+};
+
+/**
+ * Whether a job is due at `now`: a skipped run (its AI was unavailable) at once, so the next hourly check tries
+ * again; a failed one once its backoff has passed (a failure recorded without its time, by the interval); otherwise
+ * once the interval has passed since its last run.
+ */
+export const isJobDue = (last: BoardJob | null, interval: number, now: string): boolean => {
+  const result = last?.lastResult ?? null;
+  if (result?.kind === 'skipped') return true;
+  if (result?.kind === 'failed' && result.at !== undefined)
+    return Date.parse(now) - Date.parse(result.at) >= failedRetryMs(result.failures ?? 1);
+  return last?.lastRunAt == null || Date.parse(now) - Date.parse(last.lastRunAt) >= interval;
+};
 /** The most merges a run reads manifests for (code-host calls), newest kept. */
 export const MAX_MANIFEST_COMMITS = 50;
-
-/** The jobs that can run so far; the others arrive with their strands (consolidation, effect check, sub limit). */
-const RUNNABLE: readonly BoardJobName[] = ['mining'];
 
 export const isBoardJobName = (value: string): value is BoardJobName => BOARD_JOBS.some((j) => j === value);
 
 /**
- * The self-improvement pipeline's per-board jobs: weekly mining for now. Each run takes the board's
- * `board_jobs` lease, so two servers don't both run it, and records its result for the Knowledge page.
- * Admins can run one now.
+ * The self-improvement pipeline's per-board jobs: weekly mining, then weekly consolidation. Each run takes the
+ * board's `board_jobs` lease, so two servers don't both run it, and records its result for the Knowledge page.
+ * Admins can run one now. While consolidation's AI is unavailable it is skipped (the last run stands), and the next
+ * hourly check tries again; a failed run is tried again after a backoff (`failedRetryMs`).
  */
 export class LearningJobService {
   constructor(
@@ -33,6 +81,10 @@ export class LearningJobService {
       clock: Clock;
       notifier: Notifier;
       mining: MiningService;
+      /** Absent: the consolidation job isn't available (no LLM). */
+      consolidation?: KbConsolidation;
+      /** Whether consolidation's model is known to be down (`llmHealth`): the job then waits without calls. */
+      consolidationDown?: () => boolean;
       /** Null without a code host: the dependency signal isn't measured. */
       manifests: ManifestSource | null;
       /** Where a run that outlived its lease is reported (the server's error log). */
@@ -40,18 +92,33 @@ export class LearningJobService {
     },
   ) {}
 
-  /** Runs every board's due jobs (mining a week after its last run); returns what ran. */
+  /** The jobs that can run: mining, and consolidation when it has an LLM. */
+  private runnable(): BoardJobName[] {
+    return this.deps.consolidation === undefined ? ['mining'] : ['mining', 'consolidation'];
+  }
+
+  /**
+   * Runs every board's due jobs (`isJobDue`: each a week after its last run, sooner after a skipped or failed one);
+   * returns what ran. Mining runs first so consolidation's stale rule reads this week's below-threshold counts; the
+   * items mining raises are still pending, so consolidation compares them once the pipeline has drafted them, the
+   * next week. Consolidation isn't claimed while its model is down.
+   */
   async runDue(): Promise<{ boardId: number; job: BoardJobName; result: BoardJobResult }[]> {
-    const now = this.deps.clock.now();
     const boards = await this.deps.store.transaction((tx) => tx.listAllBoards());
+    const runnable = this.runnable();
     const ran: { boardId: number; job: BoardJobName; result: BoardJobResult }[] = [];
     for (const board of boards) {
-      const last = await this.deps.store.transaction((tx) => tx.getBoardJob(board.id, 'mining'));
-      if (last?.lastRunAt != null && Date.parse(now) - Date.parse(last.lastRunAt) < MINING_INTERVAL_MS) continue;
-      const claimed = await this.claim(board, 'mining');
-      if (claimed === null) continue;
-      const finished = await this.execute(board, claimed);
-      if (finished.lastResult !== null) ran.push({ boardId: board.id, job: 'mining', result: finished.lastResult });
+      for (const [job, interval] of INTERVALS) {
+        if (!runnable.includes(job)) continue;
+        if (job === 'consolidation' && this.deps.consolidationDown?.() === true) continue;
+        const now = this.deps.clock.now();
+        const last = await this.deps.store.transaction((tx) => tx.getBoardJob(board.id, job));
+        if (!isJobDue(last, interval, now)) continue;
+        const claimed = await this.claim(board, job);
+        if (claimed === null) continue;
+        const finished = await this.execute(board, claimed);
+        if (finished.lastResult !== null) ran.push({ boardId: board.id, job, result: finished.lastResult });
+      }
     }
     return ran;
   }
@@ -63,7 +130,7 @@ export class LearningJobService {
    */
   async runNow(email: string, boardId: number, job: string): Promise<Result<{ job: BoardJob; finished: Promise<BoardJob> }>> {
     if (!isBoardJobName(job)) return notFound(`No board job ${job}`);
-    if (!RUNNABLE.includes(job)) return invalidInput(`The ${job} job isn't available yet`);
+    if (!this.runnable().includes(job)) return invalidInput(`The ${job} job isn't available yet`);
     const board = await this.deps.store.transaction(async (tx): Promise<Result<Board>> => {
       const actor = await adminOf(tx, email, boardId);
       if (!actor.ok) return actor;
@@ -94,9 +161,29 @@ export class LearningJobService {
     });
   }
 
+  /** One run of a job; a job whose AI is unavailable is `skipped`. */
+  private async run(board: Board, job: BoardJobName, started: string): Promise<BoardJobResult> {
+    if (job === 'consolidation') {
+      const { consolidation } = this.deps;
+      if (consolidation === undefined) throw new Error('The consolidation job has no LLM');
+      if (this.deps.consolidationDown?.() === true) return { kind: 'skipped', reason: 'AI unavailable' };
+      try {
+        return await consolidation.consolidate(board.id);
+      } catch (error) {
+        if (error instanceof LlmUnavailable) return { kind: 'skipped', reason: `AI unavailable: ${error.reason}` };
+        throw error;
+      }
+    }
+    if (job !== 'mining') throw new Error(`The ${job} job can't run yet`);
+    const commits = await this.deps.mining.mergedCommits(board.id, started);
+    const manifestChanges =
+      this.deps.manifests === null ? null : await this.deps.manifests.manifestChanges(board, commits.slice(-MAX_MANIFEST_COMMITS));
+    return this.deps.mining.mine(board.id, started, { manifestChanges });
+  }
+
   /** Takes a job's lease; null when another server holds it. The Knowledge page shows it running. */
   private async claim(board: Board, job: BoardJobName): Promise<BoardJob | null> {
-    const claimed = await this.deps.store.transaction((tx) => tx.claimBoardJob(board.id, job, this.deps.clock.now(), BOARD_JOB_LEASE_MS));
+    const claimed = await this.deps.store.transaction((tx) => tx.claimBoardJob(board.id, job, this.deps.clock.now(), leaseOf(job)));
     if (claimed !== null) this.deps.notifier.publish({ kind: 'board.kb', boardId: board.id });
     return claimed;
   }
@@ -107,14 +194,23 @@ export class LearningJobService {
     const lease = claimed.runningUntil ?? started;
     let finished: BoardJob;
     try {
-      const commits = await this.deps.mining.mergedCommits(board.id, started);
-      const manifestChanges =
-        this.deps.manifests === null ? null : await this.deps.manifests.manifestChanges(board, commits.slice(-MAX_MANIFEST_COMMITS));
-      const result = await this.deps.mining.mine(board.id, started, { manifestChanges });
-      finished = { ...claimed, lastRunAt: started, lastResult: result, runningUntil: null };
+      const result = await this.run(board, claimed.job, started);
+      // Skipped (the AI is down): the last run stays as it was, and the next hourly check tries again. A skip keeps
+      // the failures in a row before it, so an AI that alternates between down and failing still backs off.
+      const failures = result.kind === 'skipped' ? failuresOf(claimed.lastResult) : undefined;
+      const lastResult = result.kind === 'skipped' && failures !== undefined ? { ...result, failures } : result;
+      finished = { ...claimed, lastRunAt: result.kind === 'skipped' ? claimed.lastRunAt : started, lastResult, runningUntil: null };
     } catch (error) {
-      // The last run stays as it was, so the next hourly check tries again.
-      finished = { ...claimed, lastResult: { kind: 'failed', error: error instanceof Error ? error.message : String(error) }, runningUntil: null };
+      // The last run stays as it was; the next try backs off (`isJobDue`), so a failure that persists isn't paid
+      // for every hour.
+      const failures = (failuresOf(claimed.lastResult) ?? 0) + 1;
+      const failed: BoardJobResult = {
+        kind: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+        at: this.deps.clock.now(),
+        failures,
+      };
+      finished = { ...claimed, lastResult: failed, runningUntil: null };
     }
     // A run that outlived its lease leaves the record to the server that holds it now. It is logged, so
     // operators can see the lease is too short for the board.

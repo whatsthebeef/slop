@@ -8,6 +8,7 @@ import type {
   ExtraEvidence,
   Glob,
   KbContradiction,
+  KbMergeNote,
   KbPossibleCoverage,
   KbCoverage,
   KbDraft,
@@ -18,7 +19,7 @@ import type {
   ProposedDocument,
   SignalFigures,
 } from '@slop/core';
-import { BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
+import { BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -278,6 +279,14 @@ export const kbProposals = pgTable(
     draft: jsonb('draft').$type<KbDraft>(),
     draftedAgainstVersion: integer('drafted_against_version'),
     rationale: text('rationale'),
+    /** Weekly consolidation: a stale flag (never a closure), and when an admin last kept the item. */
+    staleSince: timestamp('stale_since', { withTimezone: true }),
+    staleReason: text('stale_reason', { enum: KB_STALE_REASONS }),
+    staleDismissedAt: timestamp('stale_dismissed_at', { withTimezone: true }),
+    /** Items an admin separated from this one by reopening a merge. */
+    keptApartFrom: jsonb('kept_apart_from').$type<string[]>().notNull().default([]),
+    /** Merged by weekly consolidation: the verified quotes. */
+    mergeNote: jsonb('merge_note').$type<KbMergeNote>(),
     version: integer('version').notNull(),
   },
   (t) => [
@@ -420,6 +429,8 @@ export const boardJobs = pgTable(
     lastResult: jsonb('last_result').$type<BoardJobResult>(),
     /** Set while a server runs the job; another server doesn't start it before then. */
     runningUntil: timestamp('running_until', { withTimezone: true }),
+    /** What the job keeps between runs (consolidation's checked pairs), narrowed by core. */
+    state: jsonb('state').$type<unknown>(),
   },
   (t) => [primaryKey({ columns: [t.boardId, t.job] })],
 );

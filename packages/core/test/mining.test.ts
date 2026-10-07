@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Llm } from '../src/app/intake-service.js';
 import { KbPipeline } from '../src/app/kb-pipeline.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
-import { LearningJobService, MINING_INTERVAL_MS } from '../src/app/learning-jobs.js';
+import { FAILED_RETRY_MAX_MS, isJobDue, LearningJobService, MINING_INTERVAL_MS } from '../src/app/learning-jobs.js';
 import { MINED_BY, MiningService } from '../src/app/mining-service.js';
 import type { Result } from '../src/domain/errors.js';
 import type { DomainEvent } from '../src/domain/events.js';
 import type { KbItem } from '../src/domain/kb.js';
-import type { ManifestChange, MergedCommit } from '../src/domain/signals.js';
+import type { BoardJob, BoardJobResult, ManifestChange, MergedCommit } from '../src/domain/signals.js';
 import type { Board } from '../src/domain/types.js';
 import type { Catalog, ManifestSource, Store } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -195,6 +195,21 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     // Run now again the same day: the same figures add nothing.
     expect(await mining.mine(board.id, nextWeek)).toMatchObject({ raised: [], refreshed: [] });
     expect((await item(id ?? '')).version).toBe(refreshed.version);
+  });
+
+  it("clears a stale flag when a refresh adds the week's evidence (s15f8)", async () => {
+    await runs(10, 3, later(-2 * DAY));
+    const [id] = (await mining.mine(board.id, START)).raised;
+    await decide(id ?? '', {
+      processing: 'drafted',
+      draft: { section: null, content: 'x' },
+      draftedAgainstVersion: 1,
+      staleSince: START,
+      staleReason: 'signal_below_threshold',
+    });
+    await runs(2, 2, later(-DAY));
+    expect(await mining.mine(board.id, later(WEEK))).toMatchObject({ refreshed: [id] });
+    expect(await item(id ?? '')).toMatchObject({ status: 'open', staleSince: null, staleReason: null });
   });
 
   it('never raises an approved or covered signal again, however long it has been', async () => {
@@ -545,13 +560,73 @@ describe('Learning jobs: weekly mining with a lease, and Run now', () => {
     expect(unwrap(await jobs.jobs(DEV, boardId))).toMatchObject([{ running: false, runningUntil: later(30 * 60 * 1000) }]);
   });
 
-  it('records a failed run without moving the last run, so the next check tries again', async () => {
+  it('records a failed run without moving the last run, so the check an hour later tries again', async () => {
     failNext = true;
-    expect(await jobs.runDue()).toEqual([{ boardId, job: 'mining', result: { kind: 'failed', error: 'GitHub is down' } }]);
+    expect(await jobs.runDue()).toEqual([{ boardId, job: 'mining', result: { kind: 'failed', error: 'GitHub is down', at: START, failures: 1 } }]);
     expect(await store.transaction((tx) => tx.getBoardJob(boardId, 'mining'))).toMatchObject({ lastRunAt: null, runningUntil: null });
     failNext = false;
     now = later(60 * 60 * 1000);
     expect((await jobs.runDue())[0]?.result.kind).toBe('mining');
+  });
+
+  it('backs off a failing mining run, and counts failures from one again after a success (s15f8)', async () => {
+    const HOUR = 60 * 60 * 1000;
+    const mining = () => store.transaction((tx) => tx.getBoardJob(boardId, 'mining'));
+    failNext = true;
+    expect((await jobs.runDue())[0]?.result).toEqual({ kind: 'failed', error: 'GitHub is down', at: START, failures: 1 });
+    now = later(HOUR - 60_000);
+    expect(await jobs.runDue()).toEqual([]);
+    now = later(HOUR);
+    expect((await jobs.runDue())[0]?.result).toEqual({ kind: 'failed', error: 'GitHub is down', at: now, failures: 2 });
+    // The second failure in a row waits 2 hours.
+    now = later(3 * HOUR - 60_000);
+    expect(await jobs.runDue()).toEqual([]);
+    now = later(3 * HOUR);
+    failNext = false;
+    expect((await jobs.runDue())[0]?.result.kind).toBe('mining');
+    const succeeded = now;
+    expect(await mining()).toMatchObject({ lastRunAt: succeeded });
+    // The next weekly run fails: the count starts again, so it is retried an hour later, not 4.
+    now = later(MINING_INTERVAL_MS, succeeded);
+    failNext = true;
+    expect((await jobs.runDue())[0]?.result).toEqual({ kind: 'failed', error: 'GitHub is down', at: now, failures: 1 });
+    expect(await mining()).toMatchObject({ lastRunAt: succeeded });
+    const failedAt = now;
+    now = later(HOUR - 60_000, failedAt);
+    expect(await jobs.runDue()).toEqual([]);
+    now = later(HOUR, failedAt);
+    failNext = false;
+    expect((await jobs.runDue())[0]?.result.kind).toBe('mining');
+  });
+
+  it('isJobDue: never run, skipped, failed with its backoff capped at a day, and failures recorded before the backoff (s15f8)', () => {
+    const HOUR = 60 * 60 * 1000;
+    const jobWith = (lastRunAt: string | null, lastResult: BoardJobResult | null): BoardJob => ({
+      boardId,
+      job: 'mining',
+      lastRunAt,
+      lastResult,
+      runningUntil: null,
+    });
+    expect(isJobDue(null, WEEK, START)).toBe(true);
+    expect(isJobDue(jobWith(null, null), WEEK, START)).toBe(true);
+    // Skipped: due at once, whenever the last run was.
+    expect(isJobDue(jobWith(START, { kind: 'skipped', reason: 'AI unavailable' }), WEEK, START)).toBe(true);
+    // Many failures in a row: capped at a day, whatever the last run was.
+    const tenth: BoardJobResult = { kind: 'failed', error: 'x', at: START, failures: 10 };
+    expect(FAILED_RETRY_MAX_MS).toBe(DAY);
+    expect(isJobDue(jobWith(null, tenth), WEEK, later(DAY - 1))).toBe(false);
+    expect(isJobDue(jobWith(null, tenth), WEEK, later(DAY))).toBe(true);
+    expect(isJobDue(jobWith(later(-WEEK - DAY), tenth), WEEK, later(DAY - 1))).toBe(false);
+    // A failure without its count waits as a first one.
+    const uncounted: BoardJobResult = { kind: 'failed', error: 'x', at: START };
+    expect(isJobDue(jobWith(null, uncounted), WEEK, later(HOUR - 1))).toBe(false);
+    expect(isJobDue(jobWith(null, uncounted), WEEK, later(HOUR))).toBe(true);
+    // A failure recorded before the backoff (no time): by the interval since the last run.
+    const legacy: BoardJobResult = { kind: 'failed', error: 'x' };
+    expect(isJobDue(jobWith(null, legacy), WEEK, START)).toBe(true);
+    expect(isJobDue(jobWith(START, legacy), WEEK, later(WEEK - 1))).toBe(false);
+    expect(isJobDue(jobWith(START, legacy), WEEK, later(WEEK))).toBe(true);
   });
 
   it('lets admins run a job now, members read the last run, and refuses others', async () => {
