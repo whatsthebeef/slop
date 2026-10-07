@@ -165,15 +165,34 @@ describe('KB pipeline in Postgres', () => {
     await clearQueue();
     const first = await submit('Run vitest with --reporter=dot');
     let routeCalls = 0;
+    // The claiming worker's model call waits until the other worker has come back empty-handed:
+    // once routed, the item is legitimately due again for drafting, so an instant answer would let
+    // the second worker claim it for that next stage and make the test racy.
+    let release = (): void => undefined;
+    const otherWorkerDone = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const route: Llm = {
-      complete: (request) => {
+      complete: async (request) => {
+        await otherWorkerDone;
         // Routing, then dedupe against the open items earlier tests left.
         if (request.system === ROUTE_SYSTEM) routeCalls++;
-        return Promise.resolve(request.system === ROUTE_SYSTEM ? NEW_DOC : '{}');
+        return request.system === ROUTE_SYSTEM ? NEW_DOC : '{}';
       },
     };
     const workers = [0, 1].map(() => new KbPipeline({ store, clock, catalog, notifier, route, draft: route }));
-    const results = await Promise.all(workers.map((w) => w.processNext()));
+    const results = await Promise.all(
+      workers.map(async (w) => {
+        let claimed: string | null = null;
+        try {
+          claimed = await w.processNext();
+          return claimed;
+        } finally {
+          // The losing worker releases the gate; on a store error too, so the test fails fast.
+          if (claimed === null) release();
+        }
+      }),
+    );
     expect(results.filter((r) => r === first)).toHaveLength(1);
     expect(routeCalls).toBe(1);
     expect(await get(first)).toMatchObject({
@@ -183,7 +202,7 @@ describe('KB pipeline in Postgres', () => {
     });
 
     const second = await submit('Use the dot reporter for vitest');
-    const answers = [NEW_DOC, JSON.stringify({ duplicateOf: first })];
+    const answers = [NEW_DOC, JSON.stringify({ checked: [{ ref: first, relation: 'same fact' }], duplicateOf: first })];
     const dedupe: Llm = { complete: () => Promise.resolve(answers.shift() ?? '') };
     await new KbPipeline({ store, clock, catalog, notifier, route: dedupe, draft: dedupe }).process(second);
     expect(await get(second)).toMatchObject({ status: 'merged', duplicateOf: first });

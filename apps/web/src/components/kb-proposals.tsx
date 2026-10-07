@@ -1,4 +1,4 @@
-import { agentSetKind, KB_HISTORY_MAX, KB_HISTORY_PAGE, MAX_PROCESSING_ATTEMPTS, PROSE_KINDS, sameHeading, sectionText, spliceHeadings } from '@slop/core';
+import { agentSetKind, KB_HISTORY_MAX, KB_HISTORY_PAGE, llmWaitingReason, MAX_PROCESSING_ATTEMPTS, PROSE_KINDS, sameHeading, sectionText, spliceHeadings } from '@slop/core';
 import type {
   AgentSetEntry,
   Approval,
@@ -285,7 +285,8 @@ const DocumentComparison = ({
 
 /**
  * Where the background pipeline is with an open item: routing or drafting (with the last error and
- * the next try while retrying), or given up on, with Retry for admins.
+ * the next try while retrying), waiting for the AI to be usable again (no Retry: it resumes by
+ * itself once the sign-in or access is fixed), or given up on, with Retry for admins.
  */
 const ProcessingState = ({ item, admin, onRetry, retrying }: { item: KbItem; admin: boolean; onRetry: () => void; retrying: boolean }) => {
   if (item.status !== 'open') return null;
@@ -308,6 +309,14 @@ const ProcessingState = ({ item, admin, onRetry, retrying }: { item: KbItem; adm
     );
   }
   if (!inPipeline(item)) return null;
+  const waiting = llmWaitingReason(item);
+  if (waiting !== null) {
+    return (
+      <p className='text-xs text-muted-foreground' data-testid='processing-waiting'>
+        Waiting: AI unavailable — {waiting}. {stage} resumes once it works again.
+      </p>
+    );
+  }
   const working = item.processing === 'pending' ? 'Routing…' : 'Drafting…';
   // While retrying, `processAfter` is the backoff's end (or, once picked up again, the lease's).
   const next = item.processAfter === null ? 'shortly' : `by ${new Date(item.processAfter).toLocaleTimeString()}`;

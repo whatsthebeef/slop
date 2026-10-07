@@ -25,6 +25,8 @@ import { mountDeploys } from './http/deploys.js';
 import { mountReadiness } from './http/readiness.js';
 import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
+import { LlmHealth } from './llm-health.js';
+import { mountHealth } from './http/health.js';
 import { FileRoutines } from './routines.js';
 import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
@@ -88,15 +90,32 @@ const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub })
 const artifacts = new ArtifactService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
-const intake = new IntakeService({ store, llm: new BedrockLlm(config.INTAKE_MODEL, config.BEDROCK_REGION, logUsage) });
+// Credential and access failures mark a model down (logged once per change); no hint yet, since no
+// page shows the AI status (the waiting KB cards get their own board.kb hints).
+const llmHealth = new LlmHealth((model, h) => {
+  console.log(h.state === 'down' ? `[llm] ${model} unavailable: ${h.reason}. ${h.fix}` : `[llm] ${model} ${h.state}`);
+});
+const intake = new IntakeService({
+  store,
+  llm: llmHealth.track(
+    new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, logUsage),
+    config.INTAKE_MODEL,
+  ),
+});
 const kbPipeline = new KbPipeline({
   store,
   clock,
   catalog,
   notifier: hub,
-  route: new BedrockLlm(config.KB_ROUTE_MODEL, config.BEDROCK_REGION, logUsage),
-  // Sonnet 5.5 takes no sampling parameters other than the defaults.
-  draft: new BedrockLlm(config.KB_DRAFT_MODEL, config.BEDROCK_REGION, logUsage, null),
+  // Opus 5.5 takes no sampling parameters other than the defaults.
+  route: llmHealth.track(
+    new BedrockLlm({ id: config.KB_ROUTE_MODEL, configKey: 'KB_ROUTE_MODEL' }, config.BEDROCK_REGION, logUsage, null),
+    config.KB_ROUTE_MODEL,
+  ),
+  draft: llmHealth.track(
+    new BedrockLlm({ id: config.KB_DRAFT_MODEL, configKey: 'KB_DRAFT_MODEL' }, config.BEDROCK_REGION, logUsage, null),
+    config.KB_DRAFT_MODEL,
+  ),
 });
 
 if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
@@ -118,6 +137,7 @@ const app = createApp({
 mountDeploys(app, { deploys, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
 mountKnowledge(app, { knowledge, artifacts, catalog, intake, boards, host: github });
+mountHealth(app, { llm: llmHealth, boards });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
 const agentSetValues = { SLOP_URL: config.PUBLIC_URL, COGNITO_CLAUDE_CODE_CLIENT_ID: config.CLAUDE_CODE_CLIENT_ID };
@@ -188,7 +208,9 @@ const runWatch = new RunWatch(store, globs, logError);
 runWatch.start();
 const deployWatch = new DeployWatch(deploys, logError);
 deployWatch.start();
-const kbPipelineJob = new KbPipelineJob(kbPipeline, logError);
+// The pipeline pauses on its own models only: intake's model says nothing about them.
+const kbModels = [config.KB_ROUTE_MODEL, config.KB_DRAFT_MODEL];
+const kbPipelineJob = new KbPipelineJob(kbPipeline, logError, { isDown: () => llmHealth.isDown(kbModels) });
 kbPipelineJob.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);

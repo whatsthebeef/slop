@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
-import { IntakeService } from '../src/app/intake-service.js';
+import { IntakeService, LlmUnavailable } from '../src/app/intake-service.js';
 import type { Result } from '../src/domain/errors.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -94,5 +94,25 @@ describe('intake', () => {
       category: 'task',
       autoTrigger: false,
     });
+  });
+  it('answers llm_unavailable with the reason and fix when the model is unavailable', async () => {
+    const down = new IntakeService({
+      store,
+      llm: { complete: () => Promise.reject(new LlmUnavailable('AWS sign-in expired', 'Run `aws sso login`')) },
+    });
+    expect(await down.propose(DEV, boardId, { text: 'add export', explicit: {} })).toEqual({
+      ok: false,
+      error: {
+        code: 'llm_unavailable',
+        message: 'AI unavailable: AWS sign-in expired. Run `aws sso login`',
+        reason: 'AWS sign-in expired',
+        fix: 'Run `aws sso login`',
+      },
+    });
+  });
+
+  it('still throws ordinary model failures', async () => {
+    const failing = new IntakeService({ store, llm: { complete: () => Promise.reject(new Error('Too many requests')) } });
+    await expect(failing.propose(DEV, boardId, { text: 'add export', explicit: {} })).rejects.toThrow('Too many requests');
   });
 });

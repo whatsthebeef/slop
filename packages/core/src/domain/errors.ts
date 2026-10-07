@@ -15,7 +15,9 @@ export type DomainError =
     }
   | { readonly code: 'invalid_combination'; readonly message: string }
   | { readonly code: 'invalid_input'; readonly message: string }
-  | { readonly code: 'run_active'; readonly message: string };
+  | { readonly code: 'run_active'; readonly message: string }
+  /** The LLM can't be reached for reasons outside the request (e.g. an expired AWS sign-in). */
+  | { readonly code: 'llm_unavailable'; readonly message: string; readonly reason: string; readonly fix: string };
 
 export type DomainErrorCode = DomainError['code'];
 
@@ -31,3 +33,5 @@ export const invalidInput = (message: string): Result<never> =>
 export const invalidCombination = (message: string): Result<never> =>
   err({ code: 'invalid_combination', message });
 export const runActive = (message: string): Result<never> => err({ code: 'run_active', message });
+export const llmUnavailable = (reason: string, fix: string): Result<never> =>
+  err({ code: 'llm_unavailable', message: `AI unavailable: ${reason}. ${fix}`, reason, fix });

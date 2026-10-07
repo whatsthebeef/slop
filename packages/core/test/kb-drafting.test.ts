@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
+import { LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm } from '../src/app/intake-service.js';
 import {
   DRAFT_SYSTEM,
@@ -434,6 +435,22 @@ describe('KB pipeline: drafting and approving drafts', () => {
       await approveDraft(id, { section: 'Test', content: '## Test\n\nRun vitest --reporter=dot.' }),
     );
     expect(await doc('build_test_lint')).toContain('Run vitest --reporter=dot.');
+  });
+
+  it('waits to draft while the LLM is unavailable, keeping its stage and attempts', async () => {
+    const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: 'Test' });
+    for (let probe = 0; probe <= MAX_PROCESSING_ATTEMPTS; probe++) {
+      drafter.answer(new LlmUnavailable('No access to the Bedrock model m', 'Enable model access'));
+      expect(await pipeline.processNext()).toBe(id);
+      advance(60_000);
+    }
+    expect(await item(id)).toMatchObject({
+      status: 'open',
+      processing: 'routed',
+      processingAttempts: 0,
+      processingError: 'AI unavailable: No access to the Bedrock model m',
+      target: { name: 'build_test_lint' },
+    });
   });
 
   it('retries a failed item as an admin: back to routing without a target, to drafting with one', async () => {

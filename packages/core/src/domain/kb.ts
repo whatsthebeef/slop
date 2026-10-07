@@ -153,7 +153,10 @@ export interface KbItem {
   /** Set when approved. */
   readonly outcome: KbOutcome | null;
   readonly processing: KbProcessing;
-  /** The last routing or drafting failure; set when `failed`, and while retrying. */
+  /**
+   * The last routing or drafting failure; set when `failed`, and while retrying. While the LLM is
+   * unavailable it is `LLM_WAITING_PREFIX` plus the reason instead: the item waits, no attempt counted.
+   */
   readonly processingError: string | null;
   /** Failed attempts at the current stage (routing, then drafting). */
   readonly processingAttempts: number;
@@ -183,6 +186,18 @@ export interface KbItem {
   /** For conditional writes (approve, reject). */
   readonly version: number;
 }
+
+/**
+ * Starts `processingError` while an item waits for the LLM to be usable again (expired sign-in,
+ * no model access): not a failed attempt, so the card says "Waiting" rather than "failed".
+ */
+export const LLM_WAITING_PREFIX = 'AI unavailable: ';
+
+/** Why an open item is waiting for the LLM, or null when it isn't. */
+export const llmWaitingReason = (item: Pick<KbItem, 'processing' | 'processingError'>): string | null =>
+  (item.processing === 'pending' || item.processing === 'routed') && item.processingError?.startsWith(LLM_WAITING_PREFIX) === true
+    ? item.processingError.slice(LLM_WAITING_PREFIX.length)
+    : null;
 
 /** The pipeline fields of a newly submitted item. */
 export const UNPROCESSED: Pick<
