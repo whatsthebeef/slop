@@ -1,7 +1,8 @@
 import { App } from '@octokit/app';
-import type { DiffSummary, Glob } from '@slop/core';
+import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { machine } from '@slop/core';
 import type { CodeHost, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
+import { readCommitChecks } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
 
@@ -250,6 +251,42 @@ export class GitHub implements CodeHost {
       .filter((run) => run.status === 'completed' && run.head_sha === sha)
       .sort((a, b) => (b.completed_at ?? '').localeCompare(a.completed_at ?? ''))[0];
     return latest === undefined ? null : { sha, passed: latest.conclusion === 'success' };
+  }
+
+  async headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string } | null> {
+    const gh = await this.octokit(repo);
+    try {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner: repo.owner, repo: repo.name, ref });
+      return { sha: data.sha, subject: data.commit.message.split('\n')[0] ?? '' };
+    } catch (error) {
+      if (isStatus(error, 404, 422)) return null;
+      throw error;
+    }
+  }
+
+  async commitChecks(repo: Repo, sha: string): Promise<{ state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }> {
+    const gh = await this.octokit(repo);
+    return readCommitChecks((route, params) => gh.request(route, params), repo, sha);
+  }
+
+  async updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'> {
+    const gh = await this.octokit(repo);
+    const { state } = await this.mergeState(repo, prNumber);
+    if (state === 'conflict') return 'conflict';
+    // Only a branch that is behind has anything to take in; its head moved on otherwise.
+    if (state !== 'behind') return 'up_to_date';
+    try {
+      await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
+        owner: repo.owner,
+        repo: repo.name,
+        pull_number: prNumber,
+        expected_head_sha: sha,
+      });
+      return 'updating';
+    } catch (error) {
+      if (isStatus(error, 422)) return 'conflict';
+      throw error;
+    }
   }
 
   /**

@@ -44,6 +44,9 @@ const host: CodeHost = {
   markReady: unused,
   diffSummary: unused,
   squashMerge: unused,
+  headOf: unused,
+  commitChecks: unused,
+  updateBranch: unused,
   commentOnce: unused,
 };
 

@@ -44,9 +44,11 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   agentCatalogHash: row.agentCatalogHash,
   runNoProgressHours: row.runNoProgressHours,
   runReadyHours: row.runReadyHours,
+  runStartMinutes: row.runStartMinutes,
   subMaxChangedLines: row.subMaxChangedLines,
   deploy: row.deploy,
   readinessTicks: row.readinessTicks,
+  baseChecks: row.baseChecks,
   version: row.version,
 });
 
@@ -237,6 +239,7 @@ export class PgStore implements Store {
             agentCatalogHash: board.agentCatalogHash,
             runNoProgressHours: board.runNoProgressHours,
             runReadyHours: board.runReadyHours,
+            runStartMinutes: board.runStartMinutes,
             deploy: board.deploy,
             readinessTicks: board.readinessTicks,
             subMaxChangedLines: board.subMaxChangedLines,
@@ -245,6 +248,9 @@ export class PgStore implements Store {
           .where(and(eq(schema.boards.id, board.id), eq(schema.boards.version, expectedVersion)))
           .returning({ id: schema.boards.id });
         return rows.length === 1;
+      },
+      setBaseChecks: async (boardId, baseChecks) => {
+        await t.update(schema.boards).set({ baseChecks }).where(eq(schema.boards.id, boardId));
       },
       listAllBoards: async () => (await t.select().from(schema.boards).orderBy(schema.boards.id)).map(toBoard),
       listBoards: async (email) => {

@@ -1,4 +1,4 @@
-import { GlobService, machine } from '@slop/core';
+import { BoardService, GlobService, machine } from '@slop/core';
 import type { Board, DiffSummary, Effect, Glob, Result } from '@slop/core';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -47,6 +47,9 @@ class FakeHost implements CodeHost {
   commentOnce = () => Promise.resolve('posted' as const);
   diffSummary = () => Promise.resolve(this.diff);
   readFile = () => Promise.resolve(null);
+  headOf = () => Promise.resolve(null);
+  commitChecks = () => Promise.resolve({ state: 'passed' as const, failure: null });
+  updateBranch = () => Promise.resolve('up_to_date' as const);
   squashMerge = () => Promise.resolve({ outcome: 'merged' as const, sha: 'm1' });
 }
 
@@ -87,7 +90,7 @@ describe('a sub gate that completed before the PR was recorded as ready', () => 
     const boardOf = (boardId: number): Promise<Board | null> => store.transaction((tx) => tx.getBoard(boardId));
     host = new FakeHost();
     handle = githubDeliveryHandler({ db: database.db, globs, boardOf, github: host });
-    executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'));
+    executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), new BoardService({ store, notifier: { publish: () => undefined } }));
   });
 
   afterAll(() => drop());

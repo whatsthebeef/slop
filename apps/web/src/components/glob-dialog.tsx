@@ -1,4 +1,4 @@
-import { CATEGORIES, isValidCombination, machine, SLOP_TYPES } from '@slop/core';
+import { CATEGORIES, checksExplanation, isValidCombination, machine, SLOP_TYPES } from '@slop/core';
 import type { Action, Category, Role, SlopType } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -42,6 +42,16 @@ interface Waiting {
   readonly reason: string;
 }
 
+/** Why the head's checks failed, from the failing run's log; a red base branch means a fix isn't this glob's to push. */
+const failedChecksReason = (glob: GlobView, head: string): string => {
+  const why = checksExplanation(glob);
+  if (why === null) return `Checks failed on ${head.slice(0, 7)}; push a fix`;
+  const link = why.url === null ? '' : ` (${why.url})`;
+  return why.inherited
+    ? `${why.text}${link}. Waiting for it to be fixed on the base branch; this branch is updated when it is`
+    : `Checks failed on ${head.slice(0, 7)}: ${why.text}${link}; push a fix`;
+};
+
 /**
  * Actions the glob is heading for but can't take yet, shown disabled with the reason: merging
  * waits for the checks on the PR head, and a super's Merge and continue and Ready for review wait
@@ -58,7 +68,7 @@ const waitingFor = (glob: GlobView, actions: readonly Action[], role: Role): Wai
       head === null
         ? 'Waiting for the PR head'
         : checks?.sha === head && checks.state === 'failed'
-          ? `Checks failed on ${head.slice(0, 7)}; push a fix`
+          ? failedChecksReason(glob, head)
           : `Waiting for the checks on ${head.slice(0, 7)} to pass`;
     waiting.push({ action: 'merge', reason });
     if (glob.type === 'super') waiting.push({ action: 'merge_continue', reason });

@@ -1,4 +1,4 @@
-import type { Board, DiffSummary, Glob } from '@slop/core';
+import type { Board, CheckFailure, DiffSummary, Glob } from '@slop/core';
 
 /** A board's repository on its code host. */
 export interface Repo {
@@ -69,6 +69,15 @@ export interface CodeHost {
   commentOnce(repo: Repo, prNumber: number, marker: string, body: string): Promise<'posted' | 'exists'>;
   /** Lines changed and files touched between the base branch and `sha`. */
   diffSummary(repo: Repo, sha: string): Promise<DiffSummary>;
+  /** The head commit of `ref` (a branch) and its subject line; null when the branch doesn't exist. */
+  headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string } | null>;
+  /**
+   * The state of the checks on a commit and, when one failed, the first failing check's name, failed step and first
+   * error lines from its log. Explaining is best effort: a failure with no lines still names the check.
+   */
+  commitChecks(repo: Repo, sha: string): Promise<{ state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }>;
+  /** Merges the base branch into the PR's branch (GitHub's update-branch) when it's behind, at exactly `sha`. */
+  updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'>;
   /** Squash-merges at exactly `sha` as `<id>: <title>`, or updates a branch that is behind. */
   squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult>;
 }

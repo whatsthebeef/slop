@@ -1,7 +1,7 @@
 import type { MergeState } from '../codehost.js';
 
 /** The conclusions of a completed check run that count as a failure. */
-const FAILED_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale']);
+export const FAILED_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale']);
 
 /**
  * Maps GitHub's `mergeable_state` to a merge state. `unstable` (a non-required check failed or is running) and

@@ -1,4 +1,4 @@
-import { stuckHint } from '@slop/core';
+import { checksExplanation, queuedRunNotice, stuckHint } from '@slop/core';
 import type { Action, ArtifactKind, Category, DeployIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -86,7 +86,7 @@ const RunIndicator = ({ glob }: { glob: GlobView }) => {
   if (run === null) return null;
   const label = run.state === 'ended' ? (run.outcome ?? 'ended') : run.state;
   return (
-    <Tip text={`Routine run ${label}: owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`}>
+    <Tip text={queuedRunNotice(glob, new Date().toISOString()) ?? `Routine run ${label}: owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`}>
     <span
       className={cn(
         'inline-flex items-center gap-1 font-mono text-[11px]',
@@ -246,6 +246,7 @@ export const GlobCard = ({
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
   const hint = stuckHint(glob, new Date().toISOString());
+  const checks = checksExplanation(glob);
   const preview = moves.find((m) => m.action === previewing);
 
   return (
@@ -304,8 +305,18 @@ export const GlobCard = ({
             </span>
           </Tip>
         )}
+        {checks !== null && (
+          <Tip text={[checks.text, ...checks.lines.slice(1, 4), checks.url ?? ''].filter((l) => l !== '').join('\n')}>
+            <span
+              className={cn('font-mono text-[11px]', checks.inherited ? 'text-required' : 'font-semibold text-red')}
+              data-testid='checks-failed'
+            >
+              {checks.inherited ? 'base is red' : 'checks failed'}
+            </span>
+          </Tip>
+        )}
         {failed && (
-          <Tip text={`Failed: ${glob.failure?.reason ?? 'the routine run failed'}`}>
+          <Tip text={`Failed: ${glob.failure?.reason ?? 'the routine run failed'}${glob.failure?.reason.startsWith('Routine run never started') === true && glob.currentRun?.sessionUrl != null ? `. Session: ${glob.currentRun.sessionUrl}` : ''}`}>
             <span className='font-mono text-[11px] font-semibold text-red'>! failed</span>
           </Tip>
         )}

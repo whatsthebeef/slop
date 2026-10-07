@@ -1,7 +1,7 @@
-import type { Board, EffectKind, Glob, GlobService } from '@slop/core';
+import type { Board, BoardService, CheckFailure, EffectKind, Glob, GlobService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { FileRoutines } from './routines.js';
-import { machine, subGatePolicy } from '@slop/core';
+import { machine, parseId, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -16,6 +16,8 @@ export const codeHostExecutors = (
   host: CodeHost,
   boardOf: (id: number) => Promise<Board | null>,
   routines: FileRoutines,
+  boards: Pick<BoardService, 'recordBaseChecks'>,
+  now: () => string = () => new Date().toISOString(),
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -32,6 +34,21 @@ export const codeHostExecutors = (
     // Not finished yet: its webhook will come.
     if (check === null) return;
     await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCheckCompleted(g, check, ctx));
+  };
+
+  /** The failing check's name, step and first error lines; best effort, since the checks' state is already known. */
+  const explainFailure = async (repo: Repo, sha: string): Promise<CheckFailure | null> => {
+    try {
+      return (await host.commitChecks(repo, sha)).failure;
+    } catch {
+      return null;
+    }
+  };
+
+  /** The glob a base-branch commit merged: slop squash-merges as `<id>: <title>`. */
+  const globOfSubject = (subject: string): string | null => {
+    const id = subject.split(':')[0]?.trim() ?? '';
+    return parseId(id) === null ? null : id;
   };
 
   return {
@@ -109,6 +126,7 @@ export const codeHostExecutors = (
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
       const { sha, state } = await host.mergeState(repo, glob.pr.number);
+      const board = await boardOf(glob.boardId);
       // GitHub computes mergeability in the background; retry until it has an answer.
       if (state === 'unknown') throw new Error('GitHub has not computed the merge state yet');
       await lookUpSubGate(repo, glob, sha, globs);
@@ -118,9 +136,68 @@ export const codeHostExecutors = (
       const passed = state === 'passed' || state === 'behind';
       // A conflict after slop updated the branch is its own failure, not a failing check.
       const conflict = state === 'conflict' ? { base: repo.base, files: await host.conflictFiles(repo, glob.pr.number) } : undefined;
+      // Say what failed, and whether the base branch fails the same way (then it isn't this glob's change).
+      const failure = state === 'failed' ? await explainFailure(repo, sha) : null;
       await globs.applyEvent(glob.id, (g, ctx) =>
-        machine.checksCompleted(g, conflict === undefined ? { sha, passed } : { sha, passed, conflict }, ctx),
+        machine.checksCompleted(
+          g,
+          {
+            sha,
+            passed,
+            ...(conflict !== undefined && { conflict }),
+            ...(failure !== null && { failure, base: board?.baseChecks ?? null, baseBranch: repo.base }),
+          },
+          ctx,
+        ),
       );
+      return 'done';
+    },
+
+    refresh_base_checks: async (effect, _glob, { globs }) => {
+      if (effect.kind !== 'refresh_base_checks') return 'dropped';
+      const board = await boardOf(effect.boardId);
+      const repo = board === null ? null : repoOf(board);
+      if (board === null || repo === null || !host.configured) return 'dropped';
+      const head = await host.headOf(repo, repo.base);
+      if (head === null) return 'dropped';
+      const result = await host.commitChecks(repo, head.sha);
+      // Still running: the check's completion sends another event.
+      if (result.state === 'pending') return 'done';
+      const passed = result.state === 'passed';
+      const recorded = await boards.recordBaseChecks(
+        board.id,
+        { sha: head.sha, passed, failure: result.failure, merged: passed ? null : globOfSubject(head.subject) },
+        now(),
+      );
+      if (recorded === null || !recorded.change.changed) return 'done';
+      const { checks, change } = recorded;
+      for (const other of await globs.peekAll(board.id, { status: ['pr_open', 'in_progress'] })) {
+        // A red base marks the globs that fail the same way; a base that just turned green brings them up to date.
+        await globs.applyEvent(other.id, (g, ctx) =>
+          change.turnedGreen ? machine.baseTurnedGreen(g, ctx) : machine.baseChecksChanged(g, { checks, branch: repo.base }, ctx),
+        );
+      }
+      return 'done';
+    },
+
+    update_branch: async (effect, glob, { globs }) => {
+      if (effect.kind !== 'update_branch' || glob?.pr == null) return 'dropped';
+      // Pushed to since, or no longer red because of the base: nothing to update.
+      if (glob.pr.headSha !== effect.sha || glob.headChecks?.inheritedFrom === undefined) return 'dropped';
+      const board = await boardOf(glob.boardId);
+      const repo = board === null ? null : repoOf(board);
+      if (board === null || repo === null) return 'dropped';
+      const prNumber = glob.pr.number;
+      const result = await host.updateBranch(repo, prNumber, effect.sha);
+      if (result === 'updating') return 'done'; // The push resets the head checks and they run again.
+      if (result === 'conflict') {
+        const found = { base: repo.base, files: await host.conflictFiles(repo, prNumber), since: glob.headChecks.inheritedFrom.since };
+        await globs.applyEvent(glob.id, (g, ctx) => machine.conflictFound(g, found, ctx));
+        return 'done';
+      }
+      // Already up to date: the base moved on without a change this branch needs; drop the stale mark.
+      const checks = board.baseChecks;
+      if (checks != null) await globs.applyEvent(glob.id, (g, ctx) => machine.baseChecksChanged(g, { checks, branch: repo.base }, ctx));
       return 'done';
     },
 

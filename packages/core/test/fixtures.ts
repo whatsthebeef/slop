@@ -21,6 +21,7 @@ export const board: Board = {
   agentCatalogHash: null,
   runNoProgressHours: 2,
   runReadyHours: 8,
+  runStartMinutes: 30,
   subMaxChangedLines: 2000,
   version: 1,
 };
