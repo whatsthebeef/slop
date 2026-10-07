@@ -48,6 +48,7 @@ describe('BedrockLlm error classification', () => {
     ['ResourceNotFoundException', 'Model use case details have not been submitted for this account. RequestId: abc-123', `The Bedrock model ${MODEL} isn't found or enabled`],
     ['ValidationException', 'The provided model identifier is invalid.', `The Bedrock model ${MODEL} isn't valid here`],
     ['ValidationException', "Invocation of model ID anthropic.x with on-demand throughput isn't supported.", `The Bedrock model ${MODEL} isn't valid here`],
+    ['ValidationException', 'Invocation of model ID anthropic.x with on-demand throughput isn’t supported. Retry with an inference profile.', `The Bedrock model ${MODEL} isn't valid here`],
   ])('classifies %s as unavailable', async (name, message, reason) => {
     const thrown = await failWith(sdkError(name, message));
     expect(thrown).toBeInstanceOf(LlmUnavailable);
@@ -90,6 +91,7 @@ describe('BedrockLlm error classification', () => {
     ['ThrottlingException', 'Too many requests'],
     ['ModelTimeoutException', 'Model timed out'],
     ['ValidationException', 'temperature is not supported'],
+    ['ValidationException', `model ID ${MODEL}: extended output for this request is not supported`],
     ['AbortError', 'The operation was aborted'],
   ])('rethrows %s unchanged', async (name, message) => {
     const error = sdkError(name, message);

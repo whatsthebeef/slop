@@ -35,8 +35,9 @@ const unloadedCredentials = (profile: string | undefined): LlmUnavailable =>
     ? new LlmUnavailable("The server's AWS credentials couldn't be loaded", "Check the server's IAM role (or its AWS environment credentials)")
     : new LlmUnavailable('AWS sign-in expired', signInFix(profile));
 
+/** Bedrock's own wording for a model ID it can't use (it writes "isn’t" with a typographic apostrophe), and nothing broader. */
 const MODEL_ID_INVALID =
-  /model identifier is invalid|invalid model identifier|model id\b.*\b(isn't|is not) supported|unsupported model/i;
+  /the provided model identifier is invalid|invocation of model id \S+ with on-demand throughput (isn't|isn’t|is not) supported/i;
 
 const modelFix = (site: CallSite): string =>
   `Check ${site.model.configKey} and that model access is enabled in the Bedrock console (${site.region})`;

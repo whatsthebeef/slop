@@ -89,6 +89,28 @@ describe('KbPipelineJob', () => {
     expect(claims).toHaveLength(3);
   });
 
+  it('counts a claim that threw as a probe, so a failing store cannot make a call every poll', async () => {
+    let now = 0;
+    let claims = 0;
+    const logged: string[] = [];
+    const pipeline = {
+      processNext: (): Promise<string | null> => {
+        claims++;
+        return Promise.reject(new Error('store down'));
+      },
+    };
+    const job = new KbPipelineJob(pipeline, (_task, message) => logged.push(message), { isDown: () => true }, () => now);
+    await job.drain();
+    expect(claims).toBe(1);
+    now += 5_000;
+    await job.drain();
+    expect(claims).toBe(1);
+    now += PROBE_MS;
+    await job.drain();
+    expect(claims).toBe(2);
+    expect(logged).toHaveLength(2);
+  });
+
   it('stops claiming as soon as a call finds the LLM down mid-drain, and waits an interval to probe', async () => {
     let now = 0;
     let down = false;

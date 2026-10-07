@@ -52,7 +52,9 @@ export class KbPipelineJob {
         this.lastClaim = this.now();
       }
     } catch (error) {
-      // A store error leaves the claimed item leased; it is retried when the lease ends.
+      // A store error leaves the claimed item leased; it is retried when the lease ends. It may
+      // follow an LLM call, so it counts as a probe: a failing store can't make one call per poll.
+      this.lastClaim = this.now();
       this.log('kb-pipeline', error instanceof Error ? (error.stack ?? error.message) : String(error));
     } finally {
       this.running = false;
