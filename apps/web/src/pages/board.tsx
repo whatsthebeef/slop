@@ -398,7 +398,7 @@ export const BoardPage = () => {
         }}
         className='flex-1 overflow-auto px-5 py-4'
       >
-        <div className='flex min-h-full min-w-full w-max items-stretch gap-3'>
+        <div className='flex min-h-full min-w-full items-stretch gap-3'>
           {LISTS.map((list) => {
             const items = visible
               .filter((g) => g.list === list)
