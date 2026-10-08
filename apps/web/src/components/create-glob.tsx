@@ -55,6 +55,7 @@ export const CreateGlobDialog = ({
       setForm({
         title: proposal.title,
         summary: proposal.summary,
+        plan: proposal.plan,
         type: restricted && proposal.type === 'super' ? 'same' : proposal.type,
         category: proposal.category,
         group: proposal.group,
