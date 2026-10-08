@@ -175,7 +175,10 @@ export const GlobDialog = ({
           </div>
 
           {glob.failure !== null && (
-            <p className='rounded border border-red/40 bg-red/10 p-2 text-sm'>Failed: {glob.failure.reason}</p>
+            <p className='rounded border border-red/40 bg-red/10 p-2 text-sm'>
+              Failed: {glob.failure.reason}
+              {glob.failure.kind === 'merge' && glob.type !== 'sub' && ' — fixed? Push the fix to the branch and the glob returns to review, ready to merge.'}
+            </p>
           )}
           {(glob.failure?.conflict ?? glob.conflict) != null && glob.implementer !== null && (
             <div className='grid gap-1 rounded border border-edge p-2 text-sm'>

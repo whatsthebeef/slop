@@ -333,6 +333,74 @@ describe('PR and merge events (rows 11–16)', () => {
   });
 });
 
+describe('merge failure recovery (row 16a)', () => {
+  const failedMerge = (over = {}) =>
+    glob({
+      type: 'same',
+      status: 'failed',
+      implementer: dev.email,
+      pr: { number: 7, state: 'ready', headSha: 'aaa' },
+      failure: { reason: 'Merge conflict with main', at: NOW, kind: 'merge' },
+      ...over,
+    });
+
+  it.each(['same', 'super'] as const)(
+    'a push puts a failed %s back to pr_open, keeping the implementer',
+    (type) => {
+      const t = value(
+        m.commitPushed(failedMerge({ type }), { sha: 'bbb', runId: null }, ctx(null)),
+      );
+      expect(t.glob.status).toBe('pr_open');
+      expect(t.glob.failure).toBeNull();
+      expect(t.glob.implementer).toBe(dev.email);
+      expect(t.glob.runs).toHaveLength(0);
+      expect(t.glob.pr?.headSha).toBe('bbb');
+      expect(effectKinds(t)).toEqual(['refresh_checks']);
+    },
+  );
+
+  it('leaves a sub, a non-merge failure and a closed PR alone', () => {
+    const push = { sha: 'bbb', runId: null };
+    expect(value(m.commitPushed(failedMerge({ type: 'sub' }), push, ctx(null))).glob.status).toBe(
+      'failed',
+    );
+    expect(
+      value(m.commitPushed(failedMerge({ failure: { reason: 'x', at: NOW } }), push, ctx(null)))
+        .glob.status,
+    ).toBe('failed');
+    expect(
+      value(
+        m.commitPushed(
+          failedMerge({ pr: { number: 7, state: 'closed', headSha: 'aaa' } }),
+          push,
+          ctx(null),
+        ),
+      ).glob.status,
+    ).toBe('failed');
+  });
+
+  it('hides Retrigger for a merge failure with a human implementer', () => {
+    expect(m.allowedActions(failedMerge(), dev)).not.toContain('retrigger');
+    expect(m.allowedActions(failedMerge({ implementer: null }), dev)).toContain('retrigger');
+    expect(m.allowedActions(failedMerge({ failure: { reason: 'x', at: NOW } }), dev)).toContain(
+      'retrigger',
+    );
+    expect(m.allowedActions(failedMerge(), dev)).toContain('pick_up');
+  });
+
+  it('mark_ready on an already-ready PR moves an in_progress glob straight to pr_open', () => {
+    const t = value(
+      m.readyRequested(
+        glob({ status: 'in_progress', pr: { number: 7, state: 'ready', headSha: 'aaa' } }),
+        null,
+        ctx(),
+      ),
+    );
+    expect(t.glob.status).toBe('pr_open');
+    expect(effectKinds(t)).toEqual(['refresh_checks']);
+  });
+});
+
 describe('failures (rows 17–19, 25)', () => {
   it('row 17: report_failure with the current run fails an implementing glob', () => {
     const t = value(m.reportFailure(glob({ status: 'implementing', runs: [run()] }), { reason: 'stuck', runId: 'run-0' }, ctx(null)));
