@@ -424,8 +424,7 @@ export const readinessNotifications = (boardId: number, items: readonly Readines
       detail: missing.map((i) => i.title).join(', '),
       link,
       action: { label: 'Readiness checklist', href: link },
-      clears: { kind: 'personal' },
-      items: missing.map((i) => i.key),
+      clears: { kind: 'personal', items: missing.map((i) => i.key), dismissed: {} },
     });
   }
   return raised;

@@ -233,20 +233,4 @@ describe('PgStore', () => {
     ).rejects.toThrow('boom');
     expect(await store.transaction((tx) => tx.getUser('ghost@example.com'))).toBeNull();
   });
-
-  it('keeps a personal dismissal per person and drops it with the notification', async () => {
-    const n = {
-      id: '1/readiness', boardId: 1, source: 'readiness', severity: 'info' as const, title: 't', detail: 'd', link: null, action: null,
-      since: '2026-10-08T10:00:00.000Z', clears: { kind: 'personal' as const }, items: ['build_doc'],
-    };
-    await store.transaction(async (tx) => {
-      await tx.saveNotification(n);
-      await tx.saveNotificationDismissal(n.id, 'dev@example.com', ['build_doc']);
-    });
-    expect((await store.transaction((tx) => tx.getNotification(n.id)))?.items).toEqual(['build_doc']);
-    expect(await store.transaction((tx) => tx.listNotificationDismissals('dev@example.com', [n.id]))).toEqual([{ id: n.id, items: ['build_doc'] }]);
-    expect(await store.transaction((tx) => tx.listNotificationDismissals('other@example.com', [n.id]))).toEqual([]);
-    await store.transaction((tx) => tx.deleteNotification(n.id));
-    expect(await store.transaction((tx) => tx.listNotificationDismissals('dev@example.com', [n.id]))).toEqual([]);
-  });
 });

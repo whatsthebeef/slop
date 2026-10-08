@@ -33,7 +33,7 @@ describe('the notification bar', () => {
   });
 
   it('offers dismiss for a personal notification too', () => {
-    expect(canDismiss(n('x', 'info', 't', { kind: 'personal' }))).toBe(true);
+    expect(canDismiss(n('x', 'info', 't', { kind: 'personal', items: [], dismissed: {} }))).toBe(true);
   });
 
   it('opens this app\'s own links in place and others in a new tab', () => {

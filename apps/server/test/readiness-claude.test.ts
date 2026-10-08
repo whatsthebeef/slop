@@ -122,7 +122,7 @@ describe('GET /api/boards/:b/readiness: Claude workflow', () => {
     expect((await app.request(`/api/boards/${String(boardId)}/readiness`)).status).toBe(200);
     const shown = await notifications.list(ADMIN, boardId);
     expect(shown.ok && shown.value.filter((n) => n.source === 'readiness')).toMatchObject([
-      { severity: 'info', clears: { kind: 'personal' }, link: `/boards/${String(boardId)}/settings#readiness` },
+      { severity: 'info', clears: { kind: 'personal', dismissed: {} }, link: `/boards/${String(boardId)}/settings#readiness` },
     ]);
     await notifications.dismiss(ADMIN, boardId, `${String(boardId)}/readiness`);
     const after = await notifications.list(ADMIN, boardId);

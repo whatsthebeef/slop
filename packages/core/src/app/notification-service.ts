@@ -1,7 +1,7 @@
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { isDismissedBy, isDismissible, isExpired, mainRedNotification, MAIN_RED_SOURCE, notificationId, sortNotifications } from '../domain/notifications.js';
-import type { BoardNotification, NotificationSink, RaisedNotification } from '../domain/notifications.js';
+import type { BoardNotification, NotificationClears, NotificationSink, RaisedNotification } from '../domain/notifications.js';
 import { isReadinessFailingSource, readinessNotifications, READINESS_SOURCE } from '../domain/readiness.js';
 import type { ReadinessItem } from '../domain/readiness.js';
 import type { BaseChecks } from '../domain/types.js';
@@ -12,6 +12,10 @@ export interface NotificationServiceDeps {
   readonly notifier: Notifier;
   readonly clock: Clock;
 }
+
+/** A personal notification raised again keeps the dismissals people already made (they stay valid for the items they saw). */
+const withDismissals = (clears: NotificationClears, existing: BoardNotification | null): NotificationClears =>
+  clears.kind === 'personal' && existing?.clears.kind === 'personal' ? { ...clears, dismissed: existing.clears.dismissed } : clears;
 
 /**
  * Board notifications: board-wide incidents that need a person, kept beside the board (no glob version) and shown in
@@ -36,8 +40,7 @@ export class NotificationService implements NotificationSink {
         link: input.link ?? null,
         action: input.action ?? null,
         since: existing?.since ?? now,
-        clears: input.clears ?? { kind: 'condition' },
-        ...(input.items === undefined ? {} : { items: input.items }),
+        clears: withDismissals(input.clears ?? { kind: 'condition' }, existing),
       };
       if (existing !== null && JSON.stringify(existing) === JSON.stringify(next)) return false;
       await tx.saveNotification(next);
@@ -83,8 +86,7 @@ export class NotificationService implements NotificationSink {
       const all = await tx.listNotifications(boardId);
       for (const expired of all.filter((n) => isExpired(n, now))) await tx.deleteNotification(expired.id);
       const live = all.filter((n) => !isExpired(n, now));
-      const dismissed = await tx.listNotificationDismissals(email, live.filter((n) => n.clears.kind === 'personal').map((n) => n.id));
-      return ok(sortNotifications(live.filter((n) => !isDismissedBy(n, dismissed.find((d) => d.id === n.id)?.items))));
+      return ok(sortNotifications(live.filter((n) => !isDismissedBy(n, email))));
     });
   }
 
@@ -96,8 +98,9 @@ export class NotificationService implements NotificationSink {
       if (found === null || (found.boardId !== null && found.boardId !== boardId)) return notFound(`No notification ${id}`);
       if (!isDismissible(found)) return invalidInput('This notification clears by itself when its cause is fixed');
       // A personal dismissal hides it for this person only, until an item joins it.
-      if (found.clears.kind === 'personal') await tx.saveNotificationDismissal(id, email, found.items ?? []);
-      else await tx.deleteNotification(id);
+      if (found.clears.kind === 'personal') {
+        await tx.saveNotification({ ...found, clears: { ...found.clears, dismissed: { ...found.clears.dismissed, [email]: found.clears.items } } });
+      } else await tx.deleteNotification(id);
       return ok(null);
     });
     if (result.ok) this.hint(boardId);

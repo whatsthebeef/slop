@@ -184,7 +184,7 @@ describe('board notifications', () => {
     it('raises one info notification for the missing items, and nothing for unknown ones', async () => {
       await service.syncReadiness(board.id, [it_('build_doc', 'missing'), it_('environments', 'missing'), it_('sub_gate', 'unknown'), it_('agent_set', 'ok')]);
       expect(await list()).toMatchObject([
-        { source: 'readiness', severity: 'info', title: 'Board setup: 2 items to do', detail: 'build_doc, environments', clears: { kind: 'personal' }, items: ['build_doc', 'environments'] },
+        { source: 'readiness', severity: 'info', title: 'Board setup: 2 items to do', detail: 'build_doc, environments', clears: { kind: 'personal', items: ['build_doc', 'environments'], dismissed: {} } },
       ]);
       await service.syncReadiness(board.id, [it_('sub_gate', 'unknown')]);
       expect(await list()).toEqual([]);

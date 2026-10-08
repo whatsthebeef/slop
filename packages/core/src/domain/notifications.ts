@@ -12,7 +12,13 @@ export type NotificationClears =
   | { readonly kind: 'condition' }
   | { readonly kind: 'until'; readonly at: string }
   | { readonly kind: 'dismissible' }
-  | { readonly kind: 'personal' };
+  | {
+      readonly kind: 'personal';
+      /** What the notification is about (e.g. the readiness items still to do). */
+      readonly items: readonly string[];
+      /** Per person: the items they had seen when they dismissed it. Kept in the notification, which has no table of its own for this. */
+      readonly dismissed: Readonly<Record<string, readonly string[]>>;
+    };
 
 export interface NotificationAction {
   readonly label: string;
@@ -39,8 +45,6 @@ export interface BoardNotification {
   /** When the condition began; kept while the source keeps raising it. */
   readonly since: string;
   readonly clears: NotificationClears;
-  /** What a `personal` notification is about (e.g. the readiness items still to do): a dismissal covers the items it saw. */
-  readonly items?: readonly string[];
 }
 
 /** What a source gives when it raises one. */
@@ -53,7 +57,6 @@ export interface RaisedNotification {
   readonly link?: string | null;
   readonly action?: NotificationAction | null;
   readonly clears?: NotificationClears;
-  readonly items?: readonly string[];
 }
 
 /** The port sources use to raise and clear their notifications. */
@@ -75,9 +78,12 @@ export const isExpired = (n: BoardNotification, now: string): boolean => n.clear
 /** A notification a person may dismiss: not one whose condition still holds. */
 export const isDismissible = (n: BoardNotification): boolean => n.clears.kind === 'dismissible' || n.clears.kind === 'personal';
 
-/** Whether a person's dismissal (the items it saw) still covers a personal notification: nothing new has joined its items. */
-export const isDismissedBy = (n: BoardNotification, dismissedItems: readonly string[] | undefined): boolean =>
-  n.clears.kind === 'personal' && dismissedItems !== undefined && (n.items ?? []).every((i) => dismissedItems.includes(i));
+/** Whether this person's dismissal still covers a personal notification: nothing new has joined its items since. */
+export const isDismissedBy = (n: BoardNotification, email: string): boolean => {
+  if (n.clears.kind !== 'personal') return false;
+  const seen = n.clears.dismissed[email];
+  return seen !== undefined && n.clears.items.every((i) => seen.includes(i));
+};
 
 export const MAIN_RED_SOURCE = 'main-red';
 

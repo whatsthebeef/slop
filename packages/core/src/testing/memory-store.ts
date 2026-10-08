@@ -44,7 +44,6 @@ interface State {
   /** Tombstones: external ID and when it was deleted, as Postgres keeps `deleted_at`. */
   deletedCodeReviews: { externalId: string; at: string }[];
   notifications: Map<string, BoardNotification>;
-  notificationDismissals: Map<string, string[]>;
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -75,7 +74,6 @@ const clone = (state: State): State => ({
   codeReviews: [...state.codeReviews],
   deletedCodeReviews: [...state.deletedCodeReviews],
   notifications: new Map(state.notifications),
-  notificationDismissals: new Map(state.notificationDismissals),
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -108,7 +106,6 @@ export class MemoryStore implements Store {
     codeReviews: [],
     deletedCodeReviews: [],
     notifications: new Map(),
-    notificationDismissals: new Map(),
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -209,19 +206,7 @@ export class MemoryStore implements Store {
         s.notifications.set(notification.id, notification);
         return Promise.resolve();
       },
-      deleteNotification: (id) => {
-        for (const key of [...s.notificationDismissals.keys()]) if (key.startsWith(`${id}|`)) s.notificationDismissals.delete(key);
-        return Promise.resolve(s.notifications.delete(id));
-      },
-      saveNotificationDismissal: (id, email, items) => {
-        s.notificationDismissals.set(`${id}|${email}`, [...items]);
-        return Promise.resolve();
-      },
-      listNotificationDismissals: (email, ids) =>
-        Promise.resolve(ids.flatMap((id) => {
-          const items = s.notificationDismissals.get(`${id}|${email}`);
-          return items === undefined ? [] : [{ id, items }];
-        })),
+      deleteNotification: (id) => Promise.resolve(s.notifications.delete(id)),
       listNotifications: (boardId) =>
         Promise.resolve([...s.notifications.values()].filter((n) => n.boardId === null || n.boardId === boardId)),
       listBoards: (email) =>
