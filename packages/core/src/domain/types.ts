@@ -154,6 +154,16 @@ export interface OpenConflict extends MergeConflict {
   readonly requestedAt?: string;
 }
 
+/** How far a glob's branch is behind the base branch, read from the code host before any conflict exists. */
+export interface BehindBase {
+  readonly base: string;
+  /** Commits on the base the branch lacks (a merge each, under squash merging). */
+  readonly behindBy: number;
+  /** Files changed on both sides since they diverged: where a conflict can be. */
+  readonly files: readonly string[];
+  readonly at: string;
+}
+
 export interface Glob {
   readonly id: string;
   readonly boardId: number;
@@ -183,6 +193,8 @@ export interface Glob {
   readonly failure: Failure | null;
   /** Set while the open PR conflicts with the base branch; cleared when it merges cleanly again. */
   readonly conflict?: OpenConflict | null;
+  /** Set while the branch of a glob in Doing lacks commits from the base branch; cleared when it is up to date. */
+  readonly behind?: BehindBase | null;
   readonly provisioning: ProvisioningState;
   readonly createdAt: string;
   readonly updatedAt: string;

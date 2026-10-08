@@ -141,6 +141,16 @@ const handle = async (
     }
   };
 
+  /** The base branch received a push: every glob in Doing on that board rereads how far its branch is behind it. */
+  const queueBehind = async (branch: string, repo: string): Promise<void> => {
+    const rows = await deps.db.select().from(schema.boards).where(eq(schema.boards.baseBranch, branch));
+    for (const board of rows.filter((b) => b.repo?.toLowerCase() === repo.toLowerCase())) {
+      for (const glob of await deps.globs.peekAll(board.id, { status: ['in_progress'] })) {
+        await deps.globs.applyEvent(glob.id, (g, ctx) => machine.behindCheckRequested(g, ctx));
+      }
+    }
+  };
+
   const apply = (glob: Glob, step: Parameters<GlobService['applyEvent']>[1]) =>
     deps.globs.applyEvent(glob.id, step);
 
@@ -149,6 +159,7 @@ const handle = async (
       const push = pushPayload.parse(delivery.payload);
       const branch = push.ref.replace(/^refs\/heads\//, '');
       const glob = await globFor(branch, push.repository.full_name);
+      if (glob === null && !push.deleted) await queueBehind(branch, push.repository.full_name);
       if (glob === null || push.deleted) return true;
       if ((glob.status === 'reviewing' || glob.status === 'signed_off') && push.created) {
         // A late push recreated a merged glob's branch: remove it again.

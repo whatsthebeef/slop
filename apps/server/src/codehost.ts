@@ -46,6 +46,12 @@ export interface CommitFiles {
   readonly files: readonly { readonly path: string; readonly previousPath: string | null; readonly status: 'added' | 'removed' | 'modified' | 'renamed' | 'other' }[];
 }
 
+/** How far a branch is behind the base branch (see `CodeHost.behindBase`). */
+export interface BehindBase {
+  readonly behindBy: number;
+  readonly files: readonly string[];
+}
+
 export interface CodeHost {
   /** True once the host integration is configured (e.g. the GitHub App exists). */
   readonly configured: boolean;
@@ -75,6 +81,11 @@ export interface CodeHost {
   markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }>;
   /** Files changed on both the PR's branch and the base branch since they diverged: where a conflict can be. Best effort; empty when unknown. */
   conflictFiles(repo: Repo, prNumber: number): Promise<string[]>;
+  /**
+   * How far the PR's branch is behind the base branch: the commits on the base it lacks (a merge each, under squash
+   * merging) and the files changed on both sides since they diverged. Best effort; null when the host can't tell.
+   */
+  behindBase(repo: Repo, prNumber: number): Promise<BehindBase | null>;
   /** Posts a PR comment containing `marker` unless one with it exists already (so a retried effect comments once). */
   commentOnce(repo: Repo, prNumber: number, marker: string, body: string): Promise<'posted' | 'exists'>;
   /** Lines changed and files touched between the base branch and `sha`. */

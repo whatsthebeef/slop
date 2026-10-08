@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
-import type { CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
+import type { BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
 import { readCommitChecks } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -393,6 +393,33 @@ export class GitHub implements CodeHost, CommitGraph {
     } catch {
       // Naming the files is a courtesy; the conflict is reported without them.
       return [];
+    }
+  }
+
+  async behindBase(repo: Repo, prNumber: number): Promise<BehindBase | null> {
+    try {
+      const gh = await this.octokit(repo);
+      const { data: pr } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+        owner: repo.owner,
+        repo: repo.name,
+        pull_number: prNumber,
+      });
+      const compare = async (basehead: string) => {
+        const { data } = await gh.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+          owner: repo.owner,
+          repo: repo.name,
+          basehead,
+          per_page: 300,
+        });
+        return data;
+      };
+      // `head...base`: what the base gained since the branch diverged. `ahead_by` counts those commits.
+      const onBase = await compare(`${pr.head.sha}...${repo.base}`);
+      if (onBase.ahead_by === 0) return { behindBy: 0, files: [] };
+      const onBranch = new Set((await compare(`${repo.base}...${pr.head.sha}`)).files?.map((f) => f.filename) ?? []);
+      return { behindBy: onBase.ahead_by, files: (onBase.files ?? []).map((f) => f.filename).filter((f) => onBranch.has(f)) };
+    } catch {
+      return null;
     }
   }
 

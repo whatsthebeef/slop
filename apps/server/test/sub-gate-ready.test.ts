@@ -3,13 +3,14 @@ import type { Board, DiffSummary, Effect, Glob, Result } from '@slop/core';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { codeHostExecutors } from '../src/codehost-executors.js';
-import type { CodeHost, MergeState } from '../src/codehost.js';
+import type { MergeState } from '../src/codehost.js';
 import * as schema from '../src/db/schema.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
 import { githubDeliveryHandler } from '../src/github/events.js';
 import { FileRoutines } from '../src/routines.js';
 import { createTestDatabase } from './support/database.js';
+import { FakeCodeHost } from './support/fake-codehost.js';
 
 const REPO = 'acme/app';
 const DEV = 'dev@example.com';
@@ -21,10 +22,7 @@ const unwrap = <T>(result: Result<T>): T => {
 };
 
 /** A code host whose `sub-gate` check run on the head may already have completed. */
-class FakeHost implements CodeHost {
-  readonly configured = true;
-  commitFiles = () => Promise.resolve({ parent: null, files: [] });
-  commitDiffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
+class FakeHost extends FakeCodeHost {
   /** The completed `sub-gate` run on HEAD, or null while it is still running. */
   subGate: { passed: boolean } | null = null;
   readonly lookups: string[] = [];
@@ -32,28 +30,15 @@ class FakeHost implements CodeHost {
   mergeStateNow: MergeState = 'pending';
   conflicting: string[] = [];
 
-  connection = () => Promise.resolve({ configured: true, connected: true, installUrl: null, appName: null });
-  provision = (_repo: unknown, glob: Glob) => Promise.resolve({ branch: glob.id, pr: { number: 7, headSha: HEAD } });
-  openDraftPr = () => Promise.resolve(null);
-  syncLabels = () => Promise.resolve();
-  closePr = () => Promise.resolve();
-  deleteBranch = () => Promise.resolve();
-  reopenPr = () => Promise.resolve('reopened' as const);
-  mergeState = () => Promise.resolve({ sha: HEAD, state: this.mergeStateNow });
-  completedCheckRun = (_repo: unknown, sha: string, name: string) => {
+  override provision = (_repo: unknown, glob: Glob) => Promise.resolve({ branch: glob.id, pr: { number: 7, headSha: HEAD } });
+  override mergeState = () => Promise.resolve({ sha: HEAD, state: this.mergeStateNow });
+  override completedCheckRun = (_repo: unknown, sha: string, name: string) => {
     this.lookups.push(`${name}@${sha}`);
     return Promise.resolve(this.subGate === null ? null : { sha, passed: this.subGate.passed });
   };
-  markReady = () => Promise.resolve({ wasDraft: true, sha: HEAD });
-  conflictFiles = () => Promise.resolve(this.conflicting);
-  commentOnce = () => Promise.resolve('posted' as const);
-  diffSummary = () => Promise.resolve(this.diff);
-  readFile = () => Promise.resolve(null);
-  listFiles = () => Promise.resolve([]);
-  headOf = () => Promise.resolve(null);
-  commitChecks = () => Promise.resolve({ state: 'passed' as const, failure: null });
-  updateBranch = () => Promise.resolve('up_to_date' as const);
-  squashMerge = () => Promise.resolve({ outcome: 'merged' as const, sha: 'm1' });
+  override markReady = () => Promise.resolve({ wasDraft: true, sha: HEAD });
+  override conflictFiles = () => Promise.resolve(this.conflicting);
+  override diffSummary = () => Promise.resolve(this.diff);
 }
 
 describe('a sub gate that completed before the PR was recorded as ready', () => {
