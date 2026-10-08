@@ -6,6 +6,7 @@ import type {
   ArtifactKind,
   ArtifactSummary,
   Board,
+  BoardNotification,
   BoardJob,
   BoardJobStatus,
   CatalogUpdate,
@@ -203,8 +204,15 @@ export interface IntegrationHealthView {
 
 export const healthKey = ['health'] as const;
 
+/** The board's notifications; invalidated by `board.notifications` hints and on reconnect. */
+export const notificationsKey = (boardId: number) => ['notifications', boardId] as const;
+
 export const api = {
   health: () => request<IntegrationHealthView>('GET', '/api/health'),
+  notifications: (boardId: number) =>
+    request<{ value: BoardNotification[] }>('GET', `/api/boards/${boardId}/notifications`).then((r) => r.value),
+  dismissNotification: (boardId: number, id: string) =>
+    request<object>('POST', `/api/boards/${boardId}/notifications/dismiss`, { id }),
   startAwsSignIn: () => request<object>('POST', '/api/aws-sign-in'),
   authConfig: () => request<{ mode: 'dev' | 'cognito' }>('GET', '/auth/config'),
   devLogin: (email: string, returnTo?: string) =>

@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { api, healthKey, RequestError } from './api';
+import { api, healthKey, notificationsKey, RequestError } from './api';
 import type { GlobView } from './api';
 
 interface Hint {
@@ -15,7 +15,8 @@ interface Hint {
     | 'board.changed'
     | 'board.kb'
     | 'board.tests'
-    | 'board.health';
+    | 'board.health'
+    | 'board.notifications';
   readonly globId?: string;
   readonly version?: number;
 }
@@ -127,10 +128,12 @@ export const useLiveKnowledge = (boardId: number): LiveState => {
   return useBoardEvents(boardId, {
     onHint: (hint) => {
       if (hint.kind === 'board.changed') void client.invalidateQueries({ queryKey: ['board', boardId] });
+      if (hint.kind === 'board.notifications') void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
       if (hint.kind === 'board.kb' || hint.kind === 'board.changed') invalidateKnowledge(client, boardId);
     },
     onReconnect: () => {
       void client.invalidateQueries({ queryKey: ['board', boardId] });
+      void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
       invalidateKnowledge(client, boardId);
     },
   });
@@ -161,6 +164,10 @@ export const useLiveBoard = (boardId: number): LiveState => {
       void client.invalidateQueries({ queryKey: deploysKey(boardId) });
       void client.invalidateQueries({ queryKey: ['glob-environments'] });
       void client.invalidateQueries({ queryKey: ['glob-tests'] });
+      return;
+    }
+    if (hint.kind === 'board.notifications') {
+      void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
       return;
     }
     if (hint.kind === 'board.health') {
@@ -217,6 +224,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
     void client.invalidateQueries({ queryKey: ['glob-environments'] });
     void client.invalidateQueries({ queryKey: ['glob-tests'] });
     void client.invalidateQueries({ queryKey: ['readiness', boardId] });
+    void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
     void client.invalidateQueries({ queryKey: ['findings'] });
     void client.invalidateQueries({ queryKey: codeReviewsKey(boardId) });
     void client.invalidateQueries({ queryKey: ['glob-code-review'] });

@@ -1,5 +1,5 @@
-import type { Artifact, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
+import type { BoardNotification, Artifact, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -111,6 +111,19 @@ const toTestRun = (row: typeof schema.testRuns.$inferSelect): TestRun => ({
   ...row,
   kind: oneOf(TEST_RUN_KINDS, row.kind),
   finishedAt: row.finishedAt.toISOString(),
+});
+
+const toNotification = (row: typeof schema.boardNotifications.$inferSelect): BoardNotification => ({
+  id: row.id,
+  boardId: row.boardId,
+  source: row.source,
+  severity: oneOf(NOTIFICATION_SEVERITIES, row.severity),
+  title: row.title,
+  detail: row.detail,
+  link: row.link,
+  action: row.action,
+  since: row.since.toISOString(),
+  clears: row.clears,
 });
 
 const toCodeReview = (row: typeof schema.codeReviewComments.$inferSelect): CodeReviewComment => ({
@@ -386,6 +399,23 @@ export class PgStore implements Store {
       setBaseChecks: async (boardId, baseChecks) => {
         await t.update(schema.boards).set({ baseChecks }).where(eq(schema.boards.id, boardId));
       },
+      getNotification: async (id) => {
+        const [row] = await t.select().from(schema.boardNotifications).where(eq(schema.boardNotifications.id, id));
+        return row === undefined ? null : toNotification(row);
+      },
+      saveNotification: async (n) => {
+        const values = { ...n, since: new Date(n.since) };
+        await t.insert(schema.boardNotifications).values(values).onConflictDoUpdate({ target: schema.boardNotifications.id, set: values });
+      },
+      deleteNotification: async (id) =>
+        (await t.delete(schema.boardNotifications).where(eq(schema.boardNotifications.id, id)).returning({ id: schema.boardNotifications.id })).length > 0,
+      listNotifications: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.boardNotifications)
+            .where(or(eq(schema.boardNotifications.boardId, boardId), isNull(schema.boardNotifications.boardId)))
+        ).map(toNotification),
       listAllBoards: async () => (await t.select().from(schema.boards).orderBy(schema.boards.id)).map(toBoard),
       listBoards: async (email) => {
         const rows = await t
