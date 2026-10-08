@@ -1,7 +1,9 @@
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
-import { isDismissible, isExpired, mainRedNotification, MAIN_RED_SOURCE, notificationId, sortNotifications } from '../domain/notifications.js';
+import { isDismissedBy, isDismissible, isExpired, mainRedNotification, MAIN_RED_SOURCE, notificationId, sortNotifications } from '../domain/notifications.js';
 import type { BoardNotification, NotificationSink, RaisedNotification } from '../domain/notifications.js';
+import { isReadinessFailingSource, readinessNotifications, READINESS_SOURCE } from '../domain/readiness.js';
+import type { ReadinessItem } from '../domain/readiness.js';
 import type { BaseChecks } from '../domain/types.js';
 import type { Clock, Notifier, Store } from '../ports.js';
 
@@ -35,6 +37,7 @@ export class NotificationService implements NotificationSink {
         action: input.action ?? null,
         since: existing?.since ?? now,
         clears: input.clears ?? { kind: 'condition' },
+        ...(input.items === undefined ? {} : { items: input.items }),
       };
       if (existing !== null && JSON.stringify(existing) === JSON.stringify(next)) return false;
       await tx.saveNotification(next);
@@ -56,6 +59,22 @@ export class NotificationService implements NotificationSink {
     else await this.raise(raised);
   }
 
+  /**
+   * Makes the board's setup notifications match its readiness checklist: a warning per failing item, one info line for
+   * the missing ones. What no longer holds is cleared. Idempotent.
+   */
+  async syncReadiness(boardId: number, items: readonly ReadinessItem[]): Promise<void> {
+    const raised = readinessNotifications(boardId, items);
+    const wanted = new Set(raised.map((n) => n.source));
+    for (const n of raised) await this.raise(n);
+    const existing = await this.deps.store.transaction((tx) => tx.listNotifications(boardId));
+    for (const n of existing) {
+      if (n.boardId === boardId && (isReadinessFailingSource(n.source) || n.source === READINESS_SOURCE) && !wanted.has(n.source)) {
+        await this.clear(boardId, n.source);
+      }
+    }
+  }
+
   /** The board's active notifications (its own and global), most severe first. Expired ones are dropped. */
   async list(email: string, boardId: number): Promise<Result<BoardNotification[]>> {
     const now = this.deps.clock.now();
@@ -63,18 +82,22 @@ export class NotificationService implements NotificationSink {
       if ((await tx.getMember(boardId, email)) === null) return forbidden(`You are not a member of board ${String(boardId)}`);
       const all = await tx.listNotifications(boardId);
       for (const expired of all.filter((n) => isExpired(n, now))) await tx.deleteNotification(expired.id);
-      return ok(sortNotifications(all.filter((n) => !isExpired(n, now))));
+      const live = all.filter((n) => !isExpired(n, now));
+      const dismissed = await tx.listNotificationDismissals(email, live.filter((n) => n.clears.kind === 'personal').map((n) => n.id));
+      return ok(sortNotifications(live.filter((n) => !isDismissedBy(n, dismissed.find((d) => d.id === n.id)?.items))));
     });
   }
 
-  /** A person dismisses a notification; only dismissible ones (never one whose condition still holds). */
+  /** A person dismisses a notification (a personal one for themselves only); only dismissible ones (never one whose condition still holds). */
   async dismiss(email: string, boardId: number, id: string): Promise<Result<null>> {
     const result = await this.deps.store.transaction(async (tx): Promise<Result<null>> => {
       if ((await tx.getMember(boardId, email)) === null) return forbidden(`You are not a member of board ${String(boardId)}`);
       const found = await tx.getNotification(id);
       if (found === null || (found.boardId !== null && found.boardId !== boardId)) return notFound(`No notification ${id}`);
       if (!isDismissible(found)) return invalidInput('This notification clears by itself when its cause is fixed');
-      await tx.deleteNotification(id);
+      // A personal dismissal hides it for this person only, until an item joins it.
+      if (found.clears.kind === 'personal') await tx.saveNotificationDismissal(id, email, found.items ?? []);
+      else await tx.deleteNotification(id);
       return ok(null);
     });
     if (result.ok) this.hint(boardId);

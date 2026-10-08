@@ -78,6 +78,10 @@ export interface Tx {
   deleteNotification(id: string): Promise<boolean>;
   /** The board's own notifications and the global ones. */
   listNotifications(boardId: number): Promise<BoardNotification[]>;
+  /** A person's dismissal of a `personal` notification: the items it covered. Removed with the notification. */
+  saveNotificationDismissal(id: string, email: string, items: readonly string[]): Promise<void>;
+  /** The person's dismissals among these notifications. */
+  listNotificationDismissals(email: string, ids: readonly string[]): Promise<{ readonly id: string; readonly items: readonly string[] }[]>;
   listBoards(email: string): Promise<Board[]>;
   /** Every board, for background jobs. */
   listAllBoards(): Promise<Board[]>;

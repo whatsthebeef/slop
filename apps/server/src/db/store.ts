@@ -125,6 +125,7 @@ const toNotification = (row: typeof schema.boardNotifications.$inferSelect): Boa
   action: row.action,
   since: row.since.toISOString(),
   clears: row.clears,
+  ...(row.items === null ? {} : { items: row.items }),
 });
 
 const toCodeReview = (row: typeof schema.codeReviewComments.$inferSelect): CodeReviewComment => ({
@@ -406,11 +407,24 @@ export class PgStore implements Store {
         return row === undefined ? null : toNotification(row);
       },
       saveNotification: async (n) => {
-        const values = { ...n, since: new Date(n.since) };
+        const values = { ...n, since: new Date(n.since), items: n.items === undefined ? null : [...n.items] };
         await t.insert(schema.boardNotifications).values(values).onConflictDoUpdate({ target: schema.boardNotifications.id, set: values });
       },
       deleteNotification: async (id) =>
         (await t.delete(schema.boardNotifications).where(eq(schema.boardNotifications.id, id)).returning({ id: schema.boardNotifications.id })).length > 0,
+      saveNotificationDismissal: async (id, email, items) => {
+        const values = { notificationId: id, email, items: [...items], at: new Date() };
+        await t.insert(schema.notificationDismissals).values(values).onConflictDoUpdate({ target: [schema.notificationDismissals.notificationId, schema.notificationDismissals.email], set: values });
+      },
+      listNotificationDismissals: async (email, ids) =>
+        ids.length === 0
+          ? []
+          : (
+              await t
+                .select()
+                .from(schema.notificationDismissals)
+                .where(and(eq(schema.notificationDismissals.email, email), inArray(schema.notificationDismissals.notificationId, [...ids])))
+            ).map((r) => ({ id: r.notificationId, items: r.items })),
       listNotifications: async (boardId) =>
         (
           await t

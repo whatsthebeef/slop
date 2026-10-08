@@ -587,6 +587,22 @@ export const boardNotifications = pgTable(
     action: jsonb('action').$type<NotificationAction>(),
     since: timestamp('since', { withTimezone: true }).notNull(),
     clears: jsonb('clears').$type<NotificationClears>().notNull(),
+    /** What a personal notification is about; see `BoardNotification.items`. */
+    items: jsonb('items').$type<string[]>(),
   },
   (t) => [index('board_notifications_board_idx').on(t.boardId)],
+);
+
+/** A person's dismissal of a personal notification: the items it covered. Goes with the notification. */
+export const notificationDismissals = pgTable(
+  'notification_dismissals',
+  {
+    notificationId: text('notification_id')
+      .notNull()
+      .references(() => boardNotifications.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    items: jsonb('items').$type<string[]>().notNull(),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.notificationId, t.email] })],
 );

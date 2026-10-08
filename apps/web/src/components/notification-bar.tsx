@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { api, healthKey, notificationsKey } from '@/lib/api';
 import { signInPoll, signInView } from '@/lib/aws-sign-in';
 import type { SignInView } from '@/lib/aws-sign-in';
-import { barView, canDismiss, moreLabel, pollInterval } from '@/lib/notification-bar';
+import { barView, canDismiss, linkTarget, moreLabel, pollInterval } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
 
 const STYLE: Record<BoardNotification['severity'], string> = {
@@ -73,7 +73,7 @@ const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: numbe
       <span className={cn('font-normal', item.severity === 'critical' && 'text-sm')}>{item.detail}</span>
       {action?.kind === 'aws-sign-in' && <AwsSignInAction />}
       {action !== null && action.kind !== 'aws-sign-in' && (
-        <a className='text-sm font-normal underline' href={action.href} target={action.href.startsWith('/') ? undefined : '_blank'} rel='noreferrer'>
+        <a className='text-sm font-normal underline' href={action.href} {...linkTarget(action.href)} rel='noreferrer'>
           {action.label}
         </a>
       )}

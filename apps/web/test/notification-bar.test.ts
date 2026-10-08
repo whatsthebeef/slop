@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { BoardNotification } from '@slop/core';
-import { barView, canDismiss, moreLabel, pollInterval } from '../src/lib/notification-bar';
+import { readinessNotifications } from '@slop/core';
+import type { BoardNotification, ReadinessItem } from '@slop/core';
+import { barView, canDismiss, linkTarget, moreLabel, pollInterval } from '../src/lib/notification-bar';
 
 const n = (id: string, severity: BoardNotification['severity'], since: string, clears: BoardNotification['clears'] = { kind: 'condition' }): BoardNotification => ({
   id, boardId: 1, source: id, severity, title: id, detail: '', link: null, action: null, since, clears,
@@ -29,5 +30,36 @@ describe('the notification bar', () => {
 
   it('polls faster while one is showing', () => {
     expect(pollInterval(true)).toBeLessThan(pollInterval(false));
+  });
+
+  it('offers dismiss for a personal notification too', () => {
+    expect(canDismiss(n('x', 'info', 't', { kind: 'personal' }))).toBe(true);
+  });
+
+  it('opens this app\'s own links in place and others in a new tab', () => {
+    expect(linkTarget('/boards/3/settings#readiness')).toEqual({});
+    expect(linkTarget('https://github.com/x/y')).toEqual({ target: '_blank' });
+  });
+
+  describe('board setup', () => {
+    const item = (key: ReadinessItem['key'], title: string, state: ReadinessItem['state']): ReadinessItem => ({
+      key, title, state, detail: '', fix: null, manual: false,
+    });
+
+    it('reads as one quiet line linking to the checklist', () => {
+      const [raised] = readinessNotifications(3, [item('build_doc', 'Build doc', 'missing'), item('environments', 'Environments', 'missing'), item('sub_gate', 'Sub-gate workflow', 'ok')]);
+      expect(raised).toMatchObject({
+        severity: 'info',
+        title: 'Board setup: 2 items to do',
+        detail: 'Build doc, Environments',
+        link: '/boards/3/settings#readiness',
+        action: { label: 'Readiness checklist', href: '/boards/3/settings#readiness' },
+      });
+      expect(linkTarget(raised?.action?.href ?? '')).toEqual({});
+    });
+
+    it('says "1 item" for a single one', () => {
+      expect(readinessNotifications(3, [item('build_doc', 'Build doc', 'missing')])[0]?.title).toBe('Board setup: 1 item to do');
+    });
   });
 });
