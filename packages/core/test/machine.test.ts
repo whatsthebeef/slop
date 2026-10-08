@@ -4,6 +4,7 @@ import * as m from '../src/domain/machine.js';
 import type { Transition } from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
 import { NOW, board, ctx, dev, glob, other, po, run } from './fixtures.js';
+import { isRepoAccessFailure, provisioningFailureReason } from '../src/domain/provisioning.js';
 
 const value = (result: Result<Transition>): Transition => {
   if (!result.ok) throw new Error(`Expected ok, got ${result.error.code}: ${result.error.message}`);
@@ -1222,5 +1223,41 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     const t = value(m.startAgain(withHistory, ctx()));
     expect(t.glob.mergeMode).toBeNull();
     expect(t.glob.prs).toHaveLength(1);
+  });
+});
+
+describe('provisioning failure', () => {
+  const queued = () => glob({ status: 'implementing', provisioning: 'pending', pr: null, runs: [run({ state: 'queued' })] });
+  const reason = "Couldn't create branch s1t1 on acme/app: the slop GitHub App can't see that repo. Install it on the repo, or add the repo to its access, then Start over.";
+
+  it('a retryable failure only records the attempt', () => {
+    const t = value(m.provisioningFailed(queued(), 'boom', ctx()));
+    expect(t.glob.provisioning).toBe('failed');
+    expect(t.glob.failure).toBeNull();
+    expect(m.currentRun(t.glob)?.state).toBe('queued');
+  });
+
+  it('one that will not be retried puts the reason on the glob and ends the queued run with it', () => {
+    const t = value(m.provisioningFailed(queued(), reason, ctx(), true));
+    expect(t.glob.status).toBe('failed');
+    expect(t.glob.failure).toMatchObject({ reason, kind: 'provisioning' });
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'failed', failureReason: reason });
+  });
+
+  it('maps a 404 and a 403 to what a person can act on, and leaves throttling alone', () => {
+    expect(provisioningFailureReason('s1t1', 'acme/app', 404, 'Not Found')).toBe(reason);
+    expect(provisioningFailureReason('s1t1', 'acme/app', 403, 'Resource not accessible')).toContain('lacks permission (contents: write)');
+    expect(provisioningFailureReason('s1t1', 'acme/app', 500, 'oops')).toBe("Couldn't create branch s1t1 on acme/app: oops");
+    expect(isRepoAccessFailure(404)).toBe(true);
+    expect(isRepoAccessFailure(403, 'Resource not accessible by integration')).toBe(true);
+    expect(isRepoAccessFailure(403, 'You have exceeded a secondary rate limit')).toBe(false);
+    expect(isRepoAccessFailure(500)).toBe(false);
+  });
+
+  it('a later successful provision clears the failure', () => {
+    const failed = value(m.provisioningFailed(queued(), reason, ctx(), true)).glob;
+    const t = value(m.provisioned(failed, { branch: 's1t1', pr: null }, ctx()));
+    expect(t.glob.failure).toBeNull();
+    expect(t.glob.provisioning).toBe('ok');
   });
 });
