@@ -477,8 +477,12 @@ export const BoardPage = () => {
           onClose={() => setOpenId(null)}
           onAction={(action) => act(open, action)}
           onReviewLabel={reviewLabel(open)}
+          // A refusal rejects so the dialog keeps the draft and shows the reason beside Save.
           onUpdate={async (changes: GlobChanges) => {
-            await mutation.mutateAsync(() => api.updateGlob(open.id, open.version, changes)).catch(() => undefined);
+            store(await api.updateGlob(open.id, open.version, changes));
+          }}
+          onReload={async () => {
+            store(await api.glob(open.id));
           }}
           onDelete={async () => {
             await mutation

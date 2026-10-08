@@ -1,10 +1,10 @@
-import { CATEGORIES, checksExplanation, isValidCombination, machine, SLOP_TYPES } from '@slop/core';
-import type { Action, Category, Role, SlopType } from '@slop/core';
+import { CATEGORIES, checksExplanation, describeEditFailure, isValidCombination, machine, SLOP_TYPES } from '@slop/core';
+import type { Action, Category, EditFailure, Role, SlopType } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
-import { ACTION_LABELS } from '@/lib/api';
+import { ACTION_LABELS, RequestError } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
 import { ArtifactsSection } from './artifacts';
 import { CodeReviewSection } from './code-review';
@@ -91,6 +91,7 @@ export const GlobDialog = ({
   initialArtifact,
   onClose,
   onUpdate,
+  onReload,
   onAction,
   onReviewLabel,
   onDelete,
@@ -100,21 +101,36 @@ export const GlobDialog = ({
   /** The artifact to show first (from a card icon). */
   initialArtifact: ArtifactRef | null;
   onClose: () => void;
+  /** Saves the edits; rejects with the server's refusal (a RequestError) so the form can show it. */
   onUpdate: (changes: GlobChanges) => Promise<void>;
+  /** Loads the glob's latest values (after a version conflict); the draft stays. */
+  onReload?: () => Promise<void>;
   /** Resolves false when the action failed. */
   onAction: (action: Action) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
   onDelete: () => Promise<void>;
 }) => {
-  const [draft, setDraft] = useState<GlobChanges>({});
+  const [draft, setDraftValue] = useState<GlobChanges>({});
+  const [saveFailure, setSaveFailure] = useState<EditFailure | null>(null);
+  /** Every edit to the draft clears the last refusal. */
+  const setDraft = (next: GlobChanges) => {
+    setSaveFailure(null);
+    setDraftValue(next);
+  };
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
-  useEffect(() => setDraft({}), [glob.id]);
+  useEffect(() => {
+    setDraftValue({});
+    setSaveFailure(null);
+  }, [glob.id]);
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
 
   const merged = { ...glob, ...draft };
   const dirty = Object.keys(draft).length > 0;
+  // Why the other types can't be chosen yet, when the glob's state says so.
+  const typeNote =
+    SLOP_TYPES.map((t) => machine.typeUnavailableReason(glob, t)).find((why) => why !== null) ?? null;
   const actions = (glob.allowedActions ?? []).filter((a) => a !== 'delete');
   const disabled = waitingFor(glob, actions, board.role);
   // Ready for review changes nothing until GitHub confirms, so say it was asked for meanwhile.
@@ -277,10 +293,17 @@ export const GlobDialog = ({
                   value={merged.type}
                   onChange={(e) => setDraft({ ...draft, type: e.target.value as SlopType })}
                 >
-                  {SLOP_TYPES.map((t) => (
-                    <option key={t}>{t}</option>
-                  ))}
+                  {SLOP_TYPES.map((t) => {
+                    // Judged against the stored glob, not the draft: the server checks the stored state too.
+                    const why = machine.typeUnavailableReason(glob, t);
+                    return (
+                      <option key={t} disabled={why !== null} title={why ?? undefined}>
+                        {t}
+                      </option>
+                    );
+                  })}
                 </Select>
+                {typeNote !== null && <span className='mt-1 block text-xs font-normal text-muted-foreground'>{typeNote}</span>}
               </Label>
               <Label>
                 Category
@@ -318,22 +341,41 @@ export const GlobDialog = ({
               </Label>
             </div>
             {dirty && (
-              <div className='flex justify-end gap-2'>
-                <Button variant='outline' size='sm' onClick={() => setDraft({})}>
-                  Discard
-                </Button>
-                <Button
-                  size='sm'
-                  disabled={busy || !isValidCombination(merged.type, merged.category)}
-                  onClick={() =>
-                    void run(async () => {
-                      await onUpdate(draft);
-                      setDraft({});
-                    })
-                  }
-                >
-                  Save
-                </Button>
+              <div className='grid gap-2'>
+                {saveFailure !== null && (
+                  <div role='alert' className='flex flex-wrap items-center justify-end gap-2 text-sm text-red'>
+                    <span>{saveFailure.message}</span>
+                    {saveFailure.kind === 'conflict' && onReload !== undefined && (
+                      <Button variant='outline' size='sm' disabled={busy} onClick={() => void run(onReload)}>
+                        Reload latest
+                      </Button>
+                    )}
+                  </div>
+                )}
+                <div className='flex justify-end gap-2'>
+                  <Button variant='outline' size='sm' onClick={() => setDraft({})}>
+                    Discard
+                  </Button>
+                  <Button
+                    size='sm'
+                    disabled={busy || !isValidCombination(merged.type, merged.category)}
+                    onClick={() =>
+                      void run(async () => {
+                        try {
+                          await onUpdate(draft);
+                          setDraft({});
+                        } catch (error) {
+                          // Keep the draft: the person's change stays in the form beside the reason.
+                          setSaveFailure(
+                            describeEditFailure(error instanceof RequestError ? error.body : undefined, glob.id),
+                          );
+                        }
+                      })
+                    }
+                  >
+                    Save
+                  </Button>
+                </div>
               </div>
             )}
           </div>

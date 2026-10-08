@@ -564,8 +564,14 @@ export const SignedOffPage = () => {
           glob={open}
           initialArtifact={null}
           onClose={() => setOpen(null)}
+          // A refusal rejects so the dialog keeps the draft and shows the reason beside Save.
           onUpdate={async (changes) => {
-            await change(() => api.updateGlob(open.id, open.version, changes));
+            await api.updateGlob(open.id, open.version, changes);
+            setOpen(await api.glob(open.id));
+            void client.invalidateQueries({ queryKey: ['signed-off', boardId] });
+          }}
+          onReload={async () => {
+            setOpen(await api.glob(open.id));
           }}
           onAction={(action) => {
             const path = ACTION_PATHS[action];

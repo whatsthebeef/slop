@@ -767,6 +767,28 @@ export const changeFields = (
   return b.done();
 };
 
+const SWAP_BLOCKED = 'Sames and supers can only be swapped while a human is implementing and no run is live';
+const SUB_FROM_SAME_BLOCKED = 'A same can only become a sub while in planning';
+
+/**
+ * Why the glob's type can't be changed to `to` right now, from what the glob shows alone; null when
+ * nothing known locally rules it out. The server stays the authority (it also checks the role).
+ */
+export const typeUnavailableReason = (glob: Glob, to: SlopType): string | null => {
+  const from = glob.type;
+  if (from === to) return null;
+  if (from === 'sub' && to === 'same') {
+    return glob.status === 'merging' || glob.status === 'reviewing' || glob.status === 'signed_off'
+      ? 'A sub can only become a same before it merges'
+      : null;
+  }
+  if ((from === 'same' && to === 'super') || (from === 'super' && to === 'same')) {
+    return (glob.status !== 'in_progress' && glob.status !== 'pr_open') || hasLiveRun(glob) ? SWAP_BLOCKED : null;
+  }
+  if (from === 'same' && to === 'sub') return glob.status !== 'planning' ? SUB_FROM_SAME_BLOCKED : null;
+  return `A ${from} cannot become a ${to}`;
+};
+
 const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> => {
   const from = glob.type;
   if (from === to) return ok(null);
@@ -778,11 +800,7 @@ const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> =
   }
   if ((from === 'same' && to === 'super') || (from === 'super' && to === 'same')) {
     if ((glob.status !== 'in_progress' && glob.status !== 'pr_open') || hasLiveRun(glob)) {
-      return invalidTransition(
-        glob,
-        actor,
-        'Sames and supers can only be swapped while a human is implementing and no run is live',
-      );
+      return invalidTransition(glob, actor, SWAP_BLOCKED);
     }
     if (to === 'super' && (actor.role === 'qa' || actor.role === 'po')) {
       return forbidden('QA and PO members cannot create supers');
@@ -791,7 +809,7 @@ const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> =
   }
   if (from === 'same' && to === 'sub') {
     if (glob.status !== 'planning') {
-      return invalidTransition(glob, actor, 'A same can only become a sub while in planning');
+      return invalidTransition(glob, actor, SUB_FROM_SAME_BLOCKED);
     }
     return ok(null);
   }
