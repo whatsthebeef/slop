@@ -336,6 +336,39 @@ describe('PR and merge events (rows 11–16)', () => {
     const t = value(m.mergeFailed(glob({ status: 'merging' }), 'conflict', ctx(null)));
     expect(t.glob.status).toBe('failed');
     expect(t.glob.failure?.reason).toBe('conflict');
+    expect(t.glob.failure?.kind).toBe('merge');
+  });
+
+  it('row 16a: a push after a failed merge returns a same or super to pr_open, keeping the implementer', () => {
+    for (const type of ['same', 'super'] as const) {
+      const failed = value(m.mergeFailed(glob({ status: 'merging', type, implementer: dev.email, pr: { number: 1, state: 'ready', headSha: 'a' } }), 'conflict', ctx(null))).glob;
+      const t = value(m.commitPushed(failed, { sha: 'b', runId: null }, ctx(null)));
+      expect(t.glob.status).toBe('pr_open');
+      expect(t.glob.failure).toBeNull();
+      expect(t.glob.implementer).toBe(dev.email);
+      expect(t.glob.runs).toEqual(failed.runs);
+      expect(effectKinds(t)).toContain('refresh_checks');
+    }
+  });
+
+  it('row 16a: a failed sub is not recovered by a push', () => {
+    const failed = value(m.mergeFailed(glob({ status: 'merging', type: 'sub', pr: { number: 1, state: 'ready', headSha: 'a' } }), 'conflict', ctx(null))).glob;
+    expect(value(m.commitPushed(failed, { sha: 'b', runId: null }, ctx(null))).glob.status).toBe('failed');
+  });
+
+  it('hides Retrigger for a merge failure with a human implementer', () => {
+    const base = { status: 'merging', type: 'same', pr: { number: 1, state: 'ready', headSha: 'a' } } as const;
+    const human = value(m.mergeFailed(glob({ ...base, implementer: dev.email }), 'conflict', ctx(null))).glob;
+    const routine = value(m.mergeFailed(glob({ ...base, implementer: null }), 'conflict', ctx(null))).glob;
+    expect(m.allowedActions(human, dev)).not.toContain('retrigger');
+    expect(m.allowedActions(routine, dev)).toContain('retrigger');
+  });
+
+  it('mark_ready on an already-ready PR moves an in_progress glob straight to pr_open', () => {
+    const g = glob({ status: 'in_progress', pr: { number: 1, state: 'ready', headSha: 'a' } });
+    const t = value(m.readyRequested(g, null, ctx()));
+    expect(t.glob.status).toBe('pr_open');
+    expect(effectKinds(t)).not.toContain('mark_pr_ready');
   });
 });
 

@@ -131,6 +131,23 @@ describe('GitHub webhook deliveries', () => {
     ]);
   });
 
+  it('recovers a glob whose merge failed when a push lands on its branch', async () => {
+    const at = new Date().toISOString();
+    await database.db
+      .update(schema.globs)
+      .set({ data: { ...(await current()), status: 'failed', pr: { number: 7, state: 'ready', headSha: 'a1' }, failure: { reason: 'Merge conflict with main', at, kind: 'merge' } } })
+      .where(eq(schema.globs.id, globId));
+    await handle({
+      id: id(),
+      event: 'push',
+      payload: { ref: `refs/heads/${globId}`, after: 'b2', head_commit: { message: `${globId}: merge main` }, repository: { full_name: REPO } },
+    });
+    const g = await current();
+    expect(g.status).toBe('pr_open');
+    expect(g.failure).toBeNull();
+    expect(g.implementer).toBe(DEV.email);
+  });
+
   it('moves the glob through ready for review and merge', async () => {
     await handle({ id: id(), event: 'pull_request', payload: pr('ready_for_review') });
     expect((await current()).status).toBe('pr_open');

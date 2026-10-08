@@ -138,6 +138,8 @@ export interface Failure {
   readonly agentSetVersion?: number;
   /** Set when slop's merge failed on a conflict with the base branch (`files`: those both sides changed, when known). */
   readonly conflict?: MergeConflict;
+  /** `merge` when slop's own merge attempt failed (row 16); a push to the branch then recovers the glob. */
+  readonly kind?: 'merge';
 }
 
 export interface MergeConflict {
