@@ -1,3 +1,4 @@
+import * as http from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isatty } from 'node:tty';
 import { openInBrowser } from './auth.js';
@@ -10,6 +11,11 @@ import { describeError } from './util.js';
 
 function log(message: string): void {
   process.stderr.write(message.endsWith('\n') ? message : `${message}\n`);
+}
+
+// Node's fetch ignores HTTPS_PROXY unless asked (Node 24.5+); sandboxes route through a proxy.
+if (process.env.HTTPS_PROXY ?? process.env.https_proxy) {
+  (http as { setGlobalProxyFromEnv?: () => void }).setGlobalProxyFromEnv?.();
 }
 
 // The `slop` executable: wires the real environment into main().
