@@ -1005,8 +1005,8 @@ export const prReadyForReview = (
   b.status('pr_open').effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
   // CodeRabbit reviews on its own unless the repo turned that off; the executor decides whether to ask (R3).
   b.effect({ kind: 'request_code_review', globId: glob.id, generation: glob.generation });
-  // The sub gate may have finished before the PR was recorded as ready: look up its result.
-  if (glob.type === 'sub') b.effect({ kind: 'refresh_sub_gate', globId: glob.id, generation: glob.generation });
+  // A sub doesn't wait for the PR's checks: the board's policy decides at once, and the checks run on the base after it merges.
+  if (glob.type === 'sub') b.effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha: pr.headSha });
   return b.done();
 };
 
@@ -1259,6 +1259,35 @@ export const mergeFailed = (
     .set({ failure: { reason, at: ctx.now, kind: 'merge', ...(conflict === undefined ? {} : { conflict }) }, mergeMode: null })
     .event('MergeFailed', { reason })
     .status('failed')
+    .done();
+};
+
+/**
+ * Row 16b: the checks on the base branch failed at the commit a sub merged. Slop reverts that commit and fails the sub,
+ * naming the failing check. Sames and supers are left to a person (the red base shows on the board).
+ */
+export const mergeTurnedBaseRed = (
+  glob: Glob,
+  red: { sha: string; failure: CheckFailure | null; base: string },
+  ctx: Context,
+): Result<Transition> => {
+  if (glob.type !== 'sub' || glob.status !== 'reviewing' || glob.pr?.state !== 'merged') return unchanged(glob);
+  const check = red.failure === null ? 'the checks' : red.failure.name;
+  const link = red.failure?.url == null ? '' : ` (${red.failure.url})`;
+  return new Builder(glob, ctx)
+    .set({ failure: { reason: `Reverted from ${red.base}: ${check} failed on its merge commit${link}`, at: ctx.now, kind: 'reverted' } })
+    .event('MergeReverted', { sha: red.sha, ...(red.failure === null ? {} : { check: red.failure.name }) })
+    .status('failed')
+    .effect({ kind: 'revert_merge', globId: glob.id, generation: glob.generation, sha: red.sha })
+    .done();
+};
+
+/** The automatic revert could not be made (the base moved on since); a person reverts the commit. */
+export const revertFailed = (glob: Glob, reason: string, ctx: Context): Result<Transition> => {
+  if (glob.status !== 'failed' || glob.failure?.kind !== 'reverted') return unchanged(glob);
+  return new Builder(glob, ctx)
+    .set({ failure: { ...glob.failure, reason: `${glob.failure.reason}. ${reason}` } })
+    .event('MergeRevertFailed', { reason })
     .done();
 };
 

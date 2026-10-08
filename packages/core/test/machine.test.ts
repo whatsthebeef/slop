@@ -720,17 +720,33 @@ describe('checks and merging (slice 2)', () => {
     expect(effectKinds(pushed)).toEqual(['refresh_checks']);
   });
 
-  it('a sub entering pr_open also looks up a sub gate that finished before the PR was ready', () => {
+  it('a sub entering pr_open goes straight to the sub policy, without waiting for its checks', () => {
     const sub = value(m.prReadyForReview(glob({ type: 'sub', status: 'implementing' }), { number: 7, headSha: 'bbb' }, ctx(null)));
     expect(sub.effects).toEqual([
       { kind: 'refresh_checks', globId: 's1t1', generation: 1 },
       { kind: 'request_code_review', globId: 's1t1', generation: 1 },
-      { kind: 'refresh_sub_gate', globId: 's1t1', generation: 1 },
+      { kind: 'evaluate_sub_gate', globId: 's1t1', generation: 1, sha: 'bbb' },
     ]);
     const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
     expect(effectKinds(same)).toEqual(['refresh_checks', 'request_code_review']);
     const superGlob = value(m.prReadyForReview(glob({ type: 'super', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
     expect(effectKinds(superGlob)).toEqual(['refresh_checks', 'request_code_review']);
+  });
+
+  it('red checks on a sub\'s merge commit revert it and fail the sub; sames and supers are left alone', () => {
+    const failure = { name: 'Type check', step: null, lines: [], url: 'https://ci/1' };
+    const merged = (type: 'sub' | 'same' | 'super') =>
+      glob({ type, status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'bbb' } });
+    const t = value(m.mergeTurnedBaseRed(merged('sub'), { sha: 'm1', failure, base: 'main' }, ctx(null)));
+    expect(t.glob.status).toBe('failed');
+    expect(t.glob.failure?.kind).toBe('reverted');
+    expect(t.glob.failure?.reason).toContain('Reverted from main');
+    expect(t.glob.failure?.reason).toContain('https://ci/1');
+    expect(t.effects).toEqual([{ kind: 'revert_merge', globId: 's1t1', generation: 1, sha: 'm1' }]);
+    expect(value(m.mergeTurnedBaseRed(merged('same'), { sha: 'm1', failure, base: 'main' }, ctx(null))).changed).toBe(false);
+    expect(value(m.mergeTurnedBaseRed(merged('super'), { sha: 'm1', failure, base: 'main' }, ctx(null))).changed).toBe(false);
+    const failed = t.glob;
+    expect(value(m.revertFailed(failed, 'by hand', ctx(null))).glob.failure?.reason).toContain('by hand');
   });
 
   it('a check change queues a refresh without changing the glob', () => {

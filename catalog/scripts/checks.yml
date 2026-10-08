@@ -7,13 +7,16 @@ name: checks
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # After every merge: a sub merges as soon as it's ready, so its checks run here, and a red result reverts it.
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
   checks:
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ github.event_name == 'push' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

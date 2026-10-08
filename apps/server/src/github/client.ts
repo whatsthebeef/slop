@@ -355,6 +355,31 @@ export class GitHub implements CodeHost, CommitGraph {
     }
   }
 
+  async revertCommit(repo: Repo, sha: string): Promise<'reverted' | 'moved'> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name };
+    const { data: ref } = await gh.request('GET /repos/{owner}/{repo}/git/ref/{ref}', { ...r, ref: `heads/${repo.base}` });
+    if (ref.object.sha !== sha) return 'moved';
+    const { data: commit } = await gh.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', { ...r, commit_sha: sha });
+    const parent = commit.parents[0]?.sha;
+    if (parent === undefined) return 'moved';
+    const { data: before } = await gh.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', { ...r, commit_sha: parent });
+    // The base is still at `sha`, so the revert is the parent's tree on top of it.
+    const { data: made } = await gh.request('POST /repos/{owner}/{repo}/git/commits', {
+      ...r,
+      message: `Revert "${commit.message.split('\n')[0] ?? sha}"\n\nThis reverts commit ${sha}: the checks failed on it.`,
+      tree: before.tree.sha,
+      parents: [sha],
+    });
+    try {
+      await gh.request('PATCH /repos/{owner}/{repo}/git/refs/{ref}', { ...r, ref: `heads/${repo.base}`, sha: made.sha, force: false });
+    } catch (error) {
+      if (isStatus(error, 422)) return 'moved';
+      throw error;
+    }
+    return 'reverted';
+  }
+
   async markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {

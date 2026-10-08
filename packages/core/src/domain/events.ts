@@ -22,6 +22,8 @@ export const DOMAIN_EVENT_TYPES = [
   'ReviewReceived',
   'Merged',
   'MergeFailed',
+  'MergeReverted',
+  'MergeRevertFailed',
   'MergeFailureRecovered',
   'ConflictFlagged',
   'ConflictCleared',
@@ -69,6 +71,8 @@ export type Effect =
       readonly routineOwner: string;
     }
   | { readonly kind: 'squash_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
+  /** Revert a sub's merge commit on the base branch after the checks on it failed. */
+  | { readonly kind: 'revert_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
   | { readonly kind: 'reopen_pr'; readonly globId: string; readonly generation: number }
   /** Open a fresh draft PR for the glob's branch (after Merge and continue, on the next push). */
   | { readonly kind: 'open_pr'; readonly globId: string; readonly generation: number }
