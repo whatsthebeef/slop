@@ -268,6 +268,8 @@ export interface Board {
   readonly runNoProgressHours: number;
   /** A queued run that hasn't called slop within this many minutes never started and is failed. */
   readonly runStartMinutes: number;
+  /** A watching run that makes no slop call or push within this many minutes of its PR's checks failing is failed. */
+  readonly runRespondMinutes: number;
   /** A run that has not marked its PR ready for review within this long is failed. */
   readonly runReadyHours: number;
   /** Sub gate: subs changing more lines than this convert to sames. */

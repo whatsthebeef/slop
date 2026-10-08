@@ -1,0 +1,1 @@
+ALTER TABLE "boards" ADD COLUMN IF NOT EXISTS "run_respond_minutes" integer DEFAULT 30 NOT NULL;

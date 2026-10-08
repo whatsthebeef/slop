@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Result } from '../src/domain/errors.js';
 import * as m from '../src/domain/machine.js';
 import type { Transition } from '../src/domain/machine.js';
+import type { Glob } from '../src/domain/types.js';
 import { NOW, board, ctx, dev, glob, other, po, run } from './fixtures.js';
 
 const value = (result: Result<Transition>): Transition => {
@@ -959,7 +960,7 @@ describe('run sessions and timeouts', () => {
   });
 
   it('times out a run with no progress, or one that never marks its PR ready', () => {
-    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30 };
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
     const at = (hours: number) => new Date(Date.parse('2026-10-05T00:00:00.000Z') + hours * 3_600_000).toISOString();
     const active = (lastProgress: number) =>
       glob({ status: 'implementing', runs: [run({ state: 'active', startedAt: at(0), lastProgressAt: at(lastProgress) })] });
@@ -970,8 +971,51 @@ describe('run sessions and timeouts', () => {
     expect(m.runTimeoutReason(watching, limits, at(9))).toBeNull();
   });
 
+  describe('a watching run', () => {
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
+    const t0 = Date.parse('2026-10-05T00:00:00.000Z');
+    const at = (minutes: number) => new Date(t0 + minutes * 60_000).toISOString();
+    const watching = (headChecks: Glob['headChecks'], lastProgress = 0) =>
+      glob({
+        status: 'pr_open',
+        pr: { number: 7, state: 'ready', headSha: '47f4a3d9c0' },
+        headChecks,
+        runs: [run({ state: 'watching', startedAt: at(0), lastProgressAt: at(lastProgress) })],
+      });
+    const failed = (at0: number, extra: object = {}) => ({
+      sha: '47f4a3d9c0',
+      state: 'failed' as const,
+      at: at(at0),
+      failure: { name: 'Type check', step: null, lines: [], url: null },
+      ...extra,
+    });
+
+    it('is never failed for being idle while the checks pass or are pending', () => {
+      expect(m.runTimeoutReason(watching({ sha: '47f4a3d9c0', state: 'passed' }), limits, at(24 * 60))).toBeNull();
+      expect(m.runTimeoutReason(watching(null), limits, at(24 * 60))).toBeNull();
+    });
+
+    it('is failed once it has not responded to failed checks within the window, naming what it ignored', () => {
+      const g = watching(failed(10));
+      expect(m.runTimeoutReason(g, limits, at(39))).toBeNull();
+      expect(m.runTimeoutReason(g, limits, at(40))).toBe("Auto-fix didn't respond to failed checks (Type check) on 47f4a3d");
+      expect(m.runTimeoutReason(g, { ...limits, runRespondMinutes: 60 }, at(60))).toBeNull();
+    });
+
+    it('counts from its last slop call or push when that is later than the failure', () => {
+      expect(m.runTimeoutReason(watching(failed(10), 30), limits, at(59))).toBeNull();
+      expect(m.runTimeoutReason(watching(failed(10), 30), limits, at(60))).toMatch(/didn't respond/);
+    });
+
+    it('ignores failures inherited from the base and failures of an older head', () => {
+      const inherited = failed(10, { inheritedFrom: { base: 'main', since: 's1t1' } });
+      expect(m.runTimeoutReason(watching(inherited), limits, at(600))).toBeNull();
+      expect(m.runTimeoutReason(watching(failed(10, { sha: 'old' })), limits, at(600))).toBeNull();
+    });
+  });
+
   it('fails a queued run that never started after the board\'s time, and leaves younger ones', () => {
-    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30 };
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
     const queuedAt = '2026-10-07T02:01:55.115Z';
     const after = (minutes: number) => new Date(Date.parse(queuedAt) + minutes * 60_000).toISOString();
     const queued = glob({ status: 'implementing', runs: [run({ state: 'queued', queuedAt, startedAt: null })] });
@@ -982,6 +1026,41 @@ describe('run sessions and timeouts', () => {
     const started = value(m.runProgress(queued, 'run-0', { ...ctx(null), now: after(5) }));
     expect(m.runTimeoutReason(started.glob, limits, after(60))).toBeNull();
     expect(m.runTimeoutReason(started.glob, limits, after(5 + 121))).toMatch(/No progress for 2 hours/);
+  });
+});
+
+describe('Retry auto-fix', () => {
+  const ended = run({ state: 'ended', outcome: 'failed', endedAt: NOW, failureReason: "Auto-fix didn't respond to failed checks (Type check) on 47f4a3d" });
+  const stuck = () =>
+    glob({
+      status: 'pr_open',
+      type: 'sub',
+      pr: { number: 7, state: 'ready', headSha: '47f4a3d9c0' },
+      failure: { reason: ended.failureReason ?? '', at: NOW },
+      runs: [ended],
+    });
+
+  it('is offered next to Pick up, and queues a new run keeping the PR, branch and generation', () => {
+    expect(m.allowedActions(stuck(), dev)).toEqual(expect.arrayContaining(['pick_up', 'retry_autofix']));
+    const t = value(m.retryAutofix(stuck(), ctx(dev)));
+    expect(t.glob).toMatchObject({ status: 'pr_open', failure: null, generation: stuck().generation, pr: stuck().pr });
+    expect(t.glob.runs).toHaveLength(2);
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'queued' });
+    expect(t.effects.map((e) => e.kind)).toEqual(['fire_routine']);
+  });
+
+  it('starts the retried run watching, since there is no PR to mark ready', () => {
+    const queued = value(m.retryAutofix(stuck(), ctx(dev))).glob;
+    expect(m.currentRun(value(m.runProgress(queued, m.currentRun(queued)?.id ?? '', ctx(null))).glob)?.state).toBe('watching');
+  });
+
+  it('is refused while a run is live, for merge failures and without an ended failed run', () => {
+    const live = { ...stuck(), runs: [ended, run({ id: 'run-1', state: 'watching' })] };
+    expect(m.allowedActions(live, dev)).not.toContain('retry_autofix');
+    expect(m.retryAutofix(live, ctx(dev)).ok).toBe(false);
+    const merge = { ...stuck(), failure: { reason: 'x', at: NOW, kind: 'merge' as const } };
+    expect(m.allowedActions(merge, dev)).not.toContain('retry_autofix');
+    expect(m.retryAutofix({ ...stuck(), runs: [] }, ctx(dev)).ok).toBe(false);
   });
 });
 

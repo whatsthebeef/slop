@@ -12,6 +12,8 @@
     "allow": [
       "mcp__slop__*",
       "mcp__claude_ai_Slop__*",
+      "mcp__claude-code-remote__subscribe_pr_activity",
+      "mcp__claude-code-remote__unsubscribe_pr_activity",
       "Bash(git push origin s*)",
       "Bash(slop put-artifact:*)"
     ],

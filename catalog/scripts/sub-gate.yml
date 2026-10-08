@@ -13,7 +13,8 @@ permissions:
 
 jobs:
   sub-gate:
-    if: ${{ !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'slop:sub') }}
+    # A label other than slop:sub (slop adds several) doesn't re-run the gate.
+    if: ${{ !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'slop:sub') && (github.event.action != 'labeled' || github.event.label.name == 'slop:sub') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

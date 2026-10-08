@@ -36,6 +36,7 @@ const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLoc
 const ACTION_TIPS: Partial<Record<Action, string>> = {
   merge_continue: "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
   mark_ready: 'Marks the draft PR ready for review',
+  retry_autofix: 'Starts a new routine run that watches this PR and fixes its failed checks on the same branch',
   resolve_conflict: 'Asks the Claude GitHub App, in a PR comment, to merge the base branch into this branch and resolve the conflicts',
 };
 

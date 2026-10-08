@@ -45,6 +45,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   runNoProgressHours: row.runNoProgressHours,
   runReadyHours: row.runReadyHours,
   runStartMinutes: row.runStartMinutes,
+  runRespondMinutes: row.runRespondMinutes,
   subMaxChangedLines: row.subMaxChangedLines,
   effectCheckGlobs: row.effectCheckGlobs,
   deploy: row.deploy,
@@ -362,6 +363,7 @@ export class PgStore implements Store {
             runNoProgressHours: board.runNoProgressHours,
             runReadyHours: board.runReadyHours,
             runStartMinutes: board.runStartMinutes,
+            runRespondMinutes: board.runRespondMinutes,
             deploy: board.deploy,
             readinessTicks: board.readinessTicks,
             // Not the learned sub limit: `setSubLimit` writes it, so a settings save doesn't undo a learned move.

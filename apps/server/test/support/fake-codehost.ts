@@ -29,6 +29,8 @@ export class FakeCodeHost implements CodeHost {
   commitDiffSummary: CodeHost['commitDiffSummary'] = () => Promise.resolve({ changedLines: 0, files: [] });
   headOf: CodeHost['headOf'] = () => Promise.resolve(null);
   commitChecks: CodeHost['commitChecks'] = () => Promise.resolve({ state: 'passed', failure: null });
+  cancelledChecks: CodeHost['cancelledChecks'] = () => Promise.resolve([]);
+  rerequestCheck: CodeHost['rerequestCheck'] = () => Promise.resolve();
   updateBranch: CodeHost['updateBranch'] = () => Promise.resolve('up_to_date');
   squashMerge: CodeHost['squashMerge'] = () => Promise.resolve({ outcome: 'merged', sha: 'm1' });
   revertCommit: CodeHost['revertCommit'] = () => Promise.resolve('reverted');

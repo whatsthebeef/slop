@@ -30,12 +30,19 @@ const typecheck: CheckFailure = {
 class FakeHost extends FakeCodeHost {
   baseHead = { sha: 'm1', subject: 's1f5: Slice 8, part 1' };
   checks: Record<string, { state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }> = {};
-  mergeStateNow: 'passed' | 'failed' | 'behind' | 'conflict' = 'failed';
+  mergeStateNow: 'passed' | 'failed' | 'pending' | 'behind' | 'conflict' = 'failed';
+  cancelled: { id: number; completedAt: string | null }[] = [];
+  readonly rerequested: number[] = [];
   headSha = 'h1';
   readonly updated: { pr: number; sha: string }[] = [];
 
   override provision = (_repo: unknown, glob: Glob) => Promise.resolve({ branch: glob.id, pr: { number: 7, headSha: this.headSha } });
   override mergeState = () => Promise.resolve({ sha: this.headSha, state: this.mergeStateNow });
+  override cancelledChecks = () => Promise.resolve(this.cancelled);
+  override rerequestCheck = (_repo: unknown, id: number) => {
+    this.rerequested.push(id);
+    return Promise.resolve();
+  };
   override markReady = () => Promise.resolve({ wasDraft: true, sha: this.headSha });
   override conflictFiles = () => Promise.resolve(['src/a.ts']);
   override squashMerge = () => Promise.resolve({ outcome: 'merged' as const, sha: 'm9' });
@@ -305,5 +312,31 @@ describe('a red base branch', () => {
     await run('board-1', 'refresh_base_checks');
     expect((await current(same)).status).toBe('reviewing');
     expect(await pending(same, 'revert_merge')).toHaveLength(0);
+  });
+
+  it('leaves the head pending while a check run is cancelled, re-requests it after five minutes, and passes on a later success', async () => {
+    host.mergeStateNow = 'pending';
+    host.rerequested.length = 0;
+    const id = await newOpenGlob('Cancelled gate');
+    const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+    host.cancelled = [{ id: 5, completedAt: minutesAgo(1) }];
+    await globs.applyEvent(id, (g, ctx) => machine.checksChanged(g, ctx));
+    // Too soon: the effect retries later, and nothing is recorded (not a failed head).
+    await expect(run(id, 'refresh_checks')).rejects.toThrow(/cancelled/);
+    expect((await current(id)).headChecks).toBeNull();
+    expect(host.rerequested).toEqual([]);
+    // No newer run after five minutes: the check run is asked for again; still pending.
+    host.cancelled = [{ id: 5, completedAt: minutesAgo(6) }];
+    await globs.applyEvent(id, (g, ctx) => machine.checksChanged(g, ctx));
+    // (The first, retried request is still queued beside the new one.)
+    expect(new Set(await run(id, 'refresh_checks'))).toEqual(new Set(['done']));
+    expect(new Set(host.rerequested)).toEqual(new Set([5]));
+    expect((await current(id)).headChecks).toBeNull();
+    // The newer run succeeds.
+    host.cancelled = [];
+    host.mergeStateNow = 'passed';
+    await globs.applyEvent(id, (g, ctx) => machine.checksChanged(g, ctx));
+    await run(id, 'refresh_checks');
+    expect((await current(id)).headChecks).toMatchObject({ sha: 'h1', state: 'passed' });
   });
 });
