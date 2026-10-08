@@ -10,7 +10,12 @@ export interface ExecutorDeps {
   readonly globs: GlobService;
 }
 
-export type Executor = (effect: Effect, glob: Glob | null, deps: ExecutorDeps) => Promise<Outcome>;
+/** `final`: this attempt is the last, so a failure that is thrown will not be retried. */
+export interface AttemptInfo {
+  readonly final: boolean;
+}
+
+export type Executor = (effect: Effect, glob: Glob | null, deps: ExecutorDeps, attempt?: AttemptInfo) => Promise<Outcome>;
 
 const MAX_ATTEMPTS = 8;
 const POLL_MS = 2_000;
@@ -120,7 +125,7 @@ export class OutboxRunner {
         lastError = `No executor for ${effect.kind} yet`;
       } else {
         try {
-          state = await executor(effect, glob, this.deps);
+          state = await executor(effect, glob, this.deps, { final: job.attempts + 1 >= MAX_ATTEMPTS });
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error);
           state = job.attempts + 1 >= MAX_ATTEMPTS ? 'failed' : 'pending';

@@ -36,6 +36,7 @@ export * from './app/glob-service.js';
 export * from './app/board-service.js';
 export * from './app/notification-service.js';
 export * from './domain/notifications.js';
+export * from './domain/provisioning.js';
 export * from './app/knowledge-service.js';
 export * from './app/artifact-service.js';
 export * from './app/intake-service.js';
