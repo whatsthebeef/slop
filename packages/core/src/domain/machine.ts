@@ -777,11 +777,11 @@ const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> =
     return ok(null);
   }
   if ((from === 'same' && to === 'super') || (from === 'super' && to === 'same')) {
-    if ((glob.status !== 'in_progress' && glob.status !== 'pr_open') || hasLiveRun(glob)) {
+    if (!['planning', 'in_progress', 'pr_open'].includes(glob.status) || hasLiveRun(glob)) {
       return invalidTransition(
         glob,
         actor,
-        'Sames and supers can only be swapped while a human is implementing and no run is live',
+        'Sames and supers can only be swapped in planning or while a human is implementing, with no run live',
       );
     }
     if (to === 'super' && (actor.role === 'qa' || actor.role === 'po')) {
