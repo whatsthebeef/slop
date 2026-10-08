@@ -27,6 +27,12 @@ Usage: scripts/dev.sh [command]
                After merging main: renumber this branch's Drizzle migrations to follow main's
                (files, journal, snapshots, test references), then check drizzle-kit sees no
                drift. base defaults to origin/HEAD (else origin/main).
+  session      A session's own stack (sstor's local-run launch): a database for the glob cloned
+               from the shared one (reused if it exists), the server in watch mode on a free port
+               with dev sign-in, and Vite in front of it; :3000 is left alone. Writes the board URL
+               to $SLOP_URL_FILE (default .sstor/.url). SLOP_JOBS picks the server's background
+               jobs (default none; e.g. SLOP_JOBS=kb). `session reset` re-clones the database.
+  session-drop Drop this glob's session database.
   help         Show this help.
 
 Snapshots are taken automatically before code with new migrations starts, and kept (newest
@@ -229,6 +235,80 @@ foreground() {
   LOCAL_SIGN_IN_WITHOUT_COOKIE=true node ${env_file[@]+"${env_file[@]}"} --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts
 }
 
+# A free TCP port from $1 upwards.
+free_port() {
+  local port="$1"
+  while lsof -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1; do port=$((port + 1)); done
+  echo "$port"
+}
+
+# The session database's name: the glob (sstor's SLOP_GLOB, else the branch) as an identifier.
+session_db() {
+  local glob="${SLOP_GLOB:-$(git -C "$root" branch --show-current)}"
+  glob="$(tr '[:upper:]' '[:lower:]' <<<"$glob" | tr -c 'a-z0-9_\n' '_')"
+  [[ -n "$glob" && "$glob" != main ]] || { echo "dev.sh session: no glob (set SLOP_GLOB or check out a glob's branch)" >&2; exit 1; }
+  echo "slop_$glob"
+}
+
+# A session's own stack, so a branch's migrations and code never reach the shared database or :3000.
+session() {
+  local db
+  db="$(session_db)"
+  postgres_up
+  if [[ "${1:-}" == reset ]]; then
+    psql_slop -d postgres -qc "drop database if exists \"$db\" with (force)"
+  fi
+  if [[ -z "$(psql_slop -d postgres -Atc "select 1 from pg_database where datname = '$db'")" ]]; then
+    # pg_dump rather than CREATE DATABASE ... TEMPLATE: a template can't have connections, and
+    # main's server is always connected.
+    echo "Cloning the shared database into $db"
+    psql_slop -d postgres -qc "create database \"$db\" owner slop"
+    (cd "$root" && docker compose exec -T postgres sh -c \
+      "pg_dump -U slop -d slop --format=custom | pg_restore -U slop -d '$db' --no-owner")
+  fi
+  local jobs="${SLOP_JOBS:-none}"
+  # Effects queued on the shared database belong to main's server; an outbox switched on here
+  # would run them a second time.
+  if [[ ",$jobs," == *,outbox,* || "$jobs" == all ]]; then
+    psql_slop -d "$db" -qc "update outbox set state = 'dropped', last_error = 'cloned into a session' where state = 'pending'"
+  fi
+  local api web
+  api="$(free_port 3200)"
+  web="$(free_port 5180)"
+  local env_file=()
+  [[ -f "$root/apps/server/.env.cognito" ]] && env_file=(--env-file=.env.cognito)
+  # The tunnel and webhooks stay with main's server.
+  unset SLOP_TUNNEL_DOMAIN
+  (
+    cd "$root/apps/server"
+    # Set here, so the env files (which never override the environment) can't switch them back.
+    export PORT="$api" DATABASE_URL="postgres://slop:slop@localhost:5432/$db" \
+      PUBLIC_URL="http://localhost:$web" AUTH_MODE=dev SLOP_JOBS="$jobs"
+    exec node "$root/scripts/dev-watch.mjs" "$root/apps/server/src,$root/packages/core/src,$root/catalog" -- \
+      node ${env_file[@]+"${env_file[@]}"} --env-file-if-exists=.env.local --conditions=development --import tsx src/main.ts
+  ) &
+  local api_pid=$!
+  (
+    cd "$root/apps/web"
+    SLOP_API_URL="http://localhost:$api" SLOP_WEB_PORT="$web" exec node node_modules/vite/bin/vite.js --strictPort
+  ) &
+  local web_pid=$!
+  # The ports as well as the pids: a server outlives its watcher if the watcher dies first.
+  trap 'kill "$api_pid" "$web_pid" 2>/dev/null || true; lsof -t -i "tcp:$api" -i "tcp:$web" -sTCP:LISTEN | xargs kill 2>/dev/null || true' EXIT INT TERM
+  local url_file="${SLOP_URL_FILE:-$root/.sstor/.url}"
+  mkdir -p "$(dirname "$url_file")"
+  echo "http://localhost:$web" >"$url_file"
+  echo "Session $db: board http://localhost:$web, API http://localhost:$api (jobs: $jobs)"
+  wait
+}
+
+session_drop() {
+  local db
+  db="$(session_db)"
+  psql_slop -d postgres -qc "drop database if exists \"$db\" with (force)"
+  echo "Dropped $db"
+}
+
 list_snapshots() {
   if ! ls -1t "$snapshots"/*.dump 2>/dev/null; then
     echo "No snapshots in $snapshots"
@@ -259,6 +339,8 @@ case "$action" in
   stop) stop ;;
   restart) running_watch && watch_mode=true; stop; start ;;
   check-migrations) check_migrations; exit 0 ;;
+  session) session "${2:-}"; exit 0 ;;
+  session-drop) session_drop; exit 0 ;;
   board-watch) build_board_watch; exit 0 ;;
   snapshots) list_snapshots; exit 0 ;;
   restore) restore "${2:-}"; exit 0 ;;

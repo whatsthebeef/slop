@@ -25,6 +25,7 @@ import type {
   KbProposalList,
   KbSignal,
   LabelCommand,
+  LocalRunView,
   LabelName,
   List,
   Member,
@@ -76,6 +77,8 @@ export interface KnowledgeIndex {
   };
   /** Documents forked from a catalog entry that has a newer version (shown for copying by hand, never applied). */
   readonly catalogUpdates: readonly CatalogUpdate[];
+  /** The local-run spec, read-only (it changes through proposals). */
+  readonly localRun: LocalRunView;
 }
 
 export interface CatalogEntry {

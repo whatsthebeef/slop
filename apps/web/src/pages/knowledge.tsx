@@ -183,6 +183,22 @@ export const KnowledgePage = () => {
         <AgentSetFiles boardId={boardId} admin={admin} entries={kb.data.agentSet.entries} />
       </section>
 
+      <section className='grid gap-2' data-testid='local-run'>
+        <h2 className='text-sm font-semibold'>
+          Local-run spec{kb.data.localRun.version === null ? '' : ` · version ${kb.data.localRun.version}`}
+        </h2>
+        <p className='text-xs text-muted-foreground'>
+          What sstor builds and launches in each session's server window, written to <code>.sstor/local-run.json</code> by{' '}
+          <code>sstor init</code>. It changes only through an approved proposal (target: Local-run spec).
+        </p>
+        {kb.data.localRun.problem !== null && <p className='text-xs text-destructive'>{kb.data.localRun.problem}; it isn't served.</p>}
+        {kb.data.localRun.content === null ? (
+          <p className='text-xs text-muted-foreground'>Not set.</p>
+        ) : (
+          <pre className='overflow-x-auto rounded border p-2 text-xs'>{kb.data.localRun.content}</pre>
+        )}
+      </section>
+
       {viewing !== null && (
         <Dialog open onOpenChange={(o) => !o && setViewing(null)}>
           <DialogContent title={viewing} className='max-w-3xl'>

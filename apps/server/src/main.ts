@@ -4,7 +4,7 @@ import { ArtifactService, BoardService, CodeReviewService, DeployService, Enviro
 import type { Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
-import { loadConfig } from './config.js';
+import { JOBS, loadConfig, type Job } from './config.js';
 import * as schema from './db/schema.js';
 import { connect, PgStore, runMigrations } from './db/store.js';
 import { createApp } from './http/app.js';
@@ -231,9 +231,13 @@ app.get('/downloads/agent-set/:board', async (c) => {
   }
   const set = await knowledge.agentSetForDownload(boardId);
   if (!set.ok) return c.json({ error: 'No such board' }, 404);
+  if (set.value.localRunProblem !== null) logError('local-run', `Board ${String(boardId)}: ${set.value.localRunProblem}`);
   return c.json({
     version: set.value.version,
     files: set.value.files.map((f) => ({ path: f.path, content: renderAgentSetFile(f.content, agentSetValues) })),
+    // Beside the set, outside its version: sstor init writes it to .sstor/local-run.json (null removes that).
+    localRun: set.value.localRun,
+    ...(set.value.localRunProblem === null ? {} : { localRunProblem: set.value.localRunProblem }),
   });
 });
 mountArtifactUploads(app, { artifacts, globs, links });
@@ -270,33 +274,40 @@ app.onError((error, c) => {
 
 if (config.WEB_DIST !== undefined) mountWeb(app, config.WEB_DIST);
 
-// Catalog agent files reach boards through layering; a changed catalog gives each board a new agent-set version.
-try {
-  const { bumped, failed } = await knowledge.syncCatalogAgentSet();
-  if (bumped.length > 0) console.log(`[agent set] catalog changed: new agent-set version for boards ${bumped.join(', ')}`);
-  for (const { boardId, error } of failed) {
-    logError('agent set sync', `board ${boardId}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-} catch (error) {
-  logError('agent set sync', error instanceof Error ? (error.stack ?? error.message) : String(error));
+const runs = (job: Job): boolean => config.SLOP_JOBS.has(job);
+if (config.SLOP_JOBS.size < JOBS.length) {
+  console.log(`[jobs] starting only: ${[...config.SLOP_JOBS].join(', ') || 'none'} (SLOP_JOBS)`);
 }
 
-outbox.start();
+// Catalog agent files reach boards through layering; a changed catalog gives each board a new agent-set version.
+if (runs('catalog')) {
+  try {
+    const { bumped, failed } = await knowledge.syncCatalogAgentSet();
+    if (bumped.length > 0) console.log(`[agent set] catalog changed: new agent-set version for boards ${bumped.join(', ')}`);
+    for (const { boardId, error } of failed) {
+      logError('agent set sync', `board ${boardId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } catch (error) {
+    logError('agent set sync', error instanceof Error ? (error.stack ?? error.message) : String(error));
+  }
+}
+
+if (runs('outbox')) outbox.start();
 const runWatch = new RunWatch(store, globs, logError);
-runWatch.start();
+if (runs('runs')) runWatch.start();
 const deployWatch = new DeployWatch(deploys, logError);
-deployWatch.start();
+if (runs('deploys')) deployWatch.start();
 // The pipeline pauses on its own models only: intake's model says nothing about them.
 const kbModels = [config.KB_ROUTE_MODEL, config.KB_DRAFT_MODEL];
 const kbPipelineJob = new KbPipelineJob(kbPipeline, logError, { isDown: () => llmHealth.isDown(kbModels) });
-kbPipelineJob.start();
+if (runs('kb')) kbPipelineJob.start();
 // Findings pause on the findings model only, like the KB pipeline on its own.
 const findingsJob = new KbPipelineJob(findingsPipeline, logError, { isDown: () => llmHealth.isDown([config.FINDINGS_MODEL]) }, Date.now, 'findings');
-findingsJob.start();
+if (runs('findings')) findingsJob.start();
 const learningJobsRunner = new LearningJobs(learningJobs, logError);
-learningJobsRunner.start();
+if (runs('learning')) learningJobsRunner.start();
 const tunnelWatch = config.SLOP_TUNNEL_DOMAIN === undefined ? null : new TunnelWatch(config.SLOP_TUNNEL_DOMAIN, integrations);
-tunnelWatch?.start();
+if (runs('tunnel')) tunnelWatch?.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });

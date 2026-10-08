@@ -16,3 +16,5 @@ cdk.out/
 .donotcommit.txt
 .claude/settings.local.json
 .sstor/.finalised
+.sstor/.url
+.sstor/local-run.json

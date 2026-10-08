@@ -12,6 +12,8 @@ export const MANIFEST_PATH = '.claude/slop-agent-set.json';
 export const MARKER = '<!-- implementation-agent-system -->';
 export const MARKER_END = '<!-- /implementation-agent-system -->';
 export const DEFAULT_MCP_SERVER = 'slop';
+/** The board's local-run spec, for sstor; gitignored and not in the manifest. */
+export const LOCAL_RUN_PATH = '.sstor/local-run.json';
 const CLAUDE_MCP_TIMEOUT_MS = 15_000;
 
 /** Files the Jira-era agent system installed; removed on the first run. */
@@ -34,6 +36,14 @@ function isSafeRelativePath(path: string): boolean {
   return path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
+/** One shell command line, as slop checks it (`domain/local-run.ts` in core): sstor runs it. */
+const localRunCommand = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2000)
+  .refine((command) => !/[\0\r\n]/.test(command), 'one line');
+
 const bundleSchema = z.object({
   version: z.number().int(),
   files: z.array(
@@ -42,6 +52,10 @@ const bundleSchema = z.object({
       content: z.string(),
     }),
   ),
+  /** Absent from older servers (the installed file is left alone); null when the board has none. */
+  localRun: z.strictObject({ build: localRunCommand.optional(), launch: localRunCommand }).nullable().optional(),
+  /** Why slop isn't serving the board's stored spec (it fails slop's check). */
+  localRunProblem: z.string().optional(),
 });
 export type AgentSetBundle = z.infer<typeof bundleSchema>;
 
@@ -141,8 +155,19 @@ export async function runInit(deps: InitDeps): Promise<void> {
   }
   const written = await installAgentSet(deps, bundle);
   deps.stdout(
-    `slop init: board ${deps.board} agent set v${bundle.version}: ${written.length} files, settings, CLAUDE.md\n`,
+    `slop init: board ${deps.board} agent set v${bundle.version}: ${written.length} files, settings, CLAUDE.md${localRunSummary(bundle)}\n`,
   );
+}
+
+function localRunSummary(bundle: AgentSetBundle): string {
+  if (bundle.localRunProblem !== undefined || bundle.localRun === undefined) return '';
+  return bundle.localRun === null ? ', no local-run spec' : `, local-run spec (${LOCAL_RUN_PATH})`;
+}
+
+/** The spec's canonical text, as slop stores it: build first, two-space JSON. */
+function renderLocalRun(spec: NonNullable<AgentSetBundle['localRun']>): string {
+  const ordered = spec.build === undefined ? { launch: spec.launch } : { build: spec.build, launch: spec.launch };
+  return `${JSON.stringify(ordered, null, 2)}\n`;
 }
 
 type InstallDeps = Pick<
@@ -178,6 +203,11 @@ export async function installAgentSet(
   const incomingSettings = optionalJsonObject(byPath.get('settings.json'), 'settings.json');
   const incomingMcp = optionalJsonObject(byPath.get('mcp.json'), 'mcp.json');
   const section = byPath.get('claude_md.md');
+  // A spec slop couldn't serve leaves the installed one alone, as an older server's bundle does.
+  if (bundle.localRunProblem !== undefined) {
+    deps.log(`slop init: warning: ${bundle.localRunProblem}; keeping ${LOCAL_RUN_PATH} as it is`);
+  }
+  const localRun = bundle.localRunProblem === undefined ? bundle.localRun : undefined;
 
   // Resolve every destination first: one outside the checkout stops the run before any write.
   const destinations = new Map<string, string>();
@@ -188,6 +218,7 @@ export async function installAgentSet(
     'CLAUDE.md',
     '.gitignore',
     MANIFEST_PATH,
+    ...(localRun === undefined || localRun === null ? [] : [LOCAL_RUN_PATH]),
   ]) {
     destinations.set(relative, await paths.writable(relative));
   }
@@ -214,8 +245,12 @@ export async function installAgentSet(
     const current = (await readText(destination('CLAUDE.md'))) ?? '';
     pending.push({ relative: 'CLAUDE.md', content: replaceClaudeMdSection(current, section) });
   }
-  const ignored = ensureLine((await readText(destination('.gitignore'))) ?? '', '.reviews/');
-  if (ignored !== undefined) pending.push({ relative: '.gitignore', content: ignored });
+  const gitignore = (await readText(destination('.gitignore'))) ?? '';
+  const ignored = ['.reviews/', LOCAL_RUN_PATH].reduce((text, line) => ensureLine(text, line) ?? text, gitignore);
+  if (ignored !== gitignore) pending.push({ relative: '.gitignore', content: ignored });
+  if (localRun !== undefined && localRun !== null) {
+    pending.push({ relative: LOCAL_RUN_PATH, content: renderLocalRun(localRun) });
+  }
 
   await swapInManagedFiles(claudeFolder, managed, destination);
   for (const write of pending) await writeFileAtomic(destination(write.relative), write.content);
@@ -235,6 +270,8 @@ export async function installAgentSet(
       }
     }
   }
+  // The board has no spec (any more): sstor then has nothing to run.
+  if (localRun === null) removals.push({ path: LOCAL_RUN_PATH, isFolder: false });
   for (const { path, isFolder } of removals.sort((a, b) => a.path.localeCompare(b.path))) {
     const removal = await paths.removal(path);
     if (removal.kind === 'outside') {
