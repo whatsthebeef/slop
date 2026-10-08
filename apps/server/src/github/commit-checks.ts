@@ -1,5 +1,5 @@
 import type { CheckFailure } from '@slop/core';
-import { failureLines } from '@slop/core';
+import { failureLines, jobOwnLog } from '@slop/core';
 import type { Repo } from '../codehost.js';
 import { FAILED_CONCLUSIONS } from './merge-state.js';
 
@@ -59,11 +59,11 @@ const failedStep = async (request: Request, repo: Repo, jobId: number): Promise<
   return null;
 };
 
-/** The last lines of an Actions job log; null when it isn't available (expired, not an Actions job, no access). */
+/** The last lines of an Actions job's own log (service container output after cleanup is dropped); null when it isn't available (expired, not an Actions job, no access). */
 const logTail = async (request: Request, repo: Repo, jobId: number): Promise<string | null> => {
   try {
     const { data } = await request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', { owner: repo.owner, repo: repo.name, job_id: jobId });
-    return typeof data === 'string' ? data.split('\n').slice(-LOG_TAIL_LINES).join('\n') : null;
+    return typeof data === 'string' ? jobOwnLog(data).split('\n').slice(-LOG_TAIL_LINES).join('\n') : null;
   } catch {
     return null;
   }
