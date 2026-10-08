@@ -300,9 +300,9 @@ export const mountKnowledge = (
   });
 
   app.put('/api/globs/:id/plan', async (c) => {
-    const body = await parse(c, z.object({ content: z.string() }));
+    const body = await parse(c, z.object({ content: z.string(), version: z.number().int().optional() }));
     if (body instanceof Response) return body;
-    return send(c, await artifacts.putPlan(c.get('email'), c.req.param('id'), body.content));
+    return send(c, await artifacts.putPlan(c.get('email'), c.req.param('id'), body.content, body.version));
   });
 
   app.get('/api/globs/:id/artifacts', async (c) => send(c, await artifacts.list(c.get('email'), c.req.param('id'))));
