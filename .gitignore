@@ -14,3 +14,5 @@ cdk.out/
 .slop-dev
 .slop-dev-snapshots/
 .donotcommit.txt
+.claude/settings.local.json
+.sstor/.finalised
