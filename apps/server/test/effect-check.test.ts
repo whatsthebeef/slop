@@ -59,6 +59,7 @@ const host: CodeHost = {
   conflictFiles: unused,
   completedCheckRun: unused,
   readFile: unused,
+  listFiles: unused,
   commitFiles: unused,
   commitDiffSummary: unused,
   markReady: unused,

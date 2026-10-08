@@ -8,6 +8,7 @@ import type { Board, Glob } from './types.js';
 export const READINESS_KEYS = [
   'repo_app',
   'sub_gate',
+  'claude_workflow',
   'agent_set',
   'build_doc',
   'environments',
@@ -47,6 +48,8 @@ export interface ReadinessFacts {
   readonly installUrl: string | null;
   /** Whether the base branch has `.github/workflows/sub-gate.yml`; null when slop can't read the repo. */
   readonly subGateWorkflow: boolean | null;
+  /** Whether a workflow on the base branch runs `anthropics/claude-code-action`; null when slop can't read the repo. */
+  readonly claudeWorkflow: boolean | null;
   /**
    * The agent-set version committed on the base branch (`.claude/slop-agent-set.json`): null when
    * the file is absent, 'unreadable' when it isn't valid, 'unknown' when slop couldn't read the repo.
@@ -59,6 +62,15 @@ export interface ReadinessFacts {
   /** Globs whose watching run hasn't reacted to failed checks (see `unreactedCheckFailures`). */
   readonly unreactedCheckFailures: readonly string[];
 }
+
+/** The action a workflow must run for `@claude` mentions to get a response. */
+export const CLAUDE_ACTION = 'anthropics/claude-code-action';
+
+/** Whether a workflow file's text runs the Claude Code action. */
+export const runsClaudeAction = (workflow: string): boolean => workflow.includes(CLAUDE_ACTION);
+
+const claudeWorkflowFix = (repo: string | null): string =>
+  `Add a Claude workflow: run /install-github-app in Claude Code for ${repo ?? 'the repo'}, or copy catalog/scripts/claude.yml to .github/workflows/ and add the CLAUDE_CODE_OAUTH_TOKEN secret`;
 
 /**
  * Which readiness item a routine failure points to, and its fix, from the failure's reason.
@@ -125,6 +137,19 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
           }),
   );
 
+  const claudeTitle = `Claude workflow on ${board.baseBranch}`;
+  items.push(
+    facts.claudeWorkflow === null
+      ? item('claude_workflow', claudeTitle, 'unknown', "slop can't read the repo yet", null)
+      : facts.claudeWorkflow
+        ? item('claude_workflow', claudeTitle, 'ok', `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so @claude comments get a response (it also needs the Claude GitHub App)`, null)
+        : item('claude_workflow', claudeTitle, 'missing', claudeWorkflowFix(repo), {
+            kind: 'link',
+            label: 'Add the workflow',
+            href: `https://github.com/${repo ?? ''}/new/${board.baseBranch}?filename=.github/workflows/claude.yml`,
+          }),
+  );
+
   const committed = facts.committedAgentSetVersion;
   items.push(
     committed === 'unknown'
@@ -177,13 +202,14 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     // One run that never started can be a hiccup; repeats point at the routine itself.
     const neverStarted = key === 'routines' ? facts.recentFailures.filter((f) => /^Routine run never started/.test(f.reason)) : [];
     const unreacted = key === 'claude_app' ? facts.unreactedCheckFailures[0] : undefined;
+    const noWorkflow = facts.claudeWorkflow === false ? ' and the repo has no Claude workflow (see the "Claude workflow" item)' : '';
     items.push(
       failure !== undefined && fix !== null
         ? item(key, MANUAL[key], 'failing', `${failure.globId} failed: ${failure.reason}. ${fix.fix}`, settings)
         : neverStarted.length >= 2
           ? item(key, MANUAL[key], 'failing', `${neverStarted.length} routine runs never started (latest ${neverStarted[0]?.globId ?? ''}): check the routine's fire URL and token, and that its session can reach slop`, settings)
         : unreacted !== undefined
-          ? item(key, MANUAL[key], 'failing', `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo`, settings)
+          ? item(key, MANUAL[key], 'failing', `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo${noWorkflow}`, settings)
         : facts.ticks[key] === true
           ? item(key, MANUAL[key], 'ok', 'Ticked by an admin', null)
           : item(key, MANUAL[key], 'missing', "slop can't check this: tick it in board settings once it's done", settings),

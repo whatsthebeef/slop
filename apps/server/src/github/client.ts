@@ -463,6 +463,23 @@ export class GitHub implements CodeHost {
     }
   }
 
+  async listFiles(repo: Repo, ref: string, dir: string, signal?: AbortSignal): Promise<string[]> {
+    const gh = await this.octokit(repo);
+    try {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: repo.owner,
+        repo: repo.name,
+        path: dir,
+        ref,
+        request: { signal },
+      });
+      return Array.isArray(data) ? data.filter((e) => e.type === 'file').map((e) => e.name) : [];
+    } catch (error) {
+      if (isStatus(error, 404)) return [];
+      throw error;
+    }
+  }
+
   async commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner: repo.owner, repo: repo.name, ref: sha, request: { signal } });

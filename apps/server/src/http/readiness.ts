@@ -1,9 +1,10 @@
 import type { BoardService, GlobService, KnowledgeService, ReadinessFacts } from '@slop/core';
-import { readiness, recentRoutineFailures, unreactedCheckFailures } from '@slop/core';
+import { readiness, recentRoutineFailures, runsClaudeAction, unreactedCheckFailures } from '@slop/core';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
+import type { Repo } from '../codehost.js';
 import type { Env } from './app.js';
 import { errorBody, statusOf } from './views.js';
 
@@ -32,6 +33,14 @@ const parseAgentSetVersion = (text: string): number | 'unreadable' => {
   return parsed.success ? parsed.data.version : 'unreadable';
 };
 
+/** Whether any workflow file on `ref` runs the Claude Code action. */
+const hasClaudeWorkflow = async (host: CodeHost, repo: Repo, ref: string): Promise<boolean> => {
+  const dir = '.github/workflows';
+  const names = (await host.listFiles(repo, ref, dir)).filter((n) => /\.ya?ml$/i.test(n));
+  const texts = await Promise.all(names.map((n) => host.readFile(repo, ref, `${dir}/${n}`)));
+  return texts.some((t) => t !== null && runsClaudeAction(t));
+};
+
 /**
  * The board's readiness checklist: what slop can check (the repo, its workflow and agent set, the
  * knowledge base, environments) plus the admin's ticks, turned red by matching routine failures.
@@ -48,6 +57,7 @@ export const mountReadiness = (app: Hono<Env>, deps: ReadinessRoutesDeps): void 
     let repoConnected: boolean | null = null;
     let installUrl: string | null = null;
     let subGateWorkflow: boolean | null = null;
+    let claudeWorkflow: boolean | null = null;
     let committedAgentSetVersion: number | 'unreadable' | null = null;
     let agentSetRead = false;
     if (repo !== null && deps.host.configured) {
@@ -56,10 +66,12 @@ export const mountReadiness = (app: Hono<Env>, deps: ReadinessRoutesDeps): void 
         repoConnected = connection.connected;
         installUrl = connection.installUrl === null ? null : `${connection.installUrl}?state=${String(board.id)}`;
         if (connection.connected) {
-          const [workflow, agentSet] = await Promise.all([
+          const [workflow, agentSet, claude] = await Promise.all([
             deps.host.readFile(repo, board.baseBranch, '.github/workflows/sub-gate.yml'),
             deps.host.readFile(repo, board.baseBranch, '.claude/slop-agent-set.json'),
+            hasClaudeWorkflow(deps.host, repo, board.baseBranch),
           ]);
+          claudeWorkflow = claude;
           subGateWorkflow = workflow !== null;
           agentSetRead = true;
           committedAgentSetVersion = agentSet === null ? null : parseAgentSetVersion(agentSet);
@@ -80,6 +92,7 @@ export const mountReadiness = (app: Hono<Env>, deps: ReadinessRoutesDeps): void 
       repoConnected,
       installUrl,
       subGateWorkflow,
+      claudeWorkflow,
       committedAgentSetVersion: agentSetRead ? committedAgentSetVersion : 'unknown',
       hasBuildDoc: index.ok && index.value.some((d) => d.area === 'build'),
       ticks: board.readinessTicks,
