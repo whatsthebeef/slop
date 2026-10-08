@@ -389,7 +389,7 @@ describe('slop init', () => {
       const run = harness({ body: withSpec(null, { localRunProblem: 'The stored local-run spec (version 2) is invalid' }) });
       await runInit(run.deps);
       expect(await read(LOCAL_RUN_PATH)).toBe('{\n  "launch": "a"\n}\n');
-      expect(run.err.join('')).toContain('warning: The stored local-run spec (version 2) is invalid; keeping .sstor/local-run.json');
+      expect(run.err.join('')).toContain("local-run spec in slop is invalid (The stored local-run spec (version 2) is invalid); keeping .sstor/local-run.json");
     });
 
     it.each([

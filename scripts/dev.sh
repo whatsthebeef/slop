@@ -30,8 +30,8 @@ Usage: scripts/dev.sh [command]
   session      A session's own stack (sstor's local-run launch): a database for the glob cloned
                from the shared one (reused if it exists), the server in watch mode on a free port
                with dev sign-in, and Vite in front of it; :3000 is left alone. Writes the board URL
-               to $SLOP_URL_FILE (default .sstor/.url). SLOP_JOBS picks the server's background
-               jobs (default none; e.g. SLOP_JOBS=kb). `session reset` re-clones the database.
+               to $SLOP_URL_FILE (default .sstor/.url). SLOP_SESSION_JOBS picks the server's background
+               jobs (SLOP_SESSION_JOBS: default none; e.g. kb). `session reset` re-clones the database.
   session-drop Drop this glob's session database.
   follow       Main checkout only: keep :3000 on origin/main. Polls origin/main (every
                SLOP_FOLLOW_INTERVAL seconds, default 60); on a move it fast-forwards, installs if
@@ -267,25 +267,35 @@ session() {
   fi
   if [[ -z "$(psql_slop -d postgres -Atc "select 1 from pg_database where datname = '$db'")" ]]; then
     # pg_dump rather than CREATE DATABASE ... TEMPLATE: a template can't have connections, and
-    # main's server is always connected.
+    # main's server is always connected. Cloned under a temporary name and renamed when complete,
+    # so an interrupted clone is never reused.
+    local cloning="${db}__cloning"
     echo "Cloning the shared database into $db"
-    psql_slop -d postgres -qc "create database \"$db\" owner slop"
-    (cd "$root" && docker compose exec -T postgres sh -c \
-      "pg_dump -U slop -d slop --format=custom | pg_restore -U slop -d '$db' --no-owner")
+    psql_slop -d postgres -qc "drop database if exists \"$cloning\" with (force)" -c "create database \"$cloning\" owner slop"
+    if ! (cd "$root" && docker compose exec -T postgres bash -o pipefail -c \
+      "pg_dump -U slop -d slop --format=custom | pg_restore -U slop -d '$cloning' --no-owner --exit-on-error"); then
+      psql_slop -d postgres -qc "drop database if exists \"$cloning\" with (force)"
+      echo "dev.sh session: cloning the shared database failed" >&2
+      exit 1
+    fi
+    # The outbox rows queued before the clone are main's: an outbox switched on here would run them again.
+    psql_slop -d "$cloning" -qc "update outbox set state = 'dropped', last_error = 'cloned into a session' where state = 'pending'"
+    psql_slop -d postgres -qc "alter database \"$cloning\" rename to \"$db\""
   fi
-  local jobs="${SLOP_JOBS:-none}"
-  # Effects queued on the shared database belong to main's server; an outbox switched on here
-  # would run them a second time.
-  if [[ ",$jobs," == *,outbox,* || "$jobs" == all ]]; then
-    psql_slop -d "$db" -qc "update outbox set state = 'dropped', last_error = 'cloned into a session' where state = 'pending'"
-  fi
-  local api web
-  api="$(free_port 3200)"
-  web="$(free_port 5180)"
+  # SLOP_SESSION_JOBS, not SLOP_JOBS: a SLOP_JOBS meant for main's server (e.g. in .slop-dev) mustn't
+  # switch jobs on in every session.
+  local jobs="${SLOP_SESSION_JOBS:-none}"
+  jobs="${jobs//[[:space:]]/}"
+  jobs="${jobs:-none}"
+  local api web offset
+  # Each glob starts its search somewhere else, so sessions starting together rarely pick the same port.
+  offset=$(( $(cksum <<<"$db" | cut -d' ' -f1) % 50 ))
+  api="$(free_port $((3200 + offset)))"
+  web="$(free_port $((5180 + offset)))"
   local env_file=()
   [[ -f "$root/apps/server/.env.cognito" ]] && env_file=(--env-file=.env.cognito)
   # The tunnel and webhooks stay with main's server.
-  unset SLOP_TUNNEL_DOMAIN
+  unset SLOP_TUNNEL_DOMAIN SLOP_FOLLOW_FILE
   (
     cd "$root/apps/server"
     # Set here, so the env files (which never override the environment) can't switch them back.
@@ -300,13 +310,15 @@ session() {
     SLOP_API_URL="http://localhost:$api" SLOP_WEB_PORT="$web" exec node node_modules/vite/bin/vite.js --strictPort
   ) &
   local web_pid=$!
-  # The ports as well as the pids: a server outlives its watcher if the watcher dies first.
-  trap 'kill "$api_pid" "$web_pid" 2>/dev/null || true; lsof -t -i "tcp:$api" -i "tcp:$web" -sTCP:LISTEN | xargs kill 2>/dev/null || true' EXIT INT TERM
+  # Expanded now: the trap runs after this function's locals are gone. The ports as well as the pids,
+  # because a server outlives its watcher if the watcher dies first.
+  # shellcheck disable=SC2064
+  trap "kill $api_pid $web_pid 2>/dev/null || true; lsof -t -i tcp:$api -i tcp:$web -sTCP:LISTEN | xargs kill 2>/dev/null || true" EXIT INT TERM HUP
   local url_file="${SLOP_URL_FILE:-$root/.sstor/.url}"
   mkdir -p "$(dirname "$url_file")"
   echo "http://localhost:$web" >"$url_file"
   echo "Session $db: board http://localhost:$web, API http://localhost:$api (jobs: $jobs)"
-  wait
+  wait || true
 }
 
 session_drop() {
@@ -353,56 +365,78 @@ follow() {
   [[ "$root" == "$main_root" ]] || { echo "dev.sh follow runs only in the main checkout ($main_root)" >&2; exit 1; }
   [[ "$(git -C "$root" branch --show-current)" == "$base" ]] || { echo "dev.sh follow: check out $base first" >&2; exit 1; }
   local repo
-  repo="$(git -C "$root" remote get-url origin | sed -E 's#^(https://[^/]+/|git@[^:]+:)##; s#\.git$##')"
+  repo="$(git -C "$root" remote get-url origin | sed -E 's#^(https://[^/]+/|ssh://[^/]+/|git@[^:]+:)##; s#\.git$##')"
   export SLOP_FOLLOW_FILE="$follow_file"
-  follow_status following "sha=$(git -C "$root" rev-parse HEAD)" "repo=$repo"
+  # The commit the server runs: an update is done only once the server restarted on it, so a
+  # failed install or restart is retried on the next poll.
+  local running
+  running="$(git -C "$root" rev-parse HEAD)"
+  follow_status following "sha=$running" "repo=$repo"
   # The server reads SLOP_FOLLOW_FILE, so (re)start it under follow.
   stop; start
   echo "Following origin/$base (every ${SLOP_FOLLOW_INTERVAL:-60}s). Ctrl-C stops following; the server keeps running."
+  local held=false
+  hold() {
+    held=true
+    follow_status held "sha=$running" "repo=$repo" "behind=$(git -C "$root" rev-list --count "$running..origin/$base")" \
+      "reason=$1" "fix=$2"
+    echo "follow: held: $1"
+  }
   while true; do
     sleep "${SLOP_FOLLOW_INTERVAL:-60}"
     git -C "$root" fetch -q origin "$base" 2>/dev/null || { echo "follow: fetch failed; trying again"; continue; }
     local head target
     head="$(git -C "$root" rev-parse HEAD)"
     target="$(git -C "$root" rev-parse "origin/$base")"
-    [[ "$head" == "$target" ]] && continue
-    local behind
-    behind="$(git -C "$root" rev-list --count "HEAD..origin/$base")"
+    if [[ "$running" == "$target" && "$head" == "$target" ]]; then
+      # Whatever held us was fixed without anything new to run.
+      if $held; then held=false; follow_status following "sha=$running" "repo=$repo"; fi
+      continue
+    fi
     if [[ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]]; then
-      follow_status held "sha=$head" "repo=$repo" "behind=$behind" "reason=the main checkout has uncommitted changes" \
-        "fix=Commit or discard them in $root; follow carries on by itself"
+      hold "the main checkout has uncommitted changes" "Commit or discard them in $root; follow carries on by itself"
       continue
     fi
     if ! git -C "$root" merge-base --is-ancestor HEAD "origin/$base"; then
-      follow_status held "sha=$head" "repo=$repo" "behind=$behind" "reason=the main checkout has commits origin/$base doesn't" \
-        "fix=Move them to a branch and reset $base to origin/$base"
+      hold "the main checkout has commits origin/$base doesn't" "Move them to a branch and reset $base to origin/$base"
       continue
     fi
     if database_ahead_of "origin/$base"; then
-      follow_status held "sha=$head" "repo=$repo" "behind=$behind" "reason=the database has run a migration main doesn't have (a branch's draft)" \
-        "fix=scripts/dev.sh restore to the snapshot from before it (scripts/dev.sh snapshots lists them)"
+      hold "the database has run a migration main doesn't have (a branch's draft)" \
+        "scripts/dev.sh restore to the snapshot from before it (scripts/dev.sh snapshots lists them)"
+      continue
+    fi
+    if [[ "$head" != "$target" ]] && ! git -C "$root" merge -q --ff-only "origin/$base"; then
+      hold "fast-forwarding to ${target:0:7} failed (an untracked file in the way?)" "See git status in $root"
       continue
     fi
     local changed subjects
-    changed="$(git -C "$root" diff --name-only HEAD "origin/$base")"
-    subjects="$(git -C "$root" log --format=%s "HEAD..origin/$base" | head -n 5 | paste -sd ';' -)"
-    git -C "$root" merge -q --ff-only "origin/$base"
-    if grep -qx 'pnpm-lock.yaml' <<<"$changed"; then
-      if ! (cd "$root" && corepack pnpm install --frozen-lockfile --silent); then
-        follow_status held "sha=$target" "repo=$repo" "reason=pnpm install failed after updating to ${target:0:7}" \
-          "fix=Run corepack pnpm install in $root and look at the error; the server still runs ${head:0:7}"
-        continue
-      fi
+    changed="$(git -C "$root" diff --name-only "$running" "$target")"
+    subjects="$(git -C "$root" log -n 5 --format=%s "$running..$target" | paste -sd ';' -)"
+    if grep -qx 'pnpm-lock.yaml' <<<"$changed" && ! (cd "$root" && corepack pnpm install --frozen-lockfile --silent); then
+      hold "pnpm install failed for ${target:0:7}" "Run corepack pnpm install in $root and look at the error; follow tries again"
+      continue
     fi
-    local migrations restarted snapshot
+    local migrations log snapshot
     migrations="$(grep -o 'apps/server/drizzle/[0-9][^/]*\.sql' <<<"$changed" | xargs -n1 basename 2>/dev/null | sed 's/\.sql$//' | paste -sd ',' - || true)"
+    # In the background and waited for: errexit holds inside the restart (a failed build or snapshot
+    # stops it), which it wouldn't in a tested command or a command substitution.
+    log="$(mktemp)"
+    ( set -e; stop; start ) >"$log" 2>&1 &
+    if ! wait $!; then
+      cat "$log"; rm -f "$log"
+      hold "restarting on ${target:0:7} failed" "See the follow window; follow tries again"
+      continue
+    fi
+    cat "$log"
     # start snapshots the database itself when the new code brings migrations.
-    restarted="$(stop; start 2>&1)"
-    echo "$restarted"
-    snapshot="$(sed -n 's/^Database snapshot: \([^ ]*\).*/\1/p' <<<"$restarted")"
-    follow_status updated "sha=$target" "from=$head" "repo=$repo" "subjects=$subjects" \
+    snapshot="$(sed -n 's/^Database snapshot: \([^ ]*\).*/\1/p' "$log")"
+    rm -f "$log"
+    follow_status updated "sha=$target" "from=$running" "repo=$repo" "subjects=$subjects" \
       "migrations=$migrations" "snapshot=$snapshot"
     echo "follow: updated to ${target:0:7}${migrations:+ (migrations: $migrations)}"
+    running="$target"
+    held=false
   done
 }
 

@@ -14,5 +14,6 @@ describe('SLOP_JOBS', () => {
 
   it('refuses an unknown job rather than starting everything', () => {
     expect(() => loadConfig({ SLOP_JOBS: 'kb,mail' })).toThrow(/unknown job mail/);
+    expect(() => loadConfig({ SLOP_JOBS: ' ' })).toThrow(/SLOP_JOBS is empty/);
   });
 });

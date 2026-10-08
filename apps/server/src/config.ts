@@ -72,6 +72,11 @@ const schema = z.object({
     .default('all')
     .transform((value, ctx): ReadonlySet<Job> => {
       const names = value.split(',').map((n) => n.trim()).filter((n) => n !== '');
+      // An empty value is a mistake, not a quiet way to switch every job off.
+      if (names.length === 0) {
+        ctx.addIssue({ code: 'custom', message: 'SLOP_JOBS is empty: use all, none or a list of jobs' });
+        return z.NEVER;
+      }
       if (names.length === 1 && names[0] === 'all') return new Set(JOBS);
       if (names.length === 1 && names[0] === 'none') return new Set();
       const unknown = names.filter((n) => !isJob(n));

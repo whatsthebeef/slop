@@ -71,6 +71,7 @@ group('LocalFollowWatch', () => {
     expect(missing.reports).toEqual([]);
     const junk = watch(JSON.stringify({ state: 'updated', sha: 'nope' }));
     await junk.follow.check();
+    await junk.follow.check();
     expect(junk.reports).toEqual([]);
     expect(junk.errors).toEqual(['follow.json is not a follow status']);
   });

@@ -31,6 +31,8 @@ const plural = (n: number, word: string): string => `${String(n)} ${word}${n ===
 export class LocalFollowWatch {
   private timer: NodeJS.Timeout | null = null;
   private recorded: string | null = null;
+  /** The last unreadable status logged, so a bad file is logged once rather than every check. */
+  private logged: string | null = null;
 
   constructor(
     private readonly file: string,
@@ -79,9 +81,11 @@ export class LocalFollowWatch {
     }
     const parsed = statusSchema.safeParse(json);
     if (!parsed.success) {
-      this.logError('local follow', `${this.file} is not a follow status`);
+      if (this.logged !== text) this.logError('local follow', `${this.file} is not a follow status`);
+      this.logged = text;
       return null;
     }
+    this.logged = null;
     return parsed.data;
   }
 

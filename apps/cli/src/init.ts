@@ -205,7 +205,9 @@ export async function installAgentSet(
   const section = byPath.get('claude_md.md');
   // A spec slop couldn't serve leaves the installed one alone, as an older server's bundle does.
   if (bundle.localRunProblem !== undefined) {
-    deps.log(`slop init: warning: ${bundle.localRunProblem}; keeping ${LOCAL_RUN_PATH} as it is`);
+    deps.log(
+      `slop init: warning: the board's local-run spec in slop is invalid (${bundle.localRunProblem}); keeping ${LOCAL_RUN_PATH} as it is, so sessions launch the previous spec. A board admin should fix it on the Knowledge page.`,
+    );
   }
   const localRun = bundle.localRunProblem === undefined ? bundle.localRun : undefined;
 
