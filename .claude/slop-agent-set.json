@@ -1,0 +1,17 @@
+{
+  "version": 12,
+  "files": [
+    "agents/change_reviewer.md",
+    "agents/implementer.md",
+    "agents/investigator.md",
+    "agents/orchestrator.md",
+    "agents/tester.md",
+    "claude_md.md",
+    "commands/finalise.md",
+    "commands/kb-bootstrap.md",
+    "commands/run-glob.md",
+    "hooks/slop_after_push.sh",
+    "mcp.json",
+    "settings.json"
+  ]
+}
