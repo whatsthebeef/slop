@@ -3,6 +3,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { api, healthKey, notificationsKey, RequestError } from './api';
 import type { GlobView } from './api';
+import { withGlob } from './glob-list';
 
 interface Hint {
   readonly kind:
@@ -147,10 +148,9 @@ export const useLiveBoard = (boardId: number): LiveState => {
   const client = useQueryClient();
 
   const replace = (glob: GlobView | null, id: string) =>
-    client.setQueryData<GlobView[]>(globsKey(boardId), (list = []) => {
-      const rest = list.filter((g) => g.id !== id);
-      return glob === null ? rest : [...rest, glob];
-    });
+    client.setQueryData<GlobView[]>(globsKey(boardId), (list) =>
+      glob === null ? list?.filter((g) => g.id !== id) : withGlob(list, glob, boardId),
+    );
 
   const onHint = (hint: Hint) => {
     if (hint.kind === 'board.changed') {
