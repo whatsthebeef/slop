@@ -1,9 +1,9 @@
 import { checksExplanation, queuedRunNotice, readyStatus, stuckHint } from '@slop/core';
-import type { Action, ArtifactKind, Category, DeployIndicator } from '@slop/core';
-import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
+import type { Action, ArtifactKind, Category, CodeReviewBadge, DeployIndicator, EnvironmentIndicator } from '@slop/core';
+import { Bot, Bug, ListChecks, Loader2, MessageSquareCode, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
-import type { GlobView } from '@/lib/api';
+import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
@@ -253,6 +253,107 @@ export const DeployChip = ({ deploy }: { deploy: DeployIndicator }) => {
   );
 };
 
+const since = (iso: string | null) => (iso === null ? '' : ` since ${new Date(iso).toLocaleString()}`);
+
+/**
+ * The release and integration environments the glob is in (their deployed commit contains its merge), one chip each.
+ * Production before sign-off is allowed but flagged.
+ */
+export const EnvironmentChips = ({ environments }: { environments: readonly EnvironmentIndicator[] }) => (
+  <>
+    {environments.map((env) => {
+      const warned = env.warning === 'before_sign_off';
+      const tip = `${warned ? 'Deployed to production before sign-off. ' : ''}In ${env.environment} (${env.production ? 'production' : env.role}) at ${env.sha.slice(0, 7)}${since(env.since)}`;
+      return (
+        <Tip key={env.environment} text={tip}>
+          <span
+            className={cn('font-mono text-[11px]', warned ? 'text-required' : 'text-signal-strong')}
+            data-testid='environment-chip'
+            data-warning={env.warning}
+          >
+            {env.environment} ✓
+          </span>
+        </Tip>
+      );
+    })}
+  </>
+);
+
+/** One ATF run in words, for tooltips and the glob view. */
+export const atfLine = (run: AtfRun): string => {
+  const where = run.scope === 'branch' ? `Branch${run.environment === null ? '' : ` (${run.environment})`}` : run.environment ?? '';
+  const counts = `${run.passed} passed, ${run.failed} failed${run.skipped > 0 ? `, ${run.skipped} skipped` : ''}`;
+  return `${where} at ${run.sha.slice(0, 7)}: ${counts}${run.stale === true ? ' (an older commit than the PR head)' : ''}`;
+};
+
+/**
+ * The glob's ATF results in one chip: red when any current run has a failing test (a flag only; it never blocks),
+ * muted when the only run tested an older commit. It links to the report of the run it summarises.
+ */
+export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
+  const current = runs.filter((r) => r.stale !== true);
+  const shown = current.find((r) => r.failing) ?? current[0] ?? runs[0];
+  if (shown === undefined) return null;
+  const failing = current.some((r) => r.failing);
+  // The text always says what the run found; a stale run is only muted, never shown as passing.
+  const text = shown.failing ? `ATF ${shown.failed} failed` : `ATF ${shown.passed}✓`;
+  const tone = failing ? 'text-red' : current.length > 0 ? 'text-signal-strong' : 'text-muted-foreground';
+  const tip = runs.map((r) => `${atfLine(r)} · ${new Date(r.at).toLocaleString()}`).join('\n');
+  const chip = (
+    <span className={cn('font-mono text-[11px]', tone)} data-testid='atf-chip' data-failing={failing}>
+      {text}
+    </span>
+  );
+  return (
+    <Tip text={tip}>
+      {shown.url === null ? (
+        chip
+      ) : (
+        <a
+          href={shown.url}
+          target='_blank'
+          rel='noreferrer'
+          className='hover:underline'
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {chip}
+        </a>
+      )}
+    </Tip>
+  );
+};
+
+/** CodeRabbit's review of the PR: its inline comment count, opening the review on GitHub. */
+export const CodeReviewIcon = ({ badge }: { badge: CodeReviewBadge }) => {
+  const comments = `${badge.count} inline comment${badge.count === 1 ? '' : 's'}`;
+  const icon = (
+    <span className='inline-flex items-center gap-0.5 font-mono text-[11px] text-muted-foreground' data-testid='code-review-icon'>
+      <MessageSquareCode className='h-3.5 w-3.5' aria-hidden />
+      {badge.count}
+    </span>
+  );
+  return (
+    <Tip text={`CodeRabbit: ${comments}${badge.url === null ? '' : '; open the review on GitHub'}`}>
+      {badge.url === null ? (
+        icon
+      ) : (
+        <a
+          href={badge.url}
+          target='_blank'
+          rel='noreferrer'
+          aria-label={`CodeRabbit review: ${comments}`}
+          className='rounded-sm px-0.5 hover:bg-muted hover:text-foreground'
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {icon}
+        </a>
+      )}
+    </Tip>
+  );
+};
+
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -271,6 +372,9 @@ export const GlobCard = ({
   bump,
   tag,
   deploy,
+  environments,
+  atf,
+  codeReview,
 }: {
   glob: GlobView;
   onOpen: () => void;
@@ -291,6 +395,12 @@ export const GlobCard = ({
   /** Who moved it, briefly, when the move was made elsewhere. */
   tag?: MoveTag;
   deploy?: DeployIndicator;
+  /** The release and integration environments it is in. */
+  environments?: readonly EnvironmentIndicator[];
+  /** Its ATF results (a flag only). */
+  atf?: readonly AtfRun[];
+  /** CodeRabbit's review of its PR, when CodeRabbit has posted anything. */
+  codeReview?: CodeReviewBadge;
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
@@ -348,7 +458,10 @@ export const GlobCard = ({
         {glob.group !== null && <GroupChip name={glob.group} />}
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
+        {codeReview !== undefined && <CodeReviewIcon badge={codeReview} />}
         {deploy !== undefined && <DeployChip deploy={deploy} />}
+        {environments !== undefined && <EnvironmentChips environments={environments} />}
+        {atf !== undefined && <AtfChip runs={atf} />}
         {status !== null && (
           <Tip text={status.tip}>
             <span className={cn('font-mono text-[11px]', status.tone)} data-testid='status-line' data-kind={status.kind}>

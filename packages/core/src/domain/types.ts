@@ -191,11 +191,22 @@ export interface Glob {
   readonly doingSince: string | null;
 }
 
+/**
+ * What deploys an environment besides branch deploys, which slop observes: `integration` is deployed by the base
+ * branch's own pipeline, `release` by release refs cut from it. Without a role slop doesn't track which globs it holds.
+ */
+export const ENVIRONMENT_ROLES = ['integration', 'release'] as const;
+export type EnvironmentRole = (typeof ENVIRONMENT_ROLES)[number];
+
 export interface Environment {
   readonly name: string;
   readonly allowBranchDeploy: boolean;
   /** At most one per board: the environment a sub gets when it is created without one. */
   readonly subDefault?: true;
+  /** Set when the board's pipelines deploy the base branch or a release ref here and report it to slop. */
+  readonly role?: EnvironmentRole;
+  /** At most one per board, and only a release environment: deploying a glob here before sign-off is warned about. */
+  readonly production?: true;
 }
 
 /**

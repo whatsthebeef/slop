@@ -1,5 +1,9 @@
 import type { Deploy } from '../domain/deploys.js';
+import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
+import { sameCommit } from '../domain/signals.js';
+import type { TestRun } from '../domain/test-runs.js';
+import type { CodeReviewComment } from '../domain/code-review.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import type { KbItem } from '../domain/kb.js';
@@ -30,6 +34,14 @@ interface State {
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
+  environmentDeploys: EnvironmentDeploy[];
+  /** Keyed by glob and environment. */
+  globPresence: Map<string, GlobPresence>;
+  testRuns: TestRun[];
+  codeReviews: CodeReviewComment[];
+  /** External IDs of CodeRabbit items deleted on the code host (tombstones). */
+  /** Tombstones: external ID and when it was deleted, as Postgres keeps `deleted_at`. */
+  deletedCodeReviews: { externalId: string; at: string }[];
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -54,6 +66,11 @@ const clone = (state: State): State => ({
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
+  environmentDeploys: [...state.environmentDeploys],
+  globPresence: new Map(state.globPresence),
+  testRuns: [...state.testRuns],
+  codeReviews: [...state.codeReviews],
+  deletedCodeReviews: [...state.deletedCodeReviews],
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -80,6 +97,11 @@ export class MemoryStore implements Store {
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
+    environmentDeploys: [],
+    globPresence: new Map(),
+    testRuns: [],
+    codeReviews: [],
+    deletedCodeReviews: [],
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -94,6 +116,7 @@ export class MemoryStore implements Store {
   private tx(s: State): Tx {
     return {
       getGlob: (id) => Promise.resolve(s.globs.get(id)?.glob ?? null),
+      getGlobs: (ids) => Promise.resolve([...new Set(ids)].flatMap((id) => s.globs.get(id)?.glob ?? [])),
       insertGlob: (glob, creationKey) => {
         if (s.globs.has(glob.id)) return Promise.resolve(false);
         s.globs.set(glob.id, { glob, creationKey });
@@ -110,6 +133,9 @@ export class MemoryStore implements Store {
         s.artifacts = s.artifacts.filter((a) => a.globId !== id);
         s.findings = s.findings.filter((f) => f.globId !== id);
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
+        for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
+        s.testRuns = s.testRuns.filter((r) => r.globId !== id);
+        s.codeReviews = s.codeReviews.filter((c) => c.globId !== id);
         return Promise.resolve();
       },
       findGlobByCreationKey: (boardId, key) =>
@@ -310,6 +336,75 @@ export class MemoryStore implements Store {
       lockDeployQueue: () => Promise.resolve(),
       findDeployByProviderRef: (ref) =>
         Promise.resolve([...s.deploys.values()].find((d) => d.providerRef === ref) ?? null),
+      insertEnvironmentDeploy: (deploy) => {
+        if (s.environmentDeploys.some((d) => d.boardId === deploy.boardId && d.eventId === deploy.eventId)) {
+          return Promise.resolve(false);
+        }
+        s.environmentDeploys.push({ ...deploy, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      latestEnvironmentDeploy: (boardId, environment) =>
+        Promise.resolve(
+          s.environmentDeploys
+            .filter((d) => d.boardId === boardId && d.environment === environment && d.succeeded)
+            .sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)[0] ?? null,
+        ),
+      listGlobPresence: (boardId, filter) =>
+        Promise.resolve(
+          [...s.globPresence.values()].filter(
+            (p) =>
+              p.boardId === boardId &&
+              (filter.environment === undefined || p.environment === filter.environment) &&
+              (filter.globIds === undefined || filter.globIds.includes(p.globId)) &&
+              (filter.contained === undefined || p.contained === filter.contained),
+          ),
+        ),
+      saveGlobPresence: (rows) => {
+        for (const p of rows) s.globPresence.set(`${p.globId}:${p.environment}`, p);
+        return Promise.resolve();
+      },
+      lockEnvironment: () => Promise.resolve(),
+      insertTestRun: (run) => {
+        if (s.testRuns.some((r) => r.boardId === run.boardId && r.eventId === run.eventId)) return Promise.resolve(false);
+        s.testRuns.push({ ...run, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listTestRuns: (boardId, filter) =>
+        Promise.resolve(
+          s.testRuns.filter(
+            (r) =>
+              r.boardId === boardId &&
+              ((r.globId !== null && (filter.globIds?.includes(r.globId) ?? false)) ||
+                (r.globId === null &&
+                  (filter.commits?.some((c) => c.environment === r.environment && sameCommit(c.sha, r.sha)) ?? false))),
+          ),
+        ),
+      upsertCodeReviewComment: (comment) => {
+        if (s.deletedCodeReviews.some((d) => d.externalId === comment.externalId)) return Promise.resolve(false);
+        const stored = s.codeReviews.find((c) => c.externalId === comment.externalId);
+        if (stored === undefined) {
+          s.codeReviews.push({ ...comment, id: this.nextRowId++ });
+          return Promise.resolve(true);
+        }
+        if (stored.updatedAt > comment.updatedAt) return Promise.resolve(false);
+        const next = { ...stored, kind: comment.kind, body: comment.body, url: comment.url, commitSha: comment.commitSha, path: comment.path, line: comment.line, updatedAt: comment.updatedAt };
+        const changed = JSON.stringify(next) !== JSON.stringify(stored);
+        s.codeReviews = s.codeReviews.map((c) => (c === stored ? next : c));
+        return Promise.resolve(changed);
+      },
+      deleteCodeReviewComment: (externalId, at) => {
+        const stored = s.codeReviews.find((c) => c.externalId === externalId) ?? null;
+        if (stored === null) return Promise.resolve(null);
+        s.codeReviews = s.codeReviews.filter((c) => c.externalId !== externalId);
+        s.deletedCodeReviews.push({ externalId, at });
+        return Promise.resolve(stored);
+      },
+      listCodeReviewComments: (boardId, globIds) =>
+        Promise.resolve(
+          s.codeReviews
+            .filter((c) => c.boardId === boardId && globIds.includes(c.globId))
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id),
+        ),
       insertReviewSource: (input) => {
         const taken = s.reviewSources.some(
           (r) =>

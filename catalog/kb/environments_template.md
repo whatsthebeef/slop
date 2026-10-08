@@ -1,6 +1,6 @@
 ---
 catalog: environments_template
-version: 1
+version: 2
 area: environments
 audience: [implementer, tester, change_reviewer]
 description: The board's environments and what each is for (branch deploys, integration, release, production). Template — replace every <placeholder> in your board's copy.
@@ -23,9 +23,13 @@ Each takes glob branches; the last successful deploy is what runs there, and ano
 
 <The environment the base branch's own pipeline deploys after each merge, e.g. staging. Slop observes it; it never deploys glob branches there.>
 
+Give it the `integration` role in board settings. Its pipeline reports each deploy with `.sstor/report-deploy.sh <environment>` (from the slop catalog), and slop then shows the environment on every glob whose merge commit the deployed commit contains.
+
 ## Release and production
 
 <Release environments and how releases are cut. Production deploys are manual; say who may run them and how.>
+
+Give each the `release` role in board settings, and mark the production one. Their pipelines report deploys with `.sstor/report-deploy.sh` too. Deploying to production before a glob is signed off is allowed, but its card warns about it.
 
 ## Off limits
 

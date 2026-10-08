@@ -1,5 +1,5 @@
-import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, Glob, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES } from '@slop/core';
+import type { Artifact, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -88,6 +88,46 @@ const deployRow = (d: Deploy): typeof schema.deploys.$inferInsert => ({
   runningSince: d.runningSince === null ? null : new Date(d.runningSince),
   startedAt: d.startedAt === null ? null : new Date(d.startedAt),
   finishedAt: d.finishedAt === null ? null : new Date(d.finishedAt),
+});
+
+const toEnvironmentDeploy = (row: typeof schema.environmentDeploys.$inferSelect): EnvironmentDeploy => ({
+  ...row,
+  at: row.at.toISOString(),
+});
+
+const toPresence = (row: typeof schema.globEnvironments.$inferSelect): GlobPresence => ({
+  ...row,
+  checkedAt: row.checkedAt.toISOString(),
+  since: row.since?.toISOString() ?? null,
+});
+
+const presenceRow = (p: GlobPresence): typeof schema.globEnvironments.$inferInsert => ({
+  ...p,
+  checkedAt: new Date(p.checkedAt),
+  since: p.since === null ? null : new Date(p.since),
+});
+
+const toTestRun = (row: typeof schema.testRuns.$inferSelect): TestRun => ({
+  ...row,
+  kind: oneOf(TEST_RUN_KINDS, row.kind),
+  finishedAt: row.finishedAt.toISOString(),
+});
+
+const toCodeReview = (row: typeof schema.codeReviewComments.$inferSelect): CodeReviewComment => ({
+  id: row.id,
+  boardId: row.boardId,
+  globId: row.globId,
+  prNumber: row.prNumber,
+  externalId: row.externalId,
+  kind: oneOf(CODE_REVIEW_KINDS, row.kind),
+  author: row.author,
+  commitSha: row.commitSha,
+  path: row.path,
+  line: row.line,
+  body: row.body,
+  url: row.url,
+  createdAt: row.createdAt.toISOString(),
+  updatedAt: row.updatedAt.toISOString(),
 });
 
 const toKnowledge = (row: typeof schema.knowledge.$inferSelect): KnowledgeDoc => ({
@@ -215,6 +255,11 @@ export class PgStore implements Store {
         const [row] = await t.select({ data: schema.globs.data }).from(schema.globs).where(eq(schema.globs.id, id));
         return row?.data ?? null;
       },
+      getGlobs: async (ids) => {
+        if (ids.length === 0) return [];
+        const rows = await t.select({ data: schema.globs.data }).from(schema.globs).where(inArray(schema.globs.id, [...new Set(ids)]));
+        return rows.map((r) => r.data);
+      },
       insertGlob: async (glob, creationKey) => {
         const rows = await t
           .insert(schema.globs)
@@ -232,6 +277,9 @@ export class PgStore implements Store {
         return rows.length === 1;
       },
       deleteGlob: async (id) => {
+        await t.delete(schema.globEnvironments).where(eq(schema.globEnvironments.globId, id));
+        await t.delete(schema.testRuns).where(eq(schema.testRuns.globId, id));
+        await t.delete(schema.codeReviewComments).where(eq(schema.codeReviewComments.globId, id));
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
@@ -589,6 +637,134 @@ export class PgStore implements Store {
       findDeployByProviderRef: async (providerRef) => {
         const [row] = await t.select().from(schema.deploys).where(eq(schema.deploys.providerRef, providerRef));
         return row === undefined ? null : toDeploy(row);
+      },
+
+      insertEnvironmentDeploy: async (deploy) => {
+        const rows = await t
+          .insert(schema.environmentDeploys)
+          .values({ ...deploy, at: new Date(deploy.at) })
+          .onConflictDoNothing()
+          .returning({ id: schema.environmentDeploys.id });
+        return rows.length === 1;
+      },
+      latestEnvironmentDeploy: async (boardId, environment) => {
+        const d = schema.environmentDeploys;
+        const [row] = await t
+          .select()
+          .from(d)
+          .where(and(eq(d.boardId, boardId), eq(d.environment, environment), eq(d.succeeded, true)))
+          .orderBy(desc(d.at), desc(d.id))
+          .limit(1);
+        return row === undefined ? null : toEnvironmentDeploy(row);
+      },
+      listGlobPresence: async (boardId, filter) => {
+        const g = schema.globEnvironments;
+        const conditions = [eq(g.boardId, boardId)];
+        if (filter.environment !== undefined) conditions.push(eq(g.environment, filter.environment));
+        if (filter.contained !== undefined) conditions.push(eq(g.contained, filter.contained));
+        if (filter.globIds !== undefined) {
+          if (filter.globIds.length === 0) return [];
+          conditions.push(inArray(g.globId, [...filter.globIds]));
+        }
+        const rows = await t.select().from(g).where(and(...conditions)).orderBy(g.globId, g.environment);
+        return rows.map(toPresence);
+      },
+      saveGlobPresence: async (rows) => {
+        const g = schema.globEnvironments;
+        // One statement; a key given twice keeps its last row (one upsert can't touch a row twice).
+        const byKey = new Map(rows.map((p) => [`${p.globId}:${p.environment}`, presenceRow(p)]));
+        if (byKey.size === 0) return;
+        await t
+          .insert(g)
+          .values([...byKey.values()])
+          .onConflictDoUpdate({
+            target: [g.globId, g.environment],
+            set: {
+              boardId: sql`excluded.board_id`,
+              mergeSha: sql`excluded.merge_sha`,
+              contained: sql`excluded.contained`,
+              checkedSha: sql`excluded.checked_sha`,
+              checkedAt: sql`excluded.checked_at`,
+              since: sql`excluded.since`,
+            },
+          });
+      },
+      lockEnvironment: async (boardId, environment) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`environments:${String(boardId)}:${environment}`}))`);
+      },
+      insertTestRun: async (run) => {
+        const rows = await t
+          .insert(schema.testRuns)
+          .values({ ...run, finishedAt: new Date(run.finishedAt) })
+          .onConflictDoNothing()
+          .returning({ id: schema.testRuns.id });
+        return rows.length === 1;
+      },
+      listTestRuns: async (boardId, filter) => {
+        const r = schema.testRuns;
+        const matches = [];
+        if (filter.globIds !== undefined && filter.globIds.length > 0) matches.push(inArray(r.globId, [...filter.globIds]));
+        for (const c of filter.commits ?? []) {
+          // Either side may be a short SHA (lower-cased on the way in).
+          matches.push(
+            and(
+              isNull(r.globId),
+              eq(r.environment, c.environment),
+              sql`(starts_with(${r.sha}, ${c.sha}) or starts_with(${c.sha}, ${r.sha}))`,
+            ),
+          );
+        }
+        if (matches.length === 0) return [];
+        const rows = await t
+          .select()
+          .from(r)
+          .where(and(eq(r.boardId, boardId), or(...matches)))
+          .orderBy(desc(r.finishedAt), desc(r.id));
+        return rows.map(toTestRun);
+      },
+
+      upsertCodeReviewComment: async (comment) => {
+        const c = schema.codeReviewComments;
+        const rows = await t
+          .insert(c)
+          .values({ ...comment, createdAt: new Date(comment.createdAt), updatedAt: new Date(comment.updatedAt) })
+          .onConflictDoUpdate({
+            target: c.externalId,
+            set: {
+              kind: sql`excluded.kind`,
+              body: sql`excluded.body`,
+              url: sql`excluded.url`,
+              commitSha: sql`excluded.commit_sha`,
+              path: sql`excluded.path`,
+              line: sql`excluded.line`,
+              updatedAt: sql`excluded.updated_at`,
+            },
+            // An edit replaces the stored copy unless that is newer (a late redelivery) or was deleted, and only when it
+            // differs.
+            setWhere: sql`${c.deletedAt} is null and ${c.updatedAt} <= excluded.updated_at and (${c.kind}, ${c.body}, ${c.url}, ${c.commitSha}, ${c.path}, ${c.line}, ${c.updatedAt}) is distinct from (excluded.kind, excluded.body, excluded.url, excluded.commit_sha, excluded.path, excluded.line, excluded.updated_at)`,
+          })
+          .returning({ id: c.id });
+        return rows.length === 1;
+      },
+      deleteCodeReviewComment: async (externalId, at) => {
+        const c = schema.codeReviewComments;
+        // A tombstone, not a delete: a late redelivery of the item must not store it again.
+        const [row] = await t
+          .update(c)
+          .set({ deletedAt: new Date(at) })
+          .where(and(eq(c.externalId, externalId), isNull(c.deletedAt)))
+          .returning();
+        return row === undefined ? null : toCodeReview(row);
+      },
+      listCodeReviewComments: async (boardId, globIds) => {
+        if (globIds.length === 0) return [];
+        const c = schema.codeReviewComments;
+        const rows = await t
+          .select()
+          .from(c)
+          .where(and(eq(c.boardId, boardId), inArray(c.globId, [...globIds]), isNull(c.deletedAt)))
+          .orderBy(asc(c.createdAt), asc(c.id));
+        return rows.map(toCodeReview);
       },
 
       insertReviewSource: async (input) => {

@@ -1,5 +1,5 @@
 import type { BoardService, GlobService, Result } from '@slop/core';
-import { CATEGORIES, LABEL_NAMES, ROLES, SLOP_TYPES, STATUSES, isMine, listOf, machine, needsHuman } from '@slop/core';
+import { CATEGORIES, ENVIRONMENT_ROLES, LABEL_NAMES, ROLES, SLOP_TYPES, STATUSES, isMine, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -41,6 +41,11 @@ const environmentSchema = z.object({
   allowBranchDeploy: z.boolean(),
   // false is accepted and treated as absent.
   subDefault: z
+    .boolean()
+    .optional()
+    .transform((v) => (v === true ? (true as const) : undefined)),
+  role: z.enum(ENVIRONMENT_ROLES).optional(),
+  production: z
     .boolean()
     .optional()
     .transform((v) => (v === true ? (true as const) : undefined)),

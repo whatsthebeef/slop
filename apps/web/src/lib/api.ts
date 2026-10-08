@@ -10,8 +10,13 @@ import type {
   BoardJobStatus,
   CatalogUpdate,
   Category,
+  CodeReviewBadge,
+  GlobCodeReview,
   Deploy,
   DeployIndicator,
+  AtfIndicator,
+  EnvironmentIndicator,
+  GlobEnvironment,
   ReadinessItem,
   Environment,
   Glob,
@@ -108,10 +113,18 @@ export interface ApiError {
   readonly allowedActions?: readonly string[];
 }
 
+/** An ATF run as the API sends it; `id` is optional because an older server doesn't send it. */
+export type AtfRun = Omit<AtfIndicator, 'id'> & { readonly id?: number };
+
 export interface BoardDeploys {
   readonly indicators: Readonly<Record<string, DeployIndicator>>;
   /** Environments with a deploy running: Deploy now is disabled there for everyone. */
   readonly running: readonly string[];
+  /** The release and integration environments each glob is in. Optional: an older server doesn't send it, and a
+   * mismatched dev pairing (vite on a branch, API on main) must not blank the board. */
+  readonly environments?: Readonly<Record<string, readonly EnvironmentIndicator[]>>;
+  /** Each glob's ATF results: its branch run, and the runs against the environment commits holding it. Optional, as above. */
+  readonly atf?: Readonly<Record<string, readonly AtfRun[]>>;
 }
 
 export class RequestError extends Error {
@@ -216,6 +229,16 @@ export const api = {
   /** Deploy indicators for the given globs, and the environments with a deploy running. */
   boardDeploys: (boardId: number, globIds: readonly string[]) =>
     request<BoardDeploys>('GET', `/api/boards/${boardId}/deploys?globs=${globIds.map(encodeURIComponent).join(',')}`),
+  globEnvironments: (id: string) =>
+    request<{ value: GlobEnvironment[] }>('GET', `/api/globs/${id}/environments`).then((r) => r.value),
+  globTests: (id: string) => request<{ value: AtfRun[] }>('GET', `/api/globs/${id}/tests`).then((r) => r.value),
+  /** CodeRabbit's badge per glob (inline comment count and review link); globs with nothing stored are left out. */
+  boardCodeReviews: (boardId: number, globIds: readonly string[]) =>
+    request<{ value: Partial<Record<string, CodeReviewBadge>> }>(
+      'GET',
+      `/api/boards/${boardId}/code-reviews?globs=${globIds.map(encodeURIComponent).join(',')}`,
+    ).then((r) => r.value),
+  globCodeReview: (id: string) => request<{ value: GlobCodeReview }>('GET', `/api/globs/${id}/code-review`).then((r) => r.value),
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
   deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),
   createGlob: (boardId: number, input: NewGlob) =>

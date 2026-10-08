@@ -28,6 +28,7 @@ import {
   renderFrontmatter,
 } from '../domain/knowledge.js';
 import type { CatalogUpdate, KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
+import { isReviewGuide } from '../domain/code-review.js';
 import { effectBasisOf, effectItemOf, isEffectMeasured, startEffectCheck } from '../domain/effect-check.js';
 import type { EffectCheck } from '../domain/effect-check.js';
 import type { KbSignal } from '../domain/signals.js';
@@ -35,6 +36,13 @@ import { splicePreview } from '../domain/sections.js';
 import type { Board } from '../domain/types.js';
 import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
+
+/** A board's review guide documents, for `get_review_guide`. */
+export interface ReviewGuide {
+  readonly boardId: number;
+  readonly boardName: string;
+  readonly documents: readonly KnowledgeDoc[];
+}
 
 export interface IndexEntry {
   readonly name: string;
@@ -340,6 +348,28 @@ export class KnowledgeService {
       );
       return docs.length === 0 ? notFound(`No documents for "${areaOrName}" on board ${boardId}`) : ok(docs);
     });
+  }
+
+  /**
+   * `get_review_guide(repo)`: the review guide documents (area `review_guide`) of each board on that repo the caller is
+   * a member of. Boards without one are left out; an empty list means there is no review guide.
+   */
+  async reviewGuides(email: string, repo: string): Promise<Result<ReviewGuide[]>> {
+    return this.deps.store.transaction(async (tx) => {
+      const key = repo.trim().toLowerCase();
+      const guides: ReviewGuide[] = [];
+      for (const board of await tx.listBoards(email)) {
+        if (board.repo?.toLowerCase() !== key) continue;
+        const docs = (await tx.listKnowledge(board.id, ['doc'])).filter(isReviewGuide);
+        if (docs.length > 0) guides.push({ boardId: board.id, boardName: board.name, documents: docs });
+      }
+      return ok(guides);
+    });
+  }
+
+  /** Whether the board has a review guide (slop then asks CodeRabbit for reviews it doesn't start itself). */
+  async hasReviewGuide(boardId: number): Promise<boolean> {
+    return this.deps.store.transaction(async (tx) => (await tx.listKnowledge(boardId, ['doc'])).some(isReviewGuide));
   }
 
   /** `get_agent_set(board)`: every agent-set file as served (catalog plus the board's layers) and the set's version. */

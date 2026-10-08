@@ -1,4 +1,4 @@
-import type { Board, FindingsService, Glob, GlobService } from '@slop/core';
+import type { Board, CodeReviewService, FindingsService, Glob, GlobService } from '@slop/core';
 import { machine, parseId } from '@slop/core';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -6,7 +6,7 @@ import * as schema from '../db/schema.js';
 import type { Db } from '../db/store.js';
 import type { CodeHost } from '../codehost.js';
 import { SUB_GATE_CHECK, repoOf } from '../codehost.js';
-import { handleReviewComment } from './reviews.js';
+import { handleIssueComment, handleReview, handleReviewComment } from './reviews.js';
 import { agentSetTrailer } from './trailers.js';
 import type { Delivery } from './webhooks.js';
 
@@ -59,6 +59,7 @@ export const githubDeliveryHandler =
     db: Db;
     globs: GlobService;
     findings: Pick<FindingsService, 'recordCodeRabbitComment'>;
+    codeReviews: Pick<CodeReviewService, 'record' | 'remove'>;
     github: Pick<CodeHost, 'deleteBranch'>;
     boardOf: (id: number) => Promise<Board | null>;
   }) =>
@@ -83,6 +84,7 @@ const handle = async (
     db: Db;
     globs: GlobService;
     findings: Pick<FindingsService, 'recordCodeRabbitComment'>;
+    codeReviews: Pick<CodeReviewService, 'record' | 'remove'>;
     github: Pick<CodeHost, 'deleteBranch'>;
     boardOf: (id: number) => Promise<Board | null>;
   },
@@ -98,6 +100,22 @@ const handle = async (
     if (row === undefined) return null;
     const board = await deps.boardOf(row.data.boardId);
     return board?.repo?.toLowerCase() === repo.toLowerCase() ? row.data : null;
+  };
+
+  /**
+   * The glob whose PR (its current one, or one a super merged with Merge and continue) has this number, if the event
+   * came from its board's repo. Events without a branch (issue comments) find the glob this way.
+   */
+  const globForPr = async (repo: string, prNumber: number): Promise<Glob | null> => {
+    const rows = await deps.db
+      .select({ data: schema.globs.data })
+      .from(schema.globs)
+      .innerJoin(schema.boards, eq(schema.boards.id, schema.globs.boardId))
+      .where(
+        sql`lower(${schema.boards.repo}) = ${repo.toLowerCase()} and ((${schema.globs.data}->'pr'->>'number')::int = ${prNumber} or ${schema.globs.data}->'prs' @> ${JSON.stringify([{ number: prNumber }])}::jsonb)`,
+      )
+      .limit(1);
+    return rows[0]?.data ?? null;
   };
 
   /**
@@ -205,11 +223,17 @@ const handle = async (
       return true;
     }
 
+    // CodeRabbit's results (R3): stored verbatim; only new inline comments are also classified.
     case 'pull_request_review_comment':
-      return handleReviewComment(deps.findings, delivery.payload, globFor);
+      return handleReviewComment(deps, delivery.payload, globFor);
+
+    case 'pull_request_review':
+      return handleReview(deps.codeReviews, delivery.payload, globFor);
+
+    case 'issue_comment':
+      return handleIssueComment(deps.codeReviews, delivery.payload, globForPr);
 
     default:
-      // Reviews and comments are stored from slice 7 (CodeRabbit results).
       return true;
   }
 };

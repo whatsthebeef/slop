@@ -1,3 +1,5 @@
+import { globCodeReview } from '../domain/code-review.js';
+import type { CodeReviewComment } from '../domain/code-review.js';
 import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import type { Artifact, ArtifactKind, Provenance, ReviewStats } from '../domain/knowledge.js';
@@ -15,13 +17,26 @@ export interface GlobContext {
   readonly implementationPlan: { readonly version: number; readonly content: string } | null;
   /** Attachments in full: Clarifications and Assumptions always (they carry intent), others when asked for with `include`. */
   readonly attachments: readonly { readonly label: string; readonly content: string; readonly link: string | null }[];
-  /** Every other artifact, not in full: fetch one with `get_artifact` or `include` on `get_context`. */
+  /**
+   * Every other artifact, not in full: fetch one with `get_artifact` or `include` on `get_context`. CodeRabbit's stored
+   * review is listed as kind `code_review` while it isn't included.
+   */
   readonly available: readonly ArtifactListing[];
+  /** CodeRabbit's summary, reviews and inline comments, verbatim; only with `include: ['code_review']` (or `all`). */
+  readonly codeReview: CodeReviewContext | null;
   readonly fetch: string;
 }
 
+/** CodeRabbit's review of the glob's PR, as stored (R3). */
+export interface CodeReviewContext {
+  readonly summary: string | null;
+  readonly reviews: readonly { readonly body: string; readonly url: string | null; readonly commitSha: string | null }[];
+  readonly inline: readonly { readonly path: string | null; readonly line: string | null; readonly body: string; readonly url: string | null }[];
+  readonly comments: readonly { readonly body: string; readonly url: string | null }[];
+}
+
 export interface ArtifactListing {
-  readonly kind: ArtifactKind;
+  readonly kind: ArtifactKind | 'code_review';
   readonly label: string;
   readonly version: number;
   readonly commitSha: string | null;
@@ -39,6 +54,30 @@ const wanted = (include: readonly string[], a: Artifact): boolean =>
   include.includes('all') ||
   include.includes(a.kind) ||
   (a.kind === 'attachment' && include.some((i) => i.toLowerCase() === `attachment:${a.label}`.toLowerCase()));
+
+const codeReviewContext = (stored: readonly CodeReviewComment[]): CodeReviewContext => {
+  const grouped = globCodeReview(stored);
+  return {
+    summary: grouped.summary?.body ?? null,
+    reviews: grouped.reviews.map((r) => ({ body: r.body, url: r.url, commitSha: r.commitSha })),
+    inline: grouped.inline.map((c) => ({ path: c.path, line: c.line, body: c.body, url: c.url })),
+    comments: grouped.comments.map((c) => ({ body: c.body, url: c.url })),
+  };
+};
+
+/** The listing for CodeRabbit's stored review when it isn't included in full. */
+const codeReviewListing = (stored: readonly CodeReviewComment[]): ArtifactListing => {
+  const { badge } = globCodeReview(stored);
+  const latest = stored.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a));
+  return {
+    kind: 'code_review',
+    label: '',
+    version: stored.length,
+    commitSha: latest.commitSha,
+    size: stored.reduce((n, c) => n + c.body.length, 0),
+    description: `CodeRabbit: ${String(badge?.count ?? 0)} inline comments${badge?.hasSummary === true ? ', a summary' : ''}, ${String(stored.filter((c) => c.kind === 'review').length)} reviews`,
+  };
+};
 
 const describe = (a: Artifact): string => {
   const line = a.content.split('\n').map((l) => l.replace(/^[#>*\-\s]+/, '').trim()).find((l) => l !== '');
@@ -167,6 +206,8 @@ export class ArtifactService {
       const full = (a: Artifact) =>
         (a.kind === 'attachment' && INLINE_LABELS.has(a.label.toLowerCase())) || wanted(include, a);
       const others = artifacts.filter((a) => a.kind !== 'plan' && a.kind !== 'postplan' && !full(a));
+      const codeReview = await tx.listCodeReviewComments(glob.boardId, [globId]);
+      const codeReviewInFull = include.includes('all') || include.includes('code_review');
       return ok({
         glob: {
           id: glob.id,
@@ -192,16 +233,20 @@ export class ArtifactService {
         attachments: artifacts
           .filter((a) => a.kind === 'attachment' && full(a))
           .map((a) => ({ label: a.label, content: a.content, link: a.link })),
-        available: others.map((a) => ({
-          kind: a.kind,
-          label: a.label,
-          version: a.version,
-          commitSha: a.commitSha,
-          size: a.content.length,
-          description: describe(a),
-        })),
+        available: [
+          ...others.map((a) => ({
+            kind: a.kind,
+            label: a.label,
+            version: a.version,
+            commitSha: a.commitSha,
+            size: a.content.length,
+            description: describe(a),
+          })),
+          ...(codeReview.length === 0 || codeReviewInFull ? [] : [codeReviewListing(codeReview)]),
+        ],
+        codeReview: codeReview.length === 0 || !codeReviewInFull ? null : codeReviewContext(codeReview),
         fetch:
-          "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['implementation_plan', 'local_review', 'attachment:<label>', 'all']).",
+          "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['implementation_plan', 'local_review', 'attachment:<label>', 'code_review', 'all']).",
       });
     });
   }

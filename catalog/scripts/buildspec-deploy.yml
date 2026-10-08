@@ -2,6 +2,8 @@
 # the pushed commit and passes SLOP_ENVIRONMENT, SLOP_GLOB, SLOP_SHA, SLOP_DEPLOY_ID and
 # SLOP_CALLBACK_URL; the deploy itself lives in the repository's .sstor/deploy.sh. The build's
 # result reaches slop through EventBridge (CodeBuild Build State Change -> /webhooks/aws).
+# Branch deploys only: a pipeline that deploys the base branch or a release ref to an integration or
+# release environment reports it with .sstor/report-deploy.sh <environment> in its post_build instead.
 version: 0.2
 
 phases:

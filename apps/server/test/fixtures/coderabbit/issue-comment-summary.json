@@ -1,0 +1,93 @@
+{
+  "action": "created",
+  "issue": {
+    "url": "https://api.github.com/repos/acme/app/issues/7",
+    "html_url": "https://github.com/acme/app/pull/7",
+    "id": 3500000007,
+    "node_id": "PR_kwDONaaaaa6PaaaH",
+    "number": 7,
+    "title": "s1t1: Save before responding",
+    "user": {
+      "login": "slop-app[bot]",
+      "id": 190000001,
+      "type": "Bot"
+    },
+    "labels": [],
+    "state": "open",
+    "locked": false,
+    "comments": 1,
+    "created_at": "2026-10-05T09:00:00Z",
+    "updated_at": "2026-10-05T10:05:00Z",
+    "author_association": "NONE",
+    "draft": false,
+    "pull_request": {
+      "url": "https://api.github.com/repos/acme/app/pulls/7",
+      "html_url": "https://github.com/acme/app/pull/7",
+      "diff_url": "https://github.com/acme/app/pull/7.diff",
+      "patch_url": "https://github.com/acme/app/pull/7.patch",
+      "merged_at": null
+    },
+    "body": "Draft PR opened by slop."
+  },
+  "comment": {
+    "url": "https://api.github.com/repos/acme/app/issues/comments/3400000009",
+    "html_url": "https://github.com/acme/app/pull/7#issuecomment-3400000009",
+    "issue_url": "https://api.github.com/repos/acme/app/issues/7",
+    "id": 3400000009,
+    "node_id": "IC_kwDONaaaaa7aaaaa",
+    "user": {
+      "login": "coderabbitai[bot]",
+      "id": 136622811,
+      "node_id": "BOT_kgDOCCSy2w",
+      "avatar_url": "https://avatars.githubusercontent.com/in/347564?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/coderabbitai%5Bbot%5D",
+      "html_url": "https://github.com/apps/coderabbitai",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "created_at": "2026-10-05T10:01:12Z",
+    "updated_at": "2026-10-05T10:01:12Z",
+    "author_association": "NONE",
+    "body": "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<!-- walkthrough_start -->\n\n## Walkthrough\n\nThe save handler now logs each saved row's ID after saving it.\n\n## Changes\n\n| Cohort / File(s) | Summary |\n| --- | --- |\n| **Save handler** <br> `src/save.ts` | Logs the row ID after `save(row)`. |\n\n## Estimated code review effort\n\n🎯 1 (Trivial) | ⏱️ ~3 minutes\n\n<!-- walkthrough_end -->\n\n<!-- internal state start -->\n\n<!-- DwQgtGAEAwUe -->\n\n<!-- internal state end -->\n<!-- tips_start -->\n\n---\n\nThanks for using CodeRabbit! It's free for OSS, and your support helps us grow.\n\n<!-- tips_end -->",
+    "reactions": {
+      "total_count": 0
+    },
+    "performed_via_github_app": null
+  },
+  "repository": {
+    "id": 900000001,
+    "node_id": "R_kgDONaaaaa",
+    "name": "app",
+    "full_name": "acme/app",
+    "private": true,
+    "owner": {
+      "login": "acme",
+      "id": 9000001,
+      "type": "Organization"
+    },
+    "html_url": "https://github.com/acme/app",
+    "default_branch": "main"
+  },
+  "organization": {
+    "login": "acme",
+    "id": 9000001
+  },
+  "sender": {
+    "login": "coderabbitai[bot]",
+    "id": 136622811,
+    "node_id": "BOT_kgDOCCSy2w",
+    "avatar_url": "https://avatars.githubusercontent.com/in/347564?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/coderabbitai%5Bbot%5D",
+    "html_url": "https://github.com/apps/coderabbitai",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "installation": {
+    "id": 60000001,
+    "node_id": "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uNjAwMDAwMDE="
+  }
+}

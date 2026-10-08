@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
-import type { CodeHost, CommitFiles, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
+import type { CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
 import { readCommitChecks } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -31,7 +31,7 @@ const isStatus = (error: unknown, ...codes: number[]) => {
  * Every glob's branch is its ID, created by slop with an empty first commit so a draft PR can
  * be opened before any work exists.
  */
-export class GitHub implements CodeHost {
+export class GitHub implements CodeHost, CommitGraph {
   private readonly installations = new Map<string, Octokit>();
   private app: App | null = null;
   private appId: number | null = null;
@@ -427,6 +427,24 @@ export class GitHub implements CodeHost {
       changedLines: commit.stats.additions + commit.stats.deletions,
       files: (commit.files ?? []).map((f) => f.filename),
     };
+  }
+
+  async contains(repo: Repo, descendant: string, ancestor: string, signal?: AbortSignal): Promise<boolean | null> {
+    const gh = await this.octokit(repo);
+    try {
+      // Only the status is read, so ask for the smallest page of commits.
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+        owner: repo.owner,
+        repo: repo.name,
+        basehead: `${ancestor}...${descendant}`,
+        per_page: 1,
+        request: { signal },
+      });
+      return data.status === 'ahead' || data.status === 'identical';
+    } catch (error) {
+      if (isStatus(error, 404, 422)) return null;
+      throw error;
+    }
   }
 
   private async compare(repo: Repo, basehead: string, signal?: AbortSignal): Promise<DiffSummary> {

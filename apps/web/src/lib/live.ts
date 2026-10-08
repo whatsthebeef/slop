@@ -5,7 +5,17 @@ import { api, healthKey, RequestError } from './api';
 import type { GlobView } from './api';
 
 interface Hint {
-  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'glob.deploys' | 'glob.findings' | 'board.changed' | 'board.kb' | 'board.health';
+  readonly kind:
+    | 'glob.changed'
+    | 'glob.deleted'
+    | 'glob.artifacts'
+    | 'glob.deploys'
+    | 'glob.findings'
+    | 'glob.reviews'
+    | 'board.changed'
+    | 'board.kb'
+    | 'board.tests'
+    | 'board.health';
   readonly globId?: string;
   readonly version?: number;
 }
@@ -19,6 +29,18 @@ export const deploysKey = (boardId: number) => ['deploys', boardId] as const;
 
 /** One glob's deploy history in the glob view. */
 export const globDeploysKey = (globId: string) => ['glob-deploys', globId] as const;
+
+/** The release and integration environments in the glob view; invalidated by `glob.deploys` hints and on reconnect. */
+export const globEnvironmentsKey = (globId: string) => ['glob-environments', globId] as const;
+
+/** One glob's ATF runs in the glob view; invalidated by `glob.deploys` and `board.tests` hints and on reconnect. */
+export const globTestsKey = (globId: string) => ['glob-tests', globId] as const;
+
+/** The cards' CodeRabbit badges; invalidated by `glob.reviews` hints and on reconnect. */
+export const codeReviewsKey = (boardId: number) => ['code-reviews', boardId] as const;
+
+/** One glob's stored CodeRabbit review in the glob view; invalidated by `glob.reviews` hints and on reconnect. */
+export const globCodeReviewKey = (globId: string) => ['glob-code-review', globId] as const;
 
 /** One glob's review findings in the glob view; invalidated by `glob.findings` hints and on reconnect. */
 export const findingsKey = (globId: string) => ['findings', globId] as const;
@@ -134,6 +156,13 @@ export const useLiveBoard = (boardId: number): LiveState => {
     }
     // The board shows no KB data; the Knowledge page follows those hints itself.
     if (hint.kind === 'board.kb') return;
+    if (hint.kind === 'board.tests') {
+      // An environment's ATF run (or the check that placed globs at its commit): it shows on every glob held there.
+      void client.invalidateQueries({ queryKey: deploysKey(boardId) });
+      void client.invalidateQueries({ queryKey: ['glob-environments'] });
+      void client.invalidateQueries({ queryKey: ['glob-tests'] });
+      return;
+    }
     if (hint.kind === 'board.health') {
       void client.invalidateQueries({ queryKey: healthKey });
       return;
@@ -144,6 +173,14 @@ export const useLiveBoard = (boardId: number): LiveState => {
       // Deploys live beside the glob, not on it: refresh the board's indicators and the glob's history.
       void client.invalidateQueries({ queryKey: deploysKey(boardId) });
       void client.invalidateQueries({ queryKey: globDeploysKey(id) });
+      void client.invalidateQueries({ queryKey: globEnvironmentsKey(id) });
+      void client.invalidateQueries({ queryKey: globTestsKey(id) });
+      return;
+    }
+    if (hint.kind === 'glob.reviews') {
+      // CodeRabbit's stored review lives beside the glob: refresh the cards' badges and the glob view.
+      void client.invalidateQueries({ queryKey: codeReviewsKey(boardId) });
+      void client.invalidateQueries({ queryKey: globCodeReviewKey(id) });
       return;
     }
     if (hint.kind === 'glob.findings') {
@@ -177,8 +214,12 @@ export const useLiveBoard = (boardId: number): LiveState => {
     // Deploys and readiness live beside the globs, so missed deploy hints need their own refresh.
     void client.invalidateQueries({ queryKey: deploysKey(boardId) });
     void client.invalidateQueries({ queryKey: ['glob-deploys'] });
+    void client.invalidateQueries({ queryKey: ['glob-environments'] });
+    void client.invalidateQueries({ queryKey: ['glob-tests'] });
     void client.invalidateQueries({ queryKey: ['readiness', boardId] });
     void client.invalidateQueries({ queryKey: ['findings'] });
+    void client.invalidateQueries({ queryKey: codeReviewsKey(boardId) });
+    void client.invalidateQueries({ queryKey: ['glob-code-review'] });
   };
 
   return useBoardEvents(boardId, { onHint, onReconnect });

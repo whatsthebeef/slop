@@ -16,7 +16,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
 import { useBoardMotion } from '@/lib/board-motion';
-import { deploysKey, globsKey, useLiveBoard } from '@/lib/live';
+import { codeReviewsKey, deploysKey, globsKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useToast } from '@/toast';
 
@@ -231,7 +231,8 @@ export const BoardPage = () => {
       void navigate(`/boards/${boardId}/signed-off?glob=${encodeURIComponent(linked)}`, { replace: true });
     }
   }, [linked, globs.data, boardId, navigate, setSearchParams]);
-  // Deploy state lives beside the globs; read it for the globs on the board.
+  // Deploy state (branch deploys, and the release and integration environments each glob is in) lives beside the
+  // globs; read it for the globs on the board.
   const boardGlobIds = (globs.data ?? []).map((g) => g.id).sort();
   const deployState = useQuery({
     queryKey: [...deploysKey(boardId), boardGlobIds.join(',')],
@@ -240,6 +241,14 @@ export const BoardPage = () => {
     // Hints normally refresh it; while something is deploying, also check now and then.
     refetchInterval: (query) =>
       Object.values(query.state.data?.indicators ?? {}).some((i) => i.state === 'deploying') ? DEPLOY_POLL_MS : false,
+  });
+
+  // CodeRabbit's badges live beside the globs too (a `glob.reviews` hint refreshes them). A server without the route
+  // just leaves the cards without them.
+  const codeReviews = useQuery({
+    queryKey: [...codeReviewsKey(boardId), boardGlobIds.join(',')],
+    queryFn: () => api.boardCodeReviews(boardId, boardGlobIds),
+    enabled: boardGlobIds.length > 0,
   });
 
   // The status bar's counts include this board; refresh them when its globs change, at most every
@@ -435,6 +444,9 @@ export const BoardPage = () => {
                       bump={bumps[glob.id]}
                       tag={motion.tags[glob.id]}
                       deploy={deployState.data?.indicators[glob.id]}
+                      environments={deployState.data?.environments?.[glob.id]}
+                      atf={deployState.data?.atf?.[glob.id]}
+                      codeReview={codeReviews.data?.[glob.id]}
                     />
                   );
                 })}

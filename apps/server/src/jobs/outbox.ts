@@ -100,11 +100,12 @@ export class OutboxRunner {
       .where(eq(schema.globs.id, effect.globId));
     const glob = row?.data ?? null;
     // Deploys outlive their glob's generation, and a deleted glob's deploy must still fail so its
-    // environment's queue moves on; the deploy executor handles both.
+    // environment's queue moves on; the deploy executor handles both. Board-wide effects have no glob.
     const stale =
       effect.kind !== 'delete_glob_data' &&
       effect.kind !== 'start_deploy' &&
       effect.kind !== 'refresh_base_checks' &&
+      effect.kind !== 'check_environment' &&
       (glob === null || ('generation' in effect && effect.generation < glob.generation));
 
     let state: 'done' | 'dropped' | 'pending' | 'failed';

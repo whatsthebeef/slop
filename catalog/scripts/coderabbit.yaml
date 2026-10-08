@@ -1,0 +1,11 @@
+# CodeRabbit settings for a slop board's repo: copy to the repo root as .coderabbit.yaml.
+#
+# With automatic reviews off, CodeRabbit reviews a PR only when asked. Slop asks (it posts `@coderabbitai review`
+# once per PR) when the PR becomes ready for review and the board has a review guide: a knowledge document with
+# area `review_guide` (catalog: review_guide_template), which CodeRabbit can read through slop's get_review_guide
+# MCP tool. Leave automatic reviews on to have CodeRabbit review every PR, drafts included, on its own.
+# Slop stores CodeRabbit's summary, reviews and inline comments on the glob either way.
+reviews:
+  profile: chill
+  auto_review:
+    enabled: false

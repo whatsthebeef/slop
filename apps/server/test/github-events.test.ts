@@ -1,7 +1,9 @@
-import { FindingsService, GlobService } from '@slop/core';
+import { readFileSync } from 'node:fs';
+import { CodeReviewService, FindingsService, GlobService } from '@slop/core';
 import type { Board, Result } from '@slop/core';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import * as schema from '../src/db/schema.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
@@ -55,6 +57,7 @@ describe('GitHub webhook deliveries', () => {
       db: database.db,
       globs,
       findings: new FindingsService({ store, notifier: { publish: () => undefined }, clock: { now: () => new Date().toISOString() } }),
+      codeReviews: new CodeReviewService({ store, notifier: { publish: () => undefined }, clock: { now: () => new Date().toISOString() } }),
       boardOf,
       github: {
         deleteBranch: (_repo, branch) => {
@@ -222,6 +225,161 @@ describe('GitHub webhook deliveries', () => {
     expect(await store.transaction((tx) => tx.listReviewSources(globId))).toHaveLength(1);
     const all = await database.db.select().from(schema.reviewSources).where(eq(schema.reviewSources.externalId, 'coderabbit:302'));
     expect(all).toEqual([]);
+  });
+
+  describe('CodeRabbit results stored verbatim (R3), from saved real-shape payloads', () => {
+    const record = z.record(z.string(), z.unknown());
+    /** A saved delivery payload, on this test's glob's branch. */
+    const fixture = (name: string) =>
+      record.parse(
+        JSON.parse(readFileSync(new URL(`./fixtures/coderabbit/${name}.json`, import.meta.url), 'utf8').replaceAll('"ref": "s1t1"', `"ref": "${globId}"`)),
+      );
+    /** The payload with fields of one of its objects replaced. */
+    const patched = (payload: Record<string, unknown>, key: string, patch: Record<string, unknown>, top: Record<string, unknown> = {}) => ({
+      ...payload,
+      ...top,
+      [key]: { ...record.parse(payload[key]), ...patch },
+    });
+    const c = schema.codeReviewComments;
+    /** The glob's stored items, without tombstones. */
+    const storedRows = () => database.db.select().from(c).where(and(eq(c.globId, globId), isNull(c.deletedAt))).orderBy(c.id);
+    const setPr = async (number: number, prs: { number: number }[] = []) => {
+      const glob = await current();
+      await database.db
+        .update(schema.globs)
+        .set({ data: { ...glob, pr: { number, state: 'ready', headSha: 'b2' }, prs: prs.map((p) => ({ mergeSha: 'm1', mergedAt: '2026-10-01T00:00:00.000Z', ...p })) } })
+        .where(eq(schema.globs.id, globId));
+    };
+
+    it('stores an inline comment verbatim and queues it once for classification; an edit updates it and a delete removes it', async () => {
+      const created = fixture('review-comment-created');
+      expect(await handle({ id: id(), event: 'pull_request_review_comment', payload: created })).toBe(true);
+      const [row] = await storedRows();
+      expect(row).toMatchObject({
+        kind: 'inline',
+        externalId: 'coderabbit:review_comment:2100000101',
+        author: 'coderabbitai[bot]',
+        prNumber: 7,
+        path: 'src/save.ts',
+        line: '10-12',
+        commitSha: '4f1c2d9e8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e',
+        url: 'https://github.com/acme/app/pull/7#discussion_r2100000101',
+      });
+      expect(row?.body).toBe(record.parse(created.comment).body);
+      expect(row?.body).toContain('<!-- This is an auto-generated comment by CodeRabbit -->');
+      expect(await reviewSources()).toEqual([expect.objectContaining({ externalId: 'coderabbit:2100000101', line: '12' })]);
+
+      const edited = patched(created, 'comment', { body: 'Edited: await the save.', updated_at: '2026-10-05T11:00:00Z' }, { action: 'edited' });
+      await handle({ id: id(), event: 'pull_request_review_comment', payload: edited });
+      expect(await storedRows()).toEqual([expect.objectContaining({ body: 'Edited: await the save.' })]);
+      // Not classified twice: the edit adds no review source.
+      expect(await reviewSources()).toHaveLength(1);
+
+      await handle({ id: id(), event: 'pull_request_review_comment', payload: { ...created, action: 'deleted' } });
+      expect(await storedRows()).toEqual([]);
+      const [tombstone] = await database.db.select().from(c).where(eq(c.externalId, 'coderabbit:review_comment:2100000101'));
+      expect(tombstone?.deletedAt).toBeInstanceOf(Date);
+
+      // A late redelivery of the creation or the edit doesn't bring a deleted comment back.
+      await handle({ id: id(), event: 'pull_request_review_comment', payload: edited });
+      await handle({ id: id(), event: 'pull_request_review_comment', payload: created });
+      expect(await storedRows()).toEqual([]);
+      expect(await reviewSources()).toHaveLength(1);
+    });
+
+    it('stores a submitted review with its link, and the summary comment found by its PR number', async () => {
+      await setPr(7001);
+      const review = fixture('review-submitted');
+      await handle({ id: id(), event: 'pull_request_review', payload: patched(review, 'pull_request', { number: 7001 }) });
+      const summary = fixture('issue-comment-summary');
+      await handle({ id: id(), event: 'issue_comment', payload: patched(summary, 'issue', { number: 7001 }) });
+      expect(await storedRows()).toEqual([
+        expect.objectContaining({
+          kind: 'review',
+          externalId: 'coderabbit:review:3300000055',
+          prNumber: 7001,
+          url: 'https://github.com/acme/app/pull/7#pullrequestreview-3300000055',
+          body: record.parse(review.review).body,
+        }),
+        expect.objectContaining({
+          kind: 'summary',
+          externalId: 'coderabbit:issue_comment:3400000009',
+          prNumber: 7001,
+          body: expect.stringContaining('## Walkthrough') as unknown,
+        }),
+      ]);
+      // A review isn't a finding source; only inline comments are.
+      expect(await reviewSources()).toEqual([]);
+
+      // CodeRabbit edits its summary in place.
+      const edited = patched(patched(summary, 'issue', { number: 7001 }), 'comment', { body: `${String(record.parse(summary.comment).body)}\n\nUpdated.`, updated_at: '2026-10-05T12:00:00Z' }, { action: 'edited' });
+      await handle({ id: id(), event: 'issue_comment', payload: edited });
+      const rows = await storedRows();
+      expect(rows).toHaveLength(2);
+      expect(rows[1]?.body).toMatch(/Updated\.$/);
+    });
+
+    it('forgets a summary CodeRabbit deleted, and keeps a review with no body for its link (s15f10)', async () => {
+      await setPr(7301);
+      const summary = patched(patched(fixture('issue-comment-summary'), 'issue', { number: 7301 }), 'comment', { id: 3400007301 });
+      await handle({ id: id(), event: 'issue_comment', payload: summary });
+      const review = patched(patched(fixture('review-submitted'), 'pull_request', { number: 7301 }), 'review', { id: 3300007301, body: null });
+      await handle({ id: id(), event: 'pull_request_review', payload: review });
+      expect((await storedRows()).map((r) => [r.kind, r.body])).toEqual([
+        ['summary', expect.stringContaining('## Walkthrough') as unknown],
+        ['review', ''],
+      ]);
+      expect((await storedRows())[1]?.url).toMatch(/^https:\/\/github\.com\//);
+
+      await handle({ id: id(), event: 'issue_comment', payload: { ...summary, action: 'deleted' } });
+      expect((await storedRows()).map((r) => r.kind)).toEqual(['review']);
+    });
+
+    it("finds a super's glob by a PR it merged with Merge and continue", async () => {
+      await setPr(7102, [{ number: 7101 }]);
+      // Comment IDs are unique on GitHub; each test uses its own.
+      const summary = patched(fixture('issue-comment-summary'), 'comment', { id: 3400007101 });
+      await handle({ id: id(), event: 'issue_comment', payload: patched(summary, 'issue', { number: 7101 }) });
+      expect(await storedRows()).toEqual([expect.objectContaining({ kind: 'summary', prNumber: 7101 })]);
+    });
+
+    it("ignores other authors, plain issues, other repos and unknown PRs, and a repeated delivery", async () => {
+      await setPr(7201);
+      const summary = patched(patched(fixture('issue-comment-summary'), 'issue', { number: 7201 }), 'comment', { id: 3400007201 });
+      const human = patched(summary, 'comment', { user: { login: 'octocat' } });
+      await handle({ id: id(), event: 'issue_comment', payload: human });
+      await handle({ id: id(), event: 'issue_comment', payload: patched(summary, 'issue', { pull_request: undefined }) });
+      await handle({ id: id(), event: 'issue_comment', payload: { ...summary, repository: { full_name: 'evil/fork' } } });
+      await handle({ id: id(), event: 'issue_comment', payload: patched(summary, 'issue', { number: 9999 }) });
+      const review = fixture('review-submitted');
+      await handle({ id: id(), event: 'pull_request_review', payload: patched(review, 'review', { user: { login: 'octocat' } }) });
+      await handle({ id: id(), event: 'pull_request_review_comment', payload: patched(fixture('review-comment-created'), 'comment', { user: { login: 'octocat' } }) });
+      expect(await storedRows()).toEqual([]);
+
+      const delivery = { id: id(), event: 'issue_comment', payload: summary };
+      expect(await handle(delivery)).toBe(true);
+      expect(await handle(delivery)).toBe(false);
+      expect(await storedRows()).toHaveLength(1);
+    });
+
+    it('ignores comments by deleted (ghost) accounts and payloads it cannot read, without failing the delivery (s15f10)', async () => {
+      await setPr(7401);
+      const summary = patched(patched(fixture('issue-comment-summary'), 'issue', { number: 7401 }), 'comment', { id: 3400007401 });
+      const ghost = patched(summary, 'comment', { user: null, body: undefined });
+      expect(await handle({ id: id(), event: 'issue_comment', payload: ghost })).toBe(true);
+      const review = patched(fixture('review-submitted'), 'review', { user: null });
+      expect(await handle({ id: id(), event: 'pull_request_review', payload: review })).toBe(true);
+      const inline = patched(fixture('review-comment-created'), 'comment', { user: null, body: null });
+      expect(await handle({ id: id(), event: 'pull_request_review_comment', payload: inline })).toBe(true);
+      // CodeRabbit's own delivery in a shape slop can't read is ignored too, not failed.
+      expect(await handle({ id: id(), event: 'issue_comment', payload: patched(summary, 'issue', { number: 'seven' }) })).toBe(true);
+      expect(await storedRows()).toEqual([]);
+      expect(await reviewSources()).toEqual([]);
+
+      // A CodeRabbit comment with no body is stored empty.
+      expect(await handle({ id: id(), event: 'issue_comment', payload: patched(summary, 'comment', { body: null }) })).toBe(true);
+      expect((await storedRows()).map((r) => [r.kind, r.body])).toEqual([['comment', '']]);
+    });
   });
 
   it('forgets a delivery whose handling failed, so a redelivery retries it', async () => {

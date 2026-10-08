@@ -242,6 +242,12 @@ describe('PR and merge events (rows 11–16)', () => {
     expect(t.glob.pr).toEqual({ number: 7, state: 'ready', headSha: 'bbb' });
   });
 
+  it('row 11: PR ready asks the executor to request a CodeRabbit review (it decides whether to post, R3)', () => {
+    const t = value(m.prReadyForReview(glob({ status: 'implementing', generation: 3 }), { number: 7, headSha: 'bbb' }, ctx(null)));
+    expect(t.effects).toContainEqual({ kind: 'request_code_review', globId: 's1t1', generation: 3 });
+    expect(errorCode(m.prReadyForReview(glob({ status: 'reviewing' }), { number: 7, headSha: 'bbb' }, ctx(null)))).toBe('invalid_transition');
+  });
+
   it('row 12: the sub gate passing on the current head merges', () => {
     const g = glob({ type: 'sub', status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } });
     const t = value(m.subGateCompleted(g, { sha: 'bbb', passed: true, reason: null }, ctx(null)));
@@ -658,7 +664,7 @@ describe('checks and merging (slice 2)', () => {
 
   it('PR ready and pushes to an open PR refresh the head checks', () => {
     const t = value(m.prReadyForReview(glob({ status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(t)).toEqual(['refresh_checks']);
+    expect(effectKinds(t)).toEqual(['refresh_checks', 'request_code_review']);
     const pushed = value(m.commitPushed({ ...ready, headChecks: { sha: 'bbb', state: 'passed' } }, { sha: 'ccc', runId: null }, ctx(null)));
     expect(pushed.glob.headChecks).toBeNull();
     expect(effectKinds(pushed)).toEqual(['refresh_checks']);
@@ -668,12 +674,13 @@ describe('checks and merging (slice 2)', () => {
     const sub = value(m.prReadyForReview(glob({ type: 'sub', status: 'implementing' }), { number: 7, headSha: 'bbb' }, ctx(null)));
     expect(sub.effects).toEqual([
       { kind: 'refresh_checks', globId: 's1t1', generation: 1 },
+      { kind: 'request_code_review', globId: 's1t1', generation: 1 },
       { kind: 'refresh_sub_gate', globId: 's1t1', generation: 1 },
     ]);
     const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(same)).toEqual(['refresh_checks']);
+    expect(effectKinds(same)).toEqual(['refresh_checks', 'request_code_review']);
     const superGlob = value(m.prReadyForReview(glob({ type: 'super', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(superGlob)).toEqual(['refresh_checks']);
+    expect(effectKinds(superGlob)).toEqual(['refresh_checks', 'request_code_review']);
   });
 
   it('a check change queues a refresh without changing the glob', () => {
