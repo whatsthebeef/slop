@@ -227,6 +227,7 @@ const awsSignIn =
 awsSignInEnabled = awsSignIn !== null;
 // The registry starts empty: drop notifications a previous run left, so a problem fixed while the server was down doesn't linger.
 for (const id of Object.keys(INTEGRATION_NAMES) as IntegrationId[]) await notifications.clear(null, integrationSource(id));
+await notifications.clear(null, 'integration:local'); // the retired fake integration of local follow
 mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
 mountCodeReviews(app, { codeReviews });
 mountNotifications(app, { notifications });
@@ -320,7 +321,7 @@ if (runs('tunnel')) tunnelWatch?.start();
 const followWatch =
   config.SLOP_FOLLOW_FILE === undefined
     ? null
-    : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, config.SLOP_FOLLOW_ENVIRONMENT, integrations, (d) => environments.recordDeploy(d), logError);
+    : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, config.SLOP_FOLLOW_ENVIRONMENT, notifications, (d) => environments.recordDeploy(d), logError);
 if (runs('follow')) followWatch?.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
