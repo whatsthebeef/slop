@@ -31,6 +31,7 @@ export class FakeCodeHost implements CodeHost {
   commitChecks: CodeHost['commitChecks'] = () => Promise.resolve({ state: 'passed', failure: null });
   updateBranch: CodeHost['updateBranch'] = () => Promise.resolve('up_to_date');
   squashMerge: CodeHost['squashMerge'] = () => Promise.resolve({ outcome: 'merged', sha: 'm1' });
+  revertCommit: CodeHost['revertCommit'] = () => Promise.resolve('reverted');
 }
 
 /** A fake host with `overrides` in place of the defaults. */

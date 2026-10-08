@@ -39,6 +39,9 @@ if [[ ${#checks[@]} -gt 0 ]]; then
  "allow_force_pushes": false, "allow_deletions": false}
 JSON
   echo "  required checks pass on the current head, branch up to date, no force pushes"
+  echo "  NOTE: subs merge as soon as they're ready, before their PR's checks finish, and slop reverts a sub whose"
+  echo "  merge turns $base red. Add the slop GitHub App to a ruleset bypass list for $base (Settings > Rules)"
+  echo "  or the required checks will refuse those merges. Run the checks workflow on pushes to $base too."
 fi
 
 cat <<EOF2

@@ -249,4 +249,51 @@ describe('a red base branch', () => {
     expect(await run(conflicting, 'update_branch')).toEqual(['done']);
     expect((await current(conflicting)).conflict).toMatchObject({ base: 'main', files: ['src/a.ts'] });
   });
+  it('reverts a sub whose merge commit turned the base red, and leaves a same alone', async () => {
+    const reverted: string[] = [];
+    host.revertCommit = (_repo, sha) => {
+      reverted.push(sha);
+      return Promise.resolve('reverted');
+    };
+    // The base is green first, so the next red result is blamed on the commit that caused it.
+    host.baseHead = { sha: 'g1', subject: 's1t9: green' };
+    host.checks = { g1: { state: 'passed', failure: null } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+
+    const merged = async (type: 'sub' | 'same') => {
+      const id = await newOpenGlob(`Merged ${type}`);
+      await store.transaction(async (tx) => {
+        const g = await tx.getGlob(id);
+        if (g === null) throw new Error('missing');
+        await tx.updateGlob({ ...g, type, status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'h1' }, version: g.version + 1 }, g.version);
+      });
+      return id;
+    };
+    const sub = await merged('sub');
+    host.baseHead = { sha: 'r1', subject: `${sub}: Merged sub` };
+    host.checks = { r1: { state: 'failed', failure: typecheck } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    const failed = await current(sub);
+    expect(failed.status).toBe('failed');
+    expect(failed.failure).toMatchObject({ kind: 'reverted' });
+    expect(failed.failure?.reason).toContain('Reverted from main');
+    expect(failed.failure?.reason).toContain(typecheck.url);
+    expect(await run(sub, 'revert_merge')).toEqual(['done']);
+    expect(reverted).toEqual(['r1']);
+
+    // A same that turns the base red is not reverted: a person decides.
+    host.baseHead = { sha: 'g2', subject: 's1t9: green again' };
+    host.checks = { g2: { state: 'passed', failure: null } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    const same = await merged('same');
+    host.baseHead = { sha: 'r2', subject: `${same}: Merged same` };
+    host.checks = { r2: { state: 'failed', failure: typecheck } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    expect((await current(same)).status).toBe('reviewing');
+    expect(await pending(same, 'revert_merge')).toHaveLength(0);
+  });
 });

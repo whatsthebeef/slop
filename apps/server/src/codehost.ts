@@ -103,6 +103,11 @@ export interface CodeHost {
   updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'>;
   /** Squash-merges at exactly `sha` as `<id>: <title>`, or updates a branch that is behind. */
   squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult>;
+  /**
+   * Reverts commit `sha` on the base branch as a new commit `Revert "<subject>"`. `moved` when the base has commits
+   * after `sha` (the revert is then left to a person).
+   */
+  revertCommit(repo: Repo, sha: string): Promise<'reverted' | 'moved'>;
 }
 
 /**

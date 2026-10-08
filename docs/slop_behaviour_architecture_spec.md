@@ -106,11 +106,12 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 | 9 | `in_progress`, `pr_open` | unchanged | Pick up by someone else | All | No run active or watching | Implementer changes; a queued run is cancelled with its launch job |
 | 10 | `implementing`, `pr_open` | `in_progress` (from `implementing`) or unchanged | Take over (`pick_up` with `takeOver`) | Sub, same | Run queued, active or watching | Run superseded (a queued run's launch job is cancelled); generation increased; implementer = picker |
 | 11 | `implementing`, `in_progress` | `pr_open` | Draft PR marked ready for review | All | PR head branch = glob ID | Record PR; an active run moves to watching |
-| 12 | `pr_open` | `merging` | Sub gate passes on the current head commit | Sub | Type is still sub | Slop squash-merges |
-| 13 | `pr_open` | `pr_open` | Sub gate flags the change | Sub | — | Type becomes same; the developer now merges |
+| 12 | `pr_open` | `merging` | The PR is ready and the board's sub policy (size, sensitive paths) passes on the head commit | Sub | Type is still sub | Slop squash-merges at once, without waiting for the PR's checks; they run on the base branch after the merge (row 16b) |
+| 13 | `pr_open` | `pr_open` | The sub policy flags the change | Sub | — | Type becomes same; the developer now merges |
 | 14 | `pr_open` | `merging` | Merge button on the glob | Same, super | Checks pass on the current head | Slop squash-merges |
 | 15 | `planning`, `merging`, `pr_open`, `in_progress`, `implementing`, `failed` | `reviewing` | Merge observed (slop's own merge response or the `merged` event, whichever arrives first; the second is a no-op) | All | Glob's PR merged; not a Merge and continue (row 31) | Labels set Required (sub: QA; same/super: FR, CR, QA); run ended; the board's other open PRs are rechecked for conflicts with the base branch (see Merging) |
 | 16 | `merging` | `failed` | Merge conflict with the base branch, or checks fail after update | All | No merge observed | Failure reason recorded: "Merge conflict with `<base>`" (with the files both sides changed, when GitHub can say) or "Checks failed after updating the branch"; a conflict is recorded on the failure so the board offers Resolve conflict; every merge failure is marked `failure.kind: 'merge'` (see row 16a) |
+| 16b | `reviewing` | `failed` | The base branch's checks fail at the commit a sub merged | Sub | The failing head commit is `<id>: <title>` of the sub, and the base was green before it | Slop reverts the commit on the base (effect `revert_merge`; when the base has moved on, a person reverts by hand), failure `Reverted from <base>: <check> failed on its merge commit (<link>)` with `failure.kind: 'reverted'`, event `MergeReverted`. Sames and supers are never reverted: the red base shows on the board and a person decides |
 | 17 | `implementing` | `failed` | `report_failure` with the current run ID, or run timeout | Sub, same | Run ID is current | Run failed; reason recorded |
 | 18 | `in_progress` | `failed` | `report_failure` from an interactive session | All | — | Reason recorded |
 | 19 | `pr_open` | `failed` | PR closed without merging | All | — | Run ended; reason recorded |
@@ -135,7 +136,7 @@ The core tracks a status per glob; the four lists are a projection of it, and ev
 - Writes are conditional on the glob's version, so simultaneous events resolve cleanly.
 - Changing type, category or group is not a transition: it never moves the glob, only changes which rows apply next.
 - Draft PRs are recorded on the glob without changing status.
-- Sub gate (rows 11–13): the `sub-gate` check can finish before the PR is recorded as ready, so slop also looks up a gate result that finished before the PR was marked ready, when the sub enters `pr_open` and whenever it re-reads the head's checks.
+- Sub policy (rows 11–13): a sub is evaluated against the board's policy as soon as it enters `pr_open`; its checks are not awaited. The `checks` workflow also runs on every push to the base branch, which is how a red base (and a sub that caused it, row 16b) is found.
 - Time attribution follows the planner until a human implementer picks the glob up, then the implementer; triggeredBy only chooses whose routine runs.
 
 **Provisioning and reliability**

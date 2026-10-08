@@ -172,6 +172,14 @@ export const codeHostExecutors = (
       );
       if (recorded === null || !recorded.change.changed) return 'done';
       const { checks, change } = recorded;
+      // A sub whose merge commit turned the base red is reverted and failed; sames are left to a person.
+      const headGlob = globOfSubject(head.subject);
+      const culprit = passed || headGlob === null || checks.since !== headGlob ? null : await globs.peek(headGlob);
+      if (culprit?.type === 'sub') {
+        await globs.applyEvent(culprit.id, (g, ctx) =>
+          machine.mergeTurnedBaseRed(g, { sha: head.sha, failure: result.failure, base: repo.base }, ctx),
+        );
+      }
       for (const other of await globs.peekAll(board.id, { status: ['pr_open', 'in_progress'] })) {
         // A red base marks the globs that fail the same way; a base that just turned green brings them up to date.
         await globs.applyEvent(other.id, (g, ctx) =>
@@ -273,6 +281,18 @@ export const codeHostExecutors = (
         case 'refused':
           await globs.applyEvent(glob.id, (g, ctx) => machine.mergeFailed(g, result.reason, ctx));
           break;
+      }
+      return 'done';
+    },
+
+    revert_merge: async (effect, glob, { globs }) => {
+      if (effect.kind !== 'revert_merge' || glob === null || glob.failure?.kind !== 'reverted') return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      if ((await host.revertCommit(repo, effect.sha)) === 'moved') {
+        await globs.applyEvent(glob.id, (g, ctx) =>
+          machine.revertFailed(g, `${repo.base} has moved on, so slop could not revert ${effect.sha.slice(0, 7)}: revert it by hand`, ctx),
+        );
       }
       return 'done';
     },
