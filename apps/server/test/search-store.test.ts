@@ -149,16 +149,26 @@ describe('search store', () => {
   });
 
   describe('filters', () => {
+    // Its own board: vector search returns the nearest chunks whatever their words, so other tests' items would leak in.
+    let filterBoardId: number;
+    const own = (patch: Partial<NewKnowledgeItem>) => item({ boardId: filterBoardId, ...patch });
+    const filterQuery = (patch: Partial<SearchQuery>) => query('filterword', { boardId: filterBoardId, ...patch });
+
     beforeAll(async () => {
+      filterBoardId = (
+        await store.transaction((tx) =>
+          tx.insertBoard({ name: 'filters', repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] }),
+        )
+      ).id;
       const base = { sourceType: 'glob_plan' as SourceType };
-      await put(item({ ...base, externalRef: 'f:old', title: 'Old', occurredAt: '2026-01-10T00:00:00.000Z', globIds: ['s1t1'], globGroup: 'billing' }), 'filterword alpha');
-      await put(item({ ...base, externalRef: 'f:mid', title: 'Mid', occurredAt: '2026-06-10T00:00:00.000Z', globIds: ['s1t2'], globGroup: 'billing' }), 'filterword beta');
-      await put(item({ ...base, externalRef: 'f:new', title: 'New', occurredAt: '2026-09-10T00:00:00.000Z', globIds: ['s1t1', 's1t3'], globGroup: 'sync', sourceType: 'postplan' }), 'filterword gamma');
+      await put(own({ ...base, externalRef: 'f:old', title: 'Old', occurredAt: '2026-01-10T00:00:00.000Z', globIds: ['s1t1'], globGroup: 'billing' }), 'filterword alpha');
+      await put(own({ ...base, externalRef: 'f:mid', title: 'Mid', occurredAt: '2026-06-10T00:00:00.000Z', globIds: ['s1t2'], globGroup: 'billing' }), 'filterword beta');
+      await put(own({ ...base, externalRef: 'f:new', title: 'New', occurredAt: '2026-09-10T00:00:00.000Z', globIds: ['s1t1', 's1t3'], globGroup: 'sync', sourceType: 'postplan' }), 'filterword gamma');
       await put(item({ ...base, externalRef: 'f:foreign', title: 'Foreign', boardId: otherBoardId, globIds: ['s1t1'], globGroup: 'billing' }), 'filterword delta');
     });
 
     it('limits by date range (inclusive), glob, group and source types, always within the board', async () => {
-      const all = async (patch: Partial<SearchQuery>) => titles(await keyword(query('filterword', patch))).sort();
+      const all = async (patch: Partial<SearchQuery>) => titles(await keyword(filterQuery(patch))).sort();
       expect(await all({})).toEqual(['Mid', 'New', 'Old']);
       expect(await all({ from: '2026-06-10T00:00:00.000Z' })).toEqual(['Mid', 'New']);
       expect(await all({ to: '2026-06-10T00:00:00.000Z' })).toEqual(['Mid', 'Old']);
@@ -181,7 +191,7 @@ describe('search store', () => {
     it('applies the same filters to vector search', async () => {
       await embedAll();
       const vec = vectorOf('filterword');
-      const near = async (patch: Partial<SearchQuery>) => titles(await store.transaction((tx) => tx.vectorCandidates(query('filterword', patch), vec, 20))).sort();
+      const near = async (patch: Partial<SearchQuery>) => titles(await store.transaction((tx) => tx.vectorCandidates(filterQuery(patch), vec, 20))).sort();
       expect(await near({})).toEqual(expect.arrayContaining(['Mid', 'New', 'Old']));
       expect(await near({ from: '2026-06-10T00:00:00.000Z', globId: 's1t1' })).toEqual(['New']);
       expect(await near({ group: 'sync' })).toEqual(['New']);
