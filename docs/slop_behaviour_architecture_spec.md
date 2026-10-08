@@ -477,6 +477,16 @@ Slop is one portable Docker image running as a single instance, backed by Postgr
 
 **Not chosen:** Lambda, DynamoDB, AppSync, Amplify Gen 2 backend tooling, Bedrock Knowledge Bases on S3 Vectors (semantic search only), OpenSearch Serverless (minimum cost), Supabase, Firestore, PocketBase, Convex, Keycloak (kept as fallback), Aurora Serverless v2 and Neon (Postgres on the VM chosen), Fargate, Lightsail (no instance IAM roles), Google Workspace sign-in, CodeCommit, and App Runner (closed to new customers since 30 April 2026).
 
+## Board notifications
+
+One bar across the top of every board page shows board-wide incidents that need a person. It is exclusive: not per-glob status, not setup nags (the readiness banner stays separate).
+
+- **Model.** A `BoardNotification` has an `id` (`<board or all>/<source>`), `boardId` (null for every board), `source` (`main-red` today; `integration:<id>` and `local-follow` are planned), `severity` (`critical`, `warning`, `info`), `title`, `detail`, `link`, an optional `action` (label and href), `since`, and how it clears: `condition` (its source clears it), `until` (a time) or `dismissible`. There is one per board and source; raising again replaces it and keeps its `since`.
+- **Storage.** Beside the board, with no glob or board version. Sources raise and clear through the core `NotificationSink` port, implemented by `NotificationService`, which sends a `board.notifications` hint on every change. Expired `until` notifications are dropped on read. Only `dismissible` ones can be dismissed.
+- **Delivery.** The board refetches on the hint and on every live-update reconnect, and polls every 15 s while one is showing (60 s otherwise), because a hidden tab closes its event stream and loses hints.
+- **The bar.** Critical is large and red, flashes once when it arrives and cannot be dismissed while its condition holds. Warning is amber. Info is quiet. With several, the most severe (then the oldest) shows in full and the rest as a "+N more" count that expands.
+- **Main is red (critical).** Raised when the base branch's checks fail and cleared when they pass, from the same read that records `board.baseChecks`. It names the failing check and its first error, the glob whose merge turned the base red, and that globs failing the same way are waiting. It links to the failing run.
+
 ## Operations
 
 Slop has two environments: a developer's laptop (Docker Compose) and production on EC2. Only production is backed up.

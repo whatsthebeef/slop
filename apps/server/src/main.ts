@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
 import type { Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -31,6 +31,7 @@ import { BedrockLlm } from './llm.js';
 import { LlmHealth } from './llm-health.js';
 import { mountHealth } from './http/health.js';
 import { mountCodeReviews } from './http/code-reviews.js';
+import { mountNotifications } from './http/notifications.js';
 import { AwsSignIn, AwsSsoOidc, readSsoSession, ssoCacheFile } from './aws-sso.js';
 import { IntegrationRegistry } from './integration-health.js';
 import { TunnelWatch } from './tunnel-watch.js';
@@ -84,13 +85,14 @@ const deploys = new DeployService({
 });
 const environments = new EnvironmentService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
+const notifications = new NotificationService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 const codeReviews = new CodeReviewService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 
 const outbox = new OutboxRunner(
   db,
   { globs },
   {
-    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations),
+    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications),
     ...deployExecutors(
       deploys,
       new Deployers({ codebuild: new CodeBuildDeployer() }),
@@ -222,6 +224,7 @@ const awsSignIn =
       });
 mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
 mountCodeReviews(app, { codeReviews });
+mountNotifications(app, { notifications });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
 const agentSetValues = { SLOP_URL: config.PUBLIC_URL, COGNITO_CLAUDE_CODE_CLIENT_ID: config.CLAUDE_CODE_CLIENT_ID };

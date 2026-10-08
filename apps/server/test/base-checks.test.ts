@@ -1,4 +1,4 @@
-import { BoardService, GlobService, machine } from '@slop/core';
+import { BoardService, GlobService, NotificationService, machine } from '@slop/core';
 import type { Board, CheckFailure, Effect, Glob, Result } from '@slop/core';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -54,6 +54,7 @@ describe('a red base branch', () => {
   let store: PgStore;
   let globs: GlobService;
   let boards: BoardService;
+  let notifications: NotificationService;
   let host: FakeHost;
   let executors: ReturnType<typeof codeHostExecutors>;
   let handle: ReturnType<typeof githubDeliveryHandler>;
@@ -73,6 +74,7 @@ describe('a red base branch', () => {
       routines: { hasRoutine: () => Promise.resolve(true) },
     });
     boards = new BoardService({ store, notifier });
+    notifications = new NotificationService({ store, notifier, clock: { now: () => new Date().toISOString() } });
     await store.transaction(async (tx) => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
       const board = await tx.insertBoard({
@@ -87,7 +89,7 @@ describe('a red base branch', () => {
       await tx.upsertMember({ boardId: board.id, email: DEV, role: 'admin' });
     });
     host = new FakeHost();
-    executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), boards);
+    executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), boards, undefined, null, notifications);
     // These deliveries never carry review comments.
     const findings = { recordCodeRabbitComment: () => Promise.reject(new Error('not used here')) };
     const codeReviews = { record: () => Promise.reject(new Error('not used here')), remove: () => Promise.reject(new Error('not used here')) };
@@ -174,6 +176,13 @@ describe('a red base branch', () => {
     expect((await boardOf(1))?.baseChecks).toMatchObject({ state: 'failed', sha: 'm1', since: 's1f5', failure: { name: 'Check' } });
     expect((await current(early)).headChecks?.inheritedFrom).toEqual({ base: 'main', since: 's1f5' });
 
+    // The board's bar says what failed and who caused it.
+    const raised = unwrap(await notifications.list(DEV, 1));
+    expect(raised).toHaveLength(1);
+    expect(raised[0]).toMatchObject({ source: 'main-red', severity: 'critical', title: 'main is red since s1f5 merged', clears: { kind: 'condition' }, link: typecheck.url });
+    expect(raised[0]?.detail).toContain('error TS2739');
+    expect(raised[0]?.detail).toContain('Globs failing the same way are waiting');
+
     // A glob whose checks fail after the base's result is marked as the failure is recorded.
     const late = await newOpenGlob('Created on a red base');
     await globs.applyEvent(late, (g, ctx) => machine.checksChanged(g, ctx));
@@ -208,6 +217,7 @@ describe('a red base branch', () => {
     await handle(checkRunDelivery('main'));
     await run('board-1', 'refresh_base_checks');
     expect((await boardOf(1))?.baseChecks).toMatchObject({ state: 'passed', sha: 'm2' });
+    expect(unwrap(await notifications.list(DEV, 1))).toEqual([]);
     for (const id of inherited) expect(await pending(id, 'update_branch')).toHaveLength(1);
     for (const id of own) expect(await pending(id, 'update_branch')).toHaveLength(0);
 

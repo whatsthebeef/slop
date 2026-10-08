@@ -1,4 +1,4 @@
-import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService } from '@slop/core';
+import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { FileRoutines } from './routines.js';
 import { machine, parseId, subGatePolicy } from '@slop/core';
@@ -19,6 +19,7 @@ export const codeHostExecutors = (
   boards: Pick<BoardService, 'recordBaseChecks'>,
   now: () => string = () => new Date().toISOString(),
   health: HealthSink | null = null,
+  notifications: Pick<NotificationService, 'syncMainRed'> | null = null,
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -170,7 +171,10 @@ export const codeHostExecutors = (
         { sha: head.sha, passed, failure: result.failure, merged: passed ? null : globOfSubject(head.subject) },
         now(),
       );
-      if (recorded === null || !recorded.change.changed) return 'done';
+      if (recorded === null) return 'done';
+      // Whether or not the result changed: a retry after a crash between recording and raising still raises it.
+      await notifications?.syncMainRed(board.id, repo.base, recorded.checks);
+      if (!recorded.change.changed) return 'done';
       const { checks, change } = recorded;
       for (const other of await globs.peekAll(board.id, { status: ['pr_open', 'in_progress'] })) {
         // A red base marks the globs that fail the same way; a base that just turned green brings them up to date.
