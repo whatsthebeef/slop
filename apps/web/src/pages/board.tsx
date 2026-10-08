@@ -10,6 +10,7 @@ import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
 import { GlobDialog } from '@/components/glob-dialog';
+import { SearchBox } from '@/components/search-box';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
@@ -383,6 +384,7 @@ export const BoardPage = () => {
           ))}
         </div>
         <nav className='ml-auto flex flex-wrap items-center gap-8 text-sm'>
+          <SearchBox boardId={boardId} />
           <Link className='hover:underline' to={`/boards/${boardId}/signed-off`}>
             Signed off
           </Link>

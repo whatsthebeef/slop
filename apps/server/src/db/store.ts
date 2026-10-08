@@ -1,6 +1,8 @@
-import type { BoardNotification, Artifact, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
-import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import type { BoardNotification, Artifact, Candidate, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { GLOB_OWNED_SOURCES, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type { PostgresJsDatabase, PostgresJsQueryResultHKT } from 'drizzle-orm/postgres-js';
@@ -255,6 +257,81 @@ const globColumns = (glob: Glob) => ({
   updatedAt: new Date(glob.updatedAt),
 });
 
+const toKnowledgeItem = (row: typeof schema.knowledgeItems.$inferSelect): KnowledgeItem => ({
+  id: row.id,
+  boardId: row.boardId,
+  sourceType: row.sourceType,
+  externalRef: row.externalRef,
+  title: row.title,
+  occurredAt: row.occurredAt.toISOString(),
+  authority: row.authority,
+  status: row.status,
+  supersededBy: row.supersededBy,
+  globIds: row.globIds,
+  globGroup: row.globGroup,
+  externalUrl: row.externalUrl,
+  contentHash: row.contentHash,
+  state: row.state,
+  attempts: row.attempts,
+  processAfter: row.processAfter?.toISOString() ?? null,
+  lastError: row.lastError,
+});
+
+const supersededItems = alias(schema.knowledgeItems, 'superseding');
+
+/** What a candidate query selects: the chunk, its item's facts and the title of the item that replaced it. */
+const candidateColumns = (relevance: SQL<number>) => ({
+  chunkId: schema.chunks.id,
+  itemId: schema.knowledgeItems.id,
+  header: schema.chunks.header,
+  text: schema.chunks.text,
+  relevance,
+  sourceType: schema.knowledgeItems.sourceType,
+  title: schema.knowledgeItems.title,
+  occurredAt: schema.knowledgeItems.occurredAt,
+  authority: schema.knowledgeItems.authority,
+  status: schema.knowledgeItems.status,
+  supersededByTitle: supersededItems.title,
+  globIds: schema.knowledgeItems.globIds,
+  globGroup: schema.knowledgeItems.globGroup,
+  externalUrl: schema.knowledgeItems.externalUrl,
+});
+
+const toCandidate = (row: { relevance: number; occurredAt: Date } & Omit<Candidate, 'relevance' | 'occurredAt'>): Candidate => ({
+  ...row,
+  // A zero vector has no cosine similarity (NaN): it matches nothing.
+  relevance: Number.isFinite(row.relevance) ? Math.min(1, Math.max(0, row.relevance)) : 0,
+  occurredAt: row.occurredAt.toISOString(),
+});
+
+/** The filters every search shares: one board, and the query's date range, glob, group and source types. */
+const searchFilters = (q: SearchQuery): SQL[] => {
+  const i = schema.knowledgeItems;
+  const conditions = [eq(schema.chunks.boardId, q.boardId), eq(i.boardId, q.boardId)];
+  if (q.from !== undefined) conditions.push(gte(i.occurredAt, new Date(q.from)));
+  if (q.to !== undefined) conditions.push(lte(i.occurredAt, new Date(q.to)));
+  if (q.globId !== undefined) conditions.push(sql`${i.globIds} @> ARRAY[${q.globId}]::text[]`);
+  if (q.group !== undefined) conditions.push(eq(i.globGroup, q.group));
+  if (q.sourceTypes !== undefined && q.sourceTypes.length > 0) conditions.push(inArray(i.sourceType, [...q.sourceTypes]));
+  return conditions;
+};
+
+/** The words of a query as a full-text query, and as a plain substring (identifiers, paths) and trigram match. */
+const keywordMatch = (query: string) => {
+  const c = schema.chunks;
+  const tsquery = sql`websearch_to_tsquery('english', ${query})`;
+  const contains = sql`${c.text} ilike ${`%${query.replace(/[\\%_]/g, '\\$&')}%`}`;
+  const similar = sql`${query} <% ${c.text}`;
+  const relevance = sql<number>`greatest(
+    case when ${c.tsv} @@ ${tsquery} then ts_rank_cd(${c.tsv}, ${tsquery}, 32) else 0 end,
+    case when ${contains} then 1 else 0 end,
+    word_similarity(${query}, ${c.text})
+  )::float8`.mapWith(Number);
+  return { relevance, matches: sql`(${c.tsv} @@ ${tsquery} or ${contains} or ${similar})` };
+};
+
+const vectorText = (embedding: readonly number[]): string => `[${embedding.join(',')}]`;
+
 /** Postgres implementation of the core Store port. */
 export class PgStore implements Store {
   constructor(private readonly db: Db) {}
@@ -297,6 +374,11 @@ export class PgStore implements Store {
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
+        // Its own search items go with it; a learning or document it fed only loses the link.
+        const i = schema.knowledgeItems;
+        const linked = sql`${i.globIds} @> ARRAY[${id}]::text[]`;
+        await t.delete(i).where(and(linked, inArray(i.sourceType, [...GLOB_OWNED_SOURCES])));
+        await t.update(i).set({ globIds: sql`array_remove(${i.globIds}, ${id})` }).where(linked);
         await t.delete(schema.globs).where(eq(schema.globs.id, id));
       },
       findGlobByCreationKey: async (boardId, key) => {
@@ -1015,6 +1097,132 @@ export class PgStore implements Store {
       },
       lockBoardJob: async (boardId, job) => {
         await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`board_jobs:${String(boardId)}:${job}`}))`);
+      },
+
+      itemHashes: async (boardId) => {
+        const i = schema.knowledgeItems;
+        const rows = await t.select({ ref: i.externalRef, hash: i.contentHash }).from(i).where(eq(i.boardId, boardId));
+        return new Map(rows.map((r) => [r.ref, r.hash]));
+      },
+      replaceItem: async (item, chunks) => {
+        const i = schema.knowledgeItems;
+        // Two syncs of one item (the startup backfill and a dirty re-sync) take turns.
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`search_item:${String(item.boardId)}:${item.externalRef}`}))`);
+        const columns = {
+          sourceType: item.sourceType,
+          title: item.title,
+          occurredAt: new Date(item.occurredAt),
+          authority: item.authority,
+          status: item.status,
+          supersededBy: item.supersededBy,
+          globIds: [...item.globIds],
+          globGroup: item.globGroup,
+          externalUrl: item.externalUrl,
+          contentHash: item.contentHash,
+          state: item.state,
+          attempts: 0,
+          processAfter: null,
+          lastError: null,
+        };
+        const [row] = await t
+          .insert(i)
+          .values({ boardId: item.boardId, externalRef: item.externalRef, ...columns })
+          .onConflictDoUpdate({ target: [i.boardId, i.externalRef], set: columns })
+          .returning({ id: i.id });
+        if (row === undefined) throw new Error('Item upsert returned nothing');
+        await t.delete(schema.chunks).where(eq(schema.chunks.itemId, row.id));
+        if (chunks.length > 0) {
+          await t
+            .insert(schema.chunks)
+            .values(chunks.map((c) => ({ itemId: row.id, boardId: item.boardId, position: c.position, header: c.header, text: c.text })));
+        }
+      },
+      deleteItemsNotIn: async (boardId, sourceType, refs) => {
+        const i = schema.knowledgeItems;
+        const gone = await t
+          .delete(i)
+          .where(and(eq(i.boardId, boardId), eq(i.sourceType, sourceType), refs.size === 0 ? undefined : notInArray(i.externalRef, [...refs])))
+          .returning({ id: i.id });
+        return gone.length;
+      },
+      nextItemToSummarise: async (now) => {
+        const i = schema.knowledgeItems;
+        const [row] = await t
+          .select()
+          .from(i)
+          .where(and(eq(i.state, 'pending_summary'), or(isNull(i.processAfter), lte(i.processAfter, new Date(now)))))
+          .orderBy(asc(i.occurredAt), asc(i.id))
+          .limit(1);
+        return row === undefined ? null : toKnowledgeItem(row);
+      },
+      setItemProgress: async (id, progress) => {
+        await t
+          .update(schema.knowledgeItems)
+          .set({
+            attempts: progress.attempts,
+            processAfter: progress.processAfter === null ? null : new Date(progress.processAfter),
+            lastError: progress.lastError,
+          })
+          .where(eq(schema.knowledgeItems.id, id));
+      },
+      chunksToEmbed: async (limit) => {
+        const c = schema.chunks;
+        return t.select({ id: c.id, header: c.header, text: c.text }).from(c).where(isNull(c.embedding)).orderBy(asc(c.id)).limit(limit);
+      },
+      setEmbeddings: async (rows) => {
+        for (const row of rows) {
+          await t
+            .update(schema.chunks)
+            .set({ embedding: [...row.embedding], embeddedAt: sql`now()` })
+            .where(eq(schema.chunks.id, row.id));
+        }
+      },
+      keywordCandidates: async (q, limit) => {
+        const { relevance, matches } = keywordMatch(q.query);
+        const rows = await t
+          .select(candidateColumns(relevance))
+          .from(schema.chunks)
+          .innerJoin(schema.knowledgeItems, eq(schema.knowledgeItems.id, schema.chunks.itemId))
+          .leftJoin(supersededItems, eq(supersededItems.id, schema.knowledgeItems.supersededBy))
+          .where(and(...searchFilters(q), matches))
+          .orderBy(desc(relevance), asc(schema.chunks.id))
+          .limit(limit);
+        return rows.map(toCandidate);
+      },
+      vectorCandidates: async (q, embedding, limit) => {
+        const c = schema.chunks;
+        const distance = sql`${c.embedding} <=> ${vectorText(embedding)}::vector`;
+        const rows = await t
+          .select(candidateColumns(sql<number>`(1 - (${distance}))::float8`.mapWith(Number)))
+          .from(c)
+          .innerJoin(schema.knowledgeItems, eq(schema.knowledgeItems.id, c.itemId))
+          .leftJoin(supersededItems, eq(supersededItems.id, schema.knowledgeItems.supersededBy))
+          .where(and(...searchFilters(q), sql`${c.embedding} is not null`))
+          .orderBy(distance, asc(c.id))
+          .limit(limit);
+        return rows.map(toCandidate);
+      },
+      changeCandidates: async (q, limit) => {
+        const word = q.query.trim() === '' ? null : keywordMatch(q.query.trim());
+        const rows = await t
+          .select(candidateColumns(word === null ? sql<number>`1::float8`.mapWith(Number) : word.relevance))
+          .from(schema.chunks)
+          .innerJoin(schema.knowledgeItems, eq(schema.knowledgeItems.id, schema.chunks.itemId))
+          .leftJoin(supersededItems, eq(supersededItems.id, schema.knowledgeItems.supersededBy))
+          .where(and(...searchFilters({ ...q, sourceTypes: ['change_summary'] }), word === null ? undefined : word.matches))
+          .orderBy(desc(schema.knowledgeItems.occurredAt), asc(schema.chunks.id))
+          .limit(limit);
+        return rows.map(toCandidate);
+      },
+      listLatestArtifacts: async (boardId) => {
+        const a = schema.artifacts;
+        const rows = await t
+          .selectDistinctOn([a.globId, a.kind, a.label], getTableColumns(a))
+          .from(a)
+          .innerJoin(schema.globs, eq(schema.globs.id, a.globId))
+          .where(eq(schema.globs.boardId, boardId))
+          .orderBy(a.globId, a.kind, a.label, desc(a.version));
+        return rows.map(toArtifact);
       },
 
       appendEvents: async (events) => {

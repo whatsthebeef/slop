@@ -55,3 +55,8 @@ export * from './app/environment-service.js';
 export * from './app/test-run-service.js';
 export * from './domain/checks.js';
 export * from './app/integration-health.js';
+export * from './domain/search.js';
+export * from './domain/chunking.js';
+export * from './app/search-indexer.js';
+export * from './app/search-service.js';
+export { FakeEmbedder, vectorOf } from './testing/fake-embedder.js';

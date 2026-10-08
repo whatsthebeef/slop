@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** The background jobs a server starts; `SLOP_JOBS` picks them. */
-export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'findings', 'learning', 'tunnel', 'follow', 'readiness'] as const;
+export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'findings', 'search', 'learning', 'tunnel', 'follow', 'readiness'] as const;
 export type Job = (typeof JOBS)[number];
 const isJob = (name: string): name is Job => JOBS.some((job) => job === name);
 
@@ -99,6 +99,10 @@ const schema = z.object({
   KB_DRAFT_MODEL: z.string().default('us.anthropic.claude-opus-5-5'),
   /** Haiku 4.5 splits free-form reviews into findings and classifies each finding (temperature 0). */
   FINDINGS_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
+  /** Titan Text Embeddings V2 (1024 dimensions) embeds search chunks and queries; it is the only embedding model slop uses. */
+  EMBED_MODEL: z.string().default('amazon.titan-embed-text-v2:0'),
+  /** Haiku 4.5 writes the "why this changed" note of each merged change for the search index. */
+  SEARCH_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
 });
 
 export type Config = z.infer<typeof schema>;

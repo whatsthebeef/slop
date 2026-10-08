@@ -215,8 +215,20 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
 
    Skip trivial or glob-specific details; most globs produce 0–3. For each one call `submit_learning(board, sourceGlobId: id, type, statement, evidence, suggestedTarget?)`. Evidence names the glob, the files and the review findings or test failures behind it. Never edit `.sstor/docs/`, `.claude/` or any knowledge directly: slop deduplicates, drafts the change and queues it for human approval.
 8. **Push and mark ready:**
-   - **Unattended:** run the pre-push check (see Unattended mode), `git push origin <id>`, then call slop's `mark_ready` with the glob ID and your run ID; slop marks the draft PR ready through its GitHub App. Do not use `gh` or open a PR. The PR title is already `<id>: <title>`; do not change it. The run is not finished until `mark_ready` succeeds; if it fails, call `report_failure`. Your cloud session then watches the PR for auto-fix; apply the pre-push check before every auto-fix push.
+   - **Unattended:** run the pre-push check (see Unattended mode), `git push origin <id>`, then call slop's `mark_ready` with the glob ID and your run ID; slop marks the draft PR ready through its GitHub App. Do not use `gh` or open a PR. The PR title is already `<id>: <title>`; do not change it. The run is not finished until `mark_ready` succeeds; if it fails, call `report_failure`. Then **subscribe to the PR's activity** (see Auto-fix below): nothing watches the PR for you, and without the subscription failed checks never reach this session. Apply the pre-push check before every auto-fix push.
    - **Interactive:** `git push origin <id>`. Then ask the developer whether to mark the PR ready for review now. If yes, run `/finalise <requestId>` (generate the request ID with `uuidgen`; local review and learnings are already submitted for this commit, so /finalise will skip them), then call slop's `mark_ready` with the glob ID. If not, tell them to run `sstor --ready` from a terminal when they are. Never run `sstor` yourself: it is the developer's terminal tool, it drives this session, and it cannot run inside the sandbox.
+
+## Auto-fix (watching the PR)
+
+After `mark_ready` succeeds (unattended), your run is `watching`. Slop does not fail a quiet watcher for being idle, but it does fail one that ignores failed checks: if the PR head's checks fail (not inherited from the base) and you make no slop call or push within the board's response window (default 30 minutes), the run ends with "Auto-fix didn't respond to failed checks". So:
+
+1. **Subscribe.** Call the `subscribe_pr_activity` tool (`mcp__claude-code-remote__subscribe_pr_activity`, load it with ToolSearch if it isn't listed) for the glob's PR (`get_glob` gives `pr.number`; the repository is the board's repo) right after `mark_ready`. Check events arrive in this session as `<wake reason="external-event">` messages. If the tool is not available, call `report_failure` with that reason instead of ending the session: a watcher that can't hear about failed checks is useless.
+2. **On every event, call `get_glob` with your run ID first.** That records progress (it resets the response clock) and shows the state: stop if the run is no longer current, a human implementer is recorded, or the glob is merged. `headChecks` says whether the head's checks passed, are pending or failed, with the failing check, its step and the first error lines; `headChecks.inheritedFrom` means the base is red (see "A red base branch" above: record it, don't push).
+3. **Failed checks of this glob:** reproduce the failing check's command locally, fix the cause, run the fast checks, apply the pre-push check, commit with the `Slop-Run` trailer and push. Then wait for the next event. Don't skip, disable or quarantine a test to get green.
+4. **Anything else** (passed, pending, a comment you can't act on): do nothing and end your turn; there is no timeout for an idle watcher on a healthy PR. A merged or closed PR ends the watch.
+5. If you cannot fix the failure, call `report_failure` with the reason rather than going quiet.
+
+A run started by **Retry auto-fix** is a watcher from the start: the PR is already ready, so skip the phases and `mark_ready`, call `get_glob` (with the run ID), fix the failed checks as in step 3, and subscribe as in step 1.
 
 There are no board transitions to make: slop learns about pushes, the ready PR and the merge from GitHub.
 
@@ -225,6 +237,7 @@ There are no board transitions to make: slop learns about pushes, the ready PR a
 Supers are pairing sessions between a developer and the PO. The developer drives; you do not run the phases.
 
 - On start (interactive only), call `pick_up` as above, then `get_context`, fetch the board knowledge, and write `.reviews/<id>-context.md` as in Phase 1 steps 1–4. Supers use the **postplan** rather than plan.md as the living record; until the first postplan exists, `get_context` gives plan.md as the starting intent. When the glob already has work on it, also fetch its decision log (`get_artifact(id, 'implementation_plan')`) so you know why earlier choices were made; `get_context` only lists it.
+- **plan.md:** when the glob's spec needs rewriting (the intent changed, the PO and developer agreed a new scope), read it with `get_plan` and write the new text with `save_plan(id, version, content)`, passing the plan version you read. Never put the spec in `update_glob`'s `summary`: that leaves no plan history.
 - **Environment:** note the glob's `environment` from `get_glob` in the context file and tell the developer which environment the branch deploys to (or that none is set; they choose one with `sstor --glob <id> --env <name>`, `slop pick-up <id> --env <name>` or the glob view). Never change it yourself.
 - Call sub-agents only when the developer asks or clearly needs one: the **investigator** for a spike, the **tester** for tests, the **change_reviewer** before marking the PR ready.
 - **Postplan:** keep `.reviews/<id>-postplan.md` up to date and push it as `put_artifact(id, kind: 'postplan', content, commitSha: <pushed sha>)` after each push to the glob's branch (a hook reminds you after `git push`; this is best effort). Build it from the session conversation and `git diff origin/<base>...HEAD` (after `git fetch origin <base>`; never the local `<base>`, which can be stale). Use this structure:
@@ -292,3 +305,29 @@ When CI fails on a commit whose local checks passed (Phase 6 full checks, a loca
 - Check CI on `origin/<base>` at the commit you merged (`git log origin/<base> -1` after `git fetch origin <base>`). If the same check fails there, the failure is inherited from a red base. Don't fix it in this glob unless it is the one glob fixing the base (see Red base branch under Super mode). Record "inherited from red `<base>` at `<sha>`" in the review document, or in an `Assumptions` attachment if unattended.
 - If `<base>` is green, the failure is the glob's own. Find the CI job's command, run that exact command locally, fix the failure, and say in the review document why the local checks missed it.
 - If CI runs a check that the board's build doc does not list, or runs it differently (other flags, other environment), submit a `gotcha` learning that names the check, so the build doc can be corrected.
+
+### Overlapping side globs
+
+In every mode, not only in supers, check for overlap before creating side globs (several at once, or one while others are in flight):
+
+- Compare the files and functions each new glob's summary names with the other new globs' summaries. Also compare them with the branches of in-flight globs (`git diff origin/<base>...origin/<id>` after `git fetch`).
+- If two would edit the same code, fold them into one glob. Otherwise create the later one with "start only after `<id>` has merged" in its summary, and don't start it until that glob has merged.
+- Noticing that two globs "touch the same code" is the signal to apply this rule. Don't create them side by side anyway.
+
+### Routine runs
+
+Routine runs too often end with a person starting the run again or taking it over, often within the first hour. To make each unattended run either finish or hand over cleanly:
+
+- **Leave a trail early.** Upload the Phase 2 plan as soon as it exists. Add an `Assumptions` attachment before Phase 3. A restarted run or a person can then resume with `--from` instead of starting from nothing.
+- **Checks failing after slop updates the branch** (it merged `<base>` or re-ran checks). First rule out an inherited failure as the catalog describes. If it is not inherited, the failure comes from the merge with `<base>`.
+  - Fetch the branch again (`git fetch origin <id> && git checkout -B <id> origin/<id>`).
+  - Run the failing check's exact CI command locally.
+  - Fix it in this glob, and push after the pre-push check.
+  - Don't end the run with the checks still red.
+- **Never end a run silently.** If you can't finish, call `report_failure` with:
+  - the phase reached;
+  - the failing check or blocker, with its first error;
+  - what you tried.
+
+  The person who picks it up should not have to start again to find out.
+- **Submit an `agent-behaviour` learning** when a run needs a person, naming what would have let it finish.

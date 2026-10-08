@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -30,9 +30,13 @@ import { mountReadiness } from './http/readiness.js';
 import { ReadinessWatch } from './readiness-watch.js';
 import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
+import { BedrockEmbedder } from './embedder.js';
+import { CodeHostChanges } from './code-host-changes.js';
+import { marksBoardDirty, SearchSync } from './jobs/search-sync.js';
 import { LlmHealth } from './llm-health.js';
 import { mountHealth } from './http/health.js';
 import { mountCodeReviews } from './http/code-reviews.js';
+import { mountSearch } from './http/search.js';
 import { mountNotifications } from './http/notifications.js';
 import { AwsSignIn, AwsSsoOidc, readSsoSession, ssoCacheFile } from './aws-sso.js';
 import { IntegrationRegistry } from './integration-health.js';
@@ -116,7 +120,6 @@ const clock = { now: () => new Date().toISOString() };
 // Mining measures the board's signals: the weekly job, and the signal an admin picks to watch when approving.
 const mining = new MiningService({ store, notifier: hub });
 const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub, signals: mining });
-const artifacts = new ArtifactService({ store, clock, notifier: hub });
 const findings = new FindingsService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
@@ -166,6 +169,31 @@ const findingsLlm = trackLlm(
   config.FINDINGS_MODEL,
 );
 const findingsPipeline = new FindingsPipeline({ store, clock, notifier: hub, llm: findingsLlm });
+
+// The search index (spec, Knowledge and context): derived from the board's own material, so it syncs by content hash
+// (the start-up run is the backfill). Titan embeds chunks; Haiku writes each merged change's "why". Both wait while
+// unavailable, and chunks stay keyword-searchable meanwhile.
+const embedder = llmHealth.trackEmbedder(
+  new BedrockEmbedder({ id: config.EMBED_MODEL, configKey: 'EMBED_MODEL' }, config.BEDROCK_REGION),
+  config.EMBED_MODEL,
+);
+const searchIndexer = new SearchIndexer({
+  store,
+  clock,
+  embedder,
+  changes: new CodeHostChanges(github, logError),
+  llm: trackLlm(
+    new BedrockLlm({ id: config.SEARCH_MODEL, configKey: 'SEARCH_MODEL' }, config.BEDROCK_REGION, logUsage),
+    config.SEARCH_MODEL,
+  ),
+});
+const search = new SearchService({ store, clock, embedder });
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob) });
+const searchSync = new SearchSync(searchIndexer, logError);
+// A change to a board's material marks it for the next sync.
+hub.tap((hint) => {
+  if (marksBoardDirty(hint)) searchSync.mark(hint.boardId);
+});
 
 // Weekly mining: signals from the board's own activity become mined KB items for the KB pipeline. Weekly
 // consolidation then merges same-fact open items (verified quotes) and flags stale ones; it waits while its model is down.
@@ -233,6 +261,7 @@ for (const id of Object.keys(INTEGRATION_NAMES) as IntegrationId[]) await notifi
 await notifications.clear(null, 'integration:local'); // the retired fake integration of local follow
 mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
 mountCodeReviews(app, { codeReviews });
+mountSearch(app, { search });
 mountNotifications(app, { notifications });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
@@ -263,6 +292,7 @@ mountMcp(app, {
   outbox,
   knowledge,
   artifacts,
+  search,
   intake,
   publicUrl: config.PUBLIC_URL,
   agentSetValues,
@@ -318,6 +348,12 @@ if (runs('kb')) kbPipelineJob.start();
 // Findings pause on the findings model only, like the KB pipeline on its own.
 const findingsJob = new KbPipelineJob(findingsPipeline, logError, { isDown: () => llmHealth.isDown([config.FINDINGS_MODEL]) }, Date.now, 'findings');
 if (runs('findings')) findingsJob.start();
+// The index pauses on its own two models, like the other pipelines.
+const searchJob = new KbPipelineJob(searchIndexer, logError, { isDown: () => llmHealth.isDown([config.EMBED_MODEL, config.SEARCH_MODEL]) }, Date.now, 'search');
+if (runs('search')) {
+  searchSync.start();
+  searchJob.start();
+}
 const learningJobsRunner = new LearningJobs(learningJobs, logError);
 if (runs('learning')) learningJobsRunner.start();
 const tunnelWatch = config.SLOP_TUNNEL_DOMAIN === undefined ? null : new TunnelWatch(config.SLOP_TUNNEL_DOMAIN, integrations);
@@ -339,6 +375,8 @@ const shutdown = () => {
   deployWatch.stop();
   kbPipelineJob.stop();
   findingsJob.stop();
+  searchSync.stop();
+  searchJob.stop();
   learningJobsRunner.stop();
   tunnelWatch?.stop();
   followWatch?.stop();

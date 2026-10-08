@@ -1,5 +1,5 @@
 import { LlmUnavailable } from '@slop/core';
-import type { Llm } from '@slop/core';
+import type { Embedder, Llm } from '@slop/core';
 import { describe, expect, it } from 'vitest';
 import { LlmHealth } from '../src/llm-health.js';
 import type { LlmHealthState } from '../src/llm-health.js';
@@ -88,5 +88,33 @@ describe('LlmHealth', () => {
     await trackedDraft.complete(REQUEST);
     expect(health.isDown()).toBe(false);
     expect(health.state()).toMatchObject({ state: 'ok' });
+  });
+
+  it('tracks an embedder like an LLM: ok on success, down on LlmUnavailable, untouched by ordinary failures', async () => {
+    const { health, changes } = setup();
+    let next: () => Promise<number[][]> = () => Promise.resolve([[1]]);
+    const embedder: Embedder = { model: 'titan', dimensions: 1024, embed: () => next() };
+    const tracked = health.trackEmbedder(embedder, 'titan');
+    expect(tracked.model).toBe('titan');
+    expect(tracked.dimensions).toBe(1024);
+
+    expect(await tracked.embed(['a'])).toEqual([[1]]);
+    expect(health.isDown(['titan'])).toBe(false);
+
+    const throttled = new Error('Too many requests');
+    next = () => Promise.reject(throttled);
+    await expect(tracked.embed(['a'])).rejects.toBe(throttled);
+    expect(health.isDown(['titan'])).toBe(false);
+
+    const denied = new LlmUnavailable('No access to the Bedrock model titan', 'Enable it');
+    next = () => Promise.reject(denied);
+    await expect(tracked.embed(['a'])).rejects.toBe(denied);
+    expect(health.isDown(['titan'])).toBe(true);
+    expect(health.state()).toMatchObject({ state: 'down', reason: 'No access to the Bedrock model titan' });
+
+    next = () => Promise.resolve([[2]]);
+    await tracked.embed(['a']);
+    expect(health.isDown(['titan'])).toBe(false);
+    expect(changes.map((c) => c.state)).toEqual(['ok', 'down', 'ok']);
   });
 });

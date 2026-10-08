@@ -176,6 +176,13 @@
       "when": 1791488941828,
       "tag": "0024_watcher_respond",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791488942828,
+      "tag": "0025_search_store",
+      "breakpoints": true
     }
   ]
 }

@@ -4,8 +4,9 @@ import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import type { Artifact, ArtifactKind, Provenance, ReviewStats } from '../domain/knowledge.js';
 import { currentRun } from '../domain/machine.js';
+import type { SearchHit } from '../domain/search.js';
 import type { Glob } from '../domain/types.js';
-import type { Clock, Notifier, Store } from '../ports.js';
+import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
 
 export interface GlobContext {
@@ -24,6 +25,11 @@ export interface GlobContext {
   readonly available: readonly ArtifactListing[];
   /** CodeRabbit's summary, reviews and inline comments, verbatim; only with `include: ['code_review']` (or `all`). */
   readonly codeReview: CodeReviewContext | null;
+  /**
+   * What the board already knows about this glob's title and summary (current mode, top 5, cited, the glob's own
+   * items left out). Absent when no search is configured.
+   */
+  readonly related?: readonly SearchHit[];
   readonly fetch: string;
 }
 
@@ -107,7 +113,15 @@ export interface PutOptions {
  * version, and results from a superseded routine run are ignored.
  */
 export class ArtifactService {
-  constructor(private readonly deps: { store: Store; clock: Clock; notifier: Notifier }) {}
+  constructor(
+    private readonly deps: {
+      store: Store;
+      clock: Clock;
+      notifier: Notifier;
+      /** Ranked material related to a glob, for `get_context`; runs in the context transaction. */
+      related?: (tx: Tx, glob: Glob) => Promise<readonly SearchHit[]>;
+    },
+  ) {}
 
   /** `save_plan` and `PUT /globs/{id}/plan`: a new plan.md version, conditional on `version` when given. */
   async putPlan(email: string, globId: string, content: string, version?: number): Promise<Result<Artifact | Ignored>> {
@@ -195,7 +209,7 @@ export class ArtifactService {
 
   /**
    * `get_context` (basic): the glob and its plan in full, Clarifications and Assumptions in full, and a listing of
-   * every other artifact. `include` returns more in full. Decisions, meetings and search come in slice 8.
+   * every other artifact. `include` returns more in full. `related` adds ranked search results when search is configured.
    */
   async context(email: string, globId: string, include: readonly string[] = []): Promise<Result<GlobContext>> {
     return this.deps.store.transaction(async (tx) => {
@@ -216,6 +230,7 @@ export class ArtifactService {
       const others = artifacts.filter((a) => a.kind !== 'plan' && a.kind !== 'postplan' && !full(a));
       const codeReview = await tx.listCodeReviewComments(glob.boardId, [globId]);
       const codeReviewInFull = include.includes('all') || include.includes('code_review');
+      const related = this.deps.related === undefined ? undefined : await this.deps.related(tx, glob);
       return ok({
         glob: {
           id: glob.id,
@@ -253,6 +268,7 @@ export class ArtifactService {
           ...(codeReview.length === 0 || codeReviewInFull ? [] : [codeReviewListing(codeReview)]),
         ],
         codeReview: codeReview.length === 0 || !codeReviewInFull ? null : codeReviewContext(codeReview),
+        ...(related === undefined ? {} : { related }),
         fetch:
           "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['implementation_plan', 'local_review', 'attachment:<label>', 'code_review', 'all']).",
       });

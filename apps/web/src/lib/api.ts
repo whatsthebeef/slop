@@ -32,6 +32,7 @@ import type {
   Member,
   Role,
   Run,
+  SearchHit,
   SlopType,
   SubLimitView,
   TargetChange,
@@ -129,6 +130,12 @@ export interface BoardDeploys {
   readonly environments?: Readonly<Record<string, readonly EnvironmentIndicator[]>>;
   /** Each glob's ATF results: its branch run, and the runs against the environment commits holding it. Optional, as above. */
   readonly atf?: Readonly<Record<string, readonly AtfRun[]>>;
+}
+
+/** The board search box's results; `semantic: 'unavailable'` means keyword matches only (the embedding model is down). */
+export interface BoardSearchResult {
+  readonly hits: readonly SearchHit[];
+  readonly semantic: 'ok' | 'unavailable';
 }
 
 export class RequestError extends Error {
@@ -252,6 +259,11 @@ export const api = {
     request<{ value: Partial<Record<string, CodeReviewBadge>> }>(
       'GET',
       `/api/boards/${boardId}/code-reviews?globs=${globIds.map(encodeURIComponent).join(',')}`,
+    ).then((r) => r.value),
+  searchBoard: (boardId: number, q: string, history: boolean) =>
+    request<{ value: BoardSearchResult }>(
+      'GET',
+      `/api/boards/${boardId}/search?q=${encodeURIComponent(q)}${history ? '&history=1' : ''}`,
     ).then((r) => r.value),
   globCodeReview: (id: string) => request<{ value: GlobCodeReview }>('GET', `/api/globs/${id}/code-review`).then((r) => r.value),
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
