@@ -84,6 +84,15 @@ describe('PgStore', () => {
     expect(results.flatMap((r) => (r.ok ? [] : [r.error.code]))).toEqual(['version_conflict']);
   });
 
+  it('reads several globs at once, ignoring duplicate and unknown IDs', async () => {
+    const first = unwrap(await create());
+    const second = unwrap(await create());
+    const read = (ids: readonly string[]) => store.transaction((tx) => tx.getGlobs(ids));
+    expect(await read([])).toEqual([]);
+    const found = await read([first.id, second.id, first.id, 's1t999999']);
+    expect(found.map((g) => g.id).sort()).toEqual([first.id, second.id].sort());
+  });
+
   it('returns the same glob for a repeated idempotency key', async () => {
     const first = unwrap(await create('same-key'));
     const again = unwrap(await create('same-key'));

@@ -40,7 +40,8 @@ interface State {
   testRuns: TestRun[];
   codeReviews: CodeReviewComment[];
   /** External IDs of CodeRabbit items deleted on the code host (tombstones). */
-  deletedCodeReviews: string[];
+  /** Tombstones: external ID and when it was deleted, as Postgres keeps `deleted_at`. */
+  deletedCodeReviews: { externalId: string; at: string }[];
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -379,7 +380,7 @@ export class MemoryStore implements Store {
           ),
         ),
       upsertCodeReviewComment: (comment) => {
-        if (s.deletedCodeReviews.includes(comment.externalId)) return Promise.resolve(false);
+        if (s.deletedCodeReviews.some((d) => d.externalId === comment.externalId)) return Promise.resolve(false);
         const stored = s.codeReviews.find((c) => c.externalId === comment.externalId);
         if (stored === undefined) {
           s.codeReviews.push({ ...comment, id: this.nextRowId++ });
@@ -391,11 +392,11 @@ export class MemoryStore implements Store {
         s.codeReviews = s.codeReviews.map((c) => (c === stored ? next : c));
         return Promise.resolve(changed);
       },
-      deleteCodeReviewComment: (externalId) => {
+      deleteCodeReviewComment: (externalId, at) => {
         const stored = s.codeReviews.find((c) => c.externalId === externalId) ?? null;
         if (stored === null) return Promise.resolve(null);
         s.codeReviews = s.codeReviews.filter((c) => c.externalId !== externalId);
-        s.deletedCodeReviews.push(externalId);
+        s.deletedCodeReviews.push({ externalId, at });
         return Promise.resolve(stored);
       },
       listCodeReviewComments: (boardId, globIds) =>
