@@ -4,7 +4,7 @@ import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
-import type { ArtifactSummary } from '../domain/knowledge.js';
+import type { ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import type { Actor, Board, Category, Glob, LabelName, SlopType } from '../domain/types.js';
 import type { Clock, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 
@@ -26,6 +26,13 @@ export interface CreateGlobInput {
   readonly environment: string | null;
   readonly autoTrigger: boolean;
   readonly idempotencyKey: string | null;
+  /**
+   * plan.md v1, stored verbatim with the glob: the caller passes `plan`, else the summary as given, else the intake
+   * input. Empty or missing stores no plan (get_plan then falls back to the summary, as it always has).
+   */
+  readonly plan?: string | null;
+  /** Who is creating it, for the plan's provenance (default: a person). */
+  readonly planBy?: Provenance['by'];
 }
 
 export interface GlobView {
@@ -134,6 +141,28 @@ export class GlobService {
       }
       await tx.appendEvents(transition.value.events);
       await tx.enqueueEffects(transition.value.effects);
+      const plan = input.plan ?? '';
+      if (plan.trim() !== '') {
+        const artifact = await tx.insertArtifact({
+          globId: glob.id,
+          kind: 'plan',
+          label: '',
+          content: plan,
+          link: null,
+          commitSha: null,
+          provenance: { by: input.planBy ?? 'human', actor: email, runId: null, agentSetVersion: null },
+          createdAt: this.deps.clock.now(),
+        });
+        await tx.appendEvents([
+          {
+            type: 'ArtifactAdded',
+            globId: glob.id,
+            actor: email,
+            at: this.deps.clock.now(),
+            data: { kind: 'plan', label: '', version: artifact.version, commitSha: null, runId: null, agentSetVersion: null },
+          },
+        ]);
+      }
       return ok({ ...transition.value, glob, changed: true });
     });
     if (!result.ok) return result;

@@ -97,6 +97,7 @@ export const createGlobSchema = z.object({
   environment: z.string().min(1).nullable().default(null),
   autoTrigger: z.boolean().default(false),
   idempotencyKey: z.string().min(1).nullable().default(null),
+  plan: z.string().optional(),
 });
 
 const updateGlobSchema = z.object({
@@ -329,7 +330,11 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
-    const created = await globs.create(email, { ...body, boardId: Number(c.req.param('b')) });
+    const created = await globs.create(email, {
+      ...body,
+      plan: body.plan ?? body.summary,
+      boardId: Number(c.req.param('b')),
+    });
     if (!created.ok) return send(c, created);
     // Return once provisioning has been attempted.
     await deps.outbox.drain(created.value.id);

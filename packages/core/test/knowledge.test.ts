@@ -345,6 +345,65 @@ describe('knowledge and artifacts', () => {
     expect((await globs.listWithArtifacts('stranger@example.com', boardId, {})).ok).toBe(false);
   });
 
+  describe('plan.md v1 at creation (s15f16)', () => {
+    const create = (patch: { summary?: string; plan?: string | null; planBy?: 'human' | 'sessionator' }) =>
+      globs.create(DEV, {
+        boardId,
+        title: 'New',
+        summary: '',
+        type: 'same',
+        category: 'task',
+        group: null,
+        environment: null,
+        autoTrigger: false,
+        idempotencyKey: null,
+        ...patch,
+      });
+
+    it('stores `plan` verbatim, leaving the summary alone', async () => {
+      const glob = unwrap(await create({ summary: 'Short', plan: '# Spec\n\nDone when: x.\n', planBy: 'sessionator' }));
+      expect(glob.summary).toBe('Short');
+      const plan = unwrap(await artifacts.plan(DEV, glob.id, null));
+      expect(plan.current).toMatchObject({ version: 1, content: '# Spec\n\nDone when: x.\n', provenance: { by: 'sessionator', actor: DEV } });
+    });
+
+    it('stores the summary or the intake input when that is what it is given', async () => {
+      const fromSummary = unwrap(await create({ summary: 'The summary', plan: 'The summary' }));
+      expect(unwrap(await artifacts.plan(DEV, fromSummary.id, null)).current).toMatchObject({
+        version: 1,
+        content: 'The summary',
+        provenance: { by: 'human' },
+      });
+      const fromInput = unwrap(await create({ plan: 'Fix the login timeout, please' }));
+      expect(unwrap(await artifacts.plan(DEV, fromInput.id, null)).current?.content).toBe('Fix the login timeout, please');
+    });
+
+    it('stores nothing for an empty plan, and get_context still shows the summary as version 0', async () => {
+      const glob = unwrap(await create({ summary: 'Only a summary' }));
+      expect(unwrap(await artifacts.plan(DEV, glob.id, null)).current).toBeNull();
+      expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 0, content: 'Only a summary' });
+    });
+
+    it('get_context returns the same text for a new glob as the summary-only path did', async () => {
+      const glob = unwrap(await create({ summary: 'Same text', plan: 'Same text' }));
+      expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 1, content: 'Same text' });
+    });
+
+    it('save_plan makes v2 and later, and refuses a stale version', async () => {
+      const glob = unwrap(await create({ plan: 'v1 text' }));
+      expect(unwrap(await artifacts.putPlan(DEV, glob.id, 'v2 text', 1))).toMatchObject({ version: 2 });
+      expect(errorCode(await artifacts.putPlan(DEV, glob.id, 'stale', 1))).toBe('version_conflict');
+      expect(unwrap(await artifacts.putPlan(DEV, glob.id, 'v3 text', 2))).toMatchObject({ version: 3 });
+      expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 3, content: 'v3 text' });
+    });
+
+    it('a glob with no plan saved yet is at version 0', async () => {
+      const glob = unwrap(await create({ summary: 'Old style' }));
+      expect(errorCode(await artifacts.putPlan(DEV, glob.id, 'x', 1))).toBe('version_conflict');
+      expect(unwrap(await artifacts.putPlan(DEV, glob.id, 'First', 0))).toMatchObject({ version: 1 });
+    });
+  });
+
   it('deletes a glob\'s artifacts with the glob', async () => {
     const glob = await createGlob('Short-lived');
     unwrap(await artifacts.putPlan(DEV, glob.id, '# Plan'));
