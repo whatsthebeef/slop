@@ -11,6 +11,7 @@ import { CodeReviewSection } from './code-review';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
 import type { ArtifactRef } from './artifacts';
 import { GroupChip } from './glob-card';
+import { StatusSummary } from './status-summary';
 import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
@@ -44,15 +45,11 @@ interface Waiting {
   readonly reason: string;
 }
 
-/** Why the head's checks failed, from the failing run's log; a red base branch means a fix isn't this glob's to push. */
-const failedChecksReason = (glob: GlobView, head: string): string => {
-  const why = checksExplanation(glob);
-  if (why === null) return `Checks failed on ${head.slice(0, 7)}; push a fix`;
-  const link = why.url === null ? '' : ` (${why.url})`;
-  return why.inherited
-    ? `${why.text}${link}. Waiting for it to be fixed on the base branch; this branch is updated when it is`
-    : `Checks failed on ${head.slice(0, 7)}: ${why.text}${link}; push a fix`;
-};
+/** Why Merge is held while the head's checks are red; the status line at the top says what failed. */
+const failedChecksReason = (glob: GlobView, head: string): string =>
+  checksExplanation(glob)?.inherited === true
+    ? 'Waiting for the base branch to be fixed'
+    : `Checks failed on ${head.slice(0, 7)}; push a fix`;
 
 /**
  * Actions the glob is heading for but can't take yet, shown disabled with the reason: merging
@@ -190,9 +187,8 @@ export const GlobDialog = ({
             </span>
           </div>
 
-          {glob.failure !== null && (
-            <p className='rounded border border-red/40 bg-red/10 p-2 text-sm'>Failed: {glob.failure.reason}</p>
-          )}
+          <StatusSummary glob={glob} />
+
           {(glob.failure?.conflict ?? glob.conflict) != null && glob.implementer !== null && (
             <div className='grid gap-1 rounded border border-edge p-2 text-sm'>
               <span>Resolve it locally, then push (Start again stays available):</span>
