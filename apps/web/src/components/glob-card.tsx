@@ -402,11 +402,6 @@ export const GlobCard = ({
         </span>
       </div>
       <div className='mt-1 leading-snug font-medium'>{glob.title}</div>
-      {glob.summary.trim() !== '' && (
-        <div className='mt-1 line-clamp-2 text-xs leading-snug text-muted-foreground' data-testid='card-summary'>
-          {glob.summary}
-        </div>
-      )}
       <div className='mt-2 flex flex-wrap items-center gap-1.5'>
         {glob.group !== null && <GroupChip name={glob.group} />}
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
