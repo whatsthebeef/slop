@@ -96,11 +96,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         idempotencyKey: z.string().min(1),
         input: z.string().optional().describe('The request in free text; used for intake when no title is given'),
         title: z.string().min(1).optional(),
-        summary: z.string().optional().describe('What the work is and why; becomes the start of plan.md'),
+        summary: z.string().optional().describe('One or two sentences for the card; the spec goes in plan. Without a plan, it is also plan.md v1'),
         plan: z
           .string()
           .optional()
-          .describe('The full spec, stored verbatim as plan.md v1; without it plan.md v1 is the summary as given, else the input'),
+          .describe('The full spec, stored verbatim as plan.md v1; without it plan.md v1 is the write-up intake makes of the input, else the summary as given'),
         type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing)'),
         category: z.enum(CATEGORIES).optional(),
         group: z.string().optional(),
@@ -125,6 +125,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       };
       // Intake suggests an environment the request names; an explicit one wins.
       let suggestedEnvironment: string | null = null;
+      // The write-up intake made from the request: plan.md v1 unless the caller gave a plan or summary.
+      let proposedPlan: string | null = null;
       if (input.title === undefined) {
         if (input.input === undefined || input.input.trim() === '') {
           return { ...json({ code: 'invalid_input', message: 'Pass a title, or the request as input' }), isError: true };
@@ -140,14 +142,15 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           },
         });
         if (!proposal.ok) return reply(proposal);
-        const { environment, ...proposed } = proposal.value;
+        const { environment, plan, ...proposed } = proposal.value;
         fields = { ...proposed, autoTrigger: input.autoTrigger ?? proposal.value.autoTrigger };
         suggestedEnvironment = environment;
+        proposedPlan = plan;
       }
       const created = await globs.create(email, {
         boardId: input.board,
         ...fields,
-        plan: input.plan ?? input.summary ?? input.input ?? '',
+        plan: input.plan ?? proposedPlan ?? input.summary ?? input.input ?? '',
         planBy: 'sessionator',
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,

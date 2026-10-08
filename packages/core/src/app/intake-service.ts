@@ -54,7 +54,10 @@ export interface IntakeInput {
 
 export interface IntakeProposal {
   readonly title: string;
+  /** One or two sentences for the card. Never the spec: that is `plan`. */
   readonly summary: string;
+  /** The full write-up, with "Done when:" lines: stored as plan.md v1. */
+  readonly plan: string;
   readonly type: SlopType;
   readonly category: Category;
   readonly group: string | null;
@@ -68,10 +71,11 @@ export interface IntakeProposal {
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
 
 Respond with one JSON object and nothing else:
-{"title": string, "summary": string, "type": "sub" | "same" | "super", "category": "feature" | "task" | "bug", "group": string | null, "autoTrigger": boolean, "autoTriggerQuote": string | null}
+{"title": string, "summary": string, "plan": string, "type": "sub" | "same" | "super", "category": "feature" | "task" | "bug", "group": string | null, "autoTrigger": boolean, "autoTriggerQuote": string | null}
 
 - title: a short imperative title, at most 70 characters.
-- summary: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
+- summary: one or two plain sentences saying what is wanted, for a card on the board. Not the spec.
+- plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
 - type: "sub" for a small bug fix or minor UI or UX tweak that can be implemented and merged without human review; "super" only when the request says the work is done by a developer pairing with the product owner; otherwise "same".
 - category: "feature" for new capability, "bug" for something broken, "task" for other maintenance.
 - group: reuse an existing group (its exact name) only when the work clearly belongs to that same area; otherwise a new short group name if the request names an area of work, otherwise null. Never pick an existing group just because it is the only one.
@@ -148,7 +152,8 @@ export class IntakeService {
   ): IntakeProposal {
     const request = input.text.trim();
     const title = (input.explicit.title ?? text(field(answer, 'title')) ?? '').trim() || request.split('\n')[0]?.slice(0, 70) || 'Untitled';
-    const summary = input.explicit.summary ?? text(field(answer, 'summary')) ?? request;
+    const plan = text(field(answer, 'plan')) ?? request;
+    const summary = input.explicit.summary ?? text(field(answer, 'summary')) ?? plan.split('\n')[0]?.slice(0, 300) ?? request;
 
     let category = input.explicit.category ?? oneOf(CATEGORIES, field(answer, 'category')) ?? 'task';
     let type = input.explicit.type ?? oneOf(SLOP_TYPES, field(answer, 'type')) ?? 'same';
@@ -178,6 +183,7 @@ export class IntakeService {
     return {
       title: title.slice(0, 120),
       summary,
+      plan,
       type,
       category,
       group,

@@ -157,7 +157,10 @@ const request = async <T>(method: string, path: string, body?: unknown): Promise
 
 export interface NewGlob {
   title: string;
+  /** One or two sentences for the card. */
   summary: string;
+  /** plan.md v1, when it is more than the summary (intake's write-up of the request). */
+  plan?: string;
   type: SlopType;
   category: Category;
   group: string | null;
@@ -260,7 +263,7 @@ export const api = {
   action: (id: string, action: ActionPath, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, { version }),
   intake: (boardId: number, text: string) =>
-    request<NewGlob & { autoTriggerReason: string | null }>('POST', `/api/boards/${boardId}/intake`, { text }),
+    request<NewGlob & { plan: string; autoTriggerReason: string | null }>('POST', `/api/boards/${boardId}/intake`, { text }),
   repoConnection: (boardId: number) =>
     request<{ repo: string | null; configured: boolean; connected: boolean; installUrl: string | null; appName: string | null }>(
       'GET',

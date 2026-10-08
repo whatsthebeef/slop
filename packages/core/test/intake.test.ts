@@ -31,10 +31,11 @@ describe('intake', () => {
   const propose = (text: string, explicit = {}) => intake.propose(DEV, boardId, { text, explicit }).then(unwrap);
 
   it('uses the model answer, matching an existing group', async () => {
-    answer = '```json\n{"title":"Fix sync retry","summary":"Retries stop. Done when: they resume.","type":"sub","category":"bug","group":"device-sync","autoTrigger":false,"autoTriggerQuote":null}\n```';
+    answer = '```json\n{"title":"Fix sync retry","summary":"Retries stop.","plan":"Retries stop after a timeout. Done when: they resume.","type":"sub","category":"bug","group":"device-sync","autoTrigger":false,"autoTriggerQuote":null}\n```';
     expect(await propose('sync retries stop after a timeout')).toEqual({
       title: 'Fix sync retry',
-      summary: 'Retries stop. Done when: they resume.',
+      summary: 'Retries stop.',
+      plan: 'Retries stop after a timeout. Done when: they resume.',
       type: 'sub',
       category: 'bug',
       group: 'Device Sync',
@@ -42,6 +43,18 @@ describe('intake', () => {
       autoTrigger: false,
       autoTriggerReason: null,
     });
+  });
+
+  it('keeps the spec in plan, so the short summary never replaces it', async () => {
+    answer = '{"title":"T","summary":"Short.","plan":"The full spec.\\nDone when: it works.","type":"same","category":"task","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
+    const p = await propose('the whole request');
+    expect([p.summary, p.plan]).toEqual(['Short.', 'The full spec.\nDone when: it works.']);
+    // An explicit summary wins for the card only; plan still comes from the request.
+    const q = await propose('the whole request', { summary: 'Mine.' });
+    expect([q.summary, q.plan]).toEqual(['Mine.', 'The full spec.\nDone when: it works.']);
+    // No plan from the model: the request as written.
+    answer = '{"title":"T","summary":"Short."}';
+    expect((await propose('the whole request')).plan).toBe('the whole request');
   });
 
   it('lets explicit fields win and repairs the matrix around them', async () => {
