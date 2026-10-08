@@ -1,0 +1,29 @@
+# CodeBuild buildspec that runs a board's acceptance tests (ATF) and reports the result to slop. slop
+# doesn't start ATF: the board's pipeline does, as a stage after it deploys to a release or integration
+# environment, or after a branch deploy. Pass SLOP_ENVIRONMENT (the environment tested) and SLOP_SHA (the
+# commit it runs); for a run on a glob's branch, also SLOP_GLOB (the glob's ID).
+#
+# The tests themselves live in the repository's .sstor/atf.sh, which must write JUnit XML under
+# reports/atf/. CodeBuild keeps those reports (the `reports` group below), and .sstor/atf-report.sh sends
+# slop the counts and a link, whether the tests passed or not. Any failing test shows as an ATF failure on
+# the glob's card; it never blocks a PR, approval, sign-off or a production deploy.
+#
+# The project's role needs events:PutEvents on the default EventBridge bus for the report to reach slop.
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - mkdir -p reports/atf
+      - bash .sstor/atf.sh "$SLOP_ENVIRONMENT"
+  post_build:
+    commands:
+      # Runs whatever the build result, so a failing run is reported too.
+      - bash .sstor/atf-report.sh "$SLOP_ENVIRONMENT" reports/atf
+
+reports:
+  atf:
+    files:
+      - '**/*.xml'
+    base-directory: reports/atf
+    file-format: JUNITXML

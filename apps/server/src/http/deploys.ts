@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import type { BoardService, DeployService, EnvironmentService, Result } from '@slop/core';
+import type { BoardService, DeployService, EnvironmentService, Result, TestRunService } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { SignedLinks } from '../signed-links.js';
@@ -9,6 +9,7 @@ import { errorBody, statusOf } from './views.js';
 export interface DeployRoutesDeps {
   readonly deploys: DeployService;
   readonly environments: EnvironmentService;
+  readonly testRuns: TestRunService;
   readonly boards: BoardService;
   readonly links: SignedLinks;
   /** The keys EventBridge API destinations send (one per deploy-target stack); `/webhooks/aws` is off without any. */
@@ -78,12 +79,37 @@ const environmentDeployedSchema = slopCiBase.extend({
   }),
 });
 
+/** A test count from the pipeline's report. */
+const countSchema = z.number().int().min(0).max(10_000_000);
+
 /**
- * Events the board's own pipelines send about themselves (`catalog/scripts/report-deploy.sh` puts them on the
- * EventBridge bus; any CI may post the same envelope with the key). The `detail-type` says which; each kind's detail
- * has its own schema.
+ * `slop.ci`'s "Slop ATF Completed": a pipeline ran the acceptance tests on a glob's branch (`branch` is the glob's ID)
+ * or against a release or integration environment (`environment`, at the `sha` it tested, else what it runs now).
  */
-const slopCiEventSchema = z.discriminatedUnion('detail-type', [environmentDeployedSchema]);
+const atfCompletedSchema = slopCiBase.extend({
+  'detail-type': z.literal('Slop ATF Completed'),
+  detail: z
+    .object({
+      repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
+      sha: shaSchema.optional(),
+      environment: z.string().min(1).max(100).optional(),
+      branch: z.string().min(1).max(255).optional(),
+      passed: countSchema,
+      failed: countSchema,
+      skipped: countSchema.optional(),
+      url: linkSchema.optional(),
+    })
+    .refine((d) => d.environment !== undefined || d.branch !== undefined, 'needs an environment or a branch'),
+});
+
+/**
+ * Events the board's own pipelines send about themselves (`catalog/scripts/report-deploy.sh` and `atf-report.sh` put
+ * them on the EventBridge bus; any CI may post the same envelope with the key). The `detail-type` says which; each
+ * kind's detail has its own schema.
+ */
+const slopCiEventSchema = z.discriminatedUnion('detail-type', [environmentDeployedSchema, atfCompletedSchema]);
+
+type SlopCiEvent = z.infer<typeof slopCiEventSchema>;
 
 /** Why a build failed, from its first failed phase: e.g. "DOWNLOAD_SOURCE: Connection ... is not available". */
 const failureReason = (detail: z.infer<typeof codeBuildEventSchema>['detail'], status: string): string => {
@@ -121,21 +147,58 @@ const sameSecret = (expected: string, given: string): boolean => {
 export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
   const { deploys } = deps;
 
+  /** Records a `slop.ci` event; returns the boards that recorded it. */
+  const recordCi = async (event: SlopCiEvent): Promise<number[]> => {
+    // The event's ID dedupes redeliveries (per board); its time orders deploys that arrive out of order.
+    const eventId = `aws:${event.id}`;
+    const at = event.time === undefined ? null : new Date(event.time).toISOString();
+    if (event['detail-type'] === 'Slop ATF Completed') {
+      const { detail } = event;
+      return deps.testRuns.recordAtf({
+        repo: detail.repo,
+        sha: detail.sha ?? null,
+        environment: detail.environment ?? null,
+        branch: detail.branch ?? null,
+        passed: detail.passed,
+        failed: detail.failed,
+        skipped: detail.skipped ?? 0,
+        url: detail.url ?? null,
+        at,
+        eventId,
+      });
+    }
+    const { detail } = event;
+    return deps.environments.recordDeploy({
+      repo: detail.repo,
+      environment: detail.environment,
+      sha: detail.sha,
+      ref: detail.ref ?? null,
+      succeeded: detail.status === 'succeeded',
+      url: detail.url ?? null,
+      at,
+      eventId,
+    });
+  };
+
   app.get('/api/boards/:b/deploys', async (c) => {
     const boardId = Number(c.req.param('b'));
     const membership = await deps.boards.get(c.get('email'), boardId);
     if (!membership.ok) return send(c, membership);
     const globIds = (c.req.query('globs') ?? '').split(',').filter((id) => id !== '');
-    const [{ indicators, running }, environments] = await Promise.all([
+    const [{ indicators, running }, environments, atf] = await Promise.all([
       deploys.boardState(boardId, globIds),
       deps.environments.boardState(boardId, globIds),
+      deps.testRuns.boardState(boardId, globIds),
     ]);
     return c.json({
       indicators: Object.fromEntries(indicators),
       running: [...running],
       environments: Object.fromEntries(environments),
+      atf: Object.fromEntries(atf),
     });
   });
+
+  app.get('/api/globs/:id/tests', async (c) => send(c, await deps.testRuns.forGlob(c.get('email'), c.req.param('id'))));
 
   app.get('/api/globs/:id/environments', async (c) =>
     send(c, await deps.environments.forGlob(c.get('email'), c.req.param('id'))),
@@ -177,18 +240,7 @@ export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
     const body: unknown = await c.req.json().catch(() => null);
     const ci = slopCiEventSchema.safeParse(body);
     if (ci.success) {
-      const { detail } = ci.data;
-      // The event's ID dedupes redeliveries (per board); its time orders deploys that arrive out of order.
-      const recorded = await deps.environments.recordDeploy({
-        repo: detail.repo,
-        environment: detail.environment,
-        sha: detail.sha,
-        ref: detail.ref ?? null,
-        succeeded: detail.status === 'succeeded',
-        url: detail.url ?? null,
-        at: ci.data.time === undefined ? null : new Date(ci.data.time).toISOString(),
-        eventId: `aws:${ci.data.id}`,
-      });
+      const recorded = await recordCi(ci.data);
       return recorded.length === 0 ? c.json({ ok: true, ignored: true }, 202) : c.json({ ok: true }, 202);
     }
     const event = codeBuildEventSchema.safeParse(body);

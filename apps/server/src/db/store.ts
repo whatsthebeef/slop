@@ -1,5 +1,5 @@
-import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES } from '@slop/core';
+import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -105,6 +105,12 @@ const presenceRow = (p: GlobPresence): typeof schema.globEnvironments.$inferInse
   ...p,
   checkedAt: new Date(p.checkedAt),
   since: p.since === null ? null : new Date(p.since),
+});
+
+const toTestRun = (row: typeof schema.testRuns.$inferSelect): TestRun => ({
+  ...row,
+  kind: oneOf(TEST_RUN_KINDS, row.kind),
+  finishedAt: row.finishedAt.toISOString(),
 });
 
 const toKnowledge = (row: typeof schema.knowledge.$inferSelect): KnowledgeDoc => ({
@@ -250,6 +256,7 @@ export class PgStore implements Store {
       },
       deleteGlob: async (id) => {
         await t.delete(schema.globEnvironments).where(eq(schema.globEnvironments.globId, id));
+        await t.delete(schema.testRuns).where(eq(schema.testRuns.globId, id));
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
@@ -649,6 +656,36 @@ export class PgStore implements Store {
       },
       lockEnvironment: async (boardId, environment) => {
         await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`environments:${String(boardId)}:${environment}`}))`);
+      },
+      insertTestRun: async (run) => {
+        const rows = await t
+          .insert(schema.testRuns)
+          .values({ ...run, finishedAt: new Date(run.finishedAt) })
+          .onConflictDoNothing()
+          .returning({ id: schema.testRuns.id });
+        return rows.length === 1;
+      },
+      listTestRuns: async (boardId, filter) => {
+        const r = schema.testRuns;
+        const matches = [];
+        if (filter.globIds !== undefined && filter.globIds.length > 0) matches.push(inArray(r.globId, [...filter.globIds]));
+        for (const c of filter.commits ?? []) {
+          // Either side may be a short SHA (lower-cased on the way in).
+          matches.push(
+            and(
+              isNull(r.globId),
+              eq(r.environment, c.environment),
+              sql`(starts_with(${r.sha}, ${c.sha}) or starts_with(${c.sha}, ${r.sha}))`,
+            ),
+          );
+        }
+        if (matches.length === 0) return [];
+        const rows = await t
+          .select()
+          .from(r)
+          .where(and(eq(r.boardId, boardId), or(...matches)))
+          .orderBy(desc(r.finishedAt), desc(r.id));
+        return rows.map(toTestRun);
       },
 
       insertReviewSource: async (input) => {

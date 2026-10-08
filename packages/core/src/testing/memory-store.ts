@@ -1,6 +1,8 @@
 import type { Deploy } from '../domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
+import { sameCommit } from '../domain/signals.js';
+import type { TestRun } from '../domain/test-runs.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import type { KbItem } from '../domain/kb.js';
@@ -34,6 +36,7 @@ interface State {
   environmentDeploys: EnvironmentDeploy[];
   /** Keyed by glob and environment. */
   globPresence: Map<string, GlobPresence>;
+  testRuns: TestRun[];
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -60,6 +63,7 @@ const clone = (state: State): State => ({
   subLimitChanges: [...state.subLimitChanges],
   environmentDeploys: [...state.environmentDeploys],
   globPresence: new Map(state.globPresence),
+  testRuns: [...state.testRuns],
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -88,6 +92,7 @@ export class MemoryStore implements Store {
     subLimitChanges: [],
     environmentDeploys: [],
     globPresence: new Map(),
+    testRuns: [],
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -119,6 +124,7 @@ export class MemoryStore implements Store {
         s.findings = s.findings.filter((f) => f.globId !== id);
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
+        s.testRuns = s.testRuns.filter((r) => r.globId !== id);
         return Promise.resolve();
       },
       findGlobByCreationKey: (boardId, key) =>
@@ -347,6 +353,21 @@ export class MemoryStore implements Store {
         return Promise.resolve();
       },
       lockEnvironment: () => Promise.resolve(),
+      insertTestRun: (run) => {
+        if (s.testRuns.some((r) => r.boardId === run.boardId && r.eventId === run.eventId)) return Promise.resolve(false);
+        s.testRuns.push({ ...run, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listTestRuns: (boardId, filter) =>
+        Promise.resolve(
+          s.testRuns.filter(
+            (r) =>
+              r.boardId === boardId &&
+              ((r.globId !== null && (filter.globIds?.includes(r.globId) ?? false)) ||
+                (r.globId === null &&
+                  (filter.commits?.some((c) => c.environment === r.environment && sameCommit(c.sha, r.sha)) ?? false))),
+          ),
+        ),
       insertReviewSource: (input) => {
         const taken = s.reviewSources.some(
           (r) =>

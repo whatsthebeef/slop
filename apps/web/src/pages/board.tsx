@@ -436,7 +436,8 @@ export const BoardPage = () => {
                       bump={bumps[glob.id]}
                       tag={motion.tags[glob.id]}
                       deploy={deployState.data?.indicators[glob.id]}
-                      environments={deployState.data?.environments[glob.id]}
+                      environments={deployState.data?.environments?.[glob.id]}
+                      atf={deployState.data?.atf?.[glob.id]}
                     />
                   );
                 })}

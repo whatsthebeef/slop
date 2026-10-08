@@ -131,13 +131,15 @@ export class EnvironmentService {
       const change = environments.containmentChange(previous, live, { boardId, environment, sha }, now);
       await tx.saveGlobPresence(change.writes);
       await tx.appendEvents(change.events);
-      return change.moved;
+      // ATF reported before this check ran now shows on every glob the commit holds, moved or not.
+      const tested = (await tx.listTestRuns(boardId, { commits: [{ environment, sha }] })).length > 0;
+      return { moved: change.moved, tested: tested && change.writes.some((w) => w.contained) };
     });
     if (outcome === null) return 'stale';
-    for (const globId of outcome) {
-      const hint: Hint = { kind: 'glob.deploys', boardId, globId };
-      this.deps.notifier.publish(hint);
-    }
+    const hints: Hint[] = outcome.tested
+      ? [{ kind: 'board.tests', boardId }]
+      : outcome.moved.map((globId) => ({ kind: 'glob.deploys', boardId, globId }));
+    for (const hint of hints) this.deps.notifier.publish(hint);
     return 'recorded';
   }
 

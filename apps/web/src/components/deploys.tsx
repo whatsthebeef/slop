@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, RequestError } from '@/lib/api';
 import type { BoardView, GlobView } from '@/lib/api';
-import { deploysKey, globDeploysKey, globEnvironmentsKey } from '@/lib/live';
+import { deploysKey, globDeploysKey, globEnvironmentsKey, globTestsKey } from '@/lib/live';
 import { useToast } from '@/toast';
+import { atfLine } from './glob-card';
 import { Tip } from './ui/tip';
 
 const STATE_TEXT: Record<Deploy['state'], string> = {
@@ -158,6 +159,37 @@ export const EnvironmentsSection = ({ board, glob }: { board: BoardView; glob: G
             </li>
           );
         })}
+      </ul>
+    </section>
+  );
+};
+
+/**
+ * The glob's ATF runs in the glob view: its branch runs, and the runs against the release and integration commits that
+ * hold it. A failure is a flag only. Hidden until there is a run.
+ */
+export const TestsSection = ({ glob }: { glob: GlobView }) => {
+  const query = useQuery({ queryKey: globTestsKey(glob.id), queryFn: () => api.globTests(glob.id) });
+  const runs = query.data ?? [];
+  if (runs.length === 0) return null;
+  return (
+    <section className='grid gap-2' aria-label='Tests' data-testid='tests'>
+      <h3 className='text-xs font-semibold text-muted-foreground'>Tests</h3>
+      <ul className='grid gap-1 font-mono text-[11px]'>
+        {runs.map((run) => (
+          <li key={`${run.scope}:${run.environment ?? ''}:${run.sha}:${run.at}`} className='flex flex-wrap gap-x-2' data-testid='test-run'>
+            <span className={run.failing ? 'text-red' : run.stale === true ? 'text-muted-foreground' : 'text-signal-strong'}>
+              ATF {run.failing ? 'failed' : 'passed'}
+            </span>
+            <span>{atfLine(run)}</span>
+            <span className='text-muted-foreground'>{when(run.at)}</span>
+            {run.url !== null && (
+              <a className='underline' href={run.url} target='_blank' rel='noreferrer'>
+                report
+              </a>
+            )}
+          </li>
+        ))}
       </ul>
     </section>
   );

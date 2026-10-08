@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, DeployService, EnvironmentService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, SubLimitService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -70,6 +70,7 @@ const deploys = new DeployService({
   newDeployId: () => `dep_${randomUUID()}`,
 });
 const environments = new EnvironmentService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
+const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 
 const outbox = new OutboxRunner(
   db,
@@ -173,7 +174,7 @@ const app = createApp({
     if (!adopted.ok) logError('board created', `Adopting the catalog agent set failed for board ${boardId}: ${adopted.error.message}`);
   },
 });
-mountDeploys(app, { deploys, environments, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
+mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
 mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, logError });
 mountHealth(app, { llm: llmHealth, boards });

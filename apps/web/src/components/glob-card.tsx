@@ -1,5 +1,5 @@
 import { checksExplanation, queuedRunNotice, stuckHint } from '@slop/core';
-import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
+import type { Action, ArtifactKind, AtfIndicator, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
@@ -273,6 +273,50 @@ export const EnvironmentChips = ({ environments }: { environments: readonly Envi
   </>
 );
 
+/** One ATF run in words, for tooltips and the glob view. */
+export const atfLine = (run: AtfIndicator): string => {
+  const where = run.scope === 'branch' ? `Branch${run.environment === null ? '' : ` (${run.environment})`}` : run.environment ?? '';
+  const counts = `${run.passed} passed, ${run.failed} failed${run.skipped > 0 ? `, ${run.skipped} skipped` : ''}`;
+  return `${where} at ${run.sha.slice(0, 7)}: ${counts}${run.stale === true ? ' (an older commit than the PR head)' : ''}`;
+};
+
+/**
+ * The glob's ATF results in one chip: red when any current run has a failing test (a flag only; it never blocks),
+ * muted when the only run tested an older commit. It links to the report of the run it summarises.
+ */
+export const AtfChip = ({ runs }: { runs: readonly AtfIndicator[] }) => {
+  const current = runs.filter((r) => r.stale !== true);
+  const shown = current.find((r) => r.failing) ?? current[0] ?? runs[0];
+  if (shown === undefined) return null;
+  const failing = current.some((r) => r.failing);
+  const text = shown.failing && shown.stale !== true ? `ATF ${shown.failed} failed` : `ATF ${shown.passed}✓`;
+  const tone = failing ? 'text-red' : current.length > 0 ? 'text-signal-strong' : 'text-muted-foreground';
+  const tip = runs.map((r) => `${atfLine(r)} · ${new Date(r.at).toLocaleString()}`).join('\n');
+  const chip = (
+    <span className={cn('font-mono text-[11px]', tone)} data-testid='atf-chip' data-failing={failing}>
+      {text}
+    </span>
+  );
+  return (
+    <Tip text={tip}>
+      {shown.url === null ? (
+        chip
+      ) : (
+        <a
+          href={shown.url}
+          target='_blank'
+          rel='noreferrer'
+          className='hover:underline'
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {chip}
+        </a>
+      )}
+    </Tip>
+  );
+};
+
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -292,6 +336,7 @@ export const GlobCard = ({
   tag,
   deploy,
   environments,
+  atf,
 }: {
   glob: GlobView;
   onOpen: () => void;
@@ -314,6 +359,8 @@ export const GlobCard = ({
   deploy?: DeployIndicator;
   /** The release and integration environments it is in. */
   environments?: readonly EnvironmentIndicator[];
+  /** Its ATF results (a flag only). */
+  atf?: readonly AtfIndicator[];
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
@@ -373,6 +420,7 @@ export const GlobCard = ({
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         {deploy !== undefined && <DeployChip deploy={deploy} />}
         {environments !== undefined && <EnvironmentChips environments={environments} />}
+        {atf !== undefined && <AtfChip runs={atf} />}
         {status !== null && (
           <Tip text={status.tip}>
             <span className={cn('font-mono text-[11px]', status.tone)} data-testid='status-line' data-kind={status.kind}>

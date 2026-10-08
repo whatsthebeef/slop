@@ -196,8 +196,18 @@ describe('release deploys on contained globs', () => {
     expect(await drain()).toEqual([]);
   });
 
-  it("deletes a glob's presence with the glob", async () => {
+  it("deletes a glob's presence and branch test runs with the glob, not the environment's runs", async () => {
+    const run = { boardId: board.id, kind: 'atf' as const, sha: 'abcdef1', passed: 1, failed: 0, skipped: 0, url: null, finishedAt: '2026-10-05T12:00:00.000Z' };
+    await store.transaction(async (tx) => {
+      expect(await tx.insertTestRun({ ...run, globId: 's1t1', environment: null, eventId: 'aws:t1' })).toBe(true);
+      expect(await tx.insertTestRun({ ...run, globId: null, environment: 'prod', eventId: 'aws:t2' })).toBe(true);
+      expect(await tx.insertTestRun({ ...run, globId: null, environment: 'prod', eventId: 'aws:t2' })).toBe(false);
+    });
     await store.transaction((tx) => tx.deleteGlob('s1t1'));
     expect((await presence()).map(([id]) => id)).toEqual(['s1t2', 's1t3']);
+    const left = await store.transaction((tx) =>
+      tx.listTestRuns(board.id, { globIds: ['s1t1'], commits: [{ environment: 'prod', sha: 'abcdef1234' }] }),
+    );
+    expect(left.map((r) => r.eventId)).toEqual(['aws:t2']);
   });
 });

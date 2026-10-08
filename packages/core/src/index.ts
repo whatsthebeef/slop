@@ -21,6 +21,9 @@ export type { Deploy, DeployChange, DeployIndicator, DeployState, DeployTrigger 
 export * as environments from './domain/environments.js';
 export { RECENT_MERGE_DAYS } from './domain/environments.js';
 export type { Containment, EnvironmentDeploy, EnvironmentIndicator, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
+export * as testRuns from './domain/test-runs.js';
+export { TEST_RUN_KINDS } from './domain/test-runs.js';
+export type { AtfIndicator, EnvironmentCommit, NewTestRun, TestRun, TestRunKind } from './domain/test-runs.js';
 export * as machine from './domain/machine.js';
 export type { Action, ActionFacts, Context, FieldChanges, LabelCommand, Transition } from './domain/machine.js';
 export * from './ports.js';
@@ -40,4 +43,5 @@ export * from './app/sub-limit-service.js';
 export * from './app/learning-jobs.js';
 export * from './app/deploy-service.js';
 export * from './app/environment-service.js';
+export * from './app/test-run-service.js';
 export * from './domain/checks.js';

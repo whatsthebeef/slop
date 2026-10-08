@@ -5,7 +5,7 @@ import { api, RequestError } from './api';
 import type { GlobView } from './api';
 
 interface Hint {
-  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'glob.deploys' | 'glob.findings' | 'board.changed' | 'board.kb';
+  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'glob.deploys' | 'glob.findings' | 'board.changed' | 'board.kb' | 'board.tests';
   readonly globId?: string;
   readonly version?: number;
 }
@@ -22,6 +22,9 @@ export const globDeploysKey = (globId: string) => ['glob-deploys', globId] as co
 
 /** The release and integration environments in the glob view; invalidated by `glob.deploys` hints and on reconnect. */
 export const globEnvironmentsKey = (globId: string) => ['glob-environments', globId] as const;
+
+/** One glob's ATF runs in the glob view; invalidated by `glob.deploys` and `board.tests` hints and on reconnect. */
+export const globTestsKey = (globId: string) => ['glob-tests', globId] as const;
 
 /** One glob's review findings in the glob view; invalidated by `glob.findings` hints and on reconnect. */
 export const findingsKey = (globId: string) => ['findings', globId] as const;
@@ -137,6 +140,13 @@ export const useLiveBoard = (boardId: number): LiveState => {
     }
     // The board shows no KB data; the Knowledge page follows those hints itself.
     if (hint.kind === 'board.kb') return;
+    if (hint.kind === 'board.tests') {
+      // An environment's ATF run (or the check that placed globs at its commit): it shows on every glob held there.
+      void client.invalidateQueries({ queryKey: deploysKey(boardId) });
+      void client.invalidateQueries({ queryKey: ['glob-environments'] });
+      void client.invalidateQueries({ queryKey: ['glob-tests'] });
+      return;
+    }
     const id = hint.globId;
     if (id === undefined) return;
     if (hint.kind === 'glob.deploys') {
@@ -144,6 +154,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
       void client.invalidateQueries({ queryKey: deploysKey(boardId) });
       void client.invalidateQueries({ queryKey: globDeploysKey(id) });
       void client.invalidateQueries({ queryKey: globEnvironmentsKey(id) });
+      void client.invalidateQueries({ queryKey: globTestsKey(id) });
       return;
     }
     if (hint.kind === 'glob.findings') {
@@ -178,6 +189,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
     void client.invalidateQueries({ queryKey: deploysKey(boardId) });
     void client.invalidateQueries({ queryKey: ['glob-deploys'] });
     void client.invalidateQueries({ queryKey: ['glob-environments'] });
+    void client.invalidateQueries({ queryKey: ['glob-tests'] });
     void client.invalidateQueries({ queryKey: ['readiness', boardId] });
     void client.invalidateQueries({ queryKey: ['findings'] });
   };

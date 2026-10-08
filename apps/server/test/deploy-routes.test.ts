@@ -1,4 +1,4 @@
-import { BoardService, DeployService, EnvironmentService, GlobService } from '@slop/core';
+import { BoardService, DeployService, EnvironmentService, GlobService, TestRunService } from '@slop/core';
 import type { Board, Effect, Glob } from '@slop/core';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -59,6 +59,7 @@ describe('deploy results and executors', () => {
   let store: PgStore;
   let deploys: DeployService;
   let environments: EnvironmentService;
+  let testRuns: TestRunService;
   let globs: GlobService;
   let board: Board;
   let app: Hono<Env>;
@@ -103,6 +104,11 @@ describe('deploy results and executors', () => {
       notifier: { publish: () => undefined },
       clock: { now: () => new Date(clock).toISOString() },
     });
+    testRuns = new TestRunService({
+      store,
+      notifier: { publish: () => undefined },
+      clock: { now: () => new Date(clock).toISOString() },
+    });
     globs = new GlobService({
       store,
       notifier: { publish: () => undefined },
@@ -120,6 +126,7 @@ describe('deploy results and executors', () => {
     mountDeploys(app, {
       deploys,
       environments,
+      testRuns,
       boards: new BoardService({ store, notifier: { publish: () => undefined } }),
       links,
       awsWebhookKeys: ['other-stack-key', KEY],
@@ -270,6 +277,7 @@ describe('deploy results and executors', () => {
     mountDeploys(bare, {
       deploys,
       environments,
+      testRuns,
       boards: new BoardService({ store, notifier: { publish: () => undefined } }),
       links,
       awsWebhookKeys: [],
@@ -284,14 +292,14 @@ describe('deploy results and executors', () => {
   });
 
   /** A `slop.ci` event as `catalog/scripts/report-deploy.sh` puts it on the bus and EventBridge delivers it. */
-  const ciEvent = (id: string, detail: Record<string, unknown>, key = KEY) =>
+  const ciEvent = (id: string, detail: Record<string, unknown>, key = KEY, detailType = 'Slop Environment Deployed') =>
     app.request('/webhooks/aws', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-slop-key': key },
       body: JSON.stringify({
         version: '0',
         id,
-        'detail-type': 'Slop Environment Deployed',
+        'detail-type': detailType,
         source: 'slop.ci',
         account: '123456789012',
         time: '2026-10-05T12:30:00Z',
@@ -366,6 +374,60 @@ describe('deploy results and executors', () => {
     const view = await app.request('/api/globs/s9f2/environments');
     expect(await view.json()).toMatchObject({ value: [{ environment: 'prod', presence: { contained: true }, latest: { sha: 'abcdef1234567' } }] });
     expect((await app.request('/api/globs/s9f2/environments', { headers: { 'x-test-email': 'stranger@example.com' } })).status).toBe(403);
+  });
+
+  /** A `slop.ci` "Slop ATF Completed" event as `catalog/scripts/atf-report.sh` sends it. */
+  const atfEvent = (id: string, detail: Record<string, unknown>, key = KEY) => ciEvent(id, detail, key, 'Slop ATF Completed');
+
+  const atf = { repo: 'acme/sandbox', passed: 40, failed: 0, skipped: 2, url: 'https://console.aws.amazon.com/codesuite/codebuild/x/report/y' };
+
+  it("records an environment ATF run once and shows it on the globs the environment's commit holds", async () => {
+    // s9f2 is held by prod at abcdef1234567 (the previous test); the run reports the full commit.
+    const full = 'abcdef1234567890abcdef1234567890abcdef12';
+    expect((await atfEvent('atf-1', { ...atf, environment: 'prod', sha: full.toUpperCase(), failed: 3 })).status).toBe(202);
+    expect(await (await atfEvent('atf-1', { ...atf, environment: 'prod', sha: full })).json()).toEqual({ ok: true, ignored: true });
+    // Without a commit it takes what the environment runs now.
+    expect(await (await atfEvent('atf-2', { ...atf, environment: 'prod' })).json()).toEqual({ ok: true });
+    const runs = await store.transaction((tx) => tx.listTestRuns(board.id, { commits: [{ environment: 'prod', sha: 'abcdef1234567' }] }));
+    expect(runs.map((r) => [r.eventId, r.sha, r.globId, r.failed, r.finishedAt])).toEqual([
+      // Newest first: the same finish time, so the later one recorded.
+      ['aws:atf-2', 'abcdef1234567', null, 0, '2026-10-05T12:30:00.000Z'],
+      ['aws:atf-1', full, null, 3, '2026-10-05T12:30:00.000Z'],
+    ]);
+    const state: unknown = await (await app.request(`/api/boards/${String(board.id)}/deploys?globs=s9f1,s9f2`)).json();
+    // The card shows the environment's latest run.
+    expect(state).toMatchObject({ atf: { s9f2: [{ scope: 'environment', environment: 'prod', failing: false }] } });
+    const view = await app.request('/api/globs/s9f2/tests');
+    expect(await view.json()).toMatchObject({ value: [{ scope: 'environment' }, { scope: 'environment' }] });
+    expect((await app.request('/api/globs/s9f2/tests', { headers: { 'x-test-email': 'stranger@example.com' } })).status).toBe(403);
+  });
+
+  it("records a branch ATF run on the glob named by the branch, logged on it", async () => {
+    expect((await atfEvent('atf-3', { ...atf, branch: 'refs/heads/s9f1', sha: 'a1b2c3d4e5f6', environment: 'dev1' })).status).toBe(202);
+    const state: unknown = await (await app.request(`/api/boards/${String(board.id)}/deploys?globs=s9f1`)).json();
+    // Its commit isn't the PR's head: shown, but stale.
+    expect(state).toMatchObject({ atf: { s9f1: [{ scope: 'branch', environment: 'dev1', sha: 'a1b2c3d4e5f6', stale: true, failing: false }] } });
+    const events = await store.transaction((tx) => tx.listBoardEvents(board.id, '2026-01-01T00:00:00.000Z', ['ATFCompleted']));
+    expect(events.map((e) => [e.globId, e.data])).toEqual([
+      ['s9f1',
+      { sha: 'a1b2c3d4e5f6', environment: 'dev1', passed: 40, failed: 0, skipped: 2, url: atf.url }],
+    ]);
+  });
+
+  it('ignores malformed ATF events', async () => {
+    for (const detail of [
+      { ...atf },
+      { ...atf, environment: 'prod', passed: -1 },
+      { ...atf, environment: 'prod', failed: 1.5 },
+      { ...atf, environment: 'prod', sha: 'zzz' },
+      { ...atf, environment: 'prod', url: 'javascript:alert(1)' },
+      { ...atf, environment: 'dev1' },
+      { ...atf, branch: 's9f404', sha: 'a1b2c3d4e5f6' },
+    ]) {
+      const response = await atfEvent('atf-bad', detail);
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ ok: true, ignored: true });
+    }
   });
 
   it("doesn't start a queued deploy whose environment stopped taking branch deploys", async () => {

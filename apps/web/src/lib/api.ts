@@ -12,6 +12,7 @@ import type {
   Category,
   Deploy,
   DeployIndicator,
+  AtfIndicator,
   EnvironmentIndicator,
   GlobEnvironment,
   ReadinessItem,
@@ -114,8 +115,11 @@ export interface BoardDeploys {
   readonly indicators: Readonly<Record<string, DeployIndicator>>;
   /** Environments with a deploy running: Deploy now is disabled there for everyone. */
   readonly running: readonly string[];
-  /** The release and integration environments each glob is in. */
-  readonly environments: Readonly<Record<string, readonly EnvironmentIndicator[]>>;
+  /** The release and integration environments each glob is in. Optional: an older server doesn't send it, and a
+   * mismatched dev pairing (vite on a branch, API on main) must not blank the board. */
+  readonly environments?: Readonly<Record<string, readonly EnvironmentIndicator[]>>;
+  /** Each glob's ATF results: its branch run, and the runs against the environment commits holding it. Optional, as above. */
+  readonly atf?: Readonly<Record<string, readonly AtfIndicator[]>>;
 }
 
 export class RequestError extends Error {
@@ -197,6 +201,7 @@ export const api = {
     request<BoardDeploys>('GET', `/api/boards/${boardId}/deploys?globs=${globIds.map(encodeURIComponent).join(',')}`),
   globEnvironments: (id: string) =>
     request<{ value: GlobEnvironment[] }>('GET', `/api/globs/${id}/environments`).then((r) => r.value),
+  globTests: (id: string) => request<{ value: AtfIndicator[] }>('GET', `/api/globs/${id}/tests`).then((r) => r.value),
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
   deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),
   createGlob: (boardId: number, input: NewGlob) =>

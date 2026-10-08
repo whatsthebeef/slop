@@ -1,6 +1,7 @@
 import type { Deploy, DeployState } from './domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
 import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
+import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
@@ -29,6 +30,12 @@ export interface PresenceFilter {
   readonly contained?: boolean;
 }
 
+/** Test runs to list: the branch runs of these globs, and the environment runs at these commits (either may be short). */
+export interface TestRunFilter {
+  readonly globIds?: readonly string[];
+  readonly commits?: readonly EnvironmentCommit[];
+}
+
 /** Store access inside one transaction. Glob writes are conditional on the glob's version. */
 export interface Tx {
   getGlob(id: string): Promise<Glob | null>;
@@ -36,7 +43,7 @@ export interface Tx {
   insertGlob(glob: Glob, creationKey: string | null): Promise<boolean>;
   /** Writes `glob` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateGlob(glob: Glob, expectedVersion: number): Promise<boolean>;
-  /** Deletes the glob with its artifacts, review sources, findings and environment presence. */
+  /** Deletes the glob with its artifacts, review sources, findings, environment presence and branch test runs. */
   deleteGlob(id: string): Promise<void>;
   findGlobByCreationKey(boardId: number, key: string): Promise<Glob | null>;
   listGlobs(boardId: number, filter: GlobFilter): Promise<Glob[]>;
@@ -130,6 +137,11 @@ export interface Tx {
    */
   lockEnvironment(boardId: number, environment: string): Promise<void>;
 
+  /** Records a test run; false when the board already has its event ID (a redelivery). */
+  insertTestRun(run: NewTestRun): Promise<boolean>;
+  /** The board's test runs matching the filter (branch runs of its globs, or environment runs at its commits). */
+  listTestRuns(boardId: number, filter: TestRunFilter): Promise<TestRun[]>;
+
   /** Records a review to split into findings; null when its artifact or external ID is already recorded. */
   insertReviewSource(source: NewReviewSource): Promise<ReviewSource | null>;
   getReviewSource(id: number): Promise<ReviewSource | null>;
@@ -208,6 +220,11 @@ export type Hint =
   | { readonly kind: 'glob.deploys'; readonly boardId: number; readonly globId: string }
   /** A glob's review findings changed (split or classified): they don't bump the glob's version either. */
   | { readonly kind: 'glob.findings'; readonly boardId: number; readonly globId: string }
+  /**
+   * A test run against a release or integration environment arrived: every glob that environment holds may show it, so
+   * clients refetch the board's deploy state (one hint rather than one per held glob).
+   */
+  | { readonly kind: 'board.tests'; readonly boardId: number }
   | { readonly kind: 'board.changed'; readonly boardId: number }
   /** The board's KB items, documents or agent-set files changed (the board itself only on an agent-set version bump). */
   | { readonly kind: 'board.kb'; readonly boardId: number };
