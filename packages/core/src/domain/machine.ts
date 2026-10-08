@@ -52,6 +52,8 @@ export type Action =
   | 'pick_up'
   | 'take_over'
   | 'retrigger'
+  /** A ready PR whose watching run ended without fixing its failed checks: a new run on the same branch, keeping the PR. */
+  | 'retry_autofix'
   /** A merge conflict with no human implementer: ask the Claude GitHub App, in a PR comment, to resolve it on the same branch. */
   | 'resolve_conflict'
   | 'start_again'
@@ -453,6 +455,36 @@ export const retrigger = (glob: Glob, ctx: Context): Result<Transition> => {
     .status('implementing')
     .queueRun(actor.email)
     .done();
+};
+
+/** A PR whose checks failed on its current head (not inherited from the base), or whose auto-fix run gave up on them. */
+const needsAutofix = (glob: Glob): boolean => {
+  const checks = glob.headChecks;
+  const failedHead =
+    checks !== null && glob.pr?.headSha != null && checks.sha === glob.pr.headSha && checks.state === 'failed' && checks.inheritedFrom === undefined;
+  return failedHead || (glob.failure !== null && glob.failure.kind === undefined && glob.failure.conflict === undefined);
+};
+
+/** Whether a person can restart auto-fix: a ready PR nobody is implementing, with no live run, that needs fixing. */
+export const canRetryAutofix = (glob: Glob): boolean =>
+  glob.status === 'pr_open' &&
+  glob.type !== 'super' &&
+  glob.implementer === null &&
+  glob.pr?.state === 'ready' &&
+  !hasLiveRun(glob) &&
+  needsAutofix(glob);
+
+/**
+ * Retry auto-fix: a new routine run on the same branch, keeping the PR. The run starts as a watcher (see `runProgress`),
+ * so it fixes the failed checks, pushes, and stays on the PR.
+ */
+export const retryAutofix = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+  if (!canRetryAutofix(glob)) {
+    return invalidTransition(glob, actor, 'Only a ready PR with failed checks and no routine run can retry auto-fix');
+  }
+  return new Builder(glob, ctx).bumpGeneration().set({ failure: null }).queueRun(actor.email).done();
 };
 
 /** The failure reason for a merge conflict, naming the files when known. */
@@ -951,7 +983,7 @@ const queuedAtText = (at: string): string => `${new Date(at).toISOString().slice
  */
 export const runTimeoutReason = (
   glob: Glob,
-  board: Pick<Board, 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes'>,
+  board: Pick<Board, 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes'>,
   now: string,
 ): string | null => {
   const run = currentRun(glob);
@@ -962,12 +994,27 @@ export const runTimeoutReason = (
       ? `Routine run never started (queued at ${queuedAtText(run.queuedAt)})`
       : null;
   }
+  // A watching run is idle by design until its PR needs something: no no-progress timeout. It is failed only when the
+  // head's checks failed (not inherited from the base) and it made no slop call or push within the board's window.
+  if (run.state === 'watching') {
+    const checks = glob.headChecks;
+    const head = glob.pr?.headSha ?? null;
+    if (glob.status !== 'pr_open' || checks === null || head === null || checks.sha !== head) return null;
+    if (checks.state !== 'failed' || checks.inheritedFrom !== undefined) return null;
+    const since = [checks.at ?? null, run.lastProgressAt, run.startedAt].reduce<string | null>(
+      (latest, t) => (t !== null && (latest === null || Date.parse(t) > Date.parse(latest)) ? t : latest),
+      null,
+    );
+    if (since === null || minutesSince(since, now) < board.runRespondMinutes) return null;
+    const name = checks.failure?.name;
+    return `Auto-fix didn't respond to failed checks${name === undefined ? '' : ` (${name})`} on ${head.slice(0, 7)}`;
+  }
   const hours = (from: string | null) => (from === null ? 0 : (Date.parse(now) - Date.parse(from)) / 3_600_000);
   const lastProgress = run.lastProgressAt ?? run.startedAt ?? run.queuedAt;
   if (hours(lastProgress) >= board.runNoProgressHours) {
     return `No progress for ${String(board.runNoProgressHours)} hours`;
   }
-  if (run.state === 'active' && hours(run.startedAt ?? run.queuedAt) >= board.runReadyHours) {
+  if (hours(run.startedAt ?? run.queuedAt) >= board.runReadyHours) {
     return `PR not marked ready within ${String(board.runReadyHours)} hours`;
   }
   return null;
@@ -977,9 +1024,11 @@ export const runTimeoutReason = (
 export const runProgress = (glob: Glob, runId: string, ctx: Context): Result<Transition> => {
   const run = currentRun(glob);
   if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
+  // A run queued for a PR that is already in review (Retry auto-fix) is a watcher from its first call.
+  const started = glob.status === 'pr_open' ? 'watching' : 'active';
   return new Builder(glob, ctx)
     .updateRun({
-      state: run.state === 'queued' ? 'active' : run.state,
+      state: run.state === 'queued' ? started : run.state,
       startedAt: run.startedAt ?? ctx.now,
       lastProgressAt: ctx.now,
     })
@@ -1139,6 +1188,9 @@ export const readyRequested = (
   ctx: Context,
   source: ReadySource = { from: 'tool' },
 ): Result<Transition> => {
+  // A retried auto-fix run on a PR already in review has nothing to mark ready: its pushes are enough.
+  const watcher = currentRun(glob);
+  if (glob.status === 'pr_open' && runId !== null && watcher?.id === runId && watcher.state === 'watching') return unchanged(glob);
   if (glob.status !== 'implementing' && glob.status !== 'in_progress') {
     return invalidTransition(glob, ctx.actor, `A glob in ${glob.status} has no draft PR to mark ready`);
   }
@@ -1377,6 +1429,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (glob.status === 'failed' && glob.type !== 'super' && !hasLiveRun(glob) && !personMergeFailure) {
     actions.push('retrigger');
   }
+  if (!restricted && canRetryAutofix(glob)) actions.push('retry_autofix');
   if (canRequestConflictFix(glob)) actions.push('resolve_conflict');
   if (glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
   if (

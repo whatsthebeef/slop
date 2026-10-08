@@ -61,6 +61,7 @@ export const boards = pgTable('boards', {
   runNoProgressHours: integer('run_no_progress_hours').notNull().default(2),
   runReadyHours: integer('run_ready_hours').notNull().default(8),
   runStartMinutes: integer('run_start_minutes').notNull().default(30),
+  runRespondMinutes: integer('run_respond_minutes').notNull().default(30),
   /** The learned sub size limit (`sub_limit_changes` holds its history); not an admin setting. */
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
   /** Effect checks: globs compared on each side of an approved change. */

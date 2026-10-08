@@ -5,7 +5,7 @@ import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
 import type { BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
 import { readCommitChecks } from './commit-checks.js';
-import { classifyMergeState } from './merge-state.js';
+import { classifyMergeState, staleCancelledRuns } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
 
 type Octokit = Awaited<ReturnType<App['getInstallationOctokit']>>;
@@ -252,7 +252,7 @@ export class GitHub implements CodeHost, CommitGraph {
       repo: repo.name,
       pull_number: prNumber,
     });
-    let runs: { status: string; conclusion: string | null }[] = [];
+    let runs: { id: number | bigint; status: string; conclusion: string | null; completed_at?: string | null }[] = [];
     if (data.mergeable_state === 'unstable' || data.mergeable_state === 'blocked') {
       const checks = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
         owner: repo.owner,
@@ -262,6 +262,16 @@ export class GitHub implements CodeHost, CommitGraph {
         per_page: 100,
       });
       runs = checks.data.check_runs;
+      // A cancelled run with no newer one after a few minutes (the replacement never started): ask the App to run it again.
+      for (const run of staleCancelledRuns(runs, Date.now())) {
+        await gh
+          .request('POST /repos/{owner}/{repo}/check-runs/{check_run_id}/rerequest', {
+            owner: repo.owner,
+            repo: repo.name,
+            check_run_id: Number(run.id),
+          })
+          .catch(() => undefined);
+      }
     }
     const state = classifyMergeState(data.mergeable_state, runs);
     return { sha: data.head.sha, state };

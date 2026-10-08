@@ -959,7 +959,7 @@ describe('run sessions and timeouts', () => {
   });
 
   it('times out a run with no progress, or one that never marks its PR ready', () => {
-    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30 };
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
     const at = (hours: number) => new Date(Date.parse('2026-10-05T00:00:00.000Z') + hours * 3_600_000).toISOString();
     const active = (lastProgress: number) =>
       glob({ status: 'implementing', runs: [run({ state: 'active', startedAt: at(0), lastProgressAt: at(lastProgress) })] });
@@ -970,8 +970,90 @@ describe('run sessions and timeouts', () => {
     expect(m.runTimeoutReason(watching, limits, at(9))).toBeNull();
   });
 
+  describe('a watching run', () => {
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
+    const t0 = '2026-10-05T00:00:00.000Z';
+    const after = (minutes: number) => new Date(Date.parse(t0) + minutes * 60_000).toISOString();
+    const head = 'a'.repeat(40);
+    const watcher = (checks: Partial<NonNullable<ReturnType<typeof glob>['headChecks']>> | null, lastProgress = 0) =>
+      glob({
+        status: 'pr_open',
+        pr: { number: 1, state: 'ready', headSha: head },
+        headChecks: checks === null ? null : { sha: head, state: 'passed', ...checks },
+        runs: [run({ state: 'watching', startedAt: t0, lastProgressAt: after(lastProgress) })],
+      });
+
+    it('is never failed for being idle while checks pass or are pending', () => {
+      expect(m.runTimeoutReason(watcher({ state: 'passed' }), limits, after(24 * 60))).toBeNull();
+      expect(m.runTimeoutReason(watcher({ state: 'pending' }), limits, after(24 * 60))).toBeNull();
+      expect(m.runTimeoutReason(watcher(null), limits, after(24 * 60))).toBeNull();
+    });
+
+    it('is failed once the window passes after the checks fail, naming the check and commit', () => {
+      const failed = watcher({ state: 'failed', at: after(10), failure: { name: 'Type check', step: null, lines: [], url: null } });
+      expect(m.runTimeoutReason(failed, limits, after(39))).toBeNull();
+      expect(m.runTimeoutReason(failed, limits, after(40))).toBe("Auto-fix didn't respond to failed checks (Type check) on aaaaaaa");
+      expect(m.runTimeoutReason(failed, { ...limits, runRespondMinutes: 60 }, after(40))).toBeNull();
+    });
+
+    it('restarts the window on a slop call, and ignores a failure inherited from the base', () => {
+      const failed = { state: 'failed' as const, at: after(10) };
+      expect(m.runTimeoutReason(watcher(failed, 30), limits, after(50))).toBeNull();
+      expect(m.runTimeoutReason(watcher(failed, 30), limits, after(60))).toMatch(/Auto-fix didn't respond/);
+      const inherited = { ...failed, inheritedFrom: { base: 'main', since: 's1t1', name: 'Type check', line: 'x' } } as never;
+      expect(m.runTimeoutReason(watcher({ ...failed, inheritedFrom: inherited }), limits, after(600))).toBeNull();
+    });
+
+    it('ignores failed checks recorded for an older head', () => {
+      const g = { ...watcher({ state: 'failed', at: after(0) }), pr: { number: 1, state: 'ready' as const, headSha: 'b'.repeat(40) } };
+      expect(m.runTimeoutReason(g, limits, after(600))).toBeNull();
+    });
+  });
+
+  describe('retry auto-fix', () => {
+    const head = 'a'.repeat(40);
+    const failedPr = (over: Partial<ReturnType<typeof glob>> = {}) =>
+      glob({
+        status: 'pr_open',
+        type: 'sub',
+        pr: { number: 7, state: 'ready', headSha: head },
+        headChecks: { sha: head, state: 'failed' },
+        failure: { reason: "Auto-fix didn't respond to failed checks on aaaaaaa", at: '2026-10-05T00:00:00.000Z' },
+        runs: [run({ state: 'ended', outcome: 'failed', endedAt: '2026-10-05T00:00:00.000Z' })],
+        ...over,
+      });
+
+    it('is offered next to pick up, and queues a run that keeps the branch and PR', () => {
+      const g = failedPr();
+      const actions = m.allowedActions(g, dev);
+      expect(actions).toContain('retry_autofix');
+      expect(actions).toContain('pick_up');
+      const t = value(m.retryAutofix(g, ctx()));
+      expect(t.glob.status).toBe('pr_open');
+      expect(t.glob.pr).toEqual(g.pr);
+      expect(t.glob.failure).toBeNull();
+      expect(m.currentRun(t.glob)?.state).toBe('queued');
+      expect(t.effects.map((e) => e.kind)).toContain('fire_routine');
+    });
+
+    it('is not offered while a run is live, with a human implementer, or on a healthy PR', () => {
+      expect(m.allowedActions(failedPr({ runs: [run({ state: 'watching' })] }), dev)).not.toContain('retry_autofix');
+      expect(m.allowedActions(failedPr({ implementer: 'dev@example.com' }), other)).not.toContain('retry_autofix');
+      expect(m.allowedActions(failedPr({ headChecks: { sha: head, state: 'passed' }, failure: null }), dev)).not.toContain('retry_autofix');
+      expect(m.retryAutofix(failedPr({ headChecks: { sha: head, state: 'passed' }, failure: null }), ctx()).ok).toBe(false);
+    });
+
+    it('the queued run becomes a watcher on its first call, and mark_ready from it changes nothing', () => {
+      const queued = value(m.retryAutofix(failedPr(), ctx())).glob;
+      const runId = m.currentRun(queued)?.id ?? '';
+      const progressed = value(m.runProgress(queued, runId, ctx(null))).glob;
+      expect(m.currentRun(progressed)?.state).toBe('watching');
+      expect(value(m.readyRequested(progressed, runId, ctx(null))).changed).toBe(false);
+    });
+  });
+
   it('fails a queued run that never started after the board\'s time, and leaves younger ones', () => {
-    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30 };
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
     const queuedAt = '2026-10-07T02:01:55.115Z';
     const after = (minutes: number) => new Date(Date.parse(queuedAt) + minutes * 60_000).toISOString();
     const queued = glob({ status: 'implementing', runs: [run({ state: 'queued', queuedAt, startedAt: null })] });

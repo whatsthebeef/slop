@@ -81,7 +81,7 @@ export const fireRoutine = async (secret: RoutineSecret, text: string, health: H
 
 /** The text a routine run receives: which glob, which run, which repository, and how to start. */
 export const runInstructions = (
-  glob: { id: string; title: string },
+  glob: { id: string; title: string; status?: string },
   runId: string,
   repo: string | null,
 ): string =>
@@ -94,6 +94,12 @@ export const runInstructions = (
           `Repository: ${repo}. Work in that repository's checkout. If this session doesn't have it, or can't push to it, call slop's report_failure with the run ID saying so (the routine's environment needs ${repo} and the Claude GitHub App installed on it); don't work in another repository.`,
         ]),
     '',
+    ...(glob.status === 'pr_open'
+      ? [
+          `The PR is already ready for review and its checks failed (or a review needs a reply): read the failing check's log, fix it on the glob's branch and push, then stay on the PR. Do not call mark_ready.`,
+          '',
+        ]
+      : []),
     `Work on the glob's branch, ${glob.id}, which already exists on origin with an open draft PR: run \`git fetch origin ${glob.id} && git checkout -B ${glob.id} origin/${glob.id}\` first. Push only to ${glob.id} (\`git push origin ${glob.id}\`); never create or push a claude/ branch, and never open a new PR.`,
     '',
     `Run /run-glob ${glob.id} --run ${runId}. If that command is not available, read .claude/agents/orchestrator.md and follow it for glob ${glob.id} in unattended mode with run ID ${runId}.`,

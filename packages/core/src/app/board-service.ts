@@ -28,6 +28,7 @@ export type BoardSettings = Partial<
     | 'runNoProgressHours'
     | 'runReadyHours'
     | 'runStartMinutes'
+    | 'runRespondMinutes'
     | 'effectCheckGlobs'
     | 'deploy'
     | 'readinessTicks'
@@ -55,7 +56,7 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
   if (settings.timeZone !== undefined && !isTimeZone(settings.timeZone)) {
     return invalidInput(`Unknown time zone ${settings.timeZone}`);
   }
-  for (const key of ['runNoProgressHours', 'runReadyHours', 'runStartMinutes'] as const) {
+  for (const key of ['runNoProgressHours', 'runReadyHours', 'runStartMinutes', 'runRespondMinutes'] as const) {
     const value = settings[key];
     if (value !== undefined && (!Number.isFinite(value) || value <= 0)) return invalidInput(`${key} must be positive`);
   }

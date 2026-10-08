@@ -10,14 +10,16 @@ on:
 permissions:
   contents: read
 
-# One gate run per PR: a newer push or label cancels the one in progress.
+# One gate run per PR: a newer push or the slop:sub label cancels the one in progress. Any other label gets a group of
+# its own (its job is skipped), so it can't cancel a gate run that is under way.
 concurrency:
-  group: sub-gate-${{ github.event.pull_request.number }}
+  group: sub-gate-${{ github.event.pull_request.number }}${{ github.event.action == 'labeled' && github.event.label.name != 'slop:sub' && format('-label-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
   sub-gate:
-    if: ${{ !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'slop:sub') }}
+    # A label other than slop:sub (an env or QA label) must not start a run: it would cancel the one in progress.
+    if: ${{ !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'slop:sub') && (github.event.action != 'labeled' || github.event.label.name == 'slop:sub') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:

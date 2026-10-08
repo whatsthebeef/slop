@@ -25,20 +25,25 @@ export class RunWatch {
   }
 
   async check(now = new Date().toISOString()): Promise<number> {
-    const due = await this.store.transaction(async (tx) => {
+    const { found: due, stuck } = await this.store.transaction(async (tx) => {
       const found: { id: string; runId: string; reason: string }[] = [];
+      const stuck: string[] = [];
       for (const board of await tx.listAllBoards()) {
         for (const glob of await tx.listGlobs(board.id, { status: ['implementing', 'pr_open'] })) {
           const reason = machine.runTimeoutReason(glob, board, now);
           const run = machine.currentRun(glob);
           if (reason !== null && run !== null) found.push({ id: glob.id, runId: run.id, reason });
+          // Pending checks may be waiting on a cancelled run's replacement: read them again, which re-requests a run
+          // that never came.
+          if (glob.status === 'pr_open' && glob.headChecks?.state === 'pending') stuck.push(glob.id);
         }
       }
-      return found;
+      return { found, stuck };
     });
     for (const { id, runId, reason } of due) {
-      await this.globs.applyEvent(id, (g, ctx) => machine.reportFailure(g, { reason: reason.startsWith('Routine run never started') ? reason : `Run timed out: ${reason}`, runId }, ctx));
+      await this.globs.applyEvent(id, (g, ctx) => machine.reportFailure(g, { reason: reason.startsWith('Routine run never started') || reason.startsWith("Auto-fix didn't respond") ? reason : `Run timed out: ${reason}`, runId }, ctx));
     }
+    for (const id of stuck) await this.globs.applyEvent(id, (g, ctx) => machine.checksChanged(g, ctx));
     return due.length;
   }
 }

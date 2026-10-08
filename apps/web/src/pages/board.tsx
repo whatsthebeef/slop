@@ -35,6 +35,7 @@ const MOVE_DESCRIPTIONS: Partial<Record<Action, string>> = {
   pick_up: 'you implement it',
   take_over: 'you take it over from the routine',
   retrigger: 'a routine runs it again',
+  retry_autofix: 'a routine fixes the failed checks on the same PR',
 };
 
 /**
