@@ -17,6 +17,7 @@ import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/l
 import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
+import { withGlob } from '@/lib/glob-list';
 import { codeReviewsKey, deploysKey, globsKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useToast } from '@/toast';
@@ -278,12 +279,10 @@ export const BoardPage = () => {
     return () => clearTimeout(timer);
   }, [globs.dataUpdatedAt, client]);
 
-  // Keeps the known artifact summaries when a response carries none.
+  // Keeps the known artifact summaries when a response carries none. A response can land after the
+  // page has moved to another board, so it goes to the list of the glob's own board.
   const store = (glob: GlobView) =>
-    client.setQueryData<GlobView[]>(globsKey(boardId), (list = []) => {
-      const artifacts = glob.artifacts ?? list.find((g) => g.id === glob.id)?.artifacts;
-      return [...list.filter((g) => g.id !== glob.id), artifacts === undefined ? glob : { ...glob, artifacts }];
-    });
+    client.setQueryData<GlobView[]>(globsKey(glob.boardId), (list) => withGlob(list, glob, glob.boardId));
 
   /** Shows the error; on a version conflict, takes the current glob so the next click works. */
   const fail = (error: unknown) => {
