@@ -25,6 +25,7 @@ export const DOMAIN_EVENT_TYPES = [
   'ConflictFlagged',
   'ConflictCleared',
   'ConflictFixRequested',
+  'BehindChanged',
   'LabelChanged',
   'LabelItemTicked',
   'PickedUp',
@@ -93,6 +94,8 @@ export type Effect =
   | { readonly kind: 'flag_conflicts'; readonly globId: string; readonly generation: number }
   /** Read whether the glob's open PR conflicts with the base branch (`since`: the glob whose merge prompted it). */
   | { readonly kind: 'check_conflict'; readonly globId: string; readonly generation: number; readonly since: string | null }
+  /** Read how far the glob's branch is behind the base branch (its branch or the base received a push). */
+  | { readonly kind: 'check_behind'; readonly globId: string; readonly generation: number }
   /** Ask the Claude GitHub App, in a PR comment, to merge the base branch in and resolve the conflict. */
   | { readonly kind: 'request_conflict_fix'; readonly globId: string; readonly generation: number }
   /**

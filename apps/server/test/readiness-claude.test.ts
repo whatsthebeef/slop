@@ -8,9 +8,9 @@ import type { Database } from '../src/db/store.js';
 import type { Env } from '../src/http/app.js';
 import { mountReadiness } from '../src/http/readiness.js';
 import { createTestDatabase } from './support/database.js';
+import { fakeCodeHost } from './support/fake-codehost.js';
 
 const ADMIN = 'admin@example.com';
-const unused = () => Promise.reject(new Error('not used by the readiness route'));
 
 const catalog: Catalog = {
   kbEntries: () => Promise.resolve([]),
@@ -18,36 +18,16 @@ const catalog: Catalog = {
 };
 
 /** A repo whose `.github/workflows/` holds `files` (path to text) on every branch. */
-const hostWith = (files: Record<string, string>): CodeHost => ({
-  configured: true,
-  connection: () =>
-    Promise.resolve({ configured: true, connected: true, installUrl: null, appName: null }),
-  provision: unused,
-  openDraftPr: unused,
-  syncLabels: unused,
-  closePr: unused,
-  deleteBranch: unused,
-  reopenPr: unused,
-  mergeState: unused,
-  conflictFiles: unused,
-  completedCheckRun: unused,
-  readFile: (_repo, _ref, path) => Promise.resolve(files[path] ?? null),
-  listFiles: (_repo, _ref, dir) =>
-    Promise.resolve(
-      Object.keys(files)
-        .filter((p) => p.startsWith(`${dir}/`))
-        .map((p) => p.slice(dir.length + 1)),
-    ),
-  commitFiles: unused,
-  commitDiffSummary: unused,
-  markReady: unused,
-  diffSummary: unused,
-  squashMerge: unused,
-  headOf: unused,
-  commitChecks: unused,
-  updateBranch: unused,
-  commentOnce: unused,
-});
+const hostWith = (files: Record<string, string>): CodeHost =>
+  fakeCodeHost({
+    readFile: (_repo, _ref, path) => Promise.resolve(files[path] ?? null),
+    listFiles: (_repo, _ref, dir) =>
+      Promise.resolve(
+        Object.keys(files)
+          .filter((p) => p.startsWith(`${dir}/`))
+          .map((p) => p.slice(dir.length + 1)),
+      ),
+  });
 
 describe('GET /api/boards/:b/readiness: Claude workflow', () => {
   let database: Database;

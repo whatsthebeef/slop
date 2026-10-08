@@ -1,4 +1,4 @@
-import { checksExplanation, queuedRunNotice, readyStatus, stuckHint } from '@slop/core';
+import { behindAdvice, behindWarning, checksExplanation, queuedRunNotice, readyStatus, stuckHint } from '@slop/core';
 import type { Action, ArtifactKind, Category, CodeReviewBadge, DeployIndicator, EnvironmentIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, MessageSquareCode, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -91,7 +91,7 @@ const oneLine = (text: string, max = 90): string => {
 const hintSentence = (hint: string): string => oneLine((hint.split(/\.\s|\s+Fix:/)[0] ?? hint).replace(/\.$/, ''));
 
 interface StatusLine {
-  readonly kind: 'base-red' | 'checks' | 'failure' | 'stuck' | 'ready' | 'waiting';
+  readonly kind: 'base-red' | 'checks' | 'failure' | 'stuck' | 'behind' | 'ready' | 'waiting';
   readonly text: string;
   readonly tone: string;
   readonly tip: string;
@@ -120,6 +120,8 @@ const statusLine = (glob: GlobView, hint: string | null, checks: ReturnType<type
     candidates.push({ kind: 'failure', text: oneLine(reason), tone: 'text-red', tip });
   }
   if (hint !== null) candidates.push({ kind: 'stuck', text: hintSentence(hint), tone: 'text-required', tip: hint });
+  const behind = behindWarning(glob);
+  if (behind !== null) candidates.push({ kind: 'behind', text: behind, tone: 'text-muted-foreground', tip: `${behind}\n${behindAdvice(glob)}` });
   if (candidates.length === 0) {
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha);
@@ -127,7 +129,7 @@ const statusLine = (glob: GlobView, hint: string | null, checks: ReturnType<type
   }
   const [top, ...rest] = candidates;
   if (top === undefined) return null;
-  const ALSO = { 'base-red': 'the base branch is red', checks: 'checks failed', failure: 'the routine run failed', stuck: 'looks stuck', ready: '', waiting: '' } as const;
+  const ALSO = { 'base-red': 'the base branch is red', checks: 'checks failed', failure: 'the routine run failed', stuck: 'looks stuck', behind: 'the branch is behind the base', ready: '', waiting: '' } as const;
   const also = rest.length === 0 ? '' : `\nAlso: ${rest.map((c) => ALSO[c.kind]).join(', ')}`;
   return { ...top, tip: `${top.tip}${also}` };
 };

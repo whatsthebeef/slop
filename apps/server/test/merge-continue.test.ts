@@ -4,13 +4,14 @@ import type { Board, Effect, Glob, Result } from '@slop/core';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { codeHostExecutors } from '../src/codehost-executors.js';
-import type { CodeHost, MergeResult } from '../src/codehost.js';
+import type { MergeResult } from '../src/codehost.js';
 import * as schema from '../src/db/schema.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
 import { githubDeliveryHandler } from '../src/github/events.js';
 import { FileRoutines } from '../src/routines.js';
 import { createTestDatabase } from './support/database.js';
+import { FakeCodeHost } from './support/fake-codehost.js';
 
 const REPO = 'acme/app';
 const DEV = 'dev@example.com';
@@ -22,42 +23,25 @@ const unwrap = <T>(result: Result<T>): T => {
 };
 
 /** A code host that records what slop asked of it; only the calls these tests make do anything. */
-class FakeHost implements CodeHost {
-  readonly configured = true;
-  commitFiles = () => Promise.resolve({ parent: null, files: [] });
-  commitDiffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
+class FakeHost extends FakeCodeHost {
   readonly opened: string[] = [];
   readonly deleted: string[] = [];
   nextPr: { number: number; headSha: string } | null = { number: 8, headSha: 'd4' };
   mergeResult: MergeResult = { outcome: 'merged', sha: 'm1' };
 
-  connection = () =>
-    Promise.resolve({ configured: true, connected: true, installUrl: null, appName: null });
-  provision = (_repo: unknown, glob: Glob) =>
+  override provision = (_repo: unknown, glob: Glob) =>
     Promise.resolve({ branch: glob.id, pr: { number: 7, headSha: HEAD } });
-  openDraftPr = (_repo: unknown, glob: Glob) => {
+  override openDraftPr = (_repo: unknown, glob: Glob) => {
     this.opened.push(glob.id);
     return Promise.resolve(this.nextPr);
   };
-  syncLabels = () => Promise.resolve();
-  closePr = () => Promise.resolve();
-  deleteBranch = (_repo: unknown, branch: string) => {
+  override deleteBranch = (_repo: unknown, branch: string) => {
     this.deleted.push(branch);
     return Promise.resolve();
   };
-  reopenPr = () => Promise.resolve('reopened' as const);
-  mergeState = () => Promise.resolve({ sha: HEAD, state: 'passed' as const });
-  completedCheckRun = () => Promise.resolve(null);
-  markReady = () => Promise.resolve({ wasDraft: true, sha: HEAD });
-  conflictFiles = () => Promise.resolve([] as string[]);
-  commentOnce = () => Promise.resolve('posted' as const);
-  diffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
-  readFile = () => Promise.resolve(null);
-  listFiles = () => Promise.resolve([]);
-  headOf = () => Promise.resolve(null);
-  commitChecks = () => Promise.resolve({ state: 'passed' as const, failure: null });
-  updateBranch = () => Promise.resolve('up_to_date' as const);
-  squashMerge = () => Promise.resolve(this.mergeResult);
+  override mergeState = () => Promise.resolve({ sha: HEAD, state: 'passed' as const });
+  override markReady = () => Promise.resolve({ wasDraft: true, sha: HEAD });
+  override squashMerge = () => Promise.resolve(this.mergeResult);
 }
 
 describe('Merge and continue (row 31) through the executors and webhooks', () => {
