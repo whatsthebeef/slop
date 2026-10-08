@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** The background jobs a server starts; `SLOP_JOBS` picks them. */
-export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'findings', 'learning', 'tunnel'] as const;
+export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'findings', 'learning', 'tunnel', 'follow'] as const;
 export type Job = (typeof JOBS)[number];
 const isJob = (name: string): name is Job => JOBS.some((job) => job === name);
 
@@ -58,6 +58,10 @@ const schema = z.object({
     .transform((v) => (v ?? '').split(',').map((k) => k.trim()).filter((k) => k !== '')),
   /** The ngrok tunnel's domain (set by dev.sh): the server watches it and shows a banner when it is down. */
   SLOP_TUNNEL_DOMAIN: z.string().optional(),
+  /** Set by `scripts/dev.sh follow` on the main checkout's server: the follow loop's status file. */
+  SLOP_FOLLOW_FILE: z.string().optional(),
+  /** The integration environment a followed main checkout's commits are recorded as deploys to. */
+  SLOP_FOLLOW_ENVIRONMENT: z.string().default('local'),
   /**
    * Which background jobs start: `all` (the default), `none`, or a comma-separated list of JOBS. A
    * session's server on a clone of the shared database uses `none` (or only the job its glob works

@@ -33,6 +33,11 @@ Usage: scripts/dev.sh [command]
                to $SLOP_URL_FILE (default .sstor/.url). SLOP_JOBS picks the server's background
                jobs (default none; e.g. SLOP_JOBS=kb). `session reset` re-clones the database.
   session-drop Drop this glob's session database.
+  follow       Main checkout only: keep :3000 on origin/main. Polls origin/main (every
+               SLOP_FOLLOW_INTERVAL seconds, default 60); on a move it fast-forwards, installs if
+               the lockfile changed, snapshots and migrates, and restarts the server. It holds and
+               says why when the tree is dirty, the history isn't a fast-forward or the database is
+               ahead of main. The board shows each update or hold as a banner (.slop-dev-follow.json).
   help         Show this help.
 
 Snapshots are taken automatically before code with new migrations starts, and kept (newest
@@ -193,6 +198,8 @@ start() {
   [[ -n "${AWS_PROFILE:-}" ]] && env_args+=(-e "AWS_PROFILE=$AWS_PROFILE")
   # The server watches the tunnel (through ngrok's local API) and shows a banner when it drops.
   [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]] && env_args+=(-e "SLOP_TUNNEL_DOMAIN=$SLOP_TUNNEL_DOMAIN")
+  # Under dev.sh follow: the server shows follow's updates and holds, and records them as local deploys.
+  [[ -n "${SLOP_FOLLOW_FILE:-}" ]] && env_args+=(-e "SLOP_FOLLOW_FILE=$SLOP_FOLLOW_FILE")
   tmux new-session -d -s "$session" ${env_args[@]+"${env_args[@]}"} -n server -c "$root/apps/server" \
     "$($watch_mode && watched_server_cmd || server_cmd); read"
   tmux set-environment -t "$session" SLOP_DEV_ROOT "$root"
@@ -309,6 +316,96 @@ session_drop() {
   echo "Dropped $db"
 }
 
+# The follow loop's status, read by the server (SLOP_FOLLOW_FILE) for its banner and local deploys.
+follow_file="$main_root/.slop-dev-follow.json"
+
+follow_status() {
+  # state, then key=value pairs; python3 writes the JSON so nothing needs shell quoting.
+  local state="$1"; shift
+  FOLLOW_STATE="$state" FOLLOW_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 - "$follow_file" "$@" <<'PY'
+import json, os, sys
+path, pairs = sys.argv[1], sys.argv[2:]
+status = {"state": os.environ["FOLLOW_STATE"], "at": os.environ["FOLLOW_AT"]}
+for pair in pairs:
+    key, _, value = pair.partition("=")
+    status[key] = value
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(status, f)
+os.replace(tmp, path)
+PY
+}
+
+# Whether the shared database has run a migration that `ref`'s journal doesn't have.
+database_ahead_of() {
+  local applied
+  applied="$(psql_slop -d slop -Atc \
+    "select coalesce(max(created_at), 0) from drizzle.__drizzle_migrations" 2>/dev/null || echo 0)"
+  git -C "$root" show "$1:apps/server/drizzle/meta/_journal.json" | node -e '
+    let text = ""; process.stdin.on("data", (d) => (text += d)).on("end", () => {
+      const newest = Math.max(0, ...JSON.parse(text).entries.map((e) => e.when));
+      process.exit(Number(process.argv[1]) > newest ? 0 : 1);
+    });' "$applied"
+}
+
+follow() {
+  local base="${SLOP_FOLLOW_BASE:-main}"
+  [[ "$root" == "$main_root" ]] || { echo "dev.sh follow runs only in the main checkout ($main_root)" >&2; exit 1; }
+  [[ "$(git -C "$root" branch --show-current)" == "$base" ]] || { echo "dev.sh follow: check out $base first" >&2; exit 1; }
+  local repo
+  repo="$(git -C "$root" remote get-url origin | sed -E 's#^(https://[^/]+/|git@[^:]+:)##; s#\.git$##')"
+  export SLOP_FOLLOW_FILE="$follow_file"
+  follow_status following "sha=$(git -C "$root" rev-parse HEAD)" "repo=$repo"
+  # The server reads SLOP_FOLLOW_FILE, so (re)start it under follow.
+  stop; start
+  echo "Following origin/$base (every ${SLOP_FOLLOW_INTERVAL:-60}s). Ctrl-C stops following; the server keeps running."
+  while true; do
+    sleep "${SLOP_FOLLOW_INTERVAL:-60}"
+    git -C "$root" fetch -q origin "$base" 2>/dev/null || { echo "follow: fetch failed; trying again"; continue; }
+    local head target
+    head="$(git -C "$root" rev-parse HEAD)"
+    target="$(git -C "$root" rev-parse "origin/$base")"
+    [[ "$head" == "$target" ]] && continue
+    local behind
+    behind="$(git -C "$root" rev-list --count "HEAD..origin/$base")"
+    if [[ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]]; then
+      follow_status held "sha=$head" "repo=$repo" "behind=$behind" "reason=the main checkout has uncommitted changes" \
+        "fix=Commit or discard them in $root; follow carries on by itself"
+      continue
+    fi
+    if ! git -C "$root" merge-base --is-ancestor HEAD "origin/$base"; then
+      follow_status held "sha=$head" "repo=$repo" "behind=$behind" "reason=the main checkout has commits origin/$base doesn't" \
+        "fix=Move them to a branch and reset $base to origin/$base"
+      continue
+    fi
+    if database_ahead_of "origin/$base"; then
+      follow_status held "sha=$head" "repo=$repo" "behind=$behind" "reason=the database has run a migration main doesn't have (a branch's draft)" \
+        "fix=scripts/dev.sh restore to the snapshot from before it (scripts/dev.sh snapshots lists them)"
+      continue
+    fi
+    local changed subjects
+    changed="$(git -C "$root" diff --name-only HEAD "origin/$base")"
+    subjects="$(git -C "$root" log --format=%s "HEAD..origin/$base" | head -n 5 | paste -sd ';' -)"
+    git -C "$root" merge -q --ff-only "origin/$base"
+    if grep -qx 'pnpm-lock.yaml' <<<"$changed"; then
+      if ! (cd "$root" && corepack pnpm install --frozen-lockfile --silent); then
+        follow_status held "sha=$target" "repo=$repo" "reason=pnpm install failed after updating to ${target:0:7}" \
+          "fix=Run corepack pnpm install in $root and look at the error; the server still runs ${head:0:7}"
+        continue
+      fi
+    fi
+    local migrations restarted snapshot
+    migrations="$(grep -o 'apps/server/drizzle/[0-9][^/]*\.sql' <<<"$changed" | xargs -n1 basename 2>/dev/null | sed 's/\.sql$//' | paste -sd ',' - || true)"
+    # start snapshots the database itself when the new code brings migrations.
+    restarted="$(stop; start 2>&1)"
+    echo "$restarted"
+    snapshot="$(sed -n 's/^Database snapshot: \([^ ]*\).*/\1/p' <<<"$restarted")"
+    follow_status updated "sha=$target" "from=$head" "repo=$repo" "subjects=$subjects" \
+      "migrations=$migrations" "snapshot=$snapshot"
+    echo "follow: updated to ${target:0:7}${migrations:+ (migrations: $migrations)}"
+  done
+}
+
 list_snapshots() {
   if ! ls -1t "$snapshots"/*.dump 2>/dev/null; then
     echo "No snapshots in $snapshots"
@@ -341,6 +438,7 @@ case "$action" in
   check-migrations) check_migrations; exit 0 ;;
   session) session "${2:-}"; exit 0 ;;
   session-drop) session_drop; exit 0 ;;
+  follow) follow; exit 0 ;;
   board-watch) build_board_watch; exit 0 ;;
   snapshots) list_snapshots; exit 0 ;;
   restore) restore "${2:-}"; exit 0 ;;

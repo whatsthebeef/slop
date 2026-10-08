@@ -18,3 +18,5 @@ cdk.out/
 .sstor/.finalised
 .sstor/.url
 .sstor/local-run.json
+.slop-dev-follow.json
+.slop-dev-follow.json.tmp

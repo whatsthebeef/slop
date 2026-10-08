@@ -24,6 +24,7 @@ import { codeReviewExecutors } from './code-review-executors.js';
 import { mountArtifactUploads } from './http/artifact-upload.js';
 import { mountDeploys } from './http/deploys.js';
 import { mountWeb } from './http/web.js';
+import { LocalFollowWatch } from './local-follow.js';
 import { mountReadiness } from './http/readiness.js';
 import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
@@ -308,6 +309,11 @@ const learningJobsRunner = new LearningJobs(learningJobs, logError);
 if (runs('learning')) learningJobsRunner.start();
 const tunnelWatch = config.SLOP_TUNNEL_DOMAIN === undefined ? null : new TunnelWatch(config.SLOP_TUNNEL_DOMAIN, integrations);
 if (runs('tunnel')) tunnelWatch?.start();
+const followWatch =
+  config.SLOP_FOLLOW_FILE === undefined
+    ? null
+    : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, config.SLOP_FOLLOW_ENVIRONMENT, integrations, (d) => environments.recordDeploy(d), logError);
+if (runs('follow')) followWatch?.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -320,6 +326,7 @@ const shutdown = () => {
   findingsJob.stop();
   learningJobsRunner.stop();
   tunnelWatch?.stop();
+  followWatch?.stop();
   server.close();
   void database.close();
 };
