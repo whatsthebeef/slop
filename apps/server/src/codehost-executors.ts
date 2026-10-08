@@ -8,6 +8,9 @@ import type { Repo } from './codehost.js';
 import { SUB_GATE_CHECK, repoOf } from './codehost.js';
 import { conflictCommentBody, conflictCommentMarker } from './conflict-comment.js';
 
+/** How long a cancelled check run may wait for a newer run on the same head before it is re-requested. */
+const CANCELLED_CHECK_WAIT_MS = 5 * 60_000;
+
 /**
  * Outbox executors for the code host (the GitHub App today). Each turns one effect into GitHub calls and feeds what
  * happened back through the state machine. Throwing makes the outbox retry with backoff.
@@ -36,6 +39,18 @@ export const codeHostExecutors = (
     // Not finished yet: its webhook will come.
     if (check === null) return;
     await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCheckCompleted(g, check, ctx));
+  };
+
+  /**
+   * A cancelled check run leaves the head pending until a newer run on the same head replaces it. When none has come
+   * after `CANCELLED_CHECK_WAIT_MS`, ask the app to run it again; before that, retry the effect later.
+   */
+  const waitForCancelledChecks = async (repo: Repo, sha: string) => {
+    const cancelled = await host.cancelledChecks(repo, sha);
+    if (cancelled.length === 0) return;
+    const waited = cancelled.every((c) => c.completedAt !== null && Date.parse(now()) - Date.parse(c.completedAt) >= CANCELLED_CHECK_WAIT_MS);
+    if (!waited) throw new Error('A check run was cancelled; waiting for the newer run on the same head');
+    for (const c of cancelled) await host.rerequestCheck(repo, c.id);
   };
 
   /** The failing check's name, step and first error lines; best effort, since the checks' state is already known. */
@@ -134,7 +149,10 @@ export const codeHostExecutors = (
       await lookUpSubGate(repo, glob, sha, globs);
       // A flagged conflict clears once the PR can merge into the base branch again.
       if (state !== 'conflict' && glob.conflict != null) await globs.applyEvent(glob.id, (g, ctx) => machine.conflictCleared(g, ctx));
-      if (state === 'pending') return 'done';
+      if (state === 'pending') {
+        await waitForCancelledChecks(repo, sha);
+        return 'done';
+      }
       const passed = state === 'passed' || state === 'behind';
       // A conflict after slop updated the branch is its own failure, not a failing check.
       const conflict = state === 'conflict' ? { base: repo.base, files: await host.conflictFiles(repo, glob.pr.number) } : undefined;
@@ -349,7 +367,7 @@ export const codeHostExecutors = (
         return 'done';
       }
       const repo = await repoFor(glob.boardId);
-      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`), health);
+      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`, glob.status === 'pr_open'), health);
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));

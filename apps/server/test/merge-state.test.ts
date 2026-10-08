@@ -31,4 +31,11 @@ describe('classifyMergeState', () => {
     expect(classifyMergeState('draft', [])).toBe('pending');
     expect(classifyMergeState('unknown', [])).toBe('unknown');
   });
+
+  it('a cancelled run is not a failure: the head waits for the newer run', () => {
+    expect(classifyMergeState('unstable', [run('completed', 'cancelled')])).toBe('pending');
+    expect(classifyMergeState('blocked', [run('completed', 'success'), run('completed', 'cancelled')])).toBe('pending');
+    // A real failure beside it still fails the head.
+    expect(classifyMergeState('unstable', [run('completed', 'cancelled'), run('completed', 'failure')])).toBe('failed');
+  });
 });

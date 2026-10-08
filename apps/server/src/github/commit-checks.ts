@@ -1,7 +1,7 @@
 import type { CheckFailure } from '@slop/core';
 import { failureLines, jobOwnLog } from '@slop/core';
 import type { Repo } from '../codehost.js';
-import { FAILED_CONCLUSIONS } from './merge-state.js';
+import { FAILED_CONCLUSIONS, isUnfinished } from './merge-state.js';
 
 /** The slice of Octokit's `request` this module uses, so tests can fake GitHub. */
 export type Request = (route: string, params: Record<string, unknown>) => Promise<{ data: unknown }>;
@@ -91,10 +91,25 @@ export const readCommitChecks = async (request: Request, repo: Repo, sha: string
     // The earliest failure is the most likely cause; ties keep GitHub's order.
     .sort((a, b) => (a.completed_at ?? '').localeCompare(b.completed_at ?? ''));
   const first = failed[0];
-  if (first === undefined) return { state: runs.some((r) => r.status !== 'completed') ? 'pending' : 'passed', failure: null };
+  if (first === undefined) return { state: runs.some(isUnfinished) ? 'pending' : 'passed', failure: null };
 
   const [step, tail] = await Promise.all([failedStep(request, repo, first.id), logTail(request, repo, first.id)]);
   const fromOutput = [first.output?.title, first.output?.summary].filter((t): t is string => typeof t === 'string' && t !== '').join('\n');
   const lines = failureLines(tail ?? fromOutput);
   return { state: 'failed', failure: { name: first.name, step, lines, url: first.html_url } };
+};
+
+/** The head's latest check runs that were cancelled (a newer run normally replaces them), with when they ended. */
+export const readCancelledChecks = async (request: Request, repo: Repo, sha: string): Promise<{ id: number; completedAt: string | null }[]> => {
+  const { data } = await request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
+    owner: repo.owner,
+    repo: repo.name,
+    ref: sha,
+    filter: 'latest',
+    per_page: 100,
+  });
+  return (isRecord(data) && Array.isArray(data.check_runs) ? data.check_runs : []).flatMap((r: unknown) => {
+    const run = asCheckRun(r);
+    return run !== null && run.status === 'completed' && run.conclusion === 'cancelled' ? [{ id: run.id, completedAt: run.completed_at }] : [];
+  });
 };

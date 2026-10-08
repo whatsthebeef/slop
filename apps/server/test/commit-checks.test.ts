@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readCommitChecks } from '../src/github/commit-checks.js';
+import { readCancelledChecks, readCommitChecks } from '../src/github/commit-checks.js';
 import type { Request } from '../src/github/commit-checks.js';
 
 const repo = { owner: 'acme', name: 'app', base: 'main' };
@@ -111,5 +111,19 @@ describe('reading why a commit failed', () => {
     expect(await readCommitChecks(pending.request, repo, 'abc')).toEqual({ state: 'pending', failure: null });
     expect(passed.calls).toHaveLength(1);
     expect(pending.calls).toHaveLength(1);
+  });
+});
+
+describe('cancelled check runs', () => {
+  it('leave the commit pending, with no failure, until a newer run replaces them', async () => {
+    const cancelled = fakeGitHub({ runs: [run({ conclusion: 'success' }), run({ id: 12, name: 'sub-gate', conclusion: 'cancelled' })] });
+    expect(await readCommitChecks(cancelled.request, repo, 'abc')).toEqual({ state: 'pending', failure: null });
+    const later = fakeGitHub({ runs: [run({ conclusion: 'success' }), run({ id: 13, name: 'sub-gate', conclusion: 'success' })] });
+    expect((await readCommitChecks(later.request, repo, 'abc')).state).toBe('passed');
+  });
+
+  it('are listed with when they ended', async () => {
+    const { request } = fakeGitHub({ runs: [run({ conclusion: 'success' }), run({ id: 12, conclusion: 'cancelled', completed_at: '2026-10-07T10:05:00Z' })] });
+    expect(await readCancelledChecks(request, repo, 'abc')).toEqual([{ id: 12, completedAt: '2026-10-07T10:05:00Z' }]);
   });
 });

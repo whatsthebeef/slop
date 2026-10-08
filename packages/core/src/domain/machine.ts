@@ -52,6 +52,8 @@ export type Action =
   | 'pick_up'
   | 'take_over'
   | 'retrigger'
+  /** A PR whose auto-fix ended without fixing it: a new routine run on the same branch, keeping the PR. */
+  | 'retry_autofix'
   /** A merge conflict with no human implementer: ask the Claude GitHub App, in a PR comment, to resolve it on the same branch. */
   | 'resolve_conflict'
   | 'start_again'
@@ -437,6 +439,29 @@ const setEnvironment = (b: Builder, environment: string | null): Builder => {
   b.set({ environment }).event('FieldsChanged', { environment: { from: glob.environment, to: environment } });
   if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   return b;
+};
+
+/** Whether the glob's PR was left by an ended auto-fix run: ready for review, a failure on the card, nobody working on it. */
+const canRetryAutofix = (glob: Glob): boolean => {
+  const run = currentRun(glob);
+  return (
+    glob.status === 'pr_open' &&
+    glob.type !== 'super' &&
+    glob.implementer === null &&
+    glob.pr !== null &&
+    glob.failure !== null &&
+    glob.failure.kind === undefined &&
+    run?.state === 'ended' &&
+    run.outcome === 'failed'
+  );
+};
+
+/** Row 25a: Retry auto-fix. A new routine run watches the same PR on the same branch; the failure clears. */
+export const retryAutofix = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+  if (!canRetryAutofix(glob)) return invalidTransition(glob, actor, 'Only a ready PR whose auto-fix ended can retry it');
+  return new Builder(glob, ctx).set({ failure: null }).queueRun(actor.email).done();
 };
 
 /** Row 20: re-trigger a failed sub or same on its existing branch. */
@@ -945,13 +970,23 @@ const minutesSince = (from: string, now: string): number => (Date.parse(now) - D
 /** `2026-10-07 02:01 UTC`: a time in a failure reason. */
 const queuedAtText = (at: string): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
+/** The head's failed checks that are the glob's own to fix (not inherited from the base): what a watching run is asked to respond to. */
+const ownFailedHead = (glob: Glob): HeadChecks | null => {
+  const checks = glob.headChecks;
+  return glob.pr?.headSha != null && checks?.sha === glob.pr.headSha && checks.state === 'failed' && checks.inheritedFrom === undefined
+    ? checks
+    : null;
+};
+
 /**
  * Run failure detection: a run with no progress (no slop call or push) for too long, or that
  * has not marked its PR ready in time, is failed like a `report_failure` (rows 17 and 25).
+ * A watching run is idle by design, so it has no no-progress limit; it is failed only for not
+ * responding (no slop call or push) within `runRespondMinutes` of the head's checks failing.
  */
 export const runTimeoutReason = (
   glob: Glob,
-  board: Pick<Board, 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes'>,
+  board: Pick<Board, 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes'>,
   now: string,
 ): string | null => {
   const run = currentRun(glob);
@@ -964,10 +999,19 @@ export const runTimeoutReason = (
   }
   const hours = (from: string | null) => (from === null ? 0 : (Date.parse(now) - Date.parse(from)) / 3_600_000);
   const lastProgress = run.lastProgressAt ?? run.startedAt ?? run.queuedAt;
+  if (run.state === 'watching') {
+    const failed = ownFailedHead(glob);
+    if (failed?.at === undefined) return null;
+    // The clock starts when the checks failed, or when the run last did something, whichever is later.
+    const since = lastProgress > failed.at ? lastProgress : failed.at;
+    if (minutesSince(since, now) < board.runRespondMinutes) return null;
+    const names = failed.failure?.name;
+    return `Auto-fix didn't respond to failed checks${names === undefined ? '' : ` (${names})`} on ${failed.sha.slice(0, MIN_SHA_LENGTH)}`;
+  }
   if (hours(lastProgress) >= board.runNoProgressHours) {
     return `No progress for ${String(board.runNoProgressHours)} hours`;
   }
-  if (run.state === 'active' && hours(run.startedAt ?? run.queuedAt) >= board.runReadyHours) {
+  if (hours(run.startedAt ?? run.queuedAt) >= board.runReadyHours) {
     return `PR not marked ready within ${String(board.runReadyHours)} hours`;
   }
   return null;
@@ -979,7 +1023,8 @@ export const runProgress = (glob: Glob, runId: string, ctx: Context): Result<Tra
   if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
   return new Builder(glob, ctx)
     .updateRun({
-      state: run.state === 'queued' ? 'active' : run.state,
+      // A run retried on a ready PR watches it; there is no PR to mark ready.
+      state: run.state === 'queued' ? (glob.status === 'pr_open' ? 'watching' : 'active') : run.state,
       startedAt: run.startedAt ?? ctx.now,
       lastProgressAt: ctx.now,
     })
@@ -1377,6 +1422,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (glob.status === 'failed' && glob.type !== 'super' && !hasLiveRun(glob) && !personMergeFailure) {
     actions.push('retrigger');
   }
+  if (!restricted && !hasLiveRun(glob) && canRetryAutofix(glob)) actions.push('retry_autofix');
   if (canRequestConflictFix(glob)) actions.push('resolve_conflict');
   if (glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
   if (
