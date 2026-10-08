@@ -25,7 +25,7 @@ export interface BoardNotification {
   /** `<boardId or 'all'>/<source>`. */
   readonly id: string;
   readonly boardId: number | null;
-  /** `main-red`, `integration:<id>`; `local-follow` later. */
+  /** `main-red`, `integration:<id>`, `local-follow`. */
   readonly source: string;
   readonly severity: NotificationSeverity;
   readonly title: string;

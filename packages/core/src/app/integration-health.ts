@@ -1,7 +1,7 @@
 import type { RaisedNotification } from '../domain/notifications.js';
 
 /** The integrations slop watches: each can lapse on its own, and each has a fix a person must carry out. */
-export type IntegrationId = 'bedrock' | 'github' | 'routines' | 'tunnel' | 'local';
+export type IntegrationId = 'bedrock' | 'github' | 'routines' | 'tunnel';
 
 export type IntegrationState = 'ok' | 'degraded' | 'down';
 
@@ -30,7 +30,6 @@ export const INTEGRATION_NAMES: Readonly<Record<IntegrationId, string>> = {
   github: 'GitHub App',
   routines: 'Routines',
   tunnel: 'Webhook tunnel',
-  local: 'Local slop',
 };
 
 /** Statuses that need a person, down before degraded, then oldest first. */
@@ -92,7 +91,6 @@ const DOWN_SEVERITY: Readonly<Record<IntegrationId, 'critical' | 'warning'>> = {
   github: 'critical',
   routines: 'critical',
   tunnel: 'warning',
-  local: 'warning',
 };
 
 /**
