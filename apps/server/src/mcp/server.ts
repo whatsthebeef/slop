@@ -15,7 +15,7 @@ import { parseLabelCommand } from '../http/labels.js';
 import { issueUploadUrl } from '../http/artifact-upload.js';
 import { requestOrigin } from '../http/origin.js';
 import { isDate, toRequest } from '../search-request.js';
-import { errorBody, globView, onBoard } from '../http/views.js';
+import { errorBody, globView, globViewOf, onBoard } from '../http/views.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
 import type { ReadyGate } from '../ready-gate.js';
 
@@ -117,6 +117,13 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
             "One of the board's environments that allows branch deploys. Without one, intake suggests an environment the request targets (\"deploy to staging\"), and a sub gets the board's default for subs",
           ),
         autoTrigger: z.boolean().optional().describe('Same only: start a routine run straight away'),
+        after: z
+          .array(z.string().min(1))
+          .max(20)
+          .optional()
+          .describe(
+            'IDs of globs on this board to start after. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
+          ),
       },
     },
     async (input) => {
@@ -130,6 +137,9 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       };
       // Intake suggests an environment the request names; an explicit one wins.
       let suggestedEnvironment: string | null = null;
+      // Intake's guesses: files the work changes (they can hold it for the merge policy) and globs the request waits for (only reported).
+      let files: readonly string[] = [];
+      let suggestedAfter: readonly string[] = [];
       // The write-up intake made from the request: plan.md v1 unless the caller gave a plan or summary.
       let proposedPlan: string | null = null;
       if (input.title === undefined) {
@@ -151,6 +161,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         fields = { ...proposed, autoTrigger: input.autoTrigger ?? proposal.value.autoTrigger };
         suggestedEnvironment = environment;
         proposedPlan = plan;
+        files = proposal.value.files;
+        suggestedAfter = proposal.value.suggestedAfter;
       }
       const created = await globs.create(email, {
         boardId: input.board,
@@ -159,6 +171,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         planBy: 'sessionator',
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
+        ...(input.after === undefined ? {} : { after: input.after }),
+        ...(files.length === 0 ? {} : { files }),
       });
       if (!created.ok) return reply(created);
       await deps.outbox.drain(created.value.id);
@@ -173,6 +187,13 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         group: glob.group,
         environment: glob.environment,
         summary: glob.summary,
+        ...(glob.after === undefined || glob.after.length === 0 ? {} : { after: glob.after }),
+        ...(glob.waiting == null ? {} : { waiting: true }),
+        ...(glob.impliedAfter === undefined || glob.impliedAfter.length === 0 ? {} : { impliedAfter: glob.impliedAfter }),
+        // Not applied: pass `after` to wait for them.
+        ...(suggestedAfter.filter((id) => !(glob.after ?? []).includes(id)).length === 0
+          ? {}
+          : { suggestedAfter: suggestedAfter.filter((id) => !(glob.after ?? []).includes(id)) }),
       }));
     },
   );
@@ -190,7 +211,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       if (!view.ok) return reply(view, () => null);
       const history = await deps.deploys.history(email, id, 5);
       return reply(view, (v) => ({
-        ...globView(v.glob, v.allowedActions, v.artifacts),
+        ...globViewOf(v),
         deploys: history.ok ? history.value.map(deployView) : [],
       }));
     },
@@ -238,7 +259,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'update_glob',
     {
       description:
-        "Change a glob's title, summary, type, category, group or environment. Pass the version you read. The spec (plan.md) is not the summary: edit it with save_plan.",
+        "Change a glob's title, summary, type, category, group, environment or `after` (the globs it starts after; only before it has started; a sub changed from a same waits for them). Pass the version you read. The spec (plan.md) is not the summary: edit it with save_plan.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -248,6 +269,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         category: z.enum(CATEGORIES).optional(),
         group: z.string().nullable().optional(),
         environment: z.string().nullable().optional(),
+        after: z.array(z.string().min(1)).max(20).optional(),
       },
     },
     async ({ id, version, ...changes }) => {
@@ -258,9 +280,13 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
 
   server.registerTool(
     'start_glob',
-    { description: "Start a same's routine run (planning → implementing).", inputSchema: { id: z.string(), version: z.number().int() } },
-    async ({ id, version }) => {
-      const result = await globs.start(email, id, version);
+    {
+      description:
+        "Start a same's routine run (planning → implementing). Refused while the glob waits for globs it starts after (`after`) or a merge-policy hold; pass `anyway` to start it before they merge (a sub held in Planning can only be started this way).",
+      inputSchema: { id: z.string(), version: z.number().int(), anyway: z.boolean().optional() },
+    },
+    async ({ id, version, anyway }) => {
+      const result = anyway === true ? await globs.startAnyway(email, id, version) : await globs.start(email, id, version);
       if (result.ok) await deps.outbox.drain(id);
       return reply(result, (g) => globView(g));
     },
@@ -279,10 +305,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       },
     },
     async ({ id, version, takeOver, environment }) => {
-      const result = await globs.pickUp(email, id, version, takeOver ?? false, environment);
+      const result = await globs.pickUpWithWarning(email, id, version, takeOver ?? false, environment);
       // Run the jobs it queued (a super's provisioning) now, as the REST action does.
       if (result.ok) await deps.outbox.drain(id);
-      return reply(result, (g) => globView(g));
+      // A glob still waiting for another to merge can be picked up; the warning names what its branch lacks.
+      return reply(result, ({ glob, warning }) => ({ ...globView(glob), ...(warning === null ? {} : { warnings: [warning] }) }));
     },
   );
 
@@ -470,7 +497,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'decide_kb_item',
     {
       description:
-        "Admins only: approve a KB item as drafted, or reject it with a reason (required), recorded as you with outcome.via 'agent'. Same checks as the Knowledge page's buttons; pass the version you read from list_kb_items. Approving is refused for what a person must decide on the Knowledge page: the local-run spec, agent-set files (agent, command, hook, settings, mcp, claude_md), a whole-document proposal and any item with contradicts flags. Rejecting any item is allowed.",
+        "Admins only: approve a KB item as drafted, or reject it with a reason (required), recorded as you with outcome.via 'agent'. Same checks as the Knowledge page's buttons; pass the version you read from list_kb_items. Approving is refused for what a person must decide on the Knowledge page: the local-run spec, the merge policy, agent-set files (agent, command, hook, settings, mcp, claude_md), a whole-document proposal and any item with contradicts flags. Rejecting any item is allowed.",
       inputSchema: {
         id: z.string().describe('KB item id, e.g. s1k3'),
         version: z.number().int(),
@@ -501,7 +528,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         suggestedTarget: z
           .string()
           .optional()
-          .describe('Where it belongs: a document, area or agent definition, or "local-run" for how sessions build and launch the local servers'),
+          .describe('Where it belongs: a document, area or agent definition, "local-run" for how sessions build and launch the local servers, or "merge-policy" for which paths clash between globs (exclusivePaths) and which are left out when a sub is sized (sizeIgnoredPaths)'),
         agentSetVersion: z.number().int().nonnegative().optional(),
         runId: z.string().optional(),
         document: z

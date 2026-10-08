@@ -1,6 +1,7 @@
 import { CATEGORIES, isValidCombination, machine, SLOP_TYPES } from '@slop/core';
 import type { Action, Category, EditFailure, SlopType } from '@slop/core';
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
@@ -34,6 +35,7 @@ const STATUS_TEXT: Record<GlobView['status'], string> = {
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
 
 const ACTION_TIPS: Partial<Record<Action, string>> = {
+  start_anyway: 'Starts now, before what it waits for has merged; its branch will lack those changes',
   merge_continue: "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
   mark_ready: 'Marks the draft PR ready for review',
   retry_autofix: 'Starts a new routine run that watches this PR and fixes its failed checks on the same branch',
@@ -84,6 +86,10 @@ export const GlobDialog = ({
     glob.type === 'sub' ? null : machine.sameSuperSwapBlocker(glob);
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
 
+  // The globs it starts after can change until it has a branch.
+  const canEditAfter = glob.status === 'planning' && glob.provisioning === 'none' && glob.type !== 'super';
+  const [afterText, setAfterText] = useState((glob.after ?? []).join(', '));
+  useEffect(() => setAfterText((glob.after ?? []).join(', ')), [glob.id, glob.after]);
   const merged = { ...glob, ...draft };
   const dirty = Object.keys(draft).length > 0;
   const actions = (glob.allowedActions ?? []).filter((a) => a !== 'delete');
@@ -185,6 +191,55 @@ export const GlobDialog = ({
           )}
 
           <LabelReviews glob={glob} onReview={onReviewLabel} />
+
+          {((glob.waitingFor?.length ?? 0) > 0 || (glob.waitedOnBy?.length ?? 0) > 0 || canEditAfter) && (
+            <div className='grid gap-2 rounded border p-2 text-sm' data-testid='waits'>
+              {(glob.waitingFor?.length ?? 0) > 0 && (
+                <div data-testid='waiting-for'>
+                  <span className='font-medium'>Waiting for</span>
+                  <ul className='ml-4 list-disc'>
+                    {glob.waitingFor?.map((w) => (
+                      <li key={w.id}>
+                        <Link to={`/boards/${glob.boardId}?glob=${encodeURIComponent(w.id)}`} className='font-mono underline'>
+                          {w.id}
+                        </Link>{' '}
+                        <span className='text-muted-foreground'>{w.why}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className='text-xs text-muted-foreground'>
+                    Picking it up goes ahead without them: the branch will lack their changes.
+                  </p>
+                </div>
+              )}
+              {(glob.waitedOnBy?.length ?? 0) > 0 && (
+                <div data-testid='waited-on-by'>
+                  <span className='font-medium'>Waited on by</span>{' '}
+                  {glob.waitedOnBy?.map((id, i) => (
+                    <span key={id}>
+                      {i > 0 && ', '}
+                      <Link to={`/boards/${glob.boardId}?glob=${encodeURIComponent(id)}`} className='font-mono underline'>
+                        {id}
+                      </Link>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {canEditAfter && (
+                <Label>
+                  Start after (glob IDs)
+                  <Input
+                    value={afterText}
+                    placeholder='s15t7, s15b18'
+                    onChange={(e) => {
+                      setAfterText(e.target.value);
+                      edit({ after: e.target.value.split(/[\s,]+/).filter((id) => id !== '') });
+                    }}
+                  />
+                </Label>
+              )}
+            </div>
+          )}
 
           {actions.length + disabled.length > 0 && (
             <div className='grid gap-1'>

@@ -41,6 +41,7 @@ export const CreateGlobDialog = ({
   const [reason, setReason] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [afterText, setAfterText] = useState('');
   const restricted = board.role === 'qa' || board.role === 'po';
   const types = SLOP_TYPES.filter((t) => !(restricted && t === 'super'));
   const valid = isValidCombination(form.type, form.category) && form.title.trim() !== '';
@@ -62,7 +63,10 @@ export const CreateGlobDialog = ({
         // An environment the person already chose wins over one the request names.
         environment: form.environment ?? proposal.environment,
         autoTrigger: proposal.autoTrigger,
+        ...(proposal.files === undefined || proposal.files.length === 0 ? {} : { files: proposal.files }),
       });
+      // Only a suggestion: the person sees it in the field and may clear it.
+      if (proposal.suggestedAfter.length > 0) setAfterText(proposal.suggestedAfter.join(', '));
       setReason(proposal.autoTriggerReason);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not process the request');
@@ -76,8 +80,10 @@ export const CreateGlobDialog = ({
     setBusy(true);
     setError(null);
     try {
-      await onCreate({ ...form, group: form.group?.trim() === '' ? null : form.group });
+      const after = afterText.split(/[\s,]+/).filter((id) => id !== '');
+      await onCreate({ ...form, group: form.group?.trim() === '' ? null : form.group, ...(after.length === 0 ? {} : { after }) });
       setForm(empty());
+      setAfterText('');
       setRequest('');
       setReason(null);
       onOpenChange(false);
@@ -168,6 +174,17 @@ export const CreateGlobDialog = ({
               </Select>
             </Label>
           </div>
+          <Label>
+            Start after (glob IDs, optional)
+            <Input value={afterText} onChange={(e) => setAfterText(e.target.value)} placeholder='s15t7, s15b18' />
+          </Label>
+          {afterText.trim() !== '' && (
+            <p className='text-xs text-muted-foreground'>
+              {form.type === 'sub'
+                ? 'The sub waits in Planning until these have merged, then starts on the new main.'
+                : 'Start is refused until these have merged.'}
+            </p>
+          )}
           {form.type === 'same' && (
             <label className='flex items-center gap-2 text-sm'>
               <input

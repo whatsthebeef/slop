@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
-import { IntakeService, LlmUnavailable } from '../src/app/intake-service.js';
+import { IntakeService, LlmUnavailable, waitedForIn } from '../src/app/intake-service.js';
 import type { Result } from '../src/domain/errors.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -42,7 +42,21 @@ describe('intake', () => {
       environment: null,
       autoTrigger: false,
       autoTriggerReason: null,
+      files: [],
+      suggestedAfter: [],
     });
+  });
+
+  it('keeps the model\'s file guesses that look like repo paths, and suggests globs the request waits for', async () => {
+    answer = JSON.stringify({ title: 'T', summary: 'S', files: ['apps/server/drizzle/0023_x.sql', '/etc/passwd', '../x', 3, ' src/a.ts '] });
+    const open = `s${String(boardId)}t1`;
+    const p = await propose(`Add a column once ${open} is merged. Ignore s9t9 and mention ${open} again; also s${String(boardId)}t99 does not exist.`);
+    expect(p.files).toEqual(['apps/server/drizzle/0023_x.sql', 'src/a.ts']);
+    expect(p.suggestedAfter).toEqual([open]);
+    // A mention without a waiting cue, or a glob that merged, is not suggested.
+    expect((await propose(`This relates to ${open} but is separate`)).suggestedAfter).toEqual([]);
+    expect(waitedForIn(`wait for ${open}`, new Set())).toEqual([]);
+    expect(waitedForIn(`Start after ${open.toUpperCase()}.`, new Set([open]))).toEqual([open]);
   });
 
   it('keeps the spec in plan, so the short summary never replaces it', async () => {

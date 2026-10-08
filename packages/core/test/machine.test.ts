@@ -854,7 +854,7 @@ describe('conflicts flagged after a merge', () => {
 
   it('a merge queues the recheck of other globs with an open PR only', () => {
     const merged = value(m.merged(glob({ status: 'pr_open' }), { sha: 'm1' }, ctx(null)));
-    expect(effectKinds(merged)).toEqual(['flag_conflicts']);
+    expect(effectKinds(merged)).toEqual(['flag_conflicts', 'release_waiting']);
     const open = value(m.baseMerged(glob({ status: 'in_progress', pr }), { since: 's1t2' }, ctx(null)));
     expect(open.effects).toEqual([{ kind: 'check_conflict', globId: 's1t1', generation: 1, since: 's1t2' }]);
     expect(value(m.baseMerged(glob({ status: 'in_progress', pr: null }), { since: 's1t2' }, ctx(null))).effects).toEqual([]);
@@ -1157,7 +1157,7 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     expect(value(m.prOpened(opened.glob, { number: 8, headSha: 'ddd' }, ctx(null))).changed).toBe(false);
     // Once it has a PR, pushes don't open another.
     // (Only the check of how far the branch is behind the base.)
-    expect(effectKinds(value(m.commitPushed(opened.glob, { sha: 'eee', runId: null }, ctx(null))))).toEqual(['check_behind']);
+    expect(effectKinds(value(m.commitPushed(opened.glob, { sha: 'eee', runId: null }, ctx(null))))).toEqual(['check_behind', 'check_exclusive_paths']);
     // Neither do pushes while provisioning is still under way.
     const provisioning = glob({ type: 'super', status: 'in_progress', pr: null, provisioning: 'pending' });
     expect(effectKinds(value(m.commitPushed(provisioning, { sha: 'fff', runId: null }, ctx(null))))).toEqual([]);

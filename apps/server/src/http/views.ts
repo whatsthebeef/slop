@@ -1,4 +1,4 @@
-import type { Action, ArtifactSummary, DomainError, Glob, Role } from '@slop/core';
+import type { Action, ArtifactSummary, AwaitedDependency, DomainError, Glob, Role } from '@slop/core';
 import { checksExplanation, listOf, machine } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -10,6 +10,8 @@ export const globView = (
   glob: Glob,
   allowedActions: readonly Action[] | null = null,
   artifacts: readonly ArtifactSummary[] | null = null,
+  /** What the glob waits for and what waits for it, where the caller read them (one glob's view, not the list). */
+  waits: { readonly waitingFor: readonly AwaitedDependency[]; readonly waitedOnBy: readonly string[] } | null = null,
 ) => ({
   ...glob,
   list: listOf(glob.status),
@@ -19,7 +21,12 @@ export const globView = (
   failedChecks: checksExplanation(glob),
   ...(allowedActions === null ? {} : { allowedActions }),
   ...(artifacts === null ? {} : { artifacts: artifacts.map(artifactView) }),
+  ...(waits === null ? {} : { waitingFor: waits.waitingFor, waitedOnBy: waits.waitedOnBy }),
 });
+
+/** A glob read through the service: its view with the actions open to the caller and what it waits for. */
+export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[] }) =>
+  ({ ...globView(v.glob, v.allowedActions, v.artifacts, v), waitingFor: v.waitingFor, waitedOnBy: v.waitedOnBy });
 
 /** An artifact summary on a glob view (the glob ID is implied). */
 const artifactView = ({ kind, label, version, versions, commitSha, createdAt, by, actor }: ArtifactSummary) => ({

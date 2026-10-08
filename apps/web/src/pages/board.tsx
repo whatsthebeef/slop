@@ -59,7 +59,7 @@ const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
     };
   };
   if (glob.list === 'planning') {
-    return (['start', 'pick_up', 'take_over', 'retrigger'] as const)
+    return (['start', 'start_anyway', 'pick_up', 'take_over', 'retrigger'] as const)
       .filter((a) => allowed.includes(a))
       .map((a) => make(a, 'right', 'doing'));
   }

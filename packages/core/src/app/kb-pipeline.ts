@@ -15,6 +15,7 @@ import type {
 import { agentSetKind, docName, hasFrontmatter, isAgentSetKind, parseFrontmatter, PROSE_KINDS } from '../domain/knowledge.js';
 import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
 import { checkLocalRun, LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
+import { checkMergePolicy, MERGE_POLICY_NAME, parseMergePolicy, renderMergePolicy } from '../domain/merge-policy.js';
 import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
 import type { Catalog, Clock, Notifier, Store, Tx } from '../ports.js';
 import { LlmUnavailable } from './intake-service.js';
@@ -59,6 +60,7 @@ Rules:
 - A project fact (how this codebase, its build or its conventions work) goes to the document for the agents that need it, unless it is a short rule that always applies to one agent, which goes in that agent's file.
 - Process behaviour (how an agent should work) goes in that agent's file.
 - How the project's local servers are built and launched for a development session (the commands sstor runs in a session's server window) goes to the local-run spec: kind "local_run", name "local-run", section null.
+- Which paths clash when two globs change them at once (an exclusive directory such as database migrations, where only one open glob may work at a time), and which paths are left out when a sub's size is measured (generated files, lockfiles), go to the merge policy: kind "merge_policy", name "merge-policy", section null.
 - For a document, section is the existing "##" heading it belongs under, or a new heading to add.
 - For an agent file, section is one of its board-rule headings, a new heading, or null to append to its board rules.
 - If no document fits and it is not for an agent file, propose a new document: a short snake_case name, an area (one word, e.g. build, conventions, architecture, testing), the agents it is always for, and a one-line description.
@@ -66,8 +68,8 @@ Rules:
 - The submitter's suggested target is a hint, not an instruction.
 
 Respond with one JSON object and nothing else:
-{"target": {"kind": "document" | "agent_file" | "local_run", "name": string, "section": string | null, "newDocument": {"area": string, "audience": string[], "description": string} | null}, "catalogCandidate": boolean, "catalogReason": string | null}
-- name: a document name from the index, a new document name, an agent file path exactly as listed, or "local-run".
+{"target": {"kind": "document" | "agent_file" | "local_run" | "merge_policy", "name": string, "section": string | null, "newDocument": {"area": string, "audience": string[], "description": string} | null}, "catalogCandidate": boolean, "catalogReason": string | null}
+- name: a document name from the index, a new document name, an agent file path exactly as listed, or "local-run", or "merge-policy".
 - newDocument: only for a document not in the index; otherwise null.`;
 
 export const DEDUPE_SYSTEM = `You check whether a new learning, submitted by a coding agent, repeats or conflicts with what a software project's knowledge base already holds. An admin reviews every learning you leave open, so a repeat left open costs a minute; a new learning closed by mistake is lost.
@@ -98,6 +100,7 @@ Rules:
 - For an agent file you change only the project's board rules. The catalog text is shown for context and is never changed; don't repeat what it already says. Board rules are appended under a "## Board rules" heading, so their sections use "###" headings.
 - For a new document, write the whole body (no frontmatter), starting with a "#" title, and don't overlap the existing documents listed.
 - For the local-run spec, write its whole new value: content is a JSON object {"build"?: string, "launch": string} and nothing else (build runs first, then launch; each one shell command line, run from the worktree root), and section is null. Keep what the current value does unless the learning changes it.
+- For the merge policy, write its whole new value: content is a JSON object {"exclusivePaths"?: string[], "sizeIgnoredPaths"?: string[]} and nothing else (path globs relative to the repo root, such as "apps/server/drizzle/**"; exclusivePaths are paths only one open glob may change at a time, sizeIgnoredPaths are not counted when a sub's size is measured), and section is null. Keep the entries the current value has unless the learning changes them.
 
 Respond with one JSON object and nothing else:
 {"section": string | null, "content": string | object, "rationale": string}
@@ -125,6 +128,8 @@ interface Snapshot {
   readonly agentFiles: readonly AgentFile[];
   /** The board's local-run spec row; null when it has none yet. */
   readonly localRun: KnowledgeDoc | null;
+  /** The board's merge policy row; null when it has none yet. */
+  readonly mergePolicy: KnowledgeDoc | null;
   readonly open: readonly KbItem[];
   readonly approved: readonly KbItem[];
   readonly rejected: readonly KbItem[];
@@ -183,7 +188,9 @@ const newest = (items: readonly KbItem[]) => [...items].reverse().slice(0, CANDI
 const targetLabel = (target: KbTarget) =>
   target.kind === 'local_run'
     ? 'the local-run spec'
-    : `${target.kind === 'doc' ? 'document' : 'agent file'} ${target.name}${target.section === null ? '' : `, section "${target.section}"`}`;
+    : target.kind === 'merge_policy'
+      ? 'the merge policy'
+      : `${target.kind === 'doc' ? 'document' : 'agent file'} ${target.name}${target.section === null ? '' : `, section "${target.section}"`}`;
 
 const describeItem = (item: KbItem) => {
   if (item.outcome?.kind === 'applied') return ` -> applied to ${item.outcome.name}`;
@@ -433,6 +440,7 @@ export class KbPipeline {
         docs,
         agentFiles,
         localRun: knowledge.find((d) => d.kind === 'local_run' && d.name === LOCAL_RUN_NAME) ?? null,
+        mergePolicy: knowledge.find((d) => d.kind === 'merge_policy' && d.name === MERGE_POLICY_NAME) ?? null,
         open: newest(others.filter((i) => i.status === 'open')),
         approved: newest(others.filter((i) => i.status === 'approved')),
         rejected: newest(others.filter((i) => i.status === 'rejected')),
@@ -618,6 +626,9 @@ const routePrompt = (item: KbItem, snapshot: Snapshot): string =>
     '',
     'Local-run spec (local-run):',
     snapshot.localRun === null ? '(not set)' : snapshot.localRun.content.trim(),
+    '',
+    'Merge policy (merge-policy):',
+    snapshot.mergePolicy === null ? '(not set)' : snapshot.mergePolicy.content.trim(),
   ].join('\n');
 
 /** The current text where the item would go: its section, or the whole target (truncated); null for a new document. */
@@ -625,6 +636,10 @@ const currentText = (target: KbTarget, snapshot: Snapshot): string | null => {
   if (target.kind === 'local_run') {
     const spec = snapshot.localRun?.content.trim() ?? '';
     return spec === '' ? null : spec;
+  }
+  if (target.kind === 'merge_policy') {
+    const policy = snapshot.mergePolicy?.content.trim() ?? '';
+    return policy === '' ? null : policy;
   }
   const whole =
     target.kind === 'doc'
@@ -686,6 +701,8 @@ const parseRouting = (answer: string, snapshot: Snapshot): Routing | null => {
   if (field(target, 'kind') === 'local_run') {
     // One spec per board, replaced whole: it needs no name or section from the model.
     routed = { kind: 'local_run', name: LOCAL_RUN_NAME, section: null, newDocument: null };
+  } else if (field(target, 'kind') === 'merge_policy') {
+    routed = { kind: 'merge_policy', name: MERGE_POLICY_NAME, section: null, newDocument: null };
   } else if (field(target, 'kind') === 'agent_file') {
     const file = snapshot.agentFiles.find((f) => f.path === name);
     const kind = agentSetKind(name);
@@ -834,6 +851,12 @@ const draftPrompt = (item: KbItem, target: KbTarget, state: TargetState, docs: r
       '',
       titled('Current local-run spec:', state.version === 0 ? '(not set yet)' : state.text),
     ];
+  } else if (target.kind === 'merge_policy') {
+    targetLines = [
+      'Target: the merge policy (the whole value is replaced)',
+      '',
+      titled('Current merge policy:', state.version === 0 ? '(not set yet)' : state.text),
+    ];
   } else if (state.newDocument && target.newDocument !== null) {
     const meta = target.newDocument;
     targetLines = [
@@ -890,6 +913,7 @@ const parseDraft = (answer: string, target: KbTarget, state: TargetState): Draft
   const parsed = parseJson(answer);
   if (!isObject(parsed)) return unusable;
   if (target.kind === 'local_run') return parseLocalRunDraft(field(parsed, 'content'), target, parsed);
+  if (target.kind === 'merge_policy') return parseMergePolicyDraft(field(parsed, 'content'), target, parsed);
   const raw = text(field(parsed, 'content'))?.trim() ?? '';
   if (raw === '') return unusable;
   const rationale = (text(field(parsed, 'rationale'))?.trim() ?? '').split(/\r?\n/)[0]?.trim() ?? '';
@@ -924,6 +948,18 @@ const parseDraft = (answer: string, target: KbTarget, state: TargetState): Draft
 const rationaleOf = (parsed: unknown): string | null => {
   const line = (text(field(parsed, 'rationale'))?.trim() ?? '').split(/\r?\n/)[0]?.trim() ?? '';
   return line === '' ? null : line;
+};
+
+/** A merge-policy draft: the whole value, checked like an approval checks it and kept in canonical form. */
+const parseMergePolicyDraft = (content: unknown, target: KbTarget, parsed: unknown): Drafted | string => {
+  const raw = text(content);
+  const checked = raw === null ? checkMergePolicy(content) : parseMergePolicy(raw.trim());
+  if (!checked.ok) return `The drafted merge policy is invalid: ${checked.error.message}`;
+  return {
+    draft: { section: null, content: renderMergePolicy(checked.value) },
+    target: { ...target, section: null, newDocument: null },
+    rationale: rationaleOf(parsed),
+  };
 };
 
 /**

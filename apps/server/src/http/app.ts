@@ -14,7 +14,7 @@ import type { SignedLinks } from '../signed-links.js';
 import { labelCommandSchema } from './labels.js';
 import { requestOrigin } from './origin.js';
 import { checkSignInState, issueSignInState, safeReturnPath } from './sign-in-state.js';
-import { errorBody, globView, globViewFor, onBoard, statusOf } from './views.js';
+import { errorBody, globView, globViewFor, globViewOf, onBoard, statusOf } from './views.js';
 
 export interface AppDeps {
   readonly auth: Auth;
@@ -101,6 +101,10 @@ export const createGlobSchema = z.object({
   autoTrigger: z.boolean().default(false),
   idempotencyKey: z.string().min(1).nullable().default(null),
   plan: z.string().optional(),
+  /** IDs of globs on the board to start after. */
+  after: z.array(z.string().min(1)).max(20).optional(),
+  /** Files intake guessed the work changes: with the plan, they decide whether the merge policy's exclusive paths hold it. */
+  files: z.array(z.string().min(1).max(200)).max(20).optional(),
 });
 
 const updateGlobSchema = z.object({
@@ -111,6 +115,7 @@ const updateGlobSchema = z.object({
   category: z.enum(CATEGORIES).optional(),
   group: z.string().min(1).nullable().optional(),
   environment: z.string().min(1).nullable().optional(),
+  after: z.array(z.string().min(1)).max(20).optional(),
 });
 
 const versionSchema = z.object({ version: z.number().int() });
@@ -341,12 +346,10 @@ export const createApp = (deps: AppDeps) => {
     if (!created.ok) return send(c, created);
     // Return once provisioning has been attempted.
     await deps.outbox.drain(created.value.id);
-    return send(c, await globs.get(email, created.value.id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
+    return send(c, await globs.get(email, created.value.id), globViewOf);
   });
 
-  app.get('/api/globs/:id', async (c) =>
-    send(c, await globs.get(c.get('email'), c.req.param('id')), (v) => globView(v.glob, v.allowedActions, v.artifacts)),
-  );
+  app.get('/api/globs/:id', async (c) => send(c, await globs.get(c.get('email'), c.req.param('id')), globViewOf));
 
   app.patch('/api/globs/:id', async (c) => {
     const body = await parse(c, updateGlobSchema);
@@ -363,6 +366,7 @@ export const createApp = (deps: AppDeps) => {
 
   const actions = {
     start: (email: string, id: string, b: ActionBody) => globs.start(email, id, b.version),
+    'start-anyway': (email: string, id: string, b: ActionBody) => globs.startAnyway(email, id, b.version),
     retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version),
     'retry-autofix': (email: string, id: string, b: ActionBody) => globs.retryAutofix(email, id, b.version),
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),
@@ -403,7 +407,7 @@ export const createApp = (deps: AppDeps) => {
   /** Responds with the updated glob and the actions now open to the caller. */
   const withView = async (c: Context<Env>, result: Awaited<ReturnType<GlobService['start']>>) => {
     if (!result.ok) return send(c, result);
-    return send(c, await globs.get(c.get('email'), result.value.id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
+    return send(c, await globs.get(c.get('email'), result.value.id), globViewOf);
   };
 
   // ---------------------------------------------------------------------------

@@ -166,6 +166,20 @@ export interface BehindBase {
   readonly at: string;
 }
 
+/** A hold the board's merge policy put on a glob: it waits for `id` because both may change `paths`. */
+export interface ImpliedAfter {
+  readonly id: string;
+  readonly paths: readonly string[];
+  /** Set when a person chose Start anyway: kept for display, no longer holds. */
+  readonly overridden?: true;
+}
+
+/** Another open glob that changes some of the same exclusive paths as this one; a warning, never a block. */
+export interface PathClash {
+  readonly with: string;
+  readonly paths: readonly string[];
+}
+
 export interface Glob {
   readonly id: string;
   readonly boardId: number;
@@ -197,6 +211,14 @@ export interface Glob {
   readonly conflict?: OpenConflict | null;
   /** Set while the branch of a glob in Doing lacks commits from the base branch; cleared when it is up to date. */
   readonly behind?: BehindBase | null;
+  /** IDs of globs on the board this one waits for before it starts (unmerged when set). */
+  readonly after?: readonly string[];
+  /** Holds from the board's merge policy (exclusive paths): the same as `after`, with the reason. */
+  readonly impliedAfter?: readonly ImpliedAfter[];
+  /** Set while the glob is held in Planning for its `after`; cleared when released, started anyway or picked up. */
+  readonly waiting?: { readonly since: string } | null;
+  /** Set while another open glob changes the same exclusive paths; cleared when it no longer does. */
+  readonly clash?: PathClash | null;
   readonly provisioning: ProvisioningState;
   readonly createdAt: string;
   readonly updatedAt: string;

@@ -10,6 +10,9 @@ import type { ArtifactSummary } from './knowledge.js';
 import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
+import { mergeImplied } from './exclusive-paths.js';
+import { dependencyIds, refusalText, waitingFor, waitSummary } from './waiting.js';
+import type { DependencyState } from './waiting.js';
 import type {
   Actor,
   Board,
@@ -20,6 +23,7 @@ import type {
   ChecklistItem,
   Glob,
   HeadChecks,
+  ImpliedAfter,
   LabelName,
   LabelState,
   Labels,
@@ -49,6 +53,8 @@ export interface Transition {
 
 export type Action =
   | 'start'
+  /** A glob held for another glob to merge starts now, before it has. */
+  | 'start_anyway'
   | 'pick_up'
   | 'take_over'
   | 'retrigger'
@@ -71,7 +77,11 @@ export type Action =
 export interface ActionFacts {
   /** The commit SHA of the glob's latest postplan, or null without one (or without a SHA). */
   readonly postplanSha?: string | null;
+  /** The state of every glob this one waits for (a missing entry reads as deleted); absent when not loaded. */
+  readonly dependencies?: ReadonlyMap<string, DependencyState>;
 }
+
+const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
 
 /** The latest postplan's commit SHA among a glob's artifact summaries. */
 export const postplanShaOf = (artifacts: readonly Pick<ArtifactSummary, 'kind' | 'label' | 'commitSha'>[]): string | null =>
@@ -275,9 +285,18 @@ export interface CreateInput {
   readonly environment: string | null;
   /** Same only: start a routine run immediately (explicit instruction or `autoTrigger`). */
   readonly autoTrigger: boolean;
+  /** Globs to start after, already checked and without merged ones (see `checkAfter`). */
+  readonly after?: readonly string[];
+  /** Merge-policy holds found for this glob before it was created. */
+  readonly impliedAfter?: readonly ImpliedAfter[];
 }
 
-export const create = (input: CreateInput, board: Board, ctx: Context): Result<Transition> => {
+export const create = (
+  input: CreateInput,
+  board: Board,
+  ctx: Context,
+  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+): Result<Transition> => {
   const actor = requireActor(ctx);
   if (!isValidCombination(input.type, input.category)) {
     return invalidCombination(`A ${input.category} cannot be a ${input.type}`);
@@ -292,8 +311,14 @@ export const create = (input: CreateInput, board: Board, ctx: Context): Result<T
   const envCheck = checkEnvironment(board, environment);
   if (!envCheck.ok) return envCheck;
 
-  const autoStart = input.type === 'same' && input.autoTrigger;
-  const status: Status = autoStart ? 'implementing' : initialStatus(input.type);
+  const after = input.after ?? [];
+  const impliedAfter = input.impliedAfter ?? [];
+  const awaited = waitingFor({ after, impliedAfter }, dependencies);
+  const wantsStart = input.type === 'sub' || (input.type === 'same' && input.autoTrigger);
+  // A sub (or auto-started same) with something unmerged to wait for sits in Planning, with no branch, until released.
+  const held = wantsStart && awaited.length > 0;
+  const autoStart = input.type === 'same' && input.autoTrigger && !held;
+  const status: Status = held ? 'planning' : autoStart ? 'implementing' : initialStatus(input.type);
   const glob: Glob = {
     id: input.id,
     boardId: input.boardId,
@@ -322,6 +347,9 @@ export const create = (input: CreateInput, board: Board, ctx: Context): Result<T
     updatedAt: ctx.now,
     signedOffAt: null,
     doingSince: listOf(status) === 'doing' ? ctx.now : null,
+    ...(after.length > 0 && { after }),
+    ...(impliedAfter.length > 0 && { impliedAfter }),
+    ...(held && { waiting: { since: ctx.now } }),
   };
   const b = new Builder(glob, ctx).event('GlobCreated', {
     type: glob.type,
@@ -332,7 +360,8 @@ export const create = (input: CreateInput, board: Board, ctx: Context): Result<T
   });
   // Subs, supers and auto-started sames start in Doing, so they provision now.
   if (listOf(status) === 'doing') b.ensureProvisioned();
-  if (input.type === 'sub' || autoStart) b.queueRun(actor.email);
+  if (held) b.event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
+  else if (input.type === 'sub' || autoStart) b.queueRun(actor.email);
   return b.done();
 };
 
@@ -349,13 +378,86 @@ export const checkEnvironment = (board: Board, environment: string | null): Resu
 // ---------------------------------------------------------------------------
 // Commands from people
 
-/** Row 5: start a same's routine run from planning. */
-export const start = (glob: Glob, ctx: Context): Result<Transition> => {
+/**
+ * Row 5: start a same's routine run from planning. Refused while it waits for another glob to merge (row 33a): Start
+ * anyway is the person's override.
+ */
+export const start = (
+  glob: Glob,
+  ctx: Context,
+  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+  /** Holds the board's merge policy found for this start (another open glob may change the same exclusive paths). */
+  newHolds: readonly ImpliedAfter[] = [],
+): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status !== 'planning' || glob.type !== 'same') {
     return invalidTransition(glob, actor, 'Only a same in planning can be started');
   }
-  return new Builder(glob, ctx).status('implementing').queueRun(actor.email).done();
+  const awaited = waitingFor(glob, dependencies);
+  if (awaited.length > 0) return invalidTransition(glob, actor, refusalText(awaited));
+  // A merge-policy hold keeps the request: the same waits in Planning and starts when the other glob merges.
+  const holding = waitingFor({ impliedAfter: newHolds }, dependencies);
+  if (holding.length > 0) {
+    return new Builder(glob, ctx)
+      .set({ impliedAfter: mergeImplied(glob.impliedAfter, newHolds), waiting: { since: ctx.now } })
+      .event('Waiting', { for: holding.map((a) => a.id), note: waitSummary(holding) })
+      .done();
+  }
+  return new Builder(glob, ctx).set({ waiting: null }).status('implementing').queueRun(actor.email).done();
+};
+
+/** Row 34: Start anyway. A sub or same in planning that waits for unmerged globs starts now; the hold is recorded as overridden. */
+export const startAnyway = (
+  glob: Glob,
+  ctx: Context,
+  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.status !== 'planning' || glob.type === 'super') {
+    return invalidTransition(glob, actor, 'Only a sub or same in planning can be started anyway');
+  }
+  const awaited = waitingFor(glob, dependencies);
+  if (awaited.length === 0 && glob.waiting == null) {
+    return invalidTransition(glob, actor, 'Nothing holds this glob; use Start');
+  }
+  return new Builder(glob, ctx)
+    .set({
+      waiting: null,
+      ...(glob.impliedAfter === undefined ? {} : { impliedAfter: glob.impliedAfter.map((i) => ({ ...i, overridden: true as const })) }),
+    })
+    .event('HoldOverridden', { for: awaited.map((a) => a.id) })
+    .status('implementing')
+    .queueRun(actor.email)
+    .done();
+};
+
+/**
+ * Row 33: a glob this one waited for merged. When everything it waits for has merged, it starts as a fresh sub (or
+ * auto-started same) would: branch cut from the current base, run queued for whoever created it. Anything else, or a
+ * second call, changes nothing, so the outbox can deliver it any number of times.
+ */
+export const released = (
+  glob: Glob,
+  ctx: Context,
+  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+  /** Holds found when checking again just before starting: another glob may have taken the exclusive paths meanwhile. */
+  newHolds: readonly ImpliedAfter[] = [],
+): Result<Transition> => {
+  if (glob.waiting == null || glob.status !== 'planning' || glob.type === 'super') return unchanged(glob);
+  if (waitingFor(glob, dependencies).length > 0) return unchanged(glob);
+  const holding = waitingFor({ impliedAfter: newHolds }, dependencies);
+  if (holding.length > 0) {
+    return new Builder(glob, ctx)
+      .set({ impliedAfter: mergeImplied(glob.impliedAfter, newHolds) })
+      .event('Waiting', { for: holding.map((a) => a.id), note: waitSummary(holding) })
+      .done();
+  }
+  return new Builder(glob, ctx)
+    .set({ waiting: null })
+    .event('Released', { after: dependencyIds(glob) })
+    .status('implementing')
+    .queueRun(glob.creator)
+    .done();
 };
 
 /** Supers and sames are picked up by developers; QA and PO members only pick up subs. */
@@ -366,6 +468,8 @@ export interface PickUpOptions {
   readonly takeOver: boolean;
   /** Chosen at pick-up: must exist on the board and allow branch deploys. */
   readonly environment?: string | null;
+  /** The state of the globs the glob waits for: picking up a held glob works, and notes what hadn't merged. */
+  readonly dependencies?: ReadonlyMap<string, DependencyState>;
 }
 
 /** Rows 6–10: pick up, optionally taking over a routine run, optionally choosing the environment. */
@@ -418,7 +522,9 @@ export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOp
     case 'planning':
     case 'failed':
       // Row 6.
-      b.endRun('superseded', null, { cause: 'pick_up' }).set({ implementer: actor.email, failure: null }).status('in_progress');
+      b.endRun('superseded', null, { cause: 'pick_up' })
+        .set({ implementer: actor.email, failure: null, ...(glob.waiting == null ? {} : { waiting: null }) })
+        .status('in_progress');
       break;
     case 'pr_open':
     case 'in_progress':
@@ -428,7 +534,9 @@ export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOp
     default:
       return invalidTransition(glob, actor, `A glob in ${glob.status} cannot be picked up`);
   }
-  b.event('PickedUp', { takeOver: false });
+  // A person may go ahead on a glob that still waits; the event records what hadn't merged.
+  const unmerged = glob.status === 'planning' ? waitingFor(glob, options.dependencies ?? NO_DEPENDENCIES) : [];
+  b.event('PickedUp', { takeOver: false, ...(unmerged.length > 0 && { waitingFor: unmerged.map((a) => a.id) }) });
   if (environmentChanged) setEnvironment(b, environment);
   return b.done();
 };
@@ -593,7 +701,11 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
 };
 
 /** Row 23: return the glob to its starting status with a fresh branch and PR. */
-export const startAgain = (glob: Glob, ctx: Context): Result<Transition> => {
+export const startAgain = (
+  glob: Glob,
+  ctx: Context,
+  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status === 'reviewing' || glob.status === 'signed_off') {
     return invalidTransition(glob, actor, 'A merged glob cannot be started again');
@@ -607,10 +719,17 @@ export const startAgain = (glob: Glob, ctx: Context): Result<Transition> => {
     mergeMode: null,
     headChecks: null,
     provisioning: 'none',
+    ...(glob.waiting == null ? {} : { waiting: null }),
   })
     .effect({ kind: 'close_pr', globId: glob.id, generation, prNumber: glob.pr?.number ?? null })
-    .effect({ kind: 'delete_branch', globId: glob.id, generation })
-    .status(initialStatus(glob.type));
+    .effect({ kind: 'delete_branch', globId: glob.id, generation });
+  // A sub that waits for an unmerged glob goes back to Planning, held, instead of starting again.
+  const awaited = glob.type === 'sub' ? waitingFor(glob, dependencies) : [];
+  if (awaited.length > 0) {
+    b.set({ waiting: { since: ctx.now } }).status('planning').event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
+    return b.done();
+  }
+  b.status(initialStatus(glob.type));
   // A sub or super starts again in Doing with a fresh branch; a same waits for its next start.
   if (listOf(initialStatus(glob.type)) === 'doing') b.ensureProvisioned();
   if (glob.type === 'sub') b.queueRun(actor.email);
@@ -779,6 +898,10 @@ export interface FieldChanges {
   readonly category?: Category;
   readonly group?: string | null;
   readonly environment?: string | null;
+  /** Globs to start after, already checked (`checkAfter`): editable while the glob has no branch. */
+  readonly after?: readonly string[];
+  /** Merge-policy holds found for a same becoming a sub (set by the service, not by clients). */
+  readonly impliedAfter?: readonly ImpliedAfter[];
 }
 
 /** Changing fields is not a transition, except same → sub from planning (row 26). */
@@ -787,6 +910,7 @@ export const changeFields = (
   changes: FieldChanges,
   board: Board,
   ctx: Context,
+  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   const type = changes.type ?? glob.type;
@@ -803,6 +927,11 @@ export const changeFields = (
   const typeCheck = checkTypeChange(glob, type, actor);
   if (!typeCheck.ok) return typeCheck;
 
+  const afterChanged = changes.after !== undefined && changes.after.join('\n') !== (glob.after ?? []).join('\n');
+  if (afterChanged && (glob.status !== 'planning' || glob.provisioning !== 'none')) {
+    return invalidTransition(glob, actor, 'Start after can only be changed before the glob has started');
+  }
+
   const patch: { -readonly [K in keyof FieldChanges]: FieldChanges[K] } = {};
   const diff: { [key: string]: JsonValue } = {};
   for (const key of ['title', 'summary', 'type', 'category', 'group', 'environment'] as const) {
@@ -812,14 +941,33 @@ export const changeFields = (
       diff[key] = { from: glob[key], to: value };
     }
   }
+  if (afterChanged) {
+    Object.assign(patch, { after: changes.after });
+    diff['after'] = { from: [...(glob.after ?? [])], to: [...changes.after] };
+  }
   if (Object.keys(diff).length === 0) return unchanged(glob);
 
   const b = new Builder(glob, ctx).set(patch).event('FieldsChanged', diff);
   if (('type' in diff || 'environment' in diff) && glob.pr !== null) {
     b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   }
-  if (glob.type === 'same' && type === 'sub') {
-    b.status('implementing').queueRun(actor.email);
+  // A same becoming a sub starts, unless something it starts after hasn't merged; a held glob whose waiting list was
+  // edited down to nothing starts too. A held sub turned into a same is no longer asked to start by itself.
+  const becomesSub = glob.type === 'same' && type === 'sub';
+  const wasHeld = glob.waiting != null && glob.status === 'planning' && glob.type !== 'super';
+  if (wasHeld && glob.type === 'sub' && type === 'same') b.set({ waiting: null });
+  else if (becomesSub || wasHeld) {
+    const impliedAfter = becomesSub ? mergeImplied(glob.impliedAfter, changes.impliedAfter ?? []) : glob.impliedAfter;
+    const awaited = waitingFor({ after: changes.after ?? glob.after, impliedAfter }, dependencies);
+    if (awaited.length > 0) {
+      if (!wasHeld) {
+        b.set({ waiting: { since: ctx.now }, ...(impliedAfter === undefined ? {} : { impliedAfter }) }).event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
+      }
+    } else if (wasHeld) {
+      b.set({ waiting: null }).event('Released', { after: [] }).status('implementing').queueRun(glob.creator);
+    } else {
+      b.status('implementing').queueRun(actor.email);
+    }
   }
   return b.done();
 };
@@ -951,6 +1099,10 @@ export const commitPushed = (
   if (glob.environment !== null && !superseded && !isStart && listOf(glob.status) === 'doing') {
     b.effect({ kind: 'request_deploy', globId: glob.id, generation: glob.generation, sha: push.sha });
   }
+  // Doing with a PR: look again at whether the branch changes exclusive paths another open glob changes too (a warning).
+  if (glob.status === 'in_progress' && glob.pr !== null && !superseded && !isStart) {
+    b.effect({ kind: 'check_exclusive_paths', globId: glob.id, generation: glob.generation });
+  }
   // The commit's `Slop-Agent-Set` trailer, when it has one: which agent set produced the glob's work.
   return b
     .event('CommitPushed', {
@@ -959,6 +1111,27 @@ export const commitPushed = (
       fromSupersededRun: superseded,
       ...(push.agentSetVersion != null && { agentSetVersion: push.agentSetVersion }),
     })
+    .done();
+};
+
+/**
+ * Row 35: another open glob started or stopped changing the same exclusive paths as this one. Only a warning on the
+ * glob (the card shows it); it never blocks anything. The first clash found is kept until it ends or changes.
+ */
+export const clashChanged = (
+  glob: Glob,
+  clash: { with: string; paths: readonly string[] } | null,
+  ctx: Context,
+): Result<Transition> => {
+  const before = glob.clash ?? null;
+  if (clash === null) {
+    if (before === null) return unchanged(glob);
+    return new Builder(glob, ctx).set({ clash: null }).event('ClashChanged', { with: null }).done();
+  }
+  if (before?.with === clash.with && before.paths.join('\n') === clash.paths.join('\n')) return unchanged(glob);
+  return new Builder(glob, ctx)
+    .set({ clash: { with: clash.with, paths: [...clash.paths] } })
+    .event('ClashChanged', { with: clash.with, paths: [...clash.paths] })
     .done();
 };
 
@@ -1300,6 +1473,8 @@ export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx:
     .event('Merged', { sha: merge.sha })
     .status('reviewing')
     .effect({ kind: 'flag_conflicts', globId: glob.id, generation: glob.generation })
+    // Only the final merge releases the globs waiting for this one (a Merge and continue leaves it open).
+    .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation })
     .done();
 };
 
@@ -1411,7 +1586,13 @@ export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
 export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}): Action[] => {
   const actions: Action[] = [];
   const restricted = restrictedFrom(actor, glob);
-  if (glob.status === 'planning' && glob.type === 'same') actions.push('start');
+  // Held: waiting for another glob to merge. Without the dependencies loaded, the glob's own mark says it.
+  const held =
+    glob.status === 'planning' &&
+    glob.type !== 'super' &&
+    (facts.dependencies === undefined ? glob.waiting != null : waitingFor(glob, facts.dependencies).length > 0);
+  if (glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
+  if (held && !restricted) actions.push('start_anyway');
   const canPickUp =
     !restricted &&
     !hasBusyRun(glob) &&

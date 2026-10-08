@@ -31,6 +31,8 @@ import {
 import type { CatalogUpdate, KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
 import { LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
 import type { LocalRun } from '../domain/local-run.js';
+import { MERGE_POLICY_NAME, parseMergePolicy, renderMergePolicy } from '../domain/merge-policy.js';
+import type { MergePolicy } from '../domain/merge-policy.js';
 import { isReviewGuide } from '../domain/code-review.js';
 import { effectBasisOf, effectItemOf, isEffectMeasured, startEffectCheck } from '../domain/effect-check.js';
 import type { EffectCheck } from '../domain/effect-check.js';
@@ -95,6 +97,39 @@ const checkedLocalRun = (content: string): Result<string> => {
   const parsed = parseLocalRun(content);
   return parsed.ok ? ok(renderLocalRun(parsed.value)) : parsed;
 };
+
+/** The board's merge policy for the Knowledge page (read-only there; it changes through KB items). */
+export interface MergePolicyView {
+  /** Null when the board has none, or its stored value fails the check (`problem`). */
+  readonly policy: MergePolicy | null;
+  readonly content: string | null;
+  readonly version: number | null;
+  readonly updatedBy: string | null;
+  readonly updatedAt: string | null;
+  readonly problem: string | null;
+}
+
+/** A stored merge-policy row, checked again on read: a value that fails the check is never served. */
+const storedMergePolicy = (row: KnowledgeDoc | null): { policy: MergePolicy | null; problem: string | null } => {
+  if (row === null) return { policy: null, problem: null };
+  const parsed = parseMergePolicy(row.content);
+  return parsed.ok
+    ? { policy: parsed.value, problem: null }
+    : { policy: null, problem: `The stored merge policy (version ${row.version}) is invalid: ${parsed.error.message}` };
+};
+
+/** A merge-policy value from an approval or draft, checked and in canonical form. */
+const checkedMergePolicy = (content: string): Result<string> => {
+  const parsed = parseMergePolicy(content);
+  return parsed.ok ? ok(renderMergePolicy(parsed.value)) : parsed;
+};
+
+/**
+ * The board's merge policy as slop acts on it: empty when it has none or its stored value fails the check, so a bad
+ * row never holds a glob.
+ */
+export const readMergePolicy = async (tx: Tx, boardId: number): Promise<MergePolicy> =>
+  storedMergePolicy(await tx.getKnowledge(boardId, 'merge_policy', MERGE_POLICY_NAME)).policy ?? {};
 
 /** Every path in the board's agent set and how it is served, for the Knowledge page. */
 export interface AgentSetIndex {
@@ -224,6 +259,7 @@ const keptForPeople = (item: KbItem): string | null => {
   if (item.document !== null) return 'proposes a whole document';
   if (item.contradicts.length > 0) return 'is flagged as contradicting existing knowledge';
   if (item.target?.kind === 'local_run') return "changes the local-run spec, which sstor runs on developers' machines";
+  if (item.target?.kind === 'merge_policy') return 'changes the merge policy, which decides which globs wait for each other';
   if (item.target !== null && isAgentSetKind(item.target.kind)) return `changes an agent-set file (${item.target.kind} ${item.target.name}), which changes how agents behave`;
   return null;
 };
@@ -292,6 +328,11 @@ export const targetState = async (
   if (target.kind === 'local_run') {
     // The whole value is drafted and replaced; the first value creates the row.
     if (target.name !== LOCAL_RUN_NAME) return null;
+    return { text: existing?.content ?? '', version: existing?.version ?? 0, existing, catalog: null, newDocument: false };
+  }
+  if (target.kind === 'merge_policy') {
+    // Like the local-run spec: the whole value is replaced, and the first value creates the row.
+    if (target.name !== MERGE_POLICY_NAME) return null;
     return { text: existing?.content ?? '', version: existing?.version ?? 0, existing, catalog: null, newDocument: false };
   }
   if (target.kind === 'doc') {
@@ -451,6 +492,24 @@ export class KnowledgeService {
       const { spec, problem } = storedLocalRun(row);
       return ok({
         spec,
+        content: row?.content ?? null,
+        version: row?.version ?? null,
+        updatedBy: row?.updatedBy ?? null,
+        updatedAt: row?.updatedAt ?? null,
+        problem,
+      });
+    });
+  }
+
+  /** The board's merge policy as stored and as served, for the Knowledge page. */
+  async mergePolicy(email: string, boardId: number): Promise<Result<MergePolicyView>> {
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      const row = await tx.getKnowledge(boardId, 'merge_policy', MERGE_POLICY_NAME);
+      const { policy, problem } = storedMergePolicy(row);
+      return ok({
+        policy,
         content: row?.content ?? null,
         version: row?.version ?? null,
         updatedBy: row?.updatedBy ?? null,
@@ -903,7 +962,7 @@ export class KnowledgeService {
    * An agent (signed in as the admin) approves an open item as drafted, or rejects it with a reason: the same checks
    * and writes as the page's buttons, recorded with `via: 'agent'` in the outcome. Approving is refused for what
    * changes how agents or developers' machines behave, which a person decides on the Knowledge page: the local-run
-   * spec, agent-set files, a whole document, and any item flagged as contradicting. Rejecting is always allowed.
+   * spec, the merge policy, agent-set files, a whole document, and any item flagged as contradicting. Rejecting is always allowed.
    */
   async decideByAgent(
     email: string,
@@ -1002,6 +1061,13 @@ export class KnowledgeService {
     if (kind === 'local_run') {
       if (name !== LOCAL_RUN_NAME) return invalidInput(`The local-run spec is named ${LOCAL_RUN_NAME}`);
       const content = checkedLocalRun(approval.content);
+      if (!content.ok) return content;
+      const outcome = await this.apply(tx, email, item, kind, name, content.value);
+      return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
+    }
+    if (kind === 'merge_policy') {
+      if (name !== MERGE_POLICY_NAME) return invalidInput(`The merge policy is named ${MERGE_POLICY_NAME}`);
+      const content = checkedMergePolicy(approval.content);
       if (!content.ok) return content;
       const outcome = await this.apply(tx, email, item, kind, name, content.value);
       return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
@@ -1152,6 +1218,11 @@ export class KnowledgeService {
       if (!content.ok) return content;
       return this.apply(tx, email, item, 'local_run', LOCAL_RUN_NAME, content.value);
     }
+    if (target.kind === 'merge_policy') {
+      const content = checkedMergePolicy(draft.content);
+      if (!content.ok) return content;
+      return this.apply(tx, email, item, 'merge_policy', MERGE_POLICY_NAME, content.value);
+    }
     const { after } = splicePreview(state.text, draft.section, draft.content, state.newDocument);
     if (target.kind === 'doc') {
       const meta = state.existing ?? target.newDocument;
@@ -1169,7 +1240,7 @@ export class KnowledgeService {
     const state = await targetState(tx, catalog, item.boardId, item.target);
     if (state === null) return null;
     // The local-run spec is replaced whole (a draft holds its canonical text).
-    const whole = state.newDocument || item.target.kind === 'local_run';
+    const whole = state.newDocument || item.target.kind === 'local_run' || item.target.kind === 'merge_policy';
     const { diff } = splicePreview(state.text, item.draft.section, item.draft.content, whole);
     return { version: state.version, stale: state.version !== item.draftedAgainstVersion, diff: contextDiff(diff) };
   }
@@ -1182,6 +1253,10 @@ export class KnowledgeService {
       // One row per board, replaced whole; it may not exist yet (the first value arrives as a draft too).
       if (change.name !== LOCAL_RUN_NAME) return invalidInput(`The local-run spec is named ${LOCAL_RUN_NAME}`);
       return ok({ kind: 'local_run', name: LOCAL_RUN_NAME, section: null, newDocument: null });
+    }
+    if (change.kind === 'merge_policy') {
+      if (change.name !== MERGE_POLICY_NAME) return invalidInput(`The merge policy is named ${MERGE_POLICY_NAME}`);
+      return ok({ kind: 'merge_policy', name: MERGE_POLICY_NAME, section: null, newDocument: null });
     }
     if (change.kind === 'doc') {
       const name = docName(change.name);

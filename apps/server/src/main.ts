@@ -15,12 +15,14 @@ import { readyGate } from './ready-gate.js';
 import { GitHub } from './github/client.js';
 import { AppCredentialsStore } from './github/credentials.js';
 import { githubDeliveryHandler } from './github/events.js';
+import { HostBranchFiles } from './branch-files.js';
 import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { environmentExecutors } from './environment-executors.js';
+import { exclusivePathExecutors } from './exclusive-path-executors.js';
 import { codeReviewExecutors } from './code-review-executors.js';
 import { mountArtifactUploads } from './http/artifact-upload.js';
 import { mountDeploys } from './http/deploys.js';
@@ -65,12 +67,15 @@ const routines = new FileRoutines(config.ROUTINES_FILE);
 const hub = new HintHub();
 const auth = new Auth(db, config);
 const boards = new BoardService({ store, notifier: hub });
+// The board's merge policy reads which files a branch changes; `github` exists by the time this is first called.
+const branchFiles = new HostBranchFiles(() => github, logError);
 const globs = new GlobService({
   store,
   notifier: hub,
   clock: { now: () => new Date().toISOString() },
   ids: { runId: () => randomUUID() },
   routines,
+  branchFiles,
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.
 let awsSignInEnabled = false;
@@ -109,6 +114,7 @@ const outbox = new OutboxRunner(
       logError,
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
+    ...exclusivePathExecutors(store, branchFiles, boardOf),
     // Runs only once the outbox starts, after `knowledge` below exists.
     ...codeReviewExecutors(github, boardOf, (boardId) => knowledge.hasReviewGuide(boardId)),
   },
