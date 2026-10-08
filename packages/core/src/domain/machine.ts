@@ -874,12 +874,26 @@ export const commitPushed = (
 ): Result<Transition> => {
   const b = new Builder(glob, ctx);
   if (glob.pr !== null) b.set({ pr: { ...glob.pr, headSha: push.sha } });
+  // Row 16a: a push after slop's own merge failed (usually the base merged in, conflict resolved) puts a same or super
+  // back in review with its implementer; no run is queued and Merge is offered again once the new head's checks pass.
+  const recovers =
+    glob.status === 'failed' &&
+    glob.failure?.kind === 'merge' &&
+    glob.type !== 'sub' &&
+    glob.pr?.state === 'ready' &&
+    push.message?.trim() !== `${glob.id}: start`;
+  if (recovers) {
+    b.set({ failure: null, headChecks: null, mergeMode: null, ...(glob.conflict == null ? {} : { conflict: null }) })
+      .event('MergeFailureRecovered', { sha: push.sha, reason: glob.failure.reason })
+      .status('pr_open')
+      .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+  }
   const run = currentRun(glob);
   const superseded = push.runId !== null && (run === null || run.id !== push.runId || run.state === 'ended');
   if (!superseded && run !== null && run.state !== 'ended' && push.runId === run.id) {
     b.updateRun({ lastProgressAt: ctx.now, state: run.state === 'queued' ? 'active' : run.state });
   }
-  if (glob.status === 'pr_open' || glob.status === 'merging') {
+  if (!recovers && (glob.status === 'pr_open' || glob.status === 'merging')) {
     b.set({ headChecks: null }).effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
   }
   // A push may have fixed a flagged conflict (or not): look again.
@@ -1044,7 +1058,7 @@ export const checksCompleted = (
     if (checks.conflict !== undefined) {
       const reason = conflictReason(checks.conflict);
       return b
-        .set({ failure: { reason, at: ctx.now, conflict: checks.conflict }, mergeMode: null })
+        .set({ failure: { reason, at: ctx.now, kind: 'merge', conflict: checks.conflict }, mergeMode: null })
         .event('MergeFailed', { reason, conflict: true })
         .status('failed')
         .done();
@@ -1055,6 +1069,7 @@ export const checksCompleted = (
           failure: {
             reason: `Checks failed after updating the branch${failure === undefined ? '' : `: ${failureSummary(failure)}`}`,
             at: ctx.now,
+            kind: 'merge',
           },
           mergeMode: null,
         })
@@ -1137,6 +1152,8 @@ export const readyRequested = (
   if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
     return invalidTransition(glob, ctx.actor, `Run ${runId} is not the glob's current run`);
   }
+  // Already ready (a conflict fixed, a second call): GitHub raises no event, so go straight to pr_open.
+  if (glob.pr.state === 'ready') return prReadyForReview(glob, { number: glob.pr.number, headSha: glob.pr.headSha ?? '' }, ctx);
   return new Builder(glob, ctx)
     .effect({ kind: 'mark_pr_ready', globId: glob.id, generation: glob.generation })
     .done();
@@ -1239,7 +1256,7 @@ export const mergeFailed = (
 ): Result<Transition> => {
   if (glob.status !== 'merging') return unchanged(glob);
   return new Builder(glob, ctx)
-    .set({ failure: { reason, at: ctx.now, ...(conflict === undefined ? {} : { conflict }) }, mergeMode: null })
+    .set({ failure: { reason, at: ctx.now, kind: 'merge', ...(conflict === undefined ? {} : { conflict }) }, mergeMode: null })
     .event('MergeFailed', { reason })
     .status('failed')
     .done();
@@ -1326,7 +1343,11 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   ) {
     actions.push('take_over');
   }
-  if (glob.status === 'failed' && glob.type !== 'super' && !hasLiveRun(glob)) actions.push('retrigger');
+  // A merge failure on a glob a person implements is theirs to fix and push: a routine run is the wrong answer.
+  const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null;
+  if (glob.status === 'failed' && glob.type !== 'super' && !hasLiveRun(glob) && !personMergeFailure) {
+    actions.push('retrigger');
+  }
   if (canRequestConflictFix(glob)) actions.push('resolve_conflict');
   if (glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
   if (
