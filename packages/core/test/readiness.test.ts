@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { queuedRunNotice, readiness, runsClaudeAction, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
+import { behindWarning, queuedRunNotice, readiness, runsClaudeAction, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
 import type { ReadinessFacts } from '../src/domain/readiness.js';
 import { NOW, board, glob, run } from './fixtures.js';
 
@@ -214,5 +214,24 @@ describe('runs that never start', () => {
     expect(stateOf(facts(1)).routines).toBe('ok');
     expect(stateOf(facts(2)).routines).toBe('failing');
     expect(readiness(facts(2)).find((i) => i.key === 'routines')?.detail).toMatch(/2 routine runs never started \(latest s1t1\)/);
+  });
+});
+
+describe('the behind-main warning', () => {
+  const pr = { number: 3, state: 'draft' as const, headSha: 'abc1234' };
+  const behind = { base: 'main', behindBy: 4, files: ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts'], at: NOW };
+  const doing = (patch: Parameters<typeof glob>[0] = {}) => glob({ status: 'in_progress', pr, behind, ...patch });
+
+  it('says how many merges main is ahead by and how many files both sides changed', () => {
+    expect(behindWarning(doing())).toBe('main is 4 merges ahead; 6 files changed on both sides');
+    expect(behindWarning(doing({ behind: { ...behind, behindBy: 1, files: ['a.ts'] } }))).toBe('main is 1 merge ahead; 1 file changed on both sides');
+    expect(behindWarning(doing({ behind: { ...behind, files: [] } }))).toBe('main is 4 merges ahead; no files changed on both sides');
+  });
+
+  it('shows nothing when up to date, outside Doing, or once a conflict says more', () => {
+    expect(behindWarning(doing({ behind: null }))).toBeNull();
+    expect(behindWarning(doing({ behind: { ...behind, behindBy: 0 } }))).toBeNull();
+    expect(behindWarning(doing({ status: 'pr_open' }))).toBeNull();
+    expect(behindWarning(doing({ conflict: { base: 'main', files: [], since: null, at: NOW } }))).toBeNull();
   });
 });

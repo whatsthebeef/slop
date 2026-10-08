@@ -3,13 +3,13 @@ import type { Board, CheckFailure, Effect, Glob, Result } from '@slop/core';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { codeHostExecutors } from '../src/codehost-executors.js';
-import type { CodeHost } from '../src/codehost.js';
 import * as schema from '../src/db/schema.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
 import { githubDeliveryHandler } from '../src/github/events.js';
 import { FileRoutines } from '../src/routines.js';
 import { createTestDatabase } from './support/database.js';
+import { FakeCodeHost } from './support/fake-codehost.js';
 
 const REPO = 'acme/app';
 const DEV = 'dev@example.com';
@@ -27,36 +27,22 @@ const typecheck: CheckFailure = {
 };
 
 /** A code host with a scripted base branch and per-commit check results. */
-class FakeHost implements CodeHost {
-  readonly configured = true;
+class FakeHost extends FakeCodeHost {
   baseHead = { sha: 'm1', subject: 's1f5: Slice 8, part 1' };
   checks: Record<string, { state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }> = {};
   mergeStateNow: 'passed' | 'failed' | 'behind' | 'conflict' = 'failed';
   headSha = 'h1';
   readonly updated: { pr: number; sha: string }[] = [];
 
-  connection = () => Promise.resolve({ configured: true, connected: true, installUrl: null, appName: null });
-  provision = (_repo: unknown, glob: Glob) => Promise.resolve({ branch: glob.id, pr: { number: 7, headSha: this.headSha } });
-  openDraftPr = () => Promise.resolve(null);
-  syncLabels = () => Promise.resolve();
-  closePr = () => Promise.resolve();
-  deleteBranch = () => Promise.resolve();
-  reopenPr = () => Promise.resolve('reopened' as const);
-  mergeState = () => Promise.resolve({ sha: this.headSha, state: this.mergeStateNow });
-  completedCheckRun = () => Promise.resolve(null);
-  markReady = () => Promise.resolve({ wasDraft: true, sha: this.headSha });
-  conflictFiles = () => Promise.resolve(['src/a.ts']);
-  commentOnce = () => Promise.resolve('posted' as const);
-  diffSummary = () => Promise.resolve({ changedLines: 1, files: [] });
-  readFile = () => Promise.resolve(null);
-  listFiles = () => Promise.resolve([]);
-  commitFiles = () => Promise.resolve({ parent: null, files: [] });
-  commitDiffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
-  squashMerge = () => Promise.resolve({ outcome: 'merged' as const, sha: 'm9' });
-  headOf = () => Promise.resolve(this.baseHead);
-  commitChecks = (_repo: unknown, sha: string) => Promise.resolve(this.checks[sha] ?? { state: 'passed' as const, failure: null });
+  override provision = (_repo: unknown, glob: Glob) => Promise.resolve({ branch: glob.id, pr: { number: 7, headSha: this.headSha } });
+  override mergeState = () => Promise.resolve({ sha: this.headSha, state: this.mergeStateNow });
+  override markReady = () => Promise.resolve({ wasDraft: true, sha: this.headSha });
+  override conflictFiles = () => Promise.resolve(['src/a.ts']);
+  override squashMerge = () => Promise.resolve({ outcome: 'merged' as const, sha: 'm9' });
+  override headOf = () => Promise.resolve(this.baseHead);
+  override commitChecks = (_repo: unknown, sha: string) => Promise.resolve(this.checks[sha] ?? { state: 'passed' as const, failure: null });
   updateBranchResult: 'updating' | 'up_to_date' | 'conflict' = 'updating';
-  updateBranch = (_repo: unknown, pr: number, sha: string) => {
+  override updateBranch = (_repo: unknown, pr: number, sha: string) => {
     this.updated.push({ pr, sha });
     return Promise.resolve(this.updateBranchResult);
   };

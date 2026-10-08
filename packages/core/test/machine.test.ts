@@ -804,6 +804,32 @@ describe('checks and merging (slice 2)', () => {
   });
 });
 
+describe('how far a branch is behind the base', () => {
+  const pr = { number: 7, state: 'draft' as const, headSha: 'abc1234' };
+  const found = { base: 'main', behindBy: 3, files: ['a.ts'] };
+
+  it('a push to the branch or the base queues a recheck for a glob in Doing with an open PR only', () => {
+    const effect = [{ kind: 'check_behind', globId: 's1t1', generation: 1 }];
+    expect(value(m.behindCheckRequested(glob({ status: 'in_progress', pr }), ctx(null))).effects).toEqual(effect);
+    expect(value(m.behindCheckRequested(glob({ status: 'in_progress', pr: null }), ctx(null))).effects).toEqual([]);
+    expect(value(m.behindCheckRequested(glob({ status: 'pr_open', pr }), ctx(null))).effects).toEqual([]);
+    const pushed = value(m.commitPushed(glob({ status: 'in_progress', pr }), { sha: 'def5678', runId: null }, ctx(null)));
+    expect(pushed.effects).toContainEqual(effect[0]);
+  });
+
+  it('records the distance when it changes and clears it when the branch is up to date', () => {
+    const g = glob({ status: 'in_progress', pr });
+    const recorded = value(m.behindChecked(g, found, ctx(null)));
+    expect(recorded.glob.behind).toEqual({ ...found, at: NOW });
+    expect(value(m.behindChecked(recorded.glob, found, ctx(null))).changed).toBe(false);
+    expect(value(m.behindChecked(recorded.glob, { ...found, behindBy: 4 }, ctx(null))).glob.behind?.behindBy).toBe(4);
+    expect(value(m.behindChecked(g, { ...found, behindBy: 0, files: [] }, ctx(null))).changed).toBe(false);
+    const cleared = value(m.behindChecked(recorded.glob, { ...found, behindBy: 0, files: [] }, ctx(null)));
+    expect(cleared.glob.behind).toBeNull();
+    expect(value(m.behindChecked(glob({ status: 'in_progress', pr: null }), found, ctx(null))).changed).toBe(false);
+  });
+});
+
 describe('conflicts flagged after a merge', () => {
   const pr = { number: 7, state: 'draft' as const, headSha: 'abc1234' };
   const found = { base: 'main', files: ['a.ts'], since: 's1t2' };
@@ -996,7 +1022,8 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     expect(opened.glob.pr).toEqual({ number: 8, state: 'draft', headSha: 'ddd' });
     expect(value(m.prOpened(opened.glob, { number: 8, headSha: 'ddd' }, ctx(null))).changed).toBe(false);
     // Once it has a PR, pushes don't open another.
-    expect(effectKinds(value(m.commitPushed(opened.glob, { sha: 'eee', runId: null }, ctx(null))))).toEqual([]);
+    // (Only the check of how far the branch is behind the base.)
+    expect(effectKinds(value(m.commitPushed(opened.glob, { sha: 'eee', runId: null }, ctx(null))))).toEqual(['check_behind']);
     // Neither do pushes while provisioning is still under way.
     const provisioning = glob({ type: 'super', status: 'in_progress', pr: null, provisioning: 'pending' });
     expect(effectKinds(value(m.commitPushed(provisioning, { sha: 'fff', runId: null }, ctx(null))))).toEqual([]);

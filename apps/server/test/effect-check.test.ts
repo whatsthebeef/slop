@@ -17,7 +17,6 @@ import { sql } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Auth } from '../src/auth.js';
-import type { CodeHost } from '../src/codehost.js';
 import { loadConfig } from '../src/config.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
@@ -28,6 +27,7 @@ import { OutboxRunner } from '../src/jobs/outbox.js';
 import { HintHub } from '../src/notifier.js';
 import { SignedLinks } from '../src/signed-links.js';
 import { createTestDatabase } from './support/database.js';
+import { fakeCodeHost } from './support/fake-codehost.js';
 
 const DEV = 'dev@example.com';
 const ADMIN = 'admin@example.com';
@@ -46,30 +46,7 @@ const unwrap = <T>(result: Result<T>): T => {
 };
 
 const unused = () => Promise.reject(new Error('not used by the knowledge routes'));
-const host: CodeHost = {
-  configured: false,
-  connection: unused,
-  provision: unused,
-  openDraftPr: unused,
-  syncLabels: unused,
-  closePr: unused,
-  deleteBranch: unused,
-  reopenPr: unused,
-  mergeState: unused,
-  conflictFiles: unused,
-  completedCheckRun: unused,
-  readFile: unused,
-  listFiles: unused,
-  commitFiles: unused,
-  commitDiffSummary: unused,
-  markReady: unused,
-  diffSummary: unused,
-  squashMerge: unused,
-  commentOnce: unused,
-  headOf: unused,
-  commitChecks: unused,
-  updateBranch: unused,
-};
+const host = fakeCodeHost({ configured: false });
 const catalog = {
   kbEntries: () => Promise.resolve([]),
   agentSet: () => Promise.resolve({ hash: 'empty', files: [] }),

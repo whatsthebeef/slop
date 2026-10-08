@@ -19,12 +19,12 @@ import type { BoardJob, BoardJobStatus, KbItem, KbSignal, Llm } from '@slop/core
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CodeHost } from '../src/codehost.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
 import type { Env } from '../src/http/app.js';
 import { mountKnowledge } from '../src/http/knowledge.js';
 import { createTestDatabase } from './support/database.js';
+import { fakeCodeHost } from './support/fake-codehost.js';
 
 const DEV = 'dev@example.com';
 const ADMIN = 'admin@example.com';
@@ -38,30 +38,7 @@ const notifier = { publish: () => undefined };
 const unused = () => Promise.reject(new Error('not used by the knowledge routes'));
 
 /** The knowledge routes only read `configured` and `connection`; nothing here calls them. */
-const host: CodeHost = {
-  configured: false,
-  connection: unused,
-  provision: unused,
-  openDraftPr: unused,
-  syncLabels: unused,
-  closePr: unused,
-  deleteBranch: unused,
-  reopenPr: unused,
-  mergeState: unused,
-  conflictFiles: unused,
-  completedCheckRun: unused,
-  readFile: unused,
-  listFiles: unused,
-  commitFiles: unused,
-  commitDiffSummary: unused,
-  markReady: unused,
-  diffSummary: unused,
-  squashMerge: unused,
-  commentOnce: unused,
-  headOf: unused,
-  commitChecks: unused,
-  updateBranch: unused,
-};
+const host = fakeCodeHost({ configured: false });
 
 /** This strand's migration: a renumber (when another migration lands first) changes only this. */
 const MIGRATION = '0018_kb_consolidation';

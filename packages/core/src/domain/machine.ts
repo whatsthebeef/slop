@@ -15,6 +15,7 @@ import type {
   Board,
   Category,
   BaseChecks,
+  BehindBase,
   CheckFailure,
   ChecklistItem,
   Glob,
@@ -500,6 +501,37 @@ export const conflictFound = (
     .done();
 };
 
+/** Whether the glob is in Doing with an open PR: the globs whose distance from the base branch is worth showing. */
+const isDoingWithPr = (glob: Glob): boolean => glob.status === 'in_progress' && hasOpenPr(glob);
+
+/** The base branch or the glob's branch received a push: read again how far the branch is behind the base. */
+export const behindCheckRequested = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (!isDoingWithPr(glob)) return unchanged(glob);
+  return new Builder(glob, ctx).effect({ kind: 'check_behind', globId: glob.id, generation: glob.generation }).done();
+};
+
+/** What the code host says about how far the branch is behind the base: recorded when it changed, cleared when up to date. */
+export const behindChecked = (
+  glob: Glob,
+  found: { base: string; behindBy: number; files: readonly string[] },
+  ctx: Context,
+): Result<Transition> => {
+  if (!hasOpenPr(glob)) return unchanged(glob);
+  const before = glob.behind ?? null;
+  if (found.behindBy <= 0) {
+    if (before === null) return unchanged(glob);
+    return new Builder(glob, ctx).set({ behind: null }).event('BehindChanged', { base: found.base, behindBy: 0 }).done();
+  }
+  if (before?.base === found.base && before.behindBy === found.behindBy && before.files.join('\n') === found.files.join('\n')) {
+    return unchanged(glob);
+  }
+  const behind: BehindBase = { base: found.base, behindBy: found.behindBy, files: [...found.files], at: ctx.now };
+  return new Builder(glob, ctx)
+    .set({ behind })
+    .event('BehindChanged', { base: found.base, behindBy: found.behindBy, files: [...found.files] })
+    .done();
+};
+
 /** The open PR no longer conflicts with the base branch. */
 export const conflictCleared = (glob: Glob, ctx: Context): Result<Transition> => {
   if (glob.conflict == null) return unchanged(glob);
@@ -853,6 +885,10 @@ export const commitPushed = (
   // A push may have fixed a flagged conflict (or not): look again.
   if (glob.conflict != null && glob.pr !== null) {
     b.effect({ kind: 'check_conflict', globId: glob.id, generation: glob.generation, since: null });
+  }
+  // Doing: look again at how far the branch is behind the base (the card warns before a conflict exists).
+  if (glob.status === 'in_progress' && glob.pr !== null) {
+    b.effect({ kind: 'check_behind', globId: glob.id, generation: glob.generation });
   }
   // After Merge and continue the glob has no PR until the next push opens one, once there's new
   // work on the branch (main is merged back into it first, so the PR shows only the new work).

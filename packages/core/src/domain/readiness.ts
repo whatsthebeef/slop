@@ -275,6 +275,24 @@ const conflictHint = (glob: Glob, now: string): string | null => {
 };
 
 /**
+ * The early warning on a glob in Doing whose branch lacks commits from the base branch, before any conflict exists:
+ * "main is 4 merges ahead; 6 files changed on both sides". Null when it is up to date, not in Doing, or already in
+ * conflict (the conflict hint says more).
+ */
+export const behindWarning = (glob: Glob): string | null => {
+  const behind = glob.behind;
+  if (behind == null || behind.behindBy <= 0 || glob.status !== 'in_progress' || glob.conflict != null) return null;
+  const merges = `${String(behind.behindBy)} merge${behind.behindBy === 1 ? '' : 's'}`;
+  const files = behind.files.length;
+  const both = files === 0 ? 'no files changed on both sides' : `${String(files)} file${files === 1 ? '' : 's'} changed on both sides`;
+  return `${behind.base} is ${merges} ahead; ${both}`;
+};
+
+/** What to do about `behindWarning`, for the card's tooltip. */
+export const behindAdvice = (glob: Glob): string =>
+  `Merge ${glob.behind?.base ?? 'the base branch'} into ${glob.id} now${glob.type === 'super' ? ', or land the finished parts with Merge and continue,' : ''} before the conflicts grow`;
+
+/**
  * A short hint on a card when a glob looks stuck on setup rather than on work: a ready sub with no
  * sub-gate result, a sub whose gate passed but hasn't merged, or a routine failure with a known fix.
  */

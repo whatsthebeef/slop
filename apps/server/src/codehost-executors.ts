@@ -228,6 +228,17 @@ export const codeHostExecutors = (
       return 'done';
     },
 
+    check_behind: async (effect, glob, { globs }) => {
+      if (effect.kind !== 'check_behind' || glob?.pr == null || glob.status !== 'in_progress') return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      const found = await host.behindBase(repo, glob.pr.number);
+      // The host couldn't tell: keep what the card shows.
+      if (found === null) return 'done';
+      await globs.applyEvent(glob.id, (g, ctx) => machine.behindChecked(g, { base: repo.base, ...found }, ctx));
+      return 'done';
+    },
+
     request_conflict_fix: async (_effect, glob, { globs }) => {
       const conflict = glob?.conflict;
       if (glob?.pr == null || conflict?.requestedAt === undefined) return 'dropped';
