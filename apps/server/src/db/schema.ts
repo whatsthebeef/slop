@@ -559,6 +559,8 @@ export const codeReviewComments = pgTable(
     url: text('url'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+    /** Set when the code host deleted it: the row stays as a tombstone so a late redelivery can't bring it back. */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (t) => [
     uniqueIndex('code_review_comments_external_idx').on(t.externalId),

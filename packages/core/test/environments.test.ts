@@ -200,6 +200,29 @@ describe('EnvironmentService', () => {
     expect((await service.boardState(board.id, ['s1t1'])).size).toBe(0);
   });
 
+  it('brings a rolled-back glob back with Deployed when a later deploy contains it again (s15f10)', async () => {
+    await service.recordDeploy(report());
+    await service.recordContainment(board.id, 'prod', 'd1', [{ globId: 's1t1', mergeSha: 'm1', contained: true }]);
+    now = '2026-10-05T14:00:00.000Z';
+    await service.recordDeploy(report({ eventId: 'aws:e2', sha: 'd0' }));
+    await service.recordContainment(board.id, 'prod', 'd0', [{ globId: 's1t1', mergeSha: 'm1', contained: false }]);
+    now = '2026-10-05T15:00:00.000Z';
+    await service.recordDeploy(report({ eventId: 'aws:e3', sha: 'd3' }));
+    await service.recordContainment(board.id, 'prod', 'd3', [{ globId: 's1t1', mergeSha: 'm1', contained: true }]);
+    expect(store.state.events.map((e) => e.type)).toEqual(['Deployed', 'DeployRolledBack', 'Deployed']);
+    expect((await service.boardState(board.id, ['s1t1'])).get('s1t1')).toEqual([
+      expect.objectContaining({ environment: 'prod', sha: 'd3', since: '2026-10-05T15:00:00.000Z' }),
+    ]);
+  });
+
+  it("keeps a check current when the deploy after it failed: the environment still runs the last success (s15f10)", async () => {
+    await service.recordDeploy(report());
+    await service.recordDeploy(report({ eventId: 'aws:e2', sha: 'd2', succeeded: false, at: '2026-10-05T13:00:00.000Z' }));
+    expect(store.state.outbox).toHaveLength(1);
+    expect(await service.recordContainment(board.id, 'prod', 'd1', [{ globId: 's1t1', mergeSha: 'm1', contained: true }])).toBe('recorded');
+    expect(await service.candidates(board.id, 'prod', 'd2')).toBeNull();
+  });
+
   it('lists the observed environments in the glob view to members only', async () => {
     await store.transaction((tx) => tx.upsertMember({ boardId: board.id, email: 'dev@example.com', role: 'dev' }));
     await service.recordDeploy(report());

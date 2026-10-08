@@ -113,6 +113,9 @@ export interface ApiError {
   readonly allowedActions?: readonly string[];
 }
 
+/** An ATF run as the API sends it; `id` is optional because an older server doesn't send it. */
+export type AtfRun = Omit<AtfIndicator, 'id'> & { readonly id?: number };
+
 export interface BoardDeploys {
   readonly indicators: Readonly<Record<string, DeployIndicator>>;
   /** Environments with a deploy running: Deploy now is disabled there for everyone. */
@@ -121,7 +124,7 @@ export interface BoardDeploys {
    * mismatched dev pairing (vite on a branch, API on main) must not blank the board. */
   readonly environments?: Readonly<Record<string, readonly EnvironmentIndicator[]>>;
   /** Each glob's ATF results: its branch run, and the runs against the environment commits holding it. Optional, as above. */
-  readonly atf?: Readonly<Record<string, readonly AtfIndicator[]>>;
+  readonly atf?: Readonly<Record<string, readonly AtfRun[]>>;
 }
 
 export class RequestError extends Error {
@@ -203,7 +206,7 @@ export const api = {
     request<BoardDeploys>('GET', `/api/boards/${boardId}/deploys?globs=${globIds.map(encodeURIComponent).join(',')}`),
   globEnvironments: (id: string) =>
     request<{ value: GlobEnvironment[] }>('GET', `/api/globs/${id}/environments`).then((r) => r.value),
-  globTests: (id: string) => request<{ value: AtfIndicator[] }>('GET', `/api/globs/${id}/tests`).then((r) => r.value),
+  globTests: (id: string) => request<{ value: AtfRun[] }>('GET', `/api/globs/${id}/tests`).then((r) => r.value),
   /** CodeRabbit's badge per glob (inline comment count and review link); globs with nothing stored are left out. */
   boardCodeReviews: (boardId: number, globIds: readonly string[]) =>
     request<{ value: Partial<Record<string, CodeReviewBadge>> }>(

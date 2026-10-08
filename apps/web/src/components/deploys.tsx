@@ -123,8 +123,9 @@ export const EnvironmentsSection = ({ board, glob }: { board: BoardView; glob: G
     queryFn: () => api.globEnvironments(glob.id),
     enabled: observed,
   });
-  if (!observed) return null;
   const environments = query.data ?? [];
+  // No heading while loading, on an error or against an older API.
+  if (!observed || environments.length === 0) return null;
   return (
     <section className='grid gap-2' aria-label='Environments' data-testid='environments'>
       <h3 className='text-xs font-semibold text-muted-foreground'>Environments</h3>
@@ -176,8 +177,8 @@ export const TestsSection = ({ glob }: { glob: GlobView }) => {
     <section className='grid gap-2' aria-label='Tests' data-testid='tests'>
       <h3 className='text-xs font-semibold text-muted-foreground'>Tests</h3>
       <ul className='grid gap-1 font-mono text-[11px]'>
-        {runs.map((run) => (
-          <li key={`${run.scope}:${run.environment ?? ''}:${run.sha}:${run.at}`} className='flex flex-wrap gap-x-2' data-testid='test-run'>
+        {runs.map((run, i) => (
+          <li key={run.id ?? `${run.scope}:${run.environment ?? ''}:${run.sha}:${run.at}:${String(i)}`} className='flex flex-wrap gap-x-2' data-testid='test-run'>
             <span className={run.failing ? 'text-red' : run.stale === true ? 'text-muted-foreground' : 'text-signal-strong'}>
               ATF {run.failing ? 'failed' : 'passed'}
             </span>

@@ -19,15 +19,15 @@
 #   counts       <testcase>, <failure>/<error> and <skipped> across the report dir's *.xml (default reports/atf)
 #   url          SLOP_ATF_URL, else CODEBUILD_BUILD_URL (optional: a link to the report or run)
 #
-# A failed report never fails the pipeline.
+# A failed report never fails the pipeline: every problem is a warning and the script exits 0.
 set -euo pipefail
 
 env="${1:-${SLOP_ENVIRONMENT:-}}"
 reports="${2:-reports/atf}"
 branch="${SLOP_GLOB:-}"
 if [[ -z "$env" && -z "$branch" ]]; then
-  echo "Usage: .sstor/atf-report.sh <environment> [report dir] (or set SLOP_GLOB for a branch run)" >&2
-  exit 2
+  echo "atf-report: usage: .sstor/atf-report.sh <environment> [report dir] (or set SLOP_GLOB for a branch run). Not reported." >&2
+  exit 0
 fi
 
 repo_of() {
@@ -38,7 +38,10 @@ repo="${SLOP_REPO:-}"
 [[ -n "$repo" ]] || repo="$(repo_of "${CODEBUILD_SOURCE_REPO_URL:-$(git remote get-url origin 2>/dev/null || true)}")"
 sha="${SLOP_SHA:-${CODEBUILD_RESOLVED_SOURCE_VERSION:-}}"
 # Only a commit SHA identifies what was tested; anything else (e.g. a pipeline's artifact ARN) is left out.
-[[ "$sha" =~ ^[0-9a-fA-F]{7,40}$ ]] || sha=""
+if [[ -n "$sha" && ! "$sha" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+  echo "atf-report: '$sha' isn't a commit SHA (e.g. a CodePipeline artifact); sending no commit" >&2
+  sha=""
+fi
 
 if [[ -z "$repo" ]]; then
   echo "atf-report: couldn't tell the repo; set SLOP_REPO. Not reported." >&2
@@ -49,7 +52,10 @@ if [[ -n "$branch" && -z "$sha" ]]; then
   exit 0
 fi
 
-entries="$(mktemp)"
+command -v python3 >/dev/null 2>&1 || { echo "atf-report: python3 isn't installed. Not reported." >&2; exit 0; }
+command -v aws >/dev/null 2>&1 || { echo "atf-report: the AWS CLI isn't installed. Not reported." >&2; exit 0; }
+
+entries="$(mktemp 2>/dev/null)" || { echo "atf-report: couldn't create a temporary file. Not reported." >&2; exit 0; }
 trap 'rm -f "$entries"' EXIT
 # python3 counts the JUnit results and builds the JSON, so no value needs shell quoting.
 if ! REPORT_DIR="$reports" REPORT_ENV="$env" REPORT_BRANCH="$branch" REPORT_REPO="$repo" REPORT_SHA="$sha" \

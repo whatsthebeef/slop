@@ -1,9 +1,9 @@
 import { checksExplanation, queuedRunNotice, stuckHint } from '@slop/core';
-import type { Action, ArtifactKind, AtfIndicator, Category, CodeReviewBadge, DeployIndicator, EnvironmentIndicator } from '@slop/core';
+import type { Action, ArtifactKind, Category, CodeReviewBadge, DeployIndicator, EnvironmentIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, MessageSquareCode, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
-import type { GlobView } from '@/lib/api';
+import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
@@ -274,7 +274,7 @@ export const EnvironmentChips = ({ environments }: { environments: readonly Envi
 );
 
 /** One ATF run in words, for tooltips and the glob view. */
-export const atfLine = (run: AtfIndicator): string => {
+export const atfLine = (run: AtfRun): string => {
   const where = run.scope === 'branch' ? `Branch${run.environment === null ? '' : ` (${run.environment})`}` : run.environment ?? '';
   const counts = `${run.passed} passed, ${run.failed} failed${run.skipped > 0 ? `, ${run.skipped} skipped` : ''}`;
   return `${where} at ${run.sha.slice(0, 7)}: ${counts}${run.stale === true ? ' (an older commit than the PR head)' : ''}`;
@@ -284,12 +284,13 @@ export const atfLine = (run: AtfIndicator): string => {
  * The glob's ATF results in one chip: red when any current run has a failing test (a flag only; it never blocks),
  * muted when the only run tested an older commit. It links to the report of the run it summarises.
  */
-export const AtfChip = ({ runs }: { runs: readonly AtfIndicator[] }) => {
+export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
   const current = runs.filter((r) => r.stale !== true);
   const shown = current.find((r) => r.failing) ?? current[0] ?? runs[0];
   if (shown === undefined) return null;
   const failing = current.some((r) => r.failing);
-  const text = shown.failing && shown.stale !== true ? `ATF ${shown.failed} failed` : `ATF ${shown.passed}✓`;
+  // The text always says what the run found; a stale run is only muted, never shown as passing.
+  const text = shown.failing ? `ATF ${shown.failed} failed` : `ATF ${shown.passed}✓`;
   const tone = failing ? 'text-red' : current.length > 0 ? 'text-signal-strong' : 'text-muted-foreground';
   const tip = runs.map((r) => `${atfLine(r)} · ${new Date(r.at).toLocaleString()}`).join('\n');
   const chip = (
@@ -391,7 +392,7 @@ export const GlobCard = ({
   /** The release and integration environments it is in. */
   environments?: readonly EnvironmentIndicator[];
   /** Its ATF results (a flag only). */
-  atf?: readonly AtfIndicator[];
+  atf?: readonly AtfRun[];
   /** CodeRabbit's review of its PR, when CodeRabbit has posted anything. */
   codeReview?: CodeReviewBadge;
 }) => {

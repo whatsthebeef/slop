@@ -12,7 +12,7 @@ const reviewCommentPayload = z.object({
   action: z.string(),
   comment: z.object({
     id: z.number(),
-    body: z.string(),
+    body: z.string().nullable().optional(),
     path: z.string().nullable().optional(),
     line: z.number().nullable().optional(),
     original_line: z.number().nullable().optional(),
@@ -22,7 +22,7 @@ const reviewCommentPayload = z.object({
     html_url: z.string().nullable().optional(),
     created_at: z.string().nullable().optional(),
     updated_at: z.string().nullable().optional(),
-    user,
+    user: user.nullable().optional(),
   }),
   pull_request: z.object({ number: z.number().optional(), head: z.object({ ref: z.string() }) }),
   repository,
@@ -36,7 +36,7 @@ const reviewPayload = z.object({
     commit_id: z.string().nullable().optional(),
     html_url: z.string().nullable().optional(),
     submitted_at: z.string().nullable().optional(),
-    user: user.nullable(),
+    user: user.nullable().optional(),
   }),
   pull_request: z.object({ number: z.number(), head: z.object({ ref: z.string() }) }),
   repository,
@@ -47,14 +47,26 @@ const issueCommentPayload = z.object({
   issue: z.object({ number: z.number(), pull_request: z.object({}).loose().nullable().optional() }),
   comment: z.object({
     id: z.number(),
-    body: z.string(),
+    body: z.string().nullable().optional(),
     html_url: z.string().nullable().optional(),
     created_at: z.string().nullable().optional(),
     updated_at: z.string().nullable().optional(),
-    user,
+    user: user.nullable().optional(),
   }),
   repository,
 });
+
+/**
+ * Whether a delivery's comment or review is CodeRabbit's, read before the full payload is: these events arrive for
+ * every comment in every installed repo, and someone else's (a deleted "ghost" account has no user) is ignored
+ * whatever its shape.
+ */
+const authored = z.object({ user: z.object({ login: z.unknown() }).loose().nullable().optional() }).loose().nullable();
+const authoredPayload = z.object({ comment: authored.optional(), review: authored.optional() }).loose();
+const byCodeRabbit = (payload: unknown, key: 'comment' | 'review'): boolean => {
+  const parsed = authoredPayload.safeParse(payload);
+  return parsed.success && parsed.data[key]?.user?.login === CODERABBIT_BOT;
+};
 
 type Recorder = Pick<CodeReviewService, 'record' | 'remove'>;
 
@@ -87,9 +99,13 @@ export const handleReviewComment = async (
   payload: unknown,
   globFor: (branch: string, repo: string) => Promise<Glob | null>,
 ): Promise<boolean> => {
-  const event = reviewCommentPayload.parse(payload);
+  if (!byCodeRabbit(payload, 'comment')) return true;
+  // A CodeRabbit delivery GitHub changed the shape of is ignored, not failed (it would answer 500 on every retry).
+  const parsed = reviewCommentPayload.safeParse(payload);
+  if (!parsed.success) return true;
+  const event = parsed.data;
   const { comment } = event;
-  if (comment.user.login !== CODERABBIT_BOT) return true;
+  const body = comment.body ?? '';
   const externalId = `coderabbit:review_comment:${String(comment.id)}`;
   if (event.action === 'deleted') {
     await deps.codeReviews.remove(externalId);
@@ -105,11 +121,11 @@ export const handleReviewComment = async (
       prNumber,
       externalId,
       kind: 'inline',
-      author: comment.user.login,
+      author: CODERABBIT_BOT,
       commitSha: comment.commit_id ?? null,
       path: comment.path ?? null,
       line,
-      body: comment.body,
+      body,
       url: link(comment.html_url),
       createdAt: time(comment.created_at),
       updatedAt: time(comment.updated_at),
@@ -120,7 +136,7 @@ export const handleReviewComment = async (
   // A glob deleted meanwhile has nothing to record against. The finding keeps its own (older) external ID.
   await deps.findings.recordCodeRabbitComment(glob.id, {
     externalId: `coderabbit:${String(comment.id)}`,
-    body: comment.body,
+    body,
     path: comment.path ?? null,
     line: findingLine === null ? null : String(findingLine),
     commitSha: comment.commit_id ?? null,
@@ -134,9 +150,12 @@ export const handleReview = async (
   payload: unknown,
   globFor: (branch: string, repo: string) => Promise<Glob | null>,
 ): Promise<boolean> => {
-  const event = reviewPayload.parse(payload);
+  if (!byCodeRabbit(payload, 'review')) return true;
+  const parsed = reviewPayload.safeParse(payload);
+  if (!parsed.success) return true;
+  const event = parsed.data;
   const { review } = event;
-  if (review.user?.login !== CODERABBIT_BOT || (event.action !== 'submitted' && event.action !== 'edited')) return true;
+  if (event.action !== 'submitted' && event.action !== 'edited') return true;
   const glob = await globFor(event.pull_request.head.ref, event.repository.full_name);
   if (glob === null) return true;
   const submitted = time(review.submitted_at);
@@ -145,7 +164,7 @@ export const handleReview = async (
     prNumber: event.pull_request.number,
     externalId: `coderabbit:review:${String(review.id)}`,
     kind: 'review',
-    author: review.user.login,
+    author: CODERABBIT_BOT,
     commitSha: review.commit_id ?? null,
     path: null,
     line: null,
@@ -166,9 +185,13 @@ export const handleIssueComment = async (
   payload: unknown,
   globForPr: (repo: string, prNumber: number) => Promise<Glob | null>,
 ): Promise<boolean> => {
-  const event = issueCommentPayload.parse(payload);
+  if (!byCodeRabbit(payload, 'comment')) return true;
+  const parsed = issueCommentPayload.safeParse(payload);
+  if (!parsed.success) return true;
+  const event = parsed.data;
   const { comment } = event;
-  if (comment.user.login !== CODERABBIT_BOT || event.issue.pull_request == null) return true;
+  if (event.issue.pull_request == null) return true;
+  const body = comment.body ?? '';
   const externalId = `coderabbit:issue_comment:${String(comment.id)}`;
   if (event.action === 'deleted') {
     await codeReviews.remove(externalId);
@@ -180,12 +203,12 @@ export const handleIssueComment = async (
   await codeReviews.record(glob.id, {
     prNumber: event.issue.number,
     externalId,
-    kind: codeReview.issueCommentKind(comment.body),
-    author: comment.user.login,
+    kind: codeReview.issueCommentKind(body),
+    author: CODERABBIT_BOT,
     commitSha: null,
     path: null,
     line: null,
-    body: comment.body,
+    body,
     url: link(comment.html_url),
     createdAt: time(comment.created_at),
     updatedAt: time(comment.updated_at),

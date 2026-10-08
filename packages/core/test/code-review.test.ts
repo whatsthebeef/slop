@@ -149,10 +149,14 @@ describe('CodeReviewService', () => {
     expect(await service.record('s9t9', received({ externalId: 'other' }))).toBe(false);
   });
 
-  it('removes a deleted item', async () => {
+  it('removes a deleted item, and a late redelivery of it does not bring it back', async () => {
     await service.record('s1t1', received());
     expect(await service.remove('coderabbit:review_comment:1')).toBe(true);
     expect(await service.remove('coderabbit:review_comment:1')).toBe(false);
+    expect(await all()).toEqual([]);
+    expect(notifier.hints).toHaveLength(2);
+    expect(await service.record('s1t1', received())).toBe(false);
+    expect(await service.record('s1t1', received({ body: 'Edited.', updatedAt: '2026-10-05T13:00:00.000Z' }))).toBe(false);
     expect(await all()).toEqual([]);
     expect(notifier.hints).toHaveLength(2);
   });

@@ -47,6 +47,8 @@ export const testRunFailed = (run: Pick<TestRun, 'failed'>): boolean => run.fail
 
 /** What a glob shows for one ATF run. */
 export interface AtfIndicator {
+  /** The run's own ID (unique on the board). */
+  readonly id: number;
   /** `branch`: the glob's own branch; `environment`: the commit a release or integration environment runs. */
   readonly scope: 'branch' | 'environment';
   readonly environment: string | null;
@@ -64,6 +66,7 @@ export interface AtfIndicator {
 const newestFirst = (a: TestRun, b: TestRun): number => b.finishedAt.localeCompare(a.finishedAt) || b.id - a.id;
 
 const indicator = (run: TestRun, scope: AtfIndicator['scope'], stale: boolean): AtfIndicator => ({
+  id: run.id,
   scope,
   environment: run.environment,
   sha: run.sha,

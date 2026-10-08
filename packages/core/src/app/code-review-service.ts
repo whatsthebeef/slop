@@ -55,9 +55,13 @@ export class CodeReviewService {
     return true;
   }
 
-  /** Forgets an item deleted on the code host. False when it wasn't stored. */
+  /**
+   * Forgets an item deleted on the code host, keeping a tombstone so a late redelivery of it doesn't store it again.
+   * False when it wasn't stored.
+   */
   async remove(externalId: string): Promise<boolean> {
-    const removed = await this.deps.store.transaction((tx) => tx.deleteCodeReviewComment(externalId));
+    const now = this.deps.clock.now();
+    const removed = await this.deps.store.transaction((tx) => tx.deleteCodeReviewComment(externalId, now));
     if (removed === null) return false;
     this.deps.notifier.publish({ kind: 'glob.reviews', boardId: removed.boardId, globId: removed.globId });
     return true;

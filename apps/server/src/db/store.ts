@@ -114,8 +114,18 @@ const toTestRun = (row: typeof schema.testRuns.$inferSelect): TestRun => ({
 });
 
 const toCodeReview = (row: typeof schema.codeReviewComments.$inferSelect): CodeReviewComment => ({
-  ...row,
+  id: row.id,
+  boardId: row.boardId,
+  globId: row.globId,
+  prNumber: row.prNumber,
+  externalId: row.externalId,
   kind: oneOf(CODE_REVIEW_KINDS, row.kind),
+  author: row.author,
+  commitSha: row.commitSha,
+  path: row.path,
+  line: row.line,
+  body: row.body,
+  url: row.url,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
@@ -244,6 +254,11 @@ export class PgStore implements Store {
       getGlob: async (id) => {
         const [row] = await t.select({ data: schema.globs.data }).from(schema.globs).where(eq(schema.globs.id, id));
         return row?.data ?? null;
+      },
+      getGlobs: async (ids) => {
+        if (ids.length === 0) return [];
+        const rows = await t.select({ data: schema.globs.data }).from(schema.globs).where(inArray(schema.globs.id, [...new Set(ids)]));
+        return rows.map((r) => r.data);
       },
       insertGlob: async (glob, creationKey) => {
         const rows = await t
@@ -656,11 +671,23 @@ export class PgStore implements Store {
       },
       saveGlobPresence: async (rows) => {
         const g = schema.globEnvironments;
-        // Sequential: a transaction holds a single connection.
-        for (const p of rows) {
-          const row = presenceRow(p);
-          await t.insert(g).values(row).onConflictDoUpdate({ target: [g.globId, g.environment], set: row });
-        }
+        // One statement; a key given twice keeps its last row (one upsert can't touch a row twice).
+        const byKey = new Map(rows.map((p) => [`${p.globId}:${p.environment}`, presenceRow(p)]));
+        if (byKey.size === 0) return;
+        await t
+          .insert(g)
+          .values([...byKey.values()])
+          .onConflictDoUpdate({
+            target: [g.globId, g.environment],
+            set: {
+              boardId: sql`excluded.board_id`,
+              mergeSha: sql`excluded.merge_sha`,
+              contained: sql`excluded.contained`,
+              checkedSha: sql`excluded.checked_sha`,
+              checkedAt: sql`excluded.checked_at`,
+              since: sql`excluded.since`,
+            },
+          });
       },
       lockEnvironment: async (boardId, environment) => {
         await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`environments:${String(boardId)}:${environment}`}))`);
@@ -712,14 +739,21 @@ export class PgStore implements Store {
               line: sql`excluded.line`,
               updatedAt: sql`excluded.updated_at`,
             },
-            // An edit replaces the stored copy unless that is newer (a late redelivery), and only when it differs.
-            setWhere: sql`${c.updatedAt} <= excluded.updated_at and (${c.kind}, ${c.body}, ${c.url}, ${c.commitSha}, ${c.path}, ${c.line}, ${c.updatedAt}) is distinct from (excluded.kind, excluded.body, excluded.url, excluded.commit_sha, excluded.path, excluded.line, excluded.updated_at)`,
+            // An edit replaces the stored copy unless that is newer (a late redelivery) or was deleted, and only when it
+            // differs.
+            setWhere: sql`${c.deletedAt} is null and ${c.updatedAt} <= excluded.updated_at and (${c.kind}, ${c.body}, ${c.url}, ${c.commitSha}, ${c.path}, ${c.line}, ${c.updatedAt}) is distinct from (excluded.kind, excluded.body, excluded.url, excluded.commit_sha, excluded.path, excluded.line, excluded.updated_at)`,
           })
           .returning({ id: c.id });
         return rows.length === 1;
       },
-      deleteCodeReviewComment: async (externalId) => {
-        const [row] = await t.delete(schema.codeReviewComments).where(eq(schema.codeReviewComments.externalId, externalId)).returning();
+      deleteCodeReviewComment: async (externalId, at) => {
+        const c = schema.codeReviewComments;
+        // A tombstone, not a delete: a late redelivery of the item must not store it again.
+        const [row] = await t
+          .update(c)
+          .set({ deletedAt: new Date(at) })
+          .where(and(eq(c.externalId, externalId), isNull(c.deletedAt)))
+          .returning();
         return row === undefined ? null : toCodeReview(row);
       },
       listCodeReviewComments: async (boardId, globIds) => {
@@ -728,7 +762,7 @@ export class PgStore implements Store {
         const rows = await t
           .select()
           .from(c)
-          .where(and(eq(c.boardId, boardId), inArray(c.globId, [...globIds])))
+          .where(and(eq(c.boardId, boardId), inArray(c.globId, [...globIds]), isNull(c.deletedAt)))
           .orderBy(asc(c.createdAt), asc(c.id));
         return rows.map(toCodeReview);
       },

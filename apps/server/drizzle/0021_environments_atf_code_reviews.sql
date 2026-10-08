@@ -15,9 +15,12 @@ CREATE TABLE IF NOT EXISTS "code_review_comments" (
 	"url" text,
 	"created_at" timestamp with time zone NOT NULL,
 	"updated_at" timestamp with time zone NOT NULL,
+	"deleted_at" timestamp with time zone,
 	CONSTRAINT "code_review_comments_board_id_boards_id_fk" FOREIGN KEY ("board_id") REFERENCES "public"."boards"("id") ON DELETE cascade ON UPDATE no action
 );
 --> statement-breakpoint
+-- An earlier draft of this migration created the table without its tombstone column.
+ALTER TABLE "code_review_comments" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "environment_deploys" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"board_id" integer NOT NULL,

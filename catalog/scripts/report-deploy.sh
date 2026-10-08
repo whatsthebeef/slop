@@ -16,21 +16,22 @@
 #
 # What it sends, and where it comes from (set the SLOP_* variables to override):
 #   repo         SLOP_REPO, else the source repository URL (owner/name)
-#   sha          SLOP_SHA, else CODEBUILD_RESOLVED_SOURCE_VERSION, else git rev-parse HEAD
+#   sha          SLOP_SHA, else CODEBUILD_RESOLVED_SOURCE_VERSION, else git rev-parse HEAD (the first that is a
+#                commit SHA: a CodePipeline source is an artifact ARN, not a commit)
 #   ref          SLOP_REF (optional: the branch or tag deployed)
 #   url          CODEBUILD_BUILD_URL (optional: a link to this run)
 #
-# A failed report never fails the pipeline.
+# A failed report never fails the pipeline: every problem is a warning and the script exits 0.
 set -euo pipefail
 
 env="${1:-${SLOP_ENVIRONMENT:-}}"
-[[ -n "$env" ]] || { echo "Usage: .sstor/report-deploy.sh <environment> [succeeded|failed]" >&2; exit 2; }
+[[ -n "$env" ]] || { echo "report-deploy: usage: .sstor/report-deploy.sh <environment> [succeeded|failed]. Not reported." >&2; exit 0; }
 
 status="${2:-}"
 if [[ -z "$status" ]]; then
   if [[ "${CODEBUILD_BUILD_SUCCEEDING:-1}" == "1" ]]; then status=succeeded; else status=failed; fi
 fi
-[[ "$status" == succeeded || "$status" == failed ]] || { echo "status must be succeeded or failed, not $status" >&2; exit 2; }
+[[ "$status" == succeeded || "$status" == failed ]] || { echo "report-deploy: status must be succeeded or failed, not $status. Not reported." >&2; exit 0; }
 
 repo_of() {
   # https://github.com/owner/name(.git) or git@github.com:owner/name(.git) -> owner/name
@@ -38,17 +39,25 @@ repo_of() {
 }
 repo="${SLOP_REPO:-}"
 [[ -n "$repo" ]] || repo="$(repo_of "${CODEBUILD_SOURCE_REPO_URL:-$(git remote get-url origin 2>/dev/null || true)}")"
-sha="${SLOP_SHA:-${CODEBUILD_RESOLVED_SOURCE_VERSION:-$(git rev-parse HEAD 2>/dev/null || true)}}"
+is_sha() { [[ "$1" =~ ^[0-9a-fA-F]{7,40}$ ]]; }
+sha=""
+for candidate in "${SLOP_SHA:-}" "${CODEBUILD_RESOLVED_SOURCE_VERSION:-}" "$(git rev-parse HEAD 2>/dev/null || true)"; do
+  [[ -z "$candidate" ]] && continue
+  if is_sha "$candidate"; then sha="$candidate"; break; fi
+  echo "report-deploy: '$candidate' isn't a commit SHA (e.g. a CodePipeline artifact); trying the next source" >&2
+done
 
 if [[ -z "$repo" || -z "$sha" ]]; then
-  echo "report-deploy: couldn't tell the repo or commit; set SLOP_REPO and SLOP_SHA. Not reported." >&2
+  echo "report-deploy: couldn't tell the repo or commit; set SLOP_REPO and SLOP_SHA (a commit SHA). Not reported." >&2
   exit 0
 fi
+command -v python3 >/dev/null 2>&1 || { echo "report-deploy: python3 isn't installed. Not reported." >&2; exit 0; }
+command -v aws >/dev/null 2>&1 || { echo "report-deploy: the AWS CLI isn't installed. Not reported." >&2; exit 0; }
 
-entries="$(mktemp)"
+entries="$(mktemp 2>/dev/null)" || { echo "report-deploy: couldn't create a temporary file. Not reported." >&2; exit 0; }
 trap 'rm -f "$entries"' EXIT
 # python3 builds the JSON, so no value needs shell quoting.
-REPORT_ENV="$env" REPORT_STATUS="$status" REPORT_REPO="$repo" REPORT_SHA="$sha" python3 - >"$entries" <<'PY'
+if ! REPORT_ENV="$env" REPORT_STATUS="$status" REPORT_REPO="$repo" REPORT_SHA="$sha" python3 - >"$entries" <<'PY'
 import json, os
 detail = {
     "repo": os.environ["REPORT_REPO"],
@@ -62,6 +71,10 @@ if os.environ.get("CODEBUILD_BUILD_URL", "").startswith("https://"):
     detail["url"] = os.environ["CODEBUILD_BUILD_URL"]
 print(json.dumps([{"Source": "slop.ci", "DetailType": "Slop Environment Deployed", "Detail": json.dumps(detail)}]))
 PY
+then
+  echo "report-deploy: couldn't build the event. Not reported." >&2
+  exit 0
+fi
 
 if aws events put-events --entries "file://$entries" --query 'FailedEntryCount' --output text | grep -qx 0; then
   echo "Reported to slop: $repo at $sha $status in $env"

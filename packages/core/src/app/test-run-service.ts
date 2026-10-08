@@ -118,11 +118,11 @@ export class TestRunService {
       for (const p of presences) commits.set(`${p.environment}:${p.checkedSha}`, { environment: p.environment, sha: p.checkedSha });
       const runs = await tx.listTestRuns(boardId, { globIds, commits: [...commits.values()] });
       if (runs.length === 0) return state;
-      const withBranchRuns = new Set(runs.flatMap((r) => (r.globId === null ? [] : [r.globId])));
+      // Only a branch run needs its glob (the PR head says whether the run is stale): read those in one go.
+      const withBranchRuns = [...new Set(runs.flatMap((r) => (r.globId === null ? [] : [r.globId])))];
+      const globs = new Map((await tx.getGlobs(withBranchRuns)).map((g) => [g.id, g]));
       for (const globId of globIds) {
-        // Only a branch run needs the glob (its PR head says whether the run is stale).
-        const glob = withBranchRuns.has(globId) ? await tx.getGlob(globId) : null;
-        const indicators = testRuns.atfIndicators({ id: globId, pr: glob?.pr ?? null }, runs, presences);
+        const indicators = testRuns.atfIndicators({ id: globId, pr: globs.get(globId)?.pr ?? null }, runs, presences);
         if (indicators.length > 0) state.set(globId, indicators);
       }
       return state;

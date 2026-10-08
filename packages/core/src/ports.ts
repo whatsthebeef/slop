@@ -40,6 +40,8 @@ export interface TestRunFilter {
 /** Store access inside one transaction. Glob writes are conditional on the glob's version. */
 export interface Tx {
   getGlob(id: string): Promise<Glob | null>;
+  /** The globs with these IDs, in no particular order (missing ones are left out). */
+  getGlobs(ids: readonly string[]): Promise<Glob[]>;
   /** Inserts a new glob; returns false if the ID already exists. */
   insertGlob(glob: Glob, creationKey: string | null): Promise<boolean>;
   /** Writes `glob` if the stored version is still `expectedVersion`; returns false otherwise. */
@@ -151,8 +153,11 @@ export interface Tx {
    * copy is newer. Returns whether anything changed.
    */
   upsertCodeReviewComment(comment: NewCodeReviewComment): Promise<boolean>;
-  /** Deletes a stored CodeRabbit item; returns it, or null when none was stored. */
-  deleteCodeReviewComment(externalId: string): Promise<CodeReviewComment | null>;
+  /**
+   * Marks a stored CodeRabbit item deleted at `at` (a tombstone: it is no longer listed, and a later upsert of the
+   * same external ID changes nothing). Returns it, or null when none was stored or it was already deleted.
+   */
+  deleteCodeReviewComment(externalId: string, at: string): Promise<CodeReviewComment | null>;
   /** The board's stored CodeRabbit items on these globs, oldest first. */
   listCodeReviewComments(boardId: number, globIds: readonly string[]): Promise<CodeReviewComment[]>;
 

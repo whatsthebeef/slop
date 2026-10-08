@@ -2,6 +2,7 @@ import { BoardService, DeployService, EnvironmentService, GlobService, TestRunSe
 import type { Board, Effect, Glob } from '@slop/core';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { PgStore } from '../src/db/store.js';
 import { deployCallbackUrl, deployExecutors } from '../src/deploy-executors.js';
 import type { Deployer, DeployJob } from '../src/deployer.js';
@@ -398,7 +399,10 @@ describe('deploy results and executors', () => {
     // The card shows the environment's latest run.
     expect(state).toMatchObject({ atf: { s9f2: [{ scope: 'environment', environment: 'prod', failing: false }] } });
     const view = await app.request('/api/globs/s9f2/tests');
-    expect(await view.json()).toMatchObject({ value: [{ scope: 'environment' }, { scope: 'environment' }] });
+    const listed = z.object({ value: z.array(z.object({ id: z.number(), scope: z.string() })) }).parse(await view.json());
+    expect(listed.value.map((r) => r.scope)).toEqual(['environment', 'environment']);
+    // Each run carries its own ID (the glob view keys its rows by it).
+    expect(new Set(listed.value.map((r) => r.id)).size).toBe(2);
     expect((await app.request('/api/globs/s9f2/tests', { headers: { 'x-test-email': 'stranger@example.com' } })).status).toBe(403);
   });
 

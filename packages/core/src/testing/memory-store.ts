@@ -39,6 +39,8 @@ interface State {
   globPresence: Map<string, GlobPresence>;
   testRuns: TestRun[];
   codeReviews: CodeReviewComment[];
+  /** External IDs of CodeRabbit items deleted on the code host (tombstones). */
+  deletedCodeReviews: string[];
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -67,6 +69,7 @@ const clone = (state: State): State => ({
   globPresence: new Map(state.globPresence),
   testRuns: [...state.testRuns],
   codeReviews: [...state.codeReviews],
+  deletedCodeReviews: [...state.deletedCodeReviews],
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -97,6 +100,7 @@ export class MemoryStore implements Store {
     globPresence: new Map(),
     testRuns: [],
     codeReviews: [],
+    deletedCodeReviews: [],
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -111,6 +115,7 @@ export class MemoryStore implements Store {
   private tx(s: State): Tx {
     return {
       getGlob: (id) => Promise.resolve(s.globs.get(id)?.glob ?? null),
+      getGlobs: (ids) => Promise.resolve([...new Set(ids)].flatMap((id) => s.globs.get(id)?.glob ?? [])),
       insertGlob: (glob, creationKey) => {
         if (s.globs.has(glob.id)) return Promise.resolve(false);
         s.globs.set(glob.id, { glob, creationKey });
@@ -374,6 +379,7 @@ export class MemoryStore implements Store {
           ),
         ),
       upsertCodeReviewComment: (comment) => {
+        if (s.deletedCodeReviews.includes(comment.externalId)) return Promise.resolve(false);
         const stored = s.codeReviews.find((c) => c.externalId === comment.externalId);
         if (stored === undefined) {
           s.codeReviews.push({ ...comment, id: this.nextRowId++ });
@@ -387,7 +393,9 @@ export class MemoryStore implements Store {
       },
       deleteCodeReviewComment: (externalId) => {
         const stored = s.codeReviews.find((c) => c.externalId === externalId) ?? null;
+        if (stored === null) return Promise.resolve(null);
         s.codeReviews = s.codeReviews.filter((c) => c.externalId !== externalId);
+        s.deletedCodeReviews.push(externalId);
         return Promise.resolve(stored);
       },
       listCodeReviewComments: (boardId, globIds) =>

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { CodeReviewService, FindingsService, GlobService } from '@slop/core';
 import type { Board, Result } from '@slop/core';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import * as schema from '../src/db/schema.js';
@@ -240,7 +240,9 @@ describe('GitHub webhook deliveries', () => {
       ...top,
       [key]: { ...record.parse(payload[key]), ...patch },
     });
-    const storedRows = () => database.db.select().from(schema.codeReviewComments).where(eq(schema.codeReviewComments.globId, globId)).orderBy(schema.codeReviewComments.id);
+    const c = schema.codeReviewComments;
+    /** The glob's stored items, without tombstones. */
+    const storedRows = () => database.db.select().from(c).where(and(eq(c.globId, globId), isNull(c.deletedAt))).orderBy(c.id);
     const setPr = async (number: number, prs: { number: number }[] = []) => {
       const glob = await current();
       await database.db
@@ -275,6 +277,14 @@ describe('GitHub webhook deliveries', () => {
 
       await handle({ id: id(), event: 'pull_request_review_comment', payload: { ...created, action: 'deleted' } });
       expect(await storedRows()).toEqual([]);
+      const [tombstone] = await database.db.select().from(c).where(eq(c.externalId, 'coderabbit:review_comment:2100000101'));
+      expect(tombstone?.deletedAt).toBeInstanceOf(Date);
+
+      // A late redelivery of the creation or the edit doesn't bring a deleted comment back.
+      await handle({ id: id(), event: 'pull_request_review_comment', payload: edited });
+      await handle({ id: id(), event: 'pull_request_review_comment', payload: created });
+      expect(await storedRows()).toEqual([]);
+      expect(await reviewSources()).toHaveLength(1);
     });
 
     it('stores a submitted review with its link, and the summary comment found by its PR number', async () => {
@@ -309,6 +319,22 @@ describe('GitHub webhook deliveries', () => {
       expect(rows[1]?.body).toMatch(/Updated\.$/);
     });
 
+    it('forgets a summary CodeRabbit deleted, and keeps a review with no body for its link (s15f10)', async () => {
+      await setPr(7301);
+      const summary = patched(patched(fixture('issue-comment-summary'), 'issue', { number: 7301 }), 'comment', { id: 3400007301 });
+      await handle({ id: id(), event: 'issue_comment', payload: summary });
+      const review = patched(patched(fixture('review-submitted'), 'pull_request', { number: 7301 }), 'review', { id: 3300007301, body: null });
+      await handle({ id: id(), event: 'pull_request_review', payload: review });
+      expect((await storedRows()).map((r) => [r.kind, r.body])).toEqual([
+        ['summary', expect.stringContaining('## Walkthrough') as unknown],
+        ['review', ''],
+      ]);
+      expect((await storedRows())[1]?.url).toMatch(/^https:\/\/github\.com\//);
+
+      await handle({ id: id(), event: 'issue_comment', payload: { ...summary, action: 'deleted' } });
+      expect((await storedRows()).map((r) => r.kind)).toEqual(['review']);
+    });
+
     it("finds a super's glob by a PR it merged with Merge and continue", async () => {
       await setPr(7102, [{ number: 7101 }]);
       // Comment IDs are unique on GitHub; each test uses its own.
@@ -334,6 +360,25 @@ describe('GitHub webhook deliveries', () => {
       expect(await handle(delivery)).toBe(true);
       expect(await handle(delivery)).toBe(false);
       expect(await storedRows()).toHaveLength(1);
+    });
+
+    it('ignores comments by deleted (ghost) accounts and payloads it cannot read, without failing the delivery (s15f10)', async () => {
+      await setPr(7401);
+      const summary = patched(patched(fixture('issue-comment-summary'), 'issue', { number: 7401 }), 'comment', { id: 3400007401 });
+      const ghost = patched(summary, 'comment', { user: null, body: undefined });
+      expect(await handle({ id: id(), event: 'issue_comment', payload: ghost })).toBe(true);
+      const review = patched(fixture('review-submitted'), 'review', { user: null });
+      expect(await handle({ id: id(), event: 'pull_request_review', payload: review })).toBe(true);
+      const inline = patched(fixture('review-comment-created'), 'comment', { user: null, body: null });
+      expect(await handle({ id: id(), event: 'pull_request_review_comment', payload: inline })).toBe(true);
+      // CodeRabbit's own delivery in a shape slop can't read is ignored too, not failed.
+      expect(await handle({ id: id(), event: 'issue_comment', payload: patched(summary, 'issue', { number: 'seven' }) })).toBe(true);
+      expect(await storedRows()).toEqual([]);
+      expect(await reviewSources()).toEqual([]);
+
+      // A CodeRabbit comment with no body is stored empty.
+      expect(await handle({ id: id(), event: 'issue_comment', payload: patched(summary, 'comment', { body: null }) })).toBe(true);
+      expect((await storedRows()).map((r) => [r.kind, r.body])).toEqual([['comment', '']]);
     });
   });
 

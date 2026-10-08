@@ -153,8 +153,13 @@ describe('CodeRabbit reviews stored verbatim', () => {
     expect(await listed('s1t2')).toEqual([
       expect.objectContaining({ kind: 'summary', body: 'Walkthrough', createdAt: NOW, updatedAt: '2026-10-05T13:00:00.000Z' }),
     ]);
-    expect(await store.transaction((tx) => tx.deleteCodeReviewComment('coderabbit:issue_comment:1'))).toMatchObject({ globId: 's1t2' });
-    expect(await store.transaction((tx) => tx.deleteCodeReviewComment('coderabbit:issue_comment:1'))).toBeNull();
+    expect(await store.transaction((tx) => tx.deleteCodeReviewComment('coderabbit:issue_comment:1', '2026-10-05T13:00:00.000Z'))).toMatchObject({ globId: 's1t2' });
+    expect(await store.transaction((tx) => tx.deleteCodeReviewComment('coderabbit:issue_comment:1', '2026-10-05T13:00:00.000Z'))).toBeNull();
+    expect(await listed('s1t2')).toEqual([]);
+    // The tombstone holds: a late redelivery, older, equal or newer, doesn't store it again.
+    for (const copy of [first, later, { ...later, body: 'Walkthrough v2', updatedAt: '2026-10-05T14:00:00.000Z' }]) {
+      expect(await store.transaction((tx) => tx.upsertCodeReviewComment(copy))).toBe(false);
+    }
     expect(await listed('s1t2')).toEqual([]);
   });
 

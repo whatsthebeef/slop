@@ -125,8 +125,9 @@ export class EnvironmentService {
       await tx.lockEnvironment(boardId, environment);
       if ((await tx.latestEnvironmentDeploy(boardId, environment))?.sha !== sha) return null;
       // Globs deleted while the code host was asked are left out; their rows went with them.
-      const live: Containment[] = [];
-      for (const r of results) if ((await tx.getGlob(r.globId))?.boardId === boardId) live.push(r);
+      const globs = await tx.getGlobs(results.map((r) => r.globId));
+      const onBoard = new Set(globs.filter((g) => g.boardId === boardId).map((g) => g.id));
+      const live = results.filter((r) => onBoard.has(r.globId));
       const previous = await tx.listGlobPresence(boardId, { environment, globIds: live.map((r) => r.globId) });
       const change = environments.containmentChange(previous, live, { boardId, environment, sha }, now);
       await tx.saveGlobPresence(change.writes);
@@ -150,11 +151,9 @@ export class EnvironmentService {
       const board = await tx.getBoard(boardId);
       if (board === null || globIds.length === 0) return state;
       const presences = await tx.listGlobPresence(boardId, { globIds, contained: true });
-      for (const globId of new Set(presences.map((p) => p.globId))) {
-        const glob = await tx.getGlob(globId);
-        if (glob === null) continue;
+      for (const glob of await tx.getGlobs([...new Set(presences.map((p) => p.globId))])) {
         const indicators = environments.environmentIndicators(board, glob, presences);
-        if (indicators.length > 0) state.set(globId, indicators);
+        if (indicators.length > 0) state.set(glob.id, indicators);
       }
       return state;
     });
