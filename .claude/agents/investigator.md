@@ -124,3 +124,4 @@ Write one or more **high-level proposals** to the output path. If only one appro
 - **Don't over-engineer**: plan only what this glob needs. No speculative abstractions.
 - **Write to the output file**: the plan is pushed to slop as the glob's implementation plan, and the developer may edit it before the next phase.
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
+

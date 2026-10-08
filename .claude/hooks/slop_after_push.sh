@@ -10,3 +10,4 @@ printf '%s' "$command" | python3 -c 'import re,sys; sys.exit(0 if re.search(r"(^
 cat <<'EOF'
 {"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"You just pushed. If this glob is a super, update .reviews/<id>-postplan.md and send it with put_artifact (kind: postplan, commitSha: the pushed HEAD), then report the push's deploy state from get_glob's deploys if the glob has an environment."}}
 EOF
+

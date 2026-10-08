@@ -66,3 +66,4 @@ Full test runs and coverage are the **tester**'s job; don't run the full suite.
 - If a planned step is ambiguous, implement the most reasonable interpretation and note the assumption in the summary.
 - If a test you didn't change starts failing, check whether your change caused it. If so, fix it; if not, note it.
 - If a blocker prevents implementation, stop and return a clear description of it.
+

@@ -225,6 +225,7 @@ There are no board transitions to make: slop learns about pushes, the ready PR a
 Supers are pairing sessions between a developer and the PO. The developer drives; you do not run the phases.
 
 - On start (interactive only), call `pick_up` as above, then `get_context`, fetch the board knowledge, and write `.reviews/<id>-context.md` as in Phase 1 steps 1–4. Supers use the **postplan** rather than plan.md as the living record; until the first postplan exists, `get_context` gives plan.md as the starting intent. When the glob already has work on it, also fetch its decision log (`get_artifact(id, 'implementation_plan')`) so you know why earlier choices were made; `get_context` only lists it.
+- **plan.md:** when the glob's spec needs rewriting (the intent changed, the PO and developer agreed a new scope), read it with `get_plan` and write the new text with `save_plan(id, version, content)`, passing the plan version you read. Never put the spec in `update_glob`'s `summary`: that leaves no plan history.
 - **Environment:** note the glob's `environment` from `get_glob` in the context file and tell the developer which environment the branch deploys to (or that none is set; they choose one with `sstor --glob <id> --env <name>`, `slop pick-up <id> --env <name>` or the glob view). Never change it yourself.
 - Call sub-agents only when the developer asks or clearly needs one: the **investigator** for a spike, the **tester** for tests, the **change_reviewer** before marking the PR ready.
 - **Postplan:** keep `.reviews/<id>-postplan.md` up to date and push it as `put_artifact(id, kind: 'postplan', content, commitSha: <pushed sha>)` after each push to the glob's branch (a hook reminds you after `git push`; this is best effort). Build it from the session conversation and `git diff origin/<base>...HEAD` (after `git fetch origin <base>`; never the local `<base>`, which can be stale). Use this structure:
@@ -292,3 +293,30 @@ When CI fails on a commit whose local checks passed (Phase 6 full checks, a loca
 - Check CI on `origin/<base>` at the commit you merged (`git log origin/<base> -1` after `git fetch origin <base>`). If the same check fails there, the failure is inherited from a red base. Don't fix it in this glob unless it is the one glob fixing the base (see Red base branch under Super mode). Record "inherited from red `<base>` at `<sha>`" in the review document, or in an `Assumptions` attachment if unattended.
 - If `<base>` is green, the failure is the glob's own. Find the CI job's command, run that exact command locally, fix the failure, and say in the review document why the local checks missed it.
 - If CI runs a check that the board's build doc does not list, or runs it differently (other flags, other environment), submit a `gotcha` learning that names the check, so the build doc can be corrected.
+
+### Overlapping side globs
+
+In every mode, not only in supers, check for overlap before creating side globs (several at once, or one while others are in flight):
+
+- Compare the files and functions each new glob's summary names with the other new globs' summaries. Also compare them with the branches of in-flight globs (`git diff origin/<base>...origin/<id>` after `git fetch`).
+- If two would edit the same code, fold them into one glob. Otherwise create the later one with "start only after `<id>` has merged" in its summary, and don't start it until that glob has merged.
+- Noticing that two globs "touch the same code" is the signal to apply this rule. Don't create them side by side anyway.
+
+### Routine runs
+
+Routine runs too often end with a person starting the run again or taking it over, often within the first hour. To make each unattended run either finish or hand over cleanly:
+
+- **Leave a trail early.** Upload the Phase 2 plan as soon as it exists. Add an `Assumptions` attachment before Phase 3. A restarted run or a person can then resume with `--from` instead of starting from nothing.
+- **Checks failing after slop updates the branch** (it merged `<base>` or re-ran checks). First rule out an inherited failure as the catalog describes. If it is not inherited, the failure comes from the merge with `<base>`.
+  - Fetch the branch again (`git fetch origin <id> && git checkout -B <id> origin/<id>`).
+  - Run the failing check's exact CI command locally.
+  - Fix it in this glob, and push after the pre-push check.
+  - Don't end the run with the checks still red.
+- **Never end a run silently.** If you can't finish, call `report_failure` with:
+  - the phase reached;
+  - the failing check or blocker, with its first error;
+  - what you tried.
+
+  The person who picks it up should not have to start again to find out.
+- **Submit an `agent-behaviour` learning** when a run needs a person, naming what would have let it finish.
+

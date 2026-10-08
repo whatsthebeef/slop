@@ -138,3 +138,4 @@ Include a brief summary.
 - **Accumulate the document**: each round appends; never overwrite earlier rounds.
 - **No code modifications in standalone mode.**
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
+
