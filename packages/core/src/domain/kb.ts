@@ -383,14 +383,24 @@ export interface ProposedDocument {
   readonly content: string;
 }
 
+/** Who acted on a decision: an agent signed in as the admin, recorded inside the outcome (no column of its own). */
+export type KbVia = 'agent';
+
 /**
  * What an approval did: kept the statement as an approved learning (served by `get_conventions`),
  * or wrote a document or agent-set file, recording the version it created.
  */
 export type KbOutcome =
-  | { readonly kind: 'learning' }
+  | { readonly kind: 'learning'; readonly via?: KbVia }
+  | {
+      /** A rejection made by an agent (a person's rejection leaves the outcome empty). */
+      readonly kind: 'rejected';
+      readonly via: KbVia;
+    }
   | {
       readonly kind: 'applied';
+      /** Set when an agent made the decision on the admin's behalf (MCP `decide_kb_item`). */
+      readonly via?: KbVia;
       readonly target: KnowledgeKind;
       readonly name: string;
       readonly version: number;
