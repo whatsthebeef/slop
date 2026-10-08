@@ -84,6 +84,8 @@ export const runInstructions = (
   glob: { id: string; title: string },
   runId: string,
   repo: string | null,
+  /** The glob's PR is already ready for review (a retried auto-fix): the run watches it instead of doing the work again. */
+  prReady = false,
 ): string =>
   [
     `Slop glob ${glob.id}: ${glob.title}`,
@@ -94,9 +96,17 @@ export const runInstructions = (
           `Repository: ${repo}. Work in that repository's checkout. If this session doesn't have it, or can't push to it, call slop's report_failure with the run ID saying so (the routine's environment needs ${repo} and the Claude GitHub App installed on it); don't work in another repository.`,
         ]),
     '',
-    `Work on the glob's branch, ${glob.id}, which already exists on origin with an open draft PR: run \`git fetch origin ${glob.id} && git checkout -B ${glob.id} origin/${glob.id}\` first. Push only to ${glob.id} (\`git push origin ${glob.id}\`); never create or push a claude/ branch, and never open a new PR.`,
+    `Work on the glob's branch, ${glob.id}, which already exists on origin with an open ${prReady ? 'PR' : 'draft PR'}: run \`git fetch origin ${glob.id} && git checkout -B ${glob.id} origin/${glob.id}\` first. Push only to ${glob.id} (\`git push origin ${glob.id}\`); never create or push a claude/ branch, and never open a new PR.`,
     '',
-    `Run /run-glob ${glob.id} --run ${runId}. If that command is not available, read .claude/agents/orchestrator.md and follow it for glob ${glob.id} in unattended mode with run ID ${runId}.`,
-    "Start by calling slop's get_glob and get_context for the glob, passing the run ID.",
-    `When the work is pushed, call slop's mark_ready for ${glob.id} with the run ID (do not use gh). If you cannot finish, call report_failure with the run ID.`,
+    ...(prReady
+      ? [
+          `The PR is already ready for review and its auto-fix ended without fixing it. Don't run the phases or call mark_ready: read .claude/agents/orchestrator.md and follow its "Auto-fix (watching the PR)" section for glob ${glob.id} with run ID ${runId}.`,
+          "Start by calling slop's get_glob for the glob, passing the run ID: its headChecks say what failed on the PR's head.",
+          'If you cannot fix it, call report_failure with the run ID.',
+        ]
+      : [
+          `Run /run-glob ${glob.id} --run ${runId}. If that command is not available, read .claude/agents/orchestrator.md and follow it for glob ${glob.id} in unattended mode with run ID ${runId}.`,
+          "Start by calling slop's get_glob and get_context for the glob, passing the run ID.",
+          `When the work is pushed, call slop's mark_ready for ${glob.id} with the run ID (do not use gh). If you cannot finish, call report_failure with the run ID.`,
+        ]),
   ].join('\n');

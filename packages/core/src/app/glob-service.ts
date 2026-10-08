@@ -187,6 +187,10 @@ export class GlobService {
     );
   }
 
+  retryAutofix(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.retryAutofix(glob, ctx));
+  }
+
   retrigger(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx) => machine.retrigger(glob, ctx));
   }

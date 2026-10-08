@@ -99,6 +99,10 @@ export interface CodeHost {
    * error lines from its log. Explaining is best effort: a failure with no lines still names the check.
    */
   commitChecks(repo: Repo, sha: string): Promise<{ state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }>;
+  /** The head's latest check runs that were cancelled and their end times: a newer run normally replaces them. */
+  cancelledChecks(repo: Repo, sha: string): Promise<{ id: number; completedAt: string | null }[]>;
+  /** Asks the app that owns a check run to run it again; best effort (another app's run can't be re-requested). */
+  rerequestCheck(repo: Repo, checkRunId: number): Promise<void>;
   /** Merges the base branch into the PR's branch (GitHub's update-branch) when it's behind, at exactly `sha`. */
   updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'>;
   /** Squash-merges at exactly `sha` as `<id>: <title>`, or updates a branch that is behind. */

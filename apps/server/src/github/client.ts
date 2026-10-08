@@ -4,7 +4,7 @@ import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
 import type { BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
-import { readCommitChecks } from './commit-checks.js';
+import { readCancelledChecks, readCommitChecks } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
 
@@ -279,7 +279,8 @@ export class GitHub implements CodeHost, CommitGraph {
       filter: 'latest',
     });
     const latest = data.check_runs
-      .filter((run) => run.status === 'completed' && run.head_sha === sha)
+      // A cancelled run has no verdict: a newer run replaces it, and its webhook follows.
+      .filter((run) => run.status === 'completed' && run.conclusion !== 'cancelled' && run.head_sha === sha)
       .sort((a, b) => (b.completed_at ?? '').localeCompare(a.completed_at ?? ''))[0];
     return latest === undefined ? null : { sha, passed: latest.conclusion === 'success' };
   }
@@ -298,6 +299,21 @@ export class GitHub implements CodeHost, CommitGraph {
   async commitChecks(repo: Repo, sha: string): Promise<{ state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }> {
     const gh = await this.octokit(repo);
     return readCommitChecks((route, params) => gh.request(route, params), repo, sha);
+  }
+
+  async cancelledChecks(repo: Repo, sha: string): Promise<{ id: number; completedAt: string | null }[]> {
+    const gh = await this.octokit(repo);
+    return readCancelledChecks((route, params) => gh.request(route, params), repo, sha);
+  }
+
+  async rerequestCheck(repo: Repo, checkRunId: number): Promise<void> {
+    const gh = await this.octokit(repo);
+    try {
+      await gh.request('POST /repos/{owner}/{repo}/check-runs/{check_run_id}/rerequest', { owner: repo.owner, repo: repo.name, check_run_id: checkRunId });
+    } catch (error) {
+      // Only the app that created a check run can ask for it again; another app's run is left to its own retry.
+      if (!isStatus(error, 403, 404, 422)) throw error;
+    }
   }
 
   async updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'> {

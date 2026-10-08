@@ -79,7 +79,7 @@ describe('search store', () => {
   it('applies its migration twice without error', async () => {
     const folder = new URL('../drizzle', import.meta.url).pathname;
     // The migrator skips a recorded migration, so run the file's statements again by hand: they must be idempotent.
-    const statements = (await readFile(`${folder}/0024_search_store.sql`, 'utf8')).split('--> statement-breakpoint');
+    const statements = (await readFile(`${folder}/0025_search_store.sql`, 'utf8')).split('--> statement-breakpoint');
     for (const statement of statements) await database.db.execute(sql.raw(statement));
     await runMigrations(url, folder);
     expect(await count(schema.knowledgeItems)).toBeGreaterThanOrEqual(0);
