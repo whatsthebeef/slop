@@ -189,7 +189,9 @@ export type Hint =
   | { readonly kind: 'glob.findings'; readonly boardId: number; readonly globId: string }
   | { readonly kind: 'board.changed'; readonly boardId: number }
   /** The board's KB items, documents or agent-set files changed (the board itself only on an agent-set version bump). */
-  | { readonly kind: 'board.kb'; readonly boardId: number };
+  | { readonly kind: 'board.kb'; readonly boardId: number }
+  /** An integration's health changed (sent to every open board): the banner refetches it. */
+  | { readonly kind: 'board.health'; readonly boardId: number };
 
 /** Publishes small change hints to open boards after a commit. */
 export interface Notifier {

@@ -51,6 +51,8 @@ const schema = z.object({
     .string()
     .optional()
     .transform((v) => (v ?? '').split(',').map((k) => k.trim()).filter((k) => k !== '')),
+  /** The ngrok tunnel's domain (set by dev.sh): the server watches it and shows a banner when it is down. */
+  SLOP_TUNNEL_DOMAIN: z.string().optional(),
   BEDROCK_REGION: z.string().default('us-east-1'),
   /** Haiku 4.5 for intake and classification. */
   INTAKE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),

@@ -10,6 +10,11 @@ export class HintHub implements Notifier {
     for (const listener of this.listeners.get(hint.boardId) ?? []) listener(hint);
   }
 
+  /** A hint for every open board, for things that aren't a board's own (an integration's health). */
+  broadcast(kind: 'board.health'): void {
+    for (const boardId of this.listeners.keys()) this.publish({ kind, boardId });
+  }
+
   subscribe(boardId: number, listener: Listener): () => void {
     const set = this.listeners.get(boardId) ?? new Set<Listener>();
     set.add(listener);

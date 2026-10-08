@@ -1,11 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { api, RequestError } from './api';
+import { api, healthKey, RequestError } from './api';
 import type { GlobView } from './api';
 
 interface Hint {
-  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'glob.deploys' | 'glob.findings' | 'board.changed' | 'board.kb';
+  readonly kind: 'glob.changed' | 'glob.deleted' | 'glob.artifacts' | 'glob.deploys' | 'glob.findings' | 'board.changed' | 'board.kb' | 'board.health';
   readonly globId?: string;
   readonly version?: number;
 }
@@ -134,6 +134,10 @@ export const useLiveBoard = (boardId: number): LiveState => {
     }
     // The board shows no KB data; the Knowledge page follows those hints itself.
     if (hint.kind === 'board.kb') return;
+    if (hint.kind === 'board.health') {
+      void client.invalidateQueries({ queryKey: healthKey });
+      return;
+    }
     const id = hint.globId;
     if (id === undefined) return;
     if (hint.kind === 'glob.deploys') {
