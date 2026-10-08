@@ -49,6 +49,7 @@ class FakeHost implements CodeHost {
   commentOnce = () => Promise.resolve('posted' as const);
   diffSummary = () => Promise.resolve(this.diff);
   readFile = () => Promise.resolve(null);
+  listFiles = () => Promise.resolve([]);
   headOf = () => Promise.resolve(null);
   commitChecks = () => Promise.resolve({ state: 'passed' as const, failure: null });
   updateBranch = () => Promise.resolve('up_to_date' as const);

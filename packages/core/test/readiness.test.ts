@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { queuedRunNotice, readiness, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
+import { queuedRunNotice, readiness, runsClaudeAction, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
 import type { ReadinessFacts } from '../src/domain/readiness.js';
 import { NOW, board, glob, run } from './fixtures.js';
 
@@ -15,6 +15,7 @@ const ready: ReadinessFacts = {
   repoConnected: true,
   installUrl: null,
   subGateWorkflow: true,
+  claudeWorkflow: true,
   committedAgentSetVersion: 3,
   hasBuildDoc: true,
   ticks: { routines: true, routine_repo: true, claude_app: true },
@@ -23,6 +24,35 @@ const ready: ReadinessFacts = {
 };
 
 const stateOf = (facts: ReadinessFacts) => Object.fromEntries(readiness(facts).map((i) => [i.key, i.state]));
+
+describe('Claude workflow readiness', () => {
+  const item = (claudeWorkflow: boolean | null) => readiness({ ...ready, claudeWorkflow }).find((i) => i.key === 'claude_workflow');
+
+  it('passes when a workflow runs the Claude action', () => {
+    expect(item(true)).toMatchObject({ state: 'ok', manual: false });
+  });
+
+  it('fails with the fix when no workflow does', () => {
+    expect(item(false)).toMatchObject({ state: 'missing', title: 'Claude workflow on main' });
+    expect(item(false)?.detail).toBe(
+      'Add a Claude workflow: run /install-github-app in Claude Code for acme/app, or copy catalog/scripts/claude.yml to .github/workflows/ and add the CLAUDE_CODE_OAUTH_TOKEN secret',
+    );
+  });
+
+  it('is unknown when slop cannot read the repo', () => {
+    expect(item(null)).toMatchObject({ state: 'unknown' });
+  });
+
+  it('recognises only files that reference the action', () => {
+    expect(runsClaudeAction('steps:\n  - uses: anthropics/claude-code-action@v1\n')).toBe(true);
+    expect(runsClaudeAction('steps:\n  - uses: actions/checkout@v4\n')).toBe(false);
+  });
+
+  it('names the missing workflow when checks failed and the run has not reacted', () => {
+    const claudeApp = readiness({ ...ready, claudeWorkflow: false, unreactedCheckFailures: ['s1t1'] }).find((i) => i.key === 'claude_app');
+    expect(claudeApp?.detail).toMatch(/no Claude workflow/);
+  });
+});
 
 describe('board readiness', () => {
   it('is all ok for a board with everything set up', () => {
