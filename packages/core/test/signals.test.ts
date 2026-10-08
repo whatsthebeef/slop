@@ -511,6 +511,17 @@ describe('mined signals: threshold edges (s15f8)', () => {
     expect(measured(a, 'plan_edited_rerun')).toMatchObject({ figures: { affected: 1, eligible: 1 }, crosses: false });
   });
 
+  it('plan_edited_rerun treats plan.md v1 (creation or backfill) as the baseline, not an edit', () => {
+    const rerun = (globId: string, version: number) => [
+      event(globId, 'RunFailed', { runId: 'r1', reason: 'x' }),
+      event(globId, 'ArtifactAdded', { kind: 'plan', label: '', version }),
+      event(globId, 'RunTriggered', { runId: 'r2' }),
+    ];
+    const a = activity({ events: [...rerun('s1t1', 1), ...rerun('s1t2', 2)] });
+    expect(perGlob(a, 's1t1', 'plan_edited_rerun')).toEqual({ eligible: true, affected: false });
+    expect(perGlob(a, 's1t2', 'plan_edited_rerun')).toEqual({ eligible: true, affected: true });
+  });
+
   it('review_cap crosses at 3 globs and 30% of reviewed globs, not below', () => {
     const capped = globs(3).map((g) => artifact(g, 'local_review', { reviewStats: stats(2, 2) }));
     const fine = (n: number) => globs(n, 's1b').map((g) => artifact(g, 'local_review', { reviewStats: stats(1, 2) }));

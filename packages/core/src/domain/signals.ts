@@ -493,6 +493,9 @@ const planAmended = define({
     `Implementation plans keep needing heavy amendment after the investigator wrote them: ${String(m.figures.affected)} of ${String(m.figures.eligible)} globs with a plan ${WINDOW_WORDS}.`,
 });
 
+/** plan.md v1 (written at creation or backfilled from the summary) is the baseline, not an edit. */
+const isPlanBaseline = (e: DomainEvent): boolean => text(e, 'kind') === 'plan' && field(e, 'version') === 1;
+
 /** Per glob: whether a run ended (failed or superseded) and was run again, and whether the plan was edited in between. */
 const reruns = (activity: BoardActivity): Map<string, { edited: boolean; example: string | null }> => {
   const byGlob = new Map<string, DomainEvent[]>();
@@ -508,7 +511,7 @@ const reruns = (activity: BoardActivity): Map<string, { edited: boolean; example
         edit = null;
       } else if (ended && e.type === 'FieldsChanged' && field(e, 'summary') !== undefined) {
         edit ??= 'the plan summary';
-      } else if (ended && e.type === 'ArtifactAdded' && (text(e, 'kind') === 'plan' || text(e, 'kind') === 'attachment')) {
+      } else if (ended && e.type === 'ArtifactAdded' && !isPlanBaseline(e) && (text(e, 'kind') === 'plan' || text(e, 'kind') === 'attachment')) {
         edit ??= text(e, 'kind') === 'plan' ? 'plan.md' : 'an attachment';
       } else if (ended && e.type === 'RunTriggered' && field(e, 'fired') === undefined) {
         // The next run was queued: a rerun.
