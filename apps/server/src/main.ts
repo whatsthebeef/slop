@@ -19,6 +19,7 @@ import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
+import { mountArtifactUploads } from './http/artifact-upload.js';
 import { mountDeploys } from './http/deploys.js';
 import { mountWeb } from './http/web.js';
 import { mountReadiness } from './http/readiness.js';
@@ -225,6 +226,7 @@ app.get('/downloads/agent-set/:board', async (c) => {
     files: set.value.files.map((f) => ({ path: f.path, content: renderAgentSetFile(f.content, agentSetValues) })),
   });
 });
+mountArtifactUploads(app, { artifacts, globs, links });
 mountMcp(app, {
   auth,
   boards,

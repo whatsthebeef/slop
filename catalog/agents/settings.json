@@ -12,7 +12,8 @@
     "allow": [
       "mcp__slop__*",
       "mcp__claude_ai_Slop__*",
-      "Bash(git push origin s*)"
+      "Bash(git push origin s*)",
+      "Bash(slop put-artifact:*)"
     ],
     "deny": [
       "Bash(gh api:*)",
