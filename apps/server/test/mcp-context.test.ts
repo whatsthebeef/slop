@@ -164,6 +164,19 @@ describe('MCP get_context include and get_artifact', () => {
     expect((await latest())?.version).toBe(before + 1);
   });
 
+  it('save_plan saves plan.md conditional on the version read (s15f16)', async () => {
+    const save = (version: number, content: string) =>
+      client.callTool({ name: 'save_plan', arguments: { id: globId, version, content } });
+    expect((await save(0, '# Plan v1')).isError).not.toBe(true);
+    expect((await save(1, '# Plan v2')).isError).not.toBe(true);
+    const stale = await save(1, '# Stale');
+    expect(stale.isError).toBe(true);
+    expect(JSON.stringify(stale.content)).toContain('version_conflict');
+    const plans = await store.transaction((tx) => tx.artifactVersions(globId, 'plan', ''));
+    expect(plans.map((p) => [p.version, p.content])).toEqual([[1, '# Plan v1'], [2, '# Plan v2']]);
+    expect((await client.callTool({ name: 'save_plan', arguments: { id: globId, version: 2, content: '' } })).isError).toBe(true);
+  });
+
   it('get_artifact returns one artifact in full, or an error when there is none', async () => {
     expect(
       (await call('get_artifact', { id: globId, kind: 'implementation_plan' })).body.content,

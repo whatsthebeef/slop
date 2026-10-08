@@ -42,6 +42,8 @@ The matrix is a core invariant. Sub-to-same conversion is always valid.
 
 Labels only appear on a card once the glob is merged (Required, Added or Approved).
 
+**plan.md is created with the glob:** `create_glob` (MCP, REST, CLI `slop new`) stores plan.md v1 verbatim, from `plan` if given, else the summary as given, else the intake input, with provenance (human for REST, sessionator for MCP, and the actor). The summary is left as it is. Agents rewrite plan.md with `save_plan`, not `update_glob`. Globs created before this have no plan.md artifact until one is saved; `get_plan` and `get_context` show their summary as version 0.
+
 **Artifacts** (plan.md, postplan.md, local review.md, context attachments) live in slop as versioned records with glob ID, type, version, commit SHA where relevant, and provenance (human, sessionator, or model + prompt version). Binaries go to S3; the glob holds references.
 
 **Implementation plan:** the implementing tool (routine, sessionator or equivalent) generates an implementation plan as an artifact on the glob, with an amendments section. Edits to plan.md after triggering are allowed; the run simply continues, with no lock or special state.
@@ -168,12 +170,13 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | Tool | Input | Returns | Used by |
 | --- | --- | --- | --- |
 | `whoami` | — | user, boards, role per board | Sessionator, Claude app |
-| `create_glob` | board, input, idempotencyKey; optional title, summary, type, category, group, environment, links, autoTrigger | `{ id, version, branch, provisioning: none \| ok \| failed, status, type, category, group, environment, summary }` (same glob returned for a repeated key) | All |
+| `create_glob` | board, input, idempotencyKey; optional title, summary, plan, type, category, group, environment, links, autoTrigger | `{ id, version, branch, provisioning: none \| ok \| failed, status, type, category, group, environment, summary }` (same glob returned for a repeated key) | All |
 | `get_glob` | id | full glob: status, version, generation, fields, labels, PR, PRs merged with Merge and continue, current run (state, runId, owner, triggeredBy, started, last progress, cloud session ID and URL), run history, flags, artifact list, latest deploys (environment, commit, state, error, log link; super mode reports them after each push) | All |
 | `get_context` | id; optional include | assembled context bundle with citations: the plan in full, other artifacts listed (see Context assembly) | Routines, sessionator |
 | `get_artifact` | id, kind, optional label | one artifact's latest version in full | Agents |
 | `list_globs` | board; optional status, type, group, person | glob summaries | Claude app |
 | `update_glob` | id, version; optional title, summary, type, category, group, environment | updated glob | All |
+| `save_plan` | id, version (the plan version read; 0 when none is saved yet), content | the new plan.md version (`version_conflict` if plan.md has moved on); the same write as `PUT /globs/{id}/plan` | All |
 | `attach` | id, version, text or link, label | attachment reference | All |
 | `ingest_text` | board, text, title; optional glob id | communication id | Claude app |
 | `start_glob` | id, version | updated glob (same: `planning` → `implementing`) | Claude app |

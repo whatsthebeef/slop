@@ -97,6 +97,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         input: z.string().optional().describe('The request in free text; used for intake when no title is given'),
         title: z.string().min(1).optional(),
         summary: z.string().optional().describe('What the work is and why; becomes the start of plan.md'),
+        plan: z
+          .string()
+          .optional()
+          .describe('The full spec, stored verbatim as plan.md v1; without it plan.md v1 is the summary as given, else the input'),
         type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing)'),
         category: z.enum(CATEGORIES).optional(),
         group: z.string().optional(),
@@ -143,6 +147,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       const created = await globs.create(email, {
         boardId: input.board,
         ...fields,
+        plan: input.plan ?? input.summary ?? input.input ?? '',
+        planBy: 'sessionator',
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
       });
@@ -223,7 +229,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   server.registerTool(
     'update_glob',
     {
-      description: "Change a glob's title, summary, type, category, group or environment. Pass the version you read.",
+      description:
+        "Change a glob's title, summary, type, category, group or environment. Pass the version you read. The spec (plan.md) is not the summary: edit it with save_plan.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -524,6 +531,19 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     async ({ id, label, text, link }) =>
       reply(await artifacts.attach(email, id, { label, text: text ?? null, link: link ?? null }), (a) =>
         'ignored' in a ? a : { id: a.id, label: a.label, version: a.version },
+      ),
+  );
+
+  server.registerTool(
+    'save_plan',
+    {
+      description:
+        "Save a new version of the glob's plan.md (its spec), as the editor in the glob view does. Pass the plan version you read (get_plan or get_context; 0 when none is saved yet); a stale version is refused with version_conflict.",
+      inputSchema: { id: z.string(), version: z.number().int(), content: z.string().min(1) },
+    },
+    async ({ id, version, content }) =>
+      reply(await artifacts.putPlan(email, id, content, version), (a) =>
+        'ignored' in a ? a : { id: a.id, version: a.version },
       ),
   );
 

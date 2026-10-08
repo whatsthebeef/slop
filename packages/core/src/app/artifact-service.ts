@@ -1,6 +1,6 @@
 import { globCodeReview } from '../domain/code-review.js';
 import type { CodeReviewComment } from '../domain/code-review.js';
-import { invalidInput, notFound, ok } from '../domain/errors.js';
+import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import type { Artifact, ArtifactKind, Provenance, ReviewStats } from '../domain/knowledge.js';
 import { currentRun } from '../domain/machine.js';
@@ -97,6 +97,8 @@ export interface PutOptions {
   readonly agentSetVersion: number | null;
   /** Local reviews: the review cycle's figures, kept in the provenance (other kinds ignore them). */
   readonly reviewStats?: ReviewStats | null;
+  /** plan.md only: the version the writer read (0 before the first is saved); a later one is refused. */
+  readonly expectedPlanVersion?: number;
 }
 
 /**
@@ -107,8 +109,14 @@ export interface PutOptions {
 export class ArtifactService {
   constructor(private readonly deps: { store: Store; clock: Clock; notifier: Notifier }) {}
 
-  async putPlan(email: string, globId: string, content: string): Promise<Result<Artifact | Ignored>> {
-    return this.put(email, globId, 'plan', '', content, null, { commitSha: null, runId: null, agentSetVersion: null });
+  /** `save_plan` and `PUT /globs/{id}/plan`: a new plan.md version, conditional on `version` when given. */
+  async putPlan(email: string, globId: string, content: string, version?: number): Promise<Result<Artifact | Ignored>> {
+    return this.put(email, globId, 'plan', '', content, null, {
+      commitSha: null,
+      runId: null,
+      agentSetVersion: null,
+      ...(version === undefined ? {} : { expectedPlanVersion: version }),
+    });
   }
 
   async attach(
@@ -279,6 +287,16 @@ export class ArtifactService {
           return ok({
             artifact: { ignored: true as const, reason: `Run ${options.runId} is not the glob's current run` },
             boardId: glob.boardId,
+          });
+        }
+      }
+      if (kind === 'plan' && options.expectedPlanVersion !== undefined) {
+        const latest = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.version ?? 0;
+        if (latest !== options.expectedPlanVersion) {
+          return err({
+            code: 'version_conflict',
+            message: `plan.md is at version ${String(latest)}, not ${String(options.expectedPlanVersion)}: read it again and retry`,
+            current: glob,
           });
         }
       }
