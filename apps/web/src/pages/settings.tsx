@@ -1,4 +1,4 @@
-import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, ROLES } from '@slop/core';
+import { describeEditFailure, EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, ROLES } from '@slop/core';
 import type { DeployIntegration, Environment, Role, SubLimitChange } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
@@ -565,7 +565,17 @@ export const SignedOffPage = () => {
           initialArtifact={null}
           onClose={() => setOpen(null)}
           onUpdate={async (changes) => {
-            await change(() => api.updateGlob(open.id, open.version, changes));
+            try {
+              await api.updateGlob(open.id, open.version, changes);
+              setOpen(await api.glob(open.id));
+              return null;
+            } catch (error) {
+              // The dialog keeps the draft and shows why; a conflict is reloaded on request.
+              return describeEditFailure(error instanceof RequestError ? error.body : { message: 'Something went wrong' });
+            }
+          }}
+          onReload={async () => {
+            setOpen(await api.glob(open.id));
           }}
           onAction={(action) => {
             const path = ACTION_PATHS[action];

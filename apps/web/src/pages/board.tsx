@@ -1,4 +1,4 @@
-import { LISTS, SLOP_TYPES } from '@slop/core';
+import { describeEditFailure, LISTS, SLOP_TYPES } from '@slop/core';
 import type { Action, LabelCommand, LabelName, List, SlopType } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
@@ -478,7 +478,16 @@ export const BoardPage = () => {
           onAction={(action) => act(open, action)}
           onReviewLabel={reviewLabel(open)}
           onUpdate={async (changes: GlobChanges) => {
-            await mutation.mutateAsync(() => api.updateGlob(open.id, open.version, changes)).catch(() => undefined);
+            try {
+              store(await api.updateGlob(open.id, open.version, changes));
+              return null;
+            } catch (error) {
+              // The dialog keeps the draft and shows why; a conflict is reloaded on request.
+              return describeEditFailure(error instanceof RequestError ? error.body : { message: 'Something went wrong' });
+            }
+          }}
+          onReload={async () => {
+            store(await api.glob(open.id));
           }}
           onDelete={async () => {
             await mutation

@@ -1,5 +1,5 @@
 import { CATEGORIES, checksExplanation, isValidCombination, machine, SLOP_TYPES } from '@slop/core';
-import type { Action, Category, Role, SlopType } from '@slop/core';
+import type { Action, Category, EditFailure, Role, SlopType } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -91,6 +91,7 @@ export const GlobDialog = ({
   initialArtifact,
   onClose,
   onUpdate,
+  onReload,
   onAction,
   onReviewLabel,
   onDelete,
@@ -100,7 +101,10 @@ export const GlobDialog = ({
   /** The artifact to show first (from a card icon). */
   initialArtifact: ArtifactRef | null;
   onClose: () => void;
-  onUpdate: (changes: GlobChanges) => Promise<void>;
+  /** Saves the edits; resolves null when saved, or why the server refused them. */
+  onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
+  /** Loads the glob's latest values into the view (after a version conflict). */
+  onReload: () => Promise<void>;
   /** Resolves false when the action failed. */
   onAction: (action: Action) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
@@ -110,7 +114,18 @@ export const GlobDialog = ({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
-  useEffect(() => setDraft({}), [glob.id]);
+  const [failure, setFailure] = useState<EditFailure | null>(null);
+  useEffect(() => {
+    setDraft({});
+    setFailure(null);
+  }, [glob.id]);
+  /** Edits the draft; a refusal shown earlier no longer applies to what the person is typing. */
+  const edit = (changes: GlobChanges) => {
+    setDraft((d) => ({ ...d, ...changes }));
+    setFailure(null);
+  };
+  const swapBlocker =
+    glob.type === 'sub' ? null : machine.sameSuperSwapBlocker(glob);
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
 
   const merged = { ...glob, ...draft };
@@ -264,29 +279,34 @@ export const GlobDialog = ({
           <div className='grid gap-3'>
             <Label>
               Title
-              <Input value={merged.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+              <Input value={merged.title} onChange={(e) => edit({ title: e.target.value })} />
             </Label>
             <Label>
               Summary
-              <Textarea value={merged.summary} onChange={(e) => setDraft({ ...draft, summary: e.target.value })} />
+              <Textarea value={merged.summary} onChange={(e) => edit({ summary: e.target.value })} />
             </Label>
             <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
               <Label>
                 Type
                 <Select
                   value={merged.type}
-                  onChange={(e) => setDraft({ ...draft, type: e.target.value as SlopType })}
+                  onChange={(e) => edit({ type: e.target.value as SlopType })}
                 >
                   {SLOP_TYPES.map((t) => (
-                    <option key={t}>{t}</option>
+                    <option key={t} disabled={swapBlocker !== null && t !== glob.type && t !== 'sub' && glob.type !== 'sub'}>
+                      {t}
+                    </option>
                   ))}
                 </Select>
+                {swapBlocker !== null && glob.type !== 'sub' && (
+                  <span className='text-xs font-normal text-muted-foreground'>{swapBlocker}</span>
+                )}
               </Label>
               <Label>
                 Category
                 <Select
                   value={merged.category}
-                  onChange={(e) => setDraft({ ...draft, category: e.target.value as Category })}
+                  onChange={(e) => edit({ category: e.target.value as Category })}
                 >
                   {CATEGORIES.map((c) => (
                     <option key={c} disabled={!isValidCombination(merged.type, c)}>
@@ -299,7 +319,7 @@ export const GlobDialog = ({
                 Group
                 <Input
                   value={merged.group ?? ''}
-                  onChange={(e) => setDraft({ ...draft, group: e.target.value === '' ? null : e.target.value })}
+                  onChange={(e) => edit({ group: e.target.value === '' ? null : e.target.value })}
                 />
               </Label>
               <Label>
@@ -307,7 +327,7 @@ export const GlobDialog = ({
                 <Select
                   value={merged.environment ?? ''}
                   onChange={(e) =>
-                    setDraft({ ...draft, environment: e.target.value === '' ? null : e.target.value })
+                    edit({ environment: e.target.value === '' ? null : e.target.value })
                   }
                 >
                   <option value=''>None</option>
@@ -317,9 +337,36 @@ export const GlobDialog = ({
                 </Select>
               </Label>
             </div>
+            {failure !== null && (
+              <div role='alert' className='flex flex-wrap items-center justify-end gap-2 text-sm text-red'>
+                <span>{failure.message}</span>
+                {failure.conflict && (
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        await onReload();
+                        setFailure(null);
+                      })
+                    }
+                  >
+                    Reload latest
+                  </Button>
+                )}
+              </div>
+            )}
             {dirty && (
               <div className='flex justify-end gap-2'>
-                <Button variant='outline' size='sm' onClick={() => setDraft({})}>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={() => {
+                    setDraft({});
+                    setFailure(null);
+                  }}
+                >
                   Discard
                 </Button>
                 <Button
@@ -327,8 +374,9 @@ export const GlobDialog = ({
                   disabled={busy || !isValidCombination(merged.type, merged.category)}
                   onClick={() =>
                     void run(async () => {
-                      await onUpdate(draft);
-                      setDraft({});
+                      const refused = await onUpdate(draft);
+                      setFailure(refused);
+                      if (refused === null) setDraft({});
                     })
                   }
                 >

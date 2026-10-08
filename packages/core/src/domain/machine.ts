@@ -767,6 +767,12 @@ export const changeFields = (
   return b.done();
 };
 
+/** Why a same can't become a super (or back) right now, or null when it can; the glob view shows it beforehand. */
+export const sameSuperSwapBlocker = (glob: Glob): string | null =>
+  !['planning', 'in_progress', 'pr_open'].includes(glob.status) || hasLiveRun(glob)
+    ? 'Sames and supers can only be swapped in planning or while a human is implementing, with no run live'
+    : null;
+
 const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> => {
   const from = glob.type;
   if (from === to) return ok(null);
@@ -777,13 +783,8 @@ const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> =
     return ok(null);
   }
   if ((from === 'same' && to === 'super') || (from === 'super' && to === 'same')) {
-    if (!['planning', 'in_progress', 'pr_open'].includes(glob.status) || hasLiveRun(glob)) {
-      return invalidTransition(
-        glob,
-        actor,
-        'Sames and supers can only be swapped in planning or while a human is implementing, with no run live',
-      );
-    }
+    const blocker = sameSuperSwapBlocker(glob);
+    if (blocker !== null) return invalidTransition(glob, actor, blocker);
     if (to === 'super' && (actor.role === 'qa' || actor.role === 'po')) {
       return forbidden('QA and PO members cannot create supers');
     }
