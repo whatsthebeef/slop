@@ -13,7 +13,7 @@ import { ArtifactsSection } from './artifacts';
 import { CodeReviewSection } from './code-review';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
 import type { ArtifactRef } from './artifacts';
-import { GroupChip } from './glob-card';
+import { ActivityLabel, GroupChip } from './glob-card';
 import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
@@ -134,6 +134,7 @@ export const GlobDialog = ({
         <div className='grid gap-4'>
           <div className='flex flex-wrap items-center gap-2 text-sm'>
             <span className='rounded bg-muted px-2 py-0.5'>{STATUS_TEXT[glob.status]}</span>
+            <ActivityLabel glob={glob} />
             {glob.group !== null && <GroupChip name={glob.group} />}
             <LabelChips glob={glob} />
             <span className='ml-auto text-xs text-muted-foreground'>

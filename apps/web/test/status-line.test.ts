@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { statusLine, viewStatusLine, waitingFor } from '../src/lib/status-line';
+import { activityLabel, statusLine, viewStatusLine, waitingFor } from '../src/lib/status-line';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -74,10 +74,11 @@ describe('shared status line', () => {
     expect(top(g)).toEqual(statusLine(g, NOW));
   });
 
-  it('says why a same waiting for checks cannot merge', () => {
+  it('keeps waiting for checks off the status line: the activity label carries it', () => {
     const g = prOpen({ headChecks: { sha: head, state: 'pending' }, allowedActions: [] });
-    expect(statusLine(g, NOW)?.text).toBe('Waiting for checks');
-    expect(top(g)?.full).toBe('Merge waits for the checks on d16d563');
+    expect(statusLine(g, NOW)).toBeNull();
+    expect(top(g)).toBeNull();
+    expect(activityLabel(g, NOW)).toMatchObject({ kind: 'checks', text: 'Checks running on d16d563' });
   });
 
   it('says why a same with failed checks cannot merge, keeping the link', () => {
@@ -128,5 +129,48 @@ describe('provisioning failure', () => {
     expect(line).toMatchObject({ kind: 'provisioning', full: reason });
     expect(line?.tip).not.toContain('the routine run failed');
     expect(top(g)).toMatchObject({ kind: 'provisioning', full: reason });
+  });
+});
+
+describe('activity label', () => {
+  const live = (state: 'queued' | 'active' | 'watching', patch = {}) => ({
+    currentRun: run({ state, ...patch }),
+  });
+
+  it('is null when nothing runs on its own', () => {
+    expect(activityLabel(view(), NOW)).toBeNull();
+    expect(activityLabel(view({ currentRun: run({ state: 'ended' }) }), NOW)).toBeNull();
+  });
+
+  it('puts merging over checks over the run', () => {
+    const base = prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') });
+    expect(activityLabel(base, NOW)?.kind).toBe('checks');
+    expect(activityLabel({ ...base, status: 'merging' }, NOW)?.text).toBe('Merging');
+  });
+
+  it('puts checks over the run, and says waiting before the checks have started', () => {
+    expect(activityLabel(prOpen({ headChecks: null, ...live('active') }), NOW)).toMatchObject({
+      kind: 'checks',
+      text: 'Waiting for checks on d16d563',
+    });
+  });
+
+  it('names the run states', () => {
+    expect(activityLabel(view(live('active')), NOW)?.text).toBe('Routine working');
+    expect(activityLabel(view(live('watching')), NOW)?.text).toBe('Routine watching the PR');
+    expect(activityLabel(view(live('queued')), NOW)?.text).toBe('Queued');
+  });
+
+  it('says how long a run has been queued past 10 minutes', () => {
+    const later = new Date(Date.parse(NOW) + 25 * 60_000).toISOString();
+    const g = view(live('queued', { queuedAt: NOW }));
+    expect(activityLabel(g, later)?.text).toBe('Queued for 25 min');
+  });
+
+  it('shows nothing once the checks have settled, and leaves problems to the status line', () => {
+    expect(activityLabel(prOpen({ headChecks: { sha: head, state: 'passed' } }), NOW)).toBeNull();
+    const failed = prOpen({ headChecks: failedChecks });
+    expect(activityLabel(failed, NOW)).toBeNull();
+    expect(statusLine(failed, NOW)?.kind).toBe('checks');
   });
 });

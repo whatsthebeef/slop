@@ -1,4 +1,3 @@
-import { queuedRunNotice } from '@slop/core';
 import type { Action, ArtifactKind, Category, CodeReviewBadge, DeployIndicator, EnvironmentIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, MessageSquareCode, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -6,7 +5,7 @@ import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
-import { statusLine } from '@/lib/status-line';
+import { activityLabel, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { Tip } from './ui/tip';
@@ -83,20 +82,20 @@ export const GroupChip = ({ name }: { name: string }) => {
   );
 };
 
-const RunIndicator = ({ glob }: { glob: GlobView }) => {
-  const run = glob.currentRun;
-  // Ended runs are covered by the status line.
-  if (run === null || run.state === 'ended') return null;
-  const label = run.state;
-  const watching = 'Routine session watching the PR to auto-fix CI failures and review comments';
+/** The one label for what runs on its own (merging, checks, the routine): shared with the glob view. */
+export const ActivityLabel = ({ glob }: { glob: GlobView }) => {
+  const activity = activityLabel(glob, new Date().toISOString());
+  if (activity === null) return null;
   return (
-    <Tip text={queuedRunNotice(glob, new Date().toISOString()) ?? (run.state === 'watching' ? watching : `Routine run ${label}: owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`)}>
-    <span
-      className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground'
-    >
-      {run.state === 'active' ? <Loader2 className='h-3 w-3 animate-spin' /> : <Bot className='h-3 w-3' />}
-      {label}
-    </span>
+    <Tip text={activity.tip}>
+      <span
+        className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground'
+        data-testid='activity-label'
+        data-kind={activity.kind}
+      >
+        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <Bot className='h-3 w-3' />}
+        {activity.text}
+      </span>
     </Tip>
   );
 };
@@ -430,7 +429,7 @@ export const GlobCard = ({
           {glob.id} · {glob.type}
         </span>
         <span className='inline-flex items-center gap-1.5'>
-          <RunIndicator glob={glob} />
+          <ActivityLabel glob={glob} />
           <CategoryIcon category={glob.category} />
         </span>
       </div>
