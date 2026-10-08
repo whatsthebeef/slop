@@ -6,6 +6,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
+import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { viewStatusLine, waitingFor } from '@/lib/status-line';
 import { ArtifactsSection } from './artifacts';
 import { CodeReviewSection } from './code-review';
@@ -71,6 +72,7 @@ export const GlobDialog = ({
   useEffect(() => {
     setDraft({});
     setFailure(null);
+    setConfirmingAgain(false);
   }, [glob.id]);
   /** Edits the draft; a refusal shown earlier no longer applies to what the person is typing. */
   const edit = (changes: GlobChanges) => {
@@ -91,6 +93,8 @@ export const GlobDialog = ({
   const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
   // A super's local review normally comes first (/finalise); the board warns, then allows.
   const [confirmingReady, setConfirmingReady] = useState(false);
+  // Start again throws the PR and branch away, so it says what it will do first.
+  const [confirmingAgain, setConfirmingAgain] = useState(false);
   const reviewedAtHead = (glob.artifacts ?? []).some(
     (a) => a.kind === 'local_review' && machine.sameCommit(a.commitSha, glob.pr?.headSha),
   );
@@ -197,12 +201,16 @@ export const GlobDialog = ({
                           else setConfirmingReady(true);
                           return;
                         }
+                        if (action === 'start_again') {
+                          setConfirmingAgain(true);
+                          return;
+                        }
                         void run(async () => {
                           await onAction(action);
                         });
                       }}
                     >
-                      {ACTION_LABELS[action]}
+                      {actionLabel(action, glob.type, ACTION_LABELS)}
                     </Button>
                   );
                   const tip = ACTION_TIPS[action];
@@ -217,7 +225,7 @@ export const GlobDialog = ({
                 {disabled.map(({ action, tip }) => (
                   <Tip key={action} text={tip}>
                     <Button variant='outline' size='sm' disabled>
-                      {ACTION_LABELS[action]}
+                      {actionLabel(action, glob.type, ACTION_LABELS)}
                     </Button>
                   </Tip>
                 ))}
@@ -233,6 +241,30 @@ export const GlobDialog = ({
                   </Button>
                   <Button size='sm' disabled={busy} onClick={() => void markReady()} data-testid='confirm-ready'>
                     Ready for review
+                  </Button>
+                </div>
+              )}
+              {confirmingAgain && (
+                <div role='alert' className='flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs'>
+                  <span className='flex-1' data-testid='start-again-says'>
+                    {startAgainConfirmation(glob, board.baseBranch)}
+                  </span>
+                  <Button size='sm' variant='ghost' onClick={() => setConfirmingAgain(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='destructive'
+                    disabled={busy}
+                    data-testid='confirm-start-again'
+                    onClick={() =>
+                      void run(async () => {
+                        setConfirmingAgain(false);
+                        await onAction('start_again');
+                      })
+                    }
+                  >
+                    {actionLabel('start_again', glob.type, ACTION_LABELS)}
                   </Button>
                 </div>
               )}
