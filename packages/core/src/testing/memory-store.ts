@@ -3,6 +3,7 @@ import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js'
 import type { DomainEvent, Effect } from '../domain/events.js';
 import { sameCommit } from '../domain/signals.js';
 import type { TestRun } from '../domain/test-runs.js';
+import type { CodeReviewComment } from '../domain/code-review.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import type { KbItem } from '../domain/kb.js';
@@ -37,6 +38,7 @@ interface State {
   /** Keyed by glob and environment. */
   globPresence: Map<string, GlobPresence>;
   testRuns: TestRun[];
+  codeReviews: CodeReviewComment[];
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -64,6 +66,7 @@ const clone = (state: State): State => ({
   environmentDeploys: [...state.environmentDeploys],
   globPresence: new Map(state.globPresence),
   testRuns: [...state.testRuns],
+  codeReviews: [...state.codeReviews],
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -93,6 +96,7 @@ export class MemoryStore implements Store {
     environmentDeploys: [],
     globPresence: new Map(),
     testRuns: [],
+    codeReviews: [],
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -125,6 +129,7 @@ export class MemoryStore implements Store {
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
         s.testRuns = s.testRuns.filter((r) => r.globId !== id);
+        s.codeReviews = s.codeReviews.filter((c) => c.globId !== id);
         return Promise.resolve();
       },
       findGlobByCreationKey: (boardId, key) =>
@@ -367,6 +372,29 @@ export class MemoryStore implements Store {
                 (r.globId === null &&
                   (filter.commits?.some((c) => c.environment === r.environment && sameCommit(c.sha, r.sha)) ?? false))),
           ),
+        ),
+      upsertCodeReviewComment: (comment) => {
+        const stored = s.codeReviews.find((c) => c.externalId === comment.externalId);
+        if (stored === undefined) {
+          s.codeReviews.push({ ...comment, id: this.nextRowId++ });
+          return Promise.resolve(true);
+        }
+        if (stored.updatedAt > comment.updatedAt) return Promise.resolve(false);
+        const next = { ...stored, kind: comment.kind, body: comment.body, url: comment.url, commitSha: comment.commitSha, path: comment.path, line: comment.line, updatedAt: comment.updatedAt };
+        const changed = JSON.stringify(next) !== JSON.stringify(stored);
+        s.codeReviews = s.codeReviews.map((c) => (c === stored ? next : c));
+        return Promise.resolve(changed);
+      },
+      deleteCodeReviewComment: (externalId) => {
+        const stored = s.codeReviews.find((c) => c.externalId === externalId) ?? null;
+        s.codeReviews = s.codeReviews.filter((c) => c.externalId !== externalId);
+        return Promise.resolve(stored);
+      },
+      listCodeReviewComments: (boardId, globIds) =>
+        Promise.resolve(
+          s.codeReviews
+            .filter((c) => c.boardId === boardId && globIds.includes(c.globId))
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id),
         ),
       insertReviewSource: (input) => {
         const taken = s.reviewSources.some(

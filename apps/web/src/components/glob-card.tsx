@@ -1,6 +1,6 @@
 import { checksExplanation, queuedRunNotice, stuckHint } from '@slop/core';
-import type { Action, ArtifactKind, AtfIndicator, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
-import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
+import type { Action, ArtifactKind, AtfIndicator, Category, CodeReviewBadge, DeployIndicator, EnvironmentIndicator } from '@slop/core';
+import { Bot, Bug, ListChecks, Loader2, MessageSquareCode, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import type { GlobView } from '@/lib/api';
@@ -317,6 +317,36 @@ export const AtfChip = ({ runs }: { runs: readonly AtfIndicator[] }) => {
   );
 };
 
+/** CodeRabbit's review of the PR: its inline comment count, opening the review on GitHub. */
+export const CodeReviewIcon = ({ badge }: { badge: CodeReviewBadge }) => {
+  const comments = `${badge.count} inline comment${badge.count === 1 ? '' : 's'}`;
+  const icon = (
+    <span className='inline-flex items-center gap-0.5 font-mono text-[11px] text-muted-foreground' data-testid='code-review-icon'>
+      <MessageSquareCode className='h-3.5 w-3.5' aria-hidden />
+      {badge.count}
+    </span>
+  );
+  return (
+    <Tip text={`CodeRabbit: ${comments}${badge.url === null ? '' : '; open the review on GitHub'}`}>
+      {badge.url === null ? (
+        icon
+      ) : (
+        <a
+          href={badge.url}
+          target='_blank'
+          rel='noreferrer'
+          aria-label={`CodeRabbit review: ${comments}`}
+          className='rounded-sm px-0.5 hover:bg-muted hover:text-foreground'
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {icon}
+        </a>
+      )}
+    </Tip>
+  );
+};
+
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -337,6 +367,7 @@ export const GlobCard = ({
   deploy,
   environments,
   atf,
+  codeReview,
 }: {
   glob: GlobView;
   onOpen: () => void;
@@ -361,6 +392,8 @@ export const GlobCard = ({
   environments?: readonly EnvironmentIndicator[];
   /** Its ATF results (a flag only). */
   atf?: readonly AtfIndicator[];
+  /** CodeRabbit's review of its PR, when CodeRabbit has posted anything. */
+  codeReview?: CodeReviewBadge;
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
@@ -418,6 +451,7 @@ export const GlobCard = ({
         {glob.group !== null && <GroupChip name={glob.group} />}
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
+        {codeReview !== undefined && <CodeReviewIcon badge={codeReview} />}
         {deploy !== undefined && <DeployChip deploy={deploy} />}
         {environments !== undefined && <EnvironmentChips environments={environments} />}
         {atf !== undefined && <AtfChip runs={atf} />}

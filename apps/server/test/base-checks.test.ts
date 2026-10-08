@@ -103,7 +103,8 @@ describe('a red base branch', () => {
     executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), boards);
     // These deliveries never carry review comments.
     const findings = { recordCodeRabbitComment: () => Promise.reject(new Error('not used here')) };
-    handle = githubDeliveryHandler({ db: database.db, globs, findings, boardOf, github: { deleteBranch: () => Promise.resolve() } });
+    const codeReviews = { record: () => Promise.reject(new Error('not used here')), remove: () => Promise.reject(new Error('not used here')) };
+    handle = githubDeliveryHandler({ db: database.db, globs, findings, codeReviews, boardOf, github: { deleteBranch: () => Promise.resolve() } });
   });
 
   afterAll(() => drop());

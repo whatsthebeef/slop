@@ -1,5 +1,5 @@
-import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
+import type { Artifact, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -111,6 +111,13 @@ const toTestRun = (row: typeof schema.testRuns.$inferSelect): TestRun => ({
   ...row,
   kind: oneOf(TEST_RUN_KINDS, row.kind),
   finishedAt: row.finishedAt.toISOString(),
+});
+
+const toCodeReview = (row: typeof schema.codeReviewComments.$inferSelect): CodeReviewComment => ({
+  ...row,
+  kind: oneOf(CODE_REVIEW_KINDS, row.kind),
+  createdAt: row.createdAt.toISOString(),
+  updatedAt: row.updatedAt.toISOString(),
 });
 
 const toKnowledge = (row: typeof schema.knowledge.$inferSelect): KnowledgeDoc => ({
@@ -257,6 +264,7 @@ export class PgStore implements Store {
       deleteGlob: async (id) => {
         await t.delete(schema.globEnvironments).where(eq(schema.globEnvironments.globId, id));
         await t.delete(schema.testRuns).where(eq(schema.testRuns.globId, id));
+        await t.delete(schema.codeReviewComments).where(eq(schema.codeReviewComments.globId, id));
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
@@ -686,6 +694,43 @@ export class PgStore implements Store {
           .where(and(eq(r.boardId, boardId), or(...matches)))
           .orderBy(desc(r.finishedAt), desc(r.id));
         return rows.map(toTestRun);
+      },
+
+      upsertCodeReviewComment: async (comment) => {
+        const c = schema.codeReviewComments;
+        const rows = await t
+          .insert(c)
+          .values({ ...comment, createdAt: new Date(comment.createdAt), updatedAt: new Date(comment.updatedAt) })
+          .onConflictDoUpdate({
+            target: c.externalId,
+            set: {
+              kind: sql`excluded.kind`,
+              body: sql`excluded.body`,
+              url: sql`excluded.url`,
+              commitSha: sql`excluded.commit_sha`,
+              path: sql`excluded.path`,
+              line: sql`excluded.line`,
+              updatedAt: sql`excluded.updated_at`,
+            },
+            // An edit replaces the stored copy unless that is newer (a late redelivery), and only when it differs.
+            setWhere: sql`${c.updatedAt} <= excluded.updated_at and (${c.kind}, ${c.body}, ${c.url}, ${c.commitSha}, ${c.path}, ${c.line}, ${c.updatedAt}) is distinct from (excluded.kind, excluded.body, excluded.url, excluded.commit_sha, excluded.path, excluded.line, excluded.updated_at)`,
+          })
+          .returning({ id: c.id });
+        return rows.length === 1;
+      },
+      deleteCodeReviewComment: async (externalId) => {
+        const [row] = await t.delete(schema.codeReviewComments).where(eq(schema.codeReviewComments.externalId, externalId)).returning();
+        return row === undefined ? null : toCodeReview(row);
+      },
+      listCodeReviewComments: async (boardId, globIds) => {
+        if (globIds.length === 0) return [];
+        const c = schema.codeReviewComments;
+        const rows = await t
+          .select()
+          .from(c)
+          .where(and(eq(c.boardId, boardId), inArray(c.globId, [...globIds])))
+          .orderBy(asc(c.createdAt), asc(c.id));
+        return rows.map(toCodeReview);
       },
 
       insertReviewSource: async (input) => {

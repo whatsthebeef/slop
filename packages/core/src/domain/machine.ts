@@ -952,6 +952,8 @@ export const prReadyForReview = (
     b.updateRun({ state: 'watching', lastProgressAt: ctx.now, startedAt: run.startedAt ?? ctx.now });
   }
   b.status('pr_open').effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+  // CodeRabbit reviews on its own unless the repo turned that off; the executor decides whether to ask (R3).
+  b.effect({ kind: 'request_code_review', globId: glob.id, generation: glob.generation });
   // The sub gate may have finished before the PR was recorded as ready: look up its result.
   if (glob.type === 'sub') b.effect({ kind: 'refresh_sub_gate', globId: glob.id, generation: glob.generation });
   return b.done();

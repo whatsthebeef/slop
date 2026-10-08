@@ -114,6 +114,11 @@ export type Effect =
     }
   /** Bring the glob's PR branch up to date with the base branch so its checks run again (the base went green). */
   | { readonly kind: 'update_branch'; readonly globId: string; readonly generation: number; readonly sha: string }
+  /**
+   * The PR is ready for review: ask CodeRabbit for one (`@coderabbitai review`) when the repo's `.coderabbit.yaml` turns
+   * its automatic reviews off and the board has a review guide. Posted once per PR.
+   */
+  | { readonly kind: 'request_code_review'; readonly globId: string; readonly generation: number }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
   | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number };
 

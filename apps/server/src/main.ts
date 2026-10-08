@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, SubLimitService } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -19,6 +19,7 @@ import { mountGitHubWebhooks } from './github/webhooks.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { environmentExecutors } from './environment-executors.js';
+import { codeReviewExecutors } from './code-review-executors.js';
 import { mountDeploys } from './http/deploys.js';
 import { mountWeb } from './http/web.js';
 import { mountReadiness } from './http/readiness.js';
@@ -26,6 +27,7 @@ import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
 import { LlmHealth } from './llm-health.js';
 import { mountHealth } from './http/health.js';
+import { mountCodeReviews } from './http/code-reviews.js';
 import { FileRoutines } from './routines.js';
 import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
@@ -71,6 +73,7 @@ const deploys = new DeployService({
 });
 const environments = new EnvironmentService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
+const codeReviews = new CodeReviewService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 
 const outbox = new OutboxRunner(
   db,
@@ -85,6 +88,8 @@ const outbox = new OutboxRunner(
       logError,
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
+    // Runs only once the outbox starts, after `knowledge` below exists.
+    ...codeReviewExecutors(github, boardOf, (boardId) => knowledge.hasReviewGuide(boardId)),
   },
   logError,
 );
@@ -178,6 +183,7 @@ mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKe
 mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
 mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, logError });
 mountHealth(app, { llm: llmHealth, boards });
+mountCodeReviews(app, { codeReviews });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
 const agentSetValues = { SLOP_URL: config.PUBLIC_URL, COGNITO_CLAUDE_CODE_CLIENT_ID: config.CLAUDE_CODE_CLIENT_ID };
@@ -216,7 +222,7 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, findings, github, boardOf }),
+  handle: githubDeliveryHandler({ db, globs, findings, codeReviews, github, boardOf }),
 });
 
 app.onError((error, c) => {

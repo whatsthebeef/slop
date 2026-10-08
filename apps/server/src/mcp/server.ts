@@ -397,6 +397,23 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   );
 
   server.registerTool(
+    'get_review_guide',
+    {
+      description:
+        "The review guide for a repo: the documents with area `review_guide` on each slop board for that repo you are a member of, in full. CodeRabbit (or any reviewer) reads it before reviewing a PR. An empty list means the repo's boards have no review guide.",
+      inputSchema: { repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('owner/name') },
+    },
+    async ({ repo }) =>
+      reply(await knowledge.reviewGuides(email, repo), (guides) =>
+        guides.map((g) => ({
+          board: g.boardId,
+          boardName: g.boardName,
+          documents: g.documents.map(({ name, description, version, content }) => ({ name, description, version, content })),
+        })),
+      ),
+  );
+
+  server.registerTool(
     'import_knowledge',
     {
       description:
@@ -463,7 +480,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields, plan.md (the postplan for supers) in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), and the board's repo and base branch. Pass `include` to get more in full: 'implementation_plan', 'local_review', 'attachment:<label>', or 'all'.",
+        "The glob's context bundle: its fields, plan.md (the postplan for supers) in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), and the board's repo and base branch. Pass `include` to get more in full: 'implementation_plan', 'local_review', 'attachment:<label>', 'code_review' (CodeRabbit's summary, reviews and inline comments on the PR, verbatim), or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {

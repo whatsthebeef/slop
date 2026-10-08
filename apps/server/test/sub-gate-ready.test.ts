@@ -93,7 +93,8 @@ describe('a sub gate that completed before the PR was recorded as ready', () => 
     host = new FakeHost();
     // These deliveries never carry review comments.
     const findings = { recordCodeRabbitComment: () => Promise.reject(new Error('not used here')) };
-    handle = githubDeliveryHandler({ db: database.db, globs, findings, boardOf, github: host });
+    const codeReviews = { record: () => Promise.reject(new Error('not used here')), remove: () => Promise.reject(new Error('not used here')) };
+    handle = githubDeliveryHandler({ db: database.db, globs, findings, codeReviews, boardOf, github: host });
     executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), new BoardService({ store, notifier: { publish: () => undefined } }));
   });
 
