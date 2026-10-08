@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import type { RoutineDirectory } from '@slop/core';
+import { classifyRoutineFailure } from '@slop/core';
+import type { HealthSink, RoutineDirectory } from '@slop/core';
 import { z } from 'zod';
 
 const routinesSchema = z.record(z.string(), z.object({ url: z.url(), token: z.string().min(1) }));
@@ -49,7 +50,7 @@ const fireResponse = z.object({
 });
 
 /** Fires a routine through its API trigger with this run's instructions as the text. */
-export const fireRoutine = async (secret: RoutineSecret, text: string): Promise<FireResult> => {
+export const fireRoutine = async (secret: RoutineSecret, text: string, health: HealthSink | null = null): Promise<FireResult> => {
   const response = await fetch(secret.url, {
     method: 'POST',
     headers: {
@@ -61,6 +62,7 @@ export const fireRoutine = async (secret: RoutineSecret, text: string): Promise<
   });
   const body: unknown = await response.json().catch(() => null);
   if (response.ok) {
+    health?.report('routines', { state: 'ok' });
     const parsed = fireResponse.safeParse(body);
     return {
       outcome: 'fired',
@@ -68,6 +70,8 @@ export const fireRoutine = async (secret: RoutineSecret, text: string): Promise<
       sessionUrl: parsed.success ? (parsed.data.claude_code_session_url ?? null) : null,
     };
   }
+  const rejected = classifyRoutineFailure(response.status);
+  if (rejected !== null) health?.report('routines', rejected);
   const message = `Routine fire failed (${String(response.status)})`;
   // Rate limits and server errors are retried with backoff; anything else needs a person.
   return response.status === 429 || response.status >= 500

@@ -8,6 +8,7 @@ import type { Board, Glob } from './types.js';
 export const READINESS_KEYS = [
   'repo_app',
   'sub_gate',
+  'claude_workflow',
   'agent_set',
   'build_doc',
   'environments',
@@ -47,6 +48,8 @@ export interface ReadinessFacts {
   readonly installUrl: string | null;
   /** Whether the base branch has `.github/workflows/sub-gate.yml`; null when slop can't read the repo. */
   readonly subGateWorkflow: boolean | null;
+  /** Whether a workflow on the base branch runs `anthropics/claude-code-action`; null when slop can't read the repo. */
+  readonly claudeWorkflow: boolean | null;
   /**
    * The agent-set version committed on the base branch (`.claude/slop-agent-set.json`): null when
    * the file is absent, 'unreadable' when it isn't valid, 'unknown' when slop couldn't read the repo.
@@ -59,6 +62,15 @@ export interface ReadinessFacts {
   /** Globs whose watching run hasn't reacted to failed checks (see `unreactedCheckFailures`). */
   readonly unreactedCheckFailures: readonly string[];
 }
+
+/** The action a workflow must run for `@claude` mentions to get a response. */
+export const CLAUDE_ACTION = 'anthropics/claude-code-action';
+
+/** Whether a workflow file's text runs the Claude Code action. */
+export const runsClaudeAction = (workflow: string): boolean => workflow.includes(CLAUDE_ACTION);
+
+const claudeWorkflowFix = (repo: string | null): string =>
+  `Add a Claude workflow: run /install-github-app in Claude Code for ${repo ?? 'the repo'}, or copy catalog/scripts/claude.yml to .github/workflows/ and add the CLAUDE_CODE_OAUTH_TOKEN secret`;
 
 /**
  * Which readiness item a routine failure points to, and its fix, from the failure's reason.
@@ -125,6 +137,19 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
           }),
   );
 
+  const claudeTitle = `Claude workflow on ${board.baseBranch}`;
+  items.push(
+    facts.claudeWorkflow === null
+      ? item('claude_workflow', claudeTitle, 'unknown', "slop can't read the repo yet", null)
+      : facts.claudeWorkflow
+        ? item('claude_workflow', claudeTitle, 'ok', `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so @claude comments get a response (it also needs the Claude GitHub App)`, null)
+        : item('claude_workflow', claudeTitle, 'missing', claudeWorkflowFix(repo), {
+            kind: 'link',
+            label: 'Add the workflow',
+            href: `https://github.com/${repo ?? ''}/new/${board.baseBranch}?filename=.github/workflows/claude.yml`,
+          }),
+  );
+
   const committed = facts.committedAgentSetVersion;
   items.push(
     committed === 'unknown'
@@ -177,13 +202,14 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     // One run that never started can be a hiccup; repeats point at the routine itself.
     const neverStarted = key === 'routines' ? facts.recentFailures.filter((f) => /^Routine run never started/.test(f.reason)) : [];
     const unreacted = key === 'claude_app' ? facts.unreactedCheckFailures[0] : undefined;
+    const noWorkflow = facts.claudeWorkflow === false ? ' and the repo has no Claude workflow (see the "Claude workflow" item)' : '';
     items.push(
       failure !== undefined && fix !== null
         ? item(key, MANUAL[key], 'failing', `${failure.globId} failed: ${failure.reason}. ${fix.fix}`, settings)
         : neverStarted.length >= 2
           ? item(key, MANUAL[key], 'failing', `${neverStarted.length} routine runs never started (latest ${neverStarted[0]?.globId ?? ''}): check the routine's fire URL and token, and that its session can reach slop`, settings)
         : unreacted !== undefined
-          ? item(key, MANUAL[key], 'failing', `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo`, settings)
+          ? item(key, MANUAL[key], 'failing', `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo${noWorkflow}`, settings)
         : facts.ticks[key] === true
           ? item(key, MANUAL[key], 'ok', 'Ticked by an admin', null)
           : item(key, MANUAL[key], 'missing', "slop can't check this: tick it in board settings once it's done", settings),
@@ -313,4 +339,34 @@ export const queuedRunNotice = (glob: Glob, now: string): string | null => {
   const minutes = Math.floor((Date.parse(now) - Date.parse(run.queuedAt)) / 60_000);
   if (minutes < QUEUED_NOTICE_MINUTES) return null;
   return `Routine run queued for ${String(minutes)} min: ${run.sessionUrl === null ? 'no session yet' : `open the session ${run.sessionUrl}`}`;
+};
+
+/** What a card says about a ready same or super PR: merge it, or wait for its checks. */
+export interface ReadyStatus {
+  readonly kind: 'ready' | 'waiting';
+  readonly text: string;
+  readonly tip: string;
+}
+
+/**
+ * "Ready to merge" for a same or super at pr_open with a ready PR and passed head checks; "Waiting for checks"
+ * while they run. Null otherwise, including subs (the sub gate merges them) and any failure or conflict, which
+ * the caller ranks first. `reviewSha` is the commit of the latest local review, when there is one.
+ */
+export const readyStatus = (glob: Glob, reviewSha: string | null = null): ReadyStatus | null => {
+  if (glob.type === 'sub' || glob.status !== 'pr_open' || glob.pr?.state !== 'ready') return null;
+  if (glob.failure !== null || glob.conflict != null) return null;
+  const head = glob.pr.headSha ?? '';
+  const checks = glob.headChecks;
+  if (checks?.state === 'failed' && checks.sha === head) return null;
+  const run = glob.runs[glob.runs.length - 1];
+  const watching = run !== undefined && run.state !== 'ended';
+  const stale =
+    reviewSha !== null && reviewSha !== head ? `\nLocal review is from ${reviewSha.slice(0, 7)}, before the latest push.` : '';
+  if (checks !== null && checks.sha === head && checks.state === 'passed') {
+    const merge = `The developer merges sames and supers: Merge on the card, or sstor -i ${glob.id} --merge.`;
+    const auto = watching ? "\nThe run's session stays on the PR to auto-fix new CI failures or review comments." : '';
+    return { kind: 'ready', text: 'Ready to merge', tip: `Checks passed at ${head.slice(0, 7)}. ${merge}${auto}${stale}` };
+  }
+  return { kind: 'waiting', text: 'Waiting for checks', tip: `Checks are still running on ${head.slice(0, 7)}.${stale}` };
 };

@@ -67,6 +67,8 @@ export interface CodeHost {
   completedCheckRun(repo: Repo, sha: string, name: string): Promise<{ sha: string; passed: boolean } | null>;
   /** A file's text on a branch, or null when the file (or branch) doesn't exist. `signal` aborts the request. */
   readFile(repo: Repo, ref: string, path: string, signal?: AbortSignal): Promise<string | null>;
+  /** The names of the files directly in directory `dir` on a branch; empty when the directory (or branch) doesn't exist. */
+  listFiles(repo: Repo, ref: string, dir: string, signal?: AbortSignal): Promise<string[]>;
   /** The files commit `sha` changed against its first parent (mined signals read its dependency manifests). */
   commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles>;
   /** Marks a draft PR ready for review. */

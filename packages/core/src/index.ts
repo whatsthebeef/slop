@@ -49,3 +49,4 @@ export * from './app/deploy-service.js';
 export * from './app/environment-service.js';
 export * from './app/test-run-service.js';
 export * from './domain/checks.js';
+export * from './app/integration-health.js';

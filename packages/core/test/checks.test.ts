@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checksExplanation, failureLines, failureSummary, inheritedFailure, recordBaseChecks, sameFailure, stuckHint } from '../src/index.js';
+import { checksExplanation, failureLines, jobOwnLog, failureSummary, inheritedFailure, recordBaseChecks, sameFailure, stuckHint } from '../src/index.js';
 import type { BaseChecks, CheckFailure, Result, Transition } from '../src/index.js';
 import * as m from '../src/domain/machine.js';
 import { NOW, ctx, glob, run } from './fixtures.js';
@@ -40,6 +40,33 @@ describe('failure lines', () => {
       '2026-10-07T10:00:02.0000000Z ##[error]Process completed with exit code 2.',
     ].join('\n');
     expect(failureLines(log)).toEqual(['apps/server/test/a.ts(3,1): error TS2322: bad', 'Process completed with exit code 2.']);
+  });
+
+  it('ignores the service container log after "Post job cleanup."', () => {
+    const log = [
+      '2026-10-07T23:53:40.0000000Z ##[group]Run pnpm lint',
+      '2026-10-07T23:53:50.0000000Z ##[error]  19:32  error  Unsafe return of a value of type any',
+      '2026-10-07T23:53:50.1000000Z ##[error]✖ 18 problems (18 errors, 0 warnings)',
+      '2026-10-07T23:53:51.0000000Z ##[error]Process completed with exit code 1.',
+      '2026-10-07T23:53:51.5000000Z Post job cleanup.',
+      '2026-10-07T23:53:52.0000000Z Stop and remove container: postgres',
+      '2026-10-07T23:53:52.275Z UTC [48] LOG: background worker "logical replication launcher" (PID 54) exited with exit code 1',
+    ].join('\n');
+    const lines = failureLines(log);
+    expect(lines).toEqual([
+      '19:32  error  Unsafe return of a value of type any',
+      '✖ 18 problems (18 errors, 0 warnings)',
+      'Process completed with exit code 1.',
+    ]);
+    expect(lines.join('\n')).not.toContain('logical replication');
+    expect(jobOwnLog(log)).not.toContain('postgres');
+    expect(jobOwnLog('a\nb')).toBe('a\nb');
+  });
+
+  it('puts the bare exit-code line after other errors, and prefers marked lines over loose matches', () => {
+    expect(failureLines('##[error]Process completed with exit code 1.\n##[error]real failure')).toEqual(['real failure', 'Process completed with exit code 1.']);
+    expect(failureLines('some error-ish text\n##[error]marked one')).toEqual(['marked one']);
+    expect(failureLines('Process completed with exit code 3.')).toEqual(['Process completed with exit code 3.']);
   });
 
   it('falls back to the last lines when none look like errors, and truncates long lines', () => {

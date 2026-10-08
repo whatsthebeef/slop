@@ -1,7 +1,8 @@
 import { App } from '@octokit/app';
 import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
-import { machine } from '@slop/core';
+import { classifyGitHubFailure, machine } from '@slop/core';
+import type { HealthSink } from '@slop/core';
 import type { CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
 import { readCommitChecks } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
@@ -35,7 +36,29 @@ export class GitHub implements CodeHost, CommitGraph {
   private app: App | null = null;
   private appId: number | null = null;
 
-  constructor(private readonly credentials: AppCredentialsStore) {}
+  constructor(
+    private readonly credentials: AppCredentialsStore,
+    /** Told when the App's credentials stop working, and when they work again. */
+    private readonly health: HealthSink | null = null,
+  ) {}
+
+  /** Reports each request's outcome: a 401 (or a 403 that isn't a rate limit) is the App's access, success is its recovery. */
+  private watch<T extends Octokit>(octokit: T): T {
+    if (this.health === null) return octokit;
+    octokit.hook.after('request', () => {
+      this.health?.report('github', { state: 'ok' });
+    });
+    octokit.hook.error('request', (error) => {
+      this.noteFailure(error);
+      throw error;
+    });
+    return octokit;
+  }
+
+  private noteFailure(error: unknown): void {
+    const report = classifyGitHubFailure(status(error), error instanceof Error ? error.message : '');
+    if (report !== null) this.health?.report('github', report);
+  }
 
   get configured(): boolean {
     return this.credentials.get() !== null;
@@ -46,6 +69,7 @@ export class GitHub implements CodeHost, CommitGraph {
     if (credentials === null) throw new Error('The GitHub App is not set up (/setup/github-app)');
     if (this.app === null || this.appId !== credentials.id) {
       this.app = new App({ appId: credentials.id, privateKey: credentials.pem });
+      this.watch(this.app.octokit);
       this.appId = credentials.id;
       this.installations.clear();
     }
@@ -78,7 +102,7 @@ export class GitHub implements CodeHost, CommitGraph {
       owner: repo.owner,
       repo: repo.name,
     });
-    const octokit = await app.getInstallationOctokit(data.id);
+    const octokit = this.watch(await app.getInstallationOctokit(data.id));
     this.installations.set(key, octokit);
     return octokit;
   }
@@ -453,6 +477,23 @@ export class GitHub implements CodeHost, CommitGraph {
       return Buffer.from(data.content, 'base64').toString('utf8');
     } catch (error) {
       if (isStatus(error, 404)) return null;
+      throw error;
+    }
+  }
+
+  async listFiles(repo: Repo, ref: string, dir: string, signal?: AbortSignal): Promise<string[]> {
+    const gh = await this.octokit(repo);
+    try {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: repo.owner,
+        repo: repo.name,
+        path: dir,
+        ref,
+        request: { signal },
+      });
+      return Array.isArray(data) ? data.filter((e) => e.type === 'file').map((e) => e.name) : [];
+    } catch (error) {
+      if (isStatus(error, 404)) return [];
       throw error;
     }
   }

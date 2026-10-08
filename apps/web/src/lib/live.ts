@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { api, RequestError } from './api';
+import { api, healthKey, RequestError } from './api';
 import type { GlobView } from './api';
 
 interface Hint {
@@ -14,7 +14,8 @@ interface Hint {
     | 'glob.reviews'
     | 'board.changed'
     | 'board.kb'
-    | 'board.tests';
+    | 'board.tests'
+    | 'board.health';
   readonly globId?: string;
   readonly version?: number;
 }
@@ -160,6 +161,10 @@ export const useLiveBoard = (boardId: number): LiveState => {
       void client.invalidateQueries({ queryKey: deploysKey(boardId) });
       void client.invalidateQueries({ queryKey: ['glob-environments'] });
       void client.invalidateQueries({ queryKey: ['glob-tests'] });
+      return;
+    }
+    if (hint.kind === 'board.health') {
+      void client.invalidateQueries({ queryKey: healthKey });
       return;
     }
     const id = hint.globId;

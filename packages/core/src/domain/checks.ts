@@ -25,25 +25,46 @@ const MAX_LINES = 6;
 const MAX_LINE_LENGTH = 240;
 const ERROR_LINE = /error|fail|✖|✘|✗|not ok|assertion|cannot find|is missing|exception|exit code [1-9]/i;
 
+const POST_JOB_CLEANUP = /Post job cleanup\.\s*$/;
+const PROCESS_COMPLETED = /^Process completed with exit code \d+\.?$/i;
+
 /**
- * Picks the lines worth showing from the tail of a job log: the first few error-looking lines, else the last few
- * non-empty ones. Timestamps and ANSI colour codes are removed.
+ * The job's own steps: everything from the first "Post job cleanup." line on is dropped. GitHub prints service
+ * container logs (Postgres startup and shutdown) after it, and they would otherwise bury or mimic the real error.
+ */
+export const jobOwnLog = (log: string): string => {
+  const lines = log.split('\n');
+  const cleanup = lines.findIndex((line) => POST_JOB_CLEANUP.test(line.trim()));
+  return cleanup === -1 ? log : lines.slice(0, cleanup).join('\n');
+};
+
+/**
+ * Picks the lines worth showing from the tail of a job log: the first few lines GitHub marks `##[error]`, else the
+ * first error-looking ones, else the last few non-empty ones. The bare `Process completed with exit code N.` line
+ * comes after the others, as a last resort. Timestamps, ANSI colour codes and the marker are removed.
  */
 export const failureLines = (log: string): string[] => {
-  const clean = log
+  const clean = jobOwnLog(log)
     .split('\n')
-    .map((line) =>
-      line
+    .map((raw) => {
+      const line = raw
         // eslint-disable-next-line no-control-regex -- ANSI escape sequences in CI logs
         .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
         .replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s?/, '')
-        .replace(/^##\[(?:error|warning)\]/, '')
-        .trim(),
-    )
-    .filter((line) => line !== '');
-  const errors = clean.filter((line) => ERROR_LINE.test(line));
-  const picked = errors.length > 0 ? errors.slice(0, MAX_LINES) : clean.slice(-MAX_LINES);
-  return picked.map((line) => (line.length > MAX_LINE_LENGTH ? `${line.slice(0, MAX_LINE_LENGTH - 1)}…` : line));
+        .trim();
+      const marked = /^##\[error\]/.test(line);
+      return { text: line.replace(/^##\[(?:error|warning)\]/, '').trim(), marked };
+    })
+    .filter((line) => line.text !== '');
+  const completed = clean.filter((line) => PROCESS_COMPLETED.test(line.text));
+  const rest = clean.filter((line) => !PROCESS_COMPLETED.test(line.text));
+  const marked = rest.filter((line) => line.marked);
+  const errors = marked.length > 0 ? marked : rest.filter((line) => ERROR_LINE.test(line.text));
+  const picked =
+    errors.length + completed.length > 0
+      ? [...errors, ...completed].slice(0, MAX_LINES)
+      : clean.slice(-MAX_LINES);
+  return picked.map(({ text }) => (text.length > MAX_LINE_LENGTH ? `${text.slice(0, MAX_LINE_LENGTH - 1)}…` : text));
 };
 
 /** One line for a card: `Type check: <first error>`, or just the name when no error line is known. */

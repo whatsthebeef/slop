@@ -23,6 +23,10 @@ Usage: scripts/dev.sh [command]
                `foreground watch` watches as `watch` does.
   snapshots    List database snapshots, newest first.
   restore [f]  Stop the server and restore the database from a snapshot (default: the newest).
+  renumber-migrations [base]
+               After merging main: renumber this branch's Drizzle migrations to follow main's
+               (files, journal, snapshots, test references), then check drizzle-kit sees no
+               drift. base defaults to origin/HEAD (else origin/main).
   help         Show this help.
 
 Snapshots are taken automatically before code with new migrations starts, and kept (newest
@@ -181,6 +185,8 @@ start() {
   # LOCAL_SIGN_IN_WITHOUT_COOKIE: Chrome drops the sign-in state cookie on plain-http localhost.
   local env_args=(-e "LOCAL_SIGN_IN_WITHOUT_COOKIE=true")
   [[ -n "${AWS_PROFILE:-}" ]] && env_args+=(-e "AWS_PROFILE=$AWS_PROFILE")
+  # The server watches the tunnel (through ngrok's local API) and shows a banner when it drops.
+  [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]] && env_args+=(-e "SLOP_TUNNEL_DOMAIN=$SLOP_TUNNEL_DOMAIN")
   tmux new-session -d -s "$session" ${env_args[@]+"${env_args[@]}"} -n server -c "$root/apps/server" \
     "$($watch_mode && watched_server_cmd || server_cmd); read"
   tmux set-environment -t "$session" SLOP_DEV_ROOT "$root"
@@ -256,6 +262,7 @@ case "$action" in
   board-watch) build_board_watch; exit 0 ;;
   snapshots) list_snapshots; exit 0 ;;
   restore) restore "${2:-}"; exit 0 ;;
+  renumber-migrations) exec node "$root/scripts/renumber-migrations.mjs" ${2:+"$2"} ;;
   help|-h|--help) usage; exit 0 ;;
   *) usage >&2; exit 1 ;;
 esac

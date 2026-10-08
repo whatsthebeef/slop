@@ -1,4 +1,4 @@
-import type { Board, BoardService, CheckFailure, EffectKind, Glob, GlobService } from '@slop/core';
+import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { FileRoutines } from './routines.js';
 import { machine, parseId, subGatePolicy } from '@slop/core';
@@ -18,6 +18,7 @@ export const codeHostExecutors = (
   routines: FileRoutines,
   boards: Pick<BoardService, 'recordBaseChecks'>,
   now: () => string = () => new Date().toISOString(),
+  health: HealthSink | null = null,
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -313,7 +314,7 @@ export const codeHostExecutors = (
         return 'done';
       }
       const repo = await repoFor(glob.boardId);
-      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`));
+      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`), health);
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));

@@ -56,6 +56,22 @@ describe('reading why a commit failed', () => {
     });
   });
 
+  it('explains a failure with the job\'s error, not the Postgres service container log after cleanup', async () => {
+    const log = [
+      ...Array.from({ length: 300 }, (_, i) => `2026-10-07T10:00:00.0000000Z noise ${String(i)}`),
+      '2026-10-07T10:01:00.0000000Z ##[error]  19:32  error  Unsafe return of a value of type any',
+      '2026-10-07T10:01:00.1000000Z ##[error]✖ 18 problems (18 errors, 0 warnings)',
+      '2026-10-07T10:01:01.0000000Z ##[error]Process completed with exit code 1.',
+      '2026-10-07T10:01:02.0000000Z Post job cleanup.',
+      ...Array.from({ length: 70 }, (_, i) => `2026-10-07T10:01:03.0000000Z postgres service line ${String(i)}`),
+      '2026-10-07T10:01:09.0000000Z LOG: background worker "logical replication launcher" (PID 54) exited with exit code 1',
+    ].join('\n');
+    const { request } = fakeGitHub({ runs: [run({ conclusion: 'failure' })], log });
+    const lines = (await readCommitChecks(request, repo, 'abc')).failure?.lines ?? [];
+    expect(lines[0]).toBe('19:32  error  Unsafe return of a value of type any');
+    expect(lines.join('\n')).not.toMatch(/postgres|logical replication/);
+  });
+
   it('only reads the tail of a long log', async () => {
     const early = ['error: from the start of the job', ...Array.from({ length: 100 }, (_, i) => `line ${String(i)}`)].join('\n');
     const { request } = fakeGitHub({ runs: [run({ conclusion: 'failure' })], log: early });

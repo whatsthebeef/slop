@@ -174,7 +174,32 @@ export type ActionPath =
   | 'merge-continue'
   | 'mark-ready';
 
+/** What the board's banner shows: each integration that needs a person, and the in-app AWS sign-in (local development only). */
+export interface IntegrationHealthView {
+  readonly integrations: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly state: 'degraded' | 'down';
+    readonly reason: string | null;
+    readonly fix: string | null;
+    readonly since: string;
+    /** Whether the Sign in to AWS button applies. */
+    readonly signIn: boolean;
+  }[];
+  readonly awsSignIn:
+    | ({ readonly canStart: boolean } & (
+        | { readonly state: 'idle' | 'done' }
+        | { readonly state: 'waiting'; readonly verificationUri: string; readonly userCode: string; readonly expiresAt: string }
+        | { readonly state: 'failed'; readonly message: string }
+      ))
+    | null;
+}
+
+export const healthKey = ['health'] as const;
+
 export const api = {
+  health: () => request<IntegrationHealthView>('GET', '/api/health'),
+  startAwsSignIn: () => request<object>('POST', '/api/aws-sign-in'),
   authConfig: () => request<{ mode: 'dev' | 'cognito' }>('GET', '/auth/config'),
   devLogin: (email: string, returnTo?: string) =>
     request<{ email: string; returnTo: string }>('POST', '/auth/dev-login', { email, returnTo }),
