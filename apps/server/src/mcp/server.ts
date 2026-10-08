@@ -1,6 +1,6 @@
 import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, IntakeService, KnowledgeService, Result } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
-import { ARTIFACT_KINDS, CATEGORIES, LABEL_NAMES, LEARNING_TYPES, RISK_TIERS, SLOP_TYPES, STATUSES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, RISK_TIERS, SLOP_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -438,6 +438,34 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       },
     },
     async ({ board, documents }) => reply(await knowledge.importDocuments(email, board, documents, 'import')),
+  );
+
+  server.registerTool(
+    'list_kb_items',
+    {
+      description:
+        "Admins only: the board's knowledge-base proposals (open by default; or approved, rejected, merged, suppressed, covered). Each gives its id and version (pass both to decide_kb_item), type, statement, evidence, target (kind, name, section), draft (section, content), a preview of what approving would change, processing state and error, and the flags: contradicts, possiblyCoveredBy, staleSince and duplicateOf. Approved and rejected ones show who decided and, in outcome.via, 'agent' when an agent did.",
+      inputSchema: {
+        board: z.number().int(),
+        status: z.enum(KB_ITEM_STATUSES).optional().describe('Defaults to open'),
+      },
+    },
+    async ({ board, status }) => reply(await knowledge.listItems(email, board, status)),
+  );
+
+  server.registerTool(
+    'decide_kb_item',
+    {
+      description:
+        "Admins only: approve a KB item as drafted, or reject it with a reason (required), recorded as you with outcome.via 'agent'. Same checks as the Knowledge page's buttons; pass the version you read from list_kb_items. Approving is refused for what a person must decide on the Knowledge page: the local-run spec, agent-set files (agent, command, hook, settings, mcp, claude_md), a whole-document proposal and any item with contradicts flags. Rejecting any item is allowed.",
+      inputSchema: {
+        id: z.string().describe('KB item id, e.g. s1k3'),
+        version: z.number().int(),
+        decision: z.enum(['approve', 'reject']),
+        reason: z.string().max(4000).optional().describe('Required to reject'),
+      },
+    },
+    async ({ id, version, decision, reason }) => reply(await knowledge.decideByAgent(email, id, version, decision, reason)),
   );
 
   server.registerTool(

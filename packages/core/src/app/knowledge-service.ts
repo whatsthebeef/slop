@@ -1,4 +1,4 @@
-import { err, invalidInput, notFound, ok } from '../domain/errors.js';
+import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
 import { composeAgentSet, contextDiff, overlayProblem } from '../domain/agent-set.js';
@@ -13,6 +13,7 @@ import type {
   KbOutcome,
   KbProposalList,
   KbTarget,
+  KbVia,
   LearningType,
   NewDocumentMeta,
   ProposedDocument,
@@ -217,6 +218,15 @@ const view = (item: KbItem, preview: DraftPreview | null): KbItemView => ({
   evidenceCount: evidenceCount(item),
   lastEvidenceAt: lastEvidenceAt(item),
 });
+
+/** Why an agent may not approve the item, or null when it may: these are decided by a person. */
+const keptForPeople = (item: KbItem): string | null => {
+  if (item.document !== null) return 'proposes a whole document';
+  if (item.contradicts.length > 0) return 'is flagged as contradicting existing knowledge';
+  if (item.target?.kind === 'local_run') return "changes the local-run spec, which sstor runs on developers' machines";
+  if (item.target !== null && isAgentSetKind(item.target.kind)) return `changes an agent-set file (${item.target.kind} ${item.target.name}), which changes how agents behave`;
+  return null;
+};
 
 /** `ids` with `id` added once. */
 const apart = (ids: readonly string[], id: string): string[] => (ids.includes(id) ? [...ids] : [...ids, id]);
@@ -869,15 +879,72 @@ export class KnowledgeService {
    * and an agent-set file bumps the board's agent-set version.
    */
   async approve(email: string, itemId: string, version: number, approval: Approval): Promise<Result<KbItem>> {
-    return this.decide(email, itemId, version, async (tx, item) => {
-      // A watched signal is claimed in `kb_signals` under mining's lock, so a mining run neither overwrites the claim
-      // with the row it read before nor raises the signal meanwhile; taken first, so the measurement sees its rows.
-      if (approval.watchSignal !== undefined) await tx.lockBoardJob(item.boardId, 'mining');
-      // Checked before anything is written: a refused decision commits nothing it wrote.
-      const watched = await this.watchedSignal(tx, item, approval.watchSignal);
-      if (!watched.ok) return watched;
-      const applied = await this.applyApproval(tx, email, item, approval);
-      return applied.ok ? ok({ ...applied.value, signal: watched.value }) : applied;
+    return this.decide(email, itemId, version, (tx, item) => this.approving(tx, email, item, approval));
+  }
+
+  /** The approval's checks and writes, shared by a person's approval and an agent's. */
+  private async approving(
+    tx: Tx,
+    email: string,
+    item: KbItem,
+    approval: Approval,
+  ): Promise<Result<{ statement: string; outcome: KbOutcome; signal: KbSignal | null }>> {
+    // A watched signal is claimed in `kb_signals` under mining's lock, so a mining run neither overwrites the claim
+    // with the row it read before nor raises the signal meanwhile; taken first, so the measurement sees its rows.
+    if (approval.watchSignal !== undefined) await tx.lockBoardJob(item.boardId, 'mining');
+    // Checked before anything is written: a refused decision commits nothing it wrote.
+    const watched = await this.watchedSignal(tx, item, approval.watchSignal);
+    if (!watched.ok) return watched;
+    const applied = await this.applyApproval(tx, email, item, approval);
+    return applied.ok ? ok({ ...applied.value, signal: watched.value }) : applied;
+  }
+
+  /**
+   * An agent (signed in as the admin) approves an open item as drafted, or rejects it with a reason: the same checks
+   * and writes as the page's buttons, recorded with `via: 'agent'` in the outcome. Approving is refused for what
+   * changes how agents or developers' machines behave, which a person decides on the Knowledge page: the local-run
+   * spec, agent-set files, a whole document, and any item flagged as contradicting. Rejecting is always allowed.
+   */
+  async decideByAgent(
+    email: string,
+    itemId: string,
+    version: number,
+    decision: 'approve' | 'reject',
+    reason?: string,
+  ): Promise<Result<KbItem>> {
+    const via: KbVia = 'agent';
+    if (decision === 'reject') {
+      const trimmed = reason?.trim() ?? '';
+      if (trimmed === '') return invalidInput('Rejecting needs a reason');
+      return this.decide(email, itemId, version, () => Promise.resolve(ok({ reason: trimmed })), via);
+    }
+    return this.decide(
+      email,
+      itemId,
+      version,
+      async (tx, item) => {
+        const kept = keptForPeople(item);
+        if (kept !== null) return forbidden(`${item.id} ${kept}: approve it on the Knowledge page, or reject it here`);
+        return this.approving(tx, email, item, { as: 'draft' });
+      },
+      via,
+    );
+  }
+
+  /**
+   * The board's KB items with the given status (open by default), for an admin's agent: the open queue in the page's
+   * order, others newest decision first. Admins only, like deciding.
+   */
+  async listItems(email: string, boardId: number, status: KbItemStatus = 'open'): Promise<Result<KbItemView[]>> {
+    const catalog = await this.deps.catalog.agentSet();
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await adminOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      const items = await tx.listKbItems(boardId, status);
+      if (status !== 'open') return ok(items.map((item) => view(item, null)));
+      const views: KbItemView[] = [];
+      for (const item of [...items].sort(byEvidence)) views.push(view(item, await this.preview(tx, catalog, item)));
+      return ok(views);
     });
   }
 
@@ -971,6 +1038,7 @@ export class KnowledgeService {
       tx: Tx,
       item: KbItem,
     ) => Promise<Result<{ statement: string; outcome: KbOutcome; signal?: KbSignal | null } | { reason: string }>>,
+    via?: KbVia,
   ): Promise<Result<KbItem>> {
     const stale = (item: KbItem) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
     try {
@@ -986,14 +1054,16 @@ export class KnowledgeService {
         const decidedAt = this.deps.clock.now();
         const base = { ...item, decidedBy: email, decidedAt, version: item.version + 1 };
         let next: KbItem;
-        if ('reason' in decided.value) next = { ...base, status: 'rejected', decisionReason: decided.value.reason };
+        if ('reason' in decided.value) {
+          next = { ...base, status: 'rejected', decisionReason: decided.value.reason, ...(via === undefined ? {} : { outcome: { kind: 'rejected', via } }) };
+        }
         else {
           const { statement, outcome } = decided.value;
           const chosen = decided.value.signal ?? null;
           const signal = chosen ?? item.signal;
           // An approved change with a signal the check measures is watched (the daily effect check).
           const effectCheck = signal === null || !isEffectMeasured(signal.key) ? null : await this.effectCheckFor(tx, item.boardId, signal, outcome, decidedAt);
-          next = { ...base, status: 'approved', statement, outcome, signal, effectCheck };
+          next = { ...base, status: 'approved', statement, outcome: via === undefined ? outcome : { ...outcome, via }, signal, effectCheck };
           if (chosen !== null) await this.claimSignal(tx, next, chosen);
         }
         if (!(await tx.updateKbItem(next, item.version))) throw new StaleKbItem(item.id);
