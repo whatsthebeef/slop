@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { CheckoutPaths, writeFileAtomic } from './checkout-paths.js';
@@ -61,7 +61,12 @@ export type AgentSetBundle = z.infer<typeof bundleSchema>;
 
 const downloadLinkSchema = z.object({ url: z.url() });
 
-const manifestSchema = z.object({ files: z.array(z.string()) });
+const manifestSchema = z.object({
+  board: z.number().optional(),
+  version: z.number().optional(),
+  files: z.array(z.string()),
+});
+type Manifest = z.infer<typeof manifestSchema>;
 
 /** The part of SlopClient init uses; tests inject a fake. */
 export interface ToolCaller {
@@ -230,7 +235,8 @@ export async function installAgentSet(
     return path;
   };
 
-  const previous = await readManifest(destination(MANIFEST_PATH));
+  const previousManifest = await readManifest(destination(MANIFEST_PATH));
+  const previous = previousManifest?.files;
   const isFirstRun = previous === undefined;
   const pending: PendingWrite[] = [];
   if (incomingSettings !== undefined) {
@@ -254,8 +260,22 @@ export async function installAgentSet(
     pending.push({ relative: LOCAL_RUN_PATH, content: renderLocalRun(localRun) });
   }
 
-  await swapInManagedFiles(claudeFolder, managed, destination);
-  for (const write of pending) await writeFileAtomic(destination(write.relative), write.content);
+  // Only what changes is written: the agent set is committed in the checkout, and a rewrite of the
+  // same content (a new key order, a new timestamp) leaves the main checkout's tree dirty.
+  await swapInManagedFiles(claudeFolder, await changedOnly(managed, destination), destination);
+  // Hooks run as commands: an unchanged hook that lost its exec bit gets it back.
+  for (const file of managed) {
+    if (!file.relative.startsWith('.claude/hooks/')) continue;
+    const target = destination(file.relative);
+    const mode = await stat(target).then(
+      (s) => s.mode & 0o777,
+      () => undefined,
+    );
+    if (mode !== undefined && mode !== 0o755) await chmod(target, 0o755);
+  }
+  for (const write of await changedOnly(pending, destination)) {
+    await writeFileAtomic(destination(write.relative), write.content);
+  }
 
   // Remove managed files that left the agent set, and on the first run the legacy ones the
   // bundle didn't just write.
@@ -283,13 +303,21 @@ export async function installAgentSet(
     }
   }
 
-  const manifest = {
-    board: Number(deps.board),
-    version: bundle.version,
-    files: [...written].sort(),
-    fetchedAt: new Date(deps.now()).toISOString().replace(/\.\d{3}Z$/, 'Z'),
-  };
-  await writeFileAtomic(destination(MANIFEST_PATH), jsonWrite(MANIFEST_PATH, manifest).content);
+  const files = [...written].sort();
+  // fetchedAt says when this version was installed, so the same version and files keep it.
+  const unchanged =
+    previousManifest?.board === Number(deps.board) &&
+    previousManifest.version === bundle.version &&
+    JSON.stringify(previousManifest.files) === JSON.stringify(files);
+  if (!unchanged) {
+    const manifest = {
+      board: Number(deps.board),
+      version: bundle.version,
+      files,
+      fetchedAt: new Date(deps.now()).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    };
+    await writeFileAtomic(destination(MANIFEST_PATH), jsonWrite(MANIFEST_PATH, manifest).content);
+  }
   return written;
 }
 
@@ -525,7 +553,7 @@ async function readJsonObject(path: string): Promise<JsonObject> {
   return text === undefined ? {} : parseJsonObject(text, path);
 }
 
-async function readManifest(path: string): Promise<string[] | undefined> {
+async function readManifest(path: string): Promise<Manifest | undefined> {
   const text = await readText(path);
   if (text === undefined) return undefined;
   const manifest = manifestSchema.safeParse(parseJsonOrUndefined(text));
@@ -534,7 +562,45 @@ async function readManifest(path: string): Promise<string[] | undefined> {
       `${path} is not a valid agent set manifest: delete it and run slop init again`,
     );
   }
-  return manifest.data.files;
+  return manifest.data;
+}
+
+/**
+ * The writes whose content differs from what is on disk. JSON files count as unchanged when they
+ * hold the same value in another key order or layout, so the file keeps its order.
+ */
+async function changedOnly(
+  writes: readonly PendingWrite[],
+  destination: (relative: string) => string,
+): Promise<PendingWrite[]> {
+  const changed: PendingWrite[] = [];
+  for (const write of writes) {
+    // A file that can't be read is written over, as it was before this check.
+    const current = await readText(destination(write.relative)).catch(() => undefined);
+    if (current === write.content) continue;
+    const isJson = write.relative.endsWith('.json');
+    if (current !== undefined && isJson && sameJson(current, write.content)) continue;
+    changed.push(write);
+  }
+  return changed;
+}
+
+/** Whether two JSON texts hold the same value, ignoring object key order. */
+function sameJson(a: string, b: string): boolean {
+  const canonical = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : isJsonObject(value)
+        ? Object.fromEntries(
+            Object.keys(value)
+              .sort()
+              .map((key) => [key, canonical(value[key])]),
+          )
+        : value;
+  const left = parseJsonOrUndefined(a);
+  const right = parseJsonOrUndefined(b);
+  if (left === undefined || right === undefined) return false;
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 
 function jsonWrite(relative: string, value: unknown): PendingWrite {
