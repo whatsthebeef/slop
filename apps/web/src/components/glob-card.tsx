@@ -1,4 +1,4 @@
-import { checksExplanation, queuedRunNotice, stuckHint } from '@slop/core';
+import { checksExplanation, queuedRunNotice, readyStatus, stuckHint } from '@slop/core';
 import type { Action, ArtifactKind, Category, DeployIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -91,7 +91,7 @@ const oneLine = (text: string, max = 90): string => {
 const hintSentence = (hint: string): string => oneLine((hint.split(/\.\s|\s+Fix:/)[0] ?? hint).replace(/\.$/, ''));
 
 interface StatusLine {
-  readonly kind: 'base-red' | 'checks' | 'failure' | 'stuck';
+  readonly kind: 'base-red' | 'checks' | 'failure' | 'stuck' | 'ready' | 'waiting';
   readonly text: string;
   readonly tone: string;
   readonly tip: string;
@@ -120,9 +120,14 @@ const statusLine = (glob: GlobView, hint: string | null, checks: ReturnType<type
     candidates.push({ kind: 'failure', text: oneLine(reason), tone: 'text-red', tip });
   }
   if (hint !== null) candidates.push({ kind: 'stuck', text: hintSentence(hint), tone: 'text-required', tip: hint });
+  if (candidates.length === 0) {
+    const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
+    const ready = readyStatus(glob, reviewSha);
+    if (ready !== null) return { ...ready, tone: ready.kind === 'ready' ? 'text-signal-strong' : 'text-muted-foreground' };
+  }
   const [top, ...rest] = candidates;
   if (top === undefined) return null;
-  const ALSO = { 'base-red': 'the base branch is red', checks: 'checks failed', failure: 'the routine run failed', stuck: 'looks stuck' } as const;
+  const ALSO = { 'base-red': 'the base branch is red', checks: 'checks failed', failure: 'the routine run failed', stuck: 'looks stuck', ready: '', waiting: '' } as const;
   const also = rest.length === 0 ? '' : `\nAlso: ${rest.map((c) => ALSO[c.kind]).join(', ')}`;
   return { ...top, tip: `${top.tip}${also}` };
 };
@@ -132,8 +137,9 @@ const RunIndicator = ({ glob }: { glob: GlobView }) => {
   // Ended runs are covered by the status line.
   if (run === null || run.state === 'ended') return null;
   const label = run.state;
+  const watching = 'Routine session watching the PR to auto-fix CI failures and review comments';
   return (
-    <Tip text={queuedRunNotice(glob, new Date().toISOString()) ?? `Routine run ${label}: owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`}>
+    <Tip text={queuedRunNotice(glob, new Date().toISOString()) ?? (run.state === 'watching' ? watching : `Routine run ${label}: owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`)}>
     <span
       className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground'
     >
