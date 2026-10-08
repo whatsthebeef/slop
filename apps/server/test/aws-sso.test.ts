@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { AwsSignIn, readSsoSession, ssoCacheFile } from '../src/aws-sso.js';
 import type { SsoOidc, SsoSession } from '../src/aws-sso.js';
+import type { NotificationSink, RaisedNotification } from '@slop/core';
 import { IntegrationRegistry } from '../src/integration-health.js';
 
 const session: SsoSession = { name: 'slop', startUrl: 'https://example.awsapps.com/start', region: 'us-east-1', scopes: ['sso:account:access'] };
@@ -137,5 +138,90 @@ describe('IntegrationRegistry', () => {
     registry.report('github', { state: 'ok' });
     expect(seen).toEqual(['github:down', 'github:down', 'github:ok']);
     expect(registry.list()).toMatchObject([{ id: 'github', state: 'ok', reason: null, fix: null }]);
+  });
+});
+
+describe('IntegrationRegistry notifications', () => {
+  const setup = (sso = false) => {
+    const raised: RaisedNotification[] = [];
+    const cleared: string[] = [];
+    const sink: NotificationSink = {
+      raise: (n) => Promise.resolve(void raised.push(n)),
+      clear: (boardId, source) =>
+        Promise.resolve(void cleared.push(`${String(boardId)}/${source}`)),
+    };
+    const registry = new IntegrationRegistry(
+      undefined,
+      () => '2026-10-07T10:00:00.000Z',
+      sink,
+      () => sso,
+    );
+    return { registry, raised, cleared };
+  };
+
+  it.each([
+    ['bedrock', 'down', 'critical'],
+    ['github', 'down', 'critical'],
+    ['github', 'degraded', 'warning'],
+    ['routines', 'down', 'critical'],
+    ['tunnel', 'down', 'warning'],
+    ['tunnel', 'degraded', 'warning'],
+  ] as const)('%s %s raises a global %s notification, and ok clears it', (id, state, severity) => {
+    const { registry, raised, cleared } = setup();
+    registry.report(id, { state, reason: 'why', fix: 'do this' });
+    expect(raised).toMatchObject([
+      { boardId: null, source: `integration:${id}`, severity, clears: { kind: 'condition' } },
+    ]);
+    expect(raised[0]?.detail).toContain('do this');
+    registry.report(id, { state: 'ok' });
+    expect(cleared).toEqual([`null/integration:${id}`]);
+  });
+
+  it('says the KB pipeline is paused for Bedrock and offers the AWS sign-in only on a lapsed sign-in with an SSO profile', () => {
+    const expired = { state: 'down', reason: 'AWS sign-in expired', fix: 'Sign in' } as const;
+    const local = setup(true);
+    local.registry.report('bedrock', expired);
+    expect(local.raised[0]).toMatchObject({
+      title: 'AI features paused: AWS sign-in expired',
+      action: { label: 'Sign in to AWS', kind: 'aws-sign-in' },
+    });
+    expect(local.raised[0]?.detail).toContain('paused');
+
+    const production = setup(false);
+    production.registry.report('bedrock', expired);
+    expect(production.raised[0]?.action).toBeNull();
+    const noAccess = setup(true);
+    noAccess.registry.report('bedrock', {
+      state: 'down',
+      reason: 'No access to the model',
+      fix: 'Request it',
+    });
+    expect(noAccess.raised[0]?.action).toBeNull();
+  });
+
+  it('raises nothing for ok before any report, and not again for a repeat', () => {
+    const { registry, raised, cleared } = setup();
+    registry.report('github', { state: 'ok' });
+    registry.report('github', { state: 'down', reason: 'r', fix: 'f' });
+    registry.report('github', { state: 'down', reason: 'r', fix: 'f' });
+    expect(raised).toHaveLength(1);
+    expect(cleared).toEqual([]);
+  });
+
+  it('reports a failing sink instead of throwing', async () => {
+    const errors: string[] = [];
+    const sink: NotificationSink = {
+      raise: () => Promise.reject(new Error('db down')),
+      clear: () => Promise.resolve(),
+    };
+    new IntegrationRegistry(
+      undefined,
+      undefined,
+      sink,
+      () => false,
+      (m) => errors.push(m),
+    ).report('github', { state: 'down', reason: 'r', fix: 'f' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(errors).toEqual(['notification for github: db down']);
   });
 });

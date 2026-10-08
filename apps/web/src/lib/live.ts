@@ -172,6 +172,8 @@ export const useLiveBoard = (boardId: number): LiveState => {
     }
     if (hint.kind === 'board.health') {
       void client.invalidateQueries({ queryKey: healthKey });
+      // Integration problems are global notifications, which raise no board hint of their own.
+      void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
       return;
     }
     const id = hint.globId;

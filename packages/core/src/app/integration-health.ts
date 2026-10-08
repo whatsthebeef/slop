@@ -1,3 +1,5 @@
+import type { RaisedNotification } from '../domain/notifications.js';
+
 /** The integrations slop watches: each can lapse on its own, and each has a fix a person must carry out. */
 export type IntegrationId = 'bedrock' | 'github' | 'routines' | 'tunnel' | 'local';
 
@@ -81,3 +83,34 @@ export const classifyRoutineFailure = (status: number | null): IntegrationReport
         fix: "Create a new API token for the routine's trigger in Claude and put it in the routines file (or Secrets Manager)",
       }
     : null;
+
+export const integrationSource = (id: IntegrationId): string => `integration:${id}`;
+
+/** Down is critical where slop can't do its job without it (AI features, GitHub, routines), warning for the rest; degraded is always a warning. */
+const DOWN_SEVERITY: Readonly<Record<IntegrationId, 'critical' | 'warning'>> = {
+  bedrock: 'critical',
+  github: 'critical',
+  routines: 'critical',
+  tunnel: 'warning',
+  local: 'warning',
+};
+
+/**
+ * The board-wide notification for an integration that needs a person, or null when it is ok. Global (every board).
+ * Bedrock's says the KB pipeline is paused and offers the in-app Sign in to AWS where it applies.
+ */
+export const integrationNotification = (status: IntegrationStatus, serverUsesSso: boolean): RaisedNotification | null => {
+  if (status.state === 'ok') return null;
+  const reason = status.reason ?? status.state;
+  const paused = status.id === 'bedrock';
+  return {
+    boardId: null,
+    source: integrationSource(status.id),
+    severity: status.state === 'down' ? DOWN_SEVERITY[status.id] : 'warning',
+    title: paused ? `AI features paused: ${reason}` : `${status.name}: ${reason}`,
+    detail: `${paused ? 'The knowledge-base pipeline is paused. ' : ''}${status.fix ?? ''}`.trim(),
+    link: null,
+    action: awsSignInApplies(status, serverUsesSso) ? { label: 'Sign in to AWS', href: '', kind: 'aws-sign-in' } : null,
+    clears: { kind: 'condition' },
+  };
+};
