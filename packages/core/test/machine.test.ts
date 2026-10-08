@@ -611,12 +611,62 @@ describe('field changes and type changes (row 26)', () => {
 
   it('same and super swap only while a human implements with no live run', () => {
     expect(value(m.changeFields(glob({ status: 'in_progress' }), { type: 'super' }, board, ctx())).glob.type).toBe('super');
-    expect(errorCode(m.changeFields(glob({ status: 'planning' }), { type: 'super' }, board, ctx()))).toBe(
-      'invalid_transition',
-    );
     expect(
       errorCode(m.changeFields(glob({ status: 'pr_open', runs: [run({ state: 'watching' })] }), { type: 'super' }, board, ctx())),
     ).toBe('invalid_transition');
+  });
+
+  describe('in planning', () => {
+    const planned = (patch: Partial<Parameters<typeof glob>[0]> = {}) => glob({ status: 'planning', provisioning: 'none', pr: null, ...patch });
+
+    it('same to super and back is allowed and does not move the glob', () => {
+      const up = value(m.changeFields(planned(), { type: 'super' }, board, ctx()));
+      expect(up.glob.type).toBe('super');
+      expect(up.glob.status).toBe('planning');
+      expect(effectKinds(up)).toEqual([]);
+      const down = value(m.changeFields(up.glob, { type: 'same' }, board, ctx()));
+      expect(down.glob.type).toBe('same');
+      expect(down.glob.status).toBe('planning');
+    });
+
+    it('is refused while implementing, with a queued run, and after merge', () => {
+      for (const g of [
+        glob({ status: 'implementing', runs: [run()] }),
+        planned({ runs: [run({ state: 'queued' })] }),
+        glob({ status: 'reviewing' }),
+      ]) {
+        expect(errorCode(m.changeFields(g, { type: 'super' }, board, ctx()))).toBe('invalid_transition');
+      }
+      expect(errorCode(m.changeFields(glob({ type: 'super', status: 'implementing' }), { type: 'same' }, board, ctx()))).toBe(
+        'invalid_transition',
+      );
+    });
+
+    it('QA and PO members cannot make a super', () => {
+      const qa = { email: 'qa@example.com', role: 'qa' } as const;
+      for (const actor of [qa, po]) {
+        expect(errorCode(m.changeFields(planned(), { type: 'super' }, board, ctx(actor)))).toBe('forbidden');
+      }
+    });
+
+    it('a planned super offers Pick up but not Start; back to same offers both', () => {
+      const sup = value(m.changeFields(planned(), { type: 'super' }, board, ctx())).glob;
+      const actions = m.allowedActions(sup, dev);
+      expect(actions).toContain('pick_up');
+      expect(actions).not.toContain('start');
+      expect(errorCode(m.start(sup, ctx()))).toBe('invalid_transition');
+      const same = value(m.changeFields(sup, { type: 'same' }, board, ctx())).glob;
+      expect(m.allowedActions(same, dev)).toEqual(expect.arrayContaining(['start', 'pick_up']));
+    });
+
+    it('picking up a planned super goes straight to in_progress and provisions', () => {
+      const sup = value(m.changeFields(planned(), { type: 'super' }, board, ctx())).glob;
+      const t = value(m.pickUp(sup, ctx(), board, { takeOver: false }));
+      expect(t.glob.status).toBe('in_progress');
+      expect(t.glob.implementer).toBe(dev.email);
+      expect(t.glob.provisioning).toBe('pending');
+      expect(effectKinds(t)).toEqual(['provision']);
+    });
   });
 
   it('refuses other type changes', () => {
