@@ -22,6 +22,7 @@ export class FakeCodeHost implements CodeHost {
   listFiles: CodeHost['listFiles'] = () => Promise.resolve([]);
   commitFiles: CodeHost['commitFiles'] = () => Promise.resolve({ parent: null, files: [] });
   markReady: CodeHost['markReady'] = () => Promise.resolve({ wasDraft: true, sha: 'abcdef0123456789' });
+  conflictState: CodeHost['conflictState'] = () => Promise.resolve('clean');
   conflictFiles: CodeHost['conflictFiles'] = () => Promise.resolve([]);
   behindBase: CodeHost['behindBase'] = () => Promise.resolve({ behindBy: 0, files: [] });
   commentOnce: CodeHost['commentOnce'] = () => Promise.resolve('posted');
