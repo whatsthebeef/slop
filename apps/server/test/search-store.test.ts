@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { FakeEmbedder, GlobService, vectorOf } from '@slop/core';
-import type { Candidate, NewKnowledgeItem, SearchQuery, SourceType } from '@slop/core';
+import type { Candidate, NewKnowledgeItem, SearchQuery, SourceType, Tx } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as schema from '../src/db/schema.js';
@@ -20,6 +20,9 @@ describe('search store', () => {
   let boardId: number;
   let otherBoardId: number;
 
+  const makeBoard = (tx: Tx, name: string) =>
+    tx.insertBoard({ name, repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] });
+
   beforeAll(async () => {
     ({ database, drop, url } = await createTestDatabase('search_store'));
     store = new PgStore(database.db);
@@ -32,10 +35,8 @@ describe('search store', () => {
     });
     await store.transaction(async (tx) => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
-      const make = (name: string) =>
-        tx.insertBoard({ name, repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] });
-      boardId = (await make('search')).id;
-      otherBoardId = (await make('other')).id;
+      boardId = (await makeBoard(tx, 'search')).id;
+      otherBoardId = (await makeBoard(tx, 'other')).id;
       await tx.upsertMember({ boardId, email: DEV, role: 'admin' });
     });
   });
@@ -155,11 +156,7 @@ describe('search store', () => {
     const filterQuery = (patch: Partial<SearchQuery>) => query('filterword', { boardId: filterBoardId, ...patch });
 
     beforeAll(async () => {
-      filterBoardId = (
-        await store.transaction((tx) =>
-          tx.insertBoard({ name: 'filters', repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] }),
-        )
-      ).id;
+      filterBoardId = (await store.transaction((tx) => makeBoard(tx, 'filters'))).id;
       const base = { sourceType: 'glob_plan' as SourceType };
       await put(own({ ...base, externalRef: 'f:old', title: 'Old', occurredAt: '2026-01-10T00:00:00.000Z', globIds: ['s1t1'], globGroup: 'billing' }), 'filterword alpha');
       await put(own({ ...base, externalRef: 'f:mid', title: 'Mid', occurredAt: '2026-06-10T00:00:00.000Z', globIds: ['s1t2'], globGroup: 'billing' }), 'filterword beta');
@@ -184,8 +181,8 @@ describe('search store', () => {
     it('never returns another board, whatever the glob or group filter says', async () => {
       const foreign = await store.transaction((tx) => tx.keywordCandidates({ boardId: otherBoardId, query: 'filterword', mode: 'current', globId: 's1t2' }, 20));
       expect(foreign).toEqual([]);
-      const own = await store.transaction((tx) => tx.keywordCandidates({ boardId: otherBoardId, query: 'filterword', mode: 'current' }, 20));
-      expect(titles(own)).toEqual(['Foreign']);
+      const otherBoard = await store.transaction((tx) => tx.keywordCandidates({ boardId: otherBoardId, query: 'filterword', mode: 'current' }, 20));
+      expect(titles(otherBoard)).toEqual(['Foreign']);
     });
 
     it('applies the same filters to vector search', async () => {
