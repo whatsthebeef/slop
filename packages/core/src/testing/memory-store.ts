@@ -4,6 +4,7 @@ import type { DomainEvent, Effect } from '../domain/events.js';
 import { sameCommit } from '../domain/signals.js';
 import type { TestRun } from '../domain/test-runs.js';
 import type { CodeReviewComment } from '../domain/code-review.js';
+import type { BoardNotification } from '../domain/notifications.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import type { KbItem } from '../domain/kb.js';
@@ -42,6 +43,7 @@ interface State {
   /** External IDs of CodeRabbit items deleted on the code host (tombstones). */
   /** Tombstones: external ID and when it was deleted, as Postgres keeps `deleted_at`. */
   deletedCodeReviews: { externalId: string; at: string }[];
+  notifications: Map<string, BoardNotification>;
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -71,6 +73,7 @@ const clone = (state: State): State => ({
   testRuns: [...state.testRuns],
   codeReviews: [...state.codeReviews],
   deletedCodeReviews: [...state.deletedCodeReviews],
+  notifications: new Map(state.notifications),
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -102,6 +105,7 @@ export class MemoryStore implements Store {
     testRuns: [],
     codeReviews: [],
     deletedCodeReviews: [],
+    notifications: new Map(),
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -197,6 +201,14 @@ export class MemoryStore implements Store {
         if (current !== undefined) s.boards.set(boardId, { ...current, baseChecks });
         return Promise.resolve();
       },
+      getNotification: (id) => Promise.resolve(s.notifications.get(id) ?? null),
+      saveNotification: (notification) => {
+        s.notifications.set(notification.id, notification);
+        return Promise.resolve();
+      },
+      deleteNotification: (id) => Promise.resolve(s.notifications.delete(id)),
+      listNotifications: (boardId) =>
+        Promise.resolve([...s.notifications.values()].filter((n) => n.boardId === null || n.boardId === boardId)),
       listBoards: (email) =>
         Promise.resolve(
           [...s.boards.values()].filter((b) => s.members.has(memberKey(b.id, email))),

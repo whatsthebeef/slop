@@ -3,6 +3,7 @@ import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './do
 import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
 import type { CodeReviewComment, NewCodeReviewComment } from './domain/code-review.js';
+import type { BoardNotification } from './domain/notifications.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
@@ -70,6 +71,13 @@ export interface Tx {
   listSubLimitChanges(boardId: number): Promise<SubLimitChange[]>;
   /** Records the base branch's latest check result. It has no board version: check results arrive on their own. */
   setBaseChecks(boardId: number, baseChecks: BaseChecks): Promise<void>;
+  /** Board notifications have no version: sources raise and clear them on their own. */
+  getNotification(id: string): Promise<BoardNotification | null>;
+  saveNotification(notification: BoardNotification): Promise<void>;
+  /** True when it existed. */
+  deleteNotification(id: string): Promise<boolean>;
+  /** The board's own notifications and the global ones. */
+  listNotifications(boardId: number): Promise<BoardNotification[]>;
   listBoards(email: string): Promise<Board[]>;
   /** Every board, for background jobs. */
   listAllBoards(): Promise<Board[]>;
@@ -250,7 +258,9 @@ export type Hint =
   /** The board's KB items, documents or agent-set files changed (the board itself only on an agent-set version bump). */
   | { readonly kind: 'board.kb'; readonly boardId: number }
   /** An integration's health changed (sent to every open board): the banner refetches it. */
-  | { readonly kind: 'board.health'; readonly boardId: number };
+  | { readonly kind: 'board.health'; readonly boardId: number }
+  /** A board notification was raised, changed or cleared (beside the board, no version bump). */
+  | { readonly kind: 'board.notifications'; readonly boardId: number };
 
 /** Publishes small change hints to open boards after a commit. */
 export interface Notifier {

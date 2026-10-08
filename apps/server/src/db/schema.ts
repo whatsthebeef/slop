@@ -1,4 +1,6 @@
 import type {
+  NotificationAction,
+  NotificationClears,
   BaseChecks,
   Board,
   BoardJobResult,
@@ -567,4 +569,23 @@ export const codeReviewComments = pgTable(
     index('code_review_comments_glob_idx').on(t.globId),
     index('code_review_comments_board_glob_idx').on(t.boardId, t.globId),
   ],
+);
+
+/** Board notifications: board-wide incidents that need a person, one per board and source. No version. */
+export const boardNotifications = pgTable(
+  'board_notifications',
+  {
+    id: text('id').primaryKey(),
+    /** Null: for every board. */
+    boardId: integer('board_id').references(() => boards.id, { onDelete: 'cascade' }),
+    source: text('source').notNull(),
+    severity: text('severity').notNull(),
+    title: text('title').notNull(),
+    detail: text('detail').notNull(),
+    link: text('link'),
+    action: jsonb('action').$type<NotificationAction>(),
+    since: timestamp('since', { withTimezone: true }).notNull(),
+    clears: jsonb('clears').$type<NotificationClears>().notNull(),
+  },
+  (t) => [index('board_notifications_board_idx').on(t.boardId)],
 );
