@@ -176,11 +176,12 @@ check_tunnel() {
   echo "arrive. Is another ngrok holding the endpoint (ERR_NGROK_334)? Stop it and restart."
 }
 
+# `start replace` restarts even when this checkout's server is the one running (dev.sh follow).
 start() {
   if tmux has-session -t "$session" 2>/dev/null; then
     local other
     other="$(running_root)"
-    if [[ "$other" == "$root" ]]; then
+    if [[ "$other" == "$root" && "${1:-}" != replace ]]; then
       echo "slop-dev is already running from this checkout (scripts/dev.sh restart to restart)"
       return
     fi
@@ -188,10 +189,11 @@ start() {
   elif lsof -ti tcp:3000 >/dev/null 2>&1; then
     echo "Stopping the slop server already on :3000 (one server at a time)"
   fi
-  stop
   postgres_up
   check_migrations
   build_board
+  # Stopped only now: a failed snapshot or build leaves the running server up.
+  stop
   # tmux sessions inherit the tmux server's environment, so pass what the server needs.
   # LOCAL_SIGN_IN_WITHOUT_COOKIE: Chrome drops the sign-in state cookie on plain-http localhost.
   local env_args=(-e "LOCAL_SIGN_IN_WITHOUT_COOKIE=true")
@@ -215,10 +217,10 @@ start() {
 }
 
 foreground() {
-  stop
   postgres_up
   check_migrations
   build_board
+  stop
   if [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]]; then
     ngrok http --url="$SLOP_TUNNEL_DOMAIN" 3000 --log=false >/dev/null &
     tunnel_pid=$!
@@ -272,8 +274,9 @@ session() {
     local cloning="${db}__cloning"
     echo "Cloning the shared database into $db"
     psql_slop -d postgres -qc "drop database if exists \"$cloning\" with (force)" -c "create database \"$cloning\" owner slop"
-    if ! (cd "$root" && docker compose exec -T postgres bash -o pipefail -c \
-      "pg_dump -U slop -d slop --format=custom | pg_restore -U slop -d '$cloning' --no-owner --exit-on-error"); then
+    # Through a file rather than a pipe, so a pg_dump failure fails the clone in any image's sh.
+    if ! (cd "$root" && docker compose exec -T postgres sh -c \
+      "pg_dump -U slop -d slop --format=custom -f /tmp/$cloning.dump && pg_restore -U slop -d '$cloning' --no-owner --exit-on-error /tmp/$cloning.dump; status=\$?; rm -f /tmp/$cloning.dump; exit \$status"); then
       psql_slop -d postgres -qc "drop database if exists \"$cloning\" with (force)"
       echo "dev.sh session: cloning the shared database failed" >&2
       exit 1
@@ -373,7 +376,7 @@ follow() {
   running="$(git -C "$root" rev-parse HEAD)"
   follow_status following "sha=$running" "repo=$repo"
   # The server reads SLOP_FOLLOW_FILE, so (re)start it under follow.
-  stop; start
+  start replace
   echo "Following origin/$base (every ${SLOP_FOLLOW_INTERVAL:-60}s). Ctrl-C stops following; the server keeps running."
   local held=false
   hold() {
@@ -422,10 +425,10 @@ follow() {
     # In the background and waited for: errexit holds inside the restart (a failed build or snapshot
     # stops it), which it wouldn't in a tested command or a command substitution.
     log="$(mktemp)"
-    ( set -e; stop; start ) >"$log" 2>&1 &
+    ( set -e; start replace ) >"$log" 2>&1 &
     if ! wait $!; then
       cat "$log"; rm -f "$log"
-      hold "restarting on ${target:0:7} failed" "See the follow window; follow tries again"
+      hold "restarting on ${target:0:7} failed; the server still runs ${running:0:7}" "See the follow window; follow tries again"
       continue
     fi
     cat "$log"
@@ -468,7 +471,7 @@ case "$action" in
   foreground) foreground; exit 0 ;;
   start) start ;;
   stop) stop ;;
-  restart) running_watch && watch_mode=true; stop; start ;;
+  restart) running_watch && watch_mode=true; start replace ;;
   check-migrations) check_migrations; exit 0 ;;
   session) session "${2:-}"; exit 0 ;;
   session-drop) session_drop; exit 0 ;;
