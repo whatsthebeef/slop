@@ -1,5 +1,5 @@
 import { LlmUnavailable } from '@slop/core';
-import type { Llm, LlmRequest } from '@slop/core';
+import type { Embedder, Llm, LlmRequest } from '@slop/core';
 
 /** What slop last learned about a model: unknown until a call ends, then ok or down with the fix. */
 export type LlmHealthState =
@@ -46,6 +46,26 @@ export class LlmHealth {
           const answer = await llm.complete(request);
           this.record(model, { state: 'ok', since: this.now() });
           return answer;
+        } catch (error) {
+          if (error instanceof LlmUnavailable) {
+            this.record(model, { state: 'down', reason: error.reason, fix: error.fix, since: this.now() });
+          }
+          throw error;
+        }
+      },
+    };
+  }
+
+  /** The embedder for `model`, recording each call's outcome here like `track` (a success is ok, `LlmUnavailable` is down). */
+  trackEmbedder(embedder: Embedder, model: string): Embedder {
+    return {
+      model: embedder.model,
+      dimensions: embedder.dimensions,
+      embed: async (texts, signal) => {
+        try {
+          const vectors = await embedder.embed(texts, signal);
+          this.record(model, { state: 'ok', since: this.now() });
+          return vectors;
         } catch (error) {
           if (error instanceof LlmUnavailable) {
             this.record(model, { state: 'down', reason: error.reason, fix: error.fix, since: this.now() });

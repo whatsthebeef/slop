@@ -5,7 +5,7 @@ import type { Database } from '../../src/db/store.js';
 const ADMIN_URL = process.env.TEST_ADMIN_DATABASE_URL ?? 'postgres://slop:slop@localhost:5432/slop';
 
 /** A throwaway, migrated database next to the dev one (`docker compose up -d postgres`). */
-export const createTestDatabase = async (name: string): Promise<{ database: Database; drop: () => Promise<void> }> => {
+export const createTestDatabase = async (name: string): Promise<{ database: Database; url: string; drop: () => Promise<void> }> => {
   const dbName = `slop_test_${name}_${process.pid}`;
   const admin = connect(ADMIN_URL);
   await admin.db.execute(sql.raw(`create database ${dbName}`));
@@ -14,6 +14,7 @@ export const createTestDatabase = async (name: string): Promise<{ database: Data
   const database = connect(url);
   return {
     database,
+    url,
     drop: async () => {
       await database.close();
       await admin.db.execute(sql.raw(`drop database if exists ${dbName} with (force)`));

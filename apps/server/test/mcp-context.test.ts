@@ -1,4 +1,4 @@
-import { ArtifactService, GlobService } from '@slop/core';
+import { ArtifactService, FakeEmbedder, GlobService, SearchService, vectorOf } from '@slop/core';
 import type { Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -22,6 +22,7 @@ interface Body {
   attachments: { label: string }[];
   available: { kind: string }[];
   content: string;
+  related?: { citation: { title: string; link: string | null; globId: string | null } }[];
 }
 
 describe('MCP get_context include and get_artifact', () => {
@@ -44,7 +45,8 @@ describe('MCP get_context include and get_artifact', () => {
       ids: { runId: () => crypto.randomUUID() },
       routines: { hasRoutine: () => Promise.resolve(true) },
     });
-    const artifacts = new ArtifactService(deps);
+    const search = new SearchService({ store, clock: deps.clock, embedder: new FakeEmbedder() });
+    const artifacts = new ArtifactService({ ...deps, related: (tx, glob) => search.related(tx, glob) });
     const boardId = await store.transaction(async (tx) => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
       const board = await tx.insertBoard({
@@ -88,6 +90,33 @@ describe('MCP get_context include and get_artifact', () => {
       await artifacts.attach(DEV, globId, { label: 'Notes', text: 'Side notes.', link: null }),
     );
 
+    // Material about the same topic: one item of another glob, one of the super itself (left out of related).
+    await store.transaction(async (tx) => {
+      const item = (ref: string, linked: string) =>
+        tx.replaceItem(
+          {
+            boardId,
+            sourceType: 'glob_plan',
+            externalRef: ref,
+            title: ref,
+            occurredAt: new Date().toISOString(),
+            authority: 'approved_plan',
+            status: 'active',
+            supersededBy: null,
+            globIds: [linked],
+            globGroup: null,
+            externalUrl: `/boards/${String(boardId)}?glob=${linked}`,
+            contentHash: ref,
+            state: 'ready',
+          },
+          [{ position: 0, header: `[${ref}]`, text: 'Super idea about plans' }],
+        );
+      await item('earlier-work', 's9t9');
+      await item('own-work', globId);
+      const pending = await tx.chunksToEmbed(100);
+      await tx.setEmbeddings(pending.map((c) => ({ id: c.id, embedding: vectorOf(c.text) })));
+    });
+
     const server = buildServer({ artifacts, globs } as unknown as McpDeps, DEV, 'http://localhost');
     const [a, b] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test', version: '0' });
@@ -126,6 +155,12 @@ describe('MCP get_context include and get_artifact', () => {
       ]),
     );
     expect(body.available).toHaveLength(3);
+  });
+
+  it('get_context adds cited related material for the glob and not its own items', async () => {
+    const { body } = await call('get_context', { id: globId });
+    expect(body.related?.map((h) => h.citation.title)).toEqual(['earlier-work']);
+    expect(body.related?.[0]?.citation.link).toContain('s9t9');
   });
 
   it('get_context include returns the named artifacts in full', async () => {
