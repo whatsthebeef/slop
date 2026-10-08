@@ -144,6 +144,33 @@ describe('slop init', () => {
     await writeFile(join(root, path), content);
   }
 
+  it('changes nothing on disk when the same agent set is installed again', async () => {
+    await runInit(harness().deps);
+    // The same settings in another key order (as an older copy of the file had them) are kept as they are.
+    const settings = JSON.parse(await read('.claude/settings.json')) as Record<string, unknown>;
+    const reordered = Object.fromEntries(Object.entries(settings).reverse());
+    await put('.claude/settings.json', `${JSON.stringify(reordered, null, 2)}\n`);
+    const paths = [
+      '.claude/settings.json',
+      '.claude/agents/implementer.md',
+      '.mcp.json',
+      'CLAUDE.md',
+      '.gitignore',
+      MANIFEST_PATH,
+    ];
+    const before = await Promise.all(paths.map(read));
+    const later = harness();
+    await runInit({ ...later.deps, now: () => NOW + 3_600_000 });
+    expect(await Promise.all(paths.map(read))).toEqual(before);
+  });
+
+  it('records a new fetchedAt when the agent-set version changes', async () => {
+    await runInit(harness().deps);
+    const next = harness({ body: bundle({}, 4) });
+    await runInit({ ...next.deps, now: () => NOW + 3_600_000 });
+    expect(await readJson(MANIFEST_PATH)).toMatchObject({ version: 4, fetchedAt: '2026-10-04T13:00:00Z' });
+  });
+
   it('installs the agent set into a fresh checkout', async () => {
     const run = harness();
     await runInit(run.deps);
