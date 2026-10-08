@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { CheckoutPaths, writeFileAtomic } from './checkout-paths.js';
@@ -263,6 +263,16 @@ export async function installAgentSet(
   // Only what changes is written: the agent set is committed in the checkout, and a rewrite of the
   // same content (a new key order, a new timestamp) leaves the main checkout's tree dirty.
   await swapInManagedFiles(claudeFolder, await changedOnly(managed, destination), destination);
+  // Hooks run as commands: an unchanged hook that lost its exec bit gets it back.
+  for (const file of managed) {
+    if (!file.relative.startsWith('.claude/hooks/')) continue;
+    const target = destination(file.relative);
+    const mode = await stat(target).then(
+      (s) => s.mode & 0o777,
+      () => undefined,
+    );
+    if (mode !== undefined && mode !== 0o755) await chmod(target, 0o755);
+  }
   for (const write of await changedOnly(pending, destination)) {
     await writeFileAtomic(destination(write.relative), write.content);
   }
@@ -565,9 +575,11 @@ async function changedOnly(
 ): Promise<PendingWrite[]> {
   const changed: PendingWrite[] = [];
   for (const write of writes) {
-    const current = await readText(destination(write.relative));
+    // A file that can't be read is written over, as it was before this check.
+    const current = await readText(destination(write.relative)).catch(() => undefined);
     if (current === write.content) continue;
-    if (current !== undefined && write.relative.endsWith('.json') && sameJson(current, write.content)) continue;
+    const isJson = write.relative.endsWith('.json');
+    if (current !== undefined && isJson && sameJson(current, write.content)) continue;
     changed.push(write);
   }
   return changed;
@@ -579,11 +591,16 @@ function sameJson(a: string, b: string): boolean {
     Array.isArray(value)
       ? value.map(canonical)
       : isJsonObject(value)
-        ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]))
+        ? Object.fromEntries(
+            Object.keys(value)
+              .sort()
+              .map((key) => [key, canonical(value[key])]),
+          )
         : value;
   const left = parseJsonOrUndefined(a);
   const right = parseJsonOrUndefined(b);
-  return left !== undefined && right !== undefined && JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+  if (left === undefined || right === undefined) return false;
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 
 function jsonWrite(relative: string, value: unknown): PendingWrite {

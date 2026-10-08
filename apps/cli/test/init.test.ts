@@ -1,4 +1,5 @@
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -159,9 +160,22 @@ describe('slop init', () => {
       MANIFEST_PATH,
     ];
     const before = await Promise.all(paths.map(read));
+    const mtimes = () => Promise.all(paths.map(async (path) => (await stat(join(root, path))).mtimeMs));
+    const touched = await mtimes();
     const later = harness();
     await runInit({ ...later.deps, now: () => NOW + 3_600_000 });
     expect(await Promise.all(paths.map(read))).toEqual(before);
+    // Not rewritten with the same content either.
+    expect(await mtimes()).toEqual(touched);
+  });
+
+  it('writes over a file it cannot read, and gives a hook back its exec bit', async () => {
+    await runInit(harness().deps);
+    await chmod(join(root, '.claude/agents/implementer.md'), 0o000);
+    await chmod(join(root, '.claude/hooks/slop_after_push.sh'), 0o644);
+    await runInit(harness().deps);
+    expect(await read('.claude/agents/implementer.md')).toBe('# Implementer\n');
+    expect((await stat(join(root, '.claude/hooks/slop_after_push.sh'))).mode & 0o777).toBe(0o755);
   });
 
   it('records a new fetchedAt when the agent-set version changes', async () => {
@@ -399,6 +413,12 @@ describe('slop init', () => {
       expect(run.out).toEqual([
         'slop init: board 7 agent set v3: 4 files, settings, CLAUDE.md, local-run spec (.sstor/local-run.json)\n',
       ]);
+    });
+
+    it('rewrites a spec file that is not valid JSON', async () => {
+      await put(LOCAL_RUN_PATH, '{ not json');
+      await runInit(harness({ body: withSpec({ launch: 'scripts/session.sh' }) }).deps);
+      expect(await read(LOCAL_RUN_PATH)).toBe('{\n  "launch": "scripts/session.sh"\n}\n');
     });
 
     it('removes it when the board has none, and leaves it alone for an older server', async () => {
