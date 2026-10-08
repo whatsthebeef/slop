@@ -123,4 +123,3 @@ Include the report path, a brief summary and, on `FAIL`, the specific new failur
 - **One behaviour per test**, even with several assertions.
 - **Types**: test code follows the same typing conventions as production code.
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
-
