@@ -1,5 +1,5 @@
-import { BoardService, GlobService, KnowledgeService } from '@slop/core';
-import type { Catalog, ReadinessItem } from '@slop/core';
+import { BoardService, GlobService, NotificationService } from '@slop/core';
+import type { ReadinessItem } from '@slop/core';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CodeHost } from '../src/codehost.js';
@@ -11,11 +11,6 @@ import { createTestDatabase } from './support/database.js';
 import { fakeCodeHost } from './support/fake-codehost.js';
 
 const ADMIN = 'admin@example.com';
-
-const catalog: Catalog = {
-  kbEntries: () => Promise.resolve([]),
-  agentSet: () => Promise.resolve({ hash: 'empty', files: [] }),
-};
 
 /** A repo whose `.github/workflows/` holds `files` (path to text) on every branch. */
 const hostWith = (files: Record<string, string>): CodeHost =>
@@ -77,7 +72,8 @@ describe('GET /api/boards/:b/readiness: Claude workflow', () => {
         ids: { runId: () => crypto.randomUUID() },
         routines: { hasRoutine: () => Promise.resolve(true) },
       }),
-      knowledge: new KnowledgeService({ ...deps, catalog }),
+      store,
+      notifications: new NotificationService(deps),
       host,
       log: () => undefined,
     });
@@ -107,4 +103,30 @@ describe('GET /api/boards/:b/readiness: Claude workflow', () => {
     );
     expect(item).toMatchObject({ state: 'ok' });
   });
+
+  it('reading the checklist raises the board setup line on the bar for each member, and dismissing is personal', async () => {
+    const notifications = new NotificationService(deps);
+    const app = new Hono<Env>();
+    app.use('/api/*', async (c, next) => {
+      c.set('email', ADMIN);
+      await next();
+    });
+    mountReadiness(app, {
+      boards: new BoardService(deps),
+      globs: new GlobService({ ...deps, ids: { runId: () => crypto.randomUUID() }, routines: { hasRoutine: () => Promise.resolve(true) } }),
+      store,
+      notifications,
+      host: hostWith({}),
+      log: () => undefined,
+    });
+    expect((await app.request(`/api/boards/${String(boardId)}/readiness`)).status).toBe(200);
+    const shown = await notifications.list(ADMIN, boardId);
+    expect(shown.ok && shown.value.filter((n) => n.source === 'readiness')).toMatchObject([
+      { severity: 'info', clears: { kind: 'personal', dismissed: {} }, link: `/boards/${String(boardId)}/settings#readiness` },
+    ]);
+    await notifications.dismiss(ADMIN, boardId, `${String(boardId)}/readiness`);
+    const after = await notifications.list(ADMIN, boardId);
+    expect(after.ok && after.value.some((n) => n.source === 'readiness')).toBe(false);
+  });
 });
+
