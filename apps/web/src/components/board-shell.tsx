@@ -1,5 +1,4 @@
 import { Outlet, useParams } from 'react-router';
-import { IntegrationBanner } from '@/components/integration-banner';
 import { NotificationBar } from '@/components/notification-bar';
 import { StatusBar } from '@/components/status-bar';
 
@@ -9,7 +8,6 @@ export const BoardShell = () => {
   return (
     <div className="flex h-dvh flex-col">
       <StatusBar current={Number.isInteger(boardId) ? boardId : undefined} />
-      <IntegrationBanner />
       {Number.isInteger(boardId) && <NotificationBar boardId={boardId} />}
       <div className="min-h-0 flex-1 overflow-auto">
         <Outlet />

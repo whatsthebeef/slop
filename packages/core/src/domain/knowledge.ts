@@ -178,9 +178,9 @@ export interface ReviewStats {
   readonly testFailRounds: number;
 }
 
-/** Who produced an artifact: a person, sessionator, or a model with its prompt and agent-set version. */
+/** Who produced an artifact: a person, sessionator, a model with its prompt and agent-set version, or the backfill that gave an existing glob its plan.md v1. */
 export interface Provenance {
-  readonly by: 'human' | 'sessionator' | 'routine';
+  readonly by: 'human' | 'sessionator' | 'routine' | 'backfill';
   readonly actor: string;
   readonly runId: string | null;
   readonly agentSetVersion: number | null;

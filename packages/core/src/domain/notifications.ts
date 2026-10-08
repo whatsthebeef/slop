@@ -13,6 +13,8 @@ export type NotificationClears =
 export interface NotificationAction {
   readonly label: string;
   readonly href: string;
+  /** `link` (the default) opens `href`; `aws-sign-in` runs the in-app AWS sign-in from the bar. */
+  readonly kind?: 'link' | 'aws-sign-in';
 }
 
 /**
@@ -23,7 +25,7 @@ export interface BoardNotification {
   /** `<boardId or 'all'>/<source>`. */
   readonly id: string;
   readonly boardId: number | null;
-  /** `main-red` today; `integration:<id>` and `local-follow` later. */
+  /** `main-red`, `integration:<id>`, `local-follow`. */
   readonly source: string;
   readonly severity: NotificationSeverity;
   readonly title: string;

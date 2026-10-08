@@ -986,7 +986,8 @@ const ProposalCard = ({
           {outcomeText(item, board)}{' '}
           {item.decidedBy !== null && (
             <span className='text-muted-foreground'>
-              · {item.decidedBy} · {when(item.decidedAt)}
+              · {item.decidedBy}
+              {item.outcome?.via === 'agent' && ' via agent'} · {when(item.decidedAt)}
             </span>
           )}
         </p>

@@ -1,5 +1,5 @@
-import { INTEGRATION_NAMES } from '@slop/core';
-import type { HealthSink, IntegrationId, IntegrationReport, IntegrationStatus } from '@slop/core';
+import { INTEGRATION_NAMES, integrationNotification, integrationSource } from '@slop/core';
+import type { HealthSink, NotificationSink, IntegrationId, IntegrationReport, IntegrationStatus } from '@slop/core';
 
 /**
  * The server's health registry behind the core `HealthSink` port: what each integration last
@@ -12,6 +12,11 @@ export class IntegrationRegistry implements HealthSink {
   constructor(
     private readonly onChange: (status: IntegrationStatus) => void = () => undefined,
     private readonly now: () => string = () => new Date().toISOString(),
+    /** Each change raises or clears the integration's board notification. */
+    private readonly notifications: NotificationSink | null = null,
+    /** Whether the in-app AWS sign-in exists on this server (known only after the registry is built). */
+    private readonly serverUsesSso: () => boolean = () => false,
+    private readonly onError: (message: string) => void = () => undefined,
   ) {}
 
   report(id: IntegrationId, report: IntegrationReport): void {
@@ -30,6 +35,14 @@ export class IntegrationRegistry implements HealthSink {
     };
     this.statuses.set(id, next);
     this.onChange(next);
+    this.syncNotification(next);
+  }
+
+  private syncNotification(status: IntegrationStatus): void {
+    if (this.notifications === null) return;
+    const raised = integrationNotification(status, this.serverUsesSso());
+    const done = raised === null ? this.notifications.clear(null, integrationSource(status.id)) : this.notifications.raise(raised);
+    done.catch((error: unknown) => this.onError(`notification for ${status.id}: ${error instanceof Error ? error.message : String(error)}`));
   }
 
   /** Every integration that has reported, ok ones included. */

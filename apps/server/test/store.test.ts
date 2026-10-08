@@ -1,5 +1,6 @@
 import { GlobService } from '@slop/core';
 import type { Result } from '@slop/core';
+import { readFileSync } from 'node:fs';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, PgStore, runMigrations } from '../src/db/store.js';
@@ -112,6 +113,33 @@ describe('PgStore', () => {
     expect(latest.map((a) => `${a.kind}:${a.version}`).sort()).toEqual(['attachment:1', 'plan:2']);
     const versions = await store.transaction((tx) => tx.artifactVersions(glob.id, 'plan', ''));
     expect(versions.map((v) => v.version)).toEqual([1, 2]);
+  });
+
+  it('backfills plan.md v1 from the summary only where a glob has none, and again changes nothing', async () => {
+    const backfill = readFileSync(new URL('../drizzle/0023_plan_backfill.sql', import.meta.url), 'utf8');
+    const bare = unwrap(await create());
+    const planned = unwrap(await create());
+    const blank = unwrap(await create());
+    const setSummary = (id: string, summary: string) =>
+      database.db.execute(sql`update globs set data = jsonb_set(data, '{summary}', to_jsonb(${summary}::text)) where id = ${id}`);
+    await setSummary(bare.id, 'Old summary');
+    await setSummary(planned.id, 'Summary of a planned glob');
+    await setSummary(blank.id, '  ');
+    await database.db.execute(sql`delete from artifacts where glob_id in (${bare.id}, ${planned.id}, ${blank.id})`);
+    const provenance = { by: 'human' as const, actor: 'dev@example.com', runId: null, agentSetVersion: null };
+    await store.transaction((tx) =>
+      tx.insertArtifact({ globId: planned.id, kind: 'plan', label: '', content: 'Real plan', link: null, commitSha: null, provenance, createdAt: new Date().toISOString() }),
+    );
+    await database.db.execute(sql.raw(backfill));
+    await database.db.execute(sql.raw(backfill));
+    const plans = (id: string) => store.transaction((tx) => tx.artifactVersions(id, 'plan', ''));
+    const [v1, ...more] = await plans(bare.id);
+    expect(more).toEqual([]);
+    expect(v1).toMatchObject({ version: 1, content: 'Old summary', provenance: { by: 'backfill' } });
+    expect((await plans(planned.id)).map((a) => [a.version, a.content])).toEqual([[1, 'Real plan']]);
+    expect(await plans(blank.id)).toEqual([]);
+    const summary = await store.transaction((tx) => tx.getGlob(bare.id));
+    expect(summary?.summary).toBe('Old summary');
   });
 
   it('summarises artifacts per glob on a board: latest version per kind, version count, no content', async () => {

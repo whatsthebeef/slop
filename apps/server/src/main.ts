@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
-import type { Llm } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
+import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { JOBS, loadConfig, type Job } from './config.js';
@@ -70,11 +70,14 @@ const globs = new GlobService({
   ids: { runId: () => randomUUID() },
   routines,
 });
+// Set once the SSO profile is read below; the registry asks when a status changes.
+let awsSignInEnabled = false;
+const notifications = new NotificationService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 // Each integration reports its health here; a change tells every open board's banner to refetch.
 const integrations = new IntegrationRegistry((status) => {
   console.log(`[health] ${status.name} ${status.state}${status.reason === null ? '' : `: ${status.reason}`}`);
   hub.broadcast('board.health');
-});
+}, undefined, notifications, () => awsSignInEnabled, (message) => logError('integrations', message));
 const githubCredentials = new AppCredentialsStore(config.GITHUB_APP_FILE);
 await githubCredentials.load();
 const github = new GitHub(githubCredentials, integrations);
@@ -89,7 +92,6 @@ const deploys = new DeployService({
 });
 const environments = new EnvironmentService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
-const notifications = new NotificationService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 const codeReviews = new CodeReviewService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 
 const outbox = new OutboxRunner(
@@ -250,6 +252,10 @@ const awsSignIn =
           );
         },
       });
+awsSignInEnabled = awsSignIn !== null;
+// The registry starts empty: drop notifications a previous run left, so a problem fixed while the server was down doesn't linger.
+for (const id of Object.keys(INTEGRATION_NAMES) as IntegrationId[]) await notifications.clear(null, integrationSource(id));
+await notifications.clear(null, 'integration:local'); // the retired fake integration of local follow
 mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
 mountCodeReviews(app, { codeReviews });
 mountSearch(app, { search });
@@ -351,7 +357,7 @@ if (runs('tunnel')) tunnelWatch?.start();
 const followWatch =
   config.SLOP_FOLLOW_FILE === undefined
     ? null
-    : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, config.SLOP_FOLLOW_ENVIRONMENT, integrations, (d) => environments.recordDeploy(d), logError);
+    : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, config.SLOP_FOLLOW_ENVIRONMENT, notifications, (d) => environments.recordDeploy(d), logError);
 if (runs('follow')) followWatch?.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
