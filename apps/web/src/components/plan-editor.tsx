@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
+import { copyOrSelect, planBaseline, planText } from '@/lib/plan-text';
 import { useToast } from '@/toast';
 
 /** plan.md for a glob: what the implementer works from. Every save is a new version. */
@@ -32,18 +33,29 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
     onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not save the plan'),
   });
 
-  const value = draft ?? saved ?? '';
+  const value = planText(draft, saved, summary);
+  const area = useRef<HTMLTextAreaElement>(null);
+  const copy = async () => {
+    const ok = await copyOrSelect(value, navigator.clipboard, () => area.current?.select());
+    toast(ok ? 'Copied' : 'Could not copy; the text is selected, press Ctrl+C');
+  };
   const versions = plan.data?.versions.length ?? 0;
   return (
     <div className='grid gap-2'>
       <div className='flex items-center justify-between text-xs text-muted-foreground'>
         <span className='font-semibold'>plan.md</span>
-        <span>{versions === 0 ? 'not written yet' : `version ${versions}`}</span>
+        <span className='flex items-center gap-2'>
+          <span>{versions === 0 ? 'not written yet' : `version ${versions}`}</span>
+          <Button variant='ghost' size='sm' onClick={() => void copy()}>
+            Copy
+          </Button>
+        </span>
       </div>
       <Textarea
+        ref={area}
         className='min-h-40 font-mono text-xs'
         value={value}
-        placeholder={summary === '' ? 'What to build, and "Done when:" lines…' : summary}
+        placeholder='What to build, and "Done when:" lines…'
         onChange={(e) => edit(e.target.value)}
       />
       {changedUnderneath && (
@@ -59,7 +71,7 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
           </span>
         </div>
       )}
-      {draft !== null && draft !== (saved ?? '') && (
+      {draft !== null && draft !== planBaseline(saved, summary) && (
         <div className='flex justify-end gap-2'>
           <Button variant='outline' size='sm' onClick={() => setDraft(null)}>
             Discard
