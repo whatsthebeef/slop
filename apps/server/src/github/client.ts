@@ -411,6 +411,18 @@ export class GitHub implements CodeHost, CommitGraph {
     return { wasDraft: true, sha: data.head.sha };
   }
 
+  async conflictState(repo: Repo, prNumber: number): Promise<'clean' | 'conflict' | 'unknown'> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner: repo.owner,
+      repo: repo.name,
+      pull_number: prNumber,
+    });
+    // `mergeable` is null while GitHub computes it. A draft's `mergeable_state` is "draft", so `mergeable` decides.
+    if (data.mergeable === false || data.mergeable_state === 'dirty') return 'conflict';
+    return data.mergeable === true ? 'clean' : 'unknown';
+  }
+
   async conflictFiles(repo: Repo, prNumber: number): Promise<string[]> {
     try {
       const gh = await this.octokit(repo);

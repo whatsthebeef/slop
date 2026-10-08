@@ -1,4 +1,5 @@
 import { failureSummary } from './checks.js';
+import type { RaisedNotification } from './notifications.js';
 import type { Board, Glob } from './types.js';
 
 /**
@@ -387,4 +388,44 @@ export const readyStatus = (glob: Glob, reviewSha: string | null = null): ReadyS
     return { kind: 'ready', text: 'Ready to merge', tip: `Checks passed at ${head.slice(0, 7)}. ${merge}${auto}${stale}` };
   }
   return { kind: 'waiting', text: 'Waiting for checks', tip: `Checks are still running on ${head.slice(0, 7)}.${stale}` };
+};
+
+export const READINESS_SOURCE = 'readiness';
+const FAILING_PREFIX = 'readiness:';
+export const readinessFailingSource = (key: ReadinessKey): string => `${FAILING_PREFIX}${key}`;
+export const isReadinessFailingSource = (source: string): boolean => source.startsWith(FAILING_PREFIX);
+
+/**
+ * Board setup as notifications, loud only as far as its state warrants: a warning for each item that failed after
+ * it worked (clears when it passes), and one dismissible-per-person info line for the items never set up. Unknown and
+ * ok items raise nothing.
+ */
+export const readinessNotifications = (boardId: number, items: readonly ReadinessItem[]): RaisedNotification[] => {
+  const link = `/boards/${String(boardId)}/settings#readiness`;
+  const raised: RaisedNotification[] = items
+    .filter((i) => i.state === 'failing')
+    .map((i) => ({
+      boardId,
+      source: readinessFailingSource(i.key),
+      severity: 'warning',
+      title: `${i.title} is failing`,
+      detail: i.detail,
+      link,
+      action: { label: i.fix?.label ?? 'Readiness checklist', href: i.fix === null ? link : i.fix.kind === 'link' ? i.fix.href : link },
+      clears: { kind: 'condition' },
+    }));
+  const missing = items.filter((i) => i.state === 'missing');
+  if (missing.length > 0) {
+    raised.push({
+      boardId,
+      source: READINESS_SOURCE,
+      severity: 'info',
+      title: `Board setup: ${String(missing.length)} ${missing.length === 1 ? 'item' : 'items'} to do`,
+      detail: missing.map((i) => i.title).join(', '),
+      link,
+      action: { label: 'Readiness checklist', href: link },
+      clears: { kind: 'personal', items: missing.map((i) => i.key), dismissed: {} },
+    });
+  }
+  return raised;
 };

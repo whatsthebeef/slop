@@ -10,7 +10,6 @@ import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
 import { GlobDialog } from '@/components/glob-dialog';
-import { ReadinessBanner } from '@/components/readiness';
 import { SearchBox } from '@/components/search-box';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -402,7 +401,6 @@ export const BoardPage = () => {
         </nav>
       </header>
 
-      <ReadinessBanner boardId={boardId} />
 
       <main
         ref={(el) => {

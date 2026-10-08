@@ -1,7 +1,7 @@
 import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { FileRoutines } from './routines.js';
-import { machine, parseId, subGatePolicy } from '@slop/core';
+import { isRepoAccessFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -10,6 +10,10 @@ import { conflictCommentBody, conflictCommentMarker } from './conflict-comment.j
 
 /** How long a cancelled check run may wait for a newer run on the same head before it is re-requested. */
 const CANCELLED_CHECK_WAIT_MS = 5 * 60_000;
+
+/** The HTTP status of a code host error (Octokit's `status`), when it has one. */
+const httpStatus = (error: unknown): number | null =>
+  typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number' ? error.status : null;
 
 /**
  * Outbox executors for the code host (the GitHub App today). Each turns one effect into GitHub calls and feeds what
@@ -22,7 +26,7 @@ export const codeHostExecutors = (
   boards: Pick<BoardService, 'recordBaseChecks'>,
   now: () => string = () => new Date().toISOString(),
   health: HealthSink | null = null,
-  notifications: Pick<NotificationService, 'syncMainRed'> | null = null,
+  notifications: Pick<NotificationService, 'syncMainRed' | 'raise' | 'clear'> | null = null,
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -69,7 +73,7 @@ export const codeHostExecutors = (
   };
 
   return {
-    provision: async (_effect, glob, { globs }) => {
+    provision: async (_effect, glob, { globs }, attempt) => {
       if (glob === null) return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null || !host.configured) {
@@ -77,13 +81,23 @@ export const codeHostExecutors = (
         await globs.applyEvent(glob.id, (g, ctx) => machine.provisioned(g, { branch: g.id, pr: null }, ctx));
         return 'done';
       }
+      const name = `${repo.owner}/${repo.name}`;
       try {
         const result = await host.provision(repo, glob);
         await globs.applyEvent(glob.id, (g, ctx) => machine.provisioned(g, result, ctx));
+        await notifications?.clear(glob.boardId, REPO_ACCESS_SOURCE);
         return 'done';
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        await globs.applyEvent(glob.id, (g, ctx) => machine.provisioningFailed(g, reason, ctx));
+        const message = error instanceof Error ? error.message : String(error);
+        const code = httpStatus(error);
+        // A 404 or 403 means the App can't reach the repo: say so on the glob and the board, and don't retry.
+        const impossible = isRepoAccessFailure(code, message);
+        const reason = provisioningFailureReason(glob.id, name, code, message);
+        await globs.applyEvent(glob.id, (g, ctx) => machine.provisioningFailed(g, reason, ctx, impossible || attempt?.final === true));
+        if (impossible) {
+          await notifications?.raise(repoAccessNotification(glob.boardId, name));
+          return 'done';
+        }
         throw error;
       }
     },
@@ -181,6 +195,8 @@ export const codeHostExecutors = (
       const head = await host.headOf(repo, repo.base);
       if (head === null) return 'dropped';
       const result = await host.commitChecks(repo, head.sha);
+      // The calls above reached the repo, so the App can see it again.
+      await notifications?.clear(board.id, REPO_ACCESS_SOURCE);
       // Still running: the check's completion sends another event.
       if (result.state === 'pending') return 'done';
       const passed = result.state === 'passed';

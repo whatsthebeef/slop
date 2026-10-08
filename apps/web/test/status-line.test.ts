@@ -114,3 +114,19 @@ describe('shared status line', () => {
     expect(waitingFor(g, [], 'qa')).toEqual([]);
   });
 });
+
+describe('provisioning failure', () => {
+  it('shows the reason and fix first, ahead of every other problem', () => {
+    const reason = "Couldn't create branch s1t1 on acme/app: the slop GitHub App can't see that repo. Install it on the repo, or add the repo to its access, then Start over.";
+    const g = view({
+      status: 'failed',
+      provisioning: 'failed',
+      failure: { reason, at: NOW, kind: 'provisioning' },
+      headChecks: failedChecks,
+    });
+    const line = statusLine(g, NOW);
+    expect(line).toMatchObject({ kind: 'provisioning', full: reason });
+    expect(line?.tip).not.toContain('the routine run failed');
+    expect(top(g)).toMatchObject({ kind: 'provisioning', full: reason });
+  });
+});

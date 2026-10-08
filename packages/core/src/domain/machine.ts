@@ -878,7 +878,7 @@ export const provisioned = (
   ctx: Context,
 ): Result<Transition> => {
   const b = new Builder(glob, ctx)
-    .set({ provisioning: 'ok' })
+    .set({ provisioning: 'ok', ...(glob.failure?.kind === 'provisioning' ? { failure: null } : {}) })
     .event('BranchCreated', { ok: true, branch: result.branch });
   if (result.pr !== null) {
     b.set({ pr: { number: result.pr.number, state: 'draft', headSha: result.pr.headSha } }).event('PROpened', {
@@ -888,8 +888,19 @@ export const provisioned = (
   return b.done();
 };
 
-export const provisioningFailed =(glob: Glob, reason: string, ctx: Context) =>
-  new Builder(glob, ctx).set({ provisioning: 'failed' }).event('BranchCreated', { ok: false, reason }).done();
+/**
+ * Provisioning failed. A retryable failure only records the attempt; one that won't be retried (`final`: a 404 or 403
+ * from the code host, or the last attempt) puts the reason on the glob and ends its queued run with it, so the card
+ * and glob view say why and nothing keeps waiting for a branch that will not come.
+ */
+export const provisioningFailed = (glob: Glob, reason: string, ctx: Context, final = false): Result<Transition> => {
+  const b = new Builder(glob, ctx).set({ provisioning: 'failed' }).event('BranchCreated', { ok: false, reason });
+  if (!final) return b.done();
+  if (currentRun(glob)?.state === 'queued') b.endRun('failed', reason);
+  b.set({ failure: { reason, at: ctx.now, kind: 'provisioning' } });
+  if (glob.status === 'implementing') b.status('failed');
+  return b.done();
+};
 
 /** A push to the glob branch: records the new head; results for older commits stop counting. */
 export const commitPushed = (

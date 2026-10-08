@@ -12,7 +12,7 @@ import type { GlobView } from './api';
 /** One problem on a glob, in plain words: what the card shows in a line and the glob view shows in full. */
 export interface StatusLine {
   readonly kind:
-    'base-red' | 'checks' | 'failure' | 'stuck' | 'behind' | 'ready' | 'waiting' | 'merge-waits';
+    'provisioning' | 'base-red' | 'checks' | 'failure' | 'stuck' | 'behind' | 'ready' | 'waiting' | 'merge-waits';
   /** One line, cut short: the card's text. */
   readonly text: string;
   /** The whole sentence, for the glob view. */
@@ -39,6 +39,7 @@ export const hintSentence = (hint: string): string =>
   (hint.split(/\.\s|\s+Fix:/)[0] ?? hint).replace(/\.$/, '');
 
 const ALSO = {
+  provisioning: "the branch couldn't be created",
   'base-red': 'the base branch is red',
   checks: 'checks failed',
   failure: 'the routine run failed',
@@ -57,6 +58,7 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
   const reason = glob.failure?.reason ?? 'Routine run failed';
   const run = glob.currentRun ?? null;
   const session = run?.sessionUrl ?? null;
+  const provisioningFailed = glob.provisioning === 'failed' && glob.failure?.kind === 'provisioning';
   const candidates: StatusLine[] = [];
   const make = (
     line: Omit<StatusLine, 'text' | 'url' | 'doing' | 'sessionUrl'> &
@@ -68,6 +70,10 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
     sessionUrl: null,
     ...line,
   });
+  // A glob with no branch can't do anything else, so this comes before every other problem.
+  if (provisioningFailed) {
+    candidates.push(make({ kind: 'provisioning', full: reason, tone: 'text-red', tip: reason }));
+  }
   if (checks !== null) {
     const details = [checks.text, ...checks.lines.slice(1, 4), checks.url ?? ''].filter(
       (l) => l !== '',
@@ -109,7 +115,7 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
       );
     }
   }
-  if (failed) {
+  if (failed && !provisioningFailed) {
     const tip = `${reason}${glob.failure?.reason.startsWith('Routine run never started') === true && session !== null ? `\nSession: ${session}` : ''}`;
     candidates.push(make({ kind: 'failure', full: reason, tone: 'text-red', tip }));
   }
