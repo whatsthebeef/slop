@@ -886,7 +886,45 @@ describe('aging', () => {
   });
 });
 
+describe('merge failure recovery (row 16a)', () => {
+  const failedMerge = (over: Record<string, unknown> = {}) =>
+    glob({
+      type: 'same',
+      status: 'failed',
+      implementer: dev.email,
+      pr: { number: 7, state: 'ready', headSha: 'aaa' },
+      failure: { reason: 'Merge conflict with main', at: NOW, kind: 'merge', conflict: { base: 'main', files: ['a.ts'] } },
+      ...over,
+    });
+  it('puts a failed same or super back in pr_open on a push, keeping the implementer and queuing no run', () => {
+    for (const type of ['same', 'super'] as const) {
+      const t = value(m.commitPushed(failedMerge({ type }), { sha: 'bbb', runId: null }, ctx(null)));
+      expect(t.glob.status).toBe('pr_open');
+      expect(t.glob.failure).toBeNull();
+      expect(t.glob.implementer).toBe(dev.email);
+      expect(t.glob.pr?.headSha).toBe('bbb');
+      expect(t.glob.runs).toEqual([]);
+      expect(effectKinds(t)).toEqual(['refresh_checks']);
+    }
+  });
+  it('leaves a failed sub, a non-merge failure and a draft PR alone', () => {
+    expect(value(m.commitPushed(failedMerge({ type: 'sub' }), { sha: 'bbb', runId: null }, ctx(null))).glob.status).toBe('failed');
+    expect(value(m.commitPushed(failedMerge({ failure: { reason: 'x', at: NOW } }), { sha: 'bbb', runId: null }, ctx(null))).glob.status).toBe('failed');
+    expect(value(m.commitPushed(failedMerge({ pr: { number: 7, state: 'draft', headSha: 'aaa' } }), { sha: 'bbb', runId: null }, ctx(null))).glob.status).toBe('failed');
+  });
+  it('hides Retrigger for a merge failure with a human implementer', () => {
+    expect(m.allowedActions(failedMerge(), dev)).not.toContain('retrigger');
+    expect(m.allowedActions(failedMerge({ implementer: null }), dev)).toContain('retrigger');
+  });
+});
+
 describe('mark ready', () => {
+  it('moves an in-progress glob whose PR is already ready straight to pr_open', () => {
+    const g = glob({ status: 'in_progress', pr: { number: 7, state: 'ready', headSha: 'aaa' } });
+    const t = value(m.readyRequested(g, null, ctx()));
+    expect(t.glob.status).toBe('pr_open');
+    expect(effectKinds(t)).not.toContain('mark_pr_ready');
+  });
   it('queues marking the draft PR ready for the current run only', () => {
     const g = glob({ status: 'implementing', runs: [run()] });
     expect(effectKinds(value(m.readyRequested(g, 'run-0', ctx(null))))).toEqual(['mark_pr_ready']);

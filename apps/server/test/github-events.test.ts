@@ -115,6 +115,37 @@ describe('GitHub webhook deliveries', () => {
     expect((await current()).pr?.headSha).toBe('b2');
   });
 
+  it('recovers a glob whose merge failed when a push lands on its branch', async () => {
+    const g = await current();
+    await database.db
+      .update(schema.globs)
+      .set({
+        data: {
+          ...g,
+          type: 'same',
+          status: 'failed',
+          pr: { number: 7, state: 'ready', headSha: 'a1' },
+          failure: { reason: 'Merge conflict with main', at: g.updatedAt, kind: 'merge', conflict: { base: 'main', files: ['a.ts'] } },
+        },
+      })
+      .where(eq(schema.globs.id, globId));
+    await handle({
+      id: id(),
+      event: 'push',
+      payload: {
+        ref: `refs/heads/${globId}`,
+        after: 'c3',
+        head_commit: { message: `${globId}: Merge main` },
+        repository: { full_name: REPO },
+      },
+    });
+    const after = await current();
+    expect(after.status).toBe('pr_open');
+    expect(after.failure).toBeNull();
+    expect(after.implementer).toBe(DEV);
+    expect(after.pr?.headSha).toBe('c3');
+  });
+
   it('records the agent-set version from the Slop-Agent-Set trailer on the push event', async () => {
     const push = (sha: string, message: string) =>
       handle({ id: id(), event: 'push', payload: { ref: `refs/heads/${globId}`, after: sha, head_commit: { message }, repository: { full_name: REPO } } });
