@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { Auth } from '../auth.js';
 import { SESSION_COOKIE, SESSION_DAYS } from '../auth.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
+import type { ReadyGate } from '../ready-gate.js';
 import type { HintHub } from '../notifier.js';
 import type { SignedLinks } from '../signed-links.js';
 import { labelCommandSchema } from './labels.js';
@@ -21,6 +22,8 @@ export interface AppDeps {
   readonly globs: GlobService;
   readonly hub: HintHub;
   readonly outbox: OutboxRunner;
+  /** Refuses Ready for review for a branch that conflicts with its base. */
+  readonly readyGate?: ReadyGate;
   /** Signs the board sign-in `state`. */
   readonly links: SignedLinks;
   /** Runs after a board is created (forks the catalog's agent set into it). */
@@ -369,7 +372,10 @@ export const createApp = (deps: AppDeps) => {
     merge: (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version),
     // Supers: row 31, and the board's Ready for review (both need the latest postplan at the head).
     'merge-continue': (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version, true),
-    'mark-ready': (email: string, id: string, b: ActionBody) => globs.requestReadyFromBoard(email, id, b.version),
+    'mark-ready': async (email: string, id: string, b: ActionBody) => {
+      const gate = await deps.readyGate?.(email, id);
+      return gate !== undefined && !gate.ok ? gate : globs.requestReadyFromBoard(email, id, b.version);
+    },
   } as const;
 
   app.post('/api/globs/:id/actions/:action', async (c) => {

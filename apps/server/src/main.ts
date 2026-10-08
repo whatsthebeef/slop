@@ -11,6 +11,7 @@ import { createApp } from './http/app.js';
 import { mountKnowledge } from './http/knowledge.js';
 import { OutboxRunner } from './jobs/outbox.js';
 import { mountMcp } from './mcp/server.js';
+import { readyGate } from './ready-gate.js';
 import { GitHub } from './github/client.js';
 import { AppCredentialsStore } from './github/credentials.js';
 import { githubDeliveryHandler } from './github/events.js';
@@ -195,6 +196,7 @@ if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
 
 const app = createApp({
   auth,
+  readyGate: readyGate(github, globs, boards),
   links,
   boards,
   globs,
@@ -253,6 +255,7 @@ app.get('/downloads/agent-set/:board', async (c) => {
 mountArtifactUploads(app, { artifacts, globs, links });
 mountMcp(app, {
   auth,
+  readyGate: readyGate(github, globs, boards),
   boards,
   globs,
   deploys,

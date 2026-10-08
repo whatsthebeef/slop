@@ -79,6 +79,8 @@ export interface CodeHost {
   commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles>;
   /** Marks a draft PR ready for review. */
   markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }>;
+  /** Whether the PR's branch merges cleanly into its base, in the host's own view; `unknown` while the host is still working it out. */
+  conflictState(repo: Repo, prNumber: number): Promise<'clean' | 'conflict' | 'unknown'>;
   /** Files changed on both the PR's branch and the base branch since they diverged: where a conflict can be. Best effort; empty when unknown. */
   conflictFiles(repo: Repo, prNumber: number): Promise<string[]>;
   /**

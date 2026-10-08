@@ -16,6 +16,7 @@ import { issueUploadUrl } from '../http/artifact-upload.js';
 import { requestOrigin } from '../http/origin.js';
 import { errorBody, globView, onBoard } from '../http/views.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
+import type { ReadyGate } from '../ready-gate.js';
 
 export interface McpDeps {
   readonly auth: Auth;
@@ -26,6 +27,8 @@ export interface McpDeps {
   readonly knowledge: KnowledgeService;
   readonly artifacts: ArtifactService;
   readonly intake: IntakeService;
+  /** Refuses `mark_ready` for a branch that conflicts with its base. */
+  readonly readyGate: ReadyGate;
   readonly publicUrl: string;
   /** Public values filled into agent-set files when served (slop's URL, the Claude Code client ID). */
   readonly agentSetValues: Record<string, string>;
@@ -285,14 +288,22 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'mark_ready',
     {
       description:
-        "Mark the glob's draft PR ready for review when the work is pushed. slop does it through its GitHub App; the glob moves to pr_open when GitHub confirms. Routines pass their run ID.",
+        "Mark the glob's draft PR ready for review when the work is pushed. slop does it through its GitHub App; the glob moves to pr_open when GitHub confirms. Routines pass their run ID. Refused, with the files, while the branch conflicts with its base: merge the base, resolve, run the checks, push and call it again. A branch only behind its base is marked, with a warning to merge it.",
       inputSchema: { id: z.string(), runId: z.string().optional() },
     },
     async ({ id, runId }) => {
       if (runId !== undefined) await globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
+      const gate = await deps.readyGate(email, id);
+      if (!gate.ok) return reply(gate);
       const result = await globs.requestReady(email, id, runId ?? null);
       if (result.ok) await deps.outbox.drain(id);
-      return reply(result, (g) => ({ id: g.id, status: g.status, pr: g.pr, note: 'The PR is being marked ready; the glob moves to pr_open when GitHub confirms.' }));
+      return reply(result, (g) => ({
+        id: g.id,
+        status: g.status,
+        pr: g.pr,
+        note: 'The PR is being marked ready; the glob moves to pr_open when GitHub confirms.',
+        ...(gate.value.warning !== undefined && { warning: gate.value.warning }),
+      }));
     },
   );
 
