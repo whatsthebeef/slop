@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { accessToken, login, logout, type AuthDeps } from './auth.js';
 import { SlopClient, type ToolArguments } from './client.js';
@@ -18,6 +19,7 @@ import {
   readyCommand,
   type GlobDeps,
 } from './globs.js';
+import { PUT_ARTIFACT_USAGE, putArtifactCommand } from './put-artifact.js';
 import { resolveBoard, resolveMcpServer, runInit } from './init.js';
 import { describeError, parseJsonOrUndefined } from './util.js';
 
@@ -30,6 +32,15 @@ export interface CliContext extends AuthDeps {
   readonly isMcpServerConfigured: (server: string, root: string) => Promise<boolean>;
   readonly git: Git;
   readonly sleep: (ms: number) => Promise<void>;
+  /** Reads a file's text, or stdin for `-`; tests inject a fake. */
+  readonly readInput?: (path: string) => Promise<string>;
+}
+
+async function readInputDefault(path: string): Promise<string> {
+  if (path !== '-') return readFile(path, 'utf8');
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Uint8Array));
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 interface Command {
@@ -132,7 +143,8 @@ const COMMANDS: Readonly<Record<string, Command>> = {
       expectArgs(args, 2, 3, API_USAGE);
       const [method, path, json] = args;
       const verb = API_METHODS.find((m) => m === method?.toUpperCase());
-      if (verb === undefined || path === undefined) throw new UsageError(`usage: slop ${API_USAGE}`);
+      if (verb === undefined || path === undefined)
+        throw new UsageError(`usage: slop ${API_USAGE}`);
       const body = json === undefined ? undefined : parseJsonOrUndefined(json);
       if (json !== undefined && body === undefined) throw new UsageError('the body must be JSON');
       const value = await clientFor(context).rest(verb, path, body);
@@ -182,6 +194,16 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     usage: READY_USAGE,
     summary: "Push the glob's branch (default: the current one) and mark its PR ready",
     run: (args, context) => readyCommand(args, globDeps(context)),
+  },
+  'put-artifact': {
+    usage: PUT_ARTIFACT_USAGE,
+    summary: 'Upload a plan, postplan or local review from a file (or - for stdin) to a glob',
+    run: (args, context) =>
+      putArtifactCommand(args, {
+        client: clientFor(context),
+        readInput: context.readInput ?? readInputDefault,
+        stdout: context.stdout,
+      }),
   },
   merge: {
     usage: MERGE_USAGE,

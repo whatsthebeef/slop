@@ -5,12 +5,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Hono } from 'hono';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Auth } from '../auth.js';
 import type { Env } from '../http/app.js';
 import { renderAgentSetFile } from '../catalog.js';
 import type { SignedLinks } from '../signed-links.js';
 import { parseLabelCommand } from '../http/labels.js';
+import { issueUploadUrl } from '../http/artifact-upload.js';
 import { requestOrigin } from '../http/origin.js';
 import { errorBody, globView, onBoard } from '../http/views.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
@@ -555,6 +557,42 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           reviewStats: reviewStats ?? null,
         }),
         (a) => ('ignored' in a ? a : { id: a.id, kind: a.kind, version: a.version }),
+      );
+    },
+  );
+
+  server.registerTool(
+    'artifact_upload_url',
+    {
+      description:
+        "A URL for uploading an implementation plan, postplan or local review from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
+      inputSchema: {
+        id: z.string(),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
+        commitSha: z.string().optional(),
+        runId: z.string().optional(),
+        agentSetVersion: z.number().int().nonnegative().optional(),
+        reviewStats: z
+          .object({
+            riskTier: z.enum(RISK_TIERS),
+            reviewRounds: z.number().int().min(0).max(20),
+            maxReviewRounds: z.number().int().min(0).max(20),
+            testFailRounds: z.number().int().min(0).max(20),
+          })
+          .optional(),
+      },
+    },
+    async ({ id, kind, commitSha, runId, agentSetVersion, reviewStats }) => {
+      // Only a member of the glob's board gets a link.
+      const found = await globs.get(email, id);
+      if (!found.ok) return reply(found);
+      return json(
+        issueUploadUrl(
+          deps.links,
+          origin,
+          { id, kind, email, commitSha: commitSha ?? null, runId: runId ?? null, agentSetVersion: agentSetVersion ?? null, reviewStats: reviewStats ?? null },
+          randomUUID(),
+        ),
       );
     },
   );
