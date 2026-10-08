@@ -1,11 +1,12 @@
-import { CATEGORIES, checksExplanation, isValidCombination, machine, SLOP_TYPES } from '@slop/core';
-import type { Action, Category, EditFailure, Role, SlopType } from '@slop/core';
+import { CATEGORIES, isValidCombination, machine, SLOP_TYPES } from '@slop/core';
+import type { Action, Category, EditFailure, SlopType } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
+import { viewStatusLine, waitingFor } from '@/lib/status-line';
 import { ArtifactsSection } from './artifacts';
 import { CodeReviewSection } from './code-review';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
@@ -15,6 +16,7 @@ import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
 import { ReviewFindings } from './review-findings';
+import { cn } from '@/lib/utils';
 import { Tip } from './ui/tip';
 
 const STATUS_TEXT: Record<GlobView['status'], string> = {
@@ -34,55 +36,6 @@ const ACTION_TIPS: Partial<Record<Action, string>> = {
   merge_continue: "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
   mark_ready: 'Marks the draft PR ready for review',
   resolve_conflict: 'Asks the Claude GitHub App, in a PR comment, to merge the base branch into this branch and resolve the conflicts',
-};
-
-const { POSTPLAN_NOT_AT_HEAD } = machine;
-
-/** Why an action the glob is heading for isn't available yet. */
-interface Waiting {
-  readonly action: Action;
-  readonly reason: string;
-}
-
-/** Why the head's checks failed, from the failing run's log; a red base branch means a fix isn't this glob's to push. */
-const failedChecksReason = (glob: GlobView, head: string): string => {
-  const why = checksExplanation(glob);
-  if (why === null) return `Checks failed on ${head.slice(0, 7)}; push a fix`;
-  const link = why.url === null ? '' : ` (${why.url})`;
-  return why.inherited
-    ? `${why.text}${link}. Waiting for it to be fixed on the base branch; this branch is updated when it is`
-    : `Checks failed on ${head.slice(0, 7)}: ${why.text}${link}; push a fix`;
-};
-
-/**
- * Actions the glob is heading for but can't take yet, shown disabled with the reason: merging
- * waits for the checks on the PR head, and a super's Merge and continue and Ready for review wait
- * for the latest postplan at the head.
- */
-const waitingFor = (glob: GlobView, actions: readonly Action[], role: Role): Waiting[] => {
-  // QA and PO can't take these actions at all, so a reason would mislead them.
-  if (role === 'qa' || role === 'po') return [];
-  const waiting: Waiting[] = [];
-  if (glob.status === 'pr_open' && glob.type !== 'sub' && !actions.includes('merge')) {
-    const head = glob.pr?.headSha ?? null;
-    const checks = glob.headChecks;
-    const reason =
-      head === null
-        ? 'Waiting for the PR head'
-        : checks?.sha === head && checks.state === 'failed'
-          ? failedChecksReason(glob, head)
-          : `Waiting for the checks on ${head.slice(0, 7)} to pass`;
-    waiting.push({ action: 'merge', reason });
-    if (glob.type === 'super') waiting.push({ action: 'merge_continue', reason });
-  }
-  if (glob.type !== 'super') return waiting;
-  if (actions.includes('merge') && !actions.includes('merge_continue')) {
-    waiting.push({ action: 'merge_continue', reason: POSTPLAN_NOT_AT_HEAD });
-  }
-  if (glob.status === 'in_progress' && glob.pr?.state === 'draft' && !actions.includes('mark_ready')) {
-    waiting.push({ action: 'mark_ready', reason: POSTPLAN_NOT_AT_HEAD });
-  }
-  return waiting;
 };
 
 export const GlobDialog = ({
@@ -132,6 +85,7 @@ export const GlobDialog = ({
   const dirty = Object.keys(draft).length > 0;
   const actions = (glob.allowedActions ?? []).filter((a) => a !== 'delete');
   const disabled = waitingFor(glob, actions, board.role);
+  const status = viewStatusLine(glob, new Date().toISOString(), disabled);
   // Ready for review changes nothing until GitHub confirms, so say it was asked for meanwhile.
   const [readyAsked, setReadyAsked] = useState(false);
   const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
@@ -190,8 +144,31 @@ export const GlobDialog = ({
             </span>
           </div>
 
-          {glob.failure !== null && (
-            <p className='rounded border border-red/40 bg-red/10 p-2 text-sm'>Failed: {glob.failure.reason}</p>
+          {status !== null && (
+            <p className={cn('text-sm font-medium', status.tone)} data-testid='status-line' data-kind={status.kind}>
+              {status.full}
+              {status.url !== null && (
+                <>
+                  {' ('}
+                  <a className='underline' href={status.url} target='_blank' rel='noreferrer'>
+                    check run
+                  </a>
+                  )
+                </>
+              )}
+              {status.doing !== null && (
+                <span className='font-normal'>
+                  {' — '}
+                  {status.sessionUrl === null ? (
+                    status.doing
+                  ) : (
+                    <a className='underline' href={status.sessionUrl} target='_blank' rel='noreferrer'>
+                      {status.doing}
+                    </a>
+                  )}
+                </span>
+              )}
+            </p>
           )}
           {(glob.failure?.conflict ?? glob.conflict) != null && glob.implementer !== null && (
             <div className='grid gap-1 rounded border border-edge p-2 text-sm'>
@@ -237,23 +214,14 @@ export const GlobDialog = ({
                     </Tip>
                   );
                 })}
-                {disabled.map(({ action, reason }) => (
-                  <Tip key={action} text={reason}>
+                {disabled.map(({ action, tip }) => (
+                  <Tip key={action} text={tip}>
                     <Button variant='outline' size='sm' disabled>
                       {ACTION_LABELS[action]}
                     </Button>
                   </Tip>
                 ))}
               </div>
-              {[...new Set(disabled.map((w) => w.reason))].map((reason) => (
-                <p key={reason} className='text-xs text-muted-foreground'>
-                  {disabled
-                    .filter((w) => w.reason === reason)
-                    .map((w) => ACTION_LABELS[w.action])
-                    .join(' and ')}
-                  : {reason}
-                </p>
-              ))}
               {confirmingReady && (
                 <div role='alert' className='flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs'>
                   <span className='flex-1'>

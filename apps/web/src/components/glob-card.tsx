@@ -1,10 +1,11 @@
-import { behindAdvice, behindWarning, checksExplanation, queuedRunNotice, readyStatus, stuckHint } from '@slop/core';
+import { queuedRunNotice } from '@slop/core';
 import type { Action, ArtifactKind, Category, CodeReviewBadge, DeployIndicator, EnvironmentIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, MessageSquareCode, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
+import { statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { Tip } from './ui/tip';
@@ -79,59 +80,6 @@ export const GroupChip = ({ name }: { name: string }) => {
       </span>
     </Tip>
   );
-};
-
-/** Cut to one line of at most `max` characters. */
-const oneLine = (text: string, max = 90): string => {
-  const line = (text.split('\n')[0] ?? '').trim();
-  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
-};
-
-/** The first sentence of a stuck hint, without its "Fix: …" advice. */
-const hintSentence = (hint: string): string => oneLine((hint.split(/\.\s|\s+Fix:/)[0] ?? hint).replace(/\.$/, ''));
-
-interface StatusLine {
-  readonly kind: 'base-red' | 'checks' | 'failure' | 'stuck' | 'behind' | 'ready' | 'waiting';
-  readonly text: string;
-  readonly tone: string;
-  readonly tip: string;
-}
-
-/** The one problem a card shows, in plain words, most important first; the rest go in its tooltip. */
-const statusLine = (glob: GlobView, hint: string | null, checks: ReturnType<typeof checksExplanation>): StatusLine | null => {
-  const failed = glob.status === 'failed' || glob.failure !== null;
-  const reason = glob.failure?.reason ?? 'Routine run failed';
-  const session = glob.currentRun?.sessionUrl ?? null;
-  const candidates: StatusLine[] = [];
-  if (checks !== null) {
-    const details = [checks.text, ...checks.lines.slice(1, 4), checks.url ?? ''].filter((l) => l !== '');
-    if (checks.inherited) {
-      const head = /^(.*?not this glob's change)/.exec(checks.text)?.[1] ?? "The base branch is red: not this glob's change";
-      candidates.push({ kind: 'base-red', text: oneLine(head), tone: 'text-required', tip: details.join('\n') });
-    } else {
-      const failure = glob.headChecks?.failure;
-      const first = failure?.lines[0];
-      const text = failure === undefined ? 'Checks failed' : first === undefined ? `${failure.name} failed` : `${failure.name} failed: ${first}`;
-      candidates.push({ kind: 'checks', text: oneLine(text), tone: 'text-red', tip: details.join('\n') });
-    }
-  }
-  if (failed) {
-    const tip = `${reason}${glob.failure?.reason.startsWith('Routine run never started') === true && session !== null ? `\nSession: ${session}` : ''}`;
-    candidates.push({ kind: 'failure', text: oneLine(reason), tone: 'text-red', tip });
-  }
-  if (hint !== null) candidates.push({ kind: 'stuck', text: hintSentence(hint), tone: 'text-required', tip: hint });
-  const behind = behindWarning(glob);
-  if (behind !== null) candidates.push({ kind: 'behind', text: behind, tone: 'text-muted-foreground', tip: `${behind}\n${behindAdvice(glob)}` });
-  if (candidates.length === 0) {
-    const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
-    const ready = readyStatus(glob, reviewSha);
-    if (ready !== null) return { ...ready, tone: ready.kind === 'ready' ? 'text-signal-strong' : 'text-muted-foreground' };
-  }
-  const [top, ...rest] = candidates;
-  if (top === undefined) return null;
-  const ALSO = { 'base-red': 'the base branch is red', checks: 'checks failed', failure: 'the routine run failed', stuck: 'looks stuck', behind: 'the branch is behind the base', ready: '', waiting: '' } as const;
-  const also = rest.length === 0 ? '' : `\nAlso: ${rest.map((c) => ALSO[c.kind]).join(', ')}`;
-  return { ...top, tip: `${top.tip}${also}` };
 };
 
 const RunIndicator = ({ glob }: { glob: GlobView }) => {
@@ -407,9 +355,7 @@ export const GlobCard = ({
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
-  const hint = stuckHint(glob, new Date().toISOString());
-  const checks = checksExplanation(glob);
-  const status = statusLine(glob, hint, checks);
+  const status = statusLine(glob, new Date().toISOString());
   const preview = moves.find((m) => m.action === previewing);
 
   return (
