@@ -4,11 +4,21 @@ import type { BaseChecks } from './types.js';
 export const NOTIFICATION_SEVERITIES = ['critical', 'warning', 'info'] as const;
 export type NotificationSeverity = (typeof NOTIFICATION_SEVERITIES)[number];
 
-/** How a notification goes away: its source clears it, a time passes, or a person dismisses it. */
+/**
+ * How a notification goes away: its source clears it, a time passes, or a person dismisses it (`dismissible`: for
+ * everyone; `personal`: only for that person, and it returns when its `items` grow).
+ */
 export type NotificationClears =
   | { readonly kind: 'condition' }
   | { readonly kind: 'until'; readonly at: string }
-  | { readonly kind: 'dismissible' };
+  | { readonly kind: 'dismissible' }
+  | {
+      readonly kind: 'personal';
+      /** What the notification is about (e.g. the readiness items still to do). */
+      readonly items: readonly string[];
+      /** Per person: the items they had seen when they dismissed it. Kept in the notification, which has no table of its own for this. */
+      readonly dismissed: Readonly<Record<string, readonly string[]>>;
+    };
 
 export interface NotificationAction {
   readonly label: string;
@@ -66,7 +76,14 @@ export const sortNotifications = (items: readonly BoardNotification[]): BoardNot
 export const isExpired = (n: BoardNotification, now: string): boolean => n.clears.kind === 'until' && n.clears.at <= now;
 
 /** A notification a person may dismiss: not one whose condition still holds. */
-export const isDismissible = (n: BoardNotification): boolean => n.clears.kind === 'dismissible';
+export const isDismissible = (n: BoardNotification): boolean => n.clears.kind === 'dismissible' || n.clears.kind === 'personal';
+
+/** Whether this person's dismissal still covers a personal notification: nothing new has joined its items since. */
+export const isDismissedBy = (n: BoardNotification, email: string): boolean => {
+  if (n.clears.kind !== 'personal') return false;
+  const seen = n.clears.dismissed[email];
+  return seen !== undefined && n.clears.items.every((i) => seen.includes(i));
+};
 
 export const MAIN_RED_SOURCE = 'main-red';
 

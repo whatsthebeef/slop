@@ -27,6 +27,7 @@ import { mountDeploys } from './http/deploys.js';
 import { mountWeb } from './http/web.js';
 import { LocalFollowWatch } from './local-follow.js';
 import { mountReadiness } from './http/readiness.js';
+import { ReadinessWatch } from './readiness-watch.js';
 import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
 import { LlmHealth } from './llm-health.js';
@@ -208,7 +209,7 @@ const app = createApp({
   },
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
-mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
+mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
 mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
@@ -326,6 +327,8 @@ const followWatch =
     ? null
     : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, config.SLOP_FOLLOW_ENVIRONMENT, notifications, (d) => environments.recordDeploy(d), logError);
 if (runs('follow')) followWatch?.start();
+const readinessWatch = new ReadinessWatch(store, { globs, store, host: github, log: logError }, notifications, logError);
+if (runs('readiness')) readinessWatch.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -339,6 +342,7 @@ const shutdown = () => {
   learningJobsRunner.stop();
   tunnelWatch?.stop();
   followWatch?.stop();
+  readinessWatch.stop();
   server.close();
   void database.close();
 };

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { NotificationService } from '../src/app/notification-service.js';
 import { mainRedNotification, sortNotifications } from '../src/domain/notifications.js';
 import type { BoardNotification, RaisedNotification } from '../src/domain/notifications.js';
+import type { ReadinessItem } from '../src/domain/readiness.js';
 import type { BaseChecks } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { NOW, board } from './fixtures.js';
@@ -156,4 +157,75 @@ describe('board notifications', () => {
       expect(mainRedNotification(1, 'main', null)).toBeNull();
     });
   });
+
+  describe('board setup', () => {
+    const OTHER = 'other@example.com';
+    const it_ = (key: ReadinessItem['key'], state: ReadinessItem['state']): ReadinessItem => ({
+      key, title: key, state, detail: `${key} detail`, fix: { kind: 'settings', label: 'Board settings' }, manual: false,
+    });
+    const sources = async (email = MEMBER) => (await list(email)).map((n) => n.source);
+
+    beforeEach(async () => {
+      await store.transaction(async (tx) => {
+        await tx.upsertUser({ email: OTHER, name: 'Other', active: true });
+        await tx.upsertMember({ boardId: board.id, email: OTHER, role: 'dev' });
+      });
+    });
+
+    it('raises a warning for a failing item and clears it when the item passes', async () => {
+      await service.syncReadiness(board.id, [it_('repo_app', 'failing'), it_('build_doc', 'ok')]);
+      expect(await list()).toMatchObject([
+        { source: 'readiness:repo_app', severity: 'warning', title: 'repo_app is failing', detail: 'repo_app detail', link: '/boards/1/settings#readiness', clears: { kind: 'condition' } },
+      ]);
+      await service.syncReadiness(board.id, [it_('repo_app', 'ok'), it_('build_doc', 'ok')]);
+      expect(await list()).toEqual([]);
+    });
+
+    it('raises one info notification for the missing items, and nothing for unknown ones', async () => {
+      await service.syncReadiness(board.id, [it_('build_doc', 'missing'), it_('environments', 'missing'), it_('sub_gate', 'unknown'), it_('agent_set', 'ok')]);
+      expect(await list()).toMatchObject([
+        { source: 'readiness', severity: 'info', title: 'Board setup: 2 items to do', detail: 'build_doc, environments', clears: { kind: 'personal', items: ['build_doc', 'environments'], dismissed: {} } },
+      ]);
+      await service.syncReadiness(board.id, [it_('sub_gate', 'unknown')]);
+      expect(await list()).toEqual([]);
+    });
+
+    it('a dismissal is per person', async () => {
+      await service.syncReadiness(board.id, [it_('build_doc', 'missing')]);
+      expect((await service.dismiss(MEMBER, board.id, '1/readiness')).ok).toBe(true);
+      expect(await sources()).toEqual([]);
+      expect(await sources(OTHER)).toEqual(['readiness']);
+    });
+
+    it('stays dismissed while the missing set shrinks and returns when it grows', async () => {
+      await service.syncReadiness(board.id, [it_('build_doc', 'missing'), it_('environments', 'missing')]);
+      await service.dismiss(MEMBER, board.id, '1/readiness');
+      await service.syncReadiness(board.id, [it_('build_doc', 'missing'), it_('environments', 'ok')]);
+      expect(await sources()).toEqual([]);
+      await service.syncReadiness(board.id, [it_('build_doc', 'missing'), it_('environments', 'missing')]);
+      expect(await sources()).toEqual([]);
+      await service.syncReadiness(board.id, [it_('build_doc', 'missing'), it_('environments', 'missing'), it_('agent_set', 'missing')]);
+      expect(await sources()).toEqual(['readiness']);
+      expect(await sources(OTHER)).toEqual(['readiness']);
+    });
+
+    it('is raised afresh once everything was done in between', async () => {
+      await service.syncReadiness(board.id, [it_('build_doc', 'missing')]);
+      await service.dismiss(MEMBER, board.id, '1/readiness');
+      await service.syncReadiness(board.id, [it_('build_doc', 'ok')]);
+      await service.syncReadiness(board.id, [it_('build_doc', 'missing')]);
+      expect(await sources()).toEqual(['readiness']);
+    });
+
+    it('sync is idempotent and leaves other sources alone', async () => {
+      await service.syncMainRed(1, 'main', { sha: 'm1', state: 'failed', since: null, redAt: NOW, checkedAt: NOW });
+      await service.syncReadiness(board.id, [it_('build_doc', 'missing')]);
+      const hints = notifier.hints.length;
+      await service.syncReadiness(board.id, [it_('build_doc', 'missing')]);
+      expect(notifier.hints).toHaveLength(hints);
+      await service.syncReadiness(board.id, []);
+      expect(await sources()).toEqual(['main-red']);
+    });
+  });
 });
+
