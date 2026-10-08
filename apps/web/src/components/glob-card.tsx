@@ -1,5 +1,5 @@
 import { checksExplanation, queuedRunNotice, stuckHint } from '@slop/core';
-import type { Action, ArtifactKind, Category, DeployIndicator } from '@slop/core';
+import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
@@ -247,6 +247,32 @@ export const DeployChip = ({ deploy }: { deploy: DeployIndicator }) => {
   );
 };
 
+const since = (iso: string | null) => (iso === null ? '' : ` since ${new Date(iso).toLocaleString()}`);
+
+/**
+ * The release and integration environments the glob is in (their deployed commit contains its merge), one chip each.
+ * Production before sign-off is allowed but flagged.
+ */
+export const EnvironmentChips = ({ environments }: { environments: readonly EnvironmentIndicator[] }) => (
+  <>
+    {environments.map((env) => {
+      const warned = env.warning === 'before_sign_off';
+      const tip = `${warned ? 'Deployed to production before sign-off. ' : ''}In ${env.environment} (${env.production ? 'production' : env.role}) at ${env.sha.slice(0, 7)}${since(env.since)}`;
+      return (
+        <Tip key={env.environment} text={tip}>
+          <span
+            className={cn('font-mono text-[11px]', warned ? 'text-required' : 'text-signal-strong')}
+            data-testid='environment-chip'
+            data-warning={env.warning}
+          >
+            {env.environment} ✓
+          </span>
+        </Tip>
+      );
+    })}
+  </>
+);
+
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -265,6 +291,7 @@ export const GlobCard = ({
   bump,
   tag,
   deploy,
+  environments,
 }: {
   glob: GlobView;
   onOpen: () => void;
@@ -285,6 +312,8 @@ export const GlobCard = ({
   /** Who moved it, briefly, when the move was made elsewhere. */
   tag?: MoveTag;
   deploy?: DeployIndicator;
+  /** The release and integration environments it is in. */
+  environments?: readonly EnvironmentIndicator[];
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
@@ -343,6 +372,7 @@ export const GlobCard = ({
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         {deploy !== undefined && <DeployChip deploy={deploy} />}
+        {environments !== undefined && <EnvironmentChips environments={environments} />}
         {status !== null && (
           <Tip text={status.tip}>
             <span className={cn('font-mono text-[11px]', status.tone)} data-testid='status-line' data-kind={status.kind}>

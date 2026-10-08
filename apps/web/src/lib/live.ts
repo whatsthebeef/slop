@@ -20,6 +20,9 @@ export const deploysKey = (boardId: number) => ['deploys', boardId] as const;
 /** One glob's deploy history in the glob view. */
 export const globDeploysKey = (globId: string) => ['glob-deploys', globId] as const;
 
+/** The release and integration environments in the glob view; invalidated by `glob.deploys` hints and on reconnect. */
+export const globEnvironmentsKey = (globId: string) => ['glob-environments', globId] as const;
+
 /** One glob's review findings in the glob view; invalidated by `glob.findings` hints and on reconnect. */
 export const findingsKey = (globId: string) => ['findings', globId] as const;
 
@@ -140,6 +143,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
       // Deploys live beside the glob, not on it: refresh the board's indicators and the glob's history.
       void client.invalidateQueries({ queryKey: deploysKey(boardId) });
       void client.invalidateQueries({ queryKey: globDeploysKey(id) });
+      void client.invalidateQueries({ queryKey: globEnvironmentsKey(id) });
       return;
     }
     if (hint.kind === 'glob.findings') {
@@ -173,6 +177,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
     // Deploys and readiness live beside the globs, so missed deploy hints need their own refresh.
     void client.invalidateQueries({ queryKey: deploysKey(boardId) });
     void client.invalidateQueries({ queryKey: ['glob-deploys'] });
+    void client.invalidateQueries({ queryKey: ['glob-environments'] });
     void client.invalidateQueries({ queryKey: ['readiness', boardId] });
     void client.invalidateQueries({ queryKey: ['findings'] });
   };

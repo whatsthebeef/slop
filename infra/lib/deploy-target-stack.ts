@@ -33,7 +33,7 @@ export interface DeployTargetStackProps extends StackProps {
 /**
  * A branch-deploy target for a slop board: an EventBridge rule that sends the deploy projects' build
  * results to slop through an API destination, authenticated with a generated key (add it to slop's
- * AWS_WEBHOOK_KEY list). With a new target it also creates the CodeBuild project, which runs the
+ * AWS_WEBHOOK_KEY list), and one that sends the `slop.ci` events pipelines put on the bus. With a new target it also creates the CodeBuild project, which runs the
  * repository's `.sstor/deploy.sh <env>` at the commit slop asks for; with existing projects (which
  * already deploy, e.g. from their own buildspec) it only reports their builds.
  */
@@ -88,6 +88,14 @@ export class DeployTargetStack extends Stack {
     const cfn = project.node.defaultChild;
     if (!(cfn instanceof CfnProject)) throw new Error('Expected the CodeBuild project resource');
     cfn.addPropertyOverride('Source.Auth', { Type: 'CODECONNECTIONS', Resource: target.connectionArn });
+    // Pipelines that also deploy the base branch or a release ref here report it with
+    // `.sstor/report-deploy.sh`, which puts a `slop.ci` event on the default bus.
+    role.addToPolicy(
+      new PolicyStatement({
+        actions: ['events:PutEvents'],
+        resources: [this.formatArn({ service: 'events', resource: 'event-bus', resourceName: 'default' })],
+      }),
+    );
     return target.projectName;
   }
 
@@ -115,6 +123,14 @@ export class DeployTargetStack extends Stack {
         detailType: ['CodeBuild Build State Change'],
         detail: { 'project-name': [...projectNames] },
       },
+      targets: [new ApiDestinationTarget(destination)],
+    });
+    // Release and integration deploys (and later ATF results) that the board's pipelines report themselves. Any role
+    // that sends them needs events:PutEvents on the default bus; existing projects' roles are granted it outside
+    // this stack (the board's knowledge base says how).
+    new Rule(this, 'PipelineReports', {
+      description: 'slop.ci events from the board pipelines to slop',
+      eventPattern: { source: ['slop.ci'] },
       targets: [new ApiDestinationTarget(destination)],
     });
 

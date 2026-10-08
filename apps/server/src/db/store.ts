@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, Glob, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, Tx, User } from '@slop/core';
+import type { Artifact, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, Tx, User } from '@slop/core';
 import { ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES } from '@slop/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
@@ -88,6 +88,23 @@ const deployRow = (d: Deploy): typeof schema.deploys.$inferInsert => ({
   runningSince: d.runningSince === null ? null : new Date(d.runningSince),
   startedAt: d.startedAt === null ? null : new Date(d.startedAt),
   finishedAt: d.finishedAt === null ? null : new Date(d.finishedAt),
+});
+
+const toEnvironmentDeploy = (row: typeof schema.environmentDeploys.$inferSelect): EnvironmentDeploy => ({
+  ...row,
+  at: row.at.toISOString(),
+});
+
+const toPresence = (row: typeof schema.globEnvironments.$inferSelect): GlobPresence => ({
+  ...row,
+  checkedAt: row.checkedAt.toISOString(),
+  since: row.since?.toISOString() ?? null,
+});
+
+const presenceRow = (p: GlobPresence): typeof schema.globEnvironments.$inferInsert => ({
+  ...p,
+  checkedAt: new Date(p.checkedAt),
+  since: p.since === null ? null : new Date(p.since),
 });
 
 const toKnowledge = (row: typeof schema.knowledge.$inferSelect): KnowledgeDoc => ({
@@ -232,6 +249,7 @@ export class PgStore implements Store {
         return rows.length === 1;
       },
       deleteGlob: async (id) => {
+        await t.delete(schema.globEnvironments).where(eq(schema.globEnvironments.globId, id));
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
@@ -589,6 +607,48 @@ export class PgStore implements Store {
       findDeployByProviderRef: async (providerRef) => {
         const [row] = await t.select().from(schema.deploys).where(eq(schema.deploys.providerRef, providerRef));
         return row === undefined ? null : toDeploy(row);
+      },
+
+      insertEnvironmentDeploy: async (deploy) => {
+        const rows = await t
+          .insert(schema.environmentDeploys)
+          .values({ ...deploy, at: new Date(deploy.at) })
+          .onConflictDoNothing()
+          .returning({ id: schema.environmentDeploys.id });
+        return rows.length === 1;
+      },
+      latestEnvironmentDeploy: async (boardId, environment) => {
+        const d = schema.environmentDeploys;
+        const [row] = await t
+          .select()
+          .from(d)
+          .where(and(eq(d.boardId, boardId), eq(d.environment, environment), eq(d.succeeded, true)))
+          .orderBy(desc(d.at), desc(d.id))
+          .limit(1);
+        return row === undefined ? null : toEnvironmentDeploy(row);
+      },
+      listGlobPresence: async (boardId, filter) => {
+        const g = schema.globEnvironments;
+        const conditions = [eq(g.boardId, boardId)];
+        if (filter.environment !== undefined) conditions.push(eq(g.environment, filter.environment));
+        if (filter.contained !== undefined) conditions.push(eq(g.contained, filter.contained));
+        if (filter.globIds !== undefined) {
+          if (filter.globIds.length === 0) return [];
+          conditions.push(inArray(g.globId, [...filter.globIds]));
+        }
+        const rows = await t.select().from(g).where(and(...conditions)).orderBy(g.globId, g.environment);
+        return rows.map(toPresence);
+      },
+      saveGlobPresence: async (rows) => {
+        const g = schema.globEnvironments;
+        // Sequential: a transaction holds a single connection.
+        for (const p of rows) {
+          const row = presenceRow(p);
+          await t.insert(g).values(row).onConflictDoUpdate({ target: [g.globId, g.environment], set: row });
+        }
+      },
+      lockEnvironment: async (boardId, environment) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`environments:${String(boardId)}:${environment}`}))`);
       },
 
       insertReviewSource: async (input) => {

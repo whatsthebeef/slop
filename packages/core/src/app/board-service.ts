@@ -72,6 +72,9 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
     if (subDefaults.some((e) => !e.allowBranchDeploy)) {
       return invalidInput("The subs' default environment must allow branch deploys");
     }
+    const production = settings.environments.filter((e) => e.production === true);
+    if (production.length > 1) return invalidInput('Only one environment can be production');
+    if (production.some((e) => e.role !== 'release')) return invalidInput('Only a release environment can be production');
   }
   const deploy = settings.deploy;
   if (deploy?.provider === 'codebuild') {

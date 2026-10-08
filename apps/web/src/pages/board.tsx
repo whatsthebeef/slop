@@ -231,7 +231,8 @@ export const BoardPage = () => {
       void navigate(`/boards/${boardId}/signed-off?glob=${encodeURIComponent(linked)}`, { replace: true });
     }
   }, [linked, globs.data, boardId, navigate, setSearchParams]);
-  // Deploy state lives beside the globs; read it for the globs on the board.
+  // Deploy state (branch deploys, and the release and integration environments each glob is in) lives beside the
+  // globs; read it for the globs on the board.
   const boardGlobIds = (globs.data ?? []).map((g) => g.id).sort();
   const deployState = useQuery({
     queryKey: [...deploysKey(boardId), boardGlobIds.join(',')],
@@ -435,6 +436,7 @@ export const BoardPage = () => {
                       bump={bumps[glob.id]}
                       tag={motion.tags[glob.id]}
                       deploy={deployState.data?.indicators[glob.id]}
+                      environments={deployState.data?.environments[glob.id]}
                     />
                   );
                 })}

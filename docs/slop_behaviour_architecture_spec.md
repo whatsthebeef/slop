@@ -221,7 +221,7 @@ All tools sit behind OAuth. There is no public MCP endpoint: CodeRabbit, the Cla
 - `POST /webhooks/github`: GitHub App events `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `check_run`, `check_suite`; verified with `X-Hub-Signature-256`.
 - `POST /ingest/communications`: the canonical ingest format, authenticated with the user's ingest secret (Apps Script, pasted text, scripts).
 - `POST /webhooks/slack`: the Slack app's shortcut and reaction events, verified with its signing secret.
-- `POST /webhooks/aws`: CodeBuild and CodePipeline state changes from an EventBridge API destination, authenticated with an API key header.
+- `POST /webhooks/aws`: CodeBuild and CodePipeline state changes, and the pipelines' own `slop.ci` events (release and integration deploys), from an EventBridge API destination, authenticated with an API key header.
 
 **Outbound**
 
@@ -390,6 +390,13 @@ Each environment is represented by the commit it runs, and a glob counts as depl
 - **Deploy targets** (`infra`, `DeployTargetStack`): either a new CodeBuild project that runs the repo's `.sstor/deploy.sh`, or existing deploy projects whose own buildspec deploys; for those only the EventBridge rule is added, so their results come through `/webhooks/aws` alone.
 - **Board:** cards show deploying or queued, live, deploy failed (with the reason, until the next success) or replaced by another glob; the glob view has Deploy now and the deploy history; board settings hold the integration (CodeBuild region, default project and per-environment projects, or a GitHub Actions workflow).
 
+**Integration and release deploys (as built):**
+
+- **Roles:** each environment in board settings may have a role, `integration` or `release`, independent of `allowBranchDeploy`; at most one release environment is marked production. Only environments with a role are observed.
+- **Pipelines report themselves:** a pipeline that deploys the base branch or a release ref runs the catalog's `.sstor/report-deploy.sh <environment>`, which puts a `slop.ci` event (`detail-type` "Slop Environment Deployed"; detail `repo`, `environment`, `sha`, optional `ref` and `url`, `status`) on the account's default EventBridge bus. The deploy target stack forwards `source: slop.ci` to `POST /webhooks/aws` with the same key as CodeBuild events, so slop needs no read access to the board's AWS account and any CI can post the same envelope. The pipeline's role needs `events:PutEvents` (granted on a new deploy project; existing roles are set up as the board's knowledge base says). Each board whose repo matches and that has an observed environment of that name records it once per event ID (`environment_deploys`); the event's time orders deploys that arrive out of order. The key is global (`AWS_WEBHOOK_KEY`), so a key holder can report for any board's repo; per-board keys are a later hardening.
+- **Containment:** a succeeded deploy that is the environment's newest queues a board-wide `check_environment` outbox effect. It asks the code host (a `CommitGraph` port, GitHub's compare API) whether the deployed commit contains each candidate's merge commit: every glob merged in the last 30 days (its latest `Merged` sha) and every glob the environment held at its last check, so rollbacks reach older globs. Results are stored per glob and environment (`glob_environments`) under a per-environment lock, and dropped if a newer deploy has been recorded meanwhile. A glob that enters an environment logs `Deployed` (`observed: true`); one that leaves it logs `DeployRolledBack`. An unknown commit counts as not contained.
+- **Board:** each environment a glob is in shows as a chip on its card; a production one before sign-off is amber with a warning. The glob view lists the observed environments with whether each holds the glob and what it runs. Presence lives beside the glob (no version bump) and is refreshed by `glob.deploys` hints and on reconnect. No "not released" chip, and nothing is added to the card's status line.
+
 
 ## Time tracking and reports
 
@@ -507,7 +514,7 @@ Board roles are admin, dev, QA and PO.
 - Anyone on the board can delete globs. FR, CR and QA can only be switched on the board, not through the MCP.
 - QA and PO can create subs and sames, but not supers, and they cannot pick up (or take over) sames or supers.
 - Users are added by email and linked to their account on first sign-in.
-- **Board settings:** repo, base branch (e.g. master or main), sensitive paths, time zone, default routine owner, environments with their allowBranchDeploy flags (and at most one, allowing branch deploys, marked as the default for subs), members and roles. Wherever this document says master, it means the board's base branch.
+- **Board settings:** repo, base branch (e.g. master or main), sensitive paths, time zone, default routine owner, environments with their allowBranchDeploy flags (and at most one, allowing branch deploys, marked as the default for subs) and roles (integration or release, with at most one release environment marked production), members and roles. Wherever this document says master, it means the board's base branch.
 - **Board readiness:** board settings show a checklist of what the board needs before slop can run its globs end to end: slop's GitHub App on the repo, the `sub-gate` and `checks` workflows on the base branch (both required checks), the agent set committed at the board's version (`.claude/slop-agent-set.json`), a build doc, branch-deploy environments with a default for subs, and three items slop can't check (routines for the board, the repo in the routine's repositories, the Claude GitHub App), which an admin ticks and which turn red when a routine failure in the last week points to them. Each item has a Fix link, and the board shows a banner while anything needs doing. Cards show a stuck hint for a ready sub with no gate result after 15 minutes, a passed gate that hasn't merged, or a routine failure with a known fix. What each environment is for goes in an environments KB document (catalog template).
 - **MCP access:** slop's MCP is a claude.ai custom connector with Cognito as the OAuth server (see Auth). The Claude app and routines act as the signed-in person with their board role; Claude Code and sessionator log in the same way.
 - No notifications outside the app for now.

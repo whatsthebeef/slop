@@ -1,4 +1,5 @@
 import type { Deploy } from '../domain/deploys.js';
+import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
@@ -30,6 +31,9 @@ interface State {
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
+  environmentDeploys: EnvironmentDeploy[];
+  /** Keyed by glob and environment. */
+  globPresence: Map<string, GlobPresence>;
 }
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
@@ -54,6 +58,8 @@ const clone = (state: State): State => ({
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
+  environmentDeploys: [...state.environmentDeploys],
+  globPresence: new Map(state.globPresence),
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -80,6 +86,8 @@ export class MemoryStore implements Store {
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
+    environmentDeploys: [],
+    globPresence: new Map(),
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -110,6 +118,7 @@ export class MemoryStore implements Store {
         s.artifacts = s.artifacts.filter((a) => a.globId !== id);
         s.findings = s.findings.filter((f) => f.globId !== id);
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
+        for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
         return Promise.resolve();
       },
       findGlobByCreationKey: (boardId, key) =>
@@ -310,6 +319,34 @@ export class MemoryStore implements Store {
       lockDeployQueue: () => Promise.resolve(),
       findDeployByProviderRef: (ref) =>
         Promise.resolve([...s.deploys.values()].find((d) => d.providerRef === ref) ?? null),
+      insertEnvironmentDeploy: (deploy) => {
+        if (s.environmentDeploys.some((d) => d.boardId === deploy.boardId && d.eventId === deploy.eventId)) {
+          return Promise.resolve(false);
+        }
+        s.environmentDeploys.push({ ...deploy, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      latestEnvironmentDeploy: (boardId, environment) =>
+        Promise.resolve(
+          s.environmentDeploys
+            .filter((d) => d.boardId === boardId && d.environment === environment && d.succeeded)
+            .sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)[0] ?? null,
+        ),
+      listGlobPresence: (boardId, filter) =>
+        Promise.resolve(
+          [...s.globPresence.values()].filter(
+            (p) =>
+              p.boardId === boardId &&
+              (filter.environment === undefined || p.environment === filter.environment) &&
+              (filter.globIds === undefined || filter.globIds.includes(p.globId)) &&
+              (filter.contained === undefined || p.contained === filter.contained),
+          ),
+        ),
+      saveGlobPresence: (rows) => {
+        for (const p of rows) s.globPresence.set(`${p.globId}:${p.environment}`, p);
+        return Promise.resolve();
+      },
+      lockEnvironment: () => Promise.resolve(),
       insertReviewSource: (input) => {
         const taken = s.reviewSources.some(
           (r) =>

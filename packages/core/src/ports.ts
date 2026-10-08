@@ -1,4 +1,5 @@
 import type { Deploy, DeployState } from './domain/deploys.js';
+import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
 import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
@@ -22,6 +23,12 @@ export interface DeployFilter {
   readonly limit?: number;
 }
 
+export interface PresenceFilter {
+  readonly environment?: string;
+  readonly globIds?: readonly string[];
+  readonly contained?: boolean;
+}
+
 /** Store access inside one transaction. Glob writes are conditional on the glob's version. */
 export interface Tx {
   getGlob(id: string): Promise<Glob | null>;
@@ -29,7 +36,7 @@ export interface Tx {
   insertGlob(glob: Glob, creationKey: string | null): Promise<boolean>;
   /** Writes `glob` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateGlob(glob: Glob, expectedVersion: number): Promise<boolean>;
-  /** Deletes the glob with its artifacts, review sources and findings. */
+  /** Deletes the glob with its artifacts, review sources, findings and environment presence. */
   deleteGlob(id: string): Promise<void>;
   findGlobByCreationKey(boardId: number, key: string): Promise<Glob | null>;
   listGlobs(boardId: number, filter: GlobFilter): Promise<Glob[]>;
@@ -108,6 +115,20 @@ export interface Tx {
    * and results can't both see "nothing running" (a no-op where transactions don't overlap).
    */
   lockDeployQueue(boardId: number, environment: string): Promise<void>;
+
+  /** Records a release or integration deploy; false when the board already has its event ID (a redelivery). */
+  insertEnvironmentDeploy(deploy: NewEnvironmentDeploy): Promise<boolean>;
+  /** The environment's latest succeeded deploy (by deploy time): the commit it runs now. */
+  latestEnvironmentDeploy(boardId: number, environment: string): Promise<EnvironmentDeploy | null>;
+  /** Whether environments held globs when last checked, narrowed by the filter. */
+  listGlobPresence(boardId: number, filter: PresenceFilter): Promise<GlobPresence[]>;
+  /** Writes presence rows (insert or replace by glob and environment). */
+  saveGlobPresence(rows: readonly GlobPresence[]): Promise<void>;
+  /**
+   * Serialises an environment's containment checks until the transaction ends, so an older deploy's check can't
+   * overwrite a newer one's (a no-op where transactions don't overlap).
+   */
+  lockEnvironment(boardId: number, environment: string): Promise<void>;
 
   /** Records a review to split into findings; null when its artifact or external ID is already recorded. */
   insertReviewSource(source: NewReviewSource): Promise<ReviewSource | null>;

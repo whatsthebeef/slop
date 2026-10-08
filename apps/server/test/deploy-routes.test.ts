@@ -1,4 +1,4 @@
-import { BoardService, DeployService, GlobService } from '@slop/core';
+import { BoardService, DeployService, EnvironmentService, GlobService } from '@slop/core';
 import type { Board, Effect, Glob } from '@slop/core';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -58,6 +58,7 @@ describe('deploy results and executors', () => {
   let drop: () => Promise<void>;
   let store: PgStore;
   let deploys: DeployService;
+  let environments: EnvironmentService;
   let globs: GlobService;
   let board: Board;
   let app: Hono<Env>;
@@ -97,6 +98,11 @@ describe('deploy results and executors', () => {
       clock: { now: () => new Date((clock += 1000)).toISOString() },
       newDeployId: () => `dep-${++n}`,
     });
+    environments = new EnvironmentService({
+      store,
+      notifier: { publish: () => undefined },
+      clock: { now: () => new Date(clock).toISOString() },
+    });
     globs = new GlobService({
       store,
       notifier: { publish: () => undefined },
@@ -113,6 +119,7 @@ describe('deploy results and executors', () => {
     });
     mountDeploys(app, {
       deploys,
+      environments,
       boards: new BoardService({ store, notifier: { publish: () => undefined } }),
       links,
       awsWebhookKeys: ['other-stack-key', KEY],
@@ -126,7 +133,10 @@ describe('deploy results and executors', () => {
         baseBranch: 'main',
         timeZone: 'UTC',
         defaultRoutineOwner: null,
-        environments: [{ name: 'dev1', allowBranchDeploy: true }],
+        environments: [
+          { name: 'dev1', allowBranchDeploy: true },
+          { name: 'prod', allowBranchDeploy: false, role: 'release', production: true },
+        ],
         sensitivePaths: [],
       });
       const withDeploy: Board = {
@@ -259,6 +269,7 @@ describe('deploy results and executors', () => {
     const bare = new Hono<Env>();
     mountDeploys(bare, {
       deploys,
+      environments,
       boards: new BoardService({ store, notifier: { publish: () => undefined } }),
       links,
       awsWebhookKeys: [],
@@ -270,6 +281,91 @@ describe('deploy results and executors', () => {
       body: '{}',
     });
     expect(response.status).toBe(404);
+  });
+
+  /** A `slop.ci` event as `catalog/scripts/report-deploy.sh` puts it on the bus and EventBridge delivers it. */
+  const ciEvent = (id: string, detail: Record<string, unknown>, key = KEY) =>
+    app.request('/webhooks/aws', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-slop-key': key },
+      body: JSON.stringify({
+        version: '0',
+        id,
+        'detail-type': 'Slop Environment Deployed',
+        source: 'slop.ci',
+        account: '123456789012',
+        time: '2026-10-05T12:30:00Z',
+        region: 'us-east-1',
+        resources: [],
+        detail,
+      }),
+    });
+
+  const deployed = {
+    repo: 'acme/sandbox',
+    environment: 'prod',
+    sha: 'ABCDEF1234567',
+    ref: 'release/2026.10',
+    status: 'succeeded',
+    url: 'https://console.aws.amazon.com/codesuite/codebuild/projects/x/build/y',
+  };
+
+  const latestProdDeploy = () => store.transaction((tx) => tx.latestEnvironmentDeploy(board.id, 'prod'));
+
+  it('records a release deploy from a slop.ci event once, however often it is delivered', async () => {
+    expect((await ciEvent('ev-1', deployed)).status).toBe(202);
+    expect(await (await ciEvent('ev-1', deployed)).json()).toEqual({ ok: true, ignored: true });
+    expect(await latestProdDeploy()).toMatchObject({
+      environment: 'prod',
+      sha: 'abcdef1234567',
+      ref: 'release/2026.10',
+      succeeded: true,
+      at: '2026-10-05T12:30:00.000Z',
+      eventId: 'aws:ev-1',
+    });
+  });
+
+  it('refuses slop.ci events without the key, and ignores malformed or unknown ones', async () => {
+    expect((await ciEvent('ev-2', deployed, 'wrong')).status).toBe(401);
+    for (const detail of [
+      { ...deployed, sha: 'not-a-sha' },
+      { ...deployed, url: 'javascript:alert(1)' },
+      { ...deployed, url: 'http://insecure.example' },
+      { ...deployed, repo: 'nope' },
+      { ...deployed, repo: 'acme/elsewhere' },
+      { ...deployed, environment: 'dev1' },
+    ]) {
+      const response = await ciEvent('ev-3', detail);
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ ok: true, ignored: true });
+    }
+    expect((await latestProdDeploy())?.eventId).toBe('aws:ev-1');
+  });
+
+  it("serves each glob's environments with the board's deploy state", async () => {
+    await store.transaction((tx) =>
+      tx.saveGlobPresence([
+        {
+          boardId: board.id,
+          globId: 's9f2',
+          environment: 'prod',
+          mergeSha: 'm2',
+          contained: true,
+          checkedSha: 'abcdef1234567',
+          checkedAt: '2026-10-05T12:31:00.000Z',
+          since: '2026-10-05T12:31:00.000Z',
+        },
+      ]),
+    );
+    const state: unknown = await (await app.request(`/api/boards/${String(board.id)}/deploys?globs=s9f1,s9f2`)).json();
+    expect(state).toMatchObject({
+      environments: {
+        s9f2: [{ environment: 'prod', role: 'release', production: true, sha: 'abcdef1234567', warning: 'before_sign_off' }],
+      },
+    });
+    const view = await app.request('/api/globs/s9f2/environments');
+    expect(await view.json()).toMatchObject({ value: [{ environment: 'prod', presence: { contained: true }, latest: { sha: 'abcdef1234567' } }] });
+    expect((await app.request('/api/globs/s9f2/environments', { headers: { 'x-test-email': 'stranger@example.com' } })).status).toBe(403);
   });
 
   it("doesn't start a queued deploy whose environment stopped taking branch deploys", async () => {

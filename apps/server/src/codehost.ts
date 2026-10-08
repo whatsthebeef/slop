@@ -91,3 +91,12 @@ export interface CodeHost {
   /** Squash-merges at exactly `sha` as `<id>: <title>`, or updates a branch that is behind. */
   squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult>;
 }
+
+/**
+ * Commit ancestry on the code host, apart from `CodeHost` so its test fakes don't need it: release and integration
+ * deploys are matched to globs by whether the deployed commit contains each glob's merge commit.
+ */
+export interface CommitGraph {
+  /** Whether `descendant` contains `ancestor` (or is it); null when the host doesn't know either commit. */
+  contains(repo: Repo, descendant: string, ancestor: string, signal?: AbortSignal): Promise<boolean | null>;
+}

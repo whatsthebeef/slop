@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, RequestError } from '@/lib/api';
 import type { BoardView, GlobView } from '@/lib/api';
-import { deploysKey, globDeploysKey } from '@/lib/live';
+import { deploysKey, globDeploysKey, globEnvironmentsKey } from '@/lib/live';
 import { useToast } from '@/toast';
 import { Tip } from './ui/tip';
 
@@ -107,6 +107,58 @@ export const DeploysSection = ({ board, glob }: { board: BoardView; glob: GlobVi
           ))}
         </ul>
       )}
+    </section>
+  );
+};
+
+/**
+ * The board's release and integration environments in the glob view: whether each one's deployed commit contains the
+ * glob's merge, and what it runs. Independent of branch deploys, so it shows on boards without a deploy integration.
+ */
+export const EnvironmentsSection = ({ board, glob }: { board: BoardView; glob: GlobView }) => {
+  const observed = board.environments.some((e) => e.role !== undefined);
+  const query = useQuery({
+    queryKey: globEnvironmentsKey(glob.id),
+    queryFn: () => api.globEnvironments(glob.id),
+    enabled: observed,
+  });
+  if (!observed) return null;
+  const environments = query.data ?? [];
+  return (
+    <section className='grid gap-2' aria-label='Environments' data-testid='environments'>
+      <h3 className='text-xs font-semibold text-muted-foreground'>Environments</h3>
+      <ul className='grid gap-1 font-mono text-[11px]'>
+        {environments.map((env) => {
+          const presence = env.presence;
+          const held = presence?.contained === true;
+          const warned = held && env.production && glob.status !== 'signed_off';
+          return (
+            <li key={env.environment} className='flex flex-wrap gap-x-2' data-testid='environment-row'>
+              <span>{env.environment}</span>
+              <span className='text-muted-foreground'>{env.production ? 'production' : env.role}</span>
+              {held ? (
+                <span className={warned ? 'text-required' : 'text-signal-strong'}>
+                  in it since {when(presence.since)} at {presence.checkedSha.slice(0, 7)}
+                  {warned && ' (before sign-off)'}
+                </span>
+              ) : (
+                <span className='text-muted-foreground'>not yet</span>
+              )}
+              {env.latest !== null && (
+                <span className='text-muted-foreground'>
+                  runs {env.latest.sha.slice(0, 7)}
+                  {env.latest.ref === null ? '' : ` (${env.latest.ref})`} · {when(env.latest.at)}
+                </span>
+              )}
+              {env.latest?.url != null && (
+                <a className='underline' href={env.latest.url} target='_blank' rel='noreferrer'>
+                  deploy
+                </a>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 };

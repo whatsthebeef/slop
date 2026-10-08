@@ -7,7 +7,7 @@ import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
 import { ArtifactsSection } from './artifacts';
-import { DeploysSection } from './deploys';
+import { DeploysSection, EnvironmentsSection } from './deploys';
 import type { ArtifactRef } from './artifacts';
 import { GroupChip } from './glob-card';
 import { LabelChips, LabelReviews } from './labels';
@@ -340,6 +340,8 @@ export const GlobDialog = ({
           <PlanEditor globId={glob.id} summary={glob.summary} />
 
           <DeploysSection board={board} glob={glob} />
+
+          <EnvironmentsSection board={board} glob={glob} />
 
           <ArtifactsSection globId={glob.id} artifacts={glob.artifacts ?? []} selected={artifact} onSelect={setArtifact} />
 

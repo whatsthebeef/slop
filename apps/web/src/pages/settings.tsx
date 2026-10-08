@@ -1,4 +1,4 @@
-import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ROLES } from '@slop/core';
+import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, ROLES } from '@slop/core';
 import type { DeployIntegration, Environment, Role, SubLimitChange } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
@@ -174,7 +174,7 @@ export const SettingsPage = () => {
                         ? x
                         : e.target.checked
                           ? { ...x, allowBranchDeploy: true }
-                          : { name: x.name, allowBranchDeploy: false },
+                          : { ...x, allowBranchDeploy: false, subDefault: undefined },
                     ),
                   )
                 }
@@ -193,14 +193,47 @@ export const SettingsPage = () => {
                   // At most one default: choosing one clears the others.
                   setEnvs(
                     envs.map((x, j) =>
-                      j === i && e.target.checked
-                        ? { ...x, subDefault: true }
-                        : { name: x.name, allowBranchDeploy: x.allowBranchDeploy },
+                      j === i && e.target.checked ? { ...x, subDefault: true } : { ...x, subDefault: undefined },
                     ),
                   )
                 }
               />
               default for subs
+            </label>
+            <Select
+              className='w-32 shrink-0 text-xs'
+              aria-label={`What deploys ${env.name || 'this environment'}`}
+              title='Integration: the base branch pipeline deploys here. Release: release refs are deployed here. Slop shows which globs each one holds.'
+              disabled={!admin}
+              value={env.role ?? ''}
+              onChange={(e) => {
+                const role = ENVIRONMENT_ROLES.find((r) => r === e.target.value);
+                // Only a release environment can be production.
+                setEnvs(envs.map((x, j) => (j !== i ? x : { ...x, role, production: role === 'release' ? x.production : undefined })));
+              }}
+            >
+              <option value=''>no pipeline</option>
+              <option value='integration'>integration</option>
+              <option value='release'>release</option>
+            </Select>
+            <label
+              className='flex shrink-0 items-center gap-1 text-xs'
+              title='Cards warn when a glob reaches production before sign-off'
+            >
+              <input
+                type='checkbox'
+                disabled={!admin || env.role !== 'release'}
+                checked={env.production === true}
+                onChange={(e) =>
+                  // At most one production environment: choosing one clears the others.
+                  setEnvs(
+                    envs.map((x, j) =>
+                      j === i && e.target.checked ? { ...x, production: true } : { ...x, production: undefined },
+                    ),
+                  )
+                }
+              />
+              production
             </label>
             {admin && (
               <Button variant='ghost' size='sm' onClick={() => setEnvs(envs.filter((_, j) => j !== i))}>

@@ -37,6 +37,8 @@ export const DOMAIN_EVENT_TYPES = [
   'BaseChecksChanged',
   'ATFCompleted',
   'Deployed',
+  /** A release or integration environment no longer holds a glob it held (a rollback). */
+  'DeployRolledBack',
   'GlobDeleted',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
@@ -98,6 +100,18 @@ export type Effect =
    * so `globId` is `board-<id>` and it isn't generation-checked; re-reading is idempotent.
    */
   | { readonly kind: 'refresh_base_checks'; readonly globId: string; readonly boardId: number }
+  /**
+   * A release or integration environment now runs `sha`: work out which recently merged globs (and which globs it
+   * held before, for rollbacks) that commit contains. Board-wide like `refresh_base_checks` (`globId` is `board-<id>`,
+   * not generation-checked); dropped when a newer deploy to the environment has been recorded since.
+   */
+  | {
+      readonly kind: 'check_environment';
+      readonly globId: string;
+      readonly boardId: number;
+      readonly environment: string;
+      readonly sha: string;
+    }
   /** Bring the glob's PR branch up to date with the base branch so its checks run again (the base went green). */
   | { readonly kind: 'update_branch'; readonly globId: string; readonly generation: number; readonly sha: string }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */

@@ -254,6 +254,32 @@ describe('services', () => {
     expect(board.environments[0]?.subDefault).toBe(true);
   });
 
+  it('allows one production environment, and only a release one', async () => {
+    const two = await boards.updateSettings(ADMIN, boardId, 1, {
+      environments: [
+        { name: 'a', allowBranchDeploy: false, role: 'release', production: true },
+        { name: 'b', allowBranchDeploy: false, role: 'release', production: true },
+      ],
+    });
+    expect(two.ok).toBe(false);
+    const integration = await boards.updateSettings(ADMIN, boardId, 1, {
+      environments: [{ name: 'a', allowBranchDeploy: false, role: 'integration', production: true }],
+    });
+    expect(integration.ok).toBe(false);
+    const board = unwrap(
+      await boards.updateSettings(ADMIN, boardId, 1, {
+        environments: [
+          { name: 'dev', allowBranchDeploy: true, role: 'integration' },
+          { name: 'prod', allowBranchDeploy: false, role: 'release', production: true },
+        ],
+      }),
+    );
+    expect(board.environments.map((e) => [e.role, e.production])).toEqual([
+      ['integration', undefined],
+      ['release', true],
+    ]);
+  });
+
   it('pick-up takes an optional environment and keeps the current one when it is left out', async () => {
     unwrap(await boards.updateSettings(ADMIN, boardId, 1, { environments: [{ name: 'dev', allowBranchDeploy: true }] }));
     const glob = unwrap(await globs.create(DEV, input()));
