@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
 import { ArtifactService, BoardService, DeployService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, SubLimitService } from '@slop/core';
+import type { Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -25,6 +26,9 @@ import { HintHub } from './notifier.js';
 import { BedrockLlm } from './llm.js';
 import { LlmHealth } from './llm-health.js';
 import { mountHealth } from './http/health.js';
+import { AwsSignIn, AwsSsoOidc, readSsoSession, ssoCacheFile } from './aws-sso.js';
+import { IntegrationRegistry } from './integration-health.js';
+import { TunnelWatch } from './tunnel-watch.js';
 import { FileRoutines } from './routines.js';
 import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
@@ -56,9 +60,14 @@ const globs = new GlobService({
   ids: { runId: () => randomUUID() },
   routines,
 });
+// Each integration reports its health here; a change tells every open board's banner to refetch.
+const integrations = new IntegrationRegistry((status) => {
+  console.log(`[health] ${status.name} ${status.state}${status.reason === null ? '' : `: ${status.reason}`}`);
+  hub.broadcast('board.health');
+});
 const githubCredentials = new AppCredentialsStore(config.GITHUB_APP_FILE);
 await githubCredentials.load();
-const github = new GitHub(githubCredentials);
+const github = new GitHub(githubCredentials, integrations);
 const boardOf = (id: number) => store.transaction((tx) => tx.getBoard(id));
 // Signs agent-set download links, the board sign-in state and deploy callbacks.
 const links = new SignedLinks(config.SIGNING_SECRET);
@@ -73,7 +82,7 @@ const outbox = new OutboxRunner(
   db,
   { globs },
   {
-    ...codeHostExecutors(github, boardOf, routines, boards),
+    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations),
     ...deployExecutors(
       deploys,
       new Deployers({ codebuild: new CodeBuildDeployer() }),
@@ -94,20 +103,31 @@ const artifacts = new ArtifactService({ store, clock, notifier: hub });
 const findings = new FindingsService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
-// Credential and access failures mark a model down (logged once per change); no hint yet, since no
-// page shows the AI status (the waiting KB cards get their own board.kb hints).
-const llmHealth = new LlmHealth((model, h) => {
+// Credential and access failures mark a model down (logged once per change); the worst model's state
+// goes to the integration registry, whose banner shows it on every board (the waiting KB cards get
+// their own board.kb hints).
+const llmHealth: LlmHealth = new LlmHealth((model, h) => {
   console.log(h.state === 'down' ? `[llm] ${model} unavailable: ${h.reason}. ${h.fix}` : `[llm] ${model} ${h.state}`);
+  const worst = llmHealth.state();
+  if (worst.state === 'down') integrations.report('bedrock', { state: 'down', reason: worst.reason, fix: worst.fix });
+  else if (worst.state === 'ok') integrations.report('bedrock', { state: 'ok' });
 });
+// Each tracked model's LLM, so a finished AWS sign-in can probe the ones that were down.
+const probes = new Map<string, Llm>();
+const trackLlm = (llm: Llm, model: string): Llm => {
+  const tracked = llmHealth.track(llm, model);
+  probes.set(model, tracked);
+  return tracked;
+};
 const intake = new IntakeService({
   store,
-  llm: llmHealth.track(
+  llm: trackLlm(
     new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, logUsage),
     config.INTAKE_MODEL,
   ),
 });
 // Opus 5.5 takes no sampling parameters other than the defaults. Routing, dedupe and weekly consolidation share it.
-const kbRouteLlm = llmHealth.track(
+const kbRouteLlm = trackLlm(
   new BedrockLlm({ id: config.KB_ROUTE_MODEL, configKey: 'KB_ROUTE_MODEL' }, config.BEDROCK_REGION, logUsage, null),
   config.KB_ROUTE_MODEL,
 );
@@ -117,14 +137,14 @@ const kbPipeline = new KbPipeline({
   catalog,
   notifier: hub,
   route: kbRouteLlm,
-  draft: llmHealth.track(
+  draft: trackLlm(
     new BedrockLlm({ id: config.KB_DRAFT_MODEL, configKey: 'KB_DRAFT_MODEL' }, config.BEDROCK_REGION, logUsage, null),
     config.KB_DRAFT_MODEL,
   ),
 });
 
 // Haiku: splitting and classifying review findings, and checking bug reports for the learned sub limit.
-const findingsLlm = llmHealth.track(
+const findingsLlm = trackLlm(
   new BedrockLlm({ id: config.FINDINGS_MODEL, configKey: 'FINDINGS_MODEL' }, config.BEDROCK_REGION, logUsage),
   config.FINDINGS_MODEL,
 );
@@ -173,7 +193,23 @@ const app = createApp({
 mountDeploys(app, { deploys, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
 mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, logError });
-mountHealth(app, { llm: llmHealth, boards });
+// The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
+const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
+const awsSignIn =
+  ssoSession === null
+    ? null
+    : new AwsSignIn({
+        session: ssoSession,
+        oidc: new AwsSsoOidc(),
+        cacheFile: ssoCacheFile(ssoSession),
+        // A cheap call per down model: success marks it ok (clearing the banner), and the paused pipelines resume on their next tick.
+        onSignedIn: async () => {
+          await Promise.allSettled(
+            [...probes].filter(([model]) => llmHealth.isDown([model])).map(([, llm]) => llm.complete({ system: 'Reply with ok.', prompt: 'ok', maxTokens: 5 })),
+          );
+        },
+      });
+mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
 const agentSetValues = { SLOP_URL: config.PUBLIC_URL, COGNITO_CLAUDE_CODE_CLIENT_ID: config.CLAUDE_CODE_CLIENT_ID };
@@ -247,6 +283,8 @@ const findingsJob = new KbPipelineJob(findingsPipeline, logError, { isDown: () =
 findingsJob.start();
 const learningJobsRunner = new LearningJobs(learningJobs, logError);
 learningJobsRunner.start();
+const tunnelWatch = config.SLOP_TUNNEL_DOMAIN === undefined ? null : new TunnelWatch(config.SLOP_TUNNEL_DOMAIN, integrations);
+tunnelWatch?.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -258,6 +296,7 @@ const shutdown = () => {
   kbPipelineJob.stop();
   findingsJob.stop();
   learningJobsRunner.stop();
+  tunnelWatch?.stop();
   server.close();
   void database.close();
 };

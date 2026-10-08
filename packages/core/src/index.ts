@@ -37,3 +37,4 @@ export * from './app/sub-limit-service.js';
 export * from './app/learning-jobs.js';
 export * from './app/deploy-service.js';
 export * from './domain/checks.js';
+export * from './app/integration-health.js';

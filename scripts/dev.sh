@@ -181,6 +181,8 @@ start() {
   # LOCAL_SIGN_IN_WITHOUT_COOKIE: Chrome drops the sign-in state cookie on plain-http localhost.
   local env_args=(-e "LOCAL_SIGN_IN_WITHOUT_COOKIE=true")
   [[ -n "${AWS_PROFILE:-}" ]] && env_args+=(-e "AWS_PROFILE=$AWS_PROFILE")
+  # The server watches the tunnel (through ngrok's local API) and shows a banner when it drops.
+  [[ -n "${SLOP_TUNNEL_DOMAIN:-}" ]] && env_args+=(-e "SLOP_TUNNEL_DOMAIN=$SLOP_TUNNEL_DOMAIN")
   tmux new-session -d -s "$session" ${env_args[@]+"${env_args[@]}"} -n server -c "$root/apps/server" \
     "$($watch_mode && watched_server_cmd || server_cmd); read"
   tmux set-environment -t "$session" SLOP_DEV_ROOT "$root"
