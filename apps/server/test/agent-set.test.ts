@@ -1,11 +1,15 @@
 import { readFile } from 'node:fs/promises';
-import { KnowledgeService } from '@slop/core';
+import { KnowledgeService, renderLocalRun } from '@slop/core';
 import type { CatalogAgentSet, KnowledgeDoc, Result } from '@slop/core';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { FsCatalog, hashAgentSet } from '../src/catalog.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
+import { buildServer } from '../src/mcp/server.js';
+import type { McpDeps } from '../src/mcp/server.js';
 import { createTestDatabase } from './support/database.js';
 
 const ADMIN = 'admin@example.com';
@@ -132,5 +136,41 @@ describe('layered agent set in Postgres', () => {
     // The board serves the catalog for the old copy (orphaned here: not in this catalog) and its own edited file.
     const served = unwrap(await knowledge.agentSet(ADMIN, boardId)).files.map((f) => f.path);
     expect(served).toEqual(['agents/edited.md', 'agents/tester.md']);
+  });
+
+  it('keeps a local_run row (with history) and serves it beside the set, outside its files and version', async () => {
+    const spec = { build: 'pnpm install', launch: 'scripts/session.sh' };
+    const before = (await store.transaction((tx) => tx.getBoard(boardId)))?.agentSetVersion;
+    const row = doc({ kind: 'local_run', name: 'local-run', layer: 'file', content: renderLocalRun({ launch: 'old' }) });
+    await store.transaction((tx) => tx.saveKnowledge(row));
+    await store.transaction((tx) => tx.saveKnowledge({ ...row, content: renderLocalRun(spec), version: 2 }));
+    expect(await store.transaction((tx) => tx.getKnowledge(boardId, 'local_run', 'local-run'))).toMatchObject({
+      kind: 'local_run',
+      layer: 'file',
+      content: renderLocalRun(spec),
+      version: 2,
+    });
+    const history = await database.db.execute(
+      sql`select kind, version from knowledge_history where board_id = ${boardId} and name = 'local-run'`,
+    );
+    expect(history.map((r) => [r.kind, r.version])).toEqual([['local_run', 1]]);
+
+    const set = unwrap(await knowledge.agentSet(ADMIN, boardId));
+    expect(set).toMatchObject({ version: before, localRun: spec, localRunProblem: null });
+    expect(set.files.map((f) => f.path)).not.toContain('local-run');
+
+    const server = buildServer({ knowledge, agentSetValues: {} } as unknown as McpDeps, ADMIN, 'http://localhost');
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '0' });
+    await Promise.all([server.connect(a), client.connect(b)]);
+    try {
+      const result = await client.callTool({ name: 'get_agent_set', arguments: { board: boardId } });
+      const [first] = result.content as { text: string }[];
+      const body = JSON.parse(first?.text ?? 'null') as { version: number; localRun: unknown; localRunProblem?: string };
+      expect(body).toMatchObject({ version: before, localRun: spec });
+      expect(body.localRunProblem).toBeUndefined();
+    } finally {
+      await client.close();
+    }
   });
 });

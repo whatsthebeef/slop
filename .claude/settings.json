@@ -10,9 +10,10 @@
   },
   "permissions": {
     "allow": [
-      "mcp__slop__*",
+      "Bash(git push origin s*)",
+      "Bash(slop put-artifact:*)",
       "mcp__claude_ai_Slop__*",
-      "Bash(git push origin s*)"
+      "mcp__slop__*"
     ],
     "deny": [
       "Bash(gh api:*)",

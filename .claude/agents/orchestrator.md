@@ -30,6 +30,8 @@ Call `get_glob(id)` before anything else. It returns the status, version, genera
   - `super`: do not run the phases. Follow **Super mode** instead.
 - The glob's branch is the glob ID itself (e.g. `s1t4`). sstor (or the routine's checkout) has already put you on it. **Do not create branches.** Never commit to or push `<base>`.
 
+**Uploading artifacts:** the plan, decision log, postplan and local review are files, so upload them from the file instead of typing their text into a tool call. Anything over a few KB: in a local session run `slop put-artifact <id> --kind <kind> --file <path> [--commit <sha>] [--agent-set <n>] [--review-stats '<json>'] [--run <runId>]`; in a routine (or wherever the `slop` CLI isn't installed) call `artifact_upload_url(id, kind, commitSha, agentSetVersion, reviewStats, runId)` with the same fields and then `curl --data-binary @<path> '<url>'` (the link is single use and lasts 5 minutes; if curl can't reach slop, fall back to `put_artifact`). Keep inline `put_artifact` for small ones. Wherever this file says `put_artifact(id, kind, content, …)` for a file, this is how to send it.
+
 Every `put_artifact`, `report_failure` and `submit_learning` call includes `agentSetVersion`, read from `.claude/slop-agent-set.json`, and every commit carries the trailer `Slop-Agent-Set: <version>` with the same version, so slop can relate outcomes to the agent instructions that produced them.
 
 Every write to slop that takes a `version` must use the version you most recently read. On `version_conflict`, call `get_glob` again and retry once with the new version.

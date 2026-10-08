@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+/** The background jobs a server starts; `SLOP_JOBS` picks them. */
+export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'findings', 'learning', 'tunnel', 'follow'] as const;
+export type Job = (typeof JOBS)[number];
+const isJob = (name: string): name is Job => JOBS.some((job) => job === name);
+
 const schema = z.object({
   PORT: z.coerce.number().default(3000),
   DATABASE_URL: z.string().default('postgres://slop:slop@localhost:5432/slop'),
@@ -53,6 +58,34 @@ const schema = z.object({
     .transform((v) => (v ?? '').split(',').map((k) => k.trim()).filter((k) => k !== '')),
   /** The ngrok tunnel's domain (set by dev.sh): the server watches it and shows a banner when it is down. */
   SLOP_TUNNEL_DOMAIN: z.string().optional(),
+  /** Set by `scripts/dev.sh follow` on the main checkout's server: the follow loop's status file. */
+  SLOP_FOLLOW_FILE: z.string().optional(),
+  /** The integration environment a followed main checkout's commits are recorded as deploys to. */
+  SLOP_FOLLOW_ENVIRONMENT: z.string().default('local'),
+  /**
+   * Which background jobs start: `all` (the default), `none`, or a comma-separated list of JOBS. A
+   * session's server on a clone of the shared database uses `none` (or only the job its glob works
+   * on), so it doesn't act on GitHub, routines, deploys or Bedrock for work main's server owns.
+   */
+  SLOP_JOBS: z
+    .string()
+    .default('all')
+    .transform((value, ctx): ReadonlySet<Job> => {
+      const names = value.split(',').map((n) => n.trim()).filter((n) => n !== '');
+      // An empty value is a mistake, not a quiet way to switch every job off.
+      if (names.length === 0) {
+        ctx.addIssue({ code: 'custom', message: 'SLOP_JOBS is empty: use all, none or a list of jobs' });
+        return z.NEVER;
+      }
+      if (names.length === 1 && names[0] === 'all') return new Set(JOBS);
+      if (names.length === 1 && names[0] === 'none') return new Set();
+      const unknown = names.filter((n) => !isJob(n));
+      if (unknown.length > 0) {
+        ctx.addIssue({ code: 'custom', message: `SLOP_JOBS: unknown job ${unknown.join(', ')} (all, none, or ${JOBS.join(', ')})` });
+        return z.NEVER;
+      }
+      return new Set(names.filter(isJob));
+    }),
   BEDROCK_REGION: z.string().default('us-east-1'),
   /** Haiku 4.5 for intake and classification. */
   INTAKE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),

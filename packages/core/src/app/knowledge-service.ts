@@ -28,6 +28,8 @@ import {
   renderFrontmatter,
 } from '../domain/knowledge.js';
 import type { CatalogUpdate, KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
+import { LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
+import type { LocalRun } from '../domain/local-run.js';
 import { isReviewGuide } from '../domain/code-review.js';
 import { effectBasisOf, effectItemOf, isEffectMeasured, startEffectCheck } from '../domain/effect-check.js';
 import type { EffectCheck } from '../domain/effect-check.js';
@@ -53,11 +55,45 @@ export interface IndexEntry {
   readonly source: string;
 }
 
-/** The agent set as served: catalog files with the board's layers applied, plus the board's own files. */
+/**
+ * The agent set as served: catalog files with the board's layers applied, plus the board's own files.
+ * The local-run spec travels beside it (`sstor init` writes it to `.sstor/local-run.json`), outside
+ * `files` and the version.
+ */
 export interface AgentSet {
   readonly version: number;
   readonly files: readonly { readonly path: string; readonly content: string }[];
+  /** Null when the board has none, or its stored value fails the check (`localRunProblem` then says why). */
+  readonly localRun: LocalRun | null;
+  readonly localRunProblem: string | null;
 }
+
+/** The board's local-run spec for the Knowledge page (read-only there; it changes through KB items). */
+export interface LocalRunView {
+  /** Null when the board has none, or its stored value fails the check (`problem`). */
+  readonly spec: LocalRun | null;
+  /** The stored text, as is; null without a row. */
+  readonly content: string | null;
+  readonly version: number | null;
+  readonly updatedBy: string | null;
+  readonly updatedAt: string | null;
+  readonly problem: string | null;
+}
+
+/** A stored local-run row, checked again on read: a value that fails the check is never served. */
+const storedLocalRun = (row: KnowledgeDoc | null): { spec: LocalRun | null; problem: string | null } => {
+  if (row === null) return { spec: null, problem: null };
+  const parsed = parseLocalRun(row.content);
+  return parsed.ok
+    ? { spec: parsed.value, problem: null }
+    : { spec: null, problem: `The stored local-run spec (version ${row.version}) is invalid: ${parsed.error.message}` };
+};
+
+/** A local-run value from an approval or draft, checked and in canonical form. */
+const checkedLocalRun = (content: string): Result<string> => {
+  const parsed = parseLocalRun(content);
+  return parsed.ok ? ok(renderLocalRun(parsed.value)) : parsed;
+};
 
 /** Every path in the board's agent set and how it is served, for the Knowledge page. */
 export interface AgentSetIndex {
@@ -243,6 +279,11 @@ export const targetState = async (
   target: KbTarget,
 ): Promise<TargetState | null> => {
   const existing = await tx.getKnowledge(boardId, target.kind, target.name);
+  if (target.kind === 'local_run') {
+    // The whole value is drafted and replaced; the first value creates the row.
+    if (target.name !== LOCAL_RUN_NAME) return null;
+    return { text: existing?.content ?? '', version: existing?.version ?? 0, existing, catalog: null, newDocument: false };
+  }
   if (target.kind === 'doc') {
     if (existing !== null) return { text: existing.content, version: existing.version, existing, catalog: null, newDocument: false };
     return target.newDocument === null ? null : { text: '', version: 0, existing: null, catalog: null, newDocument: true };
@@ -389,6 +430,24 @@ export class KnowledgeService {
   async agentSetForDownload(boardId: number): Promise<Result<AgentSet>> {
     const catalog = await this.deps.catalog.agentSet();
     return this.deps.store.transaction((tx) => this.served(tx, catalog, boardId));
+  }
+
+  /** The board's local-run spec as stored and as served, for the Knowledge page. */
+  async localRun(email: string, boardId: number): Promise<Result<LocalRunView>> {
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      const row = await tx.getKnowledge(boardId, 'local_run', LOCAL_RUN_NAME);
+      const { spec, problem } = storedLocalRun(row);
+      return ok({
+        spec,
+        content: row?.content ?? null,
+        version: row?.version ?? null,
+        updatedBy: row?.updatedBy ?? null,
+        updatedAt: row?.updatedAt ?? null,
+        problem,
+      });
+    });
   }
 
   /** Every path in the board's agent set with how it is served (catalog, overlay, board file, override, orphaned). */
@@ -873,6 +932,13 @@ export class KnowledgeService {
 
     const { kind, name } = approval.target;
     if (approval.content.trim() === '') return invalidInput('The new content is empty');
+    if (kind === 'local_run') {
+      if (name !== LOCAL_RUN_NAME) return invalidInput(`The local-run spec is named ${LOCAL_RUN_NAME}`);
+      const content = checkedLocalRun(approval.content);
+      if (!content.ok) return content;
+      const outcome = await this.apply(tx, email, item, kind, name, content.value);
+      return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
+    }
     const existing = await tx.getKnowledge(item.boardId, kind, name);
     if (isAgentSetKind(kind)) {
       const outcome = await this.applyAgentSetEdit(tx, email, item, kind, name, approval.content, existing);
@@ -1010,6 +1076,12 @@ export class KnowledgeService {
         currentItem: requeued,
       });
     }
+    if (target.kind === 'local_run') {
+      // The draft is the whole value, checked again here: nothing invalid is written.
+      const content = checkedLocalRun(draft.content);
+      if (!content.ok) return content;
+      return this.apply(tx, email, item, 'local_run', LOCAL_RUN_NAME, content.value);
+    }
     const { after } = splicePreview(state.text, draft.section, draft.content, state.newDocument);
     if (target.kind === 'doc') {
       const meta = state.existing ?? target.newDocument;
@@ -1026,7 +1098,9 @@ export class KnowledgeService {
     if (item.status !== 'open' || item.draft === null || item.target === null) return null;
     const state = await targetState(tx, catalog, item.boardId, item.target);
     if (state === null) return null;
-    const { diff } = splicePreview(state.text, item.draft.section, item.draft.content, state.newDocument);
+    // The local-run spec is replaced whole (a draft holds its canonical text).
+    const whole = state.newDocument || item.target.kind === 'local_run';
+    const { diff } = splicePreview(state.text, item.draft.section, item.draft.content, whole);
     return { version: state.version, stale: state.version !== item.draftedAgainstVersion, diff: contextDiff(diff) };
   }
 
@@ -1034,6 +1108,11 @@ export class KnowledgeService {
   private async checkTarget(tx: Tx, catalog: CatalogAgentSet, boardId: number, change: TargetChange): Promise<Result<KbTarget>> {
     const section = cleanHeading(change.section);
     if (section !== null && !SINGLE_LINE.test(section)) return invalidInput('A section is one heading');
+    if (change.kind === 'local_run') {
+      // One row per board, replaced whole; it may not exist yet (the first value arrives as a draft too).
+      if (change.name !== LOCAL_RUN_NAME) return invalidInput(`The local-run spec is named ${LOCAL_RUN_NAME}`);
+      return ok({ kind: 'local_run', name: LOCAL_RUN_NAME, section: null, newDocument: null });
+    }
     if (change.kind === 'doc') {
       const name = docName(change.name);
       if (!PLAIN_NAME.test(name)) return invalidInput('A document name is letters, digits, _, . or -');
@@ -1123,7 +1202,8 @@ export class KnowledgeService {
     const board = await tx.getBoard(boardId);
     if (board === null) return notFound(`No board ${boardId}`);
     const { files } = await this.compose(tx, catalog, boardId);
-    return ok({ version: board.agentSetVersion, files });
+    const { spec, problem } = storedLocalRun(await tx.getKnowledge(boardId, 'local_run', LOCAL_RUN_NAME));
+    return ok({ version: board.agentSetVersion, files, localRun: spec, localRunProblem: problem });
   }
 
   /**

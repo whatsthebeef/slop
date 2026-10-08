@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SlopError, UsageError } from '../src/errors.js';
 import type { Fetch } from '../src/http.js';
 import {
+  LOCAL_RUN_PATH,
   MANIFEST_PATH,
   MARKER,
   MARKER_END,
@@ -162,7 +163,9 @@ describe('slop init', () => {
     expect(await read('CLAUDE.md')).toBe(
       `${MARKER}\n# Slop agent system\n\nRules.\n${MARKER_END}\n`,
     );
-    expect(await read('.gitignore')).toBe('.reviews/\n');
+    expect(await read('.gitignore')).toBe('.reviews/\n.sstor/local-run.json\n');
+    // An older server's bundle has no local-run spec: nothing is written for it.
+    expect(await exists(LOCAL_RUN_PATH)).toBe(false);
     expect(await readJson(MANIFEST_PATH)).toEqual({
       board: 7,
       version: 3,
@@ -188,7 +191,7 @@ describe('slop init', () => {
     const first = await Promise.all(paths.map(read));
     await runInit(harness().deps);
     expect(await Promise.all(paths.map(read))).toEqual(first);
-    expect(await read('.gitignore')).toBe('node_modules\n.reviews/\n');
+    expect(await read('.gitignore')).toBe('node_modules\n.reviews/\n.sstor/local-run.json\n');
   });
 
   it('merges sandbox lists into an existing sandbox block, keeping the developer settings', async () => {
@@ -355,6 +358,51 @@ describe('slop init', () => {
       'unexpected agent set bundle',
     );
     expect(await exists(MANIFEST_PATH)).toBe(false);
+  });
+
+  describe('local-run spec', () => {
+    const withSpec = (localRun: unknown, extra: Record<string, unknown> = {}) => ({ ...bundle(), localRun, ...extra });
+
+    it('writes it in canonical form beside the agent set, outside the manifest', async () => {
+      const run = harness({ body: withSpec({ launch: ' scripts/session.sh ', build: 'pnpm install' }) });
+      await runInit(run.deps);
+      expect(await read(LOCAL_RUN_PATH)).toBe('{\n  "build": "pnpm install",\n  "launch": "scripts/session.sh"\n}\n');
+      expect(((await readJson(MANIFEST_PATH)) as { files: string[] }).files).not.toContain(LOCAL_RUN_PATH);
+      expect(await read('.gitignore')).toBe('.reviews/\n.sstor/local-run.json\n');
+      expect(run.out).toEqual([
+        'slop init: board 7 agent set v3: 4 files, settings, CLAUDE.md, local-run spec (.sstor/local-run.json)\n',
+      ]);
+    });
+
+    it('removes it when the board has none, and leaves it alone for an older server', async () => {
+      await runInit(harness({ body: withSpec({ launch: 'a' }) }).deps);
+      await runInit(harness().deps);
+      expect(await read(LOCAL_RUN_PATH)).toBe('{\n  "launch": "a"\n}\n');
+      const run = harness({ body: withSpec(null) });
+      await runInit(run.deps);
+      expect(await exists(LOCAL_RUN_PATH)).toBe(false);
+      expect(run.out[0]).toContain(', no local-run spec\n');
+    });
+
+    it('keeps the installed one, with a warning, when slop reports its stored spec invalid', async () => {
+      await runInit(harness({ body: withSpec({ launch: 'a' }) }).deps);
+      const run = harness({ body: withSpec(null, { localRunProblem: 'The stored local-run spec (version 2) is invalid' }) });
+      await runInit(run.deps);
+      expect(await read(LOCAL_RUN_PATH)).toBe('{\n  "launch": "a"\n}\n');
+      expect(run.err.join('')).toContain("local-run spec in slop is invalid (The stored local-run spec (version 2) is invalid); keeping .sstor/local-run.json");
+    });
+
+    it.each([
+      ['no launch', { build: 'x' }],
+      ['an empty launch', { launch: '  ' }],
+      ['a newline', { launch: 'a\nrm -rf ~' }],
+      ['an unknown key', { launch: 'a', env: 'x' }],
+      ['a non-object', 'scripts/session.sh'],
+      ['an over-long command', { launch: 'x'.repeat(2001) }],
+    ])('rejects a bundle whose spec has %s', async (_, localRun) => {
+      await expect(runInit(harness({ body: withSpec(localRun) }).deps)).rejects.toThrow('unexpected agent set bundle');
+      expect(await exists(LOCAL_RUN_PATH)).toBe(false);
+    });
   });
 
   it("rejects a download link that is neither https nor on slop's origin", async () => {

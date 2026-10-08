@@ -61,6 +61,7 @@ const ownedPaths = (entries: readonly AgentSetEntry[]) =>
 
 /** A target as a readable path: `build_test_lint › Build`, `agents/implementer.md › Board rules`, or a new document. */
 const targetPath = (target: KbTarget, owned: ReadonlySet<string>): string => {
+  if (target.kind === 'local_run') return 'Local-run spec';
   if (target.newDocument !== null) {
     const { area, audience } = target.newDocument;
     return `new document: ${target.name} (${area}${audience.length === 0 ? '' : `, for ${audience.join(', ')}`})`;
@@ -1141,14 +1142,18 @@ const DecisionDialog = ({
   );
 };
 
-/** A target's current text (a document's body, or the board's layer of an agent file); '' for a new document. */
+/**
+ * A target's current text (a document's body, the board's layer of an agent file, or the local-run spec's JSON); ''
+ * for a new document or a spec not set yet.
+ */
 const useTargetText = (boardId: number, kind: KnowledgeKind | null, name: string, isNew: boolean) =>
   useQuery({
     queryKey: ['kb-target-text', boardId, kind, name],
-    queryFn: async () =>
-      kind === 'doc'
-        ? ((await api.knowledgeDoc(boardId, name)).find((d) => d.name === name)?.content ?? '')
-        : (await api.agentSetFile(boardId, name)).content,
+    queryFn: async () => {
+      if (kind === 'doc') return (await api.knowledgeDoc(boardId, name)).find((d) => d.name === name)?.content ?? '';
+      if (kind === 'local_run') return (await api.knowledge(boardId)).localRun.content ?? '';
+      return (await api.agentSetFile(boardId, name)).content;
+    },
     enabled: kind !== null && name !== '' && !isNew,
   });
 
@@ -1158,6 +1163,8 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
   const toast = useToast();
   const { markLocal } = useContext(KbMotion);
   const isNew = target.newDocument !== null;
+  // The local-run spec is replaced whole, like a new document's body.
+  const isSpec = target.kind === 'local_run';
   const text = useTargetText(boardId, target.kind, target.name, isNew);
   const current = isNew ? '' : text.data;
   const headings = current === undefined ? [] : spliceHeadings(current).map((h) => h.text);
@@ -1170,14 +1177,15 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
   const matched = wanted === null ? undefined : headings.find((h) => sameHeading(h, wanted.replace(/^#+\s*/, '')));
   const chosen = section ?? matched ?? '';
   // Without a draft (drafting failed), start from the section's current text.
-  const body = content ?? (current === undefined ? null : chosen === '' ? '' : (sectionText(current, chosen) ?? ''));
+  const body =
+    content ?? (current === undefined ? null : isSpec ? current : chosen === '' ? '' : (sectionText(current, chosen) ?? ''));
 
   const approve = useMutation({
     mutationFn: () =>
       api.approveProposal(item.id, item.version, {
         as: 'draft',
         content: body ?? '',
-        section: isNew || chosen === '' ? null : chosen,
+        section: isNew || isSpec || chosen === '' ? null : chosen,
         ...watching(watch),
       }),
     onSuccess: (decided) => {
@@ -1203,7 +1211,11 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
       }}
     >
       {stale && <p className='text-xs text-muted-foreground'>The target changed since this draft; approve once it is drafted again.</p>}
-      {isNew ? (
+      {isSpec ? (
+        <p className='text-xs text-muted-foreground'>
+          The whole local-run spec: a JSON object with <code>launch</code> and optionally <code>build</code>, one command line each.
+        </p>
+      ) : isNew ? (
         <p className='text-xs text-muted-foreground'>The whole body of the new document {target.name}.</p>
       ) : (
         <Label>
@@ -1219,7 +1231,7 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
         </Label>
       )}
       <Label>
-        {isNew ? 'Content' : 'Section text (with its heading)'}
+        {isSpec ? 'Spec (JSON)' : isNew ? 'Content' : 'Section text (with its heading)'}
         <Textarea
           className='min-h-80 font-mono text-xs'
           value={body ?? 'Loading…'}
@@ -1240,7 +1252,7 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
   );
 };
 
-type TargetKind = 'doc' | 'agent' | 'new';
+type TargetKind = 'doc' | 'agent' | 'new' | 'local_run';
 
 /** Points the item at another target; its draft is cleared and it is drafted again there. */
 const TargetEditor = ({
@@ -1259,10 +1271,18 @@ const TargetEditor = ({
   const toast = useToast();
   const target = item.target;
   const [kind, setKind] = useState<TargetKind>(
-    target === null ? 'doc' : target.newDocument !== null ? 'new' : target.kind === 'doc' ? 'doc' : 'agent',
+    target === null
+      ? 'doc'
+      : target.newDocument !== null
+        ? 'new'
+        : target.kind === 'doc' || target.kind === 'local_run'
+          ? target.kind
+          : 'agent',
   );
   const [docName, setDocName] = useState(target?.kind === 'doc' && target.newDocument === null ? target.name : (documents[0]?.name ?? ''));
-  const [agentPath, setAgentPath] = useState(target !== null && target.kind !== 'doc' ? target.name : (agentFiles[0]?.path ?? ''));
+  const [agentPath, setAgentPath] = useState(
+    target !== null && target.kind !== 'doc' && target.kind !== 'local_run' ? target.name : (agentFiles[0]?.path ?? ''),
+  );
   const [section, setSection] = useState(target?.section ?? '');
   const [newName, setNewName] = useState(target !== null && target.newDocument !== null ? target.name : '');
   const [area, setArea] = useState(target?.newDocument?.area ?? '');
@@ -1272,13 +1292,15 @@ const TargetEditor = ({
   const agent = agentFiles.find((f) => f.path === agentPath) ?? null;
   const name = kind === 'doc' ? docName : kind === 'agent' ? agentPath : newName.trim();
   const textKind = kind === 'doc' ? 'doc' : kind === 'agent' ? (agent?.kind ?? null) : null;
-  const text = useTargetText(boardId, textKind, name, kind === 'new');
+  // The spec has no sections, so its text isn't needed here.
+  const text = useTargetText(boardId, textKind, name, kind === 'new' || kind === 'local_run');
   const headings = text.data === undefined ? [] : [...new Set(spliceHeadings(text.data).map((h) => h.text))];
 
   const change = (): TargetChange | null => {
     const heading = section.trim() === '' ? null : section.trim();
     if (kind === 'doc') return docName === '' ? null : { kind: 'doc', name: docName, section: heading };
     if (kind === 'agent') return agent === null ? null : { kind: agent.kind, name: agent.path, section: heading };
+    if (kind === 'local_run') return { kind: 'local_run', name: 'local-run', section: null };
     const people = audience
       .split(',')
       .map((a) => a.trim())
@@ -1317,6 +1339,7 @@ const TargetEditor = ({
             ['doc', 'A document'],
             ['agent', 'An agent file (board rules)'],
             ['new', 'A new document'],
+            ['local_run', 'Local-run spec'],
           ] as const
         ).map(([value, label]) => (
           <Button
@@ -1358,7 +1381,7 @@ const TargetEditor = ({
           </Select>
         </Label>
       )}
-      {kind !== 'new' && (
+      {(kind === 'doc' || kind === 'agent') && (
         <Label>
           Section (optional: an existing heading, or a new one; empty lets the drafter choose)
           <Input list={`kb-headings-${item.id}`} value={section} onChange={(e) => setSection(e.target.value)} />

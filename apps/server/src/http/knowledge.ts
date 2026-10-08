@@ -109,19 +109,22 @@ export const mountKnowledge = (
   app.get('/api/boards/:b/kb', async (c) => {
     const boardId = Number(c.req.param('b'));
     const email = c.get('email');
-    const [index, set, updates] = await Promise.all([
+    const [index, set, updates, localRun] = await Promise.all([
       knowledge.index(email, boardId),
       knowledge.agentSetIndex(email, boardId),
       knowledge.catalogUpdates(email, boardId),
+      knowledge.localRun(email, boardId),
     ]);
     if (!index.ok) return send(c, index);
     if (!set.ok) return send(c, set);
     if (!updates.ok) return send(c, updates);
+    if (!localRun.ok) return send(c, localRun);
     const { version, entries } = set.value;
     // `files`: the paths served (orphaned overlays aren't); `entries`: every path with how it is served.
     const files = entries.filter((e) => e.status !== 'orphaned').map((e) => e.path);
     // `catalogUpdates`: documents forked from a catalog entry that has moved on (shown, never applied).
-    return c.json({ documents: index.value, agentSet: { version, files, entries }, catalogUpdates: updates.value });
+    // `localRun`: the local-run spec, read-only here (it changes through KB items).
+    return c.json({ documents: index.value, agentSet: { version, files, entries }, catalogUpdates: updates.value, localRun: localRun.value });
   });
 
   app.get('/api/boards/:b/kb/docs/:name', async (c) =>

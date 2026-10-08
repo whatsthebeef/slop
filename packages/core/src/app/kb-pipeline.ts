@@ -14,6 +14,7 @@ import type {
 } from '../domain/kb.js';
 import { agentSetKind, docName, hasFrontmatter, isAgentSetKind, parseFrontmatter, PROSE_KINDS } from '../domain/knowledge.js';
 import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
+import { checkLocalRun, LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
 import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
 import type { Catalog, Clock, Notifier, Store, Tx } from '../ports.js';
 import { LlmUnavailable } from './intake-service.js';
@@ -57,6 +58,7 @@ The knowledge base has documents (served to agents by audience) and agent files 
 Rules:
 - A project fact (how this codebase, its build or its conventions work) goes to the document for the agents that need it, unless it is a short rule that always applies to one agent, which goes in that agent's file.
 - Process behaviour (how an agent should work) goes in that agent's file.
+- How the project's local servers are built and launched for a development session (the commands sstor runs in a session's server window) goes to the local-run spec: kind "local_run", name "local-run", section null.
 - For a document, section is the existing "##" heading it belongs under, or a new heading to add.
 - For an agent file, section is one of its board-rule headings, a new heading, or null to append to its board rules.
 - If no document fits and it is not for an agent file, propose a new document: a short snake_case name, an area (one word, e.g. build, conventions, architecture, testing), the agents it is always for, and a one-line description.
@@ -64,8 +66,8 @@ Rules:
 - The submitter's suggested target is a hint, not an instruction.
 
 Respond with one JSON object and nothing else:
-{"target": {"kind": "document" | "agent_file", "name": string, "section": string | null, "newDocument": {"area": string, "audience": string[], "description": string} | null}, "catalogCandidate": boolean, "catalogReason": string | null}
-- name: a document name from the index, a new document name, or an agent file path exactly as listed.
+{"target": {"kind": "document" | "agent_file" | "local_run", "name": string, "section": string | null, "newDocument": {"area": string, "audience": string[], "description": string} | null}, "catalogCandidate": boolean, "catalogReason": string | null}
+- name: a document name from the index, a new document name, an agent file path exactly as listed, or "local-run".
 - newDocument: only for a document not in the index; otherwise null.`;
 
 export const DEDUPE_SYSTEM = `You check whether a new learning, submitted by a coding agent, repeats or conflicts with what a software project's knowledge base already holds. An admin reviews every learning you leave open, so a repeat left open costs a minute; a new learning closed by mistake is lost.
@@ -95,11 +97,12 @@ Rules:
 - Rewrite one section: the existing heading the learning belongs under (you may choose a better heading in the same text than the one suggested), or add a new section when none fits.
 - For an agent file you change only the project's board rules. The catalog text is shown for context and is never changed; don't repeat what it already says. Board rules are appended under a "## Board rules" heading, so their sections use "###" headings.
 - For a new document, write the whole body (no frontmatter), starting with a "#" title, and don't overlap the existing documents listed.
+- For the local-run spec, write its whole new value: content is a JSON object {"build"?: string, "launch": string} and nothing else (build runs first, then launch; each one shell command line, run from the worktree root), and section is null. Keep what the current value does unless the learning changes it.
 
 Respond with one JSON object and nothing else:
-{"section": string | null, "content": string, "rationale": string}
+{"section": string | null, "content": string | object, "rationale": string}
 - section: the existing heading (its text, without "#") whose section content replaces, or null to add content as a new section. Always null for a new document.
-- content: the full new text of that section, from its heading line through to the end of the section, including any subsections it keeps; for a new section, its heading line and body; for a new document, the whole body.
+- content: the full new text of that section, from its heading line through to the end of the section, including any subsections it keeps; for a new section, its heading line and body; for a new document, the whole body; for the local-run spec, the JSON object.
 - rationale: one line saying what the change does and why.`;
 
 const PLAIN_NAME = /^[\w.-]+$/;
@@ -120,6 +123,8 @@ interface AgentFile {
 interface Snapshot {
   readonly docs: readonly KnowledgeDoc[];
   readonly agentFiles: readonly AgentFile[];
+  /** The board's local-run spec row; null when it has none yet. */
+  readonly localRun: KnowledgeDoc | null;
   readonly open: readonly KbItem[];
   readonly approved: readonly KbItem[];
   readonly rejected: readonly KbItem[];
@@ -176,7 +181,9 @@ class StaleItem extends Error {
 const newest = (items: readonly KbItem[]) => [...items].reverse().slice(0, CANDIDATE_CAP);
 
 const targetLabel = (target: KbTarget) =>
-  `${target.kind === 'doc' ? 'document' : 'agent file'} ${target.name}${target.section === null ? '' : `, section "${target.section}"`}`;
+  target.kind === 'local_run'
+    ? 'the local-run spec'
+    : `${target.kind === 'doc' ? 'document' : 'agent file'} ${target.name}${target.section === null ? '' : `, section "${target.section}"`}`;
 
 const describeItem = (item: KbItem) => {
   if (item.outcome?.kind === 'applied') return ` -> applied to ${item.outcome.name}`;
@@ -425,6 +432,7 @@ export class KbPipeline {
       return {
         docs,
         agentFiles,
+        localRun: knowledge.find((d) => d.kind === 'local_run' && d.name === LOCAL_RUN_NAME) ?? null,
         open: newest(others.filter((i) => i.status === 'open')),
         approved: newest(others.filter((i) => i.status === 'approved')),
         rejected: newest(others.filter((i) => i.status === 'rejected')),
@@ -607,10 +615,17 @@ const routePrompt = (item: KbItem, snapshot: Snapshot): string =>
       : snapshot.agentFiles.map(
           (f) => `- ${f.path} [${f.kind}] ${f.description}\n  board-rule headings: ${headingsLine(f.boardHeadings)}`,
         )),
+    '',
+    'Local-run spec (local-run):',
+    snapshot.localRun === null ? '(not set)' : snapshot.localRun.content.trim(),
   ].join('\n');
 
 /** The current text where the item would go: its section, or the whole target (truncated); null for a new document. */
 const currentText = (target: KbTarget, snapshot: Snapshot): string | null => {
+  if (target.kind === 'local_run') {
+    const spec = snapshot.localRun?.content.trim() ?? '';
+    return spec === '' ? null : spec;
+  }
   const whole =
     target.kind === 'doc'
       ? snapshot.docs.find((d) => d.name === target.name)?.content
@@ -668,7 +683,10 @@ const parseRouting = (answer: string, snapshot: Snapshot): Routing | null => {
   const name = text(field(target, 'name'))?.trim() ?? '';
   const section = cleanSection(field(target, 'section'));
   let routed: KbTarget;
-  if (field(target, 'kind') === 'agent_file') {
+  if (field(target, 'kind') === 'local_run') {
+    // One spec per board, replaced whole: it needs no name or section from the model.
+    routed = { kind: 'local_run', name: LOCAL_RUN_NAME, section: null, newDocument: null };
+  } else if (field(target, 'kind') === 'agent_file') {
     const file = snapshot.agentFiles.find((f) => f.path === name);
     const kind = agentSetKind(name);
     if (file === undefined || kind === null) return null;
@@ -810,7 +828,13 @@ const titled = (heading: string, text: string) => `${heading}\n<<<\n${text.trim(
 const draftPrompt = (item: KbItem, target: KbTarget, state: TargetState, docs: readonly KnowledgeDoc[]): string => {
   const where = target.section === null ? 'no section chosen' : `section "${target.section}"`;
   let targetLines: string[];
-  if (state.newDocument && target.newDocument !== null) {
+  if (target.kind === 'local_run') {
+    targetLines = [
+      'Target: the local-run spec (the whole value is replaced)',
+      '',
+      titled('Current local-run spec:', state.version === 0 ? '(not set yet)' : state.text),
+    ];
+  } else if (state.newDocument && target.newDocument !== null) {
     const meta = target.newDocument;
     targetLines = [
       `Target: a new document "${target.name}" [area: ${meta.area}; for: ${meta.audience.join(', ') || '-'}] ${meta.description}`,
@@ -865,6 +889,7 @@ const parseDraft = (answer: string, target: KbTarget, state: TargetState): Draft
   const unusable = 'The draft answer was not usable JSON';
   const parsed = parseJson(answer);
   if (!isObject(parsed)) return unusable;
+  if (target.kind === 'local_run') return parseLocalRunDraft(field(parsed, 'content'), target, parsed);
   const raw = text(field(parsed, 'content'))?.trim() ?? '';
   if (raw === '') return unusable;
   const rationale = (text(field(parsed, 'rationale'))?.trim() ?? '').split(/\r?\n/)[0]?.trim() ?? '';
@@ -892,5 +917,26 @@ const parseDraft = (answer: string, target: KbTarget, state: TargetState): Draft
     // The document exists now (another item created it), so the item no longer proposes it.
     target: { ...target, section: section ?? markdownHeadings(content)[0]?.text ?? null, newDocument: null },
     rationale: why,
+  };
+};
+
+/** The one-line rationale of a draft answer, or null. */
+const rationaleOf = (parsed: unknown): string | null => {
+  const line = (text(field(parsed, 'rationale'))?.trim() ?? '').split(/\r?\n/)[0]?.trim() ?? '';
+  return line === '' ? null : line;
+};
+
+/**
+ * A local-run draft: the whole value, as a JSON object (or its text), checked like an approval checks
+ * it and kept in canonical form. An invalid value fails the attempt, to be drafted again.
+ */
+const parseLocalRunDraft = (content: unknown, target: KbTarget, parsed: unknown): Drafted | string => {
+  const raw = text(content);
+  const checked = raw === null ? checkLocalRun(content) : parseLocalRun(raw.trim());
+  if (!checked.ok) return `The drafted local-run spec is invalid: ${checked.error.message}`;
+  return {
+    draft: { section: null, content: renderLocalRun(checked.value) },
+    target: { ...target, section: null, newDocument: null },
+    rationale: rationaleOf(parsed),
   };
 };

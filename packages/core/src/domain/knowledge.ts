@@ -1,12 +1,17 @@
 /**
  * The board's knowledge base: documents (conventions, build commands, architecture, review
- * checklists) and the agent-set files that `sstor init` writes into a checkout.
+ * checklists), the agent-set files that `sstor init` writes into a checkout, and the local-run spec
+ * (`local_run`, `domain/local-run.ts`).
  */
-export const KNOWLEDGE_KINDS = ['doc', 'agent', 'command', 'hook', 'settings', 'mcp', 'claude_md'] as const;
+export const KNOWLEDGE_KINDS = ['doc', 'agent', 'command', 'hook', 'settings', 'mcp', 'claude_md', 'local_run'] as const;
 export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
 
-/** Everything except documents belongs to the agent set and changes its version. */
-export const isAgentSetKind = (kind: KnowledgeKind): boolean => kind !== 'doc';
+/**
+ * The kinds that belong to the agent set and change its version. Not documents, and not the local-run
+ * spec: it is delivered beside the set (never under `.claude/`) and versioned on its own row.
+ */
+export const AGENT_SET_KINDS: readonly KnowledgeKind[] = ['agent', 'command', 'hook', 'settings', 'mcp', 'claude_md'];
+export const isAgentSetKind = (kind: KnowledgeKind): boolean => AGENT_SET_KINDS.includes(kind);
 
 /** Agent-set kinds a learning (prose) can target; settings, hooks and mcp.json aren't. */
 export const PROSE_KINDS: readonly KnowledgeKind[] = ['agent', 'command', 'claude_md'];

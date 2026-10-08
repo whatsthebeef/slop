@@ -359,7 +359,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_agent_set',
     {
       description:
-        "The board's agent set (agent definitions, commands, hooks, settings, the .mcp.json entry and the CLAUDE.md section) with its version. With download: true, returns a link valid for 5 minutes instead of the files (sstor init fetches it with curl).",
+        "The board's agent set (agent definitions, commands, hooks, settings, the .mcp.json entry and the CLAUDE.md section) with its version, and beside it the board's local-run spec (localRun: { build?, launch } or null; outside the version), which sstor init writes to .sstor/local-run.json. With download: true, returns a link valid for 5 minutes instead of the files (sstor init fetches it with curl).",
       inputSchema: { board: z.number().int(), download: z.boolean().optional() },
     },
     async ({ board, download }) =>
@@ -376,6 +376,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         return {
           version: set.version,
           files: set.files.map((f) => ({ path: f.path, content: renderAgentSetFile(f.content, deps.agentSetValues) })),
+          localRun: set.localRun,
+          ...(set.localRunProblem === null ? {} : { localRunProblem: set.localRunProblem }),
         };
       }),
   );
@@ -445,7 +447,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .describe('decision, gotcha, pattern, or agent-behaviour (something an instruction would have prevented)'),
         statement: z.string().min(1).describe('The learning, as one rule or fact'),
         evidence: z.string().min(1).describe('What showed it: files, review findings, failures, a developer correction'),
-        suggestedTarget: z.string().optional().describe('Where it belongs: a document, area or agent definition'),
+        suggestedTarget: z
+          .string()
+          .optional()
+          .describe('Where it belongs: a document, area or agent definition, or "local-run" for how sessions build and launch the local servers'),
         agentSetVersion: z.number().int().nonnegative().optional(),
         runId: z.string().optional(),
         document: z
