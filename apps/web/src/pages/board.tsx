@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
+import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { codeReviewsKey, deploysKey, globsKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
@@ -34,7 +35,6 @@ const MOVE_DESCRIPTIONS: Partial<Record<Action, string>> = {
   pick_up: 'you implement it',
   take_over: 'you take it over from the routine',
   retrigger: 'a routine runs it again',
-  start_again: 'back to Planning',
 };
 
 /**
@@ -45,15 +45,18 @@ const MOVE_DESCRIPTIONS: Partial<Record<Action, string>> = {
  */
 const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
   const allowed = glob.allowedActions ?? [];
-  const make = (action: Action, direction: Direction, target: List) => ({
-    target,
-    move: {
-      action,
-      direction,
-      label: direction === 'right' ? `${ACTION_LABELS[action]} ▸` : `◂ ${ACTION_LABELS[action]}`,
-      description: `${ACTION_LABELS[action]} ${glob.id}: ${MOVE_DESCRIPTIONS[action] ?? LIST_TITLES[target]}`,
-    },
-  });
+  const make = (action: Action, direction: Direction, target: List) => {
+    const name = actionLabel(action, glob.type, ACTION_LABELS);
+    return {
+      target,
+      move: {
+        action,
+        direction,
+        label: direction === 'right' ? `${name} ▸` : `◂ ${name}`,
+        description: `${name} ${glob.id}: ${MOVE_DESCRIPTIONS[action] ?? LIST_TITLES[target]}`,
+      },
+    };
+  };
   if (glob.list === 'planning') {
     return (['start', 'pick_up', 'take_over', 'retrigger'] as const)
       .filter((a) => allowed.includes(a))
@@ -107,7 +110,7 @@ const Column = ({
       // A moved card lands at the top: lists show the most recently changed first.
       <div className='ghost-piece flex flex-col gap-1 px-3 py-2.5' aria-hidden data-testid='ghost-piece'>
         <span className='font-mono text-[10px] font-semibold tracking-wider text-signal-strong uppercase'>
-          Lands here · {ACTION_LABELS[ghost.move.action]}
+          Lands here · {actionLabel(ghost.move.action, ghost.glob.type, ACTION_LABELS)}
         </span>
         <span className='text-sm font-medium opacity-55'>
           <span className='font-mono text-xs'>{ghost.glob.id}</span> · {ghost.glob.title}
@@ -505,9 +508,14 @@ export const BoardPage = () => {
       {haltConfirm !== null && (
         <Dialog open onOpenChange={(o) => !o && setHaltConfirm(null)}>
           <DialogContent
-            title={`${ACTION_LABELS[haltConfirm.action]}: move ${haltConfirm.glob.id} to ${LIST_TITLES[haltConfirm.target]}?`}
+            title={`${actionLabel(haltConfirm.action, haltConfirm.glob.type, ACTION_LABELS)}: move ${haltConfirm.glob.id} to ${LIST_TITLES[haltConfirm.target]}?`}
             className='max-w-sm'
           >
+            {haltConfirm.action === 'start_again' && (
+              <p className='mb-2 text-sm' data-testid='start-again-says'>
+                {startAgainConfirmation(haltConfirm.glob, board.data.baseBranch)}
+              </p>
+            )}
             <p className='text-sm'>This stops:</p>
             <ul className='mt-1 list-disc pl-5 text-sm'>
               {haltConfirm.halts.map((h) => (
@@ -526,7 +534,7 @@ export const BoardPage = () => {
                   void commit(haltConfirm.glob, haltConfirm.action);
                 }}
               >
-                {ACTION_LABELS[haltConfirm.action]}
+                {actionLabel(haltConfirm.action, haltConfirm.glob.type, ACTION_LABELS)}
               </Button>
             </div>
           </DialogContent>
