@@ -314,3 +314,33 @@ export const queuedRunNotice = (glob: Glob, now: string): string | null => {
   if (minutes < QUEUED_NOTICE_MINUTES) return null;
   return `Routine run queued for ${String(minutes)} min: ${run.sessionUrl === null ? 'no session yet' : `open the session ${run.sessionUrl}`}`;
 };
+
+/** What a card says about a ready same or super PR: merge it, or wait for its checks. */
+export interface ReadyStatus {
+  readonly kind: 'ready' | 'waiting';
+  readonly text: string;
+  readonly tip: string;
+}
+
+/**
+ * "Ready to merge" for a same or super at pr_open with a ready PR and passed head checks; "Waiting for checks"
+ * while they run. Null otherwise, including subs (the sub gate merges them) and any failure or conflict, which
+ * the caller ranks first. `reviewSha` is the commit of the latest local review, when there is one.
+ */
+export const readyStatus = (glob: Glob, reviewSha: string | null = null): ReadyStatus | null => {
+  if (glob.type === 'sub' || glob.status !== 'pr_open' || glob.pr?.state !== 'ready') return null;
+  if (glob.failure !== null || glob.conflict != null) return null;
+  const head = glob.pr.headSha ?? '';
+  const checks = glob.headChecks;
+  if (checks?.state === 'failed' && checks.sha === head) return null;
+  const run = glob.runs[glob.runs.length - 1];
+  const watching = run !== undefined && run.state !== 'ended';
+  const stale =
+    reviewSha !== null && reviewSha !== head ? `\nLocal review is from ${reviewSha.slice(0, 7)}, before the latest push.` : '';
+  if (checks !== null && checks.sha === head && checks.state === 'passed') {
+    const merge = `The developer merges sames and supers: Merge on the card, or sstor -i ${glob.id} --merge.`;
+    const auto = watching ? "\nThe run's session stays on the PR to auto-fix new CI failures or review comments." : '';
+    return { kind: 'ready', text: 'Ready to merge', tip: `Checks passed at ${head.slice(0, 7)}. ${merge}${auto}${stale}` };
+  }
+  return { kind: 'waiting', text: 'Waiting for checks', tip: `Checks are still running on ${head.slice(0, 7)}.${stale}` };
+};
