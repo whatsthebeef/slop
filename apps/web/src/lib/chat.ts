@@ -16,3 +16,20 @@ export const stateLabel = (c: ChatCitation): string | null => {
   if (c.status === 'superseded') return c.supersededBy === null ? 'superseded' : `superseded by ${c.supersededBy.title}`;
   return 'current';
 };
+
+/** A question handed to the chat panel from outside it (the search box's Ask); `id` tells a repeat of the same text from the first. */
+export interface ChatRequest {
+  id: number;
+  question: string;
+  history: boolean;
+}
+
+/** The request Ask makes from the search box text and its "Include history" setting; null while the box is empty. */
+export const askRequest = (text: string, history: boolean, id: number): ChatRequest | null => {
+  const question = text.trim();
+  return question === '' ? null : { id, question, history };
+};
+
+/** Shift+Enter asks; a plain Enter keeps its search behaviour (the results already follow the text). */
+export const isAskKey = (e: { key: string; shiftKey: boolean; isComposing?: boolean }): boolean =>
+  e.key === 'Enter' && e.shiftKey && e.isComposing !== true;
