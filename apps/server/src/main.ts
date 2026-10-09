@@ -42,6 +42,8 @@ import { mountChat } from './http/chat.js';
 import { mountSearch } from './http/search.js';
 import { mountDecisions } from './http/decisions.js';
 import { mountInbox } from './http/inbox.js';
+import { mountSlack } from './http/slack.js';
+import { slackApi } from './slack.js';
 import { mountIntegrations } from './http/integrations.js';
 import { mountNotifications } from './http/notifications.js';
 import { AwsSignIn, AwsSsoOidc, readSsoSession, ssoCacheFile } from './aws-sso.js';
@@ -325,6 +327,16 @@ mountSearch(app, { search });
 mountChat(app, { chat });
 mountDecisions(app, { decisions });
 mountInbox(app, { inbox });
+if (config.SLACK_SIGNING_SECRET !== undefined && config.SLACK_BOT_TOKEN !== undefined) {
+  mountSlack(app, {
+    signingSecret: config.SLACK_SIGNING_SECRET,
+    workspaces: config.SLACK_WORKSPACES,
+    api: slackApi(config.SLACK_BOT_TOKEN, (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) })),
+    inbox,
+    publicUrl: config.PUBLIC_URL,
+    logError: (message) => { logError('slack', message); },
+  });
+}
 mountIntegrations(app, { inbox, tokens: integrationTokens });
 mountNotifications(app, { notifications });
 

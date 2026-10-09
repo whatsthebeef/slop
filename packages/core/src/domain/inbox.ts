@@ -56,7 +56,7 @@ export interface InboxItem {
   /** As pasted; empty until the summary step writes one (display falls back to the first line). */
   readonly title: string;
   readonly text: string;
-  /** Where it came from: `paste` or an integration (`meet`). */
+  /** Where it came from: `paste` or an integration (`meet`, `slack`). */
   readonly source: string;
   /** The source's own ID for it (a Meet notes doc's ID): one item per board, source and ref. Empty for a paste. */
   readonly sourceRef: string;

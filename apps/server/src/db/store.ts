@@ -1561,6 +1561,11 @@ export class PgStore implements Store {
         const [row] = await t.select().from(n).where(and(eq(n.boardId, boardId), eq(n.id, id)));
         return row === undefined ? null : toInboxItem(row);
       },
+      getInboxItemBySource: async (boardId, source, sourceRef) => {
+        const n = schema.inboxItems;
+        const [row] = await t.select().from(n).where(and(eq(n.boardId, boardId), eq(n.source, source), eq(n.sourceRef, sourceRef)));
+        return row === undefined ? null : toInboxItem(row);
+      },
       listInboxItems: async (boardId, statuses) => {
         const n = schema.inboxItems;
         const rows = await t
@@ -1576,6 +1581,10 @@ export class PgStore implements Store {
           .update(n)
           .set({
             title: item.title,
+            text: item.text,
+            contentHash: item.contentHash,
+            sourceLabel: item.sourceLabel,
+            occurredAt: new Date(item.occurredAt),
             sourceType: item.sourceType,
             status: item.status,
             summary: item.summary,

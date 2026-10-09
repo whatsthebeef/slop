@@ -833,6 +833,8 @@ export class MemoryStore implements Store {
         return Promise.resolve();
       },
       getInboxItem: (boardId, id) => Promise.resolve(s.inboxItems.find((i) => i.boardId === boardId && i.id === id) ?? null),
+      getInboxItemBySource: (boardId, source, sourceRef) =>
+        Promise.resolve(s.inboxItems.find((i) => i.boardId === boardId && i.source === source && i.sourceRef === sourceRef) ?? null),
       listInboxItems: (boardId, statuses) =>
         Promise.resolve(
           s.inboxItems
