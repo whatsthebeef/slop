@@ -295,6 +295,19 @@ export interface NewInboxPaste {
   readonly sourceLabel?: string;
 }
 
+/** The work time zone (any member of the board) and whether the caller may download its reports (its admins). Optional for older servers. */
+export interface ReportsView {
+  timeZone?: string;
+  canDownload?: boolean;
+}
+
+/** One board's report for one period, computed when asked for. */
+export interface ReportFile {
+  boardId: number;
+  period: string;
+  csv: string;
+}
+
 export const healthKey = ['health'] as const;
 
 /** The board's notifications; invalidated by `board.notifications` hints and on reconnect. */
@@ -407,6 +420,11 @@ export const api = {
     request<{ token: string; createdAt: string }>('POST', `/api/boards/${boardId}/integration-token`),
   revokeIntegrationToken: (boardId: number) =>
     request<{ active: boolean; createdAt: string | null }>('DELETE', `/api/boards/${boardId}/integration-token`),
+  /** A board's time reports: the work time zone and whether the caller may download (reports are computed when downloaded). */
+  reports: (boardId: number) => request<ReportsView>('GET', `/api/boards/${boardId}/reports`),
+  /** One period's report as JSON (its CSV inside), so a refusal comes back as an error rather than a saved file. */
+  report: (boardId: number, period: string) =>
+    request<ReportFile>('GET', `/api/boards/${boardId}/reports/${encodeURIComponent(period)}`),
   plan: (id: string) =>
     request<{ current: ArtifactView | null; versions: { version: number; createdAt: string; by: string }[] }>(
       'GET',

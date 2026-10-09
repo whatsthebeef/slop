@@ -122,5 +122,5 @@ Write one or more **high-level proposals** to the output path. If only one appro
 - **Every acceptance criterion must appear** in the mapping with a concrete approach. If one can't be addressed, flag it explicitly.
 - **Follow existing patterns and the board's conventions docs.** Proposals must not require anything the conventions forbid.
 - **Don't over-engineer**: plan only what this glob needs. No speculative abstractions.
-- **Write to the output file**: the plan is pushed to slop as the glob's implementation plan, and the developer may edit it before the next phase.
+- **Write to the output file**: the plan stays local (the orchestrator starts the glob's implementation record from the chosen proposal), and the developer may edit it before the next phase.
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
