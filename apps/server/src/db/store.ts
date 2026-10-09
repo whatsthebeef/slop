@@ -1,4 +1,4 @@
-import type { BoardNotification, Category, SlopType, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -74,6 +74,32 @@ const toSubLimitChange = (row: typeof schema.subLimitChanges.$inferSelect): SubL
   globId: row.globId,
   changedLines: row.changedLines,
   evidence: row.evidence,
+});
+
+const toIntakeSnapshot = (row: typeof schema.intakeSnapshots.$inferSelect): IntakeSnapshot => ({
+  globId: row.globId,
+  version: row.version,
+  boardId: row.boardId,
+  request: row.request,
+  title: row.title,
+  summary: row.summary,
+  plan: row.plan,
+  creator: row.creator,
+  source: row.source,
+  decisions: {
+    type: row.type,
+    category: row.category,
+    group: row.groupName,
+    environment: row.environment,
+    categoryConfidence: row.categoryConfidence,
+    reason: row.reason,
+    model: row.model,
+    promptVersion: row.promptVersion,
+  },
+  features: row.features,
+  examples: row.examples,
+  backfilled: row.backfilled,
+  createdAt: row.createdAt.toISOString(),
 });
 
 const toDeploy = (row: typeof schema.deploys.$inferSelect): Deploy => ({
@@ -1401,6 +1427,89 @@ export class PgStore implements Store {
         return rows.map(toArtifact);
       },
 
+      insertIntakeSnapshot: async (snapshot, embedding) => {
+        const d = snapshot.decisions;
+        const inserted = await t
+          .insert(schema.intakeSnapshots)
+          .values({
+            globId: snapshot.globId,
+            version: snapshot.version,
+            boardId: snapshot.boardId,
+            request: snapshot.request,
+            title: snapshot.title,
+            summary: snapshot.summary,
+            plan: snapshot.plan,
+            creator: snapshot.creator,
+            source: snapshot.source,
+            type: d.type,
+            category: d.category,
+            groupName: d.group,
+            environment: d.environment,
+            categoryConfidence: d.categoryConfidence,
+            reason: d.reason,
+            model: d.model,
+            promptVersion: d.promptVersion,
+            features: snapshot.features,
+            examples: [...snapshot.examples],
+            backfilled: snapshot.backfilled,
+            embedding: embedding === null ? null : [...embedding],
+            createdAt: new Date(snapshot.createdAt),
+          })
+          .onConflictDoNothing()
+          .returning({ globId: schema.intakeSnapshots.globId });
+        return inserted.length > 0;
+      },
+      listLatestIntakeSnapshots: async (boardId) => {
+        const n = schema.intakeSnapshots;
+        const rows = await t
+          .selectDistinctOn([n.globId], getTableColumns(n))
+          .from(n)
+          .where(eq(n.boardId, boardId))
+          .orderBy(n.globId, desc(n.version));
+        return rows.map(toIntakeSnapshot);
+      },
+      snapshotsToEmbed: async (boardId, limit) => {
+        const n = schema.intakeSnapshots;
+        return t
+          .select({ globId: n.globId, version: n.version, request: n.request })
+          .from(n)
+          .where(and(eq(n.boardId, boardId), isNull(n.embedding)))
+          .orderBy(asc(n.createdAt), asc(n.globId), asc(n.version))
+          .limit(limit);
+      },
+      setSnapshotEmbedding: async (globId, version, embedding) => {
+        const n = schema.intakeSnapshots;
+        await t
+          .update(n)
+          .set({ embedding: [...embedding] })
+          .where(and(eq(n.globId, globId), eq(n.version, version), isNull(n.embedding)));
+      },
+      nearestIntakeSnapshots: async (boardId, embedding, limit) => {
+        const n = schema.intakeSnapshots;
+        const distance = sql<number>`(${n.embedding} <=> ${vectorText(embedding)}::vector)::float8`.mapWith(Number);
+        return t
+          .select({ globId: n.globId, version: n.version, distance })
+          .from(n)
+          .where(and(eq(n.boardId, boardId), sql`${n.embedding} is not null`))
+          .orderBy(distance, asc(n.globId))
+          .limit(limit);
+      },
+      upsertGlobOutcome: async (outcome) => {
+        const o = schema.globOutcomes;
+        const values = {
+          boardId: outcome.boardId,
+          snapshotVersion: outcome.snapshotVersion,
+          outcome,
+          final: outcome.final,
+          mergedAt: new Date(outcome.mergedAt),
+          recordedAt: new Date(outcome.recordedAt),
+        };
+        await t.insert(o).values({ globId: outcome.globId, ...values }).onConflictDoUpdate({ target: o.globId, set: values });
+      },
+      listGlobOutcomes: async (boardId) => {
+        const rows = await t.select({ outcome: schema.globOutcomes.outcome }).from(schema.globOutcomes).where(eq(schema.globOutcomes.boardId, boardId));
+        return rows.map((r) => r.outcome);
+      },
       listDecisions: async (boardId) => {
         const d = schema.decisions;
         const rows = await t.select().from(d).where(eq(d.boardId, boardId)).orderBy(asc(d.decidedAt), asc(d.id));

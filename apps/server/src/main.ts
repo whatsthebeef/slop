@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, SubLimitService, IntakeLearningService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -84,6 +84,8 @@ const globs = new GlobService({
   ids: { runId: () => randomUUID() },
   routines,
   branchFiles,
+  // Embeds a new glob's request for its intake snapshot; `embedder` exists by the time the first glob is created.
+  embedder: { model: config.EMBED_MODEL, dimensions: 1024, embed: (texts, signal) => embedder.embed(texts, signal) },
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.
 let awsSignInEnabled = false;
@@ -166,13 +168,6 @@ const trackLlm = (llm: Llm, model: string): Llm => {
   probes.set(model, tracked);
   return tracked;
 };
-const intake = new IntakeService({
-  store,
-  llm: trackLlm(
-    new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, logUsage),
-    config.INTAKE_MODEL,
-  ),
-});
 // Opus 5.5 takes no sampling parameters other than the defaults. Routing, dedupe and weekly consolidation share it.
 const kbRouteLlm = trackLlm(
   new BedrockLlm({ id: config.KB_ROUTE_MODEL, configKey: 'KB_ROUTE_MODEL' }, config.BEDROCK_REGION, logUsage, null),
@@ -204,6 +199,16 @@ const embedder = llmHealth.trackEmbedder(
   new BedrockEmbedder({ id: config.EMBED_MODEL, configKey: 'EMBED_MODEL' }, config.BEDROCK_REGION),
   config.EMBED_MODEL,
 );
+const intake = new IntakeService({
+  store,
+  llm: trackLlm(
+    new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, logUsage),
+    config.INTAKE_MODEL,
+  ),
+  // Intake shows the nearest past globs (corrected first); without the embedder it works as before.
+  embedder,
+  model: config.INTAKE_MODEL,
+});
 // Haiku, for the index's change summaries and for decisions.
 const searchLlm = trackLlm(
   new BedrockLlm({ id: config.SEARCH_MODEL, configKey: 'SEARCH_MODEL' }, config.BEDROCK_REGION, logUsage),
@@ -270,6 +275,8 @@ const subLimit = new SubLimitService({
   findingsDown: () => llmHealth.isDown([config.FINDINGS_MODEL]),
   diffs: new CodeHostSubDiffs(github, logError),
 });
+// Hourly: intake snapshots are embedded or rebuilt for older globs, and merged globs' outcomes recorded and refreshed at 14 days.
+const intakeLearning = new IntakeLearningService({ store, clock, embedder });
 const learningJobs = new LearningJobService({
   store,
   clock,
@@ -279,6 +286,7 @@ const learningJobs = new LearningJobService({
   consolidation: new KbConsolidation({ store, clock, notifier: hub, llm: kbRouteLlm }),
   consolidationDown: () => llmHealth.isDown([config.KB_ROUTE_MODEL]),
   subLimit,
+  intakeLearning,
   manifests: new CodeHostManifests(github, logError),
   log: logError,
 });
@@ -302,7 +310,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
-mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, logError });
+mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, intakeLearning, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
 const awsSignIn =

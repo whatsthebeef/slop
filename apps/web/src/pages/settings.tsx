@@ -264,6 +264,7 @@ export const SettingsPage = () => {
           Agents may approve agent-file and contradicting items
         </label>
         <SubLimit boardId={boardId} admin={admin} />
+        <IntakeAccuracyView boardId={boardId} admin={admin} />
         <IntegrationToken boardId={boardId} admin={admin} />
         <DeploySettings
           deploy={deploy}
@@ -457,6 +458,86 @@ const TimeReports = ({ boardId }: { boardId: number }) => {
         </div>
       )}
     </section>
+  );
+};
+
+const rate = (value: number | null): string => (value === null ? '-' : `${Math.round(value * 100)}%`);
+const median = (value: number | null, unit: string): string => (value === null ? '-' : `${Math.round(value * 10) / 10} ${unit}`);
+
+/**
+ * How often intake's category and type survived to the merge (spec, Intake: learned task categorisation): by the month a glob
+ * was created and by prompt version, with typical size, effort and review rounds by kind. Outcomes settle 14 days after a merge.
+ */
+const IntakeAccuracyView = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const accuracy = useQuery({ queryKey: ['intake-accuracy', boardId], queryFn: () => api.intakeAccuracy(boardId) });
+  if (accuracy.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load intake accuracy.
+        <Button size='sm' variant='outline' onClick={() => void accuracy.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (accuracy.data === undefined) return <p className='text-sm text-muted-foreground'>Loading intake accuracy…</p>;
+  const { snapshots, merged, corrected, byMonth, byPromptVersion, byKind } = accuracy.data;
+  return (
+    <div className='grid gap-2' data-testid='intake-accuracy'>
+      <p className='text-sm'>
+        Intake accuracy: {merged === 0 ? 'no merged globs with an intake decision yet' : `${corrected} of ${merged} merged globs had their category or type changed (${rate(corrected / merged)})`}
+      </p>
+      <p className='text-xs text-muted-foreground'>
+        Intake is shown the most similar past globs, ones a person corrected first. {snapshots} globs recorded; older ones are rebuilt from their plans and
+        say nothing about accuracy.
+      </p>
+      <JobStatus boardId={boardId} admin={admin} job='intake_outcome' />
+      {merged > 0 && (
+        <div className='grid gap-3 sm:grid-cols-2'>
+          <table className='text-xs' data-testid='intake-accuracy-months'>
+            <thead className='text-left text-muted-foreground'>
+              <tr>
+                <th className='pr-3 font-normal'>Created</th>
+                <th className='pr-3 font-normal'>Merged</th>
+                <th className='pr-3 font-normal'>Changed</th>
+                <th className='font-normal'>Rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...byMonth, ...byPromptVersion.map((r) => ({ ...r, key: `prompt ${r.key}` }))].map((row) => (
+                <tr key={row.key}>
+                  <td className='pr-3'>{row.key}</td>
+                  <td className='pr-3'>{row.merged}</td>
+                  <td className='pr-3'>{row.corrected}</td>
+                  <td>{rate(row.rate)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <table className='text-xs' data-testid='intake-accuracy-kinds'>
+            <thead className='text-left text-muted-foreground'>
+              <tr>
+                <th className='pr-3 font-normal'>Kind</th>
+                <th className='pr-3 font-normal'>Merged</th>
+                <th className='pr-3 font-normal'>Lines</th>
+                <th className='pr-3 font-normal'>Hours</th>
+                <th className='font-normal'>Review rounds</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byKind.map((row) => (
+                <tr key={row.key}>
+                  <td className='pr-3'>{row.key}</td>
+                  <td className='pr-3'>{row.merged}</td>
+                  <td className='pr-3'>{median(row.medianChangedLines, '')}</td>
+                  <td className='pr-3'>{median(row.medianCalendarHours, 'h')}</td>
+                  <td>{median(row.medianReviewRounds, '')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 };
 

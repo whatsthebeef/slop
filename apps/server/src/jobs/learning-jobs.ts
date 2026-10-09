@@ -27,6 +27,8 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
         ...result.changes.map((c) => `${c.globId} ${c.outcome.replace('_', ' ')}: ${c.from} to ${c.to}`),
         `${result.asked} bug references asked, ${result.waiting} waiting${(result.gaveUp ?? 0) > 0 ? `, ${result.gaveUp} skipped without a usable answer` : ''}`,
       ].join('; ');
+    case 'intake_outcome':
+      return `${result.backfilled} snapshots backfilled, ${result.embedded} embedded, ${result.recorded} outcomes recorded, ${result.refreshed} refreshed`;
     case 'skipped':
       return `skipped (${result.reason}); the next check tries again`;
   }

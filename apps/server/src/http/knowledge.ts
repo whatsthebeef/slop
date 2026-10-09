@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeService, KnowledgeService, LearningJobService, SubLimitService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, SubLimitService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -85,6 +85,8 @@ export const mountKnowledge = (
     jobs: LearningJobService;
     /** The learned sub size limit; absent: its route isn't mounted. */
     subLimit?: SubLimitService;
+    /** Intake's accuracy (System page); absent: its route isn't mounted. */
+    intakeLearning?: IntakeLearningService;
     /** The server's error log (console and the `errors` table), for Run now's background run. */
     logError: (task: string, message: string) => void;
   },
@@ -191,6 +193,12 @@ export const mountKnowledge = (
   const { subLimit } = deps;
   if (subLimit !== undefined) {
     app.get('/api/boards/:b/sub-limit', async (c) => send(c, await subLimit.view(c.get('email'), Number(c.req.param('b')))));
+  }
+
+  // How often intake's category and type survived to the merge, by month and prompt version, and typical effort by kind (System page), for members.
+  const { intakeLearning } = deps;
+  if (intakeLearning !== undefined) {
+    app.get('/api/boards/:b/intake-accuracy', async (c) => send(c, await intakeLearning.accuracy(c.get('email'), Number(c.req.param('b')))));
   }
 
   // The board's signals as measured now: what an admin can pick for a submitted item's effect check to watch.

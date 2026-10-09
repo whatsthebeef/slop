@@ -13,6 +13,7 @@ import type { DiffSummary } from './domain/sub-gate.js';
 import type { GlobReportFacts } from './domain/time-tracking.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
+import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
@@ -343,6 +344,23 @@ export interface Tx {
   insertIntegrationToken(token: Omit<IntegrationToken, 'id' | 'revokedAt'>): Promise<void>;
   /** Revokes the board's active token (if any) at `at`. */
   revokeIntegrationTokens(boardId: number, at: string): Promise<void>;
+
+  /**
+   * Stores a glob's intake snapshot (`embedding` null when it couldn't be computed yet); false when that version
+   * exists. Snapshots are never edited: a rewritten plan adds the next version.
+   */
+  insertIntakeSnapshot(snapshot: IntakeSnapshot, embedding: readonly number[] | null): Promise<boolean>;
+  /** The board's snapshots, the latest version of each glob. */
+  listLatestIntakeSnapshots(boardId: number): Promise<IntakeSnapshot[]>;
+  /** Up to `limit` snapshots without an embedding, oldest first: the text to embed is the request. */
+  snapshotsToEmbed(boardId: number, limit: number): Promise<{ globId: string; version: number; request: string }[]>;
+  /** Fills the embedding of a snapshot that has none (the only change a snapshot row takes). */
+  setSnapshotEmbedding(globId: string, version: number, embedding: readonly number[]): Promise<void>;
+  /** The snapshot versions nearest to `embedding` by cosine distance, nearest first; only embedded ones. */
+  nearestIntakeSnapshots(boardId: number, embedding: readonly number[], limit: number): Promise<{ globId: string; version: number; distance: number }[]>;
+  /** Inserts or replaces a merged glob's outcome. */
+  upsertGlobOutcome(outcome: GlobOutcome): Promise<void>;
+  listGlobOutcomes(boardId: number): Promise<GlobOutcome[]>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
