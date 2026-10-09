@@ -52,12 +52,12 @@ const Count = ({
 );
 
 /** How many of the board's globs have a routine run in progress. */
-const Running = ({ count }: { count: number }) => (
+export const Running = ({ count }: { count: number }) => (
   <Count count={count} word="RUNNING" tip={runs(count)} on="bg-signal" />
 );
 
 /** How many of the board's supers are in Doing: a person drives them, so they aren't counted as runs. */
-const Supers = ({ count }: { count: number }) => (
+export const Supers = ({ count }: { count: number }) => (
   <Count
     count={count}
     word="SUPER"
@@ -67,7 +67,7 @@ const Supers = ({ count }: { count: number }) => (
 );
 
 /** How many globs on the board wait on a person. */
-const Attention = ({ count }: { count: number }) => (
+export const Attention = ({ count }: { count: number }) => (
   <Count count={count} word="WAITING" tip={needs(count)} on="bg-red-soft" />
 );
 
@@ -78,7 +78,7 @@ const REVIEW_TITLES: Record<LabelName, string> = {
 };
 
 /** How many of your globs need you on one sign-off review (to review it, or to work through the items added). */
-const Reviews = ({ name, count }: { name: LabelName; count: number }) => (
+export const Reviews = ({ name, count }: { name: LabelName; count: number }) => (
   <Count
     count={count}
     word={name}
@@ -88,9 +88,9 @@ const Reviews = ({ name, count }: { name: LabelName; count: number }) => (
   />
 );
 
-/** Board rows share columns: number, name with its ID and last-viewed label, running, supers, waiting, reviews. */
+/** Board rows and the All boards row share columns: number, name with its ID and last-viewed label, running, supers, waiting, reviews. */
 const ROW =
-  'grid min-h-11 grid-cols-[2rem_minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)_7rem_7rem_7rem_3.5rem_3.5rem_3.5rem]';
+  'grid grid-cols-[2rem_minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)_7rem_7rem_7rem_3.5rem_3.5rem_3.5rem]';
 
 const MENU_ITEM =
   'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted';
@@ -184,7 +184,7 @@ const AppSettings = () => {
 };
 
 /** The New board dialog, shared by the app settings and the board bar. */
-const NewBoardDialog = ({
+export const NewBoardDialog = ({
   open,
   onOpenChange,
   onCreated,
@@ -256,26 +256,11 @@ interface SessionWrite {
   readonly add: boolean;
 }
 
-/**
- * The app's top bar, like tmux's sessions: the boards you keep open, numbered by their place (name with its ID, when
- * you last viewed it, and your counts: runs in progress, supers, globs waiting on you and on each sign-off review).
- * Opening a board adds it at the end; × takes one out and the rest renumber. The current board, if it isn't in the bar,
- * shows after them with an add button. More boards lists the rest, each with an add button, beside New board.
- * App settings float in a corner.
- */
-export const BoardBar = ({ current, opened = true }: { current?: number; opened?: boolean }) => {
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });
+/** Adds a board to the bar or takes it out, applying the answer to the /api/me cache. Shared with the All boards page. */
+export const useSessionWrite = () => {
   const client = useQueryClient();
   const toast = useToast();
-  const [expanded, setExpanded] = useState(false);
-  const [creating, setCreating] = useState(false);
-  // Opening a board (from More boards or anywhere) collapses the list, as New board does.
-  const [shown, setShown] = useState(current);
-  if (shown !== current) {
-    setShown(current);
-    setExpanded(false);
-  }
-  const write = useMutation({
+  return useMutation({
     mutationFn: async ({ id, add }: SessionWrite) => {
       const seq = writes.next();
       const r = await (add ? api.addSession(id) : api.removeSession(id));
@@ -285,15 +270,36 @@ export const BoardBar = ({ current, opened = true }: { current?: number; opened?
     onError: (error) =>
       toast(error instanceof RequestError ? error.body.message : 'Could not change the board bar'),
   });
+};
+
+/**
+ * The app's top bar, like tmux's sessions: the boards you keep open, numbered by their place (name with its ID, when
+ * you last viewed it, and your counts: runs in progress, supers, globs waiting on you and on each sign-off review).
+ * Opening a board adds it at the end; × takes one out and the rest renumber. The current board, if it isn't in the bar,
+ * shows after them with an add button. The All boards row below links to the page where boards are added.
+ * App settings float in a corner.
+ */
+export const BoardBar = ({
+  current,
+  opened = true,
+  allBoards = false,
+}: {
+  current?: number;
+  opened?: boolean;
+  /** The All boards page is showing: its row is the marked one. */
+  allBoards?: boolean;
+}) => {
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });
+  const write = useSessionWrite();
 
   const boards = me.data?.boards ?? [];
-  const { managed, sessions, loose, more } = barRows(boards, current);
+  const { managed, sessions, loose, others } = barRows(boards, current);
   // The 30 s poll re-renders the bar, which keeps the labels fresh enough.
   const now = Date.now();
 
-  const row = (board: BoardView, kind: 'session' | 'loose' | 'more', number: string) => {
+  const row = (board: BoardView, kind: 'session' | 'loose', number: string) => {
     const selected = board.id === current;
-    const add = kind !== 'session';
+    const add = kind === 'loose';
     const busy = write.isPending && write.variables.id === board.id;
     // While the open is being recorded the current board may not be in the bar yet: no add button to flicker.
     const control = managed && !(kind === 'loose' && !opened);
@@ -301,7 +307,7 @@ export const BoardBar = ({ current, opened = true }: { current?: number; opened?
       <li
         key={board.id}
         className={cn(
-          'grid grid-cols-[minmax(0,1fr)_2.75rem] items-stretch rounded-sm border',
+          'grid grid-cols-[minmax(0,1fr)_1.75rem] items-stretch rounded-sm border',
           kind === 'session' && selected
             ? 'border-foreground bg-lcd text-lcd-foreground'
             : kind === 'loose'
@@ -313,11 +319,11 @@ export const BoardBar = ({ current, opened = true }: { current?: number; opened?
           to={`/boards/${board.id}`}
           aria-current={selected ? 'page' : undefined}
           className={ROW}
-          data-testid={kind === 'more' ? `board-more-${board.id}` : `board-tab-${board.id}`}
+          data-testid={`board-tab-${board.id}`}
         >
           <span className="font-mono text-[13px] opacity-70">{number}</span>
           <span className="flex min-w-0 items-baseline gap-2">
-            <span className="truncate text-[17px] font-semibold tracking-tight">{board.name}</span>
+            <span className="truncate text-[15px] font-semibold tracking-tight">{board.name}</span>
             <span className="shrink-0 font-mono text-[11px] opacity-60">#{board.id}</span>
             {managed && (
               <span className="hidden truncate font-mono text-xs opacity-65 sm:inline">
@@ -338,7 +344,7 @@ export const BoardBar = ({ current, opened = true }: { current?: number; opened?
             disabled={busy}
             onClick={() => write.mutate({ id: board.id, add })}
             aria-label={add ? `Add ${board.name} to the bar` : `Remove ${board.name} from the bar`}
-            className="inline-flex min-h-11 items-center justify-center rounded-sm opacity-60 hover:opacity-100 disabled:opacity-30"
+            className="inline-flex items-center justify-center rounded-sm opacity-60 hover:opacity-100 disabled:opacity-30"
             data-testid={`${add ? 'add' : 'remove'}-session-${board.id}`}
           >
             {add ? <Plus className="h-4 w-4" aria-hidden /> : <X className="h-4 w-4" aria-hidden />}
@@ -358,53 +364,30 @@ export const BoardBar = ({ current, opened = true }: { current?: number; opened?
           <ul className="grid gap-0.5">
             {sessions.map((b, i) => row(b, 'session', String(i + 1)))}
             {loose !== undefined && row(loose, 'loose', '–')}
-            {expanded && more.map((b) => row(b, 'more', '–'))}
           </ul>
           {boards.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 pt-1.5">
-              {(more.length > 0 || expanded) && (
-                <button
-                  type="button"
-                  aria-expanded={expanded}
-                  onClick={() => setExpanded(!expanded)}
-                  className="inline-flex min-h-9 items-center gap-2 rounded-sm px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-                  data-testid="more-boards"
-                >
-                  <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
-                  {expanded ? (
-                    'Fewer boards'
-                  ) : (
-                    <>
-                      More boards
-                      <span className="font-mono text-xs opacity-70">+{more.length}</span>
-                    </>
-                  )}
-                </button>
+            <Link
+              to="/boards"
+              aria-current={allBoards ? 'page' : undefined}
+              className={cn(
+                'mt-0.5 grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-x-4 rounded-sm border px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)]',
+                allBoards
+                  ? 'border-foreground bg-lcd text-lcd-foreground'
+                  : 'border-transparent text-muted-foreground hover:border-border hover:bg-muted',
               )}
-              {expanded && (
-                <button
-                  type="button"
-                  onClick={() => setCreating(true)}
-                  className="inline-flex min-h-9 items-center gap-2 rounded-sm border border-dashed border-foreground/60 px-2 text-sm hover:bg-muted"
-                  data-testid="bar-new-board"
-                >
-                  <Plus className="h-3.5 w-3.5" aria-hidden /> New board
-                </button>
-              )}
-              {managed && (
-                <span className="ml-auto font-mono text-[11px] text-muted-foreground">
-                  {expanded ? '+ adds a board to the bar' : "Boards you've opened · × to remove"}
-                </span>
-              )}
-            </div>
+              data-testid="all-boards"
+            >
+              <LayoutGrid className="h-3.5 w-3.5 opacity-60" aria-hidden />
+              <span className="truncate text-sm">
+                All boards
+                {others > 0 && (
+                  <span className="ml-2 font-mono text-xs opacity-70">+{others} more</span>
+                )}
+              </span>
+            </Link>
           )}
         </nav>
       </header>
-      <NewBoardDialog
-        open={creating}
-        onOpenChange={setCreating}
-        onCreated={() => setExpanded(false)}
-      />
     </>
   );
 };
