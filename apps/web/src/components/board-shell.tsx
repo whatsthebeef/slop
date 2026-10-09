@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, Outlet, useLocation, useParams } from 'react-router';
 import { NotificationBar } from '@/components/notification-bar';
 import { SearchBox } from '@/components/search-box';
@@ -5,25 +6,31 @@ import { StatusBar } from '@/components/status-bar';
 import { activeTab, BOARD_TABS } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
 
-/** Board, Signed off, Knowledge and Settings as tabs; only the active one is underlined. */
-const BoardTabs = ({ boardId }: { boardId: number }) => {
+/** What the shell gives its pages: the slot beside the search box, for a page's own actions (the board's New Glob). */
+export interface BoardShellContext {
+  headerActions: HTMLElement | null;
+}
+
+/** Board, Signed off, Knowledge and Settings as tabs on a thin line; the active one is underlined on it. */
+const BoardTabs = ({ boardId, onActions }: { boardId: number; onActions: (el: HTMLElement | null) => void }) => {
   const current = activeTab(useLocation().pathname, boardId);
   return (
-    <header className='flex flex-wrap items-end gap-x-6 px-5 pt-4 text-sm'>
+    <header className='mx-5 mt-4 flex flex-wrap items-end gap-x-6 border-b border-edge/50 text-sm'>
       <nav className='flex gap-6' aria-label='Board sections'>
         {BOARD_TABS.map(({ tab, label, path }) => (
           <Link
             key={tab}
             to={`/boards/${String(boardId)}${path}`}
             aria-current={current === tab ? 'page' : undefined}
-            className={cn('border-b-2 pb-1.5', current === tab ? 'border-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground')}
+            className={cn('-mb-px border-b-2 pb-1.5', current === tab ? 'border-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground')}
           >
             {label}
           </Link>
         ))}
       </nav>
-      <div className='ml-auto pb-1'>
+      <div className='ml-auto flex items-center gap-2 pb-1.5'>
         <SearchBox boardId={boardId} />
+        <div ref={onActions} data-testid='header-actions' />
       </div>
     </header>
   );
@@ -33,13 +40,14 @@ const BoardTabs = ({ boardId }: { boardId: number }) => {
 export const BoardShell = () => {
   const boardId = Number(useParams().boardId);
   const isBoard = Number.isInteger(boardId);
+  const [headerActions, setHeaderActions] = useState<HTMLElement | null>(null);
   return (
     <div className='flex h-dvh flex-col'>
       <StatusBar current={isBoard ? boardId : undefined} />
       {isBoard && <NotificationBar boardId={boardId} />}
-      {isBoard && <BoardTabs boardId={boardId} />}
+      {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} />}
       <div className='min-h-0 flex-1 overflow-auto'>
-        <Outlet />
+        <Outlet context={{ headerActions } satisfies BoardShellContext} />
       </div>
     </div>
   );

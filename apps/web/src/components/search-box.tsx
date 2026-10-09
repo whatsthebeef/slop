@@ -65,7 +65,7 @@ export const SearchBox = ({ boardId }: { boardId: number }) => {
         <Search className='pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground' aria-hidden />
         <Input
           type='search'
-          className='w-56 pl-8'
+          className='w-80 max-w-full pl-8'
           placeholder='Search this board'
           aria-label='Search this board'
           value={text}
