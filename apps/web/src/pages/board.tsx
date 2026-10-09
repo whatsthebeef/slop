@@ -10,7 +10,6 @@ import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
 import { GlobDialog } from '@/components/glob-dialog';
-import { SearchBox } from '@/components/search-box';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
@@ -366,8 +365,8 @@ export const BoardPage = () => {
   return (
     <div className='flex h-full flex-col' data-testid='board' data-live={live}>
       <OfflineNotice live={live} />
-      {/* The board's toolbar, under the app's status bar; the board's own top padding spaces it below. */}
-      <header className='flex flex-wrap items-center gap-3 px-5 pt-4'>
+      {/* Under the tabs and the line: New Glob and the type filters (this page is the board tab only). */}
+      <div className='flex flex-wrap items-center gap-3 px-5 pt-2'>
         <h1 className='sr-only'>{board.data.name}</h1>
         <div className='flex gap-0.5 rounded-md border bg-muted p-0.5' role='group' aria-label='Filter by type'>
           {(['all', ...SLOP_TYPES] as const).map((t) => (
@@ -383,23 +382,10 @@ export const BoardPage = () => {
             </Button>
           ))}
         </div>
-        <nav className='ml-auto flex flex-wrap items-center gap-8 text-sm'>
-          <SearchBox boardId={boardId} />
-          <Link className='hover:underline' to={`/boards/${boardId}/signed-off`}>
-            Signed off
-          </Link>
-          <Link className='hover:underline' to={`/boards/${boardId}/knowledge`}>
-            Knowledge
-          </Link>
-          <Link className='hover:underline' to={`/boards/${boardId}/settings`}>
-            Settings
-          </Link>
-          {/* Same text size as the nav links beside it (the small button size uses text-xs). */}
-          <Button size='sm' className='text-sm' onClick={() => setCreating(true)}>
-            <Plus className='h-4 w-4' /> New glob
-          </Button>
-        </nav>
-      </header>
+        <Button size='sm' className='ml-auto text-sm' onClick={() => setCreating(true)}>
+          <Plus className='h-4 w-4' /> New Glob
+        </Button>
+      </div>
 
 
       <main
