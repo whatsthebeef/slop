@@ -12,6 +12,8 @@ const POOL = 50;
 /** `related` fetches deeper because the glob's own items are dropped afterwards. */
 const RELATED_POOL = 30;
 export const RELATED_LIMIT = 5;
+/** How many current decisions `related` puts first, before the other hits. */
+export const RELATED_DECISIONS = 3;
 /** `get_context` must stay quick when the embedder is slow: past this the related section is keyword-only. */
 const RELATED_EMBED_TIMEOUT_MS = 5_000;
 
@@ -80,7 +82,9 @@ export class SearchService {
   /**
    * The related section of `get_context`, inside its transaction (the caller has checked membership): what the board
    * already knows about this glob's title and summary, current mode, without the glob's own items. The keyword arm
-   * uses the title alone, because a whole summary as a keyword query would have to match every word of it.
+   * uses the title alone, because a whole summary as a keyword query would have to match every word of it. Current
+   * decisions on the topic come first (up to RELATED_DECISIONS), then the other hits, where a superseded decision
+   * appears labelled as history; the glob's own decisions are returned separately (`decisions` of the bundle).
    */
   async related(tx: Tx, glob: Glob): Promise<readonly SearchHit[]> {
     const text = `${glob.title}\n${glob.summary}`.trim().slice(0, MAX_QUERY_LENGTH);
@@ -92,8 +96,12 @@ export class SearchService {
     } catch {
       // Related is a bonus on the context bundle: a slow or failing embedder must not fail it.
     }
-    const { hits } = await this.fuse(tx, q, q.query, embedding, RELATED_POOL, (c) => !c.globIds.includes(glob.id));
-    return hits.slice(0, RELATED_LIMIT);
+    const notOwn = (c: Candidate) => !c.globIds.includes(glob.id);
+    const current = await this.fuse(tx, { ...q, sourceTypes: ['decision'] }, q.query, embedding, RELATED_POOL, (c) => notOwn(c) && c.status === 'active');
+    const first = current.hits.slice(0, RELATED_DECISIONS);
+    const { hits } = await this.fuse(tx, q, q.query, embedding, RELATED_POOL, notOwn);
+    const seen = new Set(first.map((h) => h.itemId));
+    return [...first, ...hits.filter((h) => !seen.has(h.itemId))].slice(0, RELATED_LIMIT);
   }
 
   private async fuse(

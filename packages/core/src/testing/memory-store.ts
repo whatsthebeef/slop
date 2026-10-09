@@ -1,3 +1,4 @@
+import type { Decision, DecisionSource } from '../domain/decisions.js';
 import type { Deploy } from '../domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
@@ -50,6 +51,8 @@ interface State {
   /** Search store: items keyed by board and external ref, and their chunks. */
   searchItems: Map<string, KnowledgeItem>;
   searchChunks: StoredChunk[];
+  decisions: Decision[];
+  decisionSources: DecisionSource[];
 }
 
 interface StoredChunk {
@@ -117,6 +120,8 @@ const clone = (state: State): State => ({
   notifications: new Map(state.notifications),
   searchItems: new Map(state.searchItems),
   searchChunks: [...state.searchChunks],
+  decisions: [...state.decisions],
+  decisionSources: [...state.decisionSources],
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -151,6 +156,8 @@ export class MemoryStore implements Store {
     notifications: new Map(),
     searchItems: new Map(),
     searchChunks: [],
+    decisions: [],
+    decisionSources: [],
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -187,6 +194,7 @@ export class MemoryStore implements Store {
         s.codeReviews = s.codeReviews.filter((c) => c.globId !== id);
         // A glob's own items go with it; a learning or document it fed only loses the link.
         const gone = new Set<number>();
+        const goneDecisions = new Set(s.decisions.filter((d) => d.globId === id).map((d) => d.id));
         for (const [key, item] of s.searchItems) {
           if (!item.globIds.includes(id)) continue;
           if (GLOB_OWNED_SOURCES.includes(item.sourceType)) {
@@ -197,6 +205,14 @@ export class MemoryStore implements Store {
           }
         }
         s.searchChunks = s.searchChunks.filter((c) => !gone.has(c.itemId));
+        // Older decisions the deleted ones replaced stand again.
+        for (const older of s.decisions) {
+          if (older.replacedBy === null || !goneDecisions.has(older.replacedBy) || goneDecisions.has(older.id)) continue;
+          s.decisions = s.decisions.map((d) => (d.id === older.id ? { ...d, replacedBy: null, replaceState: null } : d));
+          for (const [key, item] of s.searchItems) if (item.id === older.itemId) s.searchItems.set(key, { ...item, status: 'active', supersededBy: null });
+        }
+        s.decisions = s.decisions.filter((d) => !goneDecisions.has(d.id) && !gone.has(d.itemId));
+        s.decisionSources = s.decisionSources.filter((d) => d.globId !== id);
         return Promise.resolve();
       },
       findGlobByCreationKey: (boardId, key) =>
@@ -674,6 +690,79 @@ export class MemoryStore implements Store {
         }
         return Promise.resolve([...latest.values()]);
       },
+      listDecisions: (boardId) =>
+        Promise.resolve(s.decisions.filter((d) => d.boardId === boardId).sort((a, b) => a.decidedAt.localeCompare(b.decidedAt) || a.id - b.id)),
+      getDecision: (id) => Promise.resolve(s.decisions.find((d) => d.id === id) ?? null),
+      upsertDecision: (input) => {
+        const index = s.decisions.findIndex((d) => d.itemId === input.itemId);
+        const existing = s.decisions[index];
+        if (existing !== undefined) {
+          const updated: Decision = { ...existing, ...input, createdAt: existing.createdAt };
+          s.decisions[index] = updated;
+          return Promise.resolve(updated);
+        }
+        const created: Decision = {
+          ...input,
+          id: this.nextRowId++,
+          replacedBy: null,
+          replaceState: null,
+          replaceOldQuote: null,
+          replaceNewQuote: null,
+          replaceReason: null,
+          checkedAt: null,
+          attempts: 0,
+          processAfter: null,
+          lastError: null,
+        };
+        s.decisions.push(created);
+        return Promise.resolve(created);
+      },
+      updateDecision: (id, patch) => {
+        s.decisions = s.decisions.map((d) => (d.id === id ? { ...d, ...patch } : d));
+        return Promise.resolve();
+      },
+      deleteDecision: (id) => {
+        const decision = s.decisions.find((d) => d.id === id);
+        if (decision === undefined) return Promise.resolve();
+        s.decisions = s.decisions.filter((d) => d.id !== id);
+        for (const [key, item] of s.searchItems) {
+          if (item.id !== decision.itemId) continue;
+          s.searchItems.delete(key);
+        }
+        s.searchChunks = s.searchChunks.filter((c) => c.itemId !== decision.itemId);
+        return Promise.resolve();
+      },
+      nextDecisionToCheck: (now) =>
+        Promise.resolve(
+          s.decisions
+            .filter((d) => d.checkedAt === null && (d.processAfter === null || d.processAfter <= now))
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)[0] ?? null,
+        ),
+      setItemSupersession: (itemId, status, supersededBy) => {
+        for (const [key, item] of s.searchItems) if (item.id === itemId) s.searchItems.set(key, { ...item, status, supersededBy });
+        return Promise.resolve();
+      },
+      getItemByRef: (boardId, externalRef) => {
+        const item = s.searchItems.get(itemKey(boardId, externalRef));
+        return Promise.resolve(item === undefined ? null : { id: item.id, status: item.status, supersededBy: item.supersededBy, contentHash: item.contentHash });
+      },
+      getDecisionSource: (boardId, sourceRef) =>
+        Promise.resolve(s.decisionSources.find((d) => d.boardId === boardId && d.sourceRef === sourceRef) ?? null),
+      listDecisionSources: (boardId) => Promise.resolve(s.decisionSources.filter((d) => d.boardId === boardId)),
+      upsertDecisionSource: (source) => {
+        s.decisionSources = [...s.decisionSources.filter((d) => d.boardId !== source.boardId || d.sourceRef !== source.sourceRef), source];
+        return Promise.resolve();
+      },
+      deleteDecisionSource: (boardId, sourceRef) => {
+        s.decisionSources = s.decisionSources.filter((d) => d.boardId !== boardId || d.sourceRef !== sourceRef);
+        return Promise.resolve();
+      },
+      nextDecisionSourceToExtract: (now) =>
+        Promise.resolve(
+          s.decisionSources
+            .filter((d) => d.state === 'pending' && (d.processAfter === null || d.processAfter <= now))
+            .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.sourceRef.localeCompare(b.sourceRef))[0] ?? null,
+        ),
       appendEvents: (events) => {
         s.events.push(...events);
         return Promise.resolve();
@@ -715,6 +804,7 @@ export class MemoryStore implements Store {
         authority: item.authority,
         status: item.status,
         supersededByTitle: item.supersededBy === null ? null : (items.get(item.supersededBy)?.title ?? null),
+        supersededByAt: item.supersededBy === null ? null : (items.get(item.supersededBy)?.occurredAt ?? null),
         globIds: item.globIds,
         globGroup: item.globGroup,
         externalUrl: item.externalUrl,

@@ -4,7 +4,8 @@ import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
 import type { CodeReviewComment, NewCodeReviewComment } from './domain/code-review.js';
 import type { BoardNotification } from './domain/notifications.js';
-import type { Candidate, KnowledgeItem, NewChunk, NewKnowledgeItem, PendingChunk, SearchQuery, SourceType } from './domain/search.js';
+import type { Decision, DecisionPatch, DecisionSource, NewDecision } from './domain/decisions.js';
+import type { Candidate, ItemStatus, KnowledgeItem, NewChunk, NewKnowledgeItem, PendingChunk, SearchQuery, SourceType } from './domain/search.js';
 import type { DiffSummary } from './domain/sub-gate.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
@@ -52,6 +53,8 @@ export interface Tx {
   /**
    * Deletes the glob with its artifacts, review sources, findings, environment presence, branch test runs and stored
    * CodeRabbit items, and its items in the search store (an item shared with other globs, a learning, only loses the link).
+   * Its decisions go with it; decisions it took that older ones point at are released (their `replacedBy` cleared and
+   * the item active again).
    */
   deleteGlob(id: string): Promise<void>;
   findGlobByCreationKey(boardId: number, key: string): Promise<Glob | null>;
@@ -261,6 +264,33 @@ export interface Tx {
   /** The latest version of each artifact (per glob, kind and label) on a board, with content. */
   listLatestArtifacts(boardId: number): Promise<Artifact[]>;
 
+  /** A board's decisions, oldest decision first. */
+  listDecisions(boardId: number): Promise<Decision[]>;
+  getDecision(id: number): Promise<Decision | null>;
+  /**
+   * Inserts the decision, or (the same item) updates its facts and keeps its supersession state and check progress.
+   * Returns the stored row.
+   */
+  upsertDecision(decision: NewDecision): Promise<Decision>;
+  /** Writes the given fields of a decision (supersession state, check progress); a no-op when it is gone. */
+  updateDecision(id: number, patch: DecisionPatch): Promise<void>;
+  /** Deletes a decision with its knowledge item and chunks. */
+  deleteDecision(id: number): Promise<void>;
+  /** The oldest decision on any board whose supersession check is due (`checkedAt` unset, `processAfter` unset or not after `now`). */
+  nextDecisionToCheck(now: string): Promise<Decision | null>;
+  /** Sets an item's status and the item that replaced it (the search store ranks and labels by them). */
+  setItemSupersession(itemId: number, status: ItemStatus, supersededBy: number | null): Promise<void>;
+  getDecisionSource(boardId: number, sourceRef: string): Promise<DecisionSource | null>;
+  listDecisionSources(boardId: number): Promise<DecisionSource[]>;
+  /** Inserts or replaces the source row (by board and ref). */
+  upsertDecisionSource(source: DecisionSource): Promise<void>;
+  /** Deletes a source row (its decisions are deleted separately). */
+  deleteDecisionSource(boardId: number, sourceRef: string): Promise<void>;
+  /** The oldest pending source on any board whose `processAfter` is unset or not after `now`. */
+  nextDecisionSourceToExtract(now: string): Promise<DecisionSource | null>;
+  /** The stored item for a board and external ref: its ID, status, replacing item and content hash; null when none. */
+  getItemByRef(boardId: number, externalRef: string): Promise<{ id: number; status: ItemStatus; supersededBy: number | null; contentHash: string } | null>;
+
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
   enqueueEffects(effects: readonly Effect[]): Promise<void>;
@@ -280,6 +310,8 @@ export type Hint =
   | { readonly kind: 'glob.deploys'; readonly boardId: number; readonly globId: string }
   /** A glob's review findings changed (split or classified): they don't bump the glob's version either. */
   | { readonly kind: 'glob.findings'; readonly boardId: number; readonly globId: string }
+  /** A glob's decisions (or what replaced them) changed: clients refetch the glob's decision list. */
+  | { readonly kind: 'glob.decisions'; readonly boardId: number; readonly globId: string }
   /** CodeRabbit's stored summary, reviews or comments on a glob's PR changed (beside the glob, no version bump). */
   | { readonly kind: 'glob.reviews'; readonly boardId: number; readonly globId: string }
   /**
