@@ -236,6 +236,10 @@ const chat = new ChatService({
   rewriteLlm: searchLlm,
   warn: (message) => console.warn(`[chat] ${message}`),
   llm: trackLlm(new BedrockLlm({ id: config.CHAT_MODEL, configKey: 'CHAT_MODEL' }, config.BEDROCK_REGION, logUsage, null), config.CHAT_MODEL),
+  // "Think harder" answers one question with Opus.
+  deepLlm: trackLlm(new BedrockLlm({ id: config.CHAT_THINK_MODEL, configKey: 'CHAT_THINK_MODEL' }, config.BEDROCK_REGION, logUsage, null), config.CHAT_THINK_MODEL),
+  // Save to knowledge goes to the proposal queue, like an agent's learning.
+  submitLearning: (email, board, learning) => knowledge.submitLearning(email, board, learning),
 });
 const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck });
 const searchSync = new SearchSync(searchIndexer, logError);

@@ -26,17 +26,26 @@ export const CreateGlobDialog = ({
   board,
   groups,
   open,
+  initialRequest = '',
   onOpenChange,
   onCreate,
 }: {
   board: BoardView;
   groups: readonly string[];
   open: boolean;
+  /** Free text to start the request box with (a chat answer); Process turns it into the fields. */
+  initialRequest?: string;
   onOpenChange: (open: boolean) => void;
   onCreate: (input: NewGlob) => Promise<void>;
 }) => {
   const [form, setForm] = useState<NewGlob>(empty);
-  const [request, setRequest] = useState('');
+  const [request, setRequest] = useState(initialRequest);
+  // A new text from outside (another chat answer) replaces what was typed.
+  const [seen, setSeen] = useState(initialRequest);
+  if (seen !== initialRequest) {
+    setSeen(initialRequest);
+    setRequest(initialRequest);
+  }
   const [processing, setProcessing] = useState(false);
   const [reason, setReason] = useState<string | null>(null);
   // What the last Process said about its category: how sure it was and the past globs it was shown.

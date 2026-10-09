@@ -49,6 +49,8 @@ import type {
   SubLimitView,
   TargetChange,
 } from '@slop/core';
+import type { PageContext } from './page-context';
+import { takeSseEvents } from './sse';
 
 export interface GlobView extends Glob {
   readonly list: List;
@@ -174,16 +176,31 @@ export interface BoardSearchResult {
   readonly semantic: 'ok' | 'unavailable';
 }
 
-/** One question to the board chat; the scope fields are optional. */
+/** One question to the board chat; everything but the question is optional. */
 export interface ChatQuestion {
   readonly question: string;
+  /** The conversation to add to; a new one starts without it. */
+  readonly chat?: number;
   readonly history?: boolean;
   readonly glob?: string;
   readonly group?: string;
+  /** Where the person is asking from. */
+  readonly page?: { readonly type: PageContext['type']; readonly id?: string };
+  /** One answer from the stronger model. */
+  readonly think?: boolean;
+}
+
+/** One of the person's conversations on a board. */
+export interface ChatThread {
+  readonly id: number;
+  readonly title: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 /** The chat's reply to a question (`answered` false: the board's records don't answer it). */
 export interface ChatReply {
+  readonly chat: ChatThread;
   readonly question: ChatMessage;
   readonly reply: ChatMessage;
   readonly answered?: boolean;
@@ -222,6 +239,47 @@ export const request = async <T>(method: string, path: string, body?: unknown): 
     throw new RequestError(response.status, { code: 'internal', message: `${method} ${path} did not answer with JSON (is the server older than the board?)` });
   }
   return parsed.json as T;
+};
+
+/** Listens to a streamed answer: `onText` gets each piece; `signal` stops it. */
+export interface ChatStream {
+  readonly onText: (text: string) => void;
+  readonly signal?: AbortSignal;
+}
+
+/** A question answered as server-sent events: `text` pieces, then `done` with the stored messages, or `error`. */
+const askChatStream = async (boardId: number, input: ChatQuestion, stream: ChatStream): Promise<ChatReply> => {
+  const path = `/api/boards/${boardId}/chat`;
+  const response = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+    body: JSON.stringify(input),
+    ...(stream.signal === undefined ? {} : { signal: stream.signal }),
+  });
+  if (!(response.headers.get('content-type') ?? '').includes('text/event-stream') || response.body === null) {
+    const json: unknown = await response.json().catch(() => null);
+    throw new RequestError(response.status, (json ?? { code: 'internal', message: `POST ${path} failed (${response.status})` }) as ApiError);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value !== undefined) buffer += decoder.decode(value, { stream: !done });
+    const taken = takeSseEvents(done ? `${buffer}\n\n` : buffer);
+    buffer = taken.rest;
+    for (const event of taken.events) {
+      const data: unknown = JSON.parse(event.data);
+      if (event.event === 'text') stream.onText((data as { text: string }).text);
+      else if (event.event === 'done') return data as ChatReply;
+      else if (event.event === 'error') {
+        const failure = data as { status: number; body: ApiError };
+        throw new RequestError(failure.status, failure.body);
+      }
+    }
+    if (done) throw new RequestError(502, { code: 'internal', message: 'The answer ended before it was finished' });
+  }
 };
 
 export interface NewGlob {
@@ -409,9 +467,13 @@ export const api = {
       'GET',
       `/api/boards/${boardId}/search?q=${encodeURIComponent(q)}${history ? '&history=1' : ''}`,
     ).then((r) => r.value),
-  chatHistory: (boardId: number) => request<{ messages: ChatMessage[] }>('GET', `/api/boards/${boardId}/chat`).then((r) => r.messages),
-  askChat: (boardId: number, input: ChatQuestion) => request<ChatReply>('POST', `/api/boards/${boardId}/chat`, input),
-  clearChat: (boardId: number) => request<{ ok: boolean }>('DELETE', `/api/boards/${boardId}/chat`),
+  chats: (boardId: number) => request<{ chats: ChatThread[] }>('GET', `/api/boards/${boardId}/chats`).then((r) => r.chats),
+  chatMessages: (boardId: number, chat: number) => request<{ messages: ChatMessage[] }>('GET', `/api/boards/${boardId}/chats/${chat}`).then((r) => r.messages),
+  deleteChat: (boardId: number, chat: number) => request<{ ok: boolean }>('DELETE', `/api/boards/${boardId}/chats/${chat}`),
+  /** Save to knowledge: the answer goes to the proposal queue; `glob` is the source when the answer cites none. */
+  saveChatAnswer: (boardId: number, chat: number, message: number, glob?: string) =>
+    request<{ id: string }>('POST', `/api/boards/${boardId}/chats/${chat}/messages/${message}/save`, glob === undefined ? {} : { glob }),
+  askChat: (boardId: number, input: ChatQuestion, stream?: ChatStream) => (stream === undefined ? request<ChatReply>('POST', `/api/boards/${boardId}/chat`, input) : askChatStream(boardId, input, stream)),
   globCodeReview: (id: string) => request<{ value: GlobCodeReview }>('GET', `/api/globs/${id}/code-review`).then((r) => r.value),
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
   deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),

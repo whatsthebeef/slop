@@ -9,7 +9,7 @@ import { sameCommit } from '../domain/signals.js';
 import type { TestRun } from '../domain/test-runs.js';
 import type { CodeReviewComment } from '../domain/code-review.js';
 import type { BoardNotification } from '../domain/notifications.js';
-import type { ChatMessage } from '../domain/chat.js';
+import type { ChatMessage, ChatThread } from '../domain/chat.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import type { KbItem } from '../domain/kb.js';
@@ -68,6 +68,7 @@ interface State {
   decisions: Decision[];
   decisionSources: DecisionSource[];
   chatMessages: ChatMessage[];
+  chats: ChatThread[];
   inboxItems: InboxItem[];
   inboxLinks: InboxLink[];
   integrationTokens: IntegrationToken[];
@@ -147,6 +148,7 @@ const clone = (state: State): State => ({
   decisions: [...state.decisions],
   decisionSources: [...state.decisionSources],
   chatMessages: [...state.chatMessages],
+  chats: [...state.chats],
   inboxItems: [...state.inboxItems],
   inboxLinks: [...state.inboxLinks],
   integrationTokens: [...state.integrationTokens],
@@ -193,6 +195,7 @@ export class MemoryStore implements Store {
     decisions: [],
     decisionSources: [],
     chatMessages: [],
+    chats: [],
     inboxItems: [],
     inboxLinks: [],
     integrationTokens: [],
@@ -926,15 +929,32 @@ export class MemoryStore implements Store {
             .filter((d) => d.state === 'pending' && (d.processAfter === null || d.processAfter <= now))
             .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.sourceRef.localeCompare(b.sourceRef))[0] ?? null,
         ),
-      listChatMessages: (boardId, email, limit) =>
-        Promise.resolve(s.chatMessages.filter((m) => m.boardId === boardId && m.email === email).slice(-limit)),
+      listChatMessages: (chatId, limit) => Promise.resolve(s.chatMessages.filter((m) => m.chatId === chatId).slice(-limit)),
       addChatMessage: (message) => {
         const stored = { ...message, id: this.nextRowId++ };
         s.chatMessages.push(stored);
         return Promise.resolve(stored);
       },
-      clearChat: (boardId, email) => {
-        s.chatMessages = s.chatMessages.filter((m) => m.boardId !== boardId || m.email !== email);
+      listChats: (boardId, email, limit) =>
+        Promise.resolve(
+          s.chats
+            .filter((c) => c.boardId === boardId && c.email === email)
+            .sort((x, y) => y.updatedAt.localeCompare(x.updatedAt) || y.id - x.id)
+            .slice(0, limit),
+        ),
+      getChat: (chatId) => Promise.resolve(s.chats.find((c) => c.id === chatId) ?? null),
+      createChat: (chat) => {
+        const stored = { ...chat, id: this.nextRowId++, updatedAt: chat.createdAt };
+        s.chats.push(stored);
+        return Promise.resolve(stored);
+      },
+      touchChat: (chatId, at) => {
+        s.chats = s.chats.map((c) => (c.id === chatId ? { ...c, updatedAt: at } : c));
+        return Promise.resolve();
+      },
+      deleteChat: (chatId) => {
+        s.chats = s.chats.filter((c) => c.id !== chatId);
+        s.chatMessages = s.chatMessages.filter((m) => m.chatId !== chatId);
         return Promise.resolve();
       },
       insertInboxItem: (input) => {

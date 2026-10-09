@@ -5,7 +5,7 @@ import { Plus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
+import { Link, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
@@ -17,6 +17,7 @@ import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { withGlob } from '@/lib/glob-list';
+import { usePageContext } from '@/lib/page-context';
 import { codeReviewsKey, deploysKey, globsKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useToast } from '@/toast';
@@ -200,6 +201,7 @@ export const BoardPage = () => {
   const live = useLiveBoard(boardId);
   // The ＋ (New glob) icon lives in the shell's tab row.
   const { headerActions, hideSignedOff } = useOutletContext<BoardShellContext>();
+  usePageContext({ type: 'board' });
   const [creating, setCreating] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [bumps, setBumps] = useState<Record<string, Direction>>({});
@@ -216,6 +218,16 @@ export const BoardPage = () => {
   // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens its page.
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  // "Create glob" under a chat answer arrives with the answer's text, to start the form from.
+  const location = useLocation();
+  const [createFrom, setCreateFrom] = useState('');
+  const fromChat = (location.state as { createFrom?: unknown } | null)?.createFrom;
+  useEffect(() => {
+    if (typeof fromChat !== 'string') return;
+    setCreateFrom(fromChat);
+    setCreating(true);
+    void navigate(location.pathname, { replace: true, state: null });
+  }, [fromChat]);
   const linked = searchParams.get('glob');
   useEffect(() => {
     if (linked !== null) void navigate(`/boards/${boardId}/globs/${encodeURIComponent(linked)}`, { replace: true });
@@ -421,6 +433,7 @@ export const BoardPage = () => {
         board={board.data}
         groups={groups}
         open={creating}
+        initialRequest={createFrom}
         onOpenChange={setCreating}
         onCreate={async (input: NewGlob) => {
           const glob = await api.createGlob(boardId, input).catch((error: unknown) => {

@@ -134,6 +134,8 @@ const schema = z.object({
   SEARCH_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
   /** Sonnet 5.5 (US cross-region inference profile) answers board chat questions from the retrieved sources. */
   CHAT_MODEL: z.string().default('us.anthropic.claude-sonnet-5-5'),
+  /** Opus 5.5 answers one question when the person asks the chat to think harder. */
+  CHAT_THINK_MODEL: z.string().default('us.anthropic.claude-opus-5-5'),
 });
 
 export type Config = z.infer<typeof schema>;

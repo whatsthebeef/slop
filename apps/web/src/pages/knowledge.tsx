@@ -9,6 +9,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { api, RequestError } from '@/lib/api';
 import type { ImportResult } from '@/lib/api';
 import { useLiveKnowledge } from '@/lib/live';
+import { usePageContext } from '@/lib/page-context';
 import { useToast } from '@/toast';
 
 const message = (error: unknown) => (error instanceof RequestError ? error.body.message : 'Something went wrong');
@@ -34,6 +35,7 @@ export const KnowledgePage = () => {
   const catalog = useQuery({ queryKey: ['catalog'], queryFn: api.catalog });
   const [picked, setPicked] = useState<string[]>([]);
   const [viewing, setViewing] = useState<string | null>(null);
+  usePageContext({ type: 'knowledge', ...(viewing === null ? {} : { id: viewing }) });
   const [comparing, setComparing] = useState<string | null>(null);
   const doc = useQuery({
     queryKey: ['kb-doc', boardId, viewing],

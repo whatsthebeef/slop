@@ -882,11 +882,30 @@ export const decisionSources = pgTable(
   ],
 );
 
-/** One person's board chat: their questions and the assistant's cited answers, oldest first by id. */
+/** One person's conversation with a board's records; a person has as many as they start. */
+export const boardChats = pgTable(
+  'board_chats',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    title: text('title').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [index('board_chats_person_idx').on(t.boardId, t.email, t.updatedAt)],
+);
+
+/** A conversation's questions and the assistant's cited answers, oldest first by id. */
 export const boardChatMessages = pgTable(
   'board_chat_messages',
   {
     id: bigserial('id', { mode: 'number' }).primaryKey(),
+    chatId: bigint('chat_id', { mode: 'number' })
+      .notNull()
+      .references(() => boardChats.id, { onDelete: 'cascade' }),
     boardId: integer('board_id')
       .notNull()
       .references(() => boards.id, { onDelete: 'cascade' }),
@@ -894,10 +913,12 @@ export const boardChatMessages = pgTable(
     role: text('role', { enum: ['user', 'assistant'] }).notNull(),
     content: text('content').notNull(),
     citations: jsonb('citations').$type<ChatCitation[]>(),
+    tools: jsonb('tools').$type<string[]>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
-  (t) => [index('board_chat_messages_person_idx').on(t.boardId, t.email, t.id)],
+  (t) => [index('board_chat_messages_chat_idx').on(t.chatId, t.id)],
 );
+
 
 /**
  * The board inbox (spec, Inbox and ingest): pasted text with its summary step's state. The search item (`item_id`) is a

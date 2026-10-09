@@ -1,4 +1,4 @@
-import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -370,13 +370,24 @@ const toDecisionSource = (row: typeof schema.decisionSources.$inferSelect): Deci
   updatedAt: row.updatedAt.toISOString(),
 });
 
+const toChatThread = (row: typeof schema.boardChats.$inferSelect): ChatThread => ({
+  id: row.id,
+  boardId: row.boardId,
+  email: row.email,
+  title: row.title,
+  createdAt: row.createdAt.toISOString(),
+  updatedAt: row.updatedAt.toISOString(),
+});
+
 const toChatMessage = (row: typeof schema.boardChatMessages.$inferSelect): ChatMessage => ({
   id: row.id,
+  chatId: row.chatId,
   boardId: row.boardId,
   email: row.email,
   role: row.role,
   content: row.content,
   citations: row.citations,
+  tools: row.tools,
   createdAt: row.createdAt.toISOString(),
 });
 
@@ -1747,22 +1758,46 @@ export class PgStore implements Store {
         return row === undefined ? null : toDecisionSource(row);
       },
 
-      listChatMessages: async (boardId, email, limit) => {
+      listChatMessages: async (chatId, limit) => {
         const m = schema.boardChatMessages;
-        const rows = await t.select().from(m).where(and(eq(m.boardId, boardId), eq(m.email, email))).orderBy(desc(m.id)).limit(limit);
+        const rows = await t.select().from(m).where(eq(m.chatId, chatId)).orderBy(desc(m.id)).limit(limit);
         return rows.reverse().map(toChatMessage);
       },
       addChatMessage: async (message) => {
         const [row] = await t
           .insert(schema.boardChatMessages)
-          .values({ ...message, citations: message.citations === null ? null : [...message.citations], createdAt: new Date(message.createdAt) })
+          .values({
+            ...message,
+            citations: message.citations === null ? null : [...message.citations],
+            tools: message.tools == null ? null : [...message.tools],
+            createdAt: new Date(message.createdAt),
+          })
           .returning();
         if (row === undefined) throw new Error('chat message insert returned no row');
         return toChatMessage(row);
       },
-      clearChat: async (boardId, email) => {
-        const m = schema.boardChatMessages;
-        await t.delete(m).where(and(eq(m.boardId, boardId), eq(m.email, email)));
+      listChats: async (boardId, email, limit) => {
+        const c = schema.boardChats;
+        const rows = await t.select().from(c).where(and(eq(c.boardId, boardId), eq(c.email, email))).orderBy(desc(c.updatedAt), desc(c.id)).limit(limit);
+        return rows.map(toChatThread);
+      },
+      getChat: async (chatId) => {
+        const [row] = await t.select().from(schema.boardChats).where(eq(schema.boardChats.id, chatId));
+        return row === undefined ? null : toChatThread(row);
+      },
+      createChat: async (chat) => {
+        const [row] = await t
+          .insert(schema.boardChats)
+          .values({ ...chat, createdAt: new Date(chat.createdAt), updatedAt: new Date(chat.createdAt) })
+          .returning();
+        if (row === undefined) throw new Error('chat insert returned no row');
+        return toChatThread(row);
+      },
+      touchChat: async (chatId, at) => {
+        await t.update(schema.boardChats).set({ updatedAt: new Date(at) }).where(eq(schema.boardChats.id, chatId));
+      },
+      deleteChat: async (chatId) => {
+        await t.delete(schema.boardChats).where(eq(schema.boardChats.id, chatId));
       },
       insertInboxItem: async (input) => {
         const n = schema.inboxItems;
