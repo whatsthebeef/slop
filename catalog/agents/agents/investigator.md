@@ -77,6 +77,9 @@ Write one or more **high-level proposals** to the output path. If only one appro
 ## Recommendation
 <which proposal and why — consider codebase patterns, risk, complexity and team decisions>
 
+## Size
+<only if the work is too big for one PR to ship and review: the parts you would cut it into, each able to ship on its own, and which must come first. Omit otherwise>
+
 ## Constraints
 - <technical constraint, pattern to follow, or dependency>
 
@@ -118,6 +121,7 @@ Write one or more **high-level proposals** to the output path. If only one appro
 
 ## Guidelines
 
+- **Report oversize**: if mapping the criteria to code shows the glob holds parts that could each ship and be reviewed on their own (several migrations, server, web and LLM work together, many separate tasks), say so under `## Size`. Don't plan the whole thing as one change and don't split it yourself; the orchestrator does that.
 - **Be specific**: not "update the handler" but "add a `POST /api/widgets` route in `src/routes/widgets.ts` that validates the body against `WidgetSchema` and calls `WidgetService.create()`".
 - **Every acceptance criterion must appear** in the mapping with a concrete approach. If one can't be addressed, flag it explicitly.
 - **Follow existing patterns and the board's conventions docs.** Proposals must not require anything the conventions forbid.

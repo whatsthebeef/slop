@@ -650,6 +650,14 @@ describe('field changes and type changes (row 26)', () => {
       }
     });
 
+    it('a same held only by `after` offers Start anyway, not Start, with the dependencies loaded (the list path)', () => {
+      const held = glob({ type: 'same', status: 'planning', after: ['s1t9'], waiting: null });
+      const actions = m.allowedActions(held, dev, { dependencies: new Map([['s1t9', 'open' as const]]) });
+      expect(actions).toContain('start_anyway');
+      expect(actions).not.toContain('start');
+      expect(m.allowedActions(held, dev, { dependencies: new Map([['s1t9', 'merged' as const]]) })).toContain('start');
+    });
+
     it('a planned super offers Pick up but not Start; back to same offers both', () => {
       const sup = value(m.changeFields(planned(), { type: 'super' }, board, ctx())).glob;
       const actions = m.allowedActions(sup, dev);

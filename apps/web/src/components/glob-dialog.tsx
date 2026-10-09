@@ -121,7 +121,7 @@ export const GlobDetail = ({
   };
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
 
-  // The globs it starts after can change until it has a branch.
+  // The globs it waits for can change until it has a branch.
   const canEditAfter = glob.status === 'planning' && glob.provisioning === 'none' && glob.type !== 'super';
   const [afterText, setAfterText] = useState((glob.after ?? []).join(', '));
   useEffect(() => setAfterText((glob.after ?? []).join(', ')), [glob.id, glob.after]);
@@ -284,7 +284,7 @@ export const GlobDetail = ({
               )}
               {canEditAfter && (
                 <Label>
-                  Start after (glob IDs)
+                  Waits for (glob IDs)
                   <Input
                     value={afterText}
                     placeholder='s15t7, s15b18'

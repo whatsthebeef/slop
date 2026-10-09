@@ -367,8 +367,8 @@ export const createApp = (deps: AppDeps) => {
     const splits = await globs.splitsOf(boardId);
     const oversized = await globs.oversizedOf(boardId);
     return send(c, result, (list) =>
-      list.map(({ glob, artifacts }) => ({
-        ...globViewFor(glob, email, membership.value.role, artifacts),
+      list.map(({ glob, artifacts, dependencies }) => ({
+        ...globViewFor(glob, email, membership.value.role, artifacts, dependencies),
         ...splitField(splits.get(glob.id)),
         ...(oversized.has(glob.id) ? { oversized: true } : {}),
       })),

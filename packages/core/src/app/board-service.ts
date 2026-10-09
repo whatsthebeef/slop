@@ -149,14 +149,12 @@ export class BoardService {
   }
 
   /**
-   * The person opened the board in the web app: records the time and appends the board to their bar if it isn't in it.
-   * Returns their sessions as shown. Personal state, so no board hint is published.
+   * The person opened the board in the web app: records the time only. The bar is unchanged: a board joins it through
+   * addSession. Returns their sessions as shown. Personal state, so no board hint is published.
    */
   async openBoard(email: string, boardId: number, now: string): Promise<Result<BoardSession[]>> {
-    return this.writeSessions(email, boardId, async (tx, sessions) => {
+    return this.writeSessions(email, boardId, async (tx) => {
       await tx.touchBoardSession(email, boardId, now);
-      const order = sessionOrder(sessions);
-      if (!order.includes(boardId)) await tx.setBoardSessionOrder(email, appendSession(order, boardId));
     });
   }
 

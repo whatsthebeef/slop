@@ -113,9 +113,9 @@ describe('board sessions in Postgres', () => {
     await expect(store.transaction((tx) => tx.setBoardSessionOrder(OTHER, [a]))).rejects.toThrow();
   });
 
-  it('serialises concurrent opens: unique, contiguous positions and a repeated board once', async () => {
+  it('serialises concurrent adds: unique, contiguous positions and a repeated board once', async () => {
     const opened = [...ids.slice(0, 5), ids[2] ?? 0];
-    const results = await Promise.all(opened.map((id) => boards.openBoard(DEV, id, T1)));
+    const results = await Promise.all(opened.map((id) => boards.addSession(DEV, id)));
     results.forEach(unwrap);
     const order = bar(await sessions());
     expect(order).toHaveLength(5);
@@ -128,9 +128,22 @@ describe('board sessions in Postgres', () => {
     ).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it('records opens without changing the bar', async () => {
+    const [a, b, c] = ids as [number, number, number];
+    unwrap(await boards.addSession(DEV, b));
+    await Promise.all([a, b, c, a].map((id) => boards.openBoard(DEV, id, T1)));
+    expect(bar(await sessions())).toEqual([b]);
+    expect((await sessions()).map((s) => [s.boardId, s.lastViewedAt]).sort()).toEqual(
+      [a, b, c].map((id) => [id, T1]).sort(),
+    );
+  });
+
   it('removes and adds over Postgres through the service', async () => {
     const [a, b, c] = ids as [number, number, number];
-    for (const id of [a, b, c]) unwrap(await boards.openBoard(DEV, id, T1));
+    for (const id of [a, b, c]) {
+      unwrap(await boards.addSession(DEV, id));
+      unwrap(await boards.openBoard(DEV, id, T1));
+    }
     expect(bar(unwrap(await boards.removeSession(DEV, a)))).toEqual([b, c]);
     expect(bar(unwrap(await boards.addSession(DEV, a)))).toEqual([b, c, a]);
     const memberships = await boards.memberships(DEV);
@@ -198,12 +211,12 @@ describe('board session routes', () => {
 
   const call = (method: string, path: string) => app.request(path, { method, headers: { cookie } });
 
-  it('records an open, removes and adds, and /api/me shows the session', async () => {
+  it('records an open without adding it, then adds, removes, and /api/me shows the session', async () => {
     const viewed = await call('POST', `/api/boards/${boardId}/viewed`);
     expect(viewed.status).toBe(200);
     const { sessions } = (await viewed.json()) as { sessions: BoardSession[] };
     expect(sessions).toEqual([
-      { boardId, position: 1, lastViewedAt: expect.any(String) as string },
+      { boardId, position: null, lastViewedAt: expect.any(String) as string },
     ]);
     const me = (await (await call('GET', '/api/me')).json()) as {
       boards: { id: number; position: number | null; lastViewedAt: string | null }[];
@@ -211,10 +224,13 @@ describe('board session routes', () => {
     expect(me.boards).toEqual([
       expect.objectContaining({
         id: boardId,
-        position: 1,
+        position: null,
         lastViewedAt: sessions[0]?.lastViewedAt,
       }),
     ]);
+    expect(await (await call('PUT', `/api/boards/${boardId}/session`)).json()).toMatchObject({
+      sessions: [{ boardId, position: 1 }],
+    });
     expect(await (await call('DELETE', `/api/boards/${boardId}/session`)).json()).toMatchObject({
       sessions: [{ boardId, position: null }],
     });

@@ -7,7 +7,7 @@ import * as schema from '../src/db/schema.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
 import { githubDeliveryHandler } from '../src/github/events.js';
-import { globViewOf } from '../src/http/views.js';
+import { globViewFor, globViewOf } from '../src/http/views.js';
 import { FileRoutines } from '../src/routines.js';
 import { createTestDatabase } from './support/database.js';
 import { FakeCodeHost } from './support/fake-codehost.js';
@@ -157,6 +157,18 @@ describe('start after: a merged webhook releases a waiting sub through the outbo
     expect(await executors.release_waiting?.(effect, null, { globs })).toBe('dropped');
   });
 
+  it('the board list and the single read agree: a same held only by `after` offers Start anyway', async () => {
+    const first = await create('same');
+    const second = await create('same', [first.id]);
+    const listed = unwrap(await globs.listWithArtifacts(DEV, 1, {}));
+    const row = listed.find((r) => r.glob.id === second.id);
+    expect(row).toBeDefined();
+    const fromList = globViewFor(second, DEV, 'dev', row?.artifacts ?? [], row?.dependencies).allowedActions;
+    expect(fromList).toContain('start_anyway');
+    expect(fromList).not.toContain('start');
+    expect(fromList).toEqual(unwrap(await globs.get(DEV, second.id)).allowedActions);
+  });
+
   it('refuses an unknown id through the service, and shows what a sub waits for in its view', async () => {
     const refused = await globs.create(DEV, {
       boardId: 1,
@@ -176,6 +188,6 @@ describe('start after: a merged webhook releases a waiting sub through the outbo
     const view = globViewOf(unwrap(await globs.get(DEV, second.id)));
     expect(view.allowedActions).toContain('start_anyway');
     expect(view.waitedOnBy).toEqual([]);
-    expect(view.waitingFor[0]?.why).toContain(`waiting for ${first.id} to merge`);
+    expect(view.waitingFor[0]?.why).toContain(`Waits for ${first.id} to merge`);
   });
 });

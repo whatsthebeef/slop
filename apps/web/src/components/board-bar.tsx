@@ -233,22 +233,19 @@ const applySessions = (
 };
 
 /**
- * Records that you opened the board (it joins the end of your bar if it isn't in it), once per open: changing tabs,
- * polls and refetches don't, so a board you remove isn't put back until you open it again. True once that has settled.
+ * Records that you opened the board, once per open: changing tabs, polls and refetches don't. It only records the view;
+ * the board joins your bar through +.
  */
-export const useOpenBoard = (boardId: number | undefined): boolean => {
+export const useOpenBoard = (boardId: number | undefined): void => {
   const client = useQueryClient();
-  const [settled, setSettled] = useState<number | undefined>(undefined);
   useEffect(() => {
     if (boardId === undefined) return;
     const seq = writes.next();
     void api
       .openBoard(boardId)
       .then((r) => applySessions(client, boardId, seq, r.sessions))
-      .catch(() => undefined /* a failed record leaves the bar as it was */)
-      .finally(() => setSettled(boardId));
+      .catch(() => undefined /* a failed record leaves the bar as it was */);
   }, [boardId, client]);
-  return boardId !== undefined && settled === boardId;
 };
 
 interface SessionWrite {
@@ -275,17 +272,15 @@ export const useSessionWrite = () => {
 /**
  * The app's top bar, like tmux's sessions: the boards you keep open, numbered by their place (name with its ID, when
  * you last viewed it, and your counts: runs in progress, supers, globs waiting on you and on each sign-off review).
- * Opening a board adds it at the end; × takes one out and the rest renumber. The current board, if it isn't in the bar,
+ * + adds a board at the end (opening one doesn't); × takes one out and the rest renumber. The current board, if it isn't in the bar,
  * shows after them with an add button. The All boards row below links to the page where boards are added.
  * App settings float in a corner.
  */
 export const BoardBar = ({
   current,
-  opened = true,
   allBoards = false,
 }: {
   current?: number;
-  opened?: boolean;
   /** The All boards page is showing: its row is the marked one. */
   allBoards?: boolean;
 }) => {
@@ -301,8 +296,7 @@ export const BoardBar = ({
     const selected = board.id === current;
     const add = kind === 'loose';
     const busy = write.isPending && write.variables.id === board.id;
-    // While the open is being recorded the current board may not be in the bar yet: no add button to flicker.
-    const control = managed && !(kind === 'loose' && !opened);
+    const control = managed;
     return (
       <li
         key={board.id}
