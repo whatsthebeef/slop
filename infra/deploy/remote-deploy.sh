@@ -3,10 +3,10 @@
 # The new image is pulled before anything running is touched. If it doesn't answer its health check, the
 # previous image is started again and the script fails, so CodeBuild goes red and the old release keeps serving.
 #
-# Environment: IMAGE (ECR URI with tag), PUBLIC_URL (https://<id>.cloudfront.net), AWS_REGION, STAGE.
-# Next to it: compose.yaml (compose.prod.yaml from the repo).
+# Environment: IMAGE (ECR URI with tag), PUBLIC_URL (https://<id>.cloudfront.net), AWS_REGION, STAGE, BACKUP_BUCKET.
+# Next to it: compose.yaml (compose.prod.yaml from the repo) and backup.sh (the nightly dump, scheduled below).
 set -euo pipefail
-: "${IMAGE:?}" "${PUBLIC_URL:?}" "${AWS_REGION:?}" "${STAGE:?}"
+: "${IMAGE:?}" "${PUBLIC_URL:?}" "${AWS_REGION:?}" "${STAGE:?}" "${BACKUP_BUCKET:?}"
 cd /opt/slop
 
 # One deploy at a time.
@@ -48,6 +48,29 @@ fi
   printf '%s\n' "$EXTRA"
 } > app.env.new)
 mv app.env.new app.env
+
+# The nightly dump: backup.sh run by a systemd timer (03:17 UTC; Persistent, so a missed run happens at boot).
+printf 'BACKUP_BUCKET=%s\nAWS_REGION=%s\n' "$BACKUP_BUCKET" "$AWS_REGION" > /opt/slop/backup.env
+cat > /etc/systemd/system/slop-backup.service <<'UNIT'
+[Unit]
+Description=slop nightly Postgres dump to S3
+After=docker.service
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/slop/backup.env
+ExecStart=/bin/bash /opt/slop/backup.sh
+UNIT
+cat > /etc/systemd/system/slop-backup.timer <<'UNIT'
+[Unit]
+Description=slop nightly Postgres dump
+[Timer]
+OnCalendar=*-*-* 03:17:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now slop-backup.timer
 
 compose() { SLOP_IMAGE="$1" POSTGRES_PASSWORD="$POSTGRES_PASSWORD" docker compose -f /opt/slop/compose.yaml -p slop "${@:2}"; }
 

@@ -31,7 +31,13 @@ import {
 } from 'aws-cdk-lib/aws-ec2';
 import { Repository, TagStatus } from 'aws-cdk-lib/aws-ecr';
 import { ManagedPolicy, PolicyDocument, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+import { Alarm, ComparisonOperator, Metric, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
+import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
+import { CfnLifecyclePolicy } from 'aws-cdk-lib/aws-dlm';
 import { BlockPublicAccess, Bucket, BucketEncryption } from 'aws-cdk-lib/aws-s3';
+import { Topic } from 'aws-cdk-lib/aws-sns';
+import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
+import { Tags } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import type { SlopSecrets } from './secrets.js';
 
@@ -51,6 +57,8 @@ export interface HostStackProps extends StackProps {
    * region (us-east-1 is the default); look it up with `aws ec2 describe-managed-prefix-lists`.
    */
   readonly cloudFrontPrefixListId: string;
+  /** Where the missing-backup alarm emails; without it the alarm still exists (and shows in the console) but tells nobody. */
+  readonly alertEmail?: string;
 }
 
 const APP_PORT = 3000;
@@ -122,7 +130,24 @@ export class HostStack extends Stack {
         resources: ['arn:aws:bedrock:*::foundation-model/*', `arn:aws:bedrock:*:${this.account}:inference-profile/*`],
       }),
     );
-    // Backups (s15f33) add their own bucket grant.
+
+    // Backups: the nightly pg_dump (infra/deploy/backup.sh, a systemd timer installed by each deploy) goes to this bucket.
+    // Objects and old versions expire after 30 days; the instance may write and read dumps but not delete them.
+    const backups = new Bucket(this, 'Backups', {
+      bucketName: `slop-${stage}-backups-${this.account}`,
+      encryption: BucketEncryption.S3_MANAGED,
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      versioned: true,
+      removalPolicy: retain,
+      autoDeleteObjects: stage !== 'prod',
+      lifecycleRules: [{ expiration: Duration.days(30), noncurrentVersionExpiration: Duration.days(30), abortIncompleteMultipartUploadAfter: Duration.days(7) }],
+    });
+    backups.grantPut(role);
+    backups.grantRead(role);
+    role.addToPolicy(
+      new PolicyStatement({ actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'Slop/Backup' } } }),
+    );
 
     const instance = new Instance(this, 'Host', {
       vpc,
@@ -144,6 +169,8 @@ export class HostStack extends Stack {
       userData: UserData.custom(readFileSync(new URL('../deploy/instance-setup.sh', import.meta.url), 'utf8')),
       userDataCausesReplacement: false,
     });
+    // The weekly snapshot policy below selects the instance by this tag.
+    Tags.of(instance).add('slop:snapshot', 'weekly');
     // Containers reach the instance role's credentials through the metadata service, one hop further than the host.
     const cfnInstance = instance.node.defaultChild;
     if (!(cfnInstance instanceof CfnInstance)) throw new Error('Expected the EC2 instance resource');
@@ -243,6 +270,7 @@ export class HostStack extends Stack {
         BUCKET: { value: artifacts.bucketName },
         REPOSITORY_URI: { value: repository.repositoryUri },
         PUBLIC_URL: { value: publicUrl },
+        BACKUP_BUCKET: { value: backups.bucketName },
       },
       timeout: Duration.minutes(30),
     });
@@ -250,6 +278,47 @@ export class HostStack extends Stack {
     if (!(cfnProject instanceof CfnProject)) throw new Error('Expected the CodeBuild project resource');
     cfnProject.addPropertyOverride('Source.Auth', { Type: 'CODECONNECTIONS', Resource: props.connectionArn });
 
+    // Weekly EBS snapshots of the data disk (the boot disk is rebuilt from the AMI), the newest four kept: Sundays 04:00 UTC.
+    const dlmRole = new Role(this, 'SnapshotRole', {
+      assumedBy: new ServicePrincipal('dlm.amazonaws.com'),
+      managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSDataLifecycleManagerServiceRole')],
+    });
+    new CfnLifecyclePolicy(this, 'WeeklySnapshots', {
+      description: `slop ${stage} weekly snapshot of the data disk - keep 4`,
+      state: 'ENABLED',
+      executionRoleArn: dlmRole.roleArn,
+      policyDetails: {
+        resourceTypes: ['INSTANCE'],
+        targetTags: [{ key: 'slop:snapshot', value: 'weekly' }],
+        parameters: { excludeBootVolume: true },
+        schedules: [
+          {
+            name: 'weekly',
+            createRule: { cronExpression: 'cron(0 4 ? * SUN *)' },
+            retainRule: { count: 4 },
+            copyTags: true,
+          },
+        ],
+      },
+    });
+
+    // backup.sh reports DumpSucceeded after every run. No success for 25 hours (including no report at all, e.g. the
+    // instance is down) raises the alarm.
+    const alerts = new Topic(this, 'BackupAlerts', { displayName: `slop ${stage} backups` });
+    if (props.alertEmail !== undefined) alerts.addSubscription(new EmailSubscription(props.alertEmail));
+    const dumpSucceeded = new Metric({ namespace: 'Slop/Backup', metricName: 'DumpSucceeded', statistic: 'Sum', period: Duration.hours(1) });
+    const missingDump = new Alarm(this, 'MissingDump', {
+      alarmDescription: 'No successful nightly Postgres dump for 25 hours: see /opt/slop/backup.sh, journalctl -u slop-backup',
+      metric: dumpSucceeded,
+      threshold: 1,
+      comparisonOperator: ComparisonOperator.LESS_THAN_THRESHOLD,
+      evaluationPeriods: 25,
+      datapointsToAlarm: 25,
+      treatMissingData: TreatMissingData.BREACHING,
+    });
+    missingDump.addAlarmAction(new SnsAction(alerts));
+
+    new CfnOutput(this, 'BackupBucket', { value: backups.bucketName, description: 'Nightly pg_dump files, kept 30 days' });
     new CfnOutput(this, 'PublicUrl', { value: publicUrl, description: "slop's address (the server's PUBLIC_URL)" });
     new CfnOutput(this, 'InstanceId', { value: instance.instanceId, description: 'Open a shell with aws ssm start-session --target <id>' });
     new CfnOutput(this, 'RepositoryUri', { value: repository.repositoryUri });

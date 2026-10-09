@@ -59,6 +59,8 @@ if (flag('secrets') || wantsHost) {
       branch: (app.node.tryGetContext('hostBranch') as string | undefined) ?? 'main',
       // com.amazonaws.global.cloudfront.origin-facing in us-east-1; pass -c cloudFrontPrefixListId=pl-... elsewhere.
       cloudFrontPrefixListId: (app.node.tryGetContext('cloudFrontPrefixListId') as string | undefined) ?? 'pl-3b927c52',
+      // Where the missing-backup alarm emails (-c alertEmail=you@example.com); confirm the subscription from the first message.
+      alertEmail: (app.node.tryGetContext('alertEmail') as string | undefined) || undefined,
       tags: { project: 'slop', stage },
     });
   }
