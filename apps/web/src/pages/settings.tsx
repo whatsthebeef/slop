@@ -87,13 +87,6 @@ export const SettingsPage = () => {
 
   return (
     <main className='mx-auto grid max-w-2xl gap-8 p-6'>
-      <header className='flex items-center gap-3'>
-        <Link className='text-sm text-muted-foreground hover:underline' to={`/boards/${boardId}`}>
-          ← {board.data.name}
-        </Link>
-        <h1 className='font-semibold'>Settings</h1>
-      </header>
-
       <section className='grid gap-2'>
         <h2 className='text-sm font-semibold'>Repository</h2>
         {connection.data === undefined ? (
@@ -529,12 +522,6 @@ export const SignedOffPage = () => {
 
   return (
     <main className='mx-auto grid w-full max-w-[63rem] gap-4 p-6'>
-      <header className='flex items-center gap-3'>
-        <Link className='text-sm text-muted-foreground hover:underline' to={`/boards/${boardId}`}>
-          ← Board
-        </Link>
-        <h1 className='font-semibold'>Signed off</h1>
-      </header>
       {globs.length === 0 && !pages.isLoading && <p className='text-sm text-muted-foreground'>Nothing signed off yet.</p>}
       {globs.map((g) => (
         <button

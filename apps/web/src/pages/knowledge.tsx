@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { Link, useParams } from 'react-router';
+import { useParams } from 'react-router';
 import { AgentSetFiles, LineDiff } from '@/components/agent-set-files';
 import { KbProposals } from '@/components/kb-proposals';
 import { Button } from '@/components/ui/button';
@@ -78,13 +78,6 @@ export const KnowledgePage = () => {
 
   return (
     <main className='mx-auto grid w-full max-w-[63rem] gap-8 p-6' data-live={live}>
-      <header className='flex items-center gap-3'>
-        <Link className='text-sm text-muted-foreground hover:underline' to={`/boards/${boardId}`}>
-          ← {board.data.name}
-        </Link>
-        <h1 className='font-semibold'>Knowledge</h1>
-      </header>
-
       <section className='grid gap-2'>
         <h2 className='text-sm font-semibold'>Documents</h2>
         <p className='text-xs text-muted-foreground'>
