@@ -8,6 +8,7 @@ import type {
   ArtifactSummary,
   Board,
   BoardNotification,
+  BoardSession,
   BoardJob,
   BoardJobStatus,
   CatalogUpdate,
@@ -79,6 +80,16 @@ export interface BoardView extends Board {
   readonly supers?: number;
   /** Per sign-off label, globs waiting on that review (from /api/me only). */
   readonly reviews?: Partial<Record<LabelName, number>>;
+  /** Your place in the board bar, 1-based; null when the board isn't in it (from /api/me only; absent from an older API). */
+  readonly position?: number | null;
+  /** When you last opened the board; null if never (from /api/me only). */
+  readonly lastViewedAt?: string | null;
+}
+
+/** `/api/me`: who you are and your boards with their bar sessions and counts. */
+export interface Me {
+  readonly email: string;
+  readonly boards: readonly BoardView[];
 }
 
 export interface KnowledgeIndex {
@@ -355,7 +366,11 @@ export const api = {
   devLogin: (email: string, returnTo?: string) =>
     request<{ email: string; returnTo: string }>('POST', '/auth/dev-login', { email, returnTo }),
   logout: () => request<object>('POST', '/auth/logout'),
-  me: () => request<{ email: string; boards: BoardView[] }>('GET', '/api/me'),
+  me: () => request<Me>('GET', '/api/me'),
+  /** Records that you opened the board (server time) and adds it to your bar if it isn't there. */
+  openBoard: (id: number) => request<{ sessions: BoardSession[] }>('POST', `/api/boards/${id}/viewed`),
+  addSession: (id: number) => request<{ sessions: BoardSession[] }>('PUT', `/api/boards/${id}/session`),
+  removeSession: (id: number) => request<{ sessions: BoardSession[] }>('DELETE', `/api/boards/${id}/session`),
 
   createBoard: (input: { name: string; repo: string | null; baseBranch: string; timeZone: string; environments: Environment[] }) =>
     request<Board>('POST', '/api/boards', input),

@@ -276,6 +276,9 @@ export const createApp = (deps: AppDeps) => {
         return {
           ...m.board,
           role: m.role,
+          // Your board bar: the board's place in it (null: not in it) and when you last opened it. Yours only.
+          position: m.position,
+          lastViewedAt: m.lastViewedAt,
           attention: list.filter(needsHuman).length,
           running: list.filter(machine.hasLiveRun).length,
           supers: list.filter((g) => g.type === 'super' && listOf(g.status) === 'doing').length,
@@ -304,6 +307,18 @@ export const createApp = (deps: AppDeps) => {
 
   app.get('/api/boards/:b', async (c) =>
     send(c, await boards.get(c.get('email'), Number(c.req.param('b'))), (m) => ({ ...m.board, role: m.role })),
+  );
+
+  // Board sessions (your board bar). The web app records an open once per board visit; MCP reads don't count.
+  // Each returns your sessions so the client can patch its /api/me cache without refetching it.
+  app.post('/api/boards/:b/viewed', async (c) =>
+    send(c, await boards.openBoard(c.get('email'), Number(c.req.param('b')), new Date().toISOString()), (sessions) => ({ sessions })),
+  );
+  app.put('/api/boards/:b/session', async (c) =>
+    send(c, await boards.addSession(c.get('email'), Number(c.req.param('b'))), (sessions) => ({ sessions })),
+  );
+  app.delete('/api/boards/:b/session', async (c) =>
+    send(c, await boards.removeSession(c.get('email'), Number(c.req.param('b'))), (sessions) => ({ sessions })),
   );
 
   app.patch('/api/boards/:b/settings', async (c) => {

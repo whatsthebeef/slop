@@ -24,6 +24,7 @@ export * from './domain/size-check.js';
 export * from './domain/manifests.js';
 export * from './domain/reconcile.js';
 export * from './domain/time-tracking.js';
+export * from './domain/board-sessions.js';
 export * as deploys from './domain/deploys.js';
 export { DEPLOY_STATES, DEPLOY_TRIGGERS } from './domain/deploys.js';
 export type { Deploy, DeployChange, DeployIndicator, DeployState, DeployTrigger } from './domain/deploys.js';

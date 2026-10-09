@@ -1,14 +1,13 @@
-import { LABEL_NAMES } from '@slop/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
-import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
+import { Navigate, useNavigate, useSearchParams } from 'react-router';
 import { NewBoardForm } from '@/components/new-board';
-import { Attention, Reviews, Running, StatusBar, Supers } from '@/components/status-bar';
+import { BoardBar } from '@/components/board-bar';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
 import { api } from '@/lib/api';
-import { boardVisits, lastBoard } from '@/lib/recent-boards';
+import { lastViewedBoard } from '@/lib/board-bar';
 
 export const LoginPage = () => {
   const [email, setEmail] = useState('');
@@ -49,8 +48,9 @@ export const LoginPage = () => {
 };
 
 /**
- * There's no home page: `/` opens the board you used last (or your first). With no boards yet it
- * offers to create one; after that, new boards come from the app settings menu.
+ * There's no home page: `/` opens the board in your bar you viewed last (the server's record, so it follows you
+ * between browsers); with an empty bar, the board you viewed last, else your first board. With no boards yet it offers
+ * to create one.
  */
 export const HomePage = () => {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
@@ -58,64 +58,14 @@ export const HomePage = () => {
   if (me.data === undefined || !me.isFetchedAfterMount) {
     return <p className='p-6 text-muted-foreground'>Loading…</p>;
   }
-  const boards = me.data.boards;
-  const last = lastBoard();
-  const target = boards.find((b) => b.id === last) ?? boards[0];
+  const target = lastViewedBoard(me.data.boards);
   if (target !== undefined) return <Navigate to={`/boards/${target.id}`} replace />;
   return (
     <div className='flex h-dvh flex-col'>
-      <StatusBar />
+      <BoardBar />
       <main className='mx-auto grid w-full max-w-sm gap-3 p-6'>
         <h1 className='text-base font-semibold'>Create your first board</h1>
         <NewBoardForm />
-      </main>
-    </div>
-  );
-};
-
-const opened = (at: number | undefined) =>
-  at === undefined ? 'not opened here' : `opened ${new Date(at).toLocaleString()}`;
-
-/** Every board you're on, the most recently opened (in this browser) first, then the newest. */
-export const BoardsPage = () => {
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
-  const visits = boardVisits();
-  const boards = [...(me.data?.boards ?? [])].sort(
-    (a, b) => (visits[b.id] ?? 0) - (visits[a.id] ?? 0) || b.id - a.id,
-  );
-  return (
-    <div className='flex h-dvh flex-col'>
-      <StatusBar />
-      <main className='mx-auto grid w-full max-w-[63rem] content-start gap-3 overflow-auto p-6'>
-        <h1 className='text-base font-semibold'>All boards</h1>
-        {me.data === undefined && <p className='text-sm text-muted-foreground'>Loading…</p>}
-        <ul className='grid gap-1.5'>
-          {boards.map((b) => (
-            <li key={b.id}>
-              <Link
-                to={`/boards/${b.id}`}
-                className='grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-md border bg-card px-3 py-3 no-underline hover:bg-muted'
-                data-testid={`board-row-${b.id}`}
-              >
-                <span className='font-mono text-xs text-muted-foreground'>{b.id}</span>
-                <span className='grid min-w-0'>
-                  <span className='truncate text-sm font-medium text-foreground'>{b.name}</span>
-                  <span className='truncate text-xs text-muted-foreground'>
-                    {b.repo ?? 'no repo'} · {b.role} · {opened(visits[b.id])}
-                  </span>
-                </span>
-                <span className='flex items-center gap-3'>
-                  <Running count={b.running ?? 0} />
-                  <Supers count={b.supers ?? 0} />
-                  <Attention count={b.attention ?? 0} />
-                  {LABEL_NAMES.map((name) => (
-                    <Reviews key={name} name={name} count={b.reviews?.[name] ?? 0} />
-                  ))}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
       </main>
     </div>
   );

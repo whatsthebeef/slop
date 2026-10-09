@@ -2,14 +2,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
 import './index.css';
 import { RequestError } from './lib/api';
 import { BoardPage } from './pages/board';
 import { GlobPage } from './pages/glob';
 import { InboxPage } from './pages/inbox';
 import { KnowledgePage } from './pages/knowledge';
-import { BoardsPage, HomePage, LoginPage } from './pages/home';
+import { HomePage, LoginPage } from './pages/home';
 import { SettingsPage, SignedOffPage } from './pages/settings';
 import { BoardShell } from './components/board-shell';
 import { ToastProvider } from './toast';
@@ -56,7 +56,7 @@ createRoot(root).render(
             <Routes>
               <Route path='/login' element={<LoginPage />} />
               <Route path='/' element={<HomePage />} />
-              <Route path='/boards' element={<BoardsPage />} />
+              <Route path='/boards' element={<Navigate to='/' replace />} />
               <Route path='/boards/:boardId' element={<BoardShell />}>
                 <Route index element={<BoardPage />} />
                 <Route path='inbox' element={<InboxPage />} />
