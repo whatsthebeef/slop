@@ -12,6 +12,10 @@ import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js'
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { findHolds } from './hold-service.js';
 import { embedRequest, snapshotOf } from './intake-learning-service.js';
+import { checkFrom } from './size-check-service.js';
+import type { SizeAssessor } from './size-check-service.js';
+import { unresolved } from '../domain/size-check.js';
+import type { SizeCheck } from '../domain/size-check.js';
 
 export interface GlobServiceDeps {
   readonly store: Store;
@@ -23,6 +27,8 @@ export interface GlobServiceDeps {
   readonly branchFiles?: BranchFiles;
   /** Embeds a new glob's request for its intake snapshot; without it (or when it fails) the snapshot's embedding is filled later. */
   readonly embedder?: Embedder;
+  /** Judges a new glob's size; without it no size check is made and nothing is held for it. */
+  readonly sizeCheck?: SizeAssessor;
 }
 
 export interface CreateGlobInput {
@@ -97,6 +103,8 @@ export interface GlobView {
   readonly waitingFor: readonly AwaitedDependency[];
   /** Globs in Planning that wait for this one. */
   readonly waitedOnBy: readonly string[];
+  /** The size check (flag, estimate, proposed split); null when none was made. */
+  readonly sizeCheck: SizeCheck | null;
 }
 
 /** Artifacts in a stable order: by kind (plan first), then label. */
@@ -148,6 +156,7 @@ export class GlobService {
         artifacts,
         waitingFor: waitingFor(glob, dependencies),
         waitedOnBy: waiting.filter((g) => waitsFor(g, glob.id)).map((g) => g.id),
+        sizeCheck: await tx.getSizeCheck(glob.id),
       });
     });
   }
@@ -162,6 +171,13 @@ export class GlobService {
       found.set(e.globId, { source, part, parts: parts.filter((p): p is string => typeof p === 'string') });
     }
     return found;
+  }
+
+  /** The globs on a board whose oversized flag nobody has answered yet, for the card's chip. */
+  async oversizedOf(boardId: number): Promise<Set<string>> {
+    const [checks, planning] = await this.deps.store.transaction(async (tx) => [await tx.listSizeChecks(boardId), await tx.listGlobs(boardId, { status: ['planning'] })] as const);
+    const open = new Set(planning.map((g) => g.id));
+    return new Set(checks.filter((c) => unresolved(c) && open.has(c.globId)).map((c) => c.globId));
   }
 
   /** Integrations' read of one glob, with no signed-in person. */
@@ -223,6 +239,9 @@ export class GlobService {
     }
     // The snapshot's embedding is computed here, outside the transaction (it calls a model).
     const embedding = await embedRequest(this.deps.embedder, input.intake?.request ?? input.summary);
+    // The size check asks a model too, so it is made here as well; a failing model leaves the text estimate.
+    const planText = input.plan ?? input.summary;
+    const size = this.deps.sizeCheck === undefined ? null : await this.deps.sizeCheck.assess(input.boardId, planText);
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Transition>> => {
       const board = await tx.getBoard(input.boardId);
       if (board === null) return notFound(`No board ${input.boardId}`);
@@ -242,7 +261,8 @@ export class GlobService {
         if (!checked.ok) return checked;
         after = checked.value;
       }
-      const createInput: CreateInput = { ...input, id: formatId(board.id, letter, n), after, impliedAfter: holds };
+      const sizeHold = size !== null && size.flagged ? `Oversized: ${size.reasons.join('; ')}. Split it or keep it whole to start it` : undefined;
+      const createInput: CreateInput = { ...input, id: formatId(board.id, letter, n), after, impliedAfter: holds, ...(sizeHold === undefined ? {} : { sizeHold }) };
       const ctx = await this.context(actor.value, board);
       const awaitedIds = [...after, ...holds.map((h) => h.id)];
       const transition = machine.create(createInput, board, ctx, await this.dependencyStates(tx, awaitedIds));
@@ -255,6 +275,7 @@ export class GlobService {
       await tx.enqueueEffects(transition.value.effects);
       // The frozen record of what intake saw and decided (spec, Intake): written with the glob, never edited.
       await tx.insertIntakeSnapshot(snapshotOf(glob, input.plan ?? input.summary, input.intake ?? null, input.source ?? 'api'), embedding);
+      if (size !== null) await tx.upsertSizeCheck(checkFrom(glob.id, board.id, size, null, this.deps.clock.now()));
       const plan = input.plan ?? '';
       if (plan.trim() !== '') {
         const artifact = await tx.insertArtifact({
@@ -417,6 +438,10 @@ export class GlobService {
           },
         ]);
       };
+      const sized = await tx.getSizeCheck(original.id);
+      if (sized !== null && sized.decision === null) {
+        await tx.upsertSizeCheck({ ...sized, decision: 'split', decidedBy: email, decidedAt: at, updatedAt: at });
+      }
       for (const [index, globId] of ids.entries()) {
         await addArtifact(globId, { kind: 'plan', label: '', content: planOf(index), link: null, commitSha: null });
         if (index > 0) {
@@ -633,6 +658,9 @@ export class GlobService {
 
   /** Starts one held glob if everything it waits for has merged and the merge policy still lets it. */
   async release(id: string) {
+    // A glob held for its size flag stays held until a person splits it or keeps it whole.
+    const held = await this.deps.store.transaction(async (tx) => (unresolved(await tx.getSizeCheck(id)) ? await tx.getGlob(id) : null));
+    if (held !== null) return ok(held);
     const holds = await this.holdsFor(id, true);
     return this.command(null, id, null, (glob, ctx, _board, facts) => machine.released(glob, ctx, facts.dependencies, holds), {
       dependencies: true,

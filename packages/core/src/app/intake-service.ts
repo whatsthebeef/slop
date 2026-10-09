@@ -6,6 +6,8 @@ import type { Category, Environment, SlopType } from '../domain/types.js';
 import type { Store } from '../ports.js';
 import { CONFIDENCES, INTAKE_PROMPT_VERSION, examplesBlock, needsConfirmation } from '../domain/intake-learning.js';
 import type { Confidence, IntakeExample } from '../domain/intake-learning.js';
+import { estimateFromText, oversizedReasons } from '../domain/size-check.js';
+import type { SizeThreshold } from '../domain/size-check.js';
 import type { Embedder } from '../ports.js';
 import { memberOf } from './access.js';
 import { embedRequest, nearestExamples } from './intake-learning-service.js';
@@ -98,6 +100,8 @@ export interface IntakeProposal {
   /** The model and prompt version that decided, recorded in the glob's snapshot. */
   readonly model: string | null;
   readonly promptVersion: number;
+  /** Why the plan looks oversized by its text (more tasks than the board's threshold); empty when it doesn't. Creating the glob judges it again with the model. */
+  readonly oversized: readonly string[];
 }
 
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
@@ -195,11 +199,12 @@ export class IntakeService {
       return ok({
         groups: [...new Set(globs.flatMap((g) => (g.group === null ? [] : [g.group])))],
         environments: board?.environments ?? [],
+        threshold: await tx.getSizeThreshold(boardId),
         open: new Set(globs.filter((g) => g.status !== 'reviewing' && g.status !== 'signed_off').map((g) => g.id)),
       });
     });
     if (!known.ok) return known;
-    const { groups, environments, open } = known.value;
+    const { groups, environments, open, threshold } = known.value;
 
     const examples = await this.examplesFor(boardId, input.text);
     const block = examplesBlock(examples);
@@ -217,7 +222,7 @@ export class IntakeService {
       if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
       throw error;
     }
-    return ok(this.validate(parseJson(completion), input, groups, environments, open, examples));
+    return ok(this.validate(parseJson(completion), input, groups, environments, open, examples, threshold));
   }
 
   /** The nearest past snapshots; none when there is no embedder, it fails, or the board has none. Never fails intake. */
@@ -238,6 +243,7 @@ export class IntakeService {
     environments: readonly Environment[],
     open: ReadonlySet<string>,
     examples: readonly IntakeExample[],
+    threshold: SizeThreshold,
   ): IntakeProposal {
     const request = input.text.trim();
     const title = (input.explicit.title ?? text(field(answer, 'title')) ?? '').trim() || request.split('\n')[0]?.slice(0, 70) || 'Untitled';
@@ -291,6 +297,7 @@ export class IntakeService {
       needsConfirmation: !explicitCategory && needsConfirmation(confidence, examples),
       model: this.deps.model ?? null,
       promptVersion: INTAKE_PROMPT_VERSION,
+      oversized: oversizedReasons(estimateFromText(plan), threshold),
     };
   }
 }

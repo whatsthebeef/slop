@@ -18,6 +18,7 @@ import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
+import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdChange } from './domain/size-check.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { BaseChecks, Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
@@ -85,6 +86,22 @@ export interface Tx {
   insertSubLimitChange(change: NewSubLimitChange): Promise<boolean>;
   /** A board's recorded sub-limit outcomes, newest first. */
   listSubLimitChanges(boardId: number): Promise<SubLimitChange[]>;
+  /** The glob's size check (spec, Intake), or null when none was made. */
+  getSizeCheck(globId: string): Promise<SizeCheck | null>;
+  /** The board's size checks. */
+  listSizeChecks(boardId: number): Promise<SizeCheck[]>;
+  /** Writes the glob's size check, replacing an earlier one. */
+  upsertSizeCheck(check: SizeCheck): Promise<void>;
+  /** Writes a re-assessment of the glob's size check without touching its decision columns (a concurrent Keep whole survives). */
+  updateSizeAssessment(check: SizeCheck): Promise<void>;
+  /** The board's learned size threshold (the default until it has moved). */
+  getSizeThreshold(boardId: number): Promise<SizeThreshold>;
+  /** Sets the threshold to `to` if it is still `from`; returns false otherwise. */
+  setSizeThreshold(boardId: number, from: SizeThreshold, to: SizeThreshold): Promise<boolean>;
+  /** Records a size-threshold outcome; false when the board already has that glob's (the learning is idempotent). */
+  insertSizeThresholdChange(change: NewSizeThresholdChange): Promise<boolean>;
+  /** A board's recorded size-threshold outcomes, newest first. */
+  listSizeThresholdChanges(boardId: number): Promise<SizeThresholdChange[]>;
   /** Records the base branch's latest check result. It has no board version: check results arrive on their own. */
   setBaseChecks(boardId: number, baseChecks: BaseChecks): Promise<void>;
   /** Board notifications have no version: sources raise and clear them on their own. */

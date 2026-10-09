@@ -1,5 +1,5 @@
-import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
+import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -73,6 +73,34 @@ const toSubLimitChange = (row: typeof schema.subLimitChanges.$inferSelect): SubL
   outcome: oneOf(SUB_LIMIT_OUTCOMES, row.outcome),
   globId: row.globId,
   changedLines: row.changedLines,
+  evidence: row.evidence,
+});
+
+const toSizeCheck = (row: typeof schema.globSizeChecks.$inferSelect): SizeCheck => ({
+  globId: row.globId,
+  boardId: row.boardId,
+  planHash: row.planHash,
+  estimate: row.estimate,
+  evidence: row.evidence,
+  threshold: row.threshold,
+  flagged: row.flagged,
+  reasons: row.reasons,
+  proposal: row.proposal,
+  decision: row.decision === null ? null : oneOf(SIZE_DECISIONS, row.decision),
+  decidedBy: row.decidedBy,
+  decidedAt: row.decidedAt === null ? null : row.decidedAt.toISOString(),
+  createdAt: row.createdAt.toISOString(),
+  updatedAt: row.updatedAt.toISOString(),
+});
+
+const toSizeThresholdChange = (row: typeof schema.sizeThresholdChanges.$inferSelect): SizeThresholdChange => ({
+  id: row.id,
+  boardId: row.boardId,
+  at: row.at.toISOString(),
+  from: { maxTasks: row.fromTasks, maxParts: row.fromParts },
+  to: { maxTasks: row.toTasks, maxParts: row.toParts },
+  outcome: oneOf(SIZE_OUTCOMES, row.outcome),
+  globId: row.globId,
   evidence: row.evidence,
 });
 
@@ -642,6 +670,63 @@ export class PgStore implements Store {
             .where(eq(schema.subLimitChanges.boardId, boardId))
             .orderBy(desc(schema.subLimitChanges.at), desc(schema.subLimitChanges.id))
         ).map(toSubLimitChange),
+      getSizeCheck: async (globId) => {
+        const [row] = await t.select().from(schema.globSizeChecks).where(eq(schema.globSizeChecks.globId, globId));
+        return row === undefined ? null : toSizeCheck(row);
+      },
+      listSizeChecks: async (boardId) =>
+        (await t.select().from(schema.globSizeChecks).where(eq(schema.globSizeChecks.boardId, boardId))).map(toSizeCheck),
+      upsertSizeCheck: async (check) => {
+        const c = schema.globSizeChecks;
+        const { globId, decidedAt, createdAt, updatedAt, ...rest } = check;
+        const values = { ...rest, decidedAt: decidedAt === null ? null : new Date(decidedAt), createdAt: new Date(createdAt), updatedAt: new Date(updatedAt) };
+        await t.insert(c).values({ globId, ...values }).onConflictDoUpdate({ target: c.globId, set: values });
+      },
+      updateSizeAssessment: async (check) => {
+        const c = schema.globSizeChecks;
+        const { globId, decision, decidedBy, decidedAt, createdAt, updatedAt, ...rest } = check;
+        const set = { ...rest, updatedAt: new Date(updatedAt) };
+        // On conflict only the assessment columns are written: a decision committed meanwhile stays.
+        await t
+          .insert(c)
+          .values({ globId, ...set, decision, decidedBy, decidedAt: decidedAt === null ? null : new Date(decidedAt), createdAt: new Date(createdAt) })
+          .onConflictDoUpdate({ target: c.globId, set });
+      },
+      getSizeThreshold: async (boardId) => {
+        const [row] = await t.select().from(schema.sizeThresholds).where(eq(schema.sizeThresholds.boardId, boardId));
+        return row === undefined ? DEFAULT_SIZE_THRESHOLD : { maxTasks: row.maxTasks, maxParts: row.maxParts };
+      },
+      setSizeThreshold: async (boardId, from, to) => {
+        const s = schema.sizeThresholds;
+        const values = { maxTasks: to.maxTasks, maxParts: to.maxParts };
+        // A board with no row holds the default, so the insert is the first move; an existing row moves only from `from`.
+        const [existing] = await t.select().from(s).where(eq(s.boardId, boardId));
+        const held = existing === undefined ? DEFAULT_SIZE_THRESHOLD : { maxTasks: existing.maxTasks, maxParts: existing.maxParts };
+        if (held.maxTasks !== from.maxTasks || held.maxParts !== from.maxParts) return false;
+        const rows = await t
+          .insert(s)
+          .values({ boardId, ...values })
+          .onConflictDoUpdate({ target: s.boardId, set: values, setWhere: and(eq(s.maxTasks, from.maxTasks), eq(s.maxParts, from.maxParts)) })
+          .returning({ boardId: s.boardId });
+        return rows.length === 1;
+      },
+      insertSizeThresholdChange: async (change) => {
+        const { from, to, ...rest } = change;
+        const rows = await t
+          .insert(schema.sizeThresholdChanges)
+          .values({ ...rest, at: new Date(change.at), fromTasks: from.maxTasks, toTasks: to.maxTasks, fromParts: from.maxParts, toParts: to.maxParts })
+          .onConflictDoNothing()
+          .returning({ id: schema.sizeThresholdChanges.id });
+        return rows.length === 1;
+      },
+      listSizeThresholdChanges: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.sizeThresholdChanges)
+            .where(eq(schema.sizeThresholdChanges.boardId, boardId))
+            .orderBy(desc(schema.sizeThresholdChanges.at), desc(schema.sizeThresholdChanges.id))
+        ).map(toSizeThresholdChange),
       setBaseChecks: async (boardId, baseChecks) => {
         await t.update(schema.boards).set({ baseChecks }).where(eq(schema.boards.id, boardId));
       },

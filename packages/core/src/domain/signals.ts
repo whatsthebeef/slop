@@ -5,6 +5,7 @@ import type { FindingClass, ReviewFinding } from './findings.js';
 import type { LearningType } from './kb.js';
 import type { ArtifactKind, Provenance } from './knowledge.js';
 import type { SlopType, Status } from './types.js';
+import type { SizeOutcome, SizeThreshold } from './size-check.js';
 import type { SubLimitOutcome } from './sub-limit.js';
 
 /**
@@ -879,7 +880,7 @@ export const SIGNAL_QUIET_MS = 12 * 7 * 24 * 60 * 60 * 1000;
 export const SIGNAL_RERAISE_FACTOR = 1.5;
 
 /** Per-board background jobs of the self-improvement pipeline (`board_jobs`). */
-export const BOARD_JOBS = ['mining', 'consolidation', 'effect_check', 'sub_limit', 'intake_outcome'] as const;
+export const BOARD_JOBS = ['mining', 'consolidation', 'effect_check', 'sub_limit', 'intake_outcome', 'size_threshold'] as const;
 export type BoardJobName = (typeof BOARD_JOBS)[number];
 
 export type BoardJobResult =
@@ -947,6 +948,13 @@ export type BoardJobResult =
       /** Outcomes recorded for merged globs, and earlier ones refreshed once 14 days had passed. */
       readonly recorded: number;
       readonly refreshed: number;
+    }
+  | {
+      readonly kind: 'size_threshold';
+      /** The board's size threshold after the run. */
+      readonly threshold: SizeThreshold;
+      /** Outcomes recorded this run, each with the threshold before and after it. */
+      readonly changes: readonly { readonly globId: string; readonly outcome: SizeOutcome; readonly from: SizeThreshold; readonly to: SizeThreshold }[];
     }
   /**
    * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.

@@ -645,6 +645,10 @@ const jobSummary = (result: BoardJobResult): string => {
       const moved = result.changes.filter((c) => c.from !== c.to).length;
       return `limit ${result.limit.toLocaleString('en')} lines, ${result.changes.length} outcomes recorded (${moved} moved it)${result.waiting > 0 ? `, ${result.waiting} waiting` : ''}${(result.gaveUp ?? 0) > 0 ? `, ${result.gaveUp} bug references skipped without a usable answer` : ''}`;
     }
+    case 'size_threshold': {
+      const moved = result.changes.filter((c) => c.from.maxTasks !== c.to.maxTasks || c.from.maxParts !== c.to.maxParts).length;
+      return `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts, ${result.changes.length} outcomes recorded (${moved} moved it)`;
+    }
     case 'intake_outcome':
       return `${result.recorded} outcomes recorded, ${result.refreshed} refreshed${result.backfilled > 0 ? `, ${result.backfilled} snapshots backfilled` : ''}`;
     case 'effect_check':
@@ -659,7 +663,7 @@ const jobSummary = (result: BoardJobResult): string => {
   }
 };
 
-type JobName = 'mining' | 'consolidation' | 'effect_check' | 'sub_limit' | 'intake_outcome';
+type JobName = 'mining' | 'consolidation' | 'effect_check' | 'sub_limit' | 'intake_outcome' | 'size_threshold';
 
 const JOB_LABELS: Record<JobName, { title: string; name: string }> = {
   mining: { title: 'Mined weekly', name: 'Mining' },
@@ -667,6 +671,7 @@ const JOB_LABELS: Record<JobName, { title: string; name: string }> = {
   effect_check: { title: 'Effect checks daily', name: 'The effect check' },
   sub_limit: { title: 'Learned hourly', name: 'Sub-limit learning' },
   intake_outcome: { title: 'Recorded hourly', name: 'Intake outcomes' },
+  size_threshold: { title: 'Learned hourly', name: 'Size-threshold learning' },
 };
 
 /**

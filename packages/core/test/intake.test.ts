@@ -51,7 +51,14 @@ describe('intake', () => {
       needsConfirmation: false,
       model: null,
       promptVersion: INTAKE_PROMPT_VERSION,
+      oversized: [],
     });
+  });
+
+  it('says when the proposed plan has more tasks than the board threshold', async () => {
+    const plan = '## Build\n' + Array.from({ length: 7 }, (_, i) => `${i + 1}. Step ${i + 1}`).join('\n');
+    answer = JSON.stringify({ title: 'Big', summary: 's', plan, type: 'same', category: 'feature' });
+    expect((await propose('a big piece of work')).oversized).toEqual(['7 tasks (more than 5)']);
   });
 
   it('keeps the model\'s file guesses that look like repo paths, and suggests globs the request waits for', async () => {
