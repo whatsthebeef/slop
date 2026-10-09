@@ -3,7 +3,9 @@ import type { LiveState } from './live';
 
 /** The one card that changed list steps across like a block; the cards it displaces glide. */
 const STEP_MS = 630;
-const GLIDE_MS = 500;
+export const GLIDE_MS = 500;
+/** The glide's easing; `.board-glide` in index.css repeats both so the chat panel and the columns move like the cards. */
+export const GLIDE_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
 const LOCK_MS = 165;
 const TAG_MS = 3000;
 /** Several moves at once (a burst of webhooks) play one after another, and only the first few. */
@@ -22,7 +24,7 @@ export interface MoveTag {
 const without = <T>(record: Record<string, T>, key: string): Record<string, T> =>
   Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
 
-const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+export const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 type Rects = Map<string, { x: number; y: number }>;
 
@@ -194,7 +196,7 @@ export const useCardMotion = <T>(
         [{ transform: `translate(${from.x - to.x}px, ${from.y - to.y}px)` }, { transform: 'none' }],
         {
           duration: GLIDE_MS,
-          easing: 'cubic-bezier(0.2, 0, 0, 1)',
+          easing: GLIDE_EASING,
         },
       );
     }
