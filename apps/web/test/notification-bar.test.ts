@@ -49,7 +49,7 @@ describe('the notification bar', () => {
     expect(activeTab('/boards/3/settings', 3)).toBe('settings');
   });
 
-  it('shows New Glob and the filters on the board tab only', () => {
+  it('shows New Glob (beside the search box) on the board tab only', () => {
     expect(showBoardTools('board')).toBe(true);
     expect(showBoardTools('settings')).toBe(false);
     expect(showBoardTools('signed-off')).toBe(false);

@@ -1,15 +1,17 @@
-import { describeEditFailure, LISTS, SLOP_TYPES } from '@slop/core';
-import type { Action, LabelCommand, LabelName, List, SlopType } from '@slop/core';
+import { describeEditFailure, LISTS } from '@slop/core';
+import type { Action, LabelCommand, LabelName, List } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { createPortal } from 'react-dom';
+import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
 import type { ArtifactRef } from '@/components/artifacts';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
 import { GlobDialog } from '@/components/glob-dialog';
+import type { BoardShellContext } from '@/components/board-shell';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
@@ -198,10 +200,11 @@ export const BoardPage = () => {
   const client = useQueryClient();
   const toast = useToast();
   const live = useLiveBoard(boardId);
+  // New Glob lives in the shell's header, beside the search box.
+  const { headerActions } = useOutletContext<BoardShellContext>();
   const [openId, setOpenId] = useState<string | null>(null);
   const [openArtifact, setOpenArtifact] = useState<ArtifactRef | null>(null);
   const [creating, setCreating] = useState(false);
-  const [typeFilter, setTypeFilter] = useState<SlopType | 'all'>('all');
   const [preview, setPreview] = useState<Preview | null>(null);
   const [bumps, setBumps] = useState<Record<string, Direction>>({});
   const [haltConfirm, setHaltConfirm] = useState<{
@@ -342,7 +345,7 @@ export const BoardPage = () => {
     const options = movesFor(glob).filter((m) => m.move.direction === direction);
     if (options.length === 0) {
       setBumps((b) => ({ ...b, [glob.id]: direction }));
-      setTimeout(() => setBumps((b) => Object.fromEntries(Object.entries(b).filter(([id]) => id !== glob.id))), 140);
+      setTimeout(() => setBumps((b) => Object.fromEntries(Object.entries(b).filter(([id]) => id !== glob.id))), 210);
       return;
     }
     const current = preview?.glob.id === glob.id ? options.findIndex((m) => m.move.action === preview.move.action) : -1;
@@ -358,35 +361,21 @@ export const BoardPage = () => {
   }
 
   const all = globs.data;
-  const visible = all.filter((g) => typeFilter === 'all' || g.type === typeFilter);
+  // Filtering by type was removed for now; it is to be redesigned with more options. The board shows every glob.
   const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
   const open = openId === null ? undefined : all.find((g) => g.id === openId);
 
   return (
     <div className='flex h-full flex-col' data-testid='board' data-live={live}>
       <OfflineNotice live={live} />
-      {/* Under the tabs and the line: New Glob and the type filters (this page is the board tab only). */}
-      <div className='mx-5 flex flex-wrap items-center gap-3 border-b border-edge/50 pb-3 pt-2'>
-        <h1 className='sr-only'>{board.data.name}</h1>
-        <div className='flex gap-0.5 rounded-md border bg-muted p-0.5' role='group' aria-label='Filter by type'>
-          {(['all', ...SLOP_TYPES] as const).map((t) => (
-            <Button
-              key={t}
-              size='sm'
-              className='capitalize'
-              variant={typeFilter === t ? 'selected' : 'ghost'}
-              aria-pressed={typeFilter === t}
-              onClick={() => setTypeFilter(t)}
-            >
-              {t}
-            </Button>
-          ))}
-        </div>
-        <Button size='sm' className='ml-auto text-sm' onClick={() => setCreating(true)}>
-          <Plus className='h-4 w-4' /> New Glob
-        </Button>
-      </div>
-
+      <h1 className='sr-only'>{board.data.name}</h1>
+      {headerActions !== null &&
+        createPortal(
+          <Button size='sm' className='text-sm' onClick={() => setCreating(true)}>
+            <Plus className='h-4 w-4' /> New Glob
+          </Button>,
+          headerActions,
+        )}
 
       <main
         ref={(el) => {
@@ -396,7 +385,7 @@ export const BoardPage = () => {
       >
         <div className='flex min-h-full min-w-full items-stretch gap-3'>
           {LISTS.map((list) => {
-            const items = visible
+            const items = all
               .filter((g) => g.list === list)
               .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
             return (

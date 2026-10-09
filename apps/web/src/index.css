@@ -109,8 +109,8 @@
 .press {
   box-shadow: 0 2px 0 var(--press);
   transition:
-    transform 60ms,
-    box-shadow 60ms;
+    transform 90ms,
+    box-shadow 90ms;
 }
 
 .press:active:not(:disabled) {
@@ -160,12 +160,12 @@
 
 .lock-local {
   --flash: var(--lcd);
-  animation: lock-flash 110ms steps(1, end);
+  animation: lock-flash 165ms steps(1, end);
 }
 
 .lock-remote {
   --flash: var(--remote);
-  animation: lock-flash 110ms steps(1, end);
+  animation: lock-flash 165ms steps(1, end);
 }
 
 /* A move with nowhere to go: the card nudges toward the wall and snaps back. */
@@ -180,7 +180,7 @@
 }
 
 .wall-bump {
-  animation: wall-bump 120ms steps(2, end);
+  animation: wall-bump 180ms steps(2, end);
 }
 
 /* A critical notification flashes once when it arrives. */
@@ -198,7 +198,7 @@
 }
 
 .notification-flash {
-  animation: notification-flash 900ms steps(1, end) 1;
+  animation: notification-flash 1350ms steps(1, end) 1;
 }
 
 @keyframes tag-fade {
@@ -212,13 +212,15 @@
 }
 
 .move-tag {
-  animation: tag-fade 3s linear forwards;
+  animation: tag-fade 4.5s linear forwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .lock-local,
   .lock-remote,
-  .wall-bump {
+  .wall-bump,
+  .notification-flash,
+  .move-tag {
     animation: none;
   }
 }

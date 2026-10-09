@@ -2,12 +2,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { LiveState } from './live';
 
 /** The one card that changed list steps across like a block; the cards it displaces glide. */
-const STEP_MS = 420;
-const GLIDE_MS = 330;
-const LOCK_MS = 110;
+const STEP_MS = 630;
+const GLIDE_MS = 500;
+const LOCK_MS = 165;
 const TAG_MS = 3000;
 /** Several moves at once (a burst of webhooks) play one after another, and only the first few. */
-const STAGGER_MS = 150;
+const STAGGER_MS = 225;
 const MAX_ANIMATED = 5;
 /** After the live connection comes back, the catch-up refetch just appears. */
 const RECONNECT_QUIET_MS = 2000;
