@@ -218,6 +218,13 @@
       "when": 1791515349916,
       "tag": "0030_board_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1791515350916,
+      "tag": "0031_integration_tokens",
+      "breakpoints": true
     }
   ]
 }
