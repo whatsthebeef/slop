@@ -6,7 +6,7 @@ import { hash } from '../app/text-hash.js';
  * source type `decision` (so search finds it) plus a row here with its structured facts and what replaced it.
  */
 
-export const DECISION_SOURCE_KINDS = ['implementation_plan', 'plan', 'attachment', 'kb_item'] as const;
+export const DECISION_SOURCE_KINDS = ['implementation_plan', 'plan', 'attachment', 'kb_item', 'inbox'] as const;
 export type DecisionSourceKind = (typeof DECISION_SOURCE_KINDS)[number];
 
 /**
@@ -31,7 +31,7 @@ export interface Decision {
   readonly decidedBy: string | null;
   readonly decidedAt: string;
   readonly sourceKind: DecisionSourceKind;
-  /** The stable ref of the source: `artifact:<glob>:<kind>:<label>` or `learning:<id>`. */
+  /** The stable ref of the source: `artifact:<glob>:<kind>:<label>`, `inbox:<id>:<glob>` or `learning:<id>`. */
   readonly sourceRef: string;
   readonly sourceLabel: string;
   readonly sourceUrl: string | null;
@@ -129,6 +129,8 @@ export const decisionSourceLabel = (kind: DecisionSourceKind, globId: string | n
       return `${globId ?? ''} ${label}`.trim();
     case 'kb_item':
       return 'Approved learning';
+    case 'inbox':
+      return `${globId ?? ''} inbox: ${label}`.trim();
   }
 };
 

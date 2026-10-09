@@ -1,4 +1,5 @@
 import type { Decision, DecisionSource } from '../domain/decisions.js';
+import type { InboxItem, InboxLink } from '../domain/inbox.js';
 import type { Deploy } from '../domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
@@ -53,6 +54,8 @@ interface State {
   searchChunks: StoredChunk[];
   decisions: Decision[];
   decisionSources: DecisionSource[];
+  inboxItems: InboxItem[];
+  inboxLinks: InboxLink[];
 }
 
 interface StoredChunk {
@@ -122,6 +125,8 @@ const clone = (state: State): State => ({
   searchChunks: [...state.searchChunks],
   decisions: [...state.decisions],
   decisionSources: [...state.decisionSources],
+  inboxItems: [...state.inboxItems],
+  inboxLinks: [...state.inboxLinks],
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -158,6 +163,8 @@ export class MemoryStore implements Store {
     searchChunks: [],
     decisions: [],
     decisionSources: [],
+    inboxItems: [],
+    inboxLinks: [],
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -213,6 +220,12 @@ export class MemoryStore implements Store {
         }
         s.decisions = s.decisions.filter((d) => !goneDecisions.has(d.id) && !gone.has(d.itemId));
         s.decisionSources = s.decisionSources.filter((d) => d.globId !== id);
+        // Pasted items stay; one whose last glob went is only kept.
+        const touched = new Set(s.inboxLinks.filter((l) => l.globId === id).map((l) => l.inboxId));
+        s.inboxLinks = s.inboxLinks.filter((l) => l.globId !== id);
+        s.inboxItems = s.inboxItems.map((i) =>
+          touched.has(i.id) && i.status === 'attached' && !s.inboxLinks.some((l) => l.inboxId === i.id) ? { ...i, status: 'kept', version: i.version + 1 } : i,
+        );
         return Promise.resolve();
       },
       findGlobByCreationKey: (boardId, key) =>
@@ -767,6 +780,69 @@ export class MemoryStore implements Store {
             .filter((d) => d.state === 'pending' && (d.processAfter === null || d.processAfter <= now))
             .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.sourceRef.localeCompare(b.sourceRef))[0] ?? null,
         ),
+      insertInboxItem: (input) => {
+        const existing = s.inboxItems.find((i) => i.boardId === input.boardId && i.contentHash === input.contentHash);
+        if (existing !== undefined) return Promise.resolve({ item: existing, created: false });
+        const item: InboxItem = {
+          ...input,
+          id: this.nextRowId++,
+          status: 'new',
+          summary: null,
+          suggestions: [],
+          state: 'pending',
+          attempts: 0,
+          processAfter: null,
+          lastError: null,
+          itemId: null,
+          version: 1,
+          updatedAt: input.createdAt,
+        };
+        s.inboxItems.push(item);
+        return Promise.resolve({ item, created: true });
+      },
+      getInboxItem: (boardId, id) => Promise.resolve(s.inboxItems.find((i) => i.boardId === boardId && i.id === id) ?? null),
+      listInboxItems: (boardId, statuses) =>
+        Promise.resolve(
+          s.inboxItems
+            .filter((i) => i.boardId === boardId && (statuses === undefined || statuses.includes(i.status)))
+            .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || b.id - a.id),
+        ),
+      updateInboxItem: (item, expectedVersion) => {
+        const index = s.inboxItems.findIndex((i) => i.id === item.id);
+        if (index < 0 || s.inboxItems[index]?.version !== expectedVersion) return Promise.resolve(false);
+        s.inboxItems[index] = { ...item, version: expectedVersion + 1 };
+        return Promise.resolve(true);
+      },
+      nextInboxItemToProcess: (now) =>
+        Promise.resolve(
+          s.inboxItems
+            .filter((i) => i.state === 'pending' && i.status !== 'discarded' && (i.processAfter === null || i.processAfter <= now))
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)[0] ?? null,
+        ),
+      insertInboxLink: (link) => {
+        if (s.inboxLinks.some((l) => l.inboxId === link.inboxId && l.globId === link.globId)) return Promise.resolve(false);
+        s.inboxLinks.push(link);
+        return Promise.resolve(true);
+      },
+      listInboxLinks: (boardId) => {
+        const mine = new Set(s.inboxItems.filter((i) => i.boardId === boardId).map((i) => i.id));
+        return Promise.resolve(s.inboxLinks.filter((l) => mine.has(l.inboxId)));
+      },
+      listInboxForGlob: (globId) => {
+        const ids = s.inboxLinks.filter((l) => l.globId === globId).sort((a, b) => a.linkedAt.localeCompare(b.linkedAt)).map((l) => l.inboxId);
+        return Promise.resolve(ids.flatMap((id) => s.inboxItems.find((i) => i.id === id) ?? []));
+      },
+      setItemLinks: (itemId, globIds, globGroup) => {
+        for (const [key, item] of s.searchItems) if (item.id === itemId) s.searchItems.set(key, { ...item, globIds: [...globIds], globGroup });
+        return Promise.resolve();
+      },
+      deleteItemByRef: (boardId, externalRef) => {
+        const item = s.searchItems.get(itemKey(boardId, externalRef));
+        if (item === undefined) return Promise.resolve();
+        s.searchItems.delete(itemKey(boardId, externalRef));
+        s.searchChunks = s.searchChunks.filter((c) => c.itemId !== item.id);
+        return Promise.resolve();
+      },
       appendEvents: (events) => {
         s.events.push(...events);
         return Promise.resolve();
