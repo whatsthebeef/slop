@@ -1,5 +1,6 @@
 import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
+import type { SecretSlot } from '../secrets.js';
 
 /** What GitHub returns when a GitHub App is created from a manifest. */
 export const appCredentialsSchema = z.object({
@@ -14,24 +15,40 @@ export const appCredentialsSchema = z.object({
 
 export type AppCredentials = z.infer<typeof appCredentialsSchema>;
 
+/** The local gitignored file, as a slot. */
+export const fileSlot = (file: string): SecretSlot => ({
+  read: async () => {
+    try {
+      return await readFile(file, 'utf8');
+    } catch {
+      return null;
+    }
+  },
+  write: async (value) => {
+    await writeFile(file, value, { mode: 0o600 });
+    await chmod(file, 0o600);
+  },
+});
+
 /**
  * Holds the GitHub App's credentials. Locally they live in a gitignored file written by the
- * manifest flow; in production they come from Secrets Manager. They can be replaced at runtime,
+ * manifest flow; in production in Secrets Manager (`SECRETS=aws`). They can be replaced at runtime,
  * so finishing the setup flow needs no restart.
  */
 export class AppCredentialsStore {
   private current: AppCredentials | null = null;
 
-  constructor(private readonly file: string) {}
+  constructor(private readonly slot: SecretSlot) {}
 
   get(): AppCredentials | null {
     return this.current;
   }
 
   async load(): Promise<AppCredentials | null> {
+    const raw = await this.slot.read();
     try {
-      const parsed = appCredentialsSchema.safeParse(JSON.parse(await readFile(this.file, 'utf8')));
-      this.current = parsed.success ? parsed.data : null;
+      const parsed = raw === null ? null : appCredentialsSchema.safeParse(JSON.parse(raw));
+      this.current = parsed?.success === true ? parsed.data : null;
     } catch {
       this.current = null;
     }
@@ -39,8 +56,7 @@ export class AppCredentialsStore {
   }
 
   async save(credentials: AppCredentials): Promise<void> {
-    await writeFile(this.file, JSON.stringify(credentials, null, 2), { mode: 0o600 });
-    await chmod(this.file, 0o600);
+    await this.slot.write(JSON.stringify(credentials, null, 2));
     this.current = credentials;
   }
 }

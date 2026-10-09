@@ -23,6 +23,16 @@ const schema = z.object({
   /** Folder with the built web app, served by the same container. */
   WEB_DIST: z.string().optional(),
   MIGRATIONS_DIR: z.string().default('drizzle'),
+  /**
+   * Where sensitive settings come from: `files` (local gitignored files and env vars) or `aws` (AWS Secrets Manager
+   * through the instance role: signing and Cognito client secrets, Slack secrets, the GitHub App, routines).
+   */
+  SECRETS: z.enum(['files', 'aws']).default('files'),
+  /** The Secrets Manager name prefix in `aws` mode. */
+  SECRETS_PREFIX: z.string().default('slop/prod/'),
+  SECRETS_REGION: z.string().default('us-east-1'),
+  /** How long a routine read from Secrets Manager is reused, so a newly set routine is picked up without a restart. */
+  SECRETS_CACHE_SECONDS: z.coerce.number().int().min(0).default(30),
   /** Where the manifest flow stores the GitHub App's credentials locally (gitignored). */
   GITHUB_APP_FILE: z.string().default('.github-app.json'),
   /** The GitHub App's name; GitHub app names are global, so include an owner or stage. */

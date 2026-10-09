@@ -13,7 +13,7 @@ import { OutboxRunner } from './jobs/outbox.js';
 import { mountMcp } from './mcp/server.js';
 import { readyGate } from './ready-gate.js';
 import { GitHub } from './github/client.js';
-import { AppCredentialsStore } from './github/credentials.js';
+import { AppCredentialsStore, fileSlot } from './github/credentials.js';
 import { githubDeliveryHandler } from './github/events.js';
 import { HostBranchFiles } from './branch-files.js';
 import { codeHostExecutors } from './codehost-executors.js';
@@ -50,7 +50,9 @@ import { mountReports } from './http/reports.js';
 import { AwsSignIn, AwsSsoOidc, readSsoSession, ssoCacheFile } from './aws-sso.js';
 import { IntegrationRegistry } from './integration-health.js';
 import { TunnelWatch } from './tunnel-watch.js';
-import { FileRoutines } from './routines.js';
+import { FileRoutines, SecretRoutines } from './routines.js';
+import { AwsSecretStore, secretNames, storeSlot, withSecrets } from './secrets.js';
+import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
 import { ReconcileWatch } from './jobs/reconcile.js';
@@ -60,7 +62,10 @@ import { LearningJobs } from './jobs/learning-jobs.js';
 import { CodeHostManifests } from './jobs/manifests.js';
 import { CodeHostSubDiffs } from './jobs/sub-diffs.js';
 
-const config = loadConfig();
+const baseConfig = loadConfig();
+// With SECRETS=aws the sensitive settings come from Secrets Manager through the instance role; a missing one stops the start.
+const secretStore = baseConfig.SECRETS === 'aws' ? new AwsSecretStore(new SecretsManagerClient({ region: baseConfig.SECRETS_REGION })) : null;
+const config = secretStore === null ? baseConfig : await withSecrets(baseConfig, secretStore);
 await runMigrations(config.DATABASE_URL, config.MIGRATIONS_DIR);
 const database = connect(config.DATABASE_URL);
 const { db } = database;
@@ -71,7 +76,10 @@ const logError = (task: string, message: string) => {
 };
 
 const store = new PgStore(db);
-const routines = new FileRoutines(config.ROUTINES_FILE);
+const routines =
+  secretStore === null
+    ? new FileRoutines(config.ROUTINES_FILE)
+    : new SecretRoutines(secretStore, secretNames(config.SECRETS_PREFIX).routinesPrefix, config.SECRETS_CACHE_SECONDS * 1000);
 const hub = new HintHub();
 const auth = new Auth(db, config);
 const boards = new BoardService({ store, notifier: hub });
@@ -97,7 +105,7 @@ const integrations = new IntegrationRegistry((status) => {
   console.log(`[health] ${status.name} ${status.state}${status.reason === null ? '' : `: ${status.reason}`}`);
   hub.broadcast('board.health');
 }, undefined, notifications, () => awsSignInEnabled, (message) => logError('integrations', message));
-const githubCredentials = new AppCredentialsStore(config.GITHUB_APP_FILE);
+const githubCredentials = new AppCredentialsStore(secretStore === null ? fileSlot(config.GITHUB_APP_FILE) : storeSlot(secretStore, secretNames(config.SECRETS_PREFIX).githubApp));
 await githubCredentials.load();
 const github = new GitHub(githubCredentials, integrations);
 const boardOf = (id: number) => store.transaction((tx) => tx.getBoard(id));

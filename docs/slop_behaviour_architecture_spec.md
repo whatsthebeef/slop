@@ -272,8 +272,8 @@ Subs and sames are implemented by Claude Code routines owned by whoever triggere
 **Routines**
 
 - Each developer creates one routine in their own claude.ai account, used for both subs and sames, from a shared prompt and command. The prompt stays thin and identical: fetch the glob from the slop MCP and follow its instructions using the agents in `.claude/`.
-- Each developer stores the routine's fire URL and token in Secrets Manager at `slop/routines/<userId>`; slop builds the path from the triggerer. If the triggerer has no routine, slop falls back to the board's default routine owner.
-- A routine's cloud environment has a fixed set of repositories, so a developer can also store one routine per board (`slop/routines/<userId>/<boardId>`, as Secrets Manager names can't hold `#`; locally `<email>#<boardId>` in `.routines.json`), used before their default. Either way the routine's environment must include the board's repository, with the Claude GitHub App installed on it. The fire text names the board's repository, and a session that doesn't have it, or can't push to it, reports a failure instead of working in another repository.
+- Each developer stores the routine's fire URL and token in Secrets Manager at `slop/prod/routines/<userId>/default`; slop builds the path from the triggerer. If the triggerer has no routine, slop falls back to the board's default routine owner.
+- A routine's cloud environment has a fixed set of repositories, so a developer can also store one routine per board (`slop/prod/routines/<userId>/<boardId>`, as Secrets Manager names can't hold `#`; locally `<email>#<boardId>` in `.routines.json`), used before their default. Either way the routine's environment must include the board's repository, with the Claude GitHub App installed on it. The fire text names the board's repository, and a session that doesn't have it, or can't push to it, reports a failure instead of working in another repository.
 - The triggerer is the person whose session created the glob, where slop can determine it.
 - Usage, the daily run cap, commits and PRs belong to the routine owner; time follows the planner until a human picks the glob up (slop stores both). Only the routine owner can teleport into a run.
 - Sessionator's sstor --routine-setup command handles routine setup and storing the secret.
@@ -376,7 +376,7 @@ The **size check** (as built, s15f28) is the same idea for globs that are bigger
 
 - Slop reaches the repository through a `CodeHost` port (provision, labels, close, reopen, delete branch, merge state, squash merge); the GitHub App is its only adapter, and a host-specific webhook adapter turns deliveries into the same state-machine events. Another host (GitLab, Forgejo) would mean a new adapter pair, but routines and Claude's auto-fix only work with GitHub today, so that is the real lock-in.
 
-- Slop's GitHub operations (branches, PRs, merges, check results) use the app's installation tokens, acting as `slop[bot]`. The private key lives in Secrets Manager.
+- Slop's GitHub operations (branches, PRs, merges, check results) use the app's installation tokens, acting as `slop[bot]`. The private key lives in Secrets Manager (`slop/prod/github-app`, written by the manifest flow).
 - The app is allowed by branch protection to merge subs to master once required checks pass.
 - One board maps to one repo.
 
@@ -496,7 +496,7 @@ Slop is one portable Docker image running as a single instance, backed by Postgr
 | Sign-in | Cognito federated to IAM Identity Center |
 | GitHub | GitHub App with installation tokens; source stays on GitHub |
 | CodeBuild events | EventBridge API destination posting to slop's webhook with an API key header |
-| Secrets | Environment variables for configuration; Secrets Manager for sensitive credentials (GitHub App key, routine fire tokens), read via the EC2 instance role |
+| Secrets | Environment variables for configuration; Secrets Manager for sensitive credentials (GitHub App key, routine fire tokens), read via the EC2 instance role: with `SECRETS=aws` the server reads `slop/prod/{signing-secret,cognito-board-client-secret,slack-signing-secret,slack-bot-token,github-app}` at start (a missing required one stops it, naming the secret) and routines on demand, cached for `SECRETS_CACHE_SECONDS` (30) |
 | Infrastructure | CDK for the AWS resources (Cognito, S3, IAM, EventBridge, host) |
 
 **Auth**
