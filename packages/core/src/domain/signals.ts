@@ -879,7 +879,7 @@ export const SIGNAL_QUIET_MS = 12 * 7 * 24 * 60 * 60 * 1000;
 export const SIGNAL_RERAISE_FACTOR = 1.5;
 
 /** Per-board background jobs of the self-improvement pipeline (`board_jobs`). */
-export const BOARD_JOBS = ['mining', 'consolidation', 'effect_check', 'sub_limit'] as const;
+export const BOARD_JOBS = ['mining', 'consolidation', 'effect_check', 'sub_limit', 'intake_outcome'] as const;
 export type BoardJobName = (typeof BOARD_JOBS)[number];
 
 export type BoardJobResult =
@@ -938,6 +938,15 @@ export type BoardJobResult =
       readonly waiting: number;
       /** Bug references skipped this run after `MAX_ANSWER_ATTEMPTS` asks without a usable answer (absent when none). */
       readonly gaveUp?: number;
+    }
+  | {
+      readonly kind: 'intake_outcome';
+      /** Snapshots rebuilt for globs that had none, and snapshots whose embedding was filled. */
+      readonly backfilled: number;
+      readonly embedded: number;
+      /** Outcomes recorded for merged globs, and earlier ones refreshed once 14 days had passed. */
+      readonly recorded: number;
+      readonly refreshed: number;
     }
   /**
    * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.

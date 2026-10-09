@@ -1,5 +1,5 @@
 import type { BoardService, GlobService, Result, SplitInfo } from '@slop/core';
-import { AGENT_KB_APPROVALS, CATEGORIES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, ROLES, SLOP_TYPES, STATUSES, isMine, listOf, machine, needsHuman } from '@slop/core';
+import { AGENT_KB_APPROVALS, CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, ROLES, SLOP_TYPES, STATUSES, isMine, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -106,6 +106,17 @@ export const createGlobSchema = z.object({
   after: z.array(z.string().min(1)).max(20).optional(),
   /** Files intake guessed the work changes: with the plan, they decide whether the merge policy's exclusive paths hold it. */
   files: z.array(z.string().min(1).max(200)).max(20).optional(),
+  /** What the intake proposal behind the form said, passed back so the glob's snapshot records it (the request is the text intake read). */
+  intake: z
+    .object({
+      request: z.string().min(1).max(20000),
+      categoryConfidence: z.enum(CONFIDENCES).nullable().default(null),
+      reason: z.string().max(300).nullable().default(null),
+      model: z.string().max(200).nullable().default(null),
+      promptVersion: z.number().int().nullable().default(null),
+      examples: z.array(z.string().min(1).max(40)).max(10).default([]),
+    })
+    .optional(),
 });
 
 export const splitGlobSchema = z.object({
@@ -365,8 +376,11 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
+    const { intake, ...fields } = body;
     const created = await globs.create(email, {
-      ...body,
+      ...fields,
+      source: 'web',
+      ...(intake === undefined ? {} : { intake: { ...intake, source: 'web' } }),
       plan: body.plan ?? body.summary,
       boardId: Number(c.req.param('b')),
     });

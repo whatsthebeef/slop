@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService } from '@slop/core';
+import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
 import { ARTIFACT_KINDS, CATEGORIES, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -146,6 +146,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       let suggestedAfter: readonly string[] = [];
       // The write-up intake made from the request: plan.md v1 unless the caller gave a plan or summary.
       let proposedPlan: string | null = null;
+      // What intake saw and decided, for the glob's snapshot.
+      let intakeRecord: IntakeRecord | null = null;
       if (input.title === undefined) {
         if (input.input === undefined || input.input.trim() === '') {
           return { ...json({ code: 'invalid_input', message: 'Pass a title, or the request as input' }), isError: true };
@@ -165,6 +167,15 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         fields = { ...proposed, autoTrigger: input.autoTrigger ?? proposal.value.autoTrigger };
         suggestedEnvironment = environment;
         proposedPlan = plan;
+        intakeRecord = {
+          request: input.input,
+          source: 'mcp',
+          categoryConfidence: proposal.value.categoryConfidence,
+          reason: proposal.value.categoryReason,
+          model: proposal.value.model,
+          promptVersion: proposal.value.promptVersion,
+          examples: proposal.value.examples.map((e) => e.globId),
+        };
         files = proposal.value.files;
         suggestedAfter = proposal.value.suggestedAfter;
       }
@@ -173,6 +184,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         ...fields,
         plan: input.plan ?? proposedPlan ?? input.summary ?? input.input ?? '',
         planBy: 'sessionator',
+        source: 'mcp',
+        ...(intakeRecord === null ? {} : { intake: intakeRecord }),
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
         ...(input.after === undefined ? {} : { after: input.after }),

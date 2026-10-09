@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import { IntakeService, LlmUnavailable, waitedForIn } from '../src/app/intake-service.js';
+import { INTAKE_PROMPT_VERSION } from '../src/domain/intake-learning.js';
 import type { Result } from '../src/domain/errors.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -44,6 +45,12 @@ describe('intake', () => {
       autoTriggerReason: null,
       files: [],
       suggestedAfter: [],
+      categoryConfidence: null,
+      categoryReason: null,
+      examples: [],
+      needsConfirmation: false,
+      model: null,
+      promptVersion: INTAKE_PROMPT_VERSION,
     });
   });
 
