@@ -1,3 +1,4 @@
+import { isValidTimeZone } from '@slop/core';
 import { z } from 'zod';
 
 /** The background jobs a server starts; `SLOP_JOBS` picks them. */
@@ -86,6 +87,14 @@ const schema = z.object({
       }
       return new Set(names.filter(isJob));
     }),
+  /**
+   * The one time zone working hours (09:00–17:00, weekdays) are counted in for everyone's time reports: an IANA name.
+   * Servers run in UTC, so it is a setting rather than the server's own zone.
+   */
+  SLOP_WORK_TIME_ZONE: z
+    .string()
+    .default('UTC')
+    .refine(isValidTimeZone, { message: 'SLOP_WORK_TIME_ZONE: not a known IANA time zone (e.g. UTC, Europe/London)' }),
   /** The Slack app's signing secret and bot token (xoxb-...); the Send to slop shortcut is off without both. */
   SLACK_SIGNING_SECRET: z.string().optional(),
   SLACK_BOT_TOKEN: z.string().optional(),

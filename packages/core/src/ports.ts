@@ -10,6 +10,7 @@ import type { InboxItem, InboxLink, InboxStatus, NewInboxItem } from './domain/i
 import type { IntegrationToken } from './domain/integration-tokens.js';
 import type { Candidate, ItemStatus, KnowledgeItem, NewChunk, NewKnowledgeItem, PendingChunk, SearchQuery, SourceType } from './domain/search.js';
 import type { DiffSummary } from './domain/sub-gate.js';
+import type { GlobReportFacts } from './domain/time-tracking.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
@@ -49,6 +50,11 @@ export interface Tx {
   getGlob(id: string): Promise<Glob | null>;
   /** The globs with these IDs, in no particular order (missing ones are left out). */
   getGlobs(ids: readonly string[]): Promise<Glob[]>;
+  /**
+   * Just what a time report needs (id, board, planner, category, type) for the globs with these IDs, missing ones left
+   * out. Takes any number of IDs: they go to the database as one parameter, not one each.
+   */
+  globFacts(ids: readonly string[]): Promise<GlobReportFacts[]>;
   /** Inserts a new glob; returns false if the ID already exists. */
   insertGlob(glob: Glob, creationKey: string | null): Promise<boolean>;
   /** Writes `glob` if the stored version is still `expectedVersion`; returns false otherwise. */
@@ -209,6 +215,11 @@ export interface Tx {
 
   /** A board's events at or after `since` (of `types`, when given), oldest first (events carry no board: joined through globs). */
   listBoardEvents(boardId: number, since: string, types?: readonly DomainEventType[]): Promise<DomainEvent[]>;
+  /**
+   * Every board's events of `types` before `until`, oldest first, in log order (time tracking replays them whole). Each
+   * event's `data` keeps only the top-level `dataKeys` it has, so the replay doesn't load whole payloads.
+   */
+  listEventsUntil(until: string, types: readonly DomainEventType[], dataKeys: readonly string[]): Promise<DomainEvent[]>;
   /**
    * A board's artifact versions of `kinds` created at or after `since`, oldest first, without content except
    * for `ARTIFACT_KINDS_WITH_CONTENT` (mining reads review rounds and plan changes).

@@ -30,7 +30,7 @@ Call `get_glob(id)` before anything else. It returns the status, version, genera
   - `super`: do not run the phases. Follow **Super mode** instead.
 - The glob's branch is the glob ID itself (e.g. `s1t4`). sstor (or the routine's checkout) has already put you on it. **Do not create branches.** Never commit to or push `<base>`.
 
-**Uploading artifacts:** the plan, decision log, postplan and local review are files, so upload them from the file instead of typing their text into a tool call. Anything over a few KB: in a local session run `slop put-artifact <id> --kind <kind> --file <path> [--commit <sha>] [--agent-set <n>] [--review-stats '<json>'] [--run <runId>]`; in a routine (or wherever the `slop` CLI isn't installed) call `artifact_upload_url(id, kind, commitSha, agentSetVersion, reviewStats, runId)` with the same fields and then `curl --data-binary @<path> '<url>'` (the link is single use and lasts 5 minutes; if curl can't reach slop, fall back to `put_artifact`). Keep inline `put_artifact` for small ones. Wherever this file says `put_artifact(id, kind, content, …)` for a file, this is how to send it.
+**Uploading artifacts:** the implementation record and local review are files, so upload them from the file instead of typing their text into a tool call. Anything over a few KB: in a local session run `slop put-artifact <id> --kind <kind> --file <path> [--commit <sha>] [--agent-set <n>] [--review-stats '<json>'] [--run <runId>]`; in a routine (or wherever the `slop` CLI isn't installed) call `artifact_upload_url(id, kind, commitSha, agentSetVersion, reviewStats, runId)` with the same fields and then `curl --data-binary @<path> '<url>'` (the link is single use and lasts 5 minutes; if curl can't reach slop, fall back to `put_artifact`). Keep inline `put_artifact` for small ones. Wherever this file says `put_artifact(id, kind, content, …)` for a file, this is how to send it.
 
 Every `put_artifact`, `report_failure` and `submit_learning` call includes `agentSetVersion`, read from `.claude/slop-agent-set.json`, and every commit carries the trailer `Slop-Agent-Set: <version>` with the same version, so slop can relate outcomes to the agent instructions that produced them.
 
@@ -68,7 +68,7 @@ Everything specific to the board and its project (build commands, conventions, r
 - Build, test, lint, format and dependency-check commands always come from the board's build document; never assume or hard-code them. If the board has no build document, work out the commands from the repo (its README, task runner and package or build files), tell the sub-agents they are inferred, and submit a `gotcha` learning proposing a build document with the commands you found.
 - Give the learnings file to every sub-agent, telling it these are approved decisions, gotchas and patterns from earlier globs.
 
-Use `search_text`, `search_semantic` and `search_changes` when you need history beyond the context bundle.
+Use `search_text(board, query, mode?, from?, to?, glob?, group?, sourceTypes?)` for exact words, names and file paths, `search_semantic` (same parameters) when you don't know the words used, `search_changes(board, query or path, from?, to?)` for why a file or area changed, and `ask_board(board, question, globId?)` for a plain-words question answered from the board's records with citations ("why did we decide X"); `mode` is `current` (default) or `all_time`. Results are cited and labelled when superseded or legacy. `get_context` also returns a `related` section: the board's existing material on the glob's title and summary.
 
 ## Server URL and browser testing
 
@@ -85,7 +85,8 @@ Each phase writes `.reviews/<id>-<phase>.md`. These files let the developer revi
 | Phase | Output file | Contents |
 |-------|-------------|----------|
 | 1 | `.reviews/<id>-context.md` | Glob fields, plan.md, context bundle, group siblings, clarifications or assumptions |
-| 2 | `.reviews/<id>-plan.md` | Proposals from the investigator, selected proposal, amendments |
+| 2 | `.reviews/<id>-plan.md` | Proposals from the investigator and the selected proposal (the alternatives stay here, local only) |
+| 2–6 | `.reviews/<id>-record.md` | The implementation record, started in Phase 2 and pushed to slop (see Implementation record) |
 | 3 | `.reviews/<id>-implementation.md` | Summary of changes made by the implementer |
 | 4 | `.reviews/<id>-tests.md` | Test report from the tester |
 | 5 | `.reviews/<id>-review.md` | Review findings from the change_reviewer |
@@ -117,6 +118,24 @@ Spend agent effort where it finds problems: reading the change. Don't repeat wor
 - **No new end-to-end or browser tests** unless the board's docs or the developer ask for one. Cover behaviour with unit and integration tests.
 - **Precise briefs.** Give sub-agents the files and functions to start from, the acceptance criteria and the decisions already made, so they don't explore what you already know.
 
+## Implementation record
+
+Every glob, of every type, has one **implementation record**: a living document in one format, kept up to date as work proceeds and stored as the `implementation_plan` artifact (`put_artifact(id, kind: 'implementation_plan', …)`; `kind: 'postplan'` is an old alias that writes the same record). plan.md stays the planner's intent and "Done when"; the record says what was done, and why. It is the only place the reasoning survives once the worktree is deleted, and it ranks above plan.md where the two disagree (merged code and the record, then plan.md).
+
+Keep it in `.reviews/<id>-record.md` and use this format:
+
+```
+# Implementation record: <id> — <title>
+## Approach         what we're doing and why (the chosen proposal; for supers, as agreed so far)
+## Decisions        each: **Decision.** Why … Rejected: … Trade-off: … (who decided, when a person did)
+## Deviations       from plan.md, with reasons
+## What was built   by area, with commits
+## Traps            what went wrong or would surprise the next person, and how it was handled
+## Open items       anything left for later or for another glob
+```
+
+Keep it concise: no file lists, test counts or narration, since git, the local review and the code hold those. Only what they don't already say. About 3–15 KB depending on the size of the glob. Rewrite sections rather than appending to them. `.reviews/<id>-implementation.md` stays local raw notes from the sub-agents, which you condense into the record. Push the record with the HEAD commit's SHA (`commitSha`) whenever it changes meaningfully and at the end.
+
 ## Workflow
 
 Run all phases sequentially without pausing, except where a phase says to ask the developer. Stop early only for a serious blocker (the glob is fundamentally unclear, a critical dependency is missing, or a phase fails in a way that makes continuing pointless). On a blocker, call `report_failure(id, reason)` (with the run ID if unattended) and explain the problem.
@@ -126,8 +145,8 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 ### Phase 1: Context
 
 1. Call `get_context(id)`. It returns a cited bundle: plan.md, attachments, active decisions, linked meeting excerpts, related past globs with change summaries, current test results and relevant conventions.
-   - The bundle carries plan.md (the postplan for supers) and any Clarifications or Assumptions attachments in full, and only **lists** the other artifacts (implementation plan, local reviews, other attachments) with kind, label, version, commitSha, size and a one-line description. Don't fetch them by default.
-   - **Resuming** (`--from`) **or revisiting** a glob that already has work on it: fetch the implementation plan (a super's is its decision log) with `get_context(id, include: ['implementation_plan'])` or `get_artifact(id, 'implementation_plan')`, and any other listed artifact you need (`attachment:<label>`, `local_review`) the same way. Add what you fetch to the context file.
+   - The bundle carries plan.md, the implementation record (once one exists) and any Clarifications or Assumptions attachments in full, and only **lists** the other artifacts (local reviews, other attachments) with kind, label, version, commitSha, size and a one-line description. Don't fetch them by default.
+   - **Resuming** (`--from`) **or revisiting** a glob that already has work on it: the record is already in the bundle: save it as `.reviews/<id>-record.md` and carry on from it. Fetch any other listed artifact you need (`attachment:<label>`, `local_review`) with `get_context(id, include: [...])` or `get_artifact`. Add what you fetch to the context file.
 2. If the glob has a group, call `list_globs(board, group)` for its siblings (key, title, status, type). The group replaces the old epic; siblings replace sibling tasks.
 3. Fetch the board knowledge as described under Board knowledge.
 4. Write `.reviews/<id>-context.md` containing:
@@ -156,15 +175,16 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 4. Choose a proposal:
    - **Interactive:** summarise each proposal (name, one-line summary, complexity, key trade-off), state the recommendation and ask the developer to choose or give further instructions.
    - **Unattended:** take the recommended proposal.
-5. Append `## Selected Proposal` to the plan file with the choice and any instructions, then an empty `## Amendments` section.
-6. Push the plan to slop: `put_artifact(id, kind: 'implementation_plan', content: <plan file>)`, with the run ID if unattended.
-7. **Amendments:** whenever a later phase departs from the selected proposal (a different approach, an extra change, something dropped), add a dated line to `## Amendments` saying what changed and why, and push the plan again with `put_artifact`.
+5. Append `## Selected Proposal` to the plan file with the choice and any instructions. The investigator's alternatives stay in this local plan file; they are not pushed.
+6. **Start the record** in `.reviews/<id>-record.md` from the chosen proposal: `## Approach` (the choice and why), `## Decisions` (the choices already made, with rejected alternatives), the other sections empty, and push it: `put_artifact(id, kind: 'implementation_plan', content: <record file>)`, with the run ID if unattended. Do this as soon as the choice is made, so a restarted run or a person can resume from it.
+7. **Deviations:** whenever a later phase departs from the selected proposal or plan.md (a different approach, an extra change, something dropped), add a dated line to the record's `## Deviations` saying what changed and why, and push the record again with `put_artifact`.
 
 ### Phase 3: Implementation
 
-1. Read the context file and the plan file (including the selected proposal and amendments).
+1. Read the context file, the plan file (with the selected proposal) and the record so far.
 2. Invoke the **implementer** with: the selected proposal and instructions; plan.md's acceptance criteria (or bug fields, stating this is a bug fix and the root cause must be fixed, not the symptom); the context section; group siblings; clarifications or assumptions verbatim; the learnings file path; the board's build doc and relevant board doc paths; the output path `.reviews/<id>-implementation.md`.
 3. The implementer writes its summary (files changed, root cause for bugs, decisions made).
+4. **Update the record:** add the implementer's decisions (with rejected alternatives and trade-offs), deviations and traps to `.reviews/<id>-record.md` (`## Decisions`, `## Deviations`, `## Traps`). Condense; don't paste the summary.
 
 ### Phase 4: Testing
 
@@ -174,6 +194,7 @@ Skip this phase for **low** risk work when the implementer added or updated test
 2. Invoke the **tester** with: plan.md's acceptance criteria (or for bugs the bug fields, stating that a regression test must reproduce the original bug and verify the fix); clarifications or assumptions verbatim; the learnings file path; the implementation summary; the board's build doc and relevant board doc paths; the report path `.reviews/<id>-tests.md`; the server URL if any.
 3. The tester returns `PASS` or `FAIL`.
 4. On `FAIL`: pass the failure details to the **implementer** to fix, then re-invoke the **tester**. If it still fails after one fix attempt, note the failures and continue.
+5. Add what the tester found that the next person should know (a test that failed because of how the code was written, an environment trap) to the record's `## Traps`.
 
 ### Phase 5: Review cycle (max 3 rounds)
 
@@ -183,12 +204,14 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
 2. The reviewer reviews all changes on the branch against `origin/<base>` (after `git fetch origin <base>`), classifies each finding as `IN-SCOPE` or `SUGGESTION`, appends to the review document and returns its verdict.
 3. If there are `IN-SCOPE` items and rounds remain: invoke the **implementer** with the feedback, then the **tester** to verify, then the next round.
 4. Otherwise the cycle ends.
+5. After each round, fold in what the reviewer's findings and the implementer's fixes changed: a decision the review overturned goes in `## Decisions` or `## Deviations`, a surprise in `## Traps`.
 
 ### Phase 6: Finalise
 
 1. **Format** with the format command from the board's build doc, if it has one.
-2. **Stage** code changes, excluding `.reviews/`: `git add -A && git reset HEAD .reviews/`. Check `git diff --cached --name-only | grep '^\.reviews/'` returns nothing; unstage anything it lists.
-3. **Commit** (use a HEREDOC), without asking for approval:
+2. **Complete the record:** fill `## What was built` (by area; add the commit SHAs after step 5) and `## Open items` (anything left for later, suggestions you didn't take), and check the other sections against the final code. Step 9 pushes it with the final HEAD commit's SHA, after the commit and merge steps below have set HEAD.
+3. **Stage** code changes, excluding `.reviews/`: `git add -A && git reset HEAD .reviews/`. Check `git diff --cached --name-only | grep '^\.reviews/'` returns nothing; unstage anything it lists.
+4. **Commit** (use a HEREDOC), without asking for approval:
    ```
    <id>: <glob title>
 
@@ -200,23 +223,23 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
    Slop-Run: <runId>
    ```
    3–6 concise bullets from the implementation summary. `<version>` is the number in `.claude/slop-agent-set.json`, alone on the trailer line; add the `Slop-Run` trailer only when unattended.
-4. **Merge the base branch** (`baseBranch` from `get_board`), so conflicts are resolved by the agent that wrote the change: `git fetch origin <base> && git merge origin/<base>`. Skip if already up to date.
+5. **Merge the base branch** (`baseBranch` from `get_board`), so conflicts are resolved by the agent that wrote the change: `git fetch origin <base> && git merge origin/<base>`. Skip if already up to date.
    - On conflicts, resolve them keeping both sides' intent. The plan, the context file and `git log origin/<base>` show what the other change meant.
    - **Unattended:** resolve without asking. Record what was resolved and how in the merge commit message and as an `Assumptions` attachment. If a conflict can't be resolved with confidence (a real clash of behaviour), `git merge --abort` and call `report_failure` with "Merge conflict with <base> in <files> needs a person" instead of guessing.
    - **Interactive:** show the developer the conflicting hunks with a proposed resolution and ask before committing.
    - Commit the merge as `<id>: Merge <base>` with the `Slop-Agent-Set` trailer (and the `Slop-Run` trailer if unattended).
-5. **Full checks**: run the board's full checks once on the merged result (or the fast checks where its build doc leaves full checks to CI). If something fails, hand it to the implementer, re-run the failed check, note it in the review document and commit the fix as `<id>: <what was fixed>`.
-6. **Local review:** push `.reviews/<id>-review.md` followed by `.reviews/<id>-tests.md` as one artifact: `put_artifact(id, kind: 'local_review', content, commitSha: <HEAD sha>, reviewStats: { riskTier, reviewRounds, maxReviewRounds, testFailRounds })`, with the run ID if unattended. `reviewStats` gives the risk tier, the Phase 5 rounds run and allowed, and how many Phase 4 FAIL → fix loops there were. Slop stores it verbatim and shows it under the card's local review icon.
-7. **Learnings:** extract what a developer working on related code should know, from the implementation summary, review document and test report:
+6. **Full checks**: run the board's full checks once on the merged result (or the fast checks where its build doc leaves full checks to CI). If something fails, hand it to the implementer, re-run the failed check, note it in the review document and commit the fix as `<id>: <what was fixed>`.
+7. **Local review:** push `.reviews/<id>-review.md` followed by `.reviews/<id>-tests.md` as one artifact: `put_artifact(id, kind: 'local_review', content, commitSha: <HEAD sha>, reviewStats: { riskTier, reviewRounds, maxReviewRounds, testFailRounds })`, with the run ID if unattended. `reviewStats` gives the risk tier, the Phase 5 rounds run and allowed, and how many Phase 4 FAIL → fix loops there were. Slop stores it verbatim and shows it under the card's local review icon.
+8. **Learnings:** extract what a developer working on related code should know, from the implementation summary, review document and test report:
    - `decision` — a choice made and why;
    - `gotcha` — an unexpected issue and how it was resolved;
    - `pattern` — a new pattern future work should follow;
    - `agent-behaviour` — something an instruction would have prevented or should keep doing: a review finding the implementer should never have produced, a test pass that failed because of how the code was written, a plan that needed heavy amendment, and above all **any time the developer corrected you or a sub-agent** in the session (quote the correction). Name the agent concerned.
 
    Skip trivial or glob-specific details; most globs produce 0–3. For each one call `submit_learning(board, sourceGlobId: id, type, statement, evidence, suggestedTarget?)`. Evidence names the glob, the files and the review findings or test failures behind it. Never edit `.sstor/docs/`, `.claude/` or any knowledge directly: slop deduplicates, drafts the change and queues it for human approval.
-8. **Push and mark ready:**
-   - **Unattended:** run the pre-push check (see Unattended mode), `git push origin <id>`, then call slop's `mark_ready` with the glob ID and your run ID; slop marks the draft PR ready through its GitHub App. Do not use `gh` or open a PR. The PR title is already `<id>: <title>`; do not change it. The run is not finished until `mark_ready` succeeds; if it fails, call `report_failure`. Then **subscribe to the PR's activity** (see Auto-fix below): nothing watches the PR for you, and without the subscription failed checks never reach this session. Apply the pre-push check before every auto-fix push.
-   - **Interactive:** `git push origin <id>`. Then ask the developer whether to mark the PR ready for review now. If yes, run `/finalise <requestId>` (generate the request ID with `uuidgen`; local review and learnings are already submitted for this commit, so /finalise will skip them), then call slop's `mark_ready` with the glob ID. If not, tell them to run `sstor --ready` from a terminal when they are. Never run `sstor` yourself: it is the developer's terminal tool, it drives this session, and it cannot run inside the sandbox.
+9. **Push and mark ready:**
+   - **Unattended:** run the pre-push check (see Unattended mode), push the record (`put_artifact(id, kind: 'implementation_plan', content: <record file>, commitSha: <HEAD sha>)`, with the run ID), `git push origin <id>`, then call slop's `mark_ready` with the glob ID and your run ID; slop marks the draft PR ready through its GitHub App. Do not use `gh` or open a PR. The PR title is already `<id>: <title>`; do not change it. The run is not finished until `mark_ready` succeeds. **If `mark_ready` refuses because the branch conflicts with `<base>`, don't end the run:** the PR is still a draft and no checks will run on it. Do step 4 again (`git fetch origin <base> && git merge origin/<base>`, resolve as it describes, renumbering migrations with `scripts/dev.sh renumber-migrations` where the board's build doc says to), run the fast checks, apply the pre-push check, push, and call `mark_ready` again. If you can't resolve it with confidence, `git merge --abort` and call `report_failure`. A `mark_ready` that succeeds with a `warning` that the branch is behind `<base>` means main moved without a conflict: merge it, run the fast checks and push before you stop. Any other failure: call `report_failure`. Then **subscribe to the PR's activity** (see Auto-fix below): nothing watches the PR for you, and without the subscription failed checks never reach this session. Apply the pre-push check before every auto-fix push.
+   - **Interactive:** push the record as above (no run ID), then `git push origin <id>`. Then ask the developer whether to mark the PR ready for review now. If yes, run `/finalise <requestId>` (generate the request ID with `uuidgen`; local review and learnings are already submitted for this commit, so /finalise will skip them), then call slop's `mark_ready` with the glob ID. If not, tell them to run `sstor --ready` from a terminal when they are. Never run `sstor` yourself: it is the developer's terminal tool, it drives this session, and it cannot run inside the sandbox.
 
 ## Auto-fix (watching the PR)
 
@@ -236,24 +259,15 @@ There are no board transitions to make: slop learns about pushes, the ready PR a
 
 Supers are pairing sessions between a developer and the PO. The developer drives; you do not run the phases.
 
-- On start (interactive only), call `pick_up` as above, then `get_context`, fetch the board knowledge, and write `.reviews/<id>-context.md` as in Phase 1 steps 1–4. Supers use the **postplan** rather than plan.md as the living record; until the first postplan exists, `get_context` gives plan.md as the starting intent. When the glob already has work on it, also fetch its decision log (`get_artifact(id, 'implementation_plan')`) so you know why earlier choices were made; `get_context` only lists it.
+- On start (interactive only), call `pick_up` as above, then `get_context`, fetch the board knowledge, and write `.reviews/<id>-context.md` as in Phase 1 steps 1–4. plan.md is the starting intent; when the glob already has work on it, the context bundle also carries its implementation record (save it as `.reviews/<id>-record.md`), so you know why earlier choices were made.
 - **plan.md:** when the glob's spec needs rewriting (the intent changed, the PO and developer agreed a new scope), read it with `get_plan` and write the new text with `save_plan(id, version, content)`, passing the plan version you read. Never put the spec in `update_glob`'s `summary`: that leaves no plan history.
 - **Environment:** note the glob's `environment` from `get_glob` in the context file and tell the developer which environment the branch deploys to (or that none is set; they choose one with `sstor --glob <id> --env <name>`, `slop pick-up <id> --env <name>` or the glob view). Never change it yourself.
 - Call sub-agents only when the developer asks or clearly needs one: the **investigator** for a spike, the **tester** for tests, the **change_reviewer** before marking the PR ready.
-- **Postplan:** keep `.reviews/<id>-postplan.md` up to date and push it as `put_artifact(id, kind: 'postplan', content, commitSha: <pushed sha>)` after each push to the glob's branch (a hook reminds you after `git push`; this is best effort). Build it from the session conversation and `git diff origin/<base>...HEAD` (after `git fetch origin <base>`; never the local `<base>`, which can be stale). Use this structure:
-  ```
-  # Postplan: <id> — <title>
-  ## Intent            what the PO and developer set out to do
-  ## What was built    by area, referencing files
-  ## Decisions         each with who decided and why
-  ## Deviations        from the original intent, and why
-  ## Open items        anything left for later or for another glob
-  ```
-- **Decision log:** keep `.reviews/<id>-implementation.md` as each sub-agent's notes, as today. Alongside each postplan push, condense it (and the session conversation) into `.reviews/<id>-decisions.md` and push it as `put_artifact(id, kind: 'implementation_plan', content, commitSha: <pushed sha>)`. The worktree is deleted when the glob is done, so this is the only place the reasoning survives. Per area, write bullets of the form `**Decision.** Why … Rejected … Trade-off …` and `**Trap:** … → handled by …`. Include only what the code, `git log` and the postplan don't already say: no file lists, test counts or narration. Rewrite it each time rather than appending; about 8–15 KB for a large super. (Sames and subs push their Phase 2 implementation plan as usual.)
+- **Implementation record:** the same record, in the same format, as every other glob (see Implementation record). Start it at the first agreement with the developer, in `.reviews/<id>-record.md`, and push it as `put_artifact(id, kind: 'implementation_plan', content, commitSha: <pushed sha>)` after each push to the glob's branch (a hook reminds you after `git push`; this is best effort). Build it from the session conversation, `.reviews/<id>-implementation.md` (each sub-agent's raw notes, as today) and `git diff origin/<base>...HEAD` (after `git fetch origin <base>`; never the local `<base>`, which can be stale). Rewrite it each time rather than appending; about 8–15 KB for a large super. Include only what the code, `git log` and the plan don't already say.
 - **Deploys:** when the glob has an environment, each push deploys that commit to it (slop starts the board's deploy job; nothing runs locally). After each push, call `get_glob` and tell the developer the state of the push's deploy from its `deploys` (newest first): queued behind another deploy, deploying, live, or failed with its error and log link. The push's deploy can take a few seconds to appear; check once more if it isn't there yet, then move on. Without an environment, say nothing deploys.
-- **One super at a time:** never create a super from inside a super. Keep related work in this super and land finished pieces with **Merge and continue** (the developer presses it, on the board or with `slop merge --continue`, once the PR is ready for review and the postplan is at its head). Before they do, push the postplan for the head; once the merge is observed, merge `<base>` back into the branch before the next push, so the next draft PR shows only new work.
+- **One super at a time:** never create a super from inside a super. Keep related work in this super and land finished pieces with **Merge and continue** (the developer presses it, on the board or with `slop merge --continue`, once the PR is ready for review and the implementation record is at its head). Before they do, push the implementation record for the head; once the merge is observed, merge `<base>` back into the branch before the next push, so the next draft PR shows only new work.
 - **Other work, now:** if the developer wants unrelated work started now, don't switch this worktree or branch. Create the glob (a sub or same) with a handover in its summary (what was found, where, and what to do), and tell the developer to start it in its own session with `sstor --glob <id>`.
-- **Several globs at once:** before creating them, check whether their summaries name the same files or functions. If they do, fold them into one glob, or say in the later one's summary to start only after the earlier one merges. Never tell a glob to "include the minimal part" of a sibling's fix that is still in progress.
+- **Several globs at once:** before creating them, check whether their summaries name the same files or functions. If they do, fold them into one glob, or make the later one start after the earlier one: pass `after: [<id>]` to `create_glob` (`slop new --after <id>`, or `update_glob` with `after` while it hasn't started). A sub then waits in Planning, with no branch or run, until the earlier glob merges and starts by itself on the new main; a same is refused Start until then (a person can pick it up with a warning, or Start anyway). Don't write "start only after sXtY" in a summary: nothing enforces it. Globs that would both change a path the board's merge policy marks exclusive (the board's knowledge, e.g. a migrations directory) are held for each other automatically when the plan names that path or a migration, so don't add `after` for those alone. Never tell a glob to "include the minimal part" of a sibling's fix that is still in progress.
 - **Red base branch:** fix it in exactly one place. Check `git log origin/<base>` and the open globs first, make the fix in one glob, and don't create or start other globs on the broken base until that fix has merged.
 - **Ready for review:** run the change_reviewer, then `/finalise <requestId>` followed by `mark_ready` with the glob ID (or the developer runs `sstor --ready` from a terminal, which sends `/finalise` to this session itself). Never run `sstor` yourself. Never mark the PR ready without finalising.
 - **Commits** use `<id>: <title>` with bullets, as in Phase 6. Push only the glob's branch.
@@ -311,14 +325,23 @@ When CI fails on a commit whose local checks passed (Phase 6 full checks, a loca
 In every mode, not only in supers, check for overlap before creating side globs (several at once, or one while others are in flight):
 
 - Compare the files and functions each new glob's summary names with the other new globs' summaries. Also compare them with the branches of in-flight globs (`git diff origin/<base>...origin/<id>` after `git fetch`).
-- If two would edit the same code, fold them into one glob. Otherwise create the later one with "start only after `<id>` has merged" in its summary, and don't start it until that glob has merged.
+- If two would edit the same code, fold them into one glob. Otherwise make the later one wait with `after: [<id>]`, as the catalog describes. Don't start it until that glob has merged.
 - Noticing that two globs "touch the same code" is the signal to apply this rule. Don't create them side by side anyway.
+- Don't convert a waiting glob to a sub with `update_glob` while the glob it waits for is still open. Slop starts a routine run on the new sub straight away and ignores any "start only after X merges" in its summary. Keep it a same until that glob has merged, then convert it.
+
+In s15f11, s15f14 was in planning with "Start only after s15t18 has merged" in its summary. It was converted to a sub on 2026-10-08 at 15:55. Slop queued routine run d124783b immediately, while s15t18 was still open with failing checks.
 
 ### Routine runs
 
 Routine runs too often end with a person starting the run again or taking it over, often within the first hour. To make each unattended run either finish or hand over cleanly:
 
+- **Check the Slop tools first.** If neither the `mcp__slop__*` nor the `mcp__claude_ai_Slop__*` tools are in the session, you can't call `get_glob` or `report_failure`. Don't work around it: don't try the `slop` CLI, curl or the phases. Say in your final message that the Slop connector is missing, with the glob ID and run ID, and stop. Slop fails such a run after 5 minutes. In s15f20 a run started without the connector and sat Queued for 14 minutes.
 - **Leave a trail early.** Upload the Phase 2 plan as soon as it exists. Add an `Assumptions` attachment before Phase 3. A restarted run or a person can then resume with `--from` instead of starting from nothing.
+- **Merge `<base>` again right before the push.** `<base>` often moves while a run implements: one run's branch was cut 17 seconds before another glob merged a migration with the same number. The run then pushed without merging `<base>`, and its PR conflicted in 9 files.
+  - Run `git fetch origin <base> && git merge origin/<base>` immediately before the Phase 6 push, after the full checks and learnings, not only at step 4.
+  - Resolve conflicts as in Phase 6 step 4. If new commits came in, re-run the fast checks.
+  - Never push or call `mark_ready` on a branch that is missing commits from `origin/<base>`.
+  - If the change adds a Drizzle migration, compare its number with the latest migration on `<base>` after the merge. If `<base>` already uses that number or a higher one, renumber yours to come after `<base>`'s latest. Change the file name, its journal entry and its snapshot, and leave `<base>`'s migrations as they are. Then re-run the migration checks.
 - **Checks failing after slop updates the branch** (it merged `<base>` or re-ran checks). First rule out an inherited failure as the catalog describes. If it is not inherited, the failure comes from the merge with `<base>`.
   - Fetch the branch again (`git fetch origin <id> && git checkout -B <id> origin/<id>`).
   - Run the failing check's exact CI command locally.
@@ -331,3 +354,88 @@ Routine runs too often end with a person starting the run again or taking it ove
 
   The person who picks it up should not have to start again to find out.
 - **Submit an `agent-behaviour` learning** when a run needs a person, naming what would have let it finish.
+
+### Super mode: land strands early
+
+Conflicts grow with how long a super's branch lives and how much it overlaps `<base>`. Don't let finished strands pile up on one branch:
+
+- When a strand is finished, tested and reviewed, tell the developer it is ready to land with **Merge and continue** before starting the next one. Don't hold it back to land with later strands.
+- While a strand can't land yet, merge `<base>` into the branch after every push (`git fetch origin <base> && git merge origin/<base>`), not only before marking ready. Resolve conflicts as in Phase 6 step 4, re-run the fast checks, and renumber any Drizzle migration that `<base>` has overtaken (see Routine runs).
+- After each merge, check that tests which merged cleanly still typecheck. Clean-merging files can still be broken.
+
+In one super, five strands (about 25k lines) stayed on one branch for a day while seven globs merged to `<base>`. The merge afterwards left 8 conflicted files and 4 test files that no longer typechecked, and four migrations had to be renumbered by hand. Two of the strands had been ready to land that morning.
+
+### Merge conflicts when merging the base branch
+
+Purely additive conflicts are yours to resolve, even in an interactive session. Don't stop to ask the developer about them. They are conflicts where both sides added different things:
+
+- imports;
+- interface or type members, including `Omit<…>` key lists;
+- methods, including methods on test fakes such as a fake `CodeHost`;
+- settings or defaults entries;
+- list entries;
+- Drizzle migrations that `<base>` has overtaken. Renumber yours as described under Routine runs.
+
+To resolve them:
+
+- Keep both sides.
+- Run the type check and the tests on the merged result. They must pass before you commit the merge.
+- For migrations, check that there is no drizzle drift.
+- List what you resolved in the merge commit message.
+
+When both sides changed the same logic differently, the conflict is not additive. Stop and don't pick a side. In an interactive session, ask the developer. In a routine, `git merge --abort` and call `report_failure`.
+
+In s15f8, two merges of main conflicted only in additive ways. Keeping both sides gave fully passing tests (530/184 and 626/194) and no drizzle drift. The conflicts were in:
+
+- `github/client.ts` and `main.ts` imports;
+- the `ports.ts` Omit list;
+- `board-service.ts` settings and `memory-store.ts` defaults;
+- the fake `CodeHost`s in the server tests;
+- the drizzle journal and snapshots.
+
+### Handovers for subs and sames created from a super
+
+A sub or same created from inside a super branches from `<base>`, not from the super's branch. Its handover may rely only on code that is already on `origin/<base>`.
+
+- Before writing the handover, check that every file, function and type it names exists on `origin/<base>` (`git fetch origin <base>`, then `git grep <name> origin/<base>`).
+- If the work needs the super's unmerged code, or edits files the super is changing (`git diff --name-only origin/<base>...HEAD`), don't create the side glob. Do the work in the super. Or wait until that part has landed with **Merge and continue**, and create the glob then.
+- If the work depends on another glob that hasn't merged yet (it builds on that glob or feeds it), create it with `after: [<id>]`. A handover or summary that says "Starts after sXfY" always needs the matching `after`. Otherwise slop starts a routine run straight away, and that run can't proceed.
+
+In s15f8, s15b8 was created with a handover that pointed at `kb-dedupe.ts`, `longEnoughQuote` and `KbPossibleCoverage.shortQuote`. None of these were on main yet. Its routine failed at once ("Blocked on unmerged s15f8"), and the work was folded back into s15f8.
+
+s15f24's summary said it started after s15f21, the inbox it feeds, but it had no `after`. It was started while s15f21 was still implementing, and its run had to call `report_failure` in Phase 1.
+
+### Writing handovers for UI and layout fixes
+
+Don't prescribe a UI or layout change from reading the code alone. Check it in the running app before you write the handover:
+
+- Open the page with the Chrome DevTools MCP tools and toggle the classes or styles the handover will prescribe on the live page.
+- Measure the result: the element's width, whether it scrolls, whether its children overflow, and whether they are aligned. Put the before and after numbers in the handover.
+- If no server is running, say in the handover that the fix is unverified.
+
+Before prescribing a change to a line an earlier glob changed, read that glob's diff first, so its fix isn't undone. Use `git log -L <start>,<end>:<file>` or `search_changes(board, path)` to find the earlier glob.
+
+In s15f8, the s15t10 handover told the routine to remove `items-start` from the board's list row. That was exactly the change that undid s15b3's fix, and cards overflowed again. The s15b10 handover then prescribed `w-max`, which made the board scroll horizontally. Both handovers were written from reading the code. s15b11's fix, dropping `w-max`, was measured live first. The row went from 2730 px wide and scrolling to 1681 px with no scroll, with bottoms aligned and no overflow.
+
+### Uploading artifacts
+
+Upload long files (the implementation record, the local review) yourself, as the catalog describes. Never hand a verbatim upload through `put_artifact` to a helper agent. A helper can store a summary or placeholder instead of the file and still report success. Its output can also be cut off partway through.
+
+After each upload, check that the stored artifact matches the file. Compare its size with `wc -c <path>`, or its md5 with `md5sum <path>`. If they differ, upload it again directly.
+
+In s15f8, strand 2's local review was given to helper agents twice:
+
+- A Haiku helper stored the 57-byte placeholder "[full review and tests files combined with --- separator]" (artifact 65) and reported success. The findings pipeline then failed three times to split it.
+- A Sonnet helper's output was cut off by a safety classifier, which left 16 KB of the 66 KB file (artifact 66).
+
+Direct uploads checked by md5 matched the file (artifacts 68, 69, 76 and 77).
+
+### Checks that could not be run
+
+A check that was skipped has not passed. If a fast check (lint, type check, tests) can't run, for example because a dependency is missing, don't push and don't call `mark_ready` with that check still unrun:
+
+- Fix the environment first. Run the install command from the board's build doc, then run the check again.
+- If the check still can't run, treat it as a blocker. Call `report_failure` with the check, its first error and what you tried.
+- "Not checked" in a report is never a reason to go ahead with the Phase 6 push or an auto-fix push.
+
+In s15t12, the run said "I couldn't run eslint because @eslint/js isn't installed in this environment". It still pushed b462e02 and marked PR #50 ready. CI Lint then failed with 18 errors in `apps/server/test/renumber-migrations.test.ts`.
