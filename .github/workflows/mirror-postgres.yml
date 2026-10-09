@@ -2,6 +2,18 @@
 # registry, so CI doesn't hit Docker Hub's anonymous pull limit. Run it once (Actions > Run workflow)
 # before relying on the image, and again whenever the tag below changes. It also re-runs weekly to
 # pick up upstream patch releases.
+#
+# Docker Hub can rate-limit the copy itself (`toomanyrequests` on GitHub's shared runners), so the
+# copy is skipped when GHCR already holds the upstream digest and retries with backoff on a rate
+# limit. A scheduled run that still can't copy only warns: the previous GHCR image stays in place.
+#
+# One-off manual copy, when the mirror can't run (registry to registry, all platforms):
+#   gh auth refresh -s write:packages
+#   gh auth token | docker login ghcr.io -u <owner> --password-stdin
+#   docker buildx imagetools create --tag ghcr.io/<owner>/pgvector:pg17 pgvector/pgvector:pg17
+# Then make the package public (GitHub > Packages > pgvector > Package settings > Change visibility):
+# a package pushed from outside this repo's workflows isn't linked to the repo, so checks and
+# sub-gate can't pull it with GITHUB_TOKEN until it is public or linked.
 name: mirror-postgres
 
 on:
@@ -19,7 +31,7 @@ permissions:
 jobs:
   mirror:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       SOURCE: pgvector/pgvector:pg17
       TARGET: ghcr.io/whatsthebeef/pgvector:pg17
@@ -29,5 +41,29 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Copies every platform in the manifest list, without pulling layers onto the runner.
-      - run: docker buildx imagetools create --tag "$TARGET" "$SOURCE"
+      - name: Copy to GHCR
+        run: |
+          # Digest of the multi-arch index; empty when the image or tag doesn't exist.
+          digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"'; }
+          want=$(digest "$SOURCE")
+          if [ -n "$want" ] && [ "$(digest "$TARGET")" = "$want" ]; then
+            echo "$TARGET already at $want; nothing to copy"
+            exit 0
+          fi
+          # Copies every platform in the index, without pulling layers onto the runner.
+          for delay in 0 30 60 120 240 480; do
+            sleep "$delay"
+            if docker buildx imagetools create --tag "$TARGET" "$SOURCE" 2>copy.err; then
+              exit 0
+            fi
+            cat copy.err
+            grep -qiE 'toomanyrequests|rate limit|429' copy.err || break
+            echo "Rate limited; retrying after backoff"
+          done
+          msg="Could not copy $SOURCE to $TARGET; see the workflow header for the manual copy"
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            echo "::warning::$msg. The previous image stays in place."
+            exit 0
+          fi
+          echo "::error::$msg"
+          exit 1
