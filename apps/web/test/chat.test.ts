@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RequestError } from '../src/lib/api';
 import type { ChatCitation } from '../src/lib/api';
-import { askRequest, isAskKey, stateLabel, unavailableNotice } from '../src/lib/chat';
+import { hideSignedOff, isChatShortcut, stateLabel, unavailableNotice } from '../src/lib/chat';
 
 const cite = (patch: Partial<ChatCitation>): ChatCitation => ({
   n: 1, source: 'decision', sourceLabel: 'Decision', title: 'T', date: '2026-10-01T00:00:00.000Z', link: null, globId: null, status: 'active', supersededBy: null, ...patch,
@@ -26,17 +26,23 @@ describe('the chat panel helpers', () => {
   });
 });
 
-describe('asking the board chat from the search box', () => {
-  it('sends the trimmed text with the history setting, and nothing for an empty box', () => {
-    expect(askRequest('  why SQS?  ', false, 1)).toEqual({ id: 1, question: 'why SQS?', history: false });
-    expect(askRequest('why SQS?', true, 2)).toEqual({ id: 2, question: 'why SQS?', history: true });
-    expect(askRequest('   ', false, 3)).toBeNull();
+describe('opening the chat', () => {
+  const key = (k: string, mods: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean } = {}) => ({
+    key: k, metaKey: false, ctrlKey: false, altKey: false, target: null, ...mods,
   });
 
-  it('asks on Shift+Enter only; Enter and typing keep searching', () => {
-    expect(isAskKey({ key: 'Enter', shiftKey: true })).toBe(true);
-    expect(isAskKey({ key: 'Enter', shiftKey: false })).toBe(false);
-    expect(isAskKey({ key: 'a', shiftKey: true })).toBe(false);
-    expect(isAskKey({ key: 'Enter', shiftKey: true, isComposing: true })).toBe(false);
+  it('opens on / and on ⌘K or Ctrl+K, and on nothing else', () => {
+    expect(isChatShortcut(key('/'))).toBe(true);
+    expect(isChatShortcut(key('k', { metaKey: true }))).toBe(true);
+    expect(isChatShortcut(key('K', { ctrlKey: true }))).toBe(true);
+    expect(isChatShortcut(key('k'))).toBe(false);
+    expect(isChatShortcut(key('/', { ctrlKey: true }))).toBe(false);
+    expect(isChatShortcut(key('a'))).toBe(false);
+  });
+
+  it('hides Signed Off only while the chat is open on a wide screen', () => {
+    expect(hideSignedOff(true, true)).toBe(true);
+    expect(hideSignedOff(false, true)).toBe(false);
+    expect(hideSignedOff(true, false)).toBe(false);
   });
 });

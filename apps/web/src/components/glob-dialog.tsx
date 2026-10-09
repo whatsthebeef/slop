@@ -1,9 +1,9 @@
 import { isValidCombination, machine } from '@slop/core';
 import type { Action, Category, EditFailure } from '@slop/core';
 import { useEffect, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
@@ -53,7 +53,8 @@ const ACTION_TIPS: Partial<Record<Action, string>> = {
   resolve_conflict: 'Asks the Claude GitHub App, in a PR comment, to merge the base branch into this branch and resolve the conflicts',
 };
 
-export const GlobDialog = ({
+/** The glob view: a page in the board's main area (never a modal), with a back arrow to the board. */
+export const GlobDetail = ({
   board,
   glob,
   initialArtifact,
@@ -158,15 +159,24 @@ export const GlobDialog = ({
   };
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent
-        className='max-w-[63rem]'
-        title={
-          <span>
-            <span className='font-mono text-muted-foreground'>{glob.id}</span> {glob.title}
-          </span>
-        }
-      >
+    <article className='mx-auto w-full max-w-[63rem] p-5' data-testid='glob-page'>
+      <div className='mb-4 flex items-start gap-3'>
+        <Link
+          to={`/boards/${String(glob.boardId)}`}
+          className='mt-0.5 rounded p-1 hover:bg-muted'
+          aria-label='Back to the board'
+          data-testid='glob-back'
+          onClick={(e) => {
+            e.preventDefault();
+            onClose();
+          }}
+        >
+          <ArrowLeft className='h-4 w-4' />
+        </Link>
+        <h1 className='text-base font-semibold'>
+          <span className='font-mono text-muted-foreground'>{glob.id}</span> {glob.title}
+        </h1>
+      </div>
         <div className='grid gap-4'>
           <div className='flex flex-wrap items-center gap-2 text-sm'>
             <span className='rounded bg-muted px-2 py-0.5'>{STATUS_TEXT[glob.status]}</span>
@@ -647,8 +657,7 @@ export const GlobDialog = ({
             )}
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+    </article>
   );
 };
 
