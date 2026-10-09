@@ -320,7 +320,7 @@ export const GlobDialog = ({
                         });
                       }}
                     >
-                      {actionLabel(action, glob.type, ACTION_LABELS)}
+                      {actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
                     </Button>
                   );
                   const tip = ACTION_TIPS[action];
@@ -335,7 +335,7 @@ export const GlobDialog = ({
                 {disabled.map(({ action, tip }) => (
                   <Tip key={action} text={tip}>
                     <Button variant='outline' size='sm' disabled>
-                      {actionLabel(action, glob.type, ACTION_LABELS)}
+                      {actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
                     </Button>
                   </Tip>
                 ))}
@@ -392,7 +392,7 @@ export const GlobDialog = ({
                       })
                     }
                   >
-                    {actionLabel('start_again', glob.type, ACTION_LABELS)}
+                    {actionLabel('start_again', glob.type, ACTION_LABELS, glob.status)}
                   </Button>
                 </div>
               )}
