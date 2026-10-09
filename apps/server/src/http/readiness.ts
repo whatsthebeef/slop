@@ -103,7 +103,7 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
 /** Checks the board's readiness and makes its notifications match; a failure is logged, never thrown. */
 export const syncReadiness = async (deps: ReadinessSources & Pick<ReadinessRoutesDeps, 'notifications'>, board: Board): Promise<ReadinessItem[]> => {
   const items = await readinessOf(deps, board);
-  await deps.notifications.syncReadiness(board.id, items);
+  await deps.notifications.syncReadiness(board.id, board.name, items);
   return items;
 };
 

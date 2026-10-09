@@ -93,10 +93,10 @@ describe('the notification bar', () => {
     });
 
     it('reads as one quiet line linking to the checklist', () => {
-      const [raised] = readinessNotifications(3, [item('build_doc', 'Build doc', 'missing'), item('environments', 'Environments', 'missing'), item('sub_gate', 'Sub-gate workflow', 'ok')]);
+      const [raised] = readinessNotifications(3, 'slop', [item('build_doc', 'Build doc', 'missing'), item('environments', 'Environments', 'missing'), item('sub_gate', 'Sub-gate workflow', 'ok')]);
       expect(raised).toMatchObject({
         severity: 'info',
-        title: 'Board setup: 2 items to do',
+        title: 'slop board setup: 2 items to do',
         detail: 'Build doc, Environments',
         link: '/boards/3/settings#readiness',
         action: { label: 'Readiness checklist', href: '/boards/3/settings#readiness' },
@@ -105,7 +105,7 @@ describe('the notification bar', () => {
     });
 
     it('says "1 item" for a single one', () => {
-      expect(readinessNotifications(3, [item('build_doc', 'Build doc', 'missing')])[0]?.title).toBe('Board setup: 1 item to do');
+      expect(readinessNotifications(3, 'slop', [item('build_doc', 'Build doc', 'missing')])[0]?.title).toBe('slop board setup: 1 item to do');
     });
   });
 });
