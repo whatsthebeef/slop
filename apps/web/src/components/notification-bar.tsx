@@ -1,17 +1,20 @@
 import type { BoardNotification } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, healthKey, notificationsKey } from '@/lib/api';
 import { signInPoll, signInView } from '@/lib/aws-sign-in';
 import type { SignInView } from '@/lib/aws-sign-in';
-import { barView, canDismiss, linkTarget, moreLabel, pollInterval } from '@/lib/notification-bar';
+import { barView, canDismiss, linkTarget, pollInterval, shownRows, toggleLabel } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
 
+const OUTLINE: Record<BoardNotification['severity'], string> = { critical: 'border-red', warning: 'border-amber', info: 'border-edge' };
+
 const STYLE: Record<BoardNotification['severity'], string> = {
-  critical: 'border-red bg-red/15 py-3 text-base font-semibold',
-  warning: 'border-amber bg-amber/15 py-2 text-sm',
-  info: 'border-edge bg-card py-2 text-sm text-muted-foreground',
+  critical: 'bg-red/15 py-3 text-base font-semibold',
+  warning: 'bg-amber/15 py-2 text-sm',
+  info: 'bg-card py-2 text-sm text-muted-foreground',
 };
 
 /** The AWS sign-in on the bar: the button, then the link and code to approve, or why it failed. */
@@ -55,7 +58,7 @@ const AwsSignInAction = () => {
   return view === null ? null : <SignInAction view={view} pending={start.isPending} onStart={() => start.mutate()} />;
 };
 
-const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: number; flash: boolean }) => {
+const Row = ({ item, boardId, flash, more }: { item: BoardNotification; boardId: number; flash: boolean; more?: ReactNode }) => {
   const client = useQueryClient();
   const dismiss = useMutation({
     mutationFn: () => api.dismissNotification(boardId, item.id),
@@ -65,7 +68,7 @@ const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: numbe
   return (
     <div
       role={item.severity === 'critical' ? 'alert' : 'status'}
-      className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-4', STYLE[item.severity], flash && 'notification-flash')}
+      className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 px-4 not-first:border-t not-first:border-edge', STYLE[item.severity], flash && 'notification-flash')}
       data-testid={`notification-${item.source}`}
       data-severity={item.severity}
     >
@@ -82,6 +85,7 @@ const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: numbe
           Dismiss
         </button>
       )}
+      {more}
     </div>
   );
 };
@@ -89,7 +93,7 @@ const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: numbe
 /**
  * One bar across the top of every board page for board-wide incidents that need a person. The most severe shows in
  * full (critical is big and red, flashes once on arrival and can't be dismissed while its condition holds); the
- * others sit behind a "more… (N)" button that expands them. It takes the place of the header's separator line.
+ * others sit behind "more… (N)" on it, which grows them into one attached stack with "Show less" below. It sits above the tabs.
  */
 export const NotificationBar = ({ boardId }: { boardId: number }) => {
   const [expanded, setExpanded] = useState(false);
@@ -100,19 +104,27 @@ export const NotificationBar = ({ boardId }: { boardId: number }) => {
     refetchInterval: (query) => pollInterval((query.state.data?.length ?? 0) > 0),
   });
   const view = barView(items.data ?? []);
-  if (view === null) return <hr className='mx-5 border-edge' />;
+  if (view === null) return null;
+  const toggle = (
+    <button type='button' className='text-sm font-normal text-muted-foreground underline' aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+      {toggleLabel(expanded, view.rest.length)}
+    </button>
+  );
   return (
-    <div className='mx-5 my-2 space-y-2' data-testid='notification-bar'>
-      {/* Keyed by id so a new arrival mounts afresh and flashes once. */}
-      <Row key={view.lead.id} item={view.lead} boardId={boardId} flash={view.lead.severity === 'critical'} />
-      {view.rest.length > 0 && (
-        <div className='text-sm'>
-          <button type='button' className='text-muted-foreground underline' aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-            {moreLabel(view.rest.length)}
-          </button>
-        </div>
-      )}
-      {expanded && view.rest.map((item) => <Row key={item.id} item={item} boardId={boardId} flash={false} />)}
+    <div className='mx-5 mt-3' data-testid='notification-bar'>
+      {/* One stack: the rows share the outer border and are split by hairlines. Keyed by id so a new arrival flashes once. */}
+      <div className={cn('overflow-hidden rounded-md border', OUTLINE[view.lead.severity])}>
+        {shownRows(view, expanded).map((item, i) => (
+          <Row
+            key={item.id}
+            item={item}
+            boardId={boardId}
+            flash={i === 0 && item.severity === 'critical'}
+            more={i === 0 && !expanded && view.rest.length > 0 ? <span className='ml-auto'>{toggle}</span> : undefined}
+          />
+        ))}
+      </div>
+      {expanded && <div className='mt-1'>{toggle}</div>}
     </div>
   );
 };
