@@ -1,0 +1,35 @@
+# Production on the EC2 host (infra/lib/host-stack.ts). infra/deploy/remote-deploy.sh copies this to /opt/slop/compose.yaml
+# and writes the two env files next to it: `.env` (SLOP_IMAGE, POSTGRES_PASSWORD) and `app.env` (the server's settings).
+# Postgres is not published to the host; its data lives on the instance's data disk, mounted at /var/lib/slop.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: slop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: slop
+    volumes:
+      - /var/lib/slop/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U slop -d slop']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+  app:
+    image: ${SLOP_IMAGE:?set in .env}
+    restart: unless-stopped
+    env_file: app.env
+    # Reached by CloudFront over HTTP; the security group only admits CloudFront's origin-facing addresses.
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *logging
