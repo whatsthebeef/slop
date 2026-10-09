@@ -1,6 +1,6 @@
 {
-  "id": "3f1740dd-2b90-41b0-8c34-d14d886be505",
-  "prevId": "1e37482d-86b5-41fc-bc28-7d3d4102ed79",
+  "id": "33f194ca-2b83-43c6-ab38-fdf975207214",
+  "prevId": "3f1740dd-2b90-41b0-8c34-d14d886be505",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2133,6 +2133,13 @@
           "notNull": true,
           "default": "'paste'"
         },
+        "source_ref": {
+          "name": "source_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
         "source_label": {
           "name": "source_label",
           "type": "text",
@@ -2254,6 +2261,34 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "inbox_items_source_idx": {
+          "name": "inbox_items_source_idx",
+          "columns": [
+            {
+              "expression": "board_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_ref",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"inbox_items\".\"source_ref\" <> ''",
           "concurrently": false,
           "method": "btree",
           "with": {}

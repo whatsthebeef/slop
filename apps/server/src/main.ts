@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -38,6 +38,7 @@ import { marksBoardDirty, SearchSync } from './jobs/search-sync.js';
 import { LlmHealth } from './llm-health.js';
 import { mountHealth } from './http/health.js';
 import { mountCodeReviews } from './http/code-reviews.js';
+import { mountChat } from './http/chat.js';
 import { mountSearch } from './http/search.js';
 import { mountDecisions } from './http/decisions.js';
 import { mountInbox } from './http/inbox.js';
@@ -214,6 +215,13 @@ const searchIndexer = new SearchIndexer({
   llm: searchLlm,
 });
 const search = new SearchService({ store, clock, embedder });
+// Sonnet answers board chat questions (one call per question); it takes no sampling parameters.
+const chat = new ChatService({
+  store,
+  clock,
+  search,
+  llm: trackLlm(new BedrockLlm({ id: config.CHAT_MODEL, configKey: 'CHAT_MODEL' }, config.BEDROCK_REGION, logUsage, null), config.CHAT_MODEL),
+});
 const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob) });
 const searchSync = new SearchSync(searchIndexer, logError);
 // Decisions (spec, Decisions and supersession): extracted from the board's plans and records with the search model,
@@ -305,6 +313,7 @@ await notifications.clear(null, 'integration:local'); // the retired fake integr
 mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
 mountCodeReviews(app, { codeReviews });
 mountSearch(app, { search });
+mountChat(app, { chat });
 mountDecisions(app, { decisions });
 mountInbox(app, { inbox });
 if (config.SLACK_SIGNING_SECRET !== undefined && config.SLACK_BOT_TOKEN !== undefined) {
@@ -348,6 +357,7 @@ mountMcp(app, {
   knowledge,
   artifacts,
   search,
+  chat,
   intake,
   inbox,
   publicUrl: config.PUBLIC_URL,

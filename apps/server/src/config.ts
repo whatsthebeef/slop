@@ -123,6 +123,8 @@ const schema = z.object({
   EMBED_MODEL: z.string().default('amazon.titan-embed-text-v2:0'),
   /** Haiku 4.5 writes the "why this changed" note of each merged change for the search index. */
   SEARCH_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
+  /** Sonnet 5.5 (US cross-region inference profile) answers board chat questions from the retrieved sources. */
+  CHAT_MODEL: z.string().default('us.anthropic.claude-sonnet-5-5'),
 });
 
 export type Config = z.infer<typeof schema>;
