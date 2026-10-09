@@ -219,6 +219,9 @@ const chat = new ChatService({
   store,
   clock,
   search,
+  // Haiku rewrites the question for search, so typos and follow-ups still find their records.
+  rewriteLlm: searchLlm,
+  warn: (message) => console.warn(`[chat] ${message}`),
   llm: trackLlm(new BedrockLlm({ id: config.CHAT_MODEL, configKey: 'CHAT_MODEL' }, config.BEDROCK_REGION, logUsage, null), config.CHAT_MODEL),
 });
 const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob) });
