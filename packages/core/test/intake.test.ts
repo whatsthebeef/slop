@@ -85,13 +85,17 @@ describe('intake', () => {
     expect((await propose('the whole request')).plan).toBe('the whole request');
   });
 
-  it('lets explicit fields win and repairs the matrix around them', async () => {
+  it('keeps a model answer of sub + feature, and repairs the matrix around explicit fields', async () => {
     answer = '{"title":"T","summary":"S","type":"sub","category":"feature","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
     const p = await propose('add export', { type: 'sub' });
-    expect(p.type).toBe('sub');
-    expect(p.category).toBe('task');
+    expect([p.type, p.category]).toEqual(['sub', 'feature']);
     const q = await propose('add export');
-    expect([q.type, q.category]).toEqual(['same', 'feature']);
+    expect([q.type, q.category]).toEqual(['sub', 'feature']);
+    answer = '{"title":"T","summary":"S","type":"super","category":"bug","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
+    const r = await propose('fix it');
+    expect([r.type, r.category]).toEqual(['same', 'bug']);
+    const s = await propose('fix it', { type: 'super' });
+    expect([s.type, s.category]).toEqual(['super', 'feature']);
   });
 
   it("suggests a branch-deploy environment the request names as a target; explicit fields win", async () => {

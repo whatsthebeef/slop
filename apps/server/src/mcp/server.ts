@@ -126,7 +126,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .max(20)
           .optional()
           .describe(
-            'IDs of globs on this board to start after. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
+            'IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
           ),
       },
     },
@@ -232,7 +232,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
               plan: z.string().min(1).describe("This part's share of plan.md (Markdown); {part:N} stands for part N's glob ID"),
               category: z.enum(CATEGORIES).optional(),
               type: z.enum(SLOP_TYPES).optional(),
-              after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part starts after'),
+              after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part waits for to merge'),
               attachments: z.array(z.string().min(1)).optional().describe("Labels of the original's text attachments to copy (new parts only; link attachments are always copied)"),
             }),
           )
@@ -330,7 +330,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'update_glob',
     {
       description:
-        "Change a glob's title, summary, type, category, group, environment or `after` (the globs it starts after; only before it has started; a sub changed from a same waits for them). Pass the version you read. The spec (plan.md) is not the summary: edit it with save_plan.",
+        "Change a glob's title, summary, type, category, group, environment or `after` (the globs it waits for to merge; only before it has started; a sub changed from a same waits for them). Pass the version you read. The spec (plan.md) is not the summary: edit it with save_plan.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -353,7 +353,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'start_glob',
     {
       description:
-        "Start a same's routine run (planning → implementing). Refused while the glob waits for globs it starts after (`after`) or a merge-policy hold; pass `anyway` to start it before they merge (a sub held in Planning can only be started this way).",
+        "Start a same's routine run (planning → implementing). Refused while the glob waits for globs named in `after` or a merge-policy hold; pass `anyway` to start it before they merge (a sub held in Planning can only be started this way).",
       inputSchema: { id: z.string(), version: z.number().int(), anyway: z.boolean().optional() },
     },
     async ({ id, version, anyway }) => {

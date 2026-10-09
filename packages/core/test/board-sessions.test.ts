@@ -87,31 +87,30 @@ describe('BoardService sessions', () => {
     notifier.hints.length = 0;
   });
 
-  it('appends boards as they are opened and records the time', async () => {
+  it('records the time on open and leaves the bar as it was', async () => {
     const [a, b, c] = ids as [number, number, number];
-    unwrap(await boards.openBoard(DEV, a, T1));
-    unwrap(await boards.openBoard(DEV, b, T1));
-    const sessions = unwrap(await boards.openBoard(DEV, c, T1));
-    expect(sessions.map((s) => [s.boardId, s.position])).toEqual([
-      [a, 1],
-      [b, 2],
-      [c, 3],
-    ]);
+    unwrap(await boards.addSession(DEV, b));
+    const sessions = unwrap(await boards.openBoard(DEV, a, T1));
+    expect(sessions).toEqual(expect.arrayContaining([session(b, 1, null), session(a, null, T1)]));
+    unwrap(await boards.openBoard(DEV, b, T2));
+    unwrap(await boards.openBoard(DEV, c, T2));
+    expect(await positions()).toEqual({ [a]: null, [b]: 1, [c]: null });
     const memberships = await boards.memberships(DEV);
     expect(memberships.map((m) => [m.board.id, m.position, m.lastViewedAt])).toEqual([
-      [a, 1, T1],
-      [b, 2, T1],
-      [c, 3, T1],
+      [a, null, T1],
+      [b, 1, T2],
+      [c, null, T2],
     ]);
   });
 
   it('keeps the place of a board opened again and moves its time', async () => {
     const [a, b] = ids as [number, number];
+    unwrap(await boards.addSession(DEV, a));
+    unwrap(await boards.addSession(DEV, b));
     unwrap(await boards.openBoard(DEV, a, T1));
-    unwrap(await boards.openBoard(DEV, b, T1));
     const sessions = unwrap(await boards.openBoard(DEV, a, T2));
     expect(sessions.find((s) => s.boardId === a)).toEqual(session(a, 1, T2));
-    expect(sessions.find((s) => s.boardId === b)).toEqual(session(b, 2, T1));
+    expect(sessions.find((s) => s.boardId === b)).toEqual(session(b, 2, null));
   });
 
   it('refuses non-members, inactive users and bad board IDs, storing nothing', async () => {
@@ -148,7 +147,10 @@ describe('BoardService sessions', () => {
 
   it('removes a board and renumbers the rest, idempotently, keeping its view time', async () => {
     const [a, b, c] = ids as [number, number, number];
-    for (const id of ids) unwrap(await boards.openBoard(DEV, id, T1));
+    for (const id of ids) {
+      unwrap(await boards.addSession(DEV, id));
+      unwrap(await boards.openBoard(DEV, id, T1));
+    }
     const sessions = unwrap(await boards.removeSession(DEV, b));
     expect(sessions).toEqual(
       expect.arrayContaining([session(a, 1, T1), session(b, null, T1), session(c, 2, T1)]),
@@ -159,30 +161,42 @@ describe('BoardService sessions', () => {
 
   it('removes the last board without renumbering the others (s15t42)', async () => {
     const [a, b, c] = ids as [number, number, number];
-    for (const id of ids) unwrap(await boards.openBoard(DEV, id, T1));
+    for (const id of ids) {
+      unwrap(await boards.addSession(DEV, id));
+      unwrap(await boards.openBoard(DEV, id, T1));
+    }
     unwrap(await boards.removeSession(DEV, c));
     expect(await positions()).toEqual({ [a]: 1, [b]: 2, [c]: null });
   });
 
-  it('empties the bar by removing the only board, and the next open starts again at 1 (s15t42)', async () => {
+  it('empties the bar by removing the only board, and the next add starts again at 1 (s15t42)', async () => {
     const [a, b, c] = ids as [number, number, number];
+    unwrap(await boards.addSession(DEV, a));
     unwrap(await boards.openBoard(DEV, a, T1));
     expect(unwrap(await boards.removeSession(DEV, a))).toEqual([session(a, null, T1)]);
     expect(await positions()).toEqual({ [a]: null, [b]: null, [c]: null });
     unwrap(await boards.openBoard(DEV, b, T2));
+    expect(await positions()).toEqual({ [a]: null, [b]: null, [c]: null });
+    unwrap(await boards.addSession(DEV, b));
     expect(await positions()).toMatchObject({ [a]: null, [b]: 1 });
   });
 
   it('adds a board already in the bar without moving it (s15t42)', async () => {
     const [a, b, c] = ids as [number, number, number];
-    for (const id of ids) unwrap(await boards.openBoard(DEV, id, T1));
+    for (const id of ids) {
+      unwrap(await boards.addSession(DEV, id));
+      unwrap(await boards.openBoard(DEV, id, T1));
+    }
     unwrap(await boards.addSession(DEV, a));
     expect(await positions()).toEqual({ [a]: 1, [b]: 2, [c]: 3 });
   });
 
   it('adds a board to the end, idempotently', async () => {
     const [a, b, c] = ids as [number, number, number];
-    for (const id of ids) unwrap(await boards.openBoard(DEV, id, T1));
+    for (const id of ids) {
+      unwrap(await boards.addSession(DEV, id));
+      unwrap(await boards.openBoard(DEV, id, T1));
+    }
     unwrap(await boards.removeSession(DEV, b));
     unwrap(await boards.addSession(DEV, b));
     expect(await positions()).toEqual({ [a]: 1, [b]: 3, [c]: 2 });
@@ -203,7 +217,9 @@ describe('BoardService sessions', () => {
     const [a, b] = ids as [number, number];
     unwrap(await boards.setMember(DEV, a, OTHER, 'dev'));
     unwrap(await boards.setMember(DEV, b, OTHER, 'dev'));
+    unwrap(await boards.addSession(DEV, a));
     unwrap(await boards.openBoard(DEV, a, T1));
+    unwrap(await boards.addSession(OTHER, b));
     unwrap(await boards.openBoard(OTHER, b, T2));
     expect(await positions(OTHER)).toEqual({ [a]: null, [b]: 1 });
     expect(
@@ -215,7 +231,10 @@ describe('BoardService sessions', () => {
   it('drops the session with the membership and shows the rest without a gap', async () => {
     const [a, b, c] = ids as [number, number, number];
     for (const id of [a, b, c]) unwrap(await boards.setMember(DEV, id, OTHER, 'dev'));
-    for (const id of [a, b, c]) unwrap(await boards.openBoard(OTHER, id, T1));
+    for (const id of [a, b, c]) {
+      unwrap(await boards.addSession(OTHER, id));
+      unwrap(await boards.openBoard(OTHER, id, T1));
+    }
     unwrap(await boards.removeMember(DEV, a, OTHER));
     expect(await positions(OTHER)).toEqual({ [b]: 1, [c]: 2 });
     // The next write closes the stored gap.

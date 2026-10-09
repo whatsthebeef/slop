@@ -225,7 +225,7 @@ export const CreateGlobDialog = ({
             </p>
           )}
           <Label>
-            Start after (glob IDs, optional)
+            Waits for (glob IDs, optional)
             <Input value={afterText} onChange={(e) => setAfterText(e.target.value)} placeholder='s15t7, s15b18' />
           </Label>
           {afterText.trim() !== '' && (

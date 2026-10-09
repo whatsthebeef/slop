@@ -88,7 +88,7 @@ export const BoardShell = () => {
   const isBoard = Number.isInteger(boardId);
   const [headerActions, setHeaderActions] = useState<HTMLElement | null>(null);
   // The shell stays mounted across the board's tabs, so this records each open once.
-  const opened = useOpenBoard(isBoard ? boardId : undefined);
+  useOpenBoard(isBoard ? boardId : undefined);
   const [chatOpen, setChatOpen] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
   const [focusToken, setFocusToken] = useState(0);
@@ -118,7 +118,7 @@ export const BoardShell = () => {
   return (
     <PageContextProvider page={page} setPage={setPage}>
     <div className='flex h-dvh flex-col'>
-      <BoardBar current={isBoard ? boardId : undefined} opened={opened} />
+      <BoardBar current={isBoard ? boardId : undefined} />
       {isBoard && <NotificationBar boardId={boardId} />}
       {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={openChat} />}
       <div className='flex min-h-0 flex-1'>

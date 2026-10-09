@@ -7,6 +7,7 @@ import { IntakeLearningService } from '../src/app/intake-learning-service.js';
 import type { Result } from '../src/domain/errors.js';
 import type { DomainEvent } from '../src/domain/events.js';
 import {
+  INTAKE_PROMPT_VERSION,
   collectOutcome,
   examplesDisagree,
   extractPlanFeatures,
@@ -301,7 +302,7 @@ describe('intake learning through the services', () => {
     expect(prompt.indexOf(changed.id)).toBeLessThan(prompt.indexOf(plain.id));
     expect(prompt).toContain('category changed feature -> bug');
     expect(proposal.examples.map((e) => e.globId)).toEqual([changed.id, plain.id]);
-    expect(proposal).toMatchObject({ model: 'haiku', promptVersion: 2 });
+    expect(proposal).toMatchObject({ model: 'haiku', promptVersion: INTAKE_PROMPT_VERSION });
     // The nearest two disagree on the category, so the card asks for confirmation.
     expect(proposal.needsConfirmation).toBe(true);
     // A person's explicit category is not second-guessed.

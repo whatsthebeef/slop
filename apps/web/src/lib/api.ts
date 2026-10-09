@@ -425,7 +425,7 @@ export const api = {
     request<{ email: string; returnTo: string }>('POST', '/auth/dev-login', { email, returnTo }),
   logout: () => request<object>('POST', '/auth/logout'),
   me: () => request<Me>('GET', '/api/me'),
-  /** Records that you opened the board (server time) and adds it to your bar if it isn't there. */
+  /** Records that you opened the board (server time); the bar is unchanged. */
   openBoard: (id: number) => request<{ sessions: BoardSession[] }>('POST', `/api/boards/${id}/viewed`),
   addSession: (id: number) => request<{ sessions: BoardSession[] }>('PUT', `/api/boards/${id}/session`),
   removeSession: (id: number) => request<{ sessions: BoardSession[] }>('DELETE', `/api/boards/${id}/session`),

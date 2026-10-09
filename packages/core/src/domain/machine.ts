@@ -938,7 +938,7 @@ export const changeFields = (
 
   const afterChanged = changes.after !== undefined && changes.after.join('\n') !== (glob.after ?? []).join('\n');
   if (afterChanged && (glob.status !== 'planning' || glob.provisioning !== 'none')) {
-    return invalidTransition(glob, actor, 'Start after can only be changed before the glob has started');
+    return invalidTransition(glob, actor, 'What a glob waits for can only be changed before the glob has started');
   }
 
   const patch: { -readonly [K in keyof FieldChanges]: FieldChanges[K] } = {};
@@ -1013,18 +1013,16 @@ const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> =
   return invalidTransition(glob, actor, `A ${from} cannot become a ${to}`);
 };
 
-/** A type change the glob view may offer: a feature can only become a sub as a task (`category`). */
+/** A type change the glob view may offer. */
 export interface TypeChangeOption {
   readonly to: SlopType;
-  readonly category?: Category;
 }
 
 /** The type changes `changeFields` would accept now, so the glob view never offers one the server refuses. */
 export const allowedTypeChanges = (glob: Glob, role: Role): TypeChangeOption[] =>
   SLOP_TYPES.flatMap((to): TypeChangeOption[] => {
     if (to === glob.type || !checkTypeChange(glob, to, { email: '', role }).ok) return [];
-    if (isValidCombination(to, glob.category)) return [{ to }];
-    return glob.category === 'feature' && isValidCombination(to, 'task') ? [{ to, category: 'task' }] : [];
+    return isValidCombination(to, glob.category) ? [{ to }] : [];
   });
 
 // ---------------------------------------------------------------------------

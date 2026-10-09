@@ -305,7 +305,7 @@ export const CodeReviewIcon = ({ badge }: { badge: CodeReviewBadge }) => {
 };
 
 /**
- * A glob held for others to merge: "after s15t7", or the reason when the board's merge policy held it. Each ID opens
+ * A glob held for others to merge: "waits for s15t7", or the reason when the board's merge policy held it. Each ID opens
  * that glob on the board.
  */
 export const AfterChip = ({ glob }: { glob: GlobView }) => {
@@ -315,9 +315,9 @@ export const AfterChip = ({ glob }: { glob: GlobView }) => {
   if (ids.length === 0) return null;
   const reason = implied.map((i) => `${i.id}: both may change ${i.paths.join(', ')}`).join('; ');
   return (
-    <Tip text={reason === '' ? `Starts after ${ids.join(', ')} merge${ids.length === 1 ? 's' : ''}` : `Waits: ${reason}`}>
+    <Tip text={reason === '' ? `Waits for ${ids.join(', ')} to merge` : `Waits for ${reason}`}>
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
-        {reason === '' ? 'after ' : 'waits for '}
+        waits for 
         {ids.map((id, i) => (
           <span key={id}>
             {i > 0 && ', '}

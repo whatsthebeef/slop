@@ -12,8 +12,8 @@ import type { Category, SlopType } from './types.js';
  * store, the embedder and the jobs are in the services.
  */
 
-/** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples. */
-export const INTAKE_PROMPT_VERSION = 2;
+/** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples, v2 the prompt with them, v3 the broader sub definition. */
+export const INTAKE_PROMPT_VERSION = 3;
 
 /** Intake's own confidence in the category it chose. */
 export const CONFIDENCES = ['high', 'medium', 'low'] as const;

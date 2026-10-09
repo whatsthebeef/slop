@@ -1,4 +1,4 @@
-import type { Action, ArtifactSummary, AwaitedDependency, DomainError, Glob, Role, SizeCheck } from '@slop/core';
+import type { Action, ArtifactSummary, AwaitedDependency, DependencyState, DomainError, Glob, Role, SizeCheck } from '@slop/core';
 import { checksExplanation, listOf, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -46,10 +46,21 @@ const artifactView = ({ kind, label, version, versions, commitSha, createdAt, by
   actor,
 });
 
-export const globViewFor = (glob: Glob, email: string, role: Role, artifacts: readonly ArtifactSummary[] | null = null) =>
+export const globViewFor = (
+  glob: Glob,
+  email: string,
+  role: Role,
+  artifacts: readonly ArtifactSummary[] | null = null,
+  /** The state of the globs this one waits for, so a held glob's actions don't rest on its `waiting` mark. */
+  dependencies?: ReadonlyMap<string, DependencyState>,
+) =>
   globView(
     glob,
-    machine.allowedActions(glob, { email, role }, { recordSha: machine.recordShaOf(artifacts ?? []) }),
+    machine.allowedActions(
+      glob,
+      { email, role },
+      { recordSha: machine.recordShaOf(artifacts ?? []), ...(dependencies === undefined ? {} : { dependencies }) },
+    ),
     artifacts,
   );
 

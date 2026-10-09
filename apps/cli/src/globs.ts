@@ -368,7 +368,7 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
     return;
   }
   const who = glob.waiting === true
-    ? `waiting for ${(glob.after ?? []).join(', ')} to merge, then a routine will implement it`
+    ? `waits for ${(glob.after ?? []).join(', ')} to merge, then a routine will implement it`
     : routineWillImplement
       ? 'a routine will implement it'
       : 'pick it up to implement it';

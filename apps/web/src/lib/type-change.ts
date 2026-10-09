@@ -7,8 +7,6 @@ export interface TypeAction {
   readonly label: string;
   /** What follows from pressing it. */
   readonly tip: string;
-  /** Set when a feature can only take this type as a task. */
-  readonly category?: Category;
 }
 
 const LABELS: Record<SlopType, string> = { sub: 'Make it a sub', same: 'Make it a same', super: 'Pair on it' };
@@ -23,12 +21,7 @@ const tipFor = (to: SlopType, glob: Pick<GlobView, 'after'>): string => {
 
 /** The type changes the server allows from here, as buttons; none are offered that it would refuse. */
 export const typeActions = (glob: GlobView, role: Role): TypeAction[] =>
-  machine.allowedTypeChanges(glob, role).map(({ to, category }) => ({
-    to,
-    label: LABELS[to],
-    tip: tipFor(to, glob),
-    ...(category === undefined ? {} : { category }),
-  }));
+  machine.allowedTypeChanges(glob, role).map(({ to }) => ({ to, label: LABELS[to], tip: tipFor(to, glob) }));
 
 /** Why the type can't change now, for the tooltip on the type label (null when a change is offered). */
 export const typeChangeBlocker = (glob: GlobView, role: Role): string | null => {
@@ -40,17 +33,11 @@ export const typeChangeBlocker = (glob: GlobView, role: Role): string | null => 
   return machine.sameSuperSwapBlocker(glob) ?? 'The type can no longer change';
 };
 
-/** What pressing Make it a sub says first: a feature can only be a sub as a task. */
-export const subConfirmation = (action: TypeAction): string =>
-  action.category === undefined
-    ? `Make it a sub? ${action.tip}`
-    : `A feature can't be a sub. Make it a ${action.category} sub? ${action.tip}`;
+/** What pressing Make it a sub says first. */
+export const subConfirmation = (action: TypeAction): string => `Make it a sub? ${action.tip}`;
 
-/** The change a type action sends (a feature becomes a task sub in one save). */
-export const typeActionChanges = (action: TypeAction): GlobChanges => ({
-  type: action.to,
-  ...(action.category === undefined ? {} : { category: action.category }),
-});
+/** The change a type action sends. */
+export const typeActionChanges = (action: TypeAction): GlobChanges => ({ type: action.to });
 
 /** The categories the glob's type allows. */
 export const categoryOptions = (type: SlopType): Category[] => CATEGORIES.filter((c) => isValidCombination(type, c));
