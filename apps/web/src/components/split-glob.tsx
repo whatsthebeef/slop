@@ -12,7 +12,7 @@ interface Draft {
   summary: string;
   plan: string;
   type: GlobView['type'];
-  /** Indexes of earlier parts, as chosen in the "starts after" picker; none runs in parallel. */
+  /** Indexes of earlier parts, as chosen in the "waits for" picker; none runs in parallel. */
   after: number[];
 }
 
@@ -112,7 +112,7 @@ export const SplitGlob = ({
                   <option value='sub'>sub</option>
                 </Select>
               </Label>
-              <span>Starts after:</span>
+              <span>Waits for:</span>
               {shown.slice(0, index).map((_, n) => (
                 <label key={n} className='flex items-center gap-1'>
                   <input

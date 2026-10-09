@@ -938,7 +938,7 @@ export const changeFields = (
 
   const afterChanged = changes.after !== undefined && changes.after.join('\n') !== (glob.after ?? []).join('\n');
   if (afterChanged && (glob.status !== 'planning' || glob.provisioning !== 'none')) {
-    return invalidTransition(glob, actor, 'Start after can only be changed before the glob has started');
+    return invalidTransition(glob, actor, 'What a glob waits for can only be changed before the glob has started');
   }
 
   const patch: { -readonly [K in keyof FieldChanges]: FieldChanges[K] } = {};

@@ -1,5 +1,5 @@
 /**
- * "Start after": a glob waits for other globs on its board to merge. What it waits for is derived from the dependency
+ * "Waits for": a glob waits for other globs on its board to merge. What it waits for is derived from the dependency
  * globs' live state, so a deleted dependency or one sent back to Planning needs no bookkeeping: the glob just stays put.
  */
 import { invalidInput, ok } from './errors.js';
@@ -31,7 +31,7 @@ export const dependencyIds = (glob: Dependent): string[] => [
 export interface AwaitedDependency {
   readonly id: string;
   readonly state: Exclude<DependencyState, 'merged'>;
-  /** Why it waits, as shown on the glob: "waiting for s15t7 to merge", "s15t7 was deleted; waiting", ... */
+  /** Why it waits, as shown on the glob: "Waits for s15t7 to merge", "Waits for s15t7, which was deleted", ... */
   readonly why: string;
 }
 
@@ -51,19 +51,19 @@ export const waitingFor = (glob: Dependent, states: ReadonlyMap<string, Dependen
 
 export const waitNote = (id: string, state: Exclude<DependencyState, 'merged'>, implied?: ImpliedAfter): string => {
   if (implied !== undefined && state === 'open') {
-    return `waits for ${id}: both may change ${implied.paths.slice(0, 3).join(', ')}${implied.paths.length > 3 ? ' and more' : ''}`;
+    return `Waits for ${id}: both may change ${implied.paths.slice(0, 3).join(', ')}${implied.paths.length > 3 ? ' and more' : ''}`;
   }
   switch (state) {
     case 'missing':
-      return `${id} was deleted; waiting`;
+      return `Waits for ${id}, which was deleted`;
     case 'planning':
-      return `waiting for ${id} to merge (it is in Planning)`;
+      return `Waits for ${id} to merge (it is in Planning)`;
     case 'open':
-      return `waiting for ${id} to merge`;
+      return `Waits for ${id} to merge`;
   }
 };
 
-/** One line for a glob that waits: "waiting for s15t7 to merge", joined for several. */
+/** One line for a glob that waits: "Waits for s15t7 to merge", joined for several. */
 export const waitSummary = (awaited: readonly AwaitedDependency[]): string => awaited.map((a) => a.why).join('; ');
 
 /** The warning for starting or picking up a glob that still waits. */

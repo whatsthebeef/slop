@@ -351,7 +351,7 @@ describe('slop new', () => {
     );
     await newCommand(['--sub', '--after', 's1t7,s1t8', '--after=s1t6', 'add', 'a', 'column'], run.deps);
     expect(run.slop.calls[0]?.args).toMatchObject({ type: 'sub', after: ['s1t7', 's1t8', 's1t6'] });
-    expect(run.out.join('')).toContain('waiting for s1t7, s1t8 to merge');
+    expect(run.out.join('')).toContain('waits for s1t7, s1t8 to merge');
     await expect(newCommand(['--after', 'oops', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
   });
 

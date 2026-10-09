@@ -113,7 +113,7 @@ describe('exclusive paths', () => {
     expect(held.runs).toEqual([]);
     expect(held.provisioning).toBe('none');
     const view = unwrap(await globs.get(DEV, held.id));
-    expect(view.waitingFor.map((w) => w.why)).toEqual([`waits for ${open.id}: both may change ${MIGRATION}`]);
+    expect(view.waitingFor.map((w) => w.why)).toEqual([`Waits for ${open.id}: both may change ${MIGRATION}`]);
     expect(view.allowedActions).toContain('start_anyway');
   });
 

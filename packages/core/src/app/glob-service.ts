@@ -99,7 +99,7 @@ export interface GlobView {
   readonly allowedActions: readonly machine.Action[];
   /** The latest version of each artifact, without content. */
   readonly artifacts: readonly ArtifactSummary[];
-  /** What the glob still waits for (unmerged globs it starts after), with the reason for each. */
+  /** What the glob still waits for (unmerged globs named in `after`), with the reason for each. */
   readonly waitingFor: readonly AwaitedDependency[];
   /** Globs in Planning that wait for this one. */
   readonly waitedOnBy: readonly string[];
@@ -207,7 +207,7 @@ export class GlobService {
     boardId: number,
     filter: GlobFilter,
     shown: (glob: Glob) => boolean = () => true,
-  ): Promise<Result<{ glob: Glob; artifacts: ArtifactSummary[] }[]>> {
+  ): Promise<Result<{ glob: Glob; artifacts: ArtifactSummary[]; dependencies: ReadonlyMap<string, DependencyState> }[]>> {
     return this.deps.store.transaction(async (tx) => {
       const actor = await this.actorFor(tx, email, boardId);
       if (!actor.ok) return actor;
@@ -219,7 +219,11 @@ export class GlobService {
       );
       const byGlob = new Map<string, ArtifactSummary[]>();
       for (const summary of summaries) byGlob.set(summary.globId, [...(byGlob.get(summary.globId) ?? []), summary]);
-      return ok(globs.map((glob) => ({ glob, artifacts: (byGlob.get(glob.id) ?? []).sort(byKind) })));
+      // One read of every dependency of the globs in Planning, so the list's allowed actions agree with a single read.
+      const dependencies = await this.dependencyStates(tx, [
+        ...new Set(globs.filter((g) => g.status === 'planning').flatMap((g) => dependencyIds(g))),
+      ]);
+      return ok(globs.map((glob) => ({ glob, artifacts: (byGlob.get(glob.id) ?? []).sort(byKind), dependencies })));
     });
   }
 
