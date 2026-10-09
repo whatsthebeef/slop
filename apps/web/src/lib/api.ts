@@ -43,6 +43,8 @@ import type {
   Role,
   Run,
   SearchHit,
+  SizeCheck,
+  SizeThresholdView,
   SlopType,
   SubLimitView,
   TargetChange,
@@ -60,6 +62,10 @@ export interface GlobView extends Glob {
   readonly waitedOnBy?: readonly string[];
   /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
   readonly split?: { readonly source: string; readonly part: number; readonly parts: readonly string[] };
+  /** True while the size check flagged the glob oversized and nobody has split it or kept it whole (the card's chip). */
+  readonly oversized?: boolean;
+  /** The size check: why it was flagged, its evidence and the proposed split (single-glob reads only). */
+  readonly sizeCheck?: SizeCheck;
 }
 
 export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;
@@ -453,6 +459,10 @@ export const api = {
   boardSignals: (boardId: number) => request<KbSignal[]>('GET', `/api/boards/${boardId}/kb/signals`),
   /** The board's learned sub size limit, its bounds and its history (members). */
   subLimit: (boardId: number) => request<SubLimitView>('GET', `/api/boards/${boardId}/sub-limit`),
+  /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
+  sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
+  /** Keep whole: the glob stays one glob; a glob held for the flag starts. */
+  keepWhole: (id: string) => request<GlobView>('POST', `/api/globs/${id}/keep-whole`, {}),
   /** Whether the board has an active integration token (members); the secret is never returned here. */
   integrationToken: (boardId: number) =>
     request<{ active: boolean; createdAt: string | null }>('GET', `/api/boards/${boardId}/integration-token`),

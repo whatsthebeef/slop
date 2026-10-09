@@ -18,6 +18,8 @@ import type { BoardJob, KbSignalState } from '../domain/signals.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
 import { GLOB_OWNED_SOURCES, matchesFilters } from '../domain/search.js';
 import type { Candidate, KnowledgeItem } from '../domain/search.js';
+import { DEFAULT_SIZE_THRESHOLD } from '../domain/size-check.js';
+import type { SizeCheck, SizeThreshold, SizeThresholdChange } from '../domain/size-check.js';
 import type { SubLimitChange } from '../domain/sub-limit.js';
 import type { GlobOutcome, IntakeSnapshot } from '../domain/intake-learning.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
@@ -46,6 +48,9 @@ interface State {
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
+  sizeChecks: SizeCheck[];
+  sizeThresholds: Map<number, SizeThreshold>;
+  sizeThresholdChanges: SizeThresholdChange[];
   intakeSnapshots: { snapshot: IntakeSnapshot; embedding: readonly number[] | null }[];
   globOutcomes: GlobOutcome[];
   environmentDeploys: EnvironmentDeploy[];
@@ -126,6 +131,9 @@ const clone = (state: State): State => ({
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
+  sizeChecks: [...state.sizeChecks],
+  sizeThresholds: new Map(state.sizeThresholds),
+  sizeThresholdChanges: [...state.sizeThresholdChanges],
   intakeSnapshots: [...state.intakeSnapshots],
   globOutcomes: [...state.globOutcomes],
   environmentDeploys: [...state.environmentDeploys],
@@ -169,6 +177,9 @@ export class MemoryStore implements Store {
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
+    sizeChecks: [],
+    sizeThresholds: new Map(),
+    sizeThresholdChanges: [],
     intakeSnapshots: [],
     globOutcomes: [],
     environmentDeploys: [],
@@ -222,6 +233,7 @@ export class MemoryStore implements Store {
         s.globs.delete(id);
         s.intakeSnapshots = s.intakeSnapshots.filter((r) => r.snapshot.globId !== id);
         s.globOutcomes = s.globOutcomes.filter((o) => o.globId !== id);
+        s.sizeChecks = s.sizeChecks.filter((c) => c.globId !== id);
         s.artifacts = s.artifacts.filter((a) => a.globId !== id);
         s.findings = s.findings.filter((f) => f.globId !== id);
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
@@ -311,6 +323,32 @@ export class MemoryStore implements Store {
       },
       listSubLimitChanges: (boardId) =>
         Promise.resolve(s.subLimitChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      getSizeCheck: (globId) => Promise.resolve(s.sizeChecks.find((c) => c.globId === globId) ?? null),
+      listSizeChecks: (boardId) => Promise.resolve(s.sizeChecks.filter((c) => c.boardId === boardId)),
+      upsertSizeCheck: (check) => {
+        s.sizeChecks = [...s.sizeChecks.filter((c) => c.globId !== check.globId), check];
+        return Promise.resolve();
+      },
+      updateSizeAssessment: (check) => {
+        const found = s.sizeChecks.find((c) => c.globId === check.globId);
+        const next = found === undefined ? check : { ...check, decision: found.decision, decidedBy: found.decidedBy, decidedAt: found.decidedAt, createdAt: found.createdAt };
+        s.sizeChecks = [...s.sizeChecks.filter((c) => c.globId !== check.globId), next];
+        return Promise.resolve();
+      },
+      getSizeThreshold: (boardId) => Promise.resolve(s.sizeThresholds.get(boardId) ?? DEFAULT_SIZE_THRESHOLD),
+      setSizeThreshold: (boardId, from, to) => {
+        const current = s.sizeThresholds.get(boardId) ?? DEFAULT_SIZE_THRESHOLD;
+        if (current.maxTasks !== from.maxTasks || current.maxParts !== from.maxParts) return Promise.resolve(false);
+        s.sizeThresholds.set(boardId, to);
+        return Promise.resolve(true);
+      },
+      insertSizeThresholdChange: (change) => {
+        if (s.sizeThresholdChanges.some((c) => c.boardId === change.boardId && c.globId === change.globId)) return Promise.resolve(false);
+        s.sizeThresholdChanges.push({ ...change, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listSizeThresholdChanges: (boardId) =>
+        Promise.resolve(s.sizeThresholdChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
       setBaseChecks: (boardId, baseChecks) => {
         const current = s.boards.get(boardId);
         if (current !== undefined) s.boards.set(boardId, { ...current, baseChecks });

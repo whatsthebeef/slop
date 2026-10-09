@@ -29,6 +29,11 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
       ].join('; ');
     case 'intake_outcome':
       return `${result.backfilled} snapshots backfilled, ${result.embedded} embedded, ${result.recorded} outcomes recorded, ${result.refreshed} refreshed`;
+    case 'size_threshold':
+      return [
+        `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts`,
+        ...result.changes.map((c) => `${c.globId} ${c.outcome.replace(/_/g, ' ')}: ${c.from.maxTasks}/${c.from.maxParts} to ${c.to.maxTasks}/${c.to.maxParts}`),
+      ].join('; ');
     case 'skipped':
       return `skipped (${result.reason}); the next check tries again`;
   }

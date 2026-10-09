@@ -295,6 +295,8 @@ export interface CreateInput {
   readonly after?: readonly string[];
   /** Merge-policy holds found for this glob before it was created. */
   readonly impliedAfter?: readonly ImpliedAfter[];
+  /** Set when the size check flagged the glob oversized: a sub or auto-triggered same waits in Planning, with this as the reason, until a person splits or keeps it whole. */
+  readonly sizeHold?: string;
 }
 
 export const create = (
@@ -322,7 +324,8 @@ export const create = (
   const awaited = waitingFor({ after, impliedAfter }, dependencies);
   const wantsStart = input.type === 'sub' || (input.type === 'same' && input.autoTrigger);
   // A sub (or auto-started same) with something unmerged to wait for sits in Planning, with no branch, until released.
-  const held = wantsStart && awaited.length > 0;
+  const sizeHeld = wantsStart && input.sizeHold !== undefined;
+  const held = wantsStart && (awaited.length > 0 || sizeHeld);
   const autoStart = input.type === 'same' && input.autoTrigger && !held;
   const status: Status = held ? 'planning' : autoStart ? 'implementing' : initialStatus(input.type);
   const glob: Glob = {
@@ -366,7 +369,7 @@ export const create = (
   });
   // Subs, supers and auto-started sames start in Doing, so they provision now.
   if (listOf(status) === 'doing') b.ensureProvisioned();
-  if (held) b.event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
+  if (held) b.event('Waiting', { for: awaited.map((a) => a.id), note: awaited.length > 0 ? waitSummary(awaited) : (input.sizeHold ?? '') });
   else if (input.type === 'sub' || autoStart) b.queueRun(actor.email);
   return b.done();
 };

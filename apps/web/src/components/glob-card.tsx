@@ -336,6 +336,16 @@ export const AfterChip = ({ glob }: { glob: GlobView }) => {
   );
 };
 
+/** The size check's flag: the glob looks like more than one PR's worth of work and nobody has answered it yet. */
+export const OversizedChip = ({ glob }: { glob: GlobView }) =>
+  glob.oversized === true ? (
+    <Tip text='Intake judged this more than one PR of work. Open it to split it as proposed, edit the split, or keep it whole'>
+      <span className='font-mono text-[11px] font-semibold text-required' data-testid='oversized-chip'>
+        Oversized
+      </span>
+    </Tip>
+  ) : null;
+
 /** "part 2 of 3" with links to the other parts when the glob came from a split. */
 export const SplitChip = ({ glob }: { glob: GlobView }) => {
   const split = glob.split;
@@ -467,6 +477,7 @@ export const GlobCard = ({
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         <AfterChip glob={glob} />
         <SplitChip glob={glob} />
+        <OversizedChip glob={glob} />
         {glob.clash != null && (
           <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict`}>
             <span className='font-mono text-[11px] text-required' data-testid='clash-chip'>

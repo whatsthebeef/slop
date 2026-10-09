@@ -239,6 +239,13 @@
       "when": 1791574174837,
       "tag": "0033_board_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791574175837,
+      "tag": "0034_size_check",
+      "breakpoints": true
     }
   ]
 }

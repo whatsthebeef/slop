@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
+import type { SizeProposal } from '@slop/core';
 import type { GlobView, SplitPartInput } from '@/lib/api';
 import { planText } from '@/lib/plan-text';
 
@@ -23,7 +24,18 @@ export const canSplit = (glob: GlobView): boolean =>
  * Cuts a glob in Planning into parts: part 1 stays this glob, with its plan pre-filled to edit down; the others are new
  * globs in its group. `{part:2}` in a plan stands for that part's glob ID.
  */
-export const SplitGlob = ({ glob, onDone, onCancel }: { glob: GlobView; onDone: (parts: GlobView[]) => void; onCancel: () => void }) => {
+export const SplitGlob = ({
+  glob,
+  proposal,
+  onDone,
+  onCancel,
+}: {
+  glob: GlobView;
+  /** The size check's proposed split, to pre-fill the editor with (Edit split). */
+  proposal?: SizeProposal | undefined;
+  onDone: (parts: GlobView[]) => void;
+  onCancel: () => void;
+}) => {
   const plan = useQuery({ queryKey: ['plan', glob.id], queryFn: () => api.plan(glob.id) });
   const original = planText(null, plan.data?.current?.content ?? null, glob.summary);
   const [parts, setParts] = useState<Draft[] | null>(null);
@@ -31,7 +43,9 @@ export const SplitGlob = ({ glob, onDone, onCancel }: { glob: GlobView; onDone: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (plan.isPending) return <p className='text-xs text-muted-foreground'>Loading plan.md…</p>;
-  const shown: Draft[] = parts ?? [
+  const proposed: Draft[] | null =
+    proposal === undefined ? null : proposal.parts.map((p) => ({ title: p.title, summary: p.summary, plan: p.plan, type: glob.type, after: [...p.after] }));
+  const shown: Draft[] = parts ?? proposed ?? [
     { title: glob.title, summary: glob.summary, plan: original, type: glob.type, after: [] },
     { title: '', summary: '', plan: '', type: glob.type, after: [0] },
   ];

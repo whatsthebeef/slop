@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, SubLimitService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, SizeCheckService, SubLimitService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -85,6 +85,8 @@ export const mountKnowledge = (
     jobs: LearningJobService;
     /** The learned sub size limit; absent: its route isn't mounted. */
     subLimit?: SubLimitService;
+    /** The learned size threshold; absent: its route isn't mounted. */
+    sizeCheck?: SizeCheckService;
     /** Intake's accuracy (System page); absent: its route isn't mounted. */
     intakeLearning?: IntakeLearningService;
     /** The server's error log (console and the `errors` table), for Run now's background run. */
@@ -193,6 +195,12 @@ export const mountKnowledge = (
   const { subLimit } = deps;
   if (subLimit !== undefined) {
     app.get('/api/boards/:b/sub-limit', async (c) => send(c, await subLimit.view(c.get('email'), Number(c.req.param('b')))));
+  }
+
+  // The board's learned size threshold (oversized flag), its bounds and its history, for members.
+  const { sizeCheck } = deps;
+  if (sizeCheck !== undefined) {
+    app.get('/api/boards/:b/size-threshold', async (c) => send(c, await sizeCheck.view(c.get('email'), Number(c.req.param('b')))));
   }
 
   // How often intake's category and type survived to the merge, by month and prompt version, and typical effort by kind (System page), for members.

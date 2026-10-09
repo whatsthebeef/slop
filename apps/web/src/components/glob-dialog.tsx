@@ -26,6 +26,7 @@ import { ActivityLabel, GroupChip } from './glob-card';
 import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
+import { OversizedGlob, isOversized } from './oversized-glob';
 import { SplitGlob, canSplit } from './split-glob';
 import { GlobDecisions } from './glob-decisions';
 import { ReviewFindings } from './review-findings';
@@ -128,7 +129,11 @@ export const GlobDetail = ({
   const dirty = Object.keys(draft).length > 0;
   const [splitting, setSplitting] = useState(false);
   useEffect(() => setSplitting(false), [glob.id]);
-  const splittable = canSplit(glob) && (glob.allowedActions ?? []).includes('delete');
+  const oversized = isOversized(glob);
+  const splittable = canSplit(glob) && (glob.allowedActions ?? []).includes('delete') && !oversized;
+  // Starting a flagged glob asks first: it is likely more than one PR's worth of work.
+  const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
+  useEffect(() => setConfirmingOversized(null), [glob.id]);
   const actions = (glob.allowedActions ?? []).filter((a) => a !== 'delete');
   const disabled = waitingFor(glob, actions, board.role);
   const status = viewStatusLine(glob, new Date().toISOString(), disabled);
@@ -302,6 +307,7 @@ export const GlobDetail = ({
               </Tip>
             </div>
           )}
+          {oversized && <OversizedGlob glob={glob} canKeep={board.role !== 'qa' || glob.type === 'sub'} onDone={() => onClose()} />}
           {splitting && <SplitGlob glob={glob} onCancel={() => setSplitting(false)} onDone={() => onClose()} />}
 
           {actions.length + disabled.length + typeButtons.length > 0 && (
@@ -338,6 +344,10 @@ export const GlobDetail = ({
                         }
                         if (action === 'start_again') {
                           setConfirmingAgain(true);
+                          return;
+                        }
+                        if (oversized && (action === 'start' || action === 'start_anyway' || action === 'pick_up' || action === 'take_over')) {
+                          setConfirmingOversized(action);
                           return;
                         }
                         void run(async () => {
@@ -394,6 +404,30 @@ export const GlobDetail = ({
                   </Button>
                   <Button size='sm' disabled={busy} onClick={() => void markReady()} data-testid='confirm-ready'>
                     Ready for review
+                  </Button>
+                </div>
+              )}
+              {confirmingOversized !== null && (
+                <div role='alert' className='flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs'>
+                  <span className='flex-1' data-testid='oversized-start-says'>
+                    This glob is flagged oversized: it is probably more than one PR's worth of work. Split it, or start it as it is?
+                  </span>
+                  <Button size='sm' variant='ghost' onClick={() => setConfirmingOversized(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size='sm'
+                    disabled={busy}
+                    data-testid='confirm-start-oversized'
+                    onClick={() =>
+                      void run(async () => {
+                        const action = confirmingOversized;
+                        setConfirmingOversized(null);
+                        await onAction(action);
+                      })
+                    }
+                  >
+                    Start anyway
                   </Button>
                 </div>
               )}

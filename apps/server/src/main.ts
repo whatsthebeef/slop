@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, SubLimitService, IntakeLearningService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, SubLimitService, IntakeLearningService, SizeCheckService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -86,6 +86,8 @@ const globs = new GlobService({
   branchFiles,
   // Embeds a new glob's request for its intake snapshot; `embedder` exists by the time the first glob is created.
   embedder: { model: config.EMBED_MODEL, dimensions: 1024, embed: (texts, signal) => embedder.embed(texts, signal) },
+  // Judges a new glob's size; `sizeCheck` exists by the time the first glob is created.
+  sizeCheck: { assess: (boardId, plan) => sizeCheck.assess(boardId, plan), refresh: (globId) => sizeCheck.refresh(globId) },
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.
 let awsSignInEnabled = false;
@@ -199,12 +201,15 @@ const embedder = llmHealth.trackEmbedder(
   new BedrockEmbedder({ id: config.EMBED_MODEL, configKey: 'EMBED_MODEL' }, config.BEDROCK_REGION),
   config.EMBED_MODEL,
 );
+const intakeLlm = trackLlm(
+  new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, logUsage),
+  config.INTAKE_MODEL,
+);
+// The size check: the intake model judges a plan's independent parts and proposes a split; a failing model leaves the text estimate.
+const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm });
 const intake = new IntakeService({
   store,
-  llm: trackLlm(
-    new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, logUsage),
-    config.INTAKE_MODEL,
-  ),
+  llm: intakeLlm,
   // Intake shows the nearest past globs (corrected first); without the embedder it works as before.
   embedder,
   model: config.INTAKE_MODEL,
@@ -232,7 +237,7 @@ const chat = new ChatService({
   warn: (message) => console.warn(`[chat] ${message}`),
   llm: trackLlm(new BedrockLlm({ id: config.CHAT_MODEL, configKey: 'CHAT_MODEL' }, config.BEDROCK_REGION, logUsage, null), config.CHAT_MODEL),
 });
-const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob) });
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck });
 const searchSync = new SearchSync(searchIndexer, logError);
 // Decisions (spec, Decisions and supersession): extracted from the board's plans and records with the search model,
 // checked against earlier decisions for a replacement; the people on the board confirm or undo a replacement.
@@ -287,6 +292,7 @@ const learningJobs = new LearningJobService({
   consolidationDown: () => llmHealth.isDown([config.KB_ROUTE_MODEL]),
   subLimit,
   intakeLearning,
+  sizeCheck,
   manifests: new CodeHostManifests(github, logError),
   log: logError,
 });
@@ -303,6 +309,7 @@ const app = createApp({
   globs,
   hub,
   outbox,
+  sizeCheck,
   onBoardCreated: async (email, boardId) => {
     const adopted = await knowledge.adoptCatalogAgentSet(email, boardId);
     if (!adopted.ok) logError('board created', `Adopting the catalog agent set failed for board ${boardId}: ${adopted.error.message}`);
@@ -310,7 +317,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
-mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, intakeLearning, logError });
+mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, intakeLearning, sizeCheck, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
 const awsSignIn =

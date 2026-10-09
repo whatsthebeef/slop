@@ -73,6 +73,22 @@ const PATH_TOKEN = /(?:[\w.@-]+\/)+[\w.-]*\w\.\w{1,8}\b/g;
 const CONTEXT_HEADINGS = /^(goal|summary|context|background|overview|why|notes?|risks?|constraints?|acceptance|done when|out of scope|assumptions?)\b/i;
 const MAX_PATHS = 30;
 
+/** The plan's sections (level 2 and below) that are work rather than context, have text and no task line of their own. */
+export const untaskedSectionList = (plan: string): { readonly heading: string; readonly body: string }[] => {
+  const lines = plan.split(/\r?\n/);
+  const headings = markdownHeadings(plan).filter((h) => h.level >= 2);
+  const found: { heading: string; body: string }[] = [];
+  for (const [index, heading] of headings.entries()) {
+    if (CONTEXT_HEADINGS.test(heading.text)) continue;
+    const next = headings.slice(index + 1).find((h) => h.level <= heading.level);
+    const body = lines.slice(heading.line + 1, next?.line ?? lines.length);
+    if (body.some((l) => l.trim() !== '') && !body.some((l) => TASK_LINE.test(l))) {
+      found.push({ heading: heading.text, body: body.join('\n').trim() });
+    }
+  }
+  return found;
+};
+
 export const extractPlanFeatures = (plan: string): PlanFeatures => {
   const lines = plan.split(/\r?\n/);
   const tasks = lines.filter((l) => TASK_LINE.test(l)).length;
@@ -91,15 +107,7 @@ export const extractPlanFeatures = (plan: string): PlanFeatures => {
     }
   }
 
-  const headings = markdownHeadings(plan).filter((h) => h.level >= 2);
-  let untaskedSections = 0;
-  for (const [index, heading] of headings.entries()) {
-    if (CONTEXT_HEADINGS.test(heading.text)) continue;
-    const next = headings.slice(index + 1).find((h) => h.level <= heading.level);
-    const body = lines.slice(heading.line + 1, next?.line ?? lines.length);
-    const hasText = body.some((l) => l.trim() !== '');
-    if (hasText && !body.some((l) => TASK_LINE.test(l))) untaskedSections++;
-  }
+  const untaskedSections = untaskedSectionList(plan).length;
 
   const areas = AREA_PATTERNS.filter(([, pattern]) => pattern.test(plan)).map(([area]) => area);
   const filePaths = [...new Set(plan.match(PATH_TOKEN) ?? [])].slice(0, MAX_PATHS);
