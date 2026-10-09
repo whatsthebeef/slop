@@ -1,4 +1,4 @@
-import { describeEditFailure, LISTS } from '@slop/core';
+import { LISTS } from '@slop/core';
 import type { Action, LabelCommand, LabelName, List } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
@@ -6,16 +6,14 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
-import type { ArtifactRef } from '@/components/artifacts';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
-import { GlobDialog } from '@/components/glob-dialog';
 import type { BoardShellContext } from '@/components/board-shell';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
-import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
+import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { withGlob } from '@/lib/glob-list';
@@ -200,10 +198,8 @@ export const BoardPage = () => {
   const client = useQueryClient();
   const toast = useToast();
   const live = useLiveBoard(boardId);
-  // New Glob lives in the shell's header, beside the search box.
-  const { headerActions } = useOutletContext<BoardShellContext>();
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [openArtifact, setOpenArtifact] = useState<ArtifactRef | null>(null);
+  // The ＋ (New glob) icon lives in the shell's tab row.
+  const { headerActions, hideSignedOff } = useOutletContext<BoardShellContext>();
   const [creating, setCreating] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [bumps, setBumps] = useState<Record<string, Direction>>({});
@@ -217,26 +213,15 @@ export const BoardPage = () => {
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId), ...KEEP_TRYING });
   const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId), ...KEEP_TRYING });
   const motion = useBoardMotion(globs.data, live);
-  // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens it here, or on the signed-off
-  // page when it is no longer on the board.
+  // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens its page.
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const linked = searchParams.get('glob');
   useEffect(() => {
-    if (linked === null || globs.data === undefined) return;
-    if (globs.data.some((g) => g.id === linked)) {
-      setOpenId(linked);
-      setSearchParams(
-        (params) => {
-          params.delete('glob');
-          return params;
-        },
-        { replace: true },
-      );
-    } else {
-      void navigate(`/boards/${boardId}/signed-off?glob=${encodeURIComponent(linked)}`, { replace: true });
-    }
-  }, [linked, globs.data, boardId, navigate, setSearchParams]);
+    if (linked !== null) void navigate(`/boards/${boardId}/globs/${encodeURIComponent(linked)}`, { replace: true });
+  }, [linked, boardId, navigate]);
+  const openGlob = (id: string, artifact?: string) =>
+    void navigate(`/boards/${String(boardId)}/globs/${encodeURIComponent(id)}${artifact === undefined ? '' : `?artifact=${encodeURIComponent(artifact)}`}`);
   // Deploy state (branch deploys, and the release and integration environments each glob is in) lives beside the
   // globs; read it for the globs on the board.
   const boardGlobIds = (globs.data ?? []).map((g) => g.id).sort();
@@ -363,7 +348,6 @@ export const BoardPage = () => {
   const all = globs.data;
   // Filtering by type was removed for now; it is to be redesigned with more options. The board shows every glob.
   const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
-  const open = openId === null ? undefined : all.find((g) => g.id === openId);
 
   return (
     <div className='flex h-full flex-col' data-testid='board' data-live={live}>
@@ -371,9 +355,16 @@ export const BoardPage = () => {
       <h1 className='sr-only'>{board.data.name}</h1>
       {headerActions !== null &&
         createPortal(
-          <Button size='sm' className='text-sm' onClick={() => setCreating(true)}>
-            <Plus className='h-4 w-4' /> New Glob
-          </Button>,
+          <button
+            type='button'
+            className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground'
+            aria-label='New glob'
+            title='New glob'
+            data-testid='new-glob'
+            onClick={() => setCreating(true)}
+          >
+            <Plus className='h-4 w-4' aria-hidden />
+          </button>,
           headerActions,
         )}
 
@@ -384,7 +375,7 @@ export const BoardPage = () => {
         className='flex-1 overflow-auto px-5 py-4'
       >
         <div className='flex min-h-full min-w-full items-stretch gap-3'>
-          {LISTS.map((list) => {
+          {LISTS.filter((list) => !(hideSignedOff && list === 'signed_off')).map((list) => {
             const items = all
               .filter((g) => g.list === list)
               .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -396,14 +387,8 @@ export const BoardPage = () => {
                     <GlobCard
                       key={glob.id}
                       glob={glob}
-                      onOpen={() => {
-                        setOpenArtifact(null);
-                        setOpenId(glob.id);
-                      }}
-                      onOpenArtifact={(kind) => {
-                        setOpenArtifact({ kind, label: '' });
-                        setOpenId(glob.id);
-                      }}
+                      onOpen={() => openGlob(glob.id)}
+                      onOpenArtifact={(kind) => openGlob(glob.id, kind)}
                       onReviewLabel={reviewLabel(glob)}
                       moves={moves.map((m) => m.move)}
                       previewing={preview?.glob.id === glob.id ? preview.move.action : null}
@@ -444,39 +429,6 @@ export const BoardPage = () => {
           store(glob);
         }}
       />
-
-      {open !== undefined && (
-        <GlobDialog
-          board={board.data}
-          glob={open}
-          initialArtifact={openArtifact}
-          onClose={() => setOpenId(null)}
-          onAction={(action) => act(open, action)}
-          onReviewLabel={reviewLabel(open)}
-          onUpdate={async (changes: GlobChanges) => {
-            try {
-              store(await api.updateGlob(open.id, open.version, changes));
-              return null;
-            } catch (error) {
-              // The dialog keeps the draft and shows why; a conflict is reloaded on request.
-              return describeEditFailure(error instanceof RequestError ? error.body : { message: 'Something went wrong' });
-            }
-          }}
-          onReload={async () => {
-            store(await api.glob(open.id));
-          }}
-          onDelete={async () => {
-            await mutation
-              .mutateAsync(async () => {
-                await api.deleteGlob(open.id, open.version);
-                client.setQueryData<GlobView[]>(globsKey(boardId), (list = []) => list.filter((g) => g.id !== open.id));
-                setOpenId(null);
-                return null;
-              })
-              .catch(() => undefined);
-          }}
-        />
-      )}
 
       {haltConfirm !== null && (
         <Dialog open onOpenChange={(o) => !o && setHaltConfirm(null)}>
