@@ -694,6 +694,46 @@ export class PgStore implements Store {
       deleteMember: async (boardId, email) => {
         await t.delete(schema.members).where(and(eq(schema.members.boardId, boardId), eq(schema.members.email, email)));
       },
+      lockBoardSessions: async (email) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`board_sessions:${email}`}))`);
+      },
+      listBoardSessions: async (email) =>
+        (
+          await t
+            .select({ boardId: schema.boardSessions.boardId, position: schema.boardSessions.position, lastViewedAt: schema.boardSessions.lastViewedAt })
+            .from(schema.boardSessions)
+            .where(eq(schema.boardSessions.email, email))
+            .orderBy(schema.boardSessions.boardId)
+        ).map((r) => ({ boardId: r.boardId, position: r.position, lastViewedAt: r.lastViewedAt?.toISOString() ?? null })),
+      touchBoardSession: async (email, boardId, at) => {
+        // Inserting for a non-member would break the foreign key, so only members' rows are written.
+        if ((await t.select({ email: schema.members.email }).from(schema.members).where(and(eq(schema.members.boardId, boardId), eq(schema.members.email, email)))).length === 0) return;
+        await t
+          .insert(schema.boardSessions)
+          .values({ email, boardId, lastViewedAt: new Date(at) })
+          .onConflictDoUpdate({ target: [schema.boardSessions.email, schema.boardSessions.boardId], set: { lastViewedAt: new Date(at) } });
+      },
+      setBoardSessionOrder: async (email, boardIds) => {
+        if (boardIds.length > 0) {
+          await t
+            .insert(schema.boardSessions)
+            .values(boardIds.map((boardId) => ({ email, boardId })))
+            .onConflictDoNothing();
+        }
+        // Clear first, then set: renumbering in one `position - 1` update can trip the unique index mid-statement.
+        await t
+          .update(schema.boardSessions)
+          .set({ position: null })
+          .where(and(eq(schema.boardSessions.email, email), sql`${schema.boardSessions.position} is not null`));
+        if (boardIds.length === 0) return;
+        const values = sql.join(
+          boardIds.map((boardId, i) => sql`(${boardId}::integer, ${i + 1}::integer)`),
+          sql`, `,
+        );
+        await t.execute(
+          sql`update ${schema.boardSessions} set position = v.position from (values ${values}) as v(board_id, position) where ${schema.boardSessions.email} = ${email} and ${schema.boardSessions.boardId} = v.board_id`,
+        );
+      },
 
       getUser: async (email): Promise<User | null> => {
         const [row] = await t.select().from(schema.users).where(eq(schema.users.email, email));

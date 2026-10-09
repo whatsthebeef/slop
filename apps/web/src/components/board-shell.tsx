@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useLocation, useParams } from 'react-router';
 import { ChatPanel } from '@/components/chat-panel';
 import { NotificationBar } from '@/components/notification-bar';
-import { StatusBar } from '@/components/status-bar';
+import { BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
 import { hideSignedOff, isChatShortcut, WIDE_QUERY } from '@/lib/chat';
 import { newCount } from '@/lib/inbox';
@@ -78,13 +78,15 @@ const useMedia = (query: string): boolean => {
 };
 
 /**
- * Every board page sits under the app's status bar, the notification banner and the tab row. The chat is docked
+ * Every board page sits under the app's board bar, the notification banner and the tab row; opening a board records it. The chat is docked
  * beside the routed page here, not inside it, so its conversation survives moving between pages.
  */
 export const BoardShell = () => {
   const boardId = Number(useParams().boardId);
   const isBoard = Number.isInteger(boardId);
   const [headerActions, setHeaderActions] = useState<HTMLElement | null>(null);
+  // The shell stays mounted across the board's tabs, so this records each open once.
+  const opened = useOpenBoard(isBoard ? boardId : undefined);
   const [chatOpen, setChatOpen] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
   const [focusToken, setFocusToken] = useState(0);
@@ -110,7 +112,7 @@ export const BoardShell = () => {
   const showChat = isBoard && chatOpen;
   return (
     <div className='flex h-dvh flex-col'>
-      <StatusBar current={isBoard ? boardId : undefined} />
+      <BoardBar current={isBoard ? boardId : undefined} opened={opened} />
       {isBoard && <NotificationBar boardId={boardId} />}
       {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={openChat} />}
       <div className='flex min-h-0 flex-1'>

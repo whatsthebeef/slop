@@ -1,3 +1,4 @@
+import type { BoardSession } from '../domain/board-sessions.js';
 import type { Decision, DecisionSource } from '../domain/decisions.js';
 import type { InboxItem, InboxLink } from '../domain/inbox.js';
 import type { IntegrationToken } from '../domain/integration-tokens.js';
@@ -27,6 +28,8 @@ interface State {
   globs: Map<string, { glob: Glob; creationKey: string | null }>;
   boards: Map<number, Board>;
   members: Map<string, Member>;
+  /** Keyed like `members`. */
+  boardSessions: Map<string, { position: number | null; lastViewedAt: string | null }>;
   users: Map<string, User>;
   counters: Map<string, number>;
   events: DomainEvent[];
@@ -106,6 +109,7 @@ const clone = (state: State): State => ({
   globs: new Map(state.globs),
   boards: new Map(state.boards),
   members: new Map(state.members),
+  boardSessions: new Map(state.boardSessions),
   users: new Map(state.users),
   counters: new Map(state.counters),
   events: [...state.events],
@@ -148,6 +152,7 @@ export class MemoryStore implements Store {
     globs: new Map(),
     boards: new Map(),
     members: new Map(),
+    boardSessions: new Map(),
     users: new Map(),
     counters: new Map(),
     events: [],
@@ -333,6 +338,32 @@ export class MemoryStore implements Store {
       },
       deleteMember: (boardId, email) => {
         s.members.delete(memberKey(boardId, email));
+        // As Postgres cascades the session with the membership.
+        s.boardSessions.delete(memberKey(boardId, email));
+        return Promise.resolve();
+      },
+      lockBoardSessions: () => Promise.resolve(),
+      listBoardSessions: (email) =>
+        Promise.resolve(
+          [...s.members.values()].flatMap((m): BoardSession[] => {
+            const session = m.email === email ? s.boardSessions.get(memberKey(m.boardId, email)) : undefined;
+            return session === undefined ? [] : [{ boardId: m.boardId, ...session }];
+          }),
+        ),
+      touchBoardSession: (email, boardId, at) => {
+        const key = memberKey(boardId, email);
+        if (s.members.has(key)) s.boardSessions.set(key, { position: s.boardSessions.get(key)?.position ?? null, lastViewedAt: at });
+        return Promise.resolve();
+      },
+      setBoardSessionOrder: (email, boardIds) => {
+        for (const m of s.members.values()) {
+          if (m.email !== email) continue;
+          const key = memberKey(m.boardId, email);
+          const index = boardIds.indexOf(m.boardId);
+          const session = s.boardSessions.get(key);
+          if (index !== -1) s.boardSessions.set(key, { position: index + 1, lastViewedAt: session?.lastViewedAt ?? null });
+          else if (session !== undefined) s.boardSessions.set(key, { ...session, position: null });
+        }
         return Promise.resolve();
       },
       getUser: (email) => Promise.resolve(s.users.get(email) ?? null),
