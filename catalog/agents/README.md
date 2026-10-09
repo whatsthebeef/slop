@@ -25,7 +25,7 @@ Agent definitions hold short rules that always apply to that agent; bulky or sit
 - Unattended mode for routines (`--run <runId>`): no questions, recommended proposal, assumptions recorded on the glob, run ID on every artifact and commit trailer, glob check before every push.
 - Super mode, `/finalise` and `/kb-bootstrap` (drafts the documents a board is missing from the code and submits them as proposals) are new.
 - `.sstor/docs/learnings.md` is replaced by `get_conventions` (read) and `submit_learning` (write).
-- Phase 2 pushes the chosen proposal as the `implementation_plan` artifact, with an Amendments section kept up to date.
+- Every glob keeps one implementation record (Approach, Decisions, Deviations, What was built, Traps, Open items), stored as the `implementation_plan` artifact. Phase 2 starts it from the chosen proposal, Phases 3–5 update it, Phase 6 completes and pushes it, and supers keep it up to date after each push. It replaces the separate postplan and decision log; the investigator's alternatives stay in the local plan file.
 - The local review is pushed in Phase 6, after the commit, so it carries the commit SHA.
 - Phase 6 commits as `<id>: <title>`, pushes the glob branch and marks the PR ready with slop's `mark_ready` (routines, and interactive sessions once the developer agrees). Agents never run `sstor`; the developer runs `sstor --ready` from a terminal.
 - `qa` is renamed `tester`. The OpenAI cross-review, the Codex mirrors (`.codex/`, `AGENTS.md`) and the Google Sheet memory are dropped.

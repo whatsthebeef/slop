@@ -46,7 +46,7 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
   return (
     <div className='grid gap-2'>
       <div className='flex items-center justify-between text-xs text-muted-foreground'>
-        <span className='font-semibold'>{current?.kind === 'postplan' ? 'postplan' : 'plan.md'}</span>
+        <span className='font-semibold'>plan.md</span>
         <span className='flex items-center gap-2'>
           <span data-testid='plan-version'>{planVersionLine(current, dirty)}</span>
           <Button variant='ghost' size='sm' onClick={() => setPreview(!preview)}>

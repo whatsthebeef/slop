@@ -26,9 +26,9 @@ export type SourceType = (typeof SOURCE_TYPES)[number];
 export const SOURCE_LABELS: Readonly<Record<SourceType, string>> = {
   glob_plan: 'Plan',
   glob_summary: 'Summary',
-  implementation_plan: 'Implementation plan',
-  postplan: 'Postplan',
-  decision_log: 'Decision log',
+  implementation_plan: 'Implementation record',
+  postplan: 'Postplan (legacy)',
+  decision_log: 'Decision log (legacy)',
   local_review: 'Local review',
   attachment: 'Attachment',
   change_summary: 'Change',

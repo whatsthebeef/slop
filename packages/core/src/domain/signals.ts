@@ -173,8 +173,6 @@ const whole = (value: JsonValue | undefined): number | null =>
 const rateOf = (affected: number, eligible: number): number =>
   eligible === 0 ? 0 : Math.round((affected / eligible) * 1000) / 1000;
 
-const percent = (rate: number): string => `${String(Math.round(rate * 100))}%`;
-
 const cut = (value: string, length: number): string => {
   const line = value.replace(/\s+/g, ' ').trim();
   return line.length > length ? `${line.slice(0, length - 1)}…` : line;
@@ -457,14 +455,22 @@ const blindSpot = define({
     `CodeRabbit keeps finding ${m.label} that the local review missed: ${String(m.figures.count)} findings on ${String(m.figures.affected)} globs ${WINDOW_WORDS}.`,
 });
 
-/** Non-super globs with implementation plans in the window (a super's is its decision log, rewritten each time). */
-const plannedGlobs = (activity: BoardActivity): Map<string, ArtifactMeta[]> => {
-  const supers = new Set(activity.globs.filter((g) => g.type === 'super').map((g) => g.id));
-  const plans = new Map<string, ArtifactMeta[]>();
+/** Globs with an implementation record in the window: the latest version of each. */
+const recordedGlobs = (activity: BoardActivity): Map<string, ArtifactMeta[]> => {
+  const records = new Map<string, ArtifactMeta[]>();
   for (const a of activity.artifacts) {
-    if (a.kind === 'implementation_plan' && !supers.has(a.globId)) add(plans, a.globId, a);
+    if (a.kind === 'implementation_plan') add(records, a.globId, a);
   }
-  return plans;
+  return records;
+};
+
+/** The lines under a record's `## Deviations` heading, without blanks or "None". */
+export const deviationLines = (record: string): string[] => {
+  const section = /^##\s+Deviations[^\n]*\n([\s\S]*?)(?=^##\s|(?![\s\S]))/im.exec(record)?.[1] ?? '';
+  return section
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== '' && !/^[-*\s]*(none|nothing)\.?$/i.test(l));
 };
 
 const planAmended = define({
@@ -472,25 +478,24 @@ const planAmended = define({
   agent: 'investigator',
   type: 'agent-behaviour',
   suggestedTarget: 'agents/investigator.md',
-  threshold: 'at least 3 globs and 25% of globs with a plan (3 or more versions, or 40% of lines changed)',
-  eligibleGlobs: (activity) => new Set(plannedGlobs(activity).keys()),
+  threshold: 'at least 3 globs and 25% of globs with a record (3 or more lines under its Deviations)',
+  eligibleGlobs: (activity) => new Set(recordedGlobs(activity).keys()),
   tallies: (activity) => {
-    const plans = plannedGlobs(activity);
+    const records = recordedGlobs(activity);
     const tallies = new Tallies();
-    for (const [globId, versions] of plans) {
-      const first = versions[0];
+    for (const [globId, versions] of records) {
       const last = versions.at(-1);
-      if (first === undefined || last === undefined) continue;
-      const changed = lineChange(first.content ?? '', last.content ?? '');
-      if (versions.length >= 3 || changed >= 0.4) {
-        tallies.hit('plan_amended', 'heavily amended implementation plans', globId, `${globId}: ${String(versions.length)} versions, ${percent(changed)} of lines changed`);
+      if (last === undefined) continue;
+      const deviations = deviationLines(last.content ?? '');
+      if (deviations.length >= 3) {
+        tallies.hit('plan_amended', 'implementation records with many deviations from the plan', globId, `${globId}: ${String(deviations.length)} lines of deviations`);
       }
     }
-    return tallies.done(plans.size);
+    return tallies.done(records.size);
   },
   crosses: (t) => t.affected >= 3 && rateOf(t.affected, t.eligible) >= 0.25,
   statement: (m) =>
-    `Implementation plans keep needing heavy amendment after the investigator wrote them: ${String(m.figures.affected)} of ${String(m.figures.eligible)} globs with a plan ${WINDOW_WORDS}.`,
+    `Implementations keep deviating from the plan the investigator chose: ${String(m.figures.affected)} of ${String(m.figures.eligible)} globs with a record ${WINDOW_WORDS}.`,
 });
 
 /** plan.md v1 (written at creation or backfilled from the summary) is the baseline, not an edit. */

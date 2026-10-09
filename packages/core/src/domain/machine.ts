@@ -75,17 +75,18 @@ export type Action =
  * the glob document.
  */
 export interface ActionFacts {
-  /** The commit SHA of the glob's latest postplan, or null without one (or without a SHA). */
-  readonly postplanSha?: string | null;
+  /** The commit SHA of the glob's latest implementation record, or null without one (or without a SHA). */
+  readonly recordSha?: string | null;
   /** The state of every glob this one waits for (a missing entry reads as deleted); absent when not loaded. */
   readonly dependencies?: ReadonlyMap<string, DependencyState>;
 }
 
 const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
 
-/** The latest postplan's commit SHA among a glob's artifact summaries. */
-export const postplanShaOf = (artifacts: readonly Pick<ArtifactSummary, 'kind' | 'label' | 'commitSha'>[]): string | null =>
-  artifacts.find((a) => a.kind === 'postplan' && a.label === '')?.commitSha ?? null;
+/** The latest implementation record's commit SHA among a glob's artifact summaries (a legacy postplan counts until migrated). */
+export const recordShaOf = (artifacts: readonly Pick<ArtifactSummary, 'kind' | 'label' | 'commitSha'>[]): string | null =>
+  (artifacts.find((a) => a.kind === 'implementation_plan' && a.label === '') ??
+    artifacts.find((a) => a.kind === 'postplan' && a.label === ''))?.commitSha ?? null;
 
 /** Short SHAs are at least this long (git's default abbreviation). */
 const MIN_SHA_LENGTH = 7;
@@ -98,11 +99,11 @@ export const sameCommit = (a: string | null | undefined, b: string | null | unde
   return x.startsWith(y) || y.startsWith(x);
 };
 
-/** A super's latest postplan was written at its PR's current head. */
-export const postplanAtHead = (glob: Glob, facts: ActionFacts): boolean =>
-  glob.type === 'super' && sameCommit(facts.postplanSha, glob.pr?.headSha);
+/** A super's latest implementation record was written at its PR's current head. */
+export const recordAtHead = (glob: Glob, facts: ActionFacts): boolean =>
+  glob.type === 'super' && sameCommit(facts.recordSha, glob.pr?.headSha);
 
-export const POSTPLAN_NOT_AT_HEAD = 'Update the postplan at the head first (/finalise)';
+export const RECORD_NOT_AT_HEAD = 'Update the implementation record at the head first (/finalise)';
 
 /**
  * The squash commit's title: `<id>: <title>`. A piece landed with Merge and continue says which
@@ -758,7 +759,7 @@ export const requestMerge = (
   }
   if (options.continue) {
     if (glob.type !== 'super') return invalidTransition(glob, actor, 'Only a super can merge and continue');
-    if (!postplanAtHead(glob, options.facts ?? {})) return invalidTransition(glob, actor, POSTPLAN_NOT_AT_HEAD);
+    if (!recordAtHead(glob, options.facts ?? {})) return invalidTransition(glob, actor, RECORD_NOT_AT_HEAD);
   }
   return new Builder(glob, ctx)
     .set({ mergeMode: options.continue ? 'continue' : null })
@@ -1355,7 +1356,7 @@ export const baseTurnedGreen = (glob: Glob, ctx: Context): Result<Transition> =>
     .done();
 };
 
-/** Where `mark_ready` came from: the board offers it to supers only, once the postplan is at the head. */
+/** Where `mark_ready` came from: the board offers it to supers only, once the implementation record is at the head. */
 export type ReadySource = { readonly from: 'tool' } | { readonly from: 'board'; readonly facts: ActionFacts };
 
 /**
@@ -1375,7 +1376,7 @@ export const readyRequested = (
   if (source.from === 'board') {
     if (glob.type !== 'super') return invalidTransition(glob, ctx.actor, 'Only a super is marked ready from the board');
     if (restrictedFrom(requireActor(ctx), glob)) return forbidden('QA and PO members cannot mark a super ready');
-    if (!postplanAtHead(glob, source.facts)) return invalidTransition(glob, ctx.actor, POSTPLAN_NOT_AT_HEAD);
+    if (!recordAtHead(glob, source.facts)) return invalidTransition(glob, ctx.actor, RECORD_NOT_AT_HEAD);
   }
   const run = currentRun(glob);
   if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
@@ -1625,13 +1626,13 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     glob.headChecks.state === 'passed'
   ) {
     actions.push('merge');
-    if (postplanAtHead(glob, facts)) actions.push('merge_continue');
+    if (recordAtHead(glob, facts)) actions.push('merge_continue');
   }
   if (
     !restricted &&
     glob.status === 'in_progress' &&
     glob.pr?.state === 'draft' &&
-    postplanAtHead(glob, facts)
+    recordAtHead(glob, facts)
   ) {
     actions.push('mark_ready');
   }

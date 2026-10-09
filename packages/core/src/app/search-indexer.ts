@@ -75,13 +75,13 @@ const itemOf = (boardId: number, d: Desired, state: NewKnowledgeItem['state'] = 
 const chunksOf = (d: Desired): NewChunk[] =>
   chunkDocument({ sourceType: d.sourceType, date: d.occurredAt, title: d.title, text: d.text });
 
-/** The artifact kinds as search sources; a super's implementation plan is its decision log (spec). */
-const artifactSource = (kind: ArtifactKind, glob: Glob): SourceType => {
+/** The artifact kinds as search sources; every glob's implementation plan is its implementation record (spec). */
+const artifactSource = (kind: ArtifactKind): SourceType => {
   switch (kind) {
     case 'plan':
       return 'glob_plan';
     case 'implementation_plan':
-      return glob.type === 'super' ? 'decision_log' : 'implementation_plan';
+      return 'implementation_plan';
     case 'postplan':
       return 'postplan';
     case 'local_review':
@@ -95,6 +95,7 @@ const authorityOf = (source: SourceType): AuthorityTier => {
   switch (source) {
     case 'change_summary':
     case 'postplan':
+    case 'implementation_plan':
       return 'merged_code';
     case 'local_review':
     case 'attachment':
@@ -102,7 +103,6 @@ const authorityOf = (source: SourceType): AuthorityTier => {
       return 'discussion';
     case 'glob_plan':
     case 'glob_summary':
-    case 'implementation_plan':
     case 'decision_log':
     case 'kb_doc':
     case 'learning':
@@ -309,7 +309,7 @@ export class SearchIndexer {
   }
 
   private artifactItem(boardId: number, glob: Glob, artifact: Artifact): Desired {
-    const sourceType = artifactSource(artifact.kind, glob);
+    const sourceType = artifactSource(artifact.kind);
     return {
       sourceType,
       externalRef: `artifact:${glob.id}:${artifact.kind}:${artifact.label}`,

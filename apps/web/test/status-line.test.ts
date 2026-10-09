@@ -99,7 +99,7 @@ describe('shared status line', () => {
     expect(top(g)?.full).toBe('Merge waits: main is red since s15t11');
   });
 
-  it('says a super waits for the postplan', () => {
+  it('says a super waits for the implementation record', () => {
     const g = view({
       type: 'super',
       status: 'pr_open',
@@ -107,7 +107,7 @@ describe('shared status line', () => {
       headChecks: { sha: head, state: 'passed' },
       allowedActions: ['merge'],
     });
-    expect(top(g)?.full).toBe('Merge and continue waits for the postplan at the head');
+    expect(top(g)?.full).toBe('Merge and continue waits for the implementation record at the head');
   });
 
   it('gives QA and PO no wait', () => {

@@ -18,7 +18,7 @@ const unwrap = <T>(result: Result<T>): T => {
 
 interface Body {
   plan: { content: string };
-  implementationPlan: { content: string } | null;
+  implementationRecord: { content: string } | null;
   attachments: { label: string }[];
   available: { kind: string }[];
   content: string;
@@ -80,8 +80,8 @@ describe('MCP get_context include and get_artifact', () => {
         runId: null,
         agentSetVersion: null,
       });
-    unwrap(await put('postplan', '# Postplan\n\nWhat was built.'));
-    unwrap(await put('implementation_plan', '# Decision log\n\n**Decision.** Why.'));
+    unwrap(await put('postplan', '# Record\n\nWhat was built.'));
+    unwrap(await put('implementation_plan', '# Record\n\n**Decision.** Why.'));
     unwrap(await put('local_review', '# Review\n\nAll fine.'));
     unwrap(
       await artifacts.attach(DEV, globId, { label: 'Clarifications', text: 'Use X.', link: null }),
@@ -137,24 +137,18 @@ describe('MCP get_context include and get_artifact', () => {
     };
   };
 
-  it('get_context sends the postplan and Clarifications in full and lists the rest with sizes', async () => {
+  it('get_context sends plan.md, the implementation record and Clarifications in full and lists the rest with sizes', async () => {
     const { body } = await call('get_context', { id: globId });
-    expect(body.plan.content).toBe('# Postplan\n\nWhat was built.');
+    expect(body.plan.content).toBe('Idea');
     expect(body.attachments.map((a: { label: string }) => a.label)).toEqual(['Clarifications']);
-    expect(body.implementationPlan).toBeNull();
+    expect(body.implementationRecord?.content).toContain('**Decision.**');
     expect(body.available).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'implementation_plan',
-          commitSha: 'abc123',
-          size: '# Decision log\n\n**Decision.** Why.'.length,
-          description: 'Decision log',
-        }),
         expect.objectContaining({ kind: 'local_review', description: 'Review' }),
         expect.objectContaining({ kind: 'attachment', label: 'Notes' }),
       ]),
     );
-    expect(body.available).toHaveLength(3);
+    expect(body.available).toHaveLength(2);
   });
 
   it('get_context adds cited related material for the glob and not its own items', async () => {
@@ -166,9 +160,9 @@ describe('MCP get_context include and get_artifact', () => {
   it('get_context include returns the named artifacts in full', async () => {
     const { body } = await call('get_context', {
       id: globId,
-      include: ['implementation_plan', 'attachment:Notes'],
+      include: ['attachment:Notes'],
     });
-    expect(body.implementationPlan?.content).toContain('**Decision.**');
+    expect(body.implementationRecord?.content).toContain('**Decision.**');
     expect(body.attachments.map((a: { label: string }) => a.label).sort()).toEqual([
       'Clarifications',
       'Notes',
@@ -215,7 +209,7 @@ describe('MCP get_context include and get_artifact', () => {
   it('get_artifact returns one artifact in full, or an error when there is none', async () => {
     expect(
       (await call('get_artifact', { id: globId, kind: 'implementation_plan' })).body.content,
-    ).toContain('# Decision log');
+    ).toContain('# Record');
     expect(
       (await call('get_artifact', { id: globId, kind: 'attachment', label: 'Notes' })).body.content,
     ).toBe('Side notes.');

@@ -1,6 +1,6 @@
 import type { ArtifactKind } from '@slop/core';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardCheck, FileCheck, FileText, ListChecks, Paperclip } from 'lucide-react';
+import { ClipboardCheck, FileCheck, FileText, Paperclip } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
@@ -14,8 +14,9 @@ export const ARTIFACT_META: Record<
   { readonly title: string; readonly icon: LucideIcon }
 > = {
   plan: { title: 'plan.md', icon: FileText },
-  implementation_plan: { title: 'Implementation plan', icon: ListChecks },
-  postplan: { title: 'Postplan', icon: FileCheck },
+  implementation_plan: { title: 'Implementation record', icon: FileCheck },
+  // Legacy rows only: postplans were migrated into the record and writes to the kind land there.
+  postplan: { title: 'Postplan (old)', icon: FileCheck },
   local_review: { title: 'Local review', icon: ClipboardCheck },
   attachment: { title: 'Attachment', icon: Paperclip },
 };
@@ -24,7 +25,6 @@ export const ARTIFACT_META: Record<
 export const CARD_ARTIFACT_KINDS = [
   'plan',
   'implementation_plan',
-  'postplan',
   'local_review',
 ] as const;
 
