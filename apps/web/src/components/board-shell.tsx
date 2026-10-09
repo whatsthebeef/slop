@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useLocation, useParams } from 'react-router';
+import { ChatPanel } from '@/components/chat-panel';
 import { NotificationBar } from '@/components/notification-bar';
 import { SearchBox } from '@/components/search-box';
 import { StatusBar } from '@/components/status-bar';
@@ -38,6 +39,7 @@ const BoardTabs = ({ boardId, onActions }: { boardId: number; onActions: (el: HT
       </nav>
       <div className='ml-auto flex items-center gap-2 pb-1.5'>
         <SearchBox boardId={boardId} />
+        <ChatPanel boardId={boardId} />
         <div ref={onActions} data-testid='header-actions' />
       </div>
     </header>

@@ -4,6 +4,7 @@ import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
 import type { CodeReviewComment, NewCodeReviewComment } from './domain/code-review.js';
 import type { BoardNotification } from './domain/notifications.js';
+import type { ChatMessage, NewChatMessage } from './domain/chat.js';
 import type { Decision, DecisionPatch, DecisionSource, NewDecision } from './domain/decisions.js';
 import type { InboxItem, InboxLink, InboxStatus, NewInboxItem } from './domain/inbox.js';
 import type { Candidate, ItemStatus, KnowledgeItem, NewChunk, NewKnowledgeItem, PendingChunk, SearchQuery, SourceType } from './domain/search.js';
@@ -294,6 +295,11 @@ export interface Tx {
   /** The stored item for a board and external ref: its ID, status, replacing item and content hash; null when none. */
   getItemByRef(boardId: number, externalRef: string): Promise<{ id: number; status: ItemStatus; supersededBy: number | null; contentHash: string } | null>;
 
+  /** The person's latest `limit` chat messages on a board, oldest first. */
+  listChatMessages(boardId: number, email: string, limit: number): Promise<ChatMessage[]>;
+  addChatMessage(message: NewChatMessage): Promise<ChatMessage>;
+  /** Deletes the person's conversation on the board. */
+  clearChat(boardId: number, email: string): Promise<void>;
   /**
    * Stores a pasted item (status `new`, summary pending). A board's item with the same content hash is returned
    * instead, with `created: false`.
