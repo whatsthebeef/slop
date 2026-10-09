@@ -23,8 +23,11 @@ export type InboxSourceType = (typeof INBOX_SOURCE_TYPES)[number];
 export const isInboxSourceType = (value: unknown): value is InboxSourceType =>
   INBOX_SOURCE_TYPES.some((t) => t === value);
 
-/** `new`: waiting for a person; `attached`: on at least one glob; `kept`: stays indexed, on no glob; `discarded`: gone from search. */
-export const INBOX_STATUSES = ['new', 'attached', 'kept', 'discarded'] as const;
+/**
+ * `new`: waiting for a person; `attached`: on at least one glob; `kept`: stays indexed, on no glob; `archived`: imported
+ * history, indexed and attachable but out of the live inbox; `discarded`: gone from search.
+ */
+export const INBOX_STATUSES = ['new', 'attached', 'kept', 'archived', 'discarded'] as const;
 export type InboxStatus = (typeof INBOX_STATUSES)[number];
 
 /** The summary step: `pending` until summarised (or while waiting for the model), `failed` after its last attempt. */
@@ -56,9 +59,9 @@ export interface InboxItem {
   /** As pasted; empty until the summary step writes one (display falls back to the first line). */
   readonly title: string;
   readonly text: string;
-  /** Where it came from: `paste` or an integration (`meet`, `slack`). */
+  /** Where it came from: `paste`, an integration (`meet`, `slack`) or an import (`jira`, `gdoc`). */
   readonly source: string;
-  /** The source's own ID for it (a Meet notes doc's ID): one item per board, source and ref. Empty for a paste. */
+  /** The source's own ID for it (a Meet doc's ID, a Slack permalink, a Jira key, a Google Doc ID): one item per board, source and ref. Empty for a paste. */
   readonly sourceRef: string;
   readonly sourceLabel: string;
   readonly sourceType: InboxSourceType;
@@ -95,7 +98,12 @@ export type NewInboxItem = Pick<
   | 'createdAt'
   | 'createdBy'
   | 'contentHash'
->;
+> & {
+  readonly sourceKey?: string | null;
+  /** An import starts `archived` and already summarised (`done`), so it neither floods the inbox nor spends the model. */
+  readonly status?: InboxStatus;
+  readonly state?: InboxState;
+};
 
 /** An item attached to a glob. */
 export interface InboxLink {
@@ -116,6 +124,10 @@ export const SOURCE_REF_LIMIT = 200;
 
 /** The text a repeat paste is recognised by: whitespace collapsed. */
 export const inboxContentHash = (text: string): string => hash(text.replace(/\s+/g, ' ').trim());
+
+/** The sources an import delivers (`paste` is the other one). */
+export const IMPORT_SOURCES = ['jira', 'gdoc'] as const;
+export type ImportSource = (typeof IMPORT_SOURCES)[number];
 
 export const inboxRef = (id: number): string => `inbox:${String(id)}`;
 

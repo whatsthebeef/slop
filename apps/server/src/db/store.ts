@@ -1517,6 +1517,8 @@ export class PgStore implements Store {
             createdAt: new Date(input.createdAt),
             createdBy: input.createdBy,
             contentHash: input.contentHash,
+            ...(input.status === undefined ? {} : { status: input.status }),
+            ...(input.state === undefined ? {} : { state: input.state }),
             updatedAt: new Date(input.createdAt),
           })
           .onConflictDoNothing()

@@ -807,10 +807,10 @@ export class MemoryStore implements Store {
         const item: InboxItem = {
           ...input,
           id: this.nextRowId++,
-          status: 'new',
+          status: input.status ?? 'new',
           summary: null,
           suggestions: [],
-          state: 'pending',
+          state: input.state ?? 'pending',
           attempts: 0,
           processAfter: null,
           lastError: null,

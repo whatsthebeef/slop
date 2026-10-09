@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
 import { DecisionPipeline, EXTRACT_SYSTEM } from '../src/app/decision-pipeline.js';
 import { InboxPipeline } from '../src/app/inbox-pipeline.js';
-import { InboxService } from '../src/app/inbox-service.js';
+import { InboxService, MAX_IMPORT_ITEMS } from '../src/app/inbox-service.js';
+import type { ImportedItem } from '../src/app/inbox-service.js';
 import { LlmBusy, LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
 import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from '../src/app/kb-pipeline.js';
@@ -662,6 +663,102 @@ describe('inbox', () => {
       expect(
         (await store.transaction((tx) => tx.listDecisions(boardId))).map((d) => d.globId),
       ).toEqual(['s1t1']);
+    });
+  });
+
+  describe('import', () => {
+    const jira = (key: string, text: string, extra: Partial<ImportedItem> = {}): ImportedItem => ({
+      source: 'jira',
+      sourceKey: key,
+      title: `${key}: ${text.slice(0, 20)}`,
+      text: `${key}: ${text}`,
+      sourceType: 'thread',
+      occurredAt: '2025-03-01T10:00:00.000Z',
+      ...extra,
+    });
+    const run = async (...items: ImportedItem[]) => unwrap(await inbox.importItems(DEV, boardId, items));
+    const keyed = async (key: string): Promise<InboxItem> => {
+      const found = (await rows()).find((i) => i.sourceRef === key);
+      if (found === undefined) throw new Error(`No item ${key}`);
+      return found;
+    };
+
+    it('stores items archived and already summarised: out of the live list, indexed, never sent to the model', async () => {
+      const outcomes = await run(jira('APP-1', 'We chose Postgres over DynamoDB for the sync store.'));
+      expect(outcomes).toEqual([{ sourceKey: 'APP-1', result: 'added' }]);
+      const item = await keyed('APP-1');
+      expect(item).toMatchObject({ source: 'jira', status: 'archived', state: 'done', createdBy: DEV });
+      expect(unwrap(await inbox.list(DEV, boardId))).toEqual([]);
+      expect(unwrap(await inbox.list(DEV, boardId, ['archived']))).toHaveLength(1);
+      expect(searchItem(item.id)).toMatchObject({ sourceType: 'thread', status: 'active', id: item.itemId });
+      const hits = await store.transaction((tx) =>
+        tx.keywordCandidates({ boardId, query: 'DynamoDB', mode: 'all_time' }, 10),
+      );
+      expect(hits.map((h) => h.itemId)).toContain(item.itemId);
+      expect(await processAll()).toEqual([]);
+      expect(llm.calls).toEqual([]);
+    });
+
+    it('skips an unchanged item on a re-run and updates a changed one in place, re-indexing it', async () => {
+      await run(jira('APP-1', 'first version about websockets'));
+      const before = await keyed('APP-1');
+      expect(await run(jira('APP-1', 'first version about websockets'))).toEqual([
+        { sourceKey: 'APP-1', result: 'skipped' },
+      ]);
+      expect((await keyed('APP-1')).version).toBe(before.version);
+      expect(await run(jira('APP-1', 'second version about long polling'))).toEqual([
+        { sourceKey: 'APP-1', result: 'updated' },
+      ]);
+      const after = await keyed('APP-1');
+      expect(after.id).toBe(before.id);
+      expect(after.text).toContain('long polling');
+      expect(await rows()).toHaveLength(1);
+      const hits = await store.transaction((tx) =>
+        tx.keywordCandidates({ boardId, query: 'polling', mode: 'all_time' }, 10),
+      );
+      expect(hits.map((h) => h.itemId)).toContain(after.itemId);
+    });
+
+    it('skips text already in the inbox, and an item a person discarded', async () => {
+      await paste('APP-2: same words');
+      expect(await run(jira('APP-2', 'same words', { text: 'APP-2: same words' }))).toEqual([
+        { sourceKey: 'APP-2', result: 'skipped' },
+      ]);
+      await run(jira('APP-3', 'to be discarded'));
+      unwrap(await inbox.discard(DEV, boardId, (await keyed('APP-3')).id));
+      expect(await run(jira('APP-3', 'to be discarded, edited later'))).toEqual([
+        { sourceKey: 'APP-3', result: 'skipped' },
+      ]);
+      expect((await keyed('APP-3')).status).toBe('discarded');
+    });
+
+    it('keeps one failing item from stopping the rest, and cuts a long text', async () => {
+      const long = jira('APP-4', 'x'.repeat(INBOX_TEXT_LIMIT + 50));
+      const outcomes = await run(
+        jira('APP-5', ''.padEnd(3), { text: '   ' }),
+        jira('APP-6', 'fine', { occurredAt: 'not a date' }),
+        long,
+        jira('APP-7', 'fine too'),
+      );
+      expect(outcomes.map((o) => o.result)).toEqual(['failed', 'failed', 'added', 'added']);
+      expect((await keyed('APP-4')).text).toHaveLength(INBOX_TEXT_LIMIT);
+    });
+
+    it('keeps an attached item attached and its links when it is updated', async () => {
+      const g = await addGlob({ id: 's1t1' });
+      await run(jira('APP-8', 'the original note'));
+      unwrap(await inbox.attach(DEV, boardId, (await keyed('APP-8')).id, [g.id]));
+      await run(jira('APP-8', 'the edited note'));
+      const item = await keyed('APP-8');
+      expect(item.status).toBe('attached');
+      expect(searchItem(item.id)?.globIds).toEqual(['s1t1']);
+    });
+
+    it('refuses non-members, an empty batch and too many items', async () => {
+      expect(errorCode(await inbox.importItems(OUTSIDER, boardId, [jira('A-1', 'x')]))).toBe('forbidden');
+      expect(errorCode(await inbox.importItems(DEV, boardId, []))).toBe('invalid_input');
+      const many = Array.from({ length: MAX_IMPORT_ITEMS + 1 }, (_, i) => jira(`A-${String(i)}`, 'x'));
+      expect(errorCode(await inbox.importItems(DEV, boardId, many))).toBe('invalid_input');
     });
   });
 

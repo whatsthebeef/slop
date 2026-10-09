@@ -311,7 +311,7 @@ export interface Tx {
   getInboxItemBySource(boardId: number, source: string, sourceRef: string): Promise<InboxItem | null>;
   /** A board's items, newest `occurredAt` first, optionally with one of `statuses`. */
   listInboxItems(boardId: number, statuses?: readonly InboxStatus[]): Promise<InboxItem[]>;
-  /** Writes `item` (everything but its id, board, source and creation) if the stored version is still `expectedVersion` (the version is then bumped); returns false otherwise. */
+  /** Writes `item` (everything but its id, board, source and creation; an import's re-run changes its text, hash, date and label) if the stored version is still `expectedVersion` (the version is then bumped); returns false otherwise. */
   updateInboxItem(item: InboxItem, expectedVersion: number): Promise<boolean>;
   /** The oldest pending, not discarded item on any board whose `processAfter` is unset or not after `now`. */
   nextInboxItemToProcess(now: string): Promise<InboxItem | null>;

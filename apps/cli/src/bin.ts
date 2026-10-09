@@ -34,6 +34,7 @@ try {
     isMcpServerConfigured: claudeHasMcpServer,
     git: systemGit,
     sleep: (ms) => sleep(ms),
+    env: process.env,
   });
 } catch (error) {
   // Reading the config files or finding the token store failed before any command ran.
