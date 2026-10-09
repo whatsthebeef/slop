@@ -1,5 +1,5 @@
 import type { BoardService, GlobService, Result } from '@slop/core';
-import { CATEGORIES, ENVIRONMENT_ROLES, LABEL_NAMES, ROLES, SLOP_TYPES, STATUSES, isMine, listOf, machine, needsHuman } from '@slop/core';
+import { AGENT_KB_APPROVALS, CATEGORIES, ENVIRONMENT_ROLES, LABEL_NAMES, ROLES, SLOP_TYPES, STATUSES, isMine, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -73,6 +73,7 @@ const settingsSchema = z.object({
   sensitivePaths: z.array(z.string()).optional(),
   // Core checks the range (3 to 50).
   effectCheckGlobs: z.number().int().optional(),
+  agentKbApproval: z.enum(AGENT_KB_APPROVALS).optional(),
   deploy: z
     .discriminatedUnion('provider', [
       z.object({

@@ -42,6 +42,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
+import { AGENT_DECISION_DAYS, decidedByAgent, reopenable } from '@/lib/kb-agent-decisions';
 import { useCardMotion } from '@/lib/card-motion';
 import type { CardMotionOptions } from '@/lib/card-motion';
 import { invalidateKnowledge } from '@/lib/live';
@@ -70,9 +71,6 @@ const targetPath = (target: KbTarget, owned: ReadonlySet<string>): string => {
   const parts = [target.name, ...(target.kind !== 'doc' && !owned.has(target.name) ? ['Board rules'] : [])];
   return [...parts, ...(target.section === null ? [] : [target.section])].join(' › ');
 };
-
-/** Items the pipeline closed without a decision: they leave the open queue but keep their links. */
-const CLOSED_BY_PIPELINE: readonly KbItem['status'][] = ['merged', 'suppressed', 'covered'];
 
 /** The fallback poll while the pipeline is working; hints normally refresh the list (as the board's deploy poll). */
 const PIPELINE_POLL_MS = 15_000;
@@ -905,7 +903,7 @@ const ProposalCard = ({
     },
     onError: (e) => reportError(client, boardId, toast, e),
   });
-  const closedByPipeline = CLOSED_BY_PIPELINE.includes(item.status);
+  const closedByPipeline = reopenable(item);
   const blocker = open && item.document === null ? approveBlocker(item) : null;
 
   return (
@@ -995,7 +993,7 @@ const ProposalCard = ({
       )}
       {closedByPipeline && admin && (
         <div className='mt-1 flex flex-wrap items-center gap-2'>
-          {/* The pipeline closed it without a person: an admin can put it back in the open queue. */}
+          {/* The pipeline closed it, or an agent decided it: an admin can put it back in the open queue (an agent's approval is reverted). */}
           <Button size='sm' variant='outline' disabled={reopen.isPending} onClick={() => reopen.mutate()}>
             Reopen
           </Button>
@@ -1522,11 +1520,13 @@ export const KbProposals = ({
     refetchInterval: (query) => (query.state.data?.open.some(inPipeline) === true ? PIPELINE_POLL_MS : false),
   });
   const [opened, setOpened] = useState<{ item: KbItemView; opening: Opening } | null>(null);
+  const [agentOnly, setAgentOnly] = useState(false);
 
   const { data } = proposals;
   // Core orders the open queue (by evidence, then the freshest).
   const open = useMemo(() => data?.open ?? [], [data]);
   const decided = data?.decided ?? { items: [], total: 0 };
+  const shownDecided = useMemo(() => (agentOnly ? decidedByAgent(decided.items, Date.now()) : decided.items), [agentOnly, decided.items]);
   const closed = data?.closed ?? { items: [], total: 0 };
   // Every listed card, in a list that keeps its identity until the data changes (what the motion compares).
   const listed = useMemo(
@@ -1595,7 +1595,12 @@ export const KbProposals = ({
           <details className='text-sm' data-testid='kb-decided'>
             <summary className='cursor-pointer text-xs text-muted-foreground'>Approved and rejected ({decided.total})</summary>
             <div className='mt-2 grid gap-2'>
-              {decided.items.map((item) => (
+              <label className='flex w-fit items-center gap-2 text-xs' title='Approvals and rejections an agent made through MCP; reopen one to undo it'>
+                <input type='checkbox' checked={agentOnly} onChange={(e) => setAgentOnly(e.target.checked)} data-testid='kb-agent-filter' />
+                Decided by agent (last {AGENT_DECISION_DAYS} days)
+              </label>
+              {agentOnly && shownDecided.length === 0 && <p className='text-xs text-muted-foreground'>No agent decisions in the last {AGENT_DECISION_DAYS} days.</p>}
+              {shownDecided.map((item) => (
                 <ProposalCard key={item.id} board={board} item={item} existing={null} onOpen={() => undefined} />
               ))}
               {decided.total > decided.items.length && showMore}

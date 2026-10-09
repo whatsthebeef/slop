@@ -497,15 +497,17 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'decide_kb_item',
     {
       description:
-        "Admins only: approve a KB item as drafted, or reject it with a reason (required), recorded as you with outcome.via 'agent'. Same checks as the Knowledge page's buttons; pass the version you read from list_kb_items. Approving is refused for what a person must decide on the Knowledge page: the local-run spec, the merge policy, agent-set files (agent, command, hook, settings, mcp, claude_md), a whole-document proposal and any item with contradicts flags. Rejecting any item is allowed.",
+        "Admins only: approve a KB item as drafted or with an edited draft, or reject it with a reason (required), recorded as you with outcome.via 'agent'. Same checks as the Knowledge page's buttons; pass the version you read from list_kb_items. editedDraft is the full section (or value) to apply in place of the draft: it is validated and checked against the version the draft was made against, and the change is written as a new knowledge version (agent-set files bump the agent-set version). Always refused for approval, whatever the board's setting: the local-run spec, the merge policy and a whole-document proposal (a person approves them on the Knowledge page; rejecting is allowed). Agent-set files (agent, command, hook, settings, mcp, claude_md) and items with contradicts flags are refused too unless the board's agentKbApproval setting is docs_and_agent_files (an admin sets it under Knowledge in board settings); a contradicting item then needs a reason, recorded with the decision. A person can reopen any agent decision on the Knowledge page, which reverts its change.",
       inputSchema: {
         id: z.string().describe('KB item id, e.g. s1k3'),
         version: z.number().int(),
         decision: z.enum(['approve', 'reject']),
-        reason: z.string().max(4000).optional().describe('Required to reject'),
+        reason: z.string().max(4000).optional().describe('Required to reject, and to approve a contradicting item (why the contradiction is intended or resolved)'),
+        editedDraft: z.string().max(200_000).optional().describe('Approve only: the full section or value to apply instead of the drafted one'),
       },
     },
-    async ({ id, version, decision, reason }) => reply(await knowledge.decideByAgent(email, id, version, decision, reason)),
+    async ({ id, version, decision, reason, editedDraft }) =>
+      reply(await knowledge.decideByAgent(email, id, version, decision, { reason, editedDraft })),
   );
 
   server.registerTool(

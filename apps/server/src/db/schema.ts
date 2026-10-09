@@ -23,7 +23,7 @@ import type {
   ProposedDocument,
   SignalFigures,
 } from '@slop/core';
-import { AUTHORITY_TIERS, BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
+import { AGENT_KB_APPROVALS, AUTHORITY_TIERS, BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -70,6 +70,8 @@ export const boards = pgTable('boards', {
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
   /** Effect checks: globs compared on each side of an approved change. */
   effectCheckGlobs: integer('effect_check_globs').notNull().default(EFFECT_CHECK_GLOBS_DEFAULT),
+  /** Which KB items an admin's agent may approve: 'docs' or 'docs_and_agent_files'. */
+  agentKbApproval: text('agent_kb_approval', { enum: AGENT_KB_APPROVALS }).notNull().default('docs'),
   /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
   deploy: jsonb('deploy').$type<DeployIntegration>(),
   /** The latest check result on the base branch head; written by check events, not by settings changes. */

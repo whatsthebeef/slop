@@ -1,3 +1,8 @@
+/** What an admin's agent may approve through `decide_kb_item`: documentation items only, or agent-set files and contradicting items too. */
+export const AGENT_KB_APPROVALS = ['docs', 'docs_and_agent_files'] as const;
+export type AgentKbApproval = (typeof AGENT_KB_APPROVALS)[number];
+export const AGENT_KB_APPROVAL_DEFAULT: AgentKbApproval = 'docs';
+
 export const SLOP_TYPES = ['sub', 'same', 'super'] as const;
 export type SlopType = (typeof SLOP_TYPES)[number];
 
@@ -300,6 +305,8 @@ export interface Board {
   readonly subMaxChangedLines: number;
   /** Effect checks: how many globs each side of an approved change is compared over (admins set 3 to 50). */
   readonly effectCheckGlobs: number;
+  /** Which KB items an admin's agent may approve (`decide_kb_item`); admins set it. */
+  readonly agentKbApproval: AgentKbApproval;
   readonly version: number;
 }
 
