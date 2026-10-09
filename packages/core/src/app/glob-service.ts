@@ -1,12 +1,12 @@
-import { err, forbidden, notFound, ok } from '../domain/errors.js';
+import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
-import type { ArtifactSummary, Provenance } from '../domain/knowledge.js';
+import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import type { Actor, Board, Category, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
-import { checkAfter, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
+import { MAX_AFTER, checkAfter, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
 import type { AwaitedDependency, DependencyState } from '../domain/waiting.js';
 import type { BranchFiles, Clock, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { findHolds } from './hold-service.js';
@@ -43,6 +43,42 @@ export interface CreateGlobInput {
   /** Files intake guessed the work changes (advisory: with the plan, they decide whether exclusive paths hold it). */
   readonly files?: readonly string[];
 }
+
+/** One part of a split. Part 0 is the original glob (it keeps its ID); the others become new globs in its group. */
+export interface SplitPart {
+  readonly title: string;
+  readonly summary: string;
+  /** This part's share of plan.md (Markdown). `{part:N}` stands for part N's glob ID. */
+  readonly plan: string;
+  /** Default: the original's category. */
+  readonly category?: Category;
+  /** Default: the original's type. */
+  readonly type?: SlopType;
+  /** Indexes of earlier parts this one starts after; none means it runs in parallel. Part 0 has none. */
+  readonly after?: readonly number[];
+  /** Labels of the original's text attachments to copy to this part (link attachments always are). New parts only. */
+  readonly attachments?: readonly string[];
+}
+
+export const MAX_SPLIT_PARTS = 10;
+
+/** Where a glob came from in a split: the glob that was cut, its own place and every part's ID in order. */
+export interface SplitInfo {
+  readonly source: string;
+  readonly part: number;
+  readonly parts: readonly string[];
+}
+
+export interface SplitInput {
+  readonly parts: readonly SplitPart[];
+  readonly idempotencyKey: string | null;
+  /** Who is splitting, for the new plans' provenance (default: a person). */
+  readonly planBy?: Provenance['by'];
+}
+
+/** Part N's glob ID wherever a plan or summary writes `{part:N}`. */
+export const fillPartIds = (text: string, ids: readonly string[]): string =>
+  text.replace(/\{part:(\d+)\}/g, (match, n: string) => ids[Number(n)] ?? match);
 
 export interface GlobView {
   readonly glob: Glob;
@@ -106,6 +142,18 @@ export class GlobService {
         waitedOnBy: waiting.filter((g) => waitsFor(g, glob.id)).map((g) => g.id),
       });
     });
+  }
+
+  /** The splits on a board, by glob ID, for the card's "part 2 of 3" links (a glob split again shows its latest). */
+  async splitsOf(boardId: number): Promise<Map<string, SplitInfo>> {
+    const events = await this.deps.store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['GlobSplit']));
+    const found = new Map<string, SplitInfo>();
+    for (const e of events) {
+      const { source, part, parts } = e.data;
+      if (typeof source !== 'string' || typeof part !== 'number' || !Array.isArray(parts)) continue;
+      found.set(e.globId, { source, part, parts: parts.filter((p): p is string => typeof p === 'string') });
+    }
+    return found;
   }
 
   /** Integrations' read of one glob, with no signed-in person. */
@@ -222,6 +270,166 @@ export class GlobService {
     if (!result.ok) return result;
     if (result.value.changed) this.publish(result.value.glob);
     return ok(result.value.glob);
+  }
+
+  /**
+   * Cuts a glob in Planning into parts in one transaction: the original keeps part 0 (its ID, history and decisions; a new
+   * plan.md version, title and summary), the others are created in its group with their share of the plan, copies of its
+   * link attachments and the `after` chain between them. Refused once the glob has started. With an idempotency key a retry
+   * returns the same parts, whatever the version.
+   */
+  async split(email: string, id: string, version: number, input: SplitInput): Promise<Result<Glob[]>> {
+    const wanted = input.parts;
+    if (wanted.length < 2) return invalidInput('A split needs at least 2 parts');
+    if (wanted.length > MAX_SPLIT_PARTS) return invalidInput(`A split has at most ${MAX_SPLIT_PARTS} parts`);
+    for (const [index, part] of wanted.entries()) {
+      if (part.title.trim() === '') return invalidInput(`Part ${index} needs a title`);
+      if (part.plan.trim() === '') return invalidInput(`Part ${index} needs a plan`);
+      for (const n of part.after ?? []) {
+        if (!Number.isInteger(n) || n < 0 || n >= index) return invalidInput(`Part ${index} can only start after earlier parts, not ${n}`);
+      }
+      if (index === 0 && (part.after ?? []).length > 0) return invalidInput('Part 0 is the original glob and starts after nothing new');
+    }
+    const result = await this.deps.store.transaction(async (tx): Promise<Result<{ globs: Glob[]; added: readonly string[]; fresh: boolean }>> => {
+      const original = await tx.getGlob(id);
+      if (original === null) return notFound(`No glob ${id}`);
+      const actor = await this.actorFor(tx, email, original.boardId);
+      if (!actor.ok) return actor;
+      const key = (index: number): string | null => (input.idempotencyKey === null ? null : `split:${input.idempotencyKey}:${id}:${index}`);
+      const firstKey = key(1);
+      if (firstKey !== null) {
+        const found: Glob[] = [original];
+        for (let index = 1; index < wanted.length; index++) {
+          const existing = await tx.findGlobByCreationKey(original.boardId, key(index) ?? '');
+          if (existing === null) break;
+          found.push(existing);
+        }
+        if (found.length === wanted.length) return ok({ globs: found, added: [], fresh: false });
+        if (found.length > 1) throw new Error(`Split ${input.idempotencyKey ?? ''} of ${id} is only partly recorded`);
+      }
+      if (original.version !== version) {
+        return err({ code: 'version_conflict', message: 'The glob has changed', current: original });
+      }
+      if (original.status !== 'planning' || original.provisioning !== 'none' || original.runs.length > 0 || original.pr !== null) {
+        return invalidInput(`${id} has started, so it can no longer be split: finish it and create the rest as follow-ups`);
+      }
+      const board = await tx.getBoard(original.boardId);
+      if (board === null) return notFound(`No board ${original.boardId}`);
+      const ctx = await this.context(actor.value, board);
+
+      // IDs first, so every plan can name the others.
+      const ids: string[] = [original.id];
+      for (const part of wanted.slice(1)) {
+        const letter = letterOf(part.category ?? original.category);
+        ids.push(formatId(board.id, letter, await tx.nextNumber(board.id, letter)));
+      }
+      const date = ctx.now.slice(0, 10);
+      const planOf = (index: number): string => {
+        const part = wanted[index];
+        const note =
+          index === 0
+            ? `Split into ${ids.slice(1).join(', ')} on ${date}; this is part 1 of ${wanted.length}.`
+            : `Split from ${id} on ${date}; this is part ${index + 1} of ${wanted.length} (parts: ${ids.join(', ')}).`;
+        return `${fillPartIds(part?.plan ?? '', ids).trimEnd()}\n\n---\n${note}\n`;
+      };
+
+      // Part 0: the original keeps its ID and gets the new fields.
+      const first = wanted[0];
+      if (first === undefined) return invalidInput('A split needs at least 2 parts');
+      const changes: FieldChanges = {
+        title: first.title,
+        summary: fillPartIds(first.summary, ids),
+        ...(first.category === undefined ? {} : { category: first.category }),
+        ...(first.type === undefined ? {} : { type: first.type }),
+      };
+      const changed = machine.changeFields(original, changes, board, ctx, new Map());
+      if (!changed.ok) return changed;
+      const updated = changed.value.changed ? { ...changed.value.glob, version: original.version + 1 } : original;
+      if (changed.value.changed && !(await tx.updateGlob(updated, original.version))) {
+        const current = await tx.getGlob(id);
+        return current === null ? notFound(`No glob ${id}`) : err({ code: 'version_conflict', message: 'The glob has changed', current });
+      }
+      await tx.appendEvents(changed.value.events);
+      await tx.enqueueEffects(changed.value.effects);
+
+      const attachments = await tx.listArtifacts(original.id, 'attachment');
+      const inherited = [...(original.after ?? [])];
+      const globs: Glob[] = [updated];
+      const withArtifacts = [original.id];
+      for (const [index, part] of wanted.entries()) {
+        if (index === 0) continue;
+        const partId = ids[index];
+        if (partId === undefined) throw new Error(`No ID for part ${index}`);
+        const awaitedIds = [...new Set([...inherited, ...(part.after ?? []).map((n) => ids[n] ?? '')])];
+        const found = await this.closure(tx, awaitedIds);
+        const checked = checkAfter(null, awaitedIds, board.id, (gid) => found.get(gid));
+        if (!checked.ok) return checked;
+        if (checked.value.length > MAX_AFTER) return invalidInput(`Part ${index} would wait for more than ${MAX_AFTER} globs`);
+        const created = machine.create(
+          {
+            id: partId,
+            boardId: board.id,
+            title: part.title,
+            summary: fillPartIds(part.summary, ids),
+            type: part.type ?? original.type,
+            category: part.category ?? original.category,
+            group: original.group,
+            environment: original.environment,
+            autoTrigger: false,
+            after: checked.value,
+          },
+          board,
+          ctx,
+          await this.dependencyStates(tx, checked.value),
+        );
+        if (!created.ok) return created;
+        const glob = { ...created.value.glob, version: 1 };
+        if (!(await tx.insertGlob(glob, key(index)))) throw new Error(`Glob ID collision for ${glob.id}`);
+        await tx.appendEvents(created.value.events);
+        await tx.enqueueEffects(created.value.effects);
+        globs.push(glob);
+        withArtifacts.push(glob.id);
+      }
+
+      const provenance: Provenance = { by: input.planBy ?? 'human', actor: email, runId: null, agentSetVersion: null };
+      const at = ctx.now;
+      const addArtifact = async (globId: string, artifact: Omit<Artifact, 'id' | 'version' | 'globId' | 'provenance' | 'createdAt'>) => {
+        const stored = await tx.insertArtifact({ ...artifact, globId, provenance, createdAt: at });
+        await tx.appendEvents([
+          {
+            type: 'ArtifactAdded',
+            globId,
+            actor: email,
+            at,
+            data: { kind: artifact.kind, label: artifact.label, version: stored.version, commitSha: null, runId: null, agentSetVersion: null },
+          },
+        ]);
+      };
+      for (const [index, globId] of ids.entries()) {
+        await addArtifact(globId, { kind: 'plan', label: '', content: planOf(index), link: null, commitSha: null });
+        if (index > 0) {
+          const copy = new Set(wanted[index]?.attachments ?? []);
+          for (const attachment of attachments) {
+            if (attachment.link !== null || copy.has(attachment.label)) {
+              await addArtifact(globId, { kind: 'attachment', label: attachment.label, content: attachment.content, link: attachment.link, commitSha: null });
+            }
+          }
+        }
+        await tx.appendEvents([
+          { type: 'GlobSplit', globId, actor: email, at, data: { source: id, part: index, parts: ids } },
+        ]);
+      }
+      return ok({ globs, added: withArtifacts, fresh: true });
+    });
+    if (!result.ok) return result;
+    if (result.value.fresh) {
+      for (const glob of result.value.globs) this.publish(glob);
+      for (const globId of result.value.added) {
+        const glob = result.value.globs.find((g) => g.id === globId);
+        if (glob !== undefined) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: glob.boardId, globId });
+      }
+    }
+    return ok(result.value.globs);
   }
 
   /** `changes.after` is checked here (IDs exist on the board, no cycle, merged ones dropped) before the machine sees it. */
