@@ -27,6 +27,7 @@ interface Hint {
 export type LiveState = 'connecting' | 'live' | 'reconnecting' | 'paused';
 
 export const globsKey = (boardId: number) => ['globs', boardId] as const;
+export const signedOffCountKey = (boardId: number) => ['signed-off-count', boardId] as const;
 
 /** The board's deploy indicators and running environments; invalidated by `glob.deploys` hints. */
 export const deploysKey = (boardId: number) => ['deploys', boardId] as const;
@@ -193,10 +194,14 @@ export const useLiveInbox = (boardId: number): LiveState => {
 export const useLiveBoard = (boardId: number): LiveState => {
   const client = useQueryClient();
 
-  const replace = (glob: GlobView | null, id: string) =>
+  const replace = (glob: GlobView | null, id: string) => {
+    const was = client.getQueryData<GlobView[]>(globsKey(boardId))?.find((g) => g.id === id);
     client.setQueryData<GlobView[]>(globsKey(boardId), (list) =>
       glob === null ? list?.filter((g) => g.id !== id) : withGlob(list, glob, boardId),
     );
+    // The signed-off total changes when a glob is signed off, or leaves that list (started again, deleted).
+    if (glob?.list === 'signed_off' || was?.list === 'signed_off') void client.invalidateQueries({ queryKey: signedOffCountKey(boardId) });
+  };
 
   const onHint = (hint: Hint) => {
     if (hint.kind === 'board.changed') {
@@ -276,6 +281,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
   // Hints may have been missed while disconnected or hidden: reload the board.
   const onReconnect = () => {
     void client.invalidateQueries({ queryKey: globsKey(boardId) });
+    void client.invalidateQueries({ queryKey: signedOffCountKey(boardId) });
     // Deploys and readiness live beside the globs, so missed deploy hints need their own refresh.
     void client.invalidateQueries({ queryKey: deploysKey(boardId) });
     void client.invalidateQueries({ queryKey: ['glob-deploys'] });

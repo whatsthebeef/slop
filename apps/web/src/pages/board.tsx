@@ -1,8 +1,8 @@
-import { LISTS } from '@slop/core';
+import { LISTS, bySignedOffNewest, latestSignedOff } from '@slop/core';
 import type { Action, LabelCommand, LabelName, List } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
@@ -19,7 +19,7 @@ import { useBoardMotion } from '@/lib/board-motion';
 import { useColumnGlide } from '@/lib/column-glide';
 import { withGlob } from '@/lib/glob-list';
 import { usePageContext } from '@/lib/page-context';
-import { codeReviewsKey, deploysKey, globsKey, useLiveBoard } from '@/lib/live';
+import { codeReviewsKey, deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useToast } from '@/toast';
 
@@ -93,11 +93,17 @@ const Column = ({
   list,
   children,
   count,
+  total,
+  boardId,
   ghost,
 }: {
   list: List;
   children: ReactNode;
   count: number;
+  /** Everything in the list, when it shows only the latest few. */
+  total: number;
+  /** For the "See all" link at the foot of a list that is cut short. */
+  boardId: number;
   ghost: Preview | null;
 }) => (
   <section
@@ -106,7 +112,7 @@ const Column = ({
     data-testid={`list-${list}`}
   >
     <h2 className='flex items-center justify-between px-1 font-mono text-[11px] font-semibold tracking-widest text-muted-foreground uppercase'>
-      {LIST_TITLES[list]} <span>{count}</span>
+      {LIST_TITLES[list]} <span>{total > count ? `${count} of ${total}` : count}</span>
     </h2>
     {ghost !== null && (
       // A moved card lands at the top: lists show the most recently changed first.
@@ -120,6 +126,11 @@ const Column = ({
       </div>
     )}
     {children}
+    {total > count && (
+      <Link to={`/boards/${boardId}/signed-off`} className='px-1 py-1 text-center text-xs text-muted-foreground hover:text-foreground' data-testid='see-all'>
+        See all
+      </Link>
+    )}
   </section>
 );
 
@@ -215,7 +226,13 @@ export const BoardPage = () => {
 
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId), ...KEEP_TRYING });
   const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId), ...KEEP_TRYING });
-  const motion = useBoardMotion(globs.data, live);
+  const signedOffTotal = useQuery({ queryKey: signedOffCountKey(boardId), queryFn: () => api.signedOffCount(boardId), ...KEEP_TRYING });
+  // The Signed Off column keeps the latest few (older ones stay on the Signed off tab), so the cache can hold more than it shows.
+  const shown = useMemo(
+    () => globs.data?.filter((g) => g.list !== 'signed_off').concat(latestSignedOff(globs.data.filter((g) => g.list === 'signed_off'))),
+    [globs.data],
+  );
+  const motion = useBoardMotion(shown, live);
   // Opening the chat hides Signed Off and moves the other columns at once; they glide to their new places.
   useColumnGlide(motion.container, hideSignedOff);
   // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens its page.
@@ -360,7 +377,7 @@ export const BoardPage = () => {
     return <p className='p-6 text-muted-foreground'>Loading…</p>;
   }
 
-  const all = globs.data;
+  const all = shown ?? globs.data;
   // Filtering by type was removed for now; it is to be redesigned with more options. The board shows every glob.
   const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
 
@@ -391,11 +408,12 @@ export const BoardPage = () => {
       >
         <div className='flex min-h-full min-w-full items-stretch gap-3'>
           {LISTS.filter((list) => !(hideSignedOff && list === 'signed_off')).map((list) => {
-            const items = all
-              .filter((g) => g.list === list)
-              .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+            const inList = all.filter((g) => g.list === list);
+            const items =
+              list === 'signed_off' ? bySignedOffNewest(inList) : inList.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+            const total = list === 'signed_off' ? Math.max(items.length, signedOffTotal.data ?? 0) : items.length;
             return (
-              <Column key={list} list={list} count={items.length} ghost={preview?.target === list ? preview : null}>
+              <Column key={list} list={list} count={items.length} total={total} boardId={boardId} ghost={preview?.target === list ? preview : null}>
                 {items.map((glob) => {
                   const moves = movesFor(glob);
                   return (

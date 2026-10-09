@@ -1,5 +1,5 @@
 import type { BoardService, GlobService, Result, SizeCheckService, SplitInfo } from '@slop/core';
-import { AGENT_KB_APPROVALS, CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, ROLES, SLOP_TYPES, STATUSES, isMine, listOf, machine, needsHuman } from '@slop/core';
+import { AGENT_KB_APPROVALS, CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -14,7 +14,7 @@ import type { SignedLinks } from '../signed-links.js';
 import { labelCommandSchema } from './labels.js';
 import { requestOrigin } from './origin.js';
 import { checkSignInState, issueSignInState, safeReturnPath } from './sign-in-state.js';
-import { errorBody, globView, globViewFor, globViewOf, onBoard, statusOf } from './views.js';
+import { errorBody, globView, globViewFor, globViewOf, statusOf } from './views.js';
 
 export interface AppDeps {
   readonly auth: Auth;
@@ -357,12 +357,15 @@ export const createApp = (deps: AppDeps) => {
     const membership = await boards.get(email, boardId);
     if (!membership.ok) return send(c, membership);
     const status = c.req.query('status');
-    const now = Date.now();
+    // The board shows open globs and only the latest signed-off ones; read those first so artifacts load for them alone.
+    const signedOff = await globs.list(email, boardId, { status: ['signed_off'] });
+    if (!signedOff.ok) return send(c, signedOff);
+    const kept = new Set(latestSignedOff(signedOff.value).map((g) => g.id));
     const result = await globs.listWithArtifacts(
       email,
       boardId,
       { ...(status === undefined ? {} : { status: z.array(z.enum(STATUSES)).parse(status.split(',')) }) },
-      (g) => onBoard(g, now),
+      (g) => g.status !== 'signed_off' || kept.has(g.id),
     );
     const splits = await globs.splitsOf(boardId);
     const oversized = await globs.oversizedOf(boardId);
@@ -375,13 +378,18 @@ export const createApp = (deps: AppDeps) => {
     );
   });
 
+  // How many globs are signed off in all (the board's column shows the latest few).
+  app.get('/api/boards/:b/signed-off/count', async (c) =>
+    send(c, await globs.list(c.get('email'), Number(c.req.param('b')), { status: ['signed_off'] }), (list) => ({ total: list.length })),
+  );
+
   app.get('/api/boards/:b/signed-off', async (c) => {
     const email = c.get('email');
     const result = await globs.list(email, Number(c.req.param('b')), { status: ['signed_off'] });
     const cursor = c.req.query('cursor');
     const pageSize = 50;
     return send(c, result, (list) => {
-      const sorted = [...list].sort((a, b) => (b.signedOffAt ?? '').localeCompare(a.signedOffAt ?? ''));
+      const sorted = bySignedOffNewest(list);
       const start = cursor === undefined ? 0 : Number(cursor);
       const page = sorted.slice(start, start + pageSize);
       return {

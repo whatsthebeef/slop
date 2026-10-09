@@ -442,6 +442,7 @@ export const api = {
     request<object>('DELETE', `/api/boards/${id}/members/${encodeURIComponent(email)}`),
 
   globs: (boardId: number) => request<GlobView[]>('GET', `/api/boards/${boardId}/globs`),
+  signedOffCount: (boardId: number) => request<{ total: number }>('GET', `/api/boards/${boardId}/signed-off/count`).then((r) => r.total),
   signedOff: (boardId: number, cursor: string | null) =>
     request<{ globs: GlobView[]; next: string | null }>(
       'GET',
