@@ -7,6 +7,7 @@ import { Link } from 'react-router';
 import { api } from '@/lib/api';
 import type { ChatCitation, ChatMessage } from '@/lib/api';
 import { stateLabel, unavailableNotice } from '@/lib/chat';
+import type { ChatRequest } from '@/lib/chat';
 import { Button } from './ui/button';
 import { Input, Textarea } from './ui/input';
 
@@ -55,20 +56,28 @@ const Message = ({ message, onNavigate }: { message: ChatMessage; onNavigate: ()
  * records; answers cite their sources, and a decision is marked current or superseded by a newer one. Answer text
  * comes from a model, so it is plain text.
  */
-export const ChatPanel = ({ boardId }: { boardId: number }) => {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <Button variant='outline' onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid='chat-toggle'>
-        <MessageCircle className='h-4 w-4' aria-hidden />
-        Ask
-      </Button>
-      {open && <ChatSide boardId={boardId} onClose={() => setOpen(false)} />}
-    </>
-  );
-};
+export const ChatPanel = ({
+  boardId,
+  open,
+  onOpenChange,
+  request,
+}: {
+  boardId: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** A question sent from elsewhere (the search box's Ask); the panel asks it once per request. */
+  request: ChatRequest | null;
+}) => (
+  <>
+    <Button variant='outline' onClick={() => onOpenChange(!open)} aria-expanded={open} data-testid='chat-toggle'>
+      <MessageCircle className='h-4 w-4' aria-hidden />
+      Ask
+    </Button>
+    {open && <ChatSide boardId={boardId} request={request} onClose={() => onOpenChange(false)} />}
+  </>
+);
 
-const ChatSide = ({ boardId, onClose }: { boardId: number; onClose: () => void }) => {
+const ChatSide = ({ boardId, request, onClose }: { boardId: number; request: ChatRequest | null; onClose: () => void }) => {
   const client = useQueryClient();
   const key = ['chat', boardId];
   const history = useQuery({ queryKey: key, queryFn: () => api.chatHistory(boardId) });
@@ -79,15 +88,16 @@ const ChatSide = ({ boardId, onClose }: { boardId: number; onClose: () => void }
   const end = useRef<HTMLDivElement>(null);
 
   const ask = useMutation({
-    mutationFn: (q: string) =>
+    mutationFn: ({ question: q, history: withHistory }: { question: string; history: boolean }) =>
       api.askChat(boardId, {
         question: q,
-        ...(includeHistory ? { history: true } : {}),
+        ...(withHistory ? { history: true } : {}),
         ...(glob.trim() === '' ? {} : { glob: glob.trim() }),
         ...(group.trim() === '' ? {} : { group: group.trim() }),
       }),
-    onSuccess: () => {
-      setQuestion('');
+    onSuccess: (_reply, { question: asked }) => {
+      // Clear the box only if it still holds what was asked, so a question typed meanwhile survives.
+      setQuestion((current) => (current.trim() === asked ? '' : current));
       void client.invalidateQueries({ queryKey: key });
     },
   });
@@ -104,8 +114,17 @@ const ChatSide = ({ boardId, onClose }: { boardId: number; onClose: () => void }
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
     const q = question.trim();
-    if (q !== '' && !ask.isPending) ask.mutate(q);
+    if (q !== '' && !ask.isPending) ask.mutate({ question: q, history: includeHistory });
   };
+
+  // A question from the search box is asked once, when its request arrives (also on opening the panel).
+  const handled = useRef<number | null>(null);
+  useEffect(() => {
+    if (request === null || handled.current === request.id) return;
+    handled.current = request.id;
+    setIncludeHistory(request.history);
+    ask.mutate({ question: request.question, history: request.history });
+  }, [request, ask]);
   const notice = ask.error === null ? null : unavailableNotice(ask.error);
 
   return (
