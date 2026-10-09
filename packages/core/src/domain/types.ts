@@ -65,6 +65,8 @@ export interface Run {
   /** The cloud session started by the fire request, for Open in Claude and Continue locally. */
   readonly sessionId: string | null;
   readonly sessionUrl: string | null;
+  /** Set on the run slop queued by itself after a watching run gave up: the one automatic retry. */
+  readonly autoRetry?: true;
 }
 
 export type PrState = 'draft' | 'ready' | 'closed' | 'merged';

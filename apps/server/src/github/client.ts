@@ -13,7 +13,7 @@ type Octokit = Awaited<ReturnType<App['getInstallationOctokit']>>;
 /** The parts of `GET /repos/{owner}/{repo}/commits/{ref}` a merged sub's size is read from. */
 const commitStats = z.object({
   stats: z.object({ additions: z.number().int().nonnegative(), deletions: z.number().int().nonnegative() }),
-  files: z.array(z.object({ filename: z.string() })).optional(),
+  files: z.array(z.object({ filename: z.string(), additions: z.number().int().nonnegative().optional(), deletions: z.number().int().nonnegative().optional() })).optional(),
 });
 
 const status = (error: unknown): number | null =>
@@ -506,6 +506,7 @@ export class GitHub implements CodeHost, CommitGraph {
     return {
       changedLines: commit.stats.additions + commit.stats.deletions,
       files: (commit.files ?? []).map((f) => f.filename),
+      fileLines: Object.fromEntries((commit.files ?? []).map((f) => [f.filename, (f.additions ?? 0) + (f.deletions ?? 0)])),
     };
   }
 
@@ -540,6 +541,7 @@ export class GitHub implements CodeHost, CommitGraph {
     return {
       changedLines: files.reduce((sum, f) => sum + f.additions + f.deletions, 0),
       files: files.map((f) => f.filename),
+      fileLines: Object.fromEntries(files.map((f) => [f.filename, f.additions + f.deletions])),
     };
   }
 
