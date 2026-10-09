@@ -1,6 +1,6 @@
 import { composeAgentSet } from '../domain/agent-set.js';
 import { effectItemOf } from '../domain/effect-check.js';
-import { LLM_WAITING_PREFIX } from '../domain/kb.js';
+import { BUSY_WAITING_PREFIX, LLM_WAITING_PREFIX, failedBecauseBusy } from '../domain/kb.js';
 import type {
   KbContradiction,
   KbCoverage,
@@ -17,12 +17,12 @@ import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/know
 import { checkLocalRun, LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
 import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
 import type { Catalog, Clock, Notifier, Store, Tx } from '../ports.js';
-import { LlmUnavailable } from './intake-service.js';
+import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
 import { documentTarget, targetState } from './knowledge-service.js';
 import type { TargetState } from './knowledge-service.js';
 import { addEvidenceTo, keptApart, longEnoughQuote, normalised, verifiedQuote } from './kb-dedupe.js';
-import { completeWithDeadline } from './llm-call.js';
+import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 
 /** Failures at one stage (LLM errors or unusable answers) before an item is marked `failed`. */
@@ -199,6 +199,8 @@ const describeItem = (item: KbItem) => {
  * items for an admin's decision.
  */
 export class KbPipeline {
+  private readonly busy = new BusyBackoff();
+
   constructor(
     private readonly deps: {
       store: Store;
@@ -262,6 +264,13 @@ export class KbPipeline {
   }
 
   private async run(item: KbItem): Promise<void> {
+    await this.step(item);
+    // Whatever ended the busy streak (a success, a real failure) starts the next one over.
+    const after = await this.deps.store.transaction((tx) => tx.getKbItem(item.id));
+    if (after?.processingError?.startsWith(BUSY_WAITING_PREFIX) !== true) this.busy.clear(item.id);
+  }
+
+  private async step(item: KbItem): Promise<void> {
     if (item.processing === 'routed') {
       await this.draft(item);
       return;
@@ -321,7 +330,7 @@ export class KbPipeline {
         state,
       );
     } catch (error) {
-      if (error instanceof LlmUnavailable) await this.wait(item, error.reason);
+      if (error instanceof LlmUnavailable) await this.wait(item, error);
       else await this.fail(item, error instanceof Error ? error.message : String(error), 'routed');
       return;
     }
@@ -365,7 +374,7 @@ export class KbPipeline {
   private async ask(
     item: KbItem,
     snapshot: Snapshot,
-  ): Promise<{ routing: Routing; dedupe: Dedupe } | { failure: string } | { unavailable: string }> {
+  ): Promise<{ routing: Routing; dedupe: Dedupe } | { failure: string } | { unavailable: LlmUnavailable }> {
     try {
       const routing = parseRouting(
         await this.complete(this.deps.route, { system: ROUTE_SYSTEM, prompt: routePrompt(item, snapshot), maxTokens: 600 }),
@@ -390,7 +399,7 @@ export class KbPipeline {
       );
       return dedupe === null ? { failure: 'The dedupe answer was not usable JSON' } : { routing, dedupe };
     } catch (error) {
-      if (error instanceof LlmUnavailable) return { unavailable: error.reason };
+      if (error instanceof LlmUnavailable) return { unavailable: error };
       return { failure: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -571,17 +580,49 @@ export class KbPipeline {
    * to be tried again after `LLM_WAIT_MS`. Not a failed attempt: the count is unchanged and the item
    * never ends `failed` this way; `processingError` says why it waits.
    */
-  private async wait(item: KbItem, reason: string): Promise<void> {
+  private async wait(item: KbItem, unavailable: LlmUnavailable): Promise<void> {
     const now = this.deps.clock.now();
-    const message = `${LLM_WAITING_PREFIX}${reason}`.slice(0, 500);
+    // Busy is the same wait with a growing delay, and says when the item comes back.
+    const retryAt = this.later(now, unavailable instanceof LlmBusy ? this.busy.next(item.id) : LLM_WAIT_MS);
+    const message = (unavailable instanceof LlmBusy ? busyMessage(retryAt) : `${LLM_WAITING_PREFIX}${unavailable.reason}`).slice(0, 500);
     const wrote = await this.write(item, (current) => ({
       ...current,
       processingError: message,
-      processAfter: this.later(now, LLM_WAIT_MS),
+      processAfter: retryAt,
     }));
     // Each probe while the LLM is down releases the item again; the page only needs to hear of the
     // first (the write only lands on the claimed version, so `item` is what it replaced).
     if (wrote && item.processingError !== message) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
+  }
+
+  /**
+   * Puts open items that went `failed` only because Bedrock was busy (before busy errors stopped
+   * spending attempts) back at their stage with fresh attempts: `routed` when they had a target
+   * (drafting failed), else `pending`. Run once when the job starts; returns how many were requeued.
+   */
+  async requeueBusyFailed(): Promise<number> {
+    const requeued = await this.deps.store.transaction(async (tx) => {
+      const boards = new Set<number>();
+      let count = 0;
+      for (const item of await tx.listFailedKbItems()) {
+        if (!failedBecauseBusy(item)) continue;
+        const next: KbItem = {
+          ...item,
+          processing: item.target === null ? 'pending' : 'routed',
+          processingAttempts: 0,
+          processingError: null,
+          processAfter: null,
+          version: item.version + 1,
+        };
+        if (await tx.updateKbItem(next, item.version)) {
+          boards.add(item.boardId);
+          count++;
+        }
+      }
+      return { boards, count };
+    });
+    for (const boardId of requeued.boards) this.deps.notifier.publish({ kind: 'board.kb', boardId });
+    return requeued.count;
   }
 
   private later(now: string, ms: number): string {

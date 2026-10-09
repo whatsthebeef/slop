@@ -309,6 +309,20 @@ export const staleReasonAt = (
  */
 export const LLM_WAITING_PREFIX = 'AI unavailable: ';
 
+/** Starts `processingError` while an item waits out a busy Bedrock (throttling, "unable to process"): no attempt is spent. */
+export const BUSY_WAITING_PREFIX = 'Waiting: Bedrock busy';
+
+/**
+ * What Bedrock's transient errors say, as recorded when an item failed on them before they were
+ * told apart from real failures (the SDK's messages for throttling, service-unavailable and
+ * model-not-ready), plus the busy wait message itself.
+ */
+const BUSY_ERROR = /unable to process your request|too many requests|throttl|rate exceeded|service unavailable|model is not ready|waiting: bedrock busy/i;
+
+/** Whether a `failed` item failed only because Bedrock was busy. */
+export const failedBecauseBusy = (item: Pick<KbItem, 'processing' | 'processingError'>): boolean =>
+  item.processing === 'failed' && item.processingError !== null && BUSY_ERROR.test(item.processingError);
+
 /** Why an open item is waiting for the LLM, or null when it isn't. */
 export const llmWaitingReason = (item: Pick<KbItem, 'processing' | 'processingError'>): string | null =>
   (item.processing === 'pending' || item.processing === 'routed') && item.processingError?.startsWith(LLM_WAITING_PREFIX) === true

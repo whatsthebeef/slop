@@ -121,6 +121,8 @@ export interface Tx {
    * `routed`, waiting for its draft) whose `processAfter` is unset or not after `now`.
    */
   nextKbItemToProcess(now: string): Promise<KbItem | null>;
+  /** Open items, on every board, whose processing ended `failed` (the busy-recovery pass picks from these). */
+  listFailedKbItems(): Promise<KbItem[]>;
   /** Writes `item` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateKbItem(item: KbItem, expectedVersion: number): Promise<boolean>;
 

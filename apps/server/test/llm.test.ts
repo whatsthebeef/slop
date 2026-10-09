@@ -1,7 +1,7 @@
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
-import { LlmUnavailable } from '@slop/core';
+import { LlmBusy, LlmUnavailable } from '@slop/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BedrockLlm, shownModelId } from '../src/llm.js';
+import { BEDROCK_CLIENT_RETRY, BedrockLlm, shownModelId } from '../src/llm.js';
 
 const MODEL = 'us.anthropic.claude-opus-5-5';
 
@@ -89,12 +89,26 @@ describe('BedrockLlm error classification', () => {
 
   it.each([
     ['ThrottlingException', 'Too many requests'],
+    ['ServiceUnavailableException', 'Bedrock is unable to process your request.'],
+    ['ModelNotReadyException', 'The model is not ready'],
+    ['ServiceQuotaExceededException', 'Quota exceeded'],
+    ['InternalServerException', 'Internal failure'],
     ['ModelTimeoutException', 'Model timed out'],
+    ['TimeoutError', 'Request timed out'],
+  ])('classifies %s as busy: wait and retry, no attempt spent', async (name, message) => {
+    expect(await failWith(sdkError(name, message))).toBeInstanceOf(LlmBusy);
+  });
+
+  it.each([
     ['ValidationException', 'temperature is not supported'],
     ['ValidationException', `model ID ${MODEL}: extended output for this request is not supported`],
     ['AbortError', 'The operation was aborted'],
   ])('rethrows %s unchanged', async (name, message) => {
     const error = sdkError(name, message);
     expect(await failWith(error)).toBe(error);
+  });
+
+  it('retries adaptively, up to five attempts', () => {
+    expect(BEDROCK_CLIENT_RETRY).toEqual({ retryMode: 'adaptive', maxAttempts: 5 });
   });
 });

@@ -39,6 +39,19 @@ export class LlmUnavailable extends Error {
   }
 }
 
+/**
+ * The model is only busy (Bedrock throttling, "unable to process your request", model not ready, SDK
+ * timeouts): nothing a person can fix, and it passes. A subclass of `LlmUnavailable`, so callers that
+ * wait on an unusable LLM wait on this too without spending an attempt; the background pipelines
+ * tell them apart to back off exponentially (`BusyBackoff`), and the health state ignores it.
+ */
+export class LlmBusy extends LlmUnavailable {
+  constructor() {
+    super('Bedrock is busy', 'It is retried automatically, with a growing delay');
+    this.name = 'LlmBusy';
+  }
+}
+
 export interface IntakeInput {
   readonly text: string;
   /** Fields the person (or the MCP caller) set explicitly; they always win. */

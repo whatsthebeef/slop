@@ -29,7 +29,7 @@ import { LocalFollowWatch } from './local-follow.js';
 import { mountReadiness } from './http/readiness.js';
 import { ReadinessWatch } from './readiness-watch.js';
 import { HintHub } from './notifier.js';
-import { BedrockLlm } from './llm.js';
+import { BedrockLlm, shownModelId } from './llm.js';
 import { BedrockEmbedder } from './embedder.js';
 import { CodeHostChanges } from './code-host-changes.js';
 import { marksBoardDirty, SearchSync } from './jobs/search-sync.js';
@@ -131,6 +131,19 @@ const llmHealth: LlmHealth = new LlmHealth((model, h) => {
   const worst = llmHealth.state();
   if (worst.state === 'down') integrations.report('bedrock', { state: 'down', reason: worst.reason, fix: worst.fix });
   else if (worst.state === 'ok') integrations.report('bedrock', { state: 'ok' });
+}, undefined, (model, throttled) => {
+  // Throttling slows KB drafting down but pauses nothing, so it is a warning on every board, cleared by the next success.
+  const source = `bedrock-throttling:${model}`;
+  const done = throttled
+    ? notifications.raise({
+        boardId: null,
+        source,
+        severity: 'warning',
+        title: `Bedrock is throttling ${shownModelId(model)}`,
+        detail: 'KB drafting and other AI work are slowed down: busy calls wait and retry without failing.',
+      })
+    : notifications.clear(null, source);
+  done.catch((error: unknown) => logError('llm-health', error instanceof Error ? error.message : String(error)));
 });
 // Each tracked model's LLM, so a finished AWS sign-in can probe the ones that were down.
 const probes = new Map<string, Llm>();
@@ -343,6 +356,11 @@ const deployWatch = new DeployWatch(deploys, logError);
 if (runs('deploys')) deployWatch.start();
 // The pipeline pauses on its own models only: intake's model says nothing about them.
 const kbModels = [config.KB_ROUTE_MODEL, config.KB_DRAFT_MODEL];
+// One-off on start: items that failed only because Bedrock was busy (before that stopped spending attempts) go back to their stage.
+void kbPipeline
+  .requeueBusyFailed()
+  .then((count) => count > 0 && console.log(`[kb-pipeline] requeued ${String(count)} item(s) that failed while Bedrock was busy`))
+  .catch((error: unknown) => logError('kb-pipeline', error instanceof Error ? error.message : String(error)));
 const kbPipelineJob = new KbPipelineJob(kbPipeline, logError, { isDown: () => llmHealth.isDown(kbModels) });
 if (runs('kb')) kbPipelineJob.start();
 // Findings pause on the findings model only, like the KB pipeline on its own.
