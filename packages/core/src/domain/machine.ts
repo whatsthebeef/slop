@@ -214,7 +214,7 @@ class Builder {
   }
 
   /** Queues a new routine run for whoever triggered it. */
-  queueRun(triggeredBy: string): this {
+  queueRun(triggeredBy: string, retry?: { readonly failureSummary: string | null }): this {
     const run: Run = {
       id: this.ctx.newRunId(),
       state: 'queued',
@@ -229,12 +229,14 @@ class Builder {
       failureReason: null,
       sessionId: null,
       sessionUrl: null,
+      ...(retry === undefined ? {} : { autoRetry: true as const }),
     };
     this.set({ runs: [...this.glob.runs, run] });
     this.event('RunTriggered', {
       runId: run.id,
       triggeredBy,
       routineOwner: run.routineOwner,
+      ...(retry === undefined ? {} : { automatic: true }),
     });
     return this.effect({
       kind: 'fire_routine',
@@ -242,6 +244,7 @@ class Builder {
       generation: this.glob.generation,
       runId: run.id,
       routineOwner: run.routineOwner,
+      ...(retry?.failureSummary == null ? {} : { failureSummary: retry.failureSummary }),
     });
   }
 
@@ -1154,6 +1157,17 @@ const minutesSince = (from: string, now: string): number => (Date.parse(now) - D
 /** `2026-10-07 02:01 UTC`: a time in a failure reason. */
 const queuedAtText = (at: string): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
+/** The reason `runTimeoutReason` gives a watching run that ignored failed checks. */
+const GAVE_UP = /^Auto-fix didn't respond/;
+
+/** The failing check and its first lines, as the retried run's fire text carries them; null when the log wasn't read. */
+const failureSummaryOf = (glob: Glob): string | null => {
+  const failure = glob.headChecks?.state === 'failed' ? glob.headChecks.failure : undefined;
+  if (failure === undefined) return null;
+  const where = failure.step === null ? failure.name : `${failure.name} (${failure.step})`;
+  return [where, ...failure.lines.slice(0, 5)].join('\n');
+};
+
 /** The head's failed checks that are the glob's own to fix (not inherited from the base): what a watching run is asked to respond to. */
 const ownFailedHead = (glob: Glob): HeadChecks | null => {
   const checks = glob.headChecks;
@@ -1412,6 +1426,8 @@ export const subGateCompleted = (
     /** Recorded for the learned sub limit: why it converted, the lines it changes and the limit applied. */
     cause?: SubGateCause | null;
     changedLines?: number;
+    /** Generated lines left out of `changedLines` (the board's `sizeIgnoredPaths`). */
+    ignoredLines?: number;
     limit?: number;
   },
   ctx: Context,
@@ -1425,6 +1441,7 @@ export const subGateCompleted = (
     reason: gate.reason,
     ...(gate.cause !== undefined && { cause: gate.cause }),
     ...(gate.changedLines !== undefined && { changedLines: gate.changedLines }),
+    ...(gate.ignoredLines !== undefined && gate.ignoredLines > 0 && { ignoredLines: gate.ignoredLines }),
     ...(gate.limit !== undefined && { limit: gate.limit }),
   });
   if (gate.passed) {
@@ -1559,10 +1576,14 @@ export const reportFailure = (
   }
   if (glob.status === 'pr_open' && run.state === 'watching') {
     // Row 25: auto-fix ended; the glob stays in pr_open and shows the failure.
-    return new Builder(glob, ctx)
-      .endRun('failed', report.reason, { agentSetVersion })
-      .set({ failure })
-      .done();
+    const b = new Builder(glob, ctx).endRun('failed', report.reason, { agentSetVersion });
+    // A watcher that gave up is retried once by slop itself, on the same PR and branch; only if that run also ends
+    // without fixing it does the glob show the failure and the Retry auto-fix button.
+    const retried = glob.runs.some((r) => r.autoRetry === true);
+    if (GAVE_UP.test(report.reason) && !retried && glob.type !== 'super' && glob.implementer === null && glob.pr !== null) {
+      return b.queueRun(run.triggeredBy, { failureSummary: failureSummaryOf(glob) }).done();
+    }
+    return b.set({ failure }).done();
   }
   return invalidTransition(glob, ctx.actor, `Run failure ignored: glob is ${glob.status}`);
 };

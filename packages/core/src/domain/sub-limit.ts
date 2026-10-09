@@ -10,6 +10,8 @@ import type { Glob } from './types.js';
 export const SUB_LIMIT_MIN = 200;
 export const SUB_LIMIT_MAX = 5000;
 export const SUB_LIMIT_STEP = 250;
+/** A sub that needed fixes lowers the limit only when it changed at least this share of it; a smaller one says nothing about it. */
+export const SUB_LIMIT_NEAR_SHARE = 0.5;
 /** How long after a sub's merge a needed fix (a sign-off label asking for changes, a bug blaming it) counts. */
 export const SUB_LIMIT_WINDOW_DAYS = 14;
 
@@ -57,11 +59,16 @@ export const raisedLimit = (limit: number): number =>
 export const loweredLimit = (limit: number): number =>
   Math.min(limit, Math.max(SUB_LIMIT_MIN, limit - SUB_LIMIT_STEP));
 
-export const nextLimit = (outcome: SubLimitOutcome, limit: number): number =>
-  outcome === 'merged_unchanged' ? raisedLimit(limit) : loweredLimit(limit);
+/** Whether a sub of `changedLines` was near `limit`: at least `SUB_LIMIT_NEAR_SHARE` of it. Unknown size isn't near. */
+export const nearLimit = (changedLines: number | null, limit: number): boolean =>
+  changedLines !== null && changedLines >= limit * SUB_LIMIT_NEAR_SHARE;
+
+/** The limit after an outcome: a raise always, a lowering only for a sub near the limit. */
+export const nextLimit = (outcome: SubLimitOutcome, limit: number, changedLines: number | null): number =>
+  outcome === 'merged_unchanged' ? raisedLimit(limit) : nearLimit(changedLines, limit) ? loweredLimit(limit) : limit;
 
 /** The gate's reason for a size conversion; events recorded before `changedLines` and `cause` carry only this. */
-const SIZE_REASON = /Changes (\d+) lines \(limit (\d+)\)/;
+const SIZE_REASON = /Changes (\d+) lines(?:, not counting [\d,]+ generated)? \(limit (\d+)\)/;
 
 /** A `SubReviewCompleted` event's verdict, from its fields or (older events) its reason. */
 export interface GateVerdict {
