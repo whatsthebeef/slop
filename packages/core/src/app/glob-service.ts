@@ -245,7 +245,7 @@ export class GlobService {
     const embedding = await embedRequest(this.deps.embedder, input.intake?.request ?? input.summary);
     // The size check asks a model too, so it is made here as well; a failing model leaves the text estimate.
     const planText = input.plan ?? input.summary;
-    const size = this.deps.sizeCheck === undefined ? null : await this.deps.sizeCheck.assess(input.boardId, planText);
+    const size = this.deps.sizeCheck === undefined ? null : await this.deps.sizeCheck.assess(input.boardId, planText, { summaryOnly: (input.plan ?? '').trim() === '' });
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Transition>> => {
       const board = await tx.getBoard(input.boardId);
       if (board === null) return notFound(`No board ${input.boardId}`);
@@ -658,6 +658,19 @@ export class GlobService {
       if (result.ok && result.value.status !== 'planning') released.push(waiting.id);
     }
     return released;
+  }
+
+  /**
+   * After a size check was re-judged (its plan was saved): a sub held in Planning for the flag starts once the check no
+   * longer holds it. A newly flagged sub needs nothing here: `release` refuses an unanswered flag, and a sub in Planning
+   * is always waiting on something.
+   */
+  async reconcileSizeHold(id: string): Promise<void> {
+    const lift = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      return glob !== null && glob.status === 'planning' && glob.type === 'sub' && glob.waiting != null && !unresolved(await tx.getSizeCheck(id));
+    });
+    if (lift) await this.release(id);
   }
 
   /** Starts one held glob if everything it waits for has merged and the merge policy still lets it. */
