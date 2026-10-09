@@ -62,7 +62,7 @@ const byKind = (a: ArtifactSummary, b: ArtifactSummary): number =>
 type Step = (glob: Glob, ctx: Context, board: Board, facts: ActionFacts) => Result<Transition>;
 
 interface CommandOptions {
-  /** Read the facts some actions depend on (the latest postplan); other steps get none. */
+  /** Read the facts some actions depend on (the latest implementation record); other steps get none. */
   readonly facts?: boolean;
   /** Read the state of the globs this one waits for into `facts.dependencies`. */
   readonly dependencies?: boolean;
@@ -96,7 +96,7 @@ export class GlobService {
       if (!actor.ok) return actor;
       const artifacts = (await tx.listArtifactSummaries(glob.boardId, [glob.id])).sort(byKind);
       const dependencies = await this.dependencyStates(tx, dependencyIds(glob));
-      const facts = { postplanSha: machine.postplanShaOf(artifacts), dependencies };
+      const facts = { recordSha: machine.recordShaOf(artifacts), dependencies };
       const waiting = await tx.listGlobs(glob.boardId, { status: ['planning'] });
       return ok({
         glob,
@@ -320,7 +320,7 @@ export class GlobService {
     });
   }
 
-  /** Merge, or (`continueAfter`, supers) Merge and continue, which needs the latest postplan at the head. */
+  /** Merge, or (`continueAfter`, supers) Merge and continue, which needs the latest implementation record at the head. */
   merge(email: string, id: string, version: number, continueAfter = false) {
     return this.command(
       email,
@@ -341,7 +341,7 @@ export class GlobService {
     return this.command(email, id, null, (glob, ctx) => machine.readyRequested(glob, runId, ctx));
   }
 
-  /** The board's Ready for review on a super: allowed once the latest postplan is at the PR head. */
+  /** The board's Ready for review on a super: allowed once the latest implementation record is at the PR head. */
   requestReadyFromBoard(email: string, id: string, version: number) {
     return this.command(
       email,
@@ -494,14 +494,14 @@ export class GlobService {
           if (!prepared.ok) return prepared;
           extraIds = prepared.value;
         }
-        const postplan = options.facts === true
-          ? { postplanSha: machine.postplanShaOf(await tx.listArtifactSummaries(glob.boardId, [glob.id])) }
+        const record = options.facts === true
+          ? { recordSha: machine.recordShaOf(await tx.listArtifactSummaries(glob.boardId, [glob.id])) }
           : {};
         const dependencies =
           options.dependencies === true
             ? { dependencies: await this.dependencyStates(tx, [...new Set([...dependencyIds(glob), ...extraIds])]) }
             : {};
-        const facts: ActionFacts = { ...postplan, ...dependencies };
+        const facts: ActionFacts = { ...record, ...dependencies };
         const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);
         const transition = step(glob, ctx, board, facts);
         if (!transition.ok) return transition;

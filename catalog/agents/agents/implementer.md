@@ -36,7 +36,7 @@ You implement code changes according to a plan, and fix issues found in testing 
    - features and tasks: files changed, behaviour added, decisions made;
    - bugs: files changed, the root cause, what the fix does and why.
    - Under `## Checks`, the exact commands you ran and their pass counts (not logs), so the tester and reviewer don't need to re-run them.
-   - Under `## Deviations from plan`, list anything you did differently from the selected proposal and why. The orchestrator records these as plan amendments.
+   - Under `## Deviations from plan`, list anything you did differently from the selected proposal and why. The orchestrator records these in the implementation record's Deviations. Also list under `## Decisions and traps` any decision (with the alternative you rejected) and any trap the next person would hit, since the orchestrator condenses these notes into the record.
 
 Full test runs and coverage are the **tester**'s job; don't run the full suite.
 

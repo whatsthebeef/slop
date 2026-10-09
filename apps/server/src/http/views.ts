@@ -43,7 +43,7 @@ const artifactView = ({ kind, label, version, versions, commitSha, createdAt, by
 export const globViewFor = (glob: Glob, email: string, role: Role, artifacts: readonly ArtifactSummary[] | null = null) =>
   globView(
     glob,
-    machine.allowedActions(glob, { email, role }, { postplanSha: machine.postplanShaOf(artifacts ?? []) }),
+    machine.allowedActions(glob, { email, role }, { recordSha: machine.recordShaOf(artifacts ?? []) }),
     artifacts,
   );
 

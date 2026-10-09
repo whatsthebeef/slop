@@ -4,6 +4,7 @@ import type { FindingClass, FindingSeverity, FindingSource, ReviewFinding } from
 import { addedDependencies, isManifestPath } from '../src/domain/manifests.js';
 import {
   globAgentSetVersion,
+  deviationLines,
   lineChange,
   measureSignals,
   normaliseFailure,
@@ -189,30 +190,23 @@ describe('mined signals: CodeRabbit blind spots', () => {
 });
 
 describe('mined signals: plans', () => {
-  it('counts heavily amended implementation plans (3 versions, or 40% of lines changed), not supers', () => {
-    const lines = (n: number, tag = 'line') => Array.from({ length: n }, (_, i) => `${tag} ${String(i)}`).join('\n');
-    const plan = (g: string, version: number, content: string) => artifact(g, 'implementation_plan', { version, content });
+  it('counts records with 3 or more lines under Deviations, for every glob type', () => {
+    const rec = (g: string, deviations: string) => artifact(g, 'implementation_plan', { content: `## Approach\n\nx\n\n## Deviations\n\n${deviations}\n\n## What was built\n\ny` });
     const a = activity(
       {
         artifacts: [
-          plan('s1t1', 1, 'a'),
-          plan('s1t1', 2, 'b'),
-          plan('s1t1', 3, 'c'),
-          plan('s1t2', 1, lines(10)),
-          plan('s1t2', 2, `${lines(6)}\n${lines(4, 'new')}`),
-          plan('s1t3', 1, lines(10)),
-          plan('s1t3', 2, `${lines(7)}\n${lines(3, 'new')}`),
-          plan('s1t4', 1, lines(10)),
-          plan('s1f1', 1, 'x'),
-          plan('s1f1', 2, 'y'),
-          plan('s1f1', 3, 'z'),
+          rec('s1t1', '- a\n- b\n- c'),
+          rec('s1t2', '- a\n- b'),
+          rec('s1t3', 'None'),
+          rec('s1f1', '- a\n- b\n- c\n- d'),
         ],
       },
       { s1f1: 'super' },
     );
-    expect(measured(a, 'plan_amended')).toMatchObject({ figures: { affected: 2, eligible: 4 }, globIds: ['s1t1', 's1t2'], crosses: false });
-    expect(perGlob(a, 's1f1', 'plan_amended')).toEqual({ eligible: false, affected: false });
-    expect(lineChange(lines(10), `${lines(6)}\n${lines(4, 'new')}`)).toBeCloseTo(0.4);
+    expect(measured(a, 'plan_amended')).toMatchObject({ figures: { affected: 2, eligible: 4 }, globIds: ['s1f1', 's1t1'] });
+    expect(perGlob(a, 's1t2', 'plan_amended')).toEqual({ eligible: true, affected: false });
+    expect(deviationLines('## Deviations\n- None.\n\n## Traps\n- x')).toEqual([]);
+    expect(deviationLines('## Approach\nx')).toEqual([]);
     expect(lineChange('', '')).toBe(0);
   });
 
@@ -490,13 +484,14 @@ describe('mined signals: threshold edges (s15f8)', () => {
   });
   const lines = (n: number, tag = 'line') => Array.from({ length: n }, (_, i) => `${tag} ${String(i)}`).join('\n');
 
-  it('plan_amended crosses at 3 globs and 25% of globs with a plan, not below', () => {
-    const amended = globs(3).flatMap((g) => [1, 2, 3].map((v) => artifact(g, 'implementation_plan', { version: v, content: `v${String(v)}` })));
+  it('plan_amended crosses at 3 globs and 25% of globs with a record, not below', () => {
+    const deviating = (g: string) => artifact(g, 'implementation_plan', { content: '## Deviations\n- a\n- b\n- c' });
+    const amended = globs(3).map(deviating);
     const steady = (n: number) => globs(n, 's1b').map((g) => artifact(g, 'implementation_plan', { content: lines(5) }));
     expect(measured(activity({ artifacts: [...amended, ...steady(9)] }), 'plan_amended')).toMatchObject({ figures: { affected: 3, eligible: 12 }, crosses: true });
     expect(measured(activity({ artifacts: [...amended, ...steady(10)] }), 'plan_amended')).toMatchObject({ figures: { affected: 3, eligible: 13 }, crosses: false });
-    // 39% of lines changed on 2 versions isn't heavy amendment.
-    const light = activity({ artifacts: [artifact('s1t1', 'implementation_plan', { content: lines(100) }), artifact('s1t1', 'implementation_plan', { version: 2, content: `${lines(61)}\n${lines(39, 'new')}` })] });
+    // Two lines of deviations isn't many.
+    const light = activity({ artifacts: [artifact('s1t1', 'implementation_plan', { content: '## Deviations\n- a\n- b' })] });
     expect(measured(light, 'plan_amended')).toBeUndefined();
   });
 
@@ -596,7 +591,7 @@ describe('mined signals: perGlob for every signal (s15f8)', () => {
             reviewStats: { riskTier: 'normal', reviewRounds: 2, maxReviewRounds: 2, testFailRounds: 1 },
           }),
           artifact('s1t2', 'local_review', { reviewStats: { riskTier: 'normal', reviewRounds: 1, maxReviewRounds: 2, testFailRounds: 0 } }),
-          ...[1, 2, 3].map((v) => artifact('s1t3', 'implementation_plan', { version: v, content: `v${String(v)}` })),
+          artifact('s1t3', 'implementation_plan', { content: '## Deviations\n- a\n- b\n- c' }),
           artifact('s1t4', 'implementation_plan', { content: 'same' }),
         ],
         findings: [finding('s1t2', 'security', { source: 'coderabbit' })],

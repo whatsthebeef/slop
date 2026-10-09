@@ -114,7 +114,7 @@ describe('Mining reads and board jobs in Postgres', () => {
     expect(await store.transaction((tx) => tx.listBoardEvents(boardId, since, []))).toEqual([]);
   });
 
-  it('lists artifact metadata of some kinds since a time, with content only for local reviews and plans', async () => {
+  it('lists artifact metadata of some kinds since a time, with content only for local reviews and implementation records', async () => {
     const globId = await newGlob(boardId);
     now = ago(10);
     unwrap(await artifacts.putArtifact(DEV, globId, 'implementation_plan', '# Plan\n', { commitSha: null, runId: null, agentSetVersion: 4 }));
@@ -134,7 +134,8 @@ describe('Mining reads and board jobs in Postgres', () => {
     expect(own.map((a) => [a.kind, a.version, a.content])).toEqual([
       ['implementation_plan', 1, '# Plan\n'],
       ['local_review', 1, '## Review (round 2)'],
-      ['postplan', 1, null],
+      // A postplan write is the next version of the record, whose content is kept like a plan's.
+      ['implementation_plan', 2, 'Long postplan'],
     ]);
     expect(own[1]?.provenance.reviewStats).toEqual({ riskTier: 'normal', reviewRounds: 2, maxReviewRounds: 2, testFailRounds: 1 });
     expect(own[1]?.commitSha).toBe('abc1234');

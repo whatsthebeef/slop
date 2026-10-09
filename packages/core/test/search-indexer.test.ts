@@ -173,8 +173,7 @@ describe('SearchIndexer', () => {
     expect(Object.fromEntries(types)).toEqual({
       glob_summary: 2,
       glob_plan: 1,
-      implementation_plan: 1,
-      decision_log: 1,
+      implementation_plan: 2,
       postplan: 1,
       local_review: 1,
       attachment: 1,
@@ -192,7 +191,7 @@ describe('SearchIndexer', () => {
     });
     expect(byRef('artifact:s1t1:postplan:').authority).toBe('merged_code');
     expect(byRef('artifact:s1t1:local_review:').authority).toBe('discussion');
-    expect(byRef('artifact:s1f2:implementation_plan:').sourceType).toBe('decision_log');
+    expect(byRef('artifact:s1f2:implementation_plan:')).toMatchObject({ sourceType: 'implementation_plan', authority: 'merged_code' });
     expect(byRef('review:coderabbit:review_comment:1').externalUrl).toBe('https://github.com/acme/app/pull/7#discussion_r1');
     expect(byRef('kb:build_test_lint').globIds).toEqual([]);
     expect(chunksOf('kb:build_test_lint')).toMatchObject([{ header: '[Knowledge · 2026-10-05 · "build_test_lint" · Build]', text: 'Run pnpm test.' }]);

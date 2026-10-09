@@ -202,7 +202,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_glob',
     {
       description:
-        "Everything about a glob: status, version, fields, labels, PR, runs, flags, its artifacts (the latest version of each plan, implementation plan, postplan, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress.",
+        "Everything about a glob: status, version, fields, labels, PR, runs, flags, its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress.",
       inputSchema: { id: z.string(), runId: z.string().optional() },
     },
     async ({ id, runId }) => {
@@ -340,7 +340,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'merge',
     {
       description:
-        "Merge a same or super whose PR is ready and whose required checks passed on the current head, as the glob's Merge button does: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. With continue (supers, latest postplan at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Pass the version you read.",
+        "Merge a same or super whose PR is ready and whose required checks passed on the current head, as the glob's Merge button does: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. With continue (supers, latest implementation record at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Pass the version you read.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -565,7 +565,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields, plan.md (the postplan for supers) in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows; the glob's own items left out). Pass `include` to get more in full: 'implementation_plan', 'local_review', 'attachment:<label>', 'code_review' (CodeRabbit's summary, reviews and inline comments on the PR, verbatim), or 'all'.",
+        "The glob's context bundle: its fields, plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows; the glob's own items left out). Pass `include` to get more in full: 'local_review', 'attachment:<label>', 'code_review' (CodeRabbit's summary, reviews and inline comments on the PR, verbatim), or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {
@@ -588,13 +588,13 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   const sourceTypes = z
     .array(z.enum(SOURCE_TYPES))
     .optional()
-    .describe('Only these kinds of source (glob_plan, postplan, local_review, code_review, kb_doc, learning, ...)');
+    .describe('Only these kinds of source (glob_plan, implementation_plan, local_review, code_review, kb_doc, learning, ...)');
 
   server.registerTool(
     'search_text',
     {
       description:
-        "Keyword search over the board's plans, postplans, reviews, CodeRabbit comments, knowledge and learnings: exact words, names, identifiers and file paths. Returns at most 10 cited chunks (source, date, title, link, glob), best first; superseded or legacy items are labelled. The board's search index; member of the board required.",
+        "Keyword search over the board's plans, implementation records, reviews, CodeRabbit comments, knowledge and learnings: exact words, names, identifiers and file paths. Returns at most 10 cited chunks (source, date, title, link, glob), best first; superseded or legacy items are labelled. The board's search index; member of the board required.",
       inputSchema: { ...searchFields, query: z.string().min(1).max(MAX_QUERY_LENGTH), sourceTypes },
     },
     async (p) => reply(await deps.search.text(email, toRequest(p))),
@@ -636,7 +636,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_artifact',
     {
       description:
-        "The latest version of one artifact of a glob in full: kind is 'implementation_plan', 'postplan', 'local_review' or 'attachment' (with its label).",
+        "The latest version of one artifact of a glob in full: kind is 'implementation_plan' (the implementation record), 'local_review' or 'attachment' (with its label).",
       inputSchema: { id: z.string(), kind: z.enum(ARTIFACT_KINDS), label: z.string().optional() },
     },
     async ({ id, kind, label }) => reply(await artifacts.artifact(email, id, kind, label ?? '')),
@@ -645,7 +645,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   server.registerTool(
     'get_plan',
     {
-      description: 'plan.md (or the postplan for supers) for a glob, optionally a given version, with its version history.',
+      description: 'plan.md for a glob, optionally a given version, with its version history.',
       inputSchema: { id: z.string(), version: z.number().int().optional() },
     },
     async ({ id, version }) => reply(await artifacts.plan(email, id, version ?? null)),
@@ -680,7 +680,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'put_artifact',
     {
       description:
-        'Store an implementation plan, postplan or local review on the glob as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
+        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it) or a local review as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
       inputSchema: {
         id: z.string(),
         kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
@@ -719,7 +719,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'artifact_upload_url',
     {
       description:
-        "A URL for uploading an implementation plan, postplan or local review from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
+        "A URL for uploading the implementation record (implementation_plan; postplan is an alias) or a local review from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
       inputSchema: {
         id: z.string(),
         kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
