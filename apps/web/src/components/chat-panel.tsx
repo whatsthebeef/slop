@@ -214,7 +214,7 @@ const Message = ({
   const citations = message.citations ?? [];
   const user = message.role === 'user';
   return (
-    <article className={user ? 'ml-8 rounded-md bg-muted p-2' : 'mr-4 rounded-md border p-2'} data-testid={`chat-${message.role}`}>
+    <article className={user ? 'ml-8 rounded-md bg-muted p-2' : 'py-1'} data-testid={`chat-${message.role}`}>
       {user ? (
         <p className='whitespace-pre-wrap text-sm'>{message.content}</p>
       ) : (
@@ -245,6 +245,8 @@ export const ChatPanel = ({
   onChatChange,
   onClose,
   onFullScreenChange,
+  width,
+  divider,
 }: {
   boardId: number;
   fullScreen: boolean;
@@ -255,6 +257,10 @@ export const ChatPanel = ({
   onChatChange: (chatId: number | null) => void;
   onClose: () => void;
   onFullScreenChange: (fullScreen: boolean) => void;
+  /** The docked width in px; the dock clips the panel to its own width while it slides, so the panel keeps this one. */
+  width: number;
+  /** The drag handle on the panel's left edge (not shown on the narrow-screen sheet or in full screen). */
+  divider?: ReactNode;
 }) => {
   const client = useQueryClient();
   const page = useCurrentPage();
@@ -343,9 +349,9 @@ export const ChatPanel = ({
   return (
     <aside
       className={cn(
-        'flex min-h-0 flex-col border-l-2 border-foreground/80 bg-card p-3 text-sm',
-        fullScreen ? 'flex-1' : 'w-[30rem] max-w-[85vw] shrink-0',
+        'relative flex h-full min-h-0 w-full flex-col border-l-2 border-foreground/80 bg-card p-3 text-sm',
       )}
+      style={{ minWidth: width }}
       aria-label='Board chat'
       data-testid='chat-panel'
       data-fullscreen={fullScreen}
@@ -355,6 +361,7 @@ export const ChatPanel = ({
         else onClose();
       }}
     >
+      {!fullScreen && divider}
       <div className={cn('mx-auto flex min-h-0 w-full flex-1 flex-col gap-2', fullScreen && 'max-w-3xl')}>
         <div className='flex items-center justify-between gap-2'>
           <h2 className='font-semibold'>Ask this board</h2>
@@ -444,7 +451,7 @@ export const ChatPanel = ({
               <article className='ml-8 rounded-md bg-muted p-2' data-testid='chat-user'>
                 <p className='whitespace-pre-wrap text-sm'>{pending.question}</p>
               </article>
-              <article className='mr-4 rounded-md border p-2' data-testid='chat-streaming'>
+              <article className='py-1' data-testid='chat-streaming'>
                 {pending.text === '' ? <p className='text-muted-foreground'>Reading the board's records…</p> : <Answer text={pending.text} citations={[]} onNavigate={followed} />}
               </article>
             </>

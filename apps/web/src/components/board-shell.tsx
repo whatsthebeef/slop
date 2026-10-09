@@ -2,10 +2,12 @@ import { MessageCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useLocation, useParams } from 'react-router';
+import { ChatDivider } from '@/components/chat-divider';
 import { ChatPanel } from '@/components/chat-panel';
 import { NotificationBar } from '@/components/notification-bar';
 import { BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
+import { clampChatWidth, DEFAULT_CHAT_WIDTH, readChatWidth, usePresence, writeChatWidth } from '@/lib/chat-width';
 import { hideSignedOff, isChatShortcut, WIDE_QUERY } from '@/lib/chat';
 import { newCount } from '@/lib/inbox';
 import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
@@ -115,6 +117,23 @@ export const BoardShell = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, [isBoard]);
   const showChat = isBoard && chatOpen;
+  // The panel stays mounted while it glides shut; the divider sets its width on wide screens, remembered between visits.
+  const { mounted, entered } = usePresence(showChat);
+  const [savedWidth, setSavedWidth] = useState(readChatWidth);
+  const [dragging, setDragging] = useState(false);
+  const [available, setAvailable] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setAvailable(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const setWidth = (width: number) => {
+    const next = clampChatWidth(width, available);
+    setSavedWidth(next);
+    writeChatWidth(next);
+  };
+  const resizable = wide && !fullScreen;
+  const width = wide ? clampChatWidth(savedWidth, available) : Math.min(DEFAULT_CHAT_WIDTH, Math.round(available * 0.85));
   return (
     <PageContextProvider page={page} setPage={setPage}>
     <div className='flex h-dvh flex-col'>
@@ -122,10 +141,32 @@ export const BoardShell = () => {
       {isBoard && <NotificationBar boardId={boardId} />}
       {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={openChat} />}
       <div className='flex min-h-0 flex-1'>
-        <div className={cn('min-h-0 min-w-0 flex-1 overflow-auto', showChat && fullScreen && 'hidden')} data-testid='main-area'>
+        <div
+          className={cn('board-glide min-h-0 min-w-0 flex-[1_1_0%] overflow-auto', showChat && fullScreen && 'flex-[0_1_0%] overflow-hidden', dragging && 'transition-none')}
+          inert={showChat && fullScreen}
+          data-testid='main-area'
+        >
           <Outlet context={{ headerActions, hideSignedOff: hideSignedOff(showChat, wide) } satisfies BoardShellContext} />
         </div>
-        {showChat && <ChatPanel boardId={boardId} fullScreen={fullScreen} focusToken={focusToken} chatId={chatId} onChatChange={setChatId} onClose={closeChat} onFullScreenChange={setFullScreen} />}
+        {isBoard && mounted && (
+          <div
+            className={cn('board-glide min-h-0 min-w-0 overflow-hidden', dragging && 'transition-none')}
+            style={{ flexBasis: entered && showChat ? width : 0, flexGrow: entered && showChat && fullScreen ? 1 : 0, flexShrink: 0 }}
+            data-testid='chat-dock'
+          >
+            <ChatPanel
+              boardId={boardId}
+              fullScreen={fullScreen}
+              focusToken={focusToken}
+              chatId={chatId}
+              onChatChange={setChatId}
+              onClose={closeChat}
+              onFullScreenChange={setFullScreen}
+              width={width}
+              divider={resizable && <ChatDivider width={width} available={available} dragging={dragging} onWidth={setWidth} onDragging={setDragging} />}
+            />
+          </div>
+        )}
       </div>
     </div>
     </PageContextProvider>
