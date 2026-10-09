@@ -112,7 +112,7 @@ Respond with one JSON object and nothing else:
 - title: a short imperative title, at most 70 characters.
 - summary: one or two plain sentences saying what is wanted, for a card on the board. Not the spec.
 - plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
-- type: "sub" for a small bug fix or minor UI or UX tweak that can be implemented and merged without human review; "super" only when the request says the work is done by a developer pairing with the product owner; otherwise "same".
+- type: "sub" for any self-contained change that one routine can implement and merge in one PR without a human design decision: bug fixes, UI or UX tweaks, follow-ups to merged work, small features confined to one area, and test or doc changes. "same" for large or multi-area work, changes that need a human review (agent instructions, auth, migrations of existing data), and work that overlaps an open glob. "super" only when the request says the work is done by a developer pairing with the product owner.
 - category: "feature" for new capability, "bug" for something broken, "task" for other maintenance.
 - categoryConfidence: how sure you are of the category: "low" when the request could reasonably be a different category. categoryReason: one short sentence saying why.
 - Examples from the board's history may follow the request. Examples marked as changed show what the team wanted after a person corrected the first choice: follow them over your own reading when the request is similar.
@@ -255,7 +255,7 @@ export class IntakeService {
     if (!isValidCombination(type, category)) {
       // Keep whatever the person set explicitly and repair the other field.
       if (input.explicit.type !== undefined && input.explicit.category === undefined) {
-        category = type === 'sub' ? 'task' : 'feature';
+        category = 'feature';
       } else {
         type = 'same';
       }

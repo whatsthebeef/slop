@@ -1,12 +1,12 @@
 import type { Category, List, SlopType, Status } from './types.js';
 
 const ALLOWED: Record<Category, readonly SlopType[]> = {
-  feature: ['same', 'super'],
+  feature: ['sub', 'same', 'super'],
   task: ['sub', 'same', 'super'],
   bug: ['sub', 'same'],
 };
 
-/** The type/category matrix: features are never subs, bugs are never supers. */
+/** The type/category matrix: bugs are never supers. */
 export const isValidCombination = (type: SlopType, category: Category): boolean =>
   ALLOWED[category].includes(type);
 

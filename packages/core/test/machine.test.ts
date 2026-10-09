@@ -61,9 +61,7 @@ describe('create (rows 1–4)', () => {
   });
 
   it('enforces the type/category matrix', () => {
-    expect(errorCode(m.create(createInput({ type: 'sub', category: 'feature' }), board, ctx()))).toBe(
-      'invalid_combination',
-    );
+    expect(m.create(createInput({ type: 'sub', category: 'feature' }), board, ctx()).ok).toBe(true);
     expect(errorCode(m.create(createInput({ type: 'super', category: 'bug' }), board, ctx()))).toBe(
       'invalid_combination',
     );
@@ -593,9 +591,10 @@ describe('field changes and type changes (row 26)', () => {
   });
 
   it('enforces the matrix on category changes', () => {
-    expect(errorCode(m.changeFields(glob({ type: 'sub' }), { category: 'feature' }, board, ctx()))).toBe(
+    expect(errorCode(m.changeFields(glob({ type: 'super' }), { category: 'bug' }, board, ctx()))).toBe(
       'invalid_combination',
     );
+    expect(m.changeFields(glob({ type: 'sub' }), { category: 'feature' }, board, ctx()).ok).toBe(true);
   });
 
   it('row 26: same to sub from planning starts work', () => {
@@ -1347,11 +1346,8 @@ describe('allowedTypeChanges', () => {
     expect(m.allowedTypeChanges(glob({ type: 'same', category: 'task' }), 'dev')).toEqual([{ to: 'sub' }, { to: 'super' }]);
   });
 
-  it('offers a feature only the task sub, and not a bug a super', () => {
-    expect(m.allowedTypeChanges(glob({ type: 'same', category: 'feature' }), 'dev')).toEqual([
-      { to: 'sub', category: 'task' },
-      { to: 'super' },
-    ]);
+  it('offers a feature a sub, and not a bug a super', () => {
+    expect(m.allowedTypeChanges(glob({ type: 'same', category: 'feature' }), 'dev')).toEqual([{ to: 'sub' }, { to: 'super' }]);
     expect(tos(glob({ type: 'same', category: 'bug' }))).toEqual(['sub']);
   });
 

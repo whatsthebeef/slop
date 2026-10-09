@@ -33,12 +33,11 @@ describe('type actions', () => {
     expect(sub?.tip).toBe('Waits for s1t2 to merge, then starts a routine run and merges itself when ready.');
   });
 
-  it('offers a feature the task sub, and sends type and category together', () => {
+  it('offers a feature a plain sub', () => {
     const [sub] = typeActions(view({ type: 'same', category: 'feature' }), 'dev');
     if (sub === undefined) throw new Error('no sub action');
-    expect(sub).toMatchObject({ to: 'sub', category: 'task' });
-    expect(subConfirmation(sub)).toMatch(/^A feature can't be a sub\. Make it a task sub\?/);
-    expect(typeActionChanges(sub)).toEqual({ type: 'sub', category: 'task' });
+    expect(sub).toMatchObject({ to: 'sub' });
+    expect(typeActionChanges(sub)).toEqual({ type: 'sub' });
   });
 
   it('confirms a plain sub without the task change', () => {
@@ -57,7 +56,7 @@ describe('type actions', () => {
 
 describe('category', () => {
   it('offers only the categories the type allows', () => {
-    expect(categoryOptions('sub')).toEqual(['task', 'bug']);
+    expect(categoryOptions('sub')).toEqual(['feature', 'task', 'bug']);
     expect(categoryOptions('super')).toEqual(['feature', 'task']);
   });
 

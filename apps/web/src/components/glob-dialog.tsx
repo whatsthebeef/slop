@@ -384,7 +384,7 @@ export const GlobDetail = ({
                     Cancel
                   </Button>
                   <Button size='sm' disabled={busy} data-testid='confirm-type' onClick={() => void run(() => changeType(confirmingType))}>
-                    {confirmingType.category === undefined ? 'Make it a sub' : `Make it a ${confirmingType.category} sub`}
+                    Make it a sub
                   </Button>
                 </div>
               )}

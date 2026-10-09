@@ -5,7 +5,7 @@ import { DEFAULT_SIZE_IGNORED_PATHS, matchesGlob, sizeIgnoredPathsOf, subGatePol
 
 describe('type/category matrix', () => {
   it.each([
-    ['sub', 'feature', false],
+    ['sub', 'feature', true],
     ['same', 'feature', true],
     ['super', 'feature', true],
     ['sub', 'task', true],
