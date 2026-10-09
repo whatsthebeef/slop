@@ -54,6 +54,8 @@ export interface GlobView extends Glob {
   /** What the glob still waits for, and the globs in Planning that wait for it (single-glob reads only). */
   readonly waitingFor?: readonly AwaitedDependency[];
   readonly waitedOnBy?: readonly string[];
+  /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
+  readonly split?: { readonly source: string; readonly part: number; readonly parts: readonly string[] };
 }
 
 export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;
@@ -217,6 +219,16 @@ export interface NewGlob {
   after?: string[];
   /** Files intake guessed the work changes (sent back as given). */
   files?: string[];
+}
+
+export interface SplitPartInput {
+  title: string;
+  summary: string;
+  plan: string;
+  category?: Category;
+  type?: SlopType;
+  /** Indexes of earlier parts this one starts after. */
+  after?: number[];
 }
 
 export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'after'>>;
@@ -400,6 +412,9 @@ export const api = {
       'GET',
       `/api/globs/${id}/plan`,
     ),
+  /** Cuts a glob in Planning into parts; the first keeps the glob's ID. */
+  splitGlob: (id: string, version: number, parts: SplitPartInput[], idempotencyKey: string) =>
+    request<{ parts: GlobView[] }>('POST', `/api/globs/${id}/split`, { version, idempotencyKey, parts }),
   savePlan: (id: string, content: string) => request<ArtifactView>('PUT', `/api/globs/${id}/plan`, { content }),
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
   artifactVersions: (id: string, kind: ArtifactKind, label: string) =>

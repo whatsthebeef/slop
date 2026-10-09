@@ -336,6 +336,33 @@ export const AfterChip = ({ glob }: { glob: GlobView }) => {
   );
 };
 
+/** "part 2 of 3" with links to the other parts when the glob came from a split. */
+export const SplitChip = ({ glob }: { glob: GlobView }) => {
+  const split = glob.split;
+  if (split === undefined) return null;
+  const others = split.parts.filter((id) => id !== glob.id);
+  return (
+    <Tip text={`Split from ${split.source}; the other parts: ${others.join(', ')}`}>
+      <span className='font-mono text-[11px] text-muted-foreground' data-testid='split-chip'>
+        part {split.part + 1} of {split.parts.length}
+        {split.part > 0 && (
+          <>
+            {', split from '}
+            <Link
+              to={`/boards/${glob.boardId}?glob=${encodeURIComponent(split.source)}`}
+              className='underline-offset-2 hover:underline'
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              {split.source}
+            </Link>
+          </>
+        )}
+      </span>
+    </Tip>
+  );
+};
+
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -439,6 +466,7 @@ export const GlobCard = ({
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         <AfterChip glob={glob} />
+        <SplitChip glob={glob} />
         {glob.clash != null && (
           <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict`}>
             <span className='font-mono text-[11px] text-required' data-testid='clash-chip'>

@@ -1,5 +1,5 @@
-import type { BoardService, GlobService, Result } from '@slop/core';
-import { AGENT_KB_APPROVALS, CATEGORIES, ENVIRONMENT_ROLES, LABEL_NAMES, ROLES, SLOP_TYPES, STATUSES, isMine, listOf, machine, needsHuman } from '@slop/core';
+import type { BoardService, GlobService, Result, SplitInfo } from '@slop/core';
+import { AGENT_KB_APPROVALS, CATEGORIES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, ROLES, SLOP_TYPES, STATUSES, isMine, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -108,6 +108,25 @@ export const createGlobSchema = z.object({
   files: z.array(z.string().min(1).max(200)).max(20).optional(),
 });
 
+export const splitGlobSchema = z.object({
+  version: z.number().int(),
+  idempotencyKey: z.string().min(1).nullable().default(null),
+  parts: z
+    .array(
+      z.object({
+        title: z.string().min(1),
+        summary: z.string().default(''),
+        plan: z.string().min(1),
+        category: z.enum(CATEGORIES).optional(),
+        type: z.enum(SLOP_TYPES).optional(),
+        after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
+        attachments: z.array(z.string().min(1)).optional(),
+      }),
+    )
+    .min(2)
+    .max(MAX_SPLIT_PARTS),
+});
+
 const updateGlobSchema = z.object({
   version: z.number().int(),
   title: z.string().min(1).optional(),
@@ -118,6 +137,9 @@ const updateGlobSchema = z.object({
   environment: z.string().min(1).nullable().optional(),
   after: z.array(z.string().min(1)).max(20).optional(),
 });
+
+/** A glob that came from a split says where: `split: { source, part, parts }`. */
+const splitField = (split: SplitInfo | undefined) => (split === undefined ? {} : { split });
 
 const versionSchema = z.object({ version: z.number().int() });
 
@@ -314,8 +336,12 @@ export const createApp = (deps: AppDeps) => {
       { ...(status === undefined ? {} : { status: z.array(z.enum(STATUSES)).parse(status.split(',')) }) },
       (g) => onBoard(g, now),
     );
+    const splits = await globs.splitsOf(boardId);
     return send(c, result, (list) =>
-      list.map(({ glob, artifacts }) => globViewFor(glob, email, membership.value.role, artifacts)),
+      list.map(({ glob, artifacts }) => ({
+        ...globViewFor(glob, email, membership.value.role, artifacts),
+        ...splitField(splits.get(glob.id)),
+      })),
     );
   });
 
@@ -350,13 +376,38 @@ export const createApp = (deps: AppDeps) => {
     return send(c, await globs.get(email, created.value.id), globViewOf);
   });
 
-  app.get('/api/globs/:id', async (c) => send(c, await globs.get(c.get('email'), c.req.param('id')), globViewOf));
+  app.get('/api/globs/:id', async (c) => {
+    const view = await globs.get(c.get('email'), c.req.param('id'));
+    if (!view.ok) return send(c, view);
+    const split = (await globs.splitsOf(view.value.glob.boardId)).get(view.value.glob.id);
+    return send(c, view, (v) => ({ ...globViewOf(v), ...splitField(split) }));
+  });
 
   app.patch('/api/globs/:id', async (c) => {
     const body = await parse(c, updateGlobSchema);
     if (body instanceof Response) return body;
     const { version, ...changes } = body;
     return withView(c, await globs.update(c.get('email'), c.req.param('id'), version, changes));
+  });
+
+  // Split a glob in Planning into parts (the board's Split; MCP's split_glob).
+  app.post('/api/globs/:id/split', async (c) => {
+    const body = await parse(c, splitGlobSchema);
+    if (body instanceof Response) return body;
+    const email = c.get('email');
+    const split = await globs.split(email, c.req.param('id'), body.version, {
+      idempotencyKey: body.idempotencyKey,
+      parts: body.parts.map(({ category, type, after, attachments, ...rest }) => ({
+        ...rest,
+        ...(category === undefined ? {} : { category }),
+        ...(type === undefined ? {} : { type }),
+        ...(after === undefined ? {} : { after }),
+        ...(attachments === undefined ? {} : { attachments }),
+      })),
+    });
+    if (!split.ok) return send(c, split);
+    for (const glob of split.value) await deps.outbox.drain(glob.id);
+    return send(c, split, (list) => ({ parts: list.map((glob) => globView(glob)) }));
   });
 
   app.delete('/api/globs/:id', async (c) => {

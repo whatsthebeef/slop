@@ -26,6 +26,7 @@ import { ActivityLabel, GroupChip } from './glob-card';
 import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
+import { SplitGlob, canSplit } from './split-glob';
 import { GlobDecisions } from './glob-decisions';
 import { ReviewFindings } from './review-findings';
 import { cn } from '@/lib/utils';
@@ -124,6 +125,9 @@ export const GlobDialog = ({
   useEffect(() => setAfterText((glob.after ?? []).join(', ')), [glob.id, glob.after]);
   const merged = { ...glob, ...draft };
   const dirty = Object.keys(draft).length > 0;
+  const [splitting, setSplitting] = useState(false);
+  useEffect(() => setSplitting(false), [glob.id]);
+  const splittable = canSplit(glob) && (glob.allowedActions ?? []).includes('delete');
   const actions = (glob.allowedActions ?? []).filter((a) => a !== 'delete');
   const disabled = waitingFor(glob, actions, board.role);
   const status = viewStatusLine(glob, new Date().toISOString(), disabled);
@@ -278,6 +282,17 @@ export const GlobDialog = ({
               )}
             </div>
           )}
+
+          {splittable && !splitting && (
+            <div>
+              <Tip text='Cut this glob into parts: part 1 stays here, the others are created with their share of the plan'>
+                <Button variant='outline' size='sm' disabled={busy} data-testid='split-glob' onClick={() => setSplitting(true)}>
+                  Split
+                </Button>
+              </Tip>
+            </div>
+          )}
+          {splitting && <SplitGlob glob={glob} onCancel={() => setSplitting(false)} onDone={() => onClose()} />}
 
           {actions.length + disabled.length + typeButtons.length > 0 && (
             <div className='grid gap-1'>

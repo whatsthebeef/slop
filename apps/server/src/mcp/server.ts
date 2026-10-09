@@ -1,6 +1,6 @@
 import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, Result, SearchService, ChatService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
-import { ARTIFACT_KINDS, CATEGORIES, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -196,6 +196,60 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         ...(suggestedAfter.filter((id) => !(glob.after ?? []).includes(id)).length === 0
           ? {}
           : { suggestedAfter: suggestedAfter.filter((id) => !(glob.after ?? []).includes(id)) }),
+      }));
+    },
+  );
+
+  server.registerTool(
+    'split_glob',
+    {
+      description:
+        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title, summary and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` chain between them. Write `{part:N}` in a plan or summary for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel.",
+      inputSchema: {
+        id: z.string(),
+        version: z.number().int(),
+        idempotencyKey: z.string().min(1),
+        parts: z
+          .array(
+            z.object({
+              title: z.string().min(1),
+              summary: z.string(),
+              plan: z.string().min(1).describe("This part's share of plan.md (Markdown); {part:N} stands for part N's glob ID"),
+              category: z.enum(CATEGORIES).optional(),
+              type: z.enum(SLOP_TYPES).optional(),
+              after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part starts after'),
+              attachments: z.array(z.string().min(1)).optional().describe("Labels of the original's text attachments to copy (new parts only; link attachments are always copied)"),
+            }),
+          )
+          .min(2)
+          .max(MAX_SPLIT_PARTS),
+      },
+    },
+    async ({ id, version, idempotencyKey, parts }) => {
+      const split = await globs.split(email, id, version, {
+        idempotencyKey,
+        planBy: 'sessionator',
+        parts: parts.map(({ attachments, after, category, type, ...rest }) => ({
+          ...rest,
+          ...(attachments === undefined ? {} : { attachments }),
+          ...(after === undefined ? {} : { after }),
+          ...(category === undefined ? {} : { category }),
+          ...(type === undefined ? {} : { type }),
+        })),
+      });
+      if (split.ok) for (const glob of split.value) await deps.outbox.drain(glob.id);
+      return reply(split, (list) => ({
+        parts: list.map((glob, index) => ({
+          part: index,
+          id: glob.id,
+          version: glob.version,
+          title: glob.title,
+          type: glob.type,
+          category: glob.category,
+          status: glob.status,
+          ...(glob.after === undefined || glob.after.length === 0 ? {} : { after: glob.after }),
+          ...(glob.waiting == null ? {} : { waiting: true }),
+        })),
       }));
     },
   );

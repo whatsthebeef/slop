@@ -51,6 +51,8 @@ export const DOMAIN_EVENT_TYPES = [
   'HoldOverridden',
   /** Another open glob started or stopped changing the same exclusive paths as this one. */
   'ClashChanged',
+  /** A glob was cut into parts (`split_glob`): on every part, with the source, its place and the other parts' IDs. */
+  'GlobSplit',
   'GlobDeleted',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
