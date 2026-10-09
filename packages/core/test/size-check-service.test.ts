@@ -22,7 +22,7 @@ const NOW = '2026-10-09T12:00:00.000Z';
 
 const BIG = `# Big
 
-## Build
+## Tasks
 1. Add the migration for the new table in apps/server/drizzle
 2. Add the server endpoint in apps/server/src/http/app.ts
 3. Add the web card in apps/web/src/components/card.tsx
@@ -34,7 +34,7 @@ Done when: all of it works.
 ## Chat content
 The chat panel shows more content. This section has prose and no task of its own.
 `;
-const SMALL = '## Do\n1. Fix the label on the card.\n';
+const SMALL = '## Do\n- [ ] Fix the label on the card.\n';
 
 describe('learned size check', () => {
   let store: MemoryStore;
@@ -56,8 +56,8 @@ describe('learned size check', () => {
           ? '{"independentParts": 5, "reason": "five pieces"}'
           : JSON.stringify({
               parts: [
-                { title: 'Data and server', summary: 'a', plan: '## Build\n1. migration in apps/server/drizzle\n2. endpoint in apps/server/drizzle', after: [] },
-                { title: 'Web', summary: 'b', plan: '## Build\n3. web card', after: [0] },
+                { title: 'Data and server', summary: 'a', plan: '## Tasks\n1. migration in apps/server/drizzle\n2. endpoint in apps/server/drizzle', after: [] },
+                { title: 'Web', summary: 'b', plan: '## Tasks\n3. web card', after: [0] },
               ],
             }),
       );
@@ -111,8 +111,9 @@ describe('learned size check', () => {
     expect(check?.estimate).toMatchObject({ tasks: 6, independentParts: 5, partsSource: 'model' });
     expect(check?.evidence.join('\n')).toContain('Model: 5 independent parts');
     expect(check?.reasons.length).toBe(2);
-    // The model's two parts, and the untasked "Chat content" section as a third.
-    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['Data and server', 'Web', 'Chat content']);
+    // The model's two parts; the untasked "Chat content" section is context, copied into each.
+    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['Data and server', 'Web']);
+    for (const part of check?.proposal?.parts ?? []) expect(part.plan).toContain('This section has prose and no task of its own');
     expect(check?.proposal?.parts[1]?.after).toEqual([0]);
   });
 
