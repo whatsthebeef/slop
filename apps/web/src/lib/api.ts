@@ -12,6 +12,8 @@ import type {
   BoardJobStatus,
   CatalogUpdate,
   Category,
+  ChatCitation,
+  ChatMessage,
   CodeReviewBadge,
   GlobCodeReview,
   DecisionView,
@@ -125,6 +127,9 @@ export interface ApiError {
   /** A KB item's version conflict carries the item as it is now. */
   readonly currentItem?: KbItem;
   readonly allowedActions?: readonly string[];
+  /** `llm_unavailable` only: what is wrong with the model, and what to do. */
+  readonly reason?: string;
+  readonly fix?: string;
 }
 
 /** An ATF run as the API sends it; `id` is optional because an older server doesn't send it. */
@@ -147,6 +152,23 @@ export interface BoardSearchResult {
   readonly semantic: 'ok' | 'unavailable';
 }
 
+/** One question to the board chat; the scope fields are optional. */
+export interface ChatQuestion {
+  readonly question: string;
+  readonly history?: boolean;
+  readonly glob?: string;
+  readonly group?: string;
+}
+
+/** The chat's reply to a question (`answered` false: the board's records don't answer it). */
+export interface ChatReply {
+  readonly question: ChatMessage;
+  readonly reply: ChatMessage;
+  readonly answered?: boolean;
+}
+
+export type { ChatCitation, ChatMessage };
+
 export class RequestError extends Error {
   constructor(
     readonly status: number,
@@ -159,16 +181,25 @@ export class RequestError extends Error {
 /** A failure that can pass by itself: the server unreachable (fetch throws) or a 5xx. */
 export const isTransient = (error: unknown): boolean => !(error instanceof RequestError) || error.status >= 500;
 
-const request = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+export const request = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
   const response = await fetch(path, {
     method,
     credentials: 'same-origin',
     headers: body === undefined ? {} : { 'content-type': 'application/json' },
     body: body === undefined ? null : JSON.stringify(body),
   });
-  const data = (await response.json().catch(() => ({}))) as unknown;
-  if (!response.ok) throw new RequestError(response.status, data as ApiError);
-  return data as T;
+  const parsed = await response.json().then(
+    (json: unknown) => ({ json }),
+    () => null,
+  );
+  if (!response.ok) {
+    throw new RequestError(response.status, (parsed?.json ?? { code: 'internal', message: `${method} ${path} failed (${response.status})` }) as ApiError);
+  }
+  // An OK answer that isn't JSON is not the API (a server older than the board answers an unknown route with the page).
+  if (parsed === null) {
+    throw new RequestError(response.status, { code: 'internal', message: `${method} ${path} did not answer with JSON (is the server older than the board?)` });
+  }
+  return parsed.json as T;
 };
 
 export interface NewGlob {
@@ -307,6 +338,9 @@ export const api = {
       'GET',
       `/api/boards/${boardId}/search?q=${encodeURIComponent(q)}${history ? '&history=1' : ''}`,
     ).then((r) => r.value),
+  chatHistory: (boardId: number) => request<{ messages: ChatMessage[] }>('GET', `/api/boards/${boardId}/chat`).then((r) => r.messages),
+  askChat: (boardId: number, input: ChatQuestion) => request<ChatReply>('POST', `/api/boards/${boardId}/chat`, input),
+  clearChat: (boardId: number) => request<{ ok: boolean }>('DELETE', `/api/boards/${boardId}/chat`),
   globCodeReview: (id: string) => request<{ value: GlobCodeReview }>('GET', `/api/globs/${id}/code-review`).then((r) => r.value),
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
   deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),

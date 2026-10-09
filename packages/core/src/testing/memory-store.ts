@@ -8,6 +8,7 @@ import { sameCommit } from '../domain/signals.js';
 import type { TestRun } from '../domain/test-runs.js';
 import type { CodeReviewComment } from '../domain/code-review.js';
 import type { BoardNotification } from '../domain/notifications.js';
+import type { ChatMessage } from '../domain/chat.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import type { KbItem } from '../domain/kb.js';
@@ -55,6 +56,7 @@ interface State {
   searchChunks: StoredChunk[];
   decisions: Decision[];
   decisionSources: DecisionSource[];
+  chatMessages: ChatMessage[];
   inboxItems: InboxItem[];
   inboxLinks: InboxLink[];
   integrationTokens: IntegrationToken[];
@@ -127,6 +129,7 @@ const clone = (state: State): State => ({
   searchChunks: [...state.searchChunks],
   decisions: [...state.decisions],
   decisionSources: [...state.decisionSources],
+  chatMessages: [...state.chatMessages],
   inboxItems: [...state.inboxItems],
   inboxLinks: [...state.inboxLinks],
   integrationTokens: [...state.integrationTokens],
@@ -166,6 +169,7 @@ export class MemoryStore implements Store {
     searchChunks: [],
     decisions: [],
     decisionSources: [],
+    chatMessages: [],
     inboxItems: [],
     inboxLinks: [],
     integrationTokens: [],
@@ -784,6 +788,17 @@ export class MemoryStore implements Store {
             .filter((d) => d.state === 'pending' && (d.processAfter === null || d.processAfter <= now))
             .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.sourceRef.localeCompare(b.sourceRef))[0] ?? null,
         ),
+      listChatMessages: (boardId, email, limit) =>
+        Promise.resolve(s.chatMessages.filter((m) => m.boardId === boardId && m.email === email).slice(-limit)),
+      addChatMessage: (message) => {
+        const stored = { ...message, id: this.nextRowId++ };
+        s.chatMessages.push(stored);
+        return Promise.resolve(stored);
+      },
+      clearChat: (boardId, email) => {
+        s.chatMessages = s.chatMessages.filter((m) => m.boardId !== boardId || m.email !== email);
+        return Promise.resolve();
+      },
       insertInboxItem: (input) => {
         const existing =
           s.inboxItems.find((i) => input.sourceRef !== '' && i.boardId === input.boardId && i.source === input.source && i.sourceRef === input.sourceRef) ??

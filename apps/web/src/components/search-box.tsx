@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { Search } from 'lucide-react';
+import { MessageCircle, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { api } from '@/lib/api';
+import { isAskKey } from '@/lib/chat';
 import type { SearchHit } from '@slop/core';
 
 const DEBOUNCE_MS = 300;
@@ -30,9 +32,10 @@ const Cite = ({ hit, onNavigate }: { hit: SearchHit; onNavigate: () => void }) =
 
 /**
  * The board's search box: keyword and semantic matches over the board's plans, reviews, knowledge and changes. By
- * default it favours current material; "Include history" ranks everything the board has ever recorded.
+ * default it favours current material; "Include history" ranks everything the board has ever recorded. Ask hands the
+ * same text (and the history setting) to the board chat as a question; the box and its results stay as they are.
  */
-export const SearchBox = ({ boardId }: { boardId: number }) => {
+export const SearchBox = ({ boardId, onAsk }: { boardId: number; onAsk: (text: string, history: boolean) => void }) => {
   const [text, setText] = useState('');
   const [term, setTerm] = useState('');
   const [history, setHistory] = useState(false);
@@ -50,6 +53,12 @@ export const SearchBox = ({ boardId }: { boardId: number }) => {
     enabled,
   });
 
+  const ask = () => {
+    if (text.trim() === '') return;
+    setOpen(false);
+    onAsk(text, history);
+  };
+
   return (
     <div
       className='relative'
@@ -65,7 +74,7 @@ export const SearchBox = ({ boardId }: { boardId: number }) => {
         <Search className='pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground' aria-hidden />
         <Input
           type='search'
-          className='w-80 max-w-full pl-8'
+          className={text.trim() === '' ? 'w-80 max-w-full pl-8' : 'w-80 max-w-full pl-8 pr-16'}
           placeholder='Search this board'
           aria-label='Search this board'
           value={text}
@@ -74,7 +83,27 @@ export const SearchBox = ({ boardId }: { boardId: number }) => {
             setOpen(true);
           }}
           onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (isAskKey(e.nativeEvent)) {
+              e.preventDefault();
+              ask();
+            }
+          }}
         />
+        {text.trim() !== '' && (
+          <Button
+            type='button'
+            size='sm'
+            variant='ghost'
+            className='absolute top-0.5 right-0.5 h-8 px-2'
+            aria-label='Ask the board chat this question'
+            data-testid='search-ask'
+            onClick={ask}
+          >
+            <MessageCircle className='h-4 w-4' aria-hidden />
+            Ask
+          </Button>
+        )}
       </div>
       {open && enabled && (
         <div

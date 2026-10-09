@@ -1,10 +1,13 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useLocation, useParams } from 'react-router';
+import { ChatPanel } from '@/components/chat-panel';
 import { NotificationBar } from '@/components/notification-bar';
 import { SearchBox } from '@/components/search-box';
 import { StatusBar } from '@/components/status-bar';
 import { api } from '@/lib/api';
+import { askRequest } from '@/lib/chat';
+import type { ChatRequest } from '@/lib/chat';
 import { newCount } from '@/lib/inbox';
 import { inboxKey } from '@/lib/live';
 import { activeTab, BOARD_TABS, pollInterval } from '@/lib/notification-bar';
@@ -21,6 +24,15 @@ const BoardTabs = ({ boardId, onActions }: { boardId: number; onActions: (el: HT
   // The Inbox tab counts items waiting for a person; hints refresh it on the pages that listen, and a slow poll covers the rest.
   const inbox = useQuery({ queryKey: inboxKey(boardId), queryFn: () => api.inbox(boardId), refetchInterval: pollInterval(false) });
   const waiting = newCount(inbox.data ?? []);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatRequest, setChatRequest] = useState<ChatRequest | null>(null);
+  const requests = useRef(0);
+  const askChat = (text: string, history: boolean) => {
+    const next = askRequest(text, history, ++requests.current);
+    if (next === null) return;
+    setChatRequest(next);
+    setChatOpen(true);
+  };
   return (
     <header className='mx-5 mt-4 flex flex-wrap items-end gap-x-6 border-b border-edge/50 text-sm'>
       <nav className='flex gap-6' aria-label='Board sections'>
@@ -37,7 +49,8 @@ const BoardTabs = ({ boardId, onActions }: { boardId: number; onActions: (el: HT
         ))}
       </nav>
       <div className='ml-auto flex items-center gap-2 pb-1.5'>
-        <SearchBox boardId={boardId} />
+        <SearchBox boardId={boardId} onAsk={askChat} />
+        <ChatPanel boardId={boardId} open={chatOpen} onOpenChange={setChatOpen} request={chatRequest} />
         <div ref={onActions} data-testid='header-actions' />
       </div>
     </header>

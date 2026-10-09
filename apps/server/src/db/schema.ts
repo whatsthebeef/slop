@@ -1,4 +1,5 @@
 import type {
+  ChatCitation,
   NotificationAction,
   NotificationClears,
   BaseChecks,
@@ -736,6 +737,23 @@ export const decisionSources = pgTable(
     index('decision_sources_queue_idx').on(t.state, t.processAfter),
     index('decision_sources_glob_idx').on(t.globId),
   ],
+);
+
+/** One person's board chat: their questions and the assistant's cited answers, oldest first by id. */
+export const boardChatMessages = pgTable(
+  'board_chat_messages',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    role: text('role', { enum: ['user', 'assistant'] }).notNull(),
+    content: text('content').notNull(),
+    citations: jsonb('citations').$type<ChatCitation[]>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [index('board_chat_messages_person_idx').on(t.boardId, t.email, t.id)],
 );
 
 /**
