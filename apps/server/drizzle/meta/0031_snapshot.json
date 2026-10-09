@@ -1,5 +1,5 @@
 {
-  "id": "11b7b56c-f0f3-4eaa-93b0-00fe74b3f31e",
+  "id": "dc886699-dc0b-4457-a5d0-cbbfa375fa9e",
   "prevId": "3f1740dd-2b90-41b0-8c34-d14d886be505",
   "version": "7",
   "dialect": "postgresql",
@@ -2036,11 +2036,12 @@
           "notNull": true,
           "default": "'paste'"
         },
-        "source_key": {
-          "name": "source_key",
+        "source_ref": {
+          "name": "source_ref",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "''"
         },
         "source_label": {
           "name": "source_label",
@@ -2167,8 +2168,8 @@
           "method": "btree",
           "with": {}
         },
-        "inbox_items_source_idx": {
-          "name": "inbox_items_source_idx",
+        "inbox_items_source_ref_idx": {
+          "name": "inbox_items_source_ref_idx",
           "columns": [
             {
               "expression": "board_id",
@@ -2183,14 +2184,14 @@
               "nulls": "last"
             },
             {
-              "expression": "source_key",
+              "expression": "source_ref",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             }
           ],
           "isUnique": true,
-          "where": "\"inbox_items\".\"source_key\" is not null",
+          "where": "\"inbox_items\".\"source_ref\" <> ''",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -4321,6 +4322,101 @@
         "board_chat_messages_board_id_boards_id_fk": {
           "name": "board_chat_messages_board_id_boards_id_fk",
           "tableFrom": "board_chat_messages",
+          "tableTo": "boards",
+          "columnsFrom": [
+            "board_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.integration_tokens": {
+      "name": "integration_tokens",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "board_id": {
+          "name": "board_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "integration_tokens_hash_idx": {
+          "name": "integration_tokens_hash_idx",
+          "columns": [
+            {
+              "expression": "token_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_tokens_active_idx": {
+          "name": "integration_tokens_active_idx",
+          "columns": [
+            {
+              "expression": "board_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"integration_tokens\".\"revoked_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "integration_tokens_board_id_boards_id_fk": {
+          "name": "integration_tokens_board_id_boards_id_fk",
+          "tableFrom": "integration_tokens",
           "tableTo": "boards",
           "columnsFrom": [
             "board_id"

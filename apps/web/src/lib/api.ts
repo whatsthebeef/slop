@@ -181,16 +181,25 @@ export class RequestError extends Error {
 /** A failure that can pass by itself: the server unreachable (fetch throws) or a 5xx. */
 export const isTransient = (error: unknown): boolean => !(error instanceof RequestError) || error.status >= 500;
 
-const request = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+export const request = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
   const response = await fetch(path, {
     method,
     credentials: 'same-origin',
     headers: body === undefined ? {} : { 'content-type': 'application/json' },
     body: body === undefined ? null : JSON.stringify(body),
   });
-  const data = (await response.json().catch(() => ({}))) as unknown;
-  if (!response.ok) throw new RequestError(response.status, data as ApiError);
-  return data as T;
+  const parsed = await response.json().then(
+    (json: unknown) => ({ json }),
+    () => null,
+  );
+  if (!response.ok) {
+    throw new RequestError(response.status, (parsed?.json ?? { code: 'internal', message: `${method} ${path} failed (${response.status})` }) as ApiError);
+  }
+  // An OK answer that isn't JSON is not the API (a server older than the board answers an unknown route with the page).
+  if (parsed === null) {
+    throw new RequestError(response.status, { code: 'internal', message: `${method} ${path} did not answer with JSON (is the server older than the board?)` });
+  }
+  return parsed.json as T;
 };
 
 export interface NewGlob {
@@ -378,6 +387,14 @@ export const api = {
   boardSignals: (boardId: number) => request<KbSignal[]>('GET', `/api/boards/${boardId}/kb/signals`),
   /** The board's learned sub size limit, its bounds and its history (members). */
   subLimit: (boardId: number) => request<SubLimitView>('GET', `/api/boards/${boardId}/sub-limit`),
+  /** Whether the board has an active integration token (members); the secret is never returned here. */
+  integrationToken: (boardId: number) =>
+    request<{ active: boolean; createdAt: string | null }>('GET', `/api/boards/${boardId}/integration-token`),
+  /** Makes a token (admins), revoking the old one; the response carries the secret, once. */
+  createIntegrationToken: (boardId: number) =>
+    request<{ token: string; createdAt: string }>('POST', `/api/boards/${boardId}/integration-token`),
+  revokeIntegrationToken: (boardId: number) =>
+    request<{ active: boolean; createdAt: string | null }>('DELETE', `/api/boards/${boardId}/integration-token`),
   plan: (id: string) =>
     request<{ current: ArtifactView | null; versions: { version: number; createdAt: string; by: string }[] }>(
       'GET',

@@ -678,7 +678,7 @@ describe('inbox', () => {
     });
     const run = async (...items: ImportedItem[]) => unwrap(await inbox.importItems(DEV, boardId, items));
     const keyed = async (key: string): Promise<InboxItem> => {
-      const found = (await rows()).find((i) => i.sourceKey === key);
+      const found = (await rows()).find((i) => i.sourceRef === key);
       if (found === undefined) throw new Error(`No item ${key}`);
       return found;
     };
@@ -789,6 +789,77 @@ describe('inbox', () => {
       // A second sweep is idempotent too.
       await indexer.syncBoard(boardId);
       for (const id of ids) expect(searchItem(id)?.authority).toBe('discussion');
+    });
+  });
+
+  describe('addFromSource', () => {
+    const THREAD = 'https://acme.slack.com/archives/C1/p1791554580000200';
+    const slack = (text: string, extra: { title?: string } = {}) => ({
+      source: 'slack',
+      sourceRef: THREAD,
+      sourceType: 'thread' as const,
+      sourceLabel: 'Slack thread',
+      occurredAt: '2026-10-09T14:03:00.000Z',
+      createdBy: 'slack:U1',
+      text,
+      ...extra,
+    });
+
+    it('files the thread as a new indexed item without a member check', async () => {
+      const result = unwrap(await inbox.addFromSource(boardId, slack(NOTES, { title: 'Slack: standup' })));
+      expect(result.created).toBe(true);
+      const item = await row(result.id);
+      expect(item).toMatchObject({ source: 'slack', sourceRef: THREAD, sourceType: 'thread', createdBy: 'slack:U1', title: 'Slack: standup', status: 'new', state: 'pending' });
+      expect(searchItem(result.id)?.sourceType).toBe('thread');
+      expect(notifier.hints.some((e) => e.kind === 'board.inbox')).toBe(true);
+    });
+
+    it('sending the same thread again changes nothing; a changed thread updates the one item', async () => {
+      const first = unwrap(await inbox.addFromSource(boardId, slack(NOTES)));
+      expect(unwrap(await inbox.addFromSource(boardId, slack(NOTES)))).toEqual({ id: first.id, created: false });
+      expect((await row(first.id)).version).toBe(2);
+
+      llm.queue.push(answer());
+      await processAll();
+      expect((await row(first.id)).state).toBe('done');
+
+      const longer = `${NOTES}\n\nA late reply: use a heartbeat too.`;
+      expect(unwrap(await inbox.addFromSource(boardId, slack(longer)))).toEqual({ id: first.id, created: false });
+      const updated = await row(first.id);
+      expect(updated.text).toBe(longer);
+      expect(updated).toMatchObject({ state: 'pending', summary: null, attempts: 0 });
+      expect(await rows()).toHaveLength(1);
+    });
+
+    it('keeps the glob links of an attached item when the thread is sent again', async () => {
+      const g = await addGlob();
+      const id = unwrap(await inbox.addFromSource(boardId, slack(NOTES))).id;
+      unwrap(await inbox.attach(DEV, boardId, id, [g.id]));
+      unwrap(await inbox.addFromSource(boardId, slack(`${NOTES}\n\nMore.`)));
+      const item = await row(id);
+      expect(item.status).toBe('attached');
+      expect(await store.transaction((tx) => tx.listInboxLinks(boardId))).toHaveLength(1);
+    });
+
+    it('brings a discarded thread back as new', async () => {
+      const id = unwrap(await inbox.addFromSource(boardId, slack(NOTES))).id;
+      unwrap(await inbox.discard(DEV, boardId, id));
+      expect(unwrap(await inbox.addFromSource(boardId, slack(NOTES)))).toEqual({ id, created: false });
+      expect((await row(id)).status).toBe('new');
+      expect(searchItem(id)).toBeDefined();
+    });
+
+    it('leaves a pasted item with the same text alone', async () => {
+      const pasted = await paste(NOTES);
+      const result = unwrap(await inbox.addFromSource(boardId, slack(NOTES)));
+      expect(result).toEqual({ id: pasted, created: false });
+      expect((await row(pasted)).source).toBe('paste');
+    });
+
+    it('refuses empty text, an empty reference and an unknown board', async () => {
+      expect(errorCode(await inbox.addFromSource(boardId, slack('  ')))).toBe('invalid_input');
+      expect(errorCode(await inbox.addFromSource(boardId, { ...slack(NOTES), sourceRef: '' }))).toBe('invalid_input');
+      expect(errorCode(await inbox.addFromSource(999, slack(NOTES)))).toBe('not_found');
     });
   });
 });

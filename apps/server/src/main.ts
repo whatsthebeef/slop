@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -42,6 +42,9 @@ import { mountChat } from './http/chat.js';
 import { mountSearch } from './http/search.js';
 import { mountDecisions } from './http/decisions.js';
 import { mountInbox } from './http/inbox.js';
+import { mountSlack } from './http/slack.js';
+import { slackApi } from './slack.js';
+import { mountIntegrations } from './http/integrations.js';
 import { mountNotifications } from './http/notifications.js';
 import { AwsSignIn, AwsSsoOidc, readSsoSession, ssoCacheFile } from './aws-sso.js';
 import { IntegrationRegistry } from './integration-health.js';
@@ -218,6 +221,9 @@ const chat = new ChatService({
   store,
   clock,
   search,
+  // Haiku rewrites the question for search, so typos and follow-ups still find their records.
+  rewriteLlm: searchLlm,
+  warn: (message) => console.warn(`[chat] ${message}`),
   llm: trackLlm(new BedrockLlm({ id: config.CHAT_MODEL, configKey: 'CHAT_MODEL' }, config.BEDROCK_REGION, logUsage, null), config.CHAT_MODEL),
 });
 const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob) });
@@ -235,6 +241,13 @@ const decisionSync = new SearchSync(decisionPipeline, logError, Date.now, 'decis
 const decisions = new DecisionService({ store, clock, notifier: hub });
 // The board inbox: `add` stores and indexes a paste at once; the pipeline then summarises it and suggests globs (Haiku).
 const inbox = new InboxService({ store, clock, notifier: hub });
+// The Meet notes Apps Script (and later integrations) deliver with a per-board token: only its hash is stored.
+const integrationTokens = new IntegrationTokenService({
+  store,
+  clock,
+  newSecret: () => `slopit_${randomBytes(32).toString('base64url')}`,
+  hashSecret: (secret) => createHash('sha256').update(secret).digest('hex'),
+});
 const inboxPipeline = new InboxPipeline({ store, clock, notifier: hub, embedder, llm: searchLlm });
 // A change to a board's material marks it for the next sync.
 hub.tap((hint) => {
@@ -314,6 +327,17 @@ mountSearch(app, { search });
 mountChat(app, { chat });
 mountDecisions(app, { decisions });
 mountInbox(app, { inbox });
+if (config.SLACK_SIGNING_SECRET !== undefined && config.SLACK_BOT_TOKEN !== undefined) {
+  mountSlack(app, {
+    signingSecret: config.SLACK_SIGNING_SECRET,
+    workspaces: config.SLACK_WORKSPACES,
+    api: slackApi(config.SLACK_BOT_TOKEN, (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) })),
+    inbox,
+    publicUrl: config.PUBLIC_URL,
+    logError: (message) => { logError('slack', message); },
+  });
+}
+mountIntegrations(app, { inbox, tokens: integrationTokens });
 mountNotifications(app, { notifications });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.

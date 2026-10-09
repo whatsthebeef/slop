@@ -1,5 +1,6 @@
 import type { Decision, DecisionSource } from '../domain/decisions.js';
 import type { InboxItem, InboxLink } from '../domain/inbox.js';
+import type { IntegrationToken } from '../domain/integration-tokens.js';
 import type { Deploy } from '../domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
@@ -58,6 +59,7 @@ interface State {
   chatMessages: ChatMessage[];
   inboxItems: InboxItem[];
   inboxLinks: InboxLink[];
+  integrationTokens: IntegrationToken[];
 }
 
 interface StoredChunk {
@@ -130,6 +132,7 @@ const clone = (state: State): State => ({
   chatMessages: [...state.chatMessages],
   inboxItems: [...state.inboxItems],
   inboxLinks: [...state.inboxLinks],
+  integrationTokens: [...state.integrationTokens],
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -169,6 +172,7 @@ export class MemoryStore implements Store {
     chatMessages: [],
     inboxItems: [],
     inboxLinks: [],
+    integrationTokens: [],
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -796,11 +800,12 @@ export class MemoryStore implements Store {
         return Promise.resolve();
       },
       insertInboxItem: (input) => {
-        const existing = s.inboxItems.find((i) => i.boardId === input.boardId && i.contentHash === input.contentHash);
+        const existing =
+          s.inboxItems.find((i) => input.sourceRef !== '' && i.boardId === input.boardId && i.source === input.source && i.sourceRef === input.sourceRef) ??
+          s.inboxItems.find((i) => i.boardId === input.boardId && i.contentHash === input.contentHash);
         if (existing !== undefined) return Promise.resolve({ item: existing, created: false });
         const item: InboxItem = {
           ...input,
-          sourceKey: input.sourceKey ?? null,
           id: this.nextRowId++,
           status: input.status ?? 'new',
           summary: null,
@@ -816,9 +821,20 @@ export class MemoryStore implements Store {
         s.inboxItems.push(item);
         return Promise.resolve({ item, created: true });
       },
+      getActiveIntegrationToken: (boardId) =>
+        Promise.resolve(s.integrationTokens.find((t) => t.boardId === boardId && t.revokedAt === null) ?? null),
+      findIntegrationToken: (tokenHash) => Promise.resolve(s.integrationTokens.find((t) => t.tokenHash === tokenHash) ?? null),
+      insertIntegrationToken: (token) => {
+        s.integrationTokens.push({ ...token, id: this.nextRowId++, revokedAt: null });
+        return Promise.resolve();
+      },
+      revokeIntegrationTokens: (boardId, at) => {
+        s.integrationTokens = s.integrationTokens.map((t) => (t.boardId === boardId && t.revokedAt === null ? { ...t, revokedAt: at } : t));
+        return Promise.resolve();
+      },
       getInboxItem: (boardId, id) => Promise.resolve(s.inboxItems.find((i) => i.boardId === boardId && i.id === id) ?? null),
-      findInboxItemBySource: (boardId, source, sourceKey) =>
-        Promise.resolve(s.inboxItems.find((i) => i.boardId === boardId && i.source === source && i.sourceKey === sourceKey) ?? null),
+      getInboxItemBySource: (boardId, source, sourceRef) =>
+        Promise.resolve(s.inboxItems.find((i) => i.boardId === boardId && i.source === source && i.sourceRef === sourceRef) ?? null),
       listInboxItems: (boardId, statuses) =>
         Promise.resolve(
           s.inboxItems

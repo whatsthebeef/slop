@@ -1,4 +1,4 @@
-import type { BoardNotification, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { BoardNotification, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -332,7 +332,7 @@ const toInboxItem = (row: typeof schema.inboxItems.$inferSelect): InboxItem => (
   title: row.title,
   text: row.text,
   source: row.source,
-  sourceKey: row.sourceKey,
+  sourceRef: row.sourceRef,
   sourceLabel: row.sourceLabel,
   sourceType: row.sourceType,
   occurredAt: row.occurredAt.toISOString(),
@@ -349,6 +349,15 @@ const toInboxItem = (row: typeof schema.inboxItems.$inferSelect): InboxItem => (
   itemId: row.itemId,
   version: row.version,
   updatedAt: row.updatedAt.toISOString(),
+});
+
+const toIntegrationToken = (row: typeof schema.integrationTokens.$inferSelect): IntegrationToken => ({
+  id: row.id,
+  boardId: row.boardId,
+  tokenHash: row.tokenHash,
+  createdAt: row.createdAt.toISOString(),
+  createdBy: row.createdBy,
+  revokedAt: row.revokedAt?.toISOString() ?? null,
 });
 
 const toInboxLink = (row: typeof schema.inboxLinks.$inferSelect): InboxLink => ({
@@ -1501,7 +1510,7 @@ export class PgStore implements Store {
             title: input.title,
             text: input.text,
             source: input.source,
-            sourceKey: input.sourceKey ?? null,
+            sourceRef: input.sourceRef,
             sourceLabel: input.sourceLabel,
             sourceType: input.sourceType,
             occurredAt: new Date(input.occurredAt),
@@ -1512,22 +1521,51 @@ export class PgStore implements Store {
             ...(input.state === undefined ? {} : { state: input.state }),
             updatedAt: new Date(input.createdAt),
           })
-          .onConflictDoNothing({ target: [n.boardId, n.contentHash] })
+          .onConflictDoNothing()
           .returning();
         if (created !== undefined) return { item: toInboxItem(created), created: true };
-        // A racing paste of the same text got there first.
-        const [existing] = await t.select().from(n).where(and(eq(n.boardId, input.boardId), eq(n.contentHash, input.contentHash)));
+        // The same source ref (an integration's delivery), or the same text, is in the inbox already (or a racing insert got there first).
+        const [bySource] =
+          input.sourceRef === ''
+            ? []
+            : await t.select().from(n).where(and(eq(n.boardId, input.boardId), eq(n.source, input.source), eq(n.sourceRef, input.sourceRef)));
+        const [existing] =
+          bySource !== undefined
+            ? [bySource]
+            : await t.select().from(n).where(and(eq(n.boardId, input.boardId), eq(n.contentHash, input.contentHash)));
         if (existing === undefined) throw new Error('Inbox item insert returned nothing');
         return { item: toInboxItem(existing), created: false };
+      },
+      getActiveIntegrationToken: async (boardId) => {
+        const k = schema.integrationTokens;
+        const [row] = await t.select().from(k).where(and(eq(k.boardId, boardId), isNull(k.revokedAt)));
+        return row === undefined ? null : toIntegrationToken(row);
+      },
+      findIntegrationToken: async (tokenHash) => {
+        const k = schema.integrationTokens;
+        const [row] = await t.select().from(k).where(eq(k.tokenHash, tokenHash));
+        return row === undefined ? null : toIntegrationToken(row);
+      },
+      insertIntegrationToken: async (token) => {
+        await t.insert(schema.integrationTokens).values({
+          boardId: token.boardId,
+          tokenHash: token.tokenHash,
+          createdAt: new Date(token.createdAt),
+          createdBy: token.createdBy,
+        });
+      },
+      revokeIntegrationTokens: async (boardId, at) => {
+        const k = schema.integrationTokens;
+        await t.update(k).set({ revokedAt: new Date(at) }).where(and(eq(k.boardId, boardId), isNull(k.revokedAt)));
       },
       getInboxItem: async (boardId, id) => {
         const n = schema.inboxItems;
         const [row] = await t.select().from(n).where(and(eq(n.boardId, boardId), eq(n.id, id)));
         return row === undefined ? null : toInboxItem(row);
       },
-      findInboxItemBySource: async (boardId, source, sourceKey) => {
+      getInboxItemBySource: async (boardId, source, sourceRef) => {
         const n = schema.inboxItems;
-        const [row] = await t.select().from(n).where(and(eq(n.boardId, boardId), eq(n.source, source), eq(n.sourceKey, sourceKey)));
+        const [row] = await t.select().from(n).where(and(eq(n.boardId, boardId), eq(n.source, source), eq(n.sourceRef, sourceRef)));
         return row === undefined ? null : toInboxItem(row);
       },
       listInboxItems: async (boardId, statuses) => {
@@ -1546,9 +1584,9 @@ export class PgStore implements Store {
           .set({
             title: item.title,
             text: item.text,
+            contentHash: item.contentHash,
             sourceLabel: item.sourceLabel,
             occurredAt: new Date(item.occurredAt),
-            contentHash: item.contentHash,
             sourceType: item.sourceType,
             status: item.status,
             summary: item.summary,

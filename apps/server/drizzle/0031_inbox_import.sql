@@ -1,2 +1,0 @@
-ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "source_key" text;--> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "inbox_items_source_idx" ON "inbox_items" USING btree ("board_id","source","source_key") WHERE "inbox_items"."source_key" is not null;

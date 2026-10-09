@@ -434,7 +434,7 @@ describe('inbox', () => {
     const [row] = await database.db
       .select()
       .from(schema.inboxItems)
-      .where(eq(schema.inboxItems.sourceKey, 'APP-1'));
+      .where(eq(schema.inboxItems.sourceRef, 'APP-1'));
     expect(row).toMatchObject({ boardId, source: 'jira', status: 'archived', state: 'done' });
     const found = await store.transaction((tx) =>
       tx.keywordCandidates({ boardId, query: 'DynamoDB', mode: 'all_time', sourceTypes: ['thread'] }, 10),
@@ -455,7 +455,7 @@ describe('inbox', () => {
     const [changed] = await database.db
       .select()
       .from(schema.inboxItems)
-      .where(eq(schema.inboxItems.sourceKey, 'APP-1'));
+      .where(eq(schema.inboxItems.sourceRef, 'APP-1'));
     expect(changed?.id).toBe(row?.id);
     expect(changed?.text).toContain('long polling');
     expect((await outcomes([item('x')], STRANGER)).status).toBe(403);

@@ -771,8 +771,8 @@ export const inboxItems = pgTable(
     title: text('title').notNull().default(''),
     text: text('text').notNull(),
     source: text('source').notNull().default('paste'),
-    /** An import's id for the item in its source (Jira key, Google Doc id); null for a paste. */
-    sourceKey: text('source_key'),
+    /** The source's own ID for the item (empty for a paste); with the board and source it is unique when set. */
+    sourceRef: text('source_ref').notNull().default(''),
     sourceLabel: text('source_label').notNull().default(''),
     sourceType: text('source_type', { enum: INBOX_SOURCE_TYPES }).notNull(),
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
@@ -793,11 +793,28 @@ export const inboxItems = pgTable(
   },
   (t) => [
     uniqueIndex('inbox_items_hash_idx').on(t.boardId, t.contentHash),
-    uniqueIndex('inbox_items_source_idx')
-      .on(t.boardId, t.source, t.sourceKey)
-      .where(sql`${t.sourceKey} is not null`),
+    uniqueIndex('inbox_items_source_ref_idx').on(t.boardId, t.source, t.sourceRef).where(sql`${t.sourceRef} <> ''`),
     index('inbox_items_board_idx').on(t.boardId, t.status, t.occurredAt),
     index('inbox_items_queue_idx').on(t.state, t.processAfter),
+  ],
+);
+
+/** A board's integration tokens (spec, Inbox and ingest): only the hash of the secret is kept; one is active per board. */
+export const integrationTokens = pgTable(
+  'integration_tokens',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    createdBy: text('created_by').notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('integration_tokens_hash_idx').on(t.tokenHash),
+    uniqueIndex('integration_tokens_active_idx').on(t.boardId).where(sql`${t.revokedAt} is null`),
   ],
 );
 

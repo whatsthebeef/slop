@@ -23,3 +23,15 @@ describe('SLOP_JOBS', () => {
     expect(() => loadConfig({ SLOP_JOBS: ' ' })).toThrow(/SLOP_JOBS is empty/);
   });
 });
+
+describe('SLACK_WORKSPACES', () => {
+  it('maps workspaces to boards and is empty by default', () => {
+    expect(loadConfig({}).SLACK_WORKSPACES.size).toBe(0);
+    const map = loadConfig({ SLACK_WORKSPACES: 'T1=15, T2=16' }).SLACK_WORKSPACES;
+    expect([...map]).toEqual([['T1', 15], ['T2', 16]]);
+  });
+  it('refuses a pair that is not <workspace>=<board>', () => {
+    expect(() => loadConfig({ SLACK_WORKSPACES: 'T1' })).toThrow('SLACK_WORKSPACES');
+    expect(() => loadConfig({ SLACK_WORKSPACES: 'T1=x' })).toThrow('SLACK_WORKSPACES');
+  });
+});
