@@ -1,7 +1,6 @@
 import type { BoardNotification } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, healthKey, notificationsKey } from '@/lib/api';
 import { signInPoll, signInView } from '@/lib/aws-sign-in';
@@ -58,7 +57,7 @@ const AwsSignInAction = () => {
   return view === null ? null : <SignInAction view={view} pending={start.isPending} onStart={() => start.mutate()} />;
 };
 
-const Row = ({ item, boardId, flash, more }: { item: BoardNotification; boardId: number; flash: boolean; more?: ReactNode }) => {
+const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: number; flash: boolean }) => {
   const client = useQueryClient();
   const dismiss = useMutation({
     mutationFn: () => api.dismissNotification(boardId, item.id),
@@ -85,7 +84,6 @@ const Row = ({ item, boardId, flash, more }: { item: BoardNotification; boardId:
           Dismiss
         </button>
       )}
-      {more}
     </div>
   );
 };
@@ -93,7 +91,7 @@ const Row = ({ item, boardId, flash, more }: { item: BoardNotification; boardId:
 /**
  * One bar across the top of every board page for board-wide incidents that need a person. The most severe shows in
  * full (critical is big and red, flashes once on arrival and can't be dismissed while its condition holds); the
- * others sit behind "more… (N)" on it, which grows them into one attached stack with "Show less" below. It sits above the tabs.
+ * others sit behind "more… (N)" just below it, which grows them into one attached stack with "Show less" in the same place below. It sits above the tabs.
  */
 export const NotificationBar = ({ boardId }: { boardId: number }) => {
   const [expanded, setExpanded] = useState(false);
@@ -105,11 +103,6 @@ export const NotificationBar = ({ boardId }: { boardId: number }) => {
   });
   const view = barView(items.data ?? []);
   if (view === null) return null;
-  const toggle = (
-    <button type='button' className='text-sm font-normal text-muted-foreground underline' aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-      {toggleLabel(expanded, view.rest.length)}
-    </button>
-  );
   return (
     <div className='mx-5 mt-3' data-testid='notification-bar'>
       {/* One stack: the rows share the outer border and are split by hairlines. Keyed by id so a new arrival flashes once. */}
@@ -120,11 +113,17 @@ export const NotificationBar = ({ boardId }: { boardId: number }) => {
             item={item}
             boardId={boardId}
             flash={i === 0 && item.severity === 'critical'}
-            more={i === 0 && !expanded && view.rest.length > 0 ? <span className='ml-auto'>{toggle}</span> : undefined}
           />
         ))}
       </div>
-      {expanded && <div className='mt-1'>{toggle}</div>}
+      {/* Below the stack: "more… (N)" under the lead, which becomes "Show less" in the same place under the last row. */}
+      {view.rest.length > 0 && (
+        <div className='mt-1'>
+          <button type='button' className='text-sm font-normal text-muted-foreground underline' aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+            {toggleLabel(expanded, view.rest.length)}
+          </button>
+        </div>
+      )}
     </div>
   );
 };
