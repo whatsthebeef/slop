@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -105,7 +105,7 @@ const outbox = new OutboxRunner(
   db,
   { globs },
   {
-    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications),
+    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths),
     ...deployExecutors(
       deploys,
       new Deployers({ codebuild: new CodeBuildDeployer() }),

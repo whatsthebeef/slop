@@ -402,20 +402,27 @@ describe('The learned sub limit in Postgres', () => {
       (_task, message) => logged.push(message),
     );
     const current = await board();
-    expect(await diffs.mergedChangedLines(current, 'abc1234def')).toBe(42);
+    expect(await diffs.mergedChangedLines(current, 'abc1234def', [])).toBe(42);
     expect(calls[0]).toMatchObject({
       repo: { owner: 'acme', name: 'app', base: 'main' },
       sha: 'abc1234def',
     });
     expect(calls[0]?.signal).toBeInstanceOf(AbortSignal);
-    expect(await diffs.mergedChangedLines({ ...current, repo: null }, 'abc')).toBeNull();
+    expect(await diffs.mergedChangedLines({ ...current, repo: null }, 'abc', [])).toBeNull();
     failing = true;
-    await expect(diffs.mergedChangedLines(current, 'abc1234def')).rejects.toThrow('502');
+    await expect(diffs.mergedChangedLines(current, 'abc1234def', [])).rejects.toThrow('502');
     expect(logged[0]).toMatch(/abc1234/);
     const unconfigured = new CodeHostSubDiffs(
       { configured: false, commitDiffSummary: unused },
       () => undefined,
     );
-    expect(await unconfigured.mergedChangedLines(current, 'abc')).toBeNull();
+    expect(await unconfigured.mergedChangedLines(current, 'abc', [])).toBeNull();
+    // Generated files the board's policy ignores are left out of the merge's size.
+    failing = false;
+    const generated = new CodeHostSubDiffs(
+      { configured: true, commitDiffSummary: () => Promise.resolve({ changedLines: 3100, files: ['a.ts', 'drizzle/meta/1.json'], fileLines: { 'a.ts': 53, 'drizzle/meta/1.json': 3047 } }) },
+      () => undefined,
+    );
+    expect(await generated.mergedChangedLines(current, 'abc', ['drizzle/meta/**'])).toBe(53);
   });
 });
