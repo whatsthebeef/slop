@@ -633,7 +633,7 @@ Slop is a context manager: it holds what is known about the work, decides what i
 **Decisions and supersession**
 
 - On ingest, an LLM extracts decisions from each communication (statement, topic, date, source) and compares them with existing decisions on the same topic.
-- A contradicting newer decision marks the older one `superseded`, linked to its replacement. Superseded items are not hidden: they are heavily down-ranked and labelled "superseded by…" with a one-line reason, so readers and the LLM see both the history and what is current. Supersession is judged by an LLM comparing a new decision with the most similar active decisions on the board; plan versions supersede each other automatically.
+- A contradicting newer decision marks the older one `superseded`, linked to its replacement. Superseded items are not hidden: they are heavily down-ranked and labelled "superseded by…" with a one-line reason, so readers and the LLM see both the history and what is current. Supersession is judged by an LLM comparing a new decision with the most similar active decisions on the board; plan versions supersede each other automatically. Decisions from one source text never replace each other. A replacement is applied only when the model classes the two as the same subject (`sameSubject`), both quotes check out, and either both decisions are in one glob or the newer decision's text names the older one's glob; otherwise it is only a hint for a person to confirm.
 - Decisions appear on the glob with their sources. Members confirm or undo a replacement (as built below); marking a decision wrong is not built yet.
 - Newer material ranks higher when relevance is equal.
 
