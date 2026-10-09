@@ -77,6 +77,8 @@ export type Effect =
       readonly generation: number;
       readonly runId: string;
       readonly routineOwner: string;
+      /** An automatic retry of a watcher that gave up: the failed check it is asked to fix (name and first lines). */
+      readonly failureSummary?: string;
     }
   | { readonly kind: 'squash_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
   /** Revert a sub's merge commit on the base branch after the checks on it failed. */

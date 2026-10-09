@@ -8,6 +8,7 @@ import {
   SUB_LIMIT_STEP,
   SUB_LIMIT_WINDOW_DAYS,
   bugText,
+  nearLimit,
   nextLimit,
   outcomeKey,
   subLimitCandidates,
@@ -15,7 +16,9 @@ import {
 import type { SubLimitCandidate, SubLimitOutcome, SubLimitView } from '../domain/sub-limit.js';
 import type { Board } from '../domain/types.js';
 import type { Notifier, Store, SubDiffSource } from '../ports.js';
+import { sizeIgnoredPathsOf } from '../domain/sub-gate.js';
 import { memberOf } from './access.js';
+import { readMergePolicy } from './knowledge-service.js';
 import { LlmUnavailable } from './intake-service.js';
 import type { Llm } from './intake-service.js';
 import { longEnoughQuote, verifiedQuote } from './kb-dedupe.js';
@@ -38,6 +41,12 @@ const GATE_LOOKBACK_DAYS = 90;
 export const SUB_LIMIT_LLM_TIMEOUT_MS = 30_000;
 /** The most bug references whose answers the job remembers (the newest), so it doesn't ask again hourly. */
 export const MAX_REMEMBERED_ANSWERS = 500;
+
+/** Why a sub that needed fixes left the limit alone. */
+const tooSmall = (changedLines: number | null, limit: number): string =>
+  changedLines === null
+    ? `Its size is unknown, so it says nothing about the limit (${limit})`
+    : `Too small to say anything about the limit: ${changedLines} lines, under half of ${limit}`;
 /** Asks about one bug reference that end without a usable answer (unusable JSON, a timeout) before it is skipped. */
 export const MAX_ANSWER_ATTEMPTS = 3;
 
@@ -142,8 +151,10 @@ export class SubLimitService {
         (await tx.listSubLimitChanges(boardId)).map((c) => outcomeKey(c.globId, c.outcome)),
       );
       const memory = memoryOf(await tx.getBoardJobState(boardId, 'sub_limit'));
+      const ignoredPaths = sizeIgnoredPathsOf(await readMergePolicy(tx, boardId));
       return {
         board,
+        ignoredPaths,
         candidates: subLimitCandidates({ events, globs, recorded, mergedSince, now }),
         memory,
         recorded,
@@ -229,7 +240,7 @@ export class SubLimitService {
       let changedLines = candidate.changedLines;
       if (changedLines === null && candidate.kind !== 'merged_unchanged') {
         if (!fetched.has(candidate.mergeSha))
-          fetched.set(candidate.mergeSha, await this.changedLines(board, candidate.mergeSha));
+          fetched.set(candidate.mergeSha, await this.changedLines(board, candidate.mergeSha, read.ignoredPaths));
         changedLines = fetched.get(candidate.mergeSha) ?? null;
       }
       const change = await this.record(
@@ -296,10 +307,10 @@ export class SubLimitService {
   }
 
   /** A passed sub's line count from its merge commit, when its gate verdict didn't record one. Null when unknown. */
-  private async changedLines(board: Board, sha: string): Promise<number | null> {
+  private async changedLines(board: Board, sha: string, ignoredPaths: readonly string[]): Promise<number | null> {
     if (this.deps.diffs === null || sha === '') return null;
     try {
-      return await this.deps.diffs.mergedChangedLines(board, sha);
+      return await this.deps.diffs.mergedChangedLines(board, sha, ignoredPaths);
     } catch {
       // The code host failed (logged by the adapter): the outcome is recorded without a count.
       return null;
@@ -324,7 +335,9 @@ export class SubLimitService {
         const board = await tx.getBoard(boardId);
         if (board === null) return null;
         const from = board.subMaxChangedLines;
-        const to = nextLimit(outcome, from);
+        const to = nextLimit(outcome, from, changedLines);
+        // A sub that needed fixes without being near the limit is recorded as such, and the limit stays.
+        const unmoved = outcome === 'needed_fixes' && to === from && !nearLimit(changedLines, from);
         const inserted = await tx.insertSubLimitChange({
           boardId,
           at: now,
@@ -333,7 +346,7 @@ export class SubLimitService {
           outcome,
           globId,
           changedLines,
-          evidence,
+          evidence: unmoved ? `${evidence}. ${tooSmall(changedLines, from)}` : evidence,
         });
         if (!inserted) return null;
         if (to !== from && !(await tx.setSubLimit(boardId, from, to)))
