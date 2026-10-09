@@ -2,10 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { LiveState } from './live';
 
 /** The one card that changed list steps across like a block; the cards it displaces glide. */
-const STEP_MS = 630;
+export const STEP_MS = 630;
 export const GLIDE_MS = 500;
-/** The glide's easing; `.board-glide` in index.css repeats both so the chat panel and the columns move like the cards. */
 export const GLIDE_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
+/** The stepped easing of a card that changed list; the chat panel slides in and out with it. */
+export const STEP_EASING = 'steps(4, end)';
 const LOCK_MS = 165;
 const TAG_MS = 3000;
 /** Several moves at once (a burst of webhooks) play one after another, and only the first few. */
@@ -179,7 +180,7 @@ export const useCardMotion = <T>(
         [{ transform: `translate(${from.x - to.x}px, ${from.y - to.y}px)` }, { transform: 'none' }],
         {
           duration: STEP_MS,
-          easing: 'steps(4, end)',
+          easing: STEP_EASING,
           delay: index * STAGGER_MS,
           fill: 'backwards',
         },

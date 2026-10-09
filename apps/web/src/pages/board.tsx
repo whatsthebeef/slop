@@ -16,11 +16,11 @@ import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/l
 import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
+import { useColumnGlide } from '@/lib/column-glide';
 import { withGlob } from '@/lib/glob-list';
 import { usePageContext } from '@/lib/page-context';
 import { codeReviewsKey, deploysKey, globsKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
-import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
 
 const LIST_TITLES: Record<List, string> = {
@@ -94,22 +94,14 @@ const Column = ({
   children,
   count,
   ghost,
-  collapsed,
 }: {
   list: List;
-  /** Folded away to nothing (Signed Off while the chat is docked); it stays mounted so it glides shut and open with the panel. */
-  collapsed: boolean;
   children: ReactNode;
   count: number;
   ghost: Preview | null;
 }) => (
   <section
-    className={cn(
-      'list-well board-glide flex flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2',
-      collapsed ? 'pointer-events-none -ml-3 min-w-0 flex-[0_1_0%] overflow-hidden border-0 p-0 opacity-0' : 'min-w-64',
-    )}
-    inert={collapsed}
-    aria-hidden={collapsed}
+    className='list-well flex min-w-64 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2'
     aria-label={LIST_TITLES[list]}
     data-testid={`list-${list}`}
   >
@@ -224,6 +216,8 @@ export const BoardPage = () => {
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId), ...KEEP_TRYING });
   const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId), ...KEEP_TRYING });
   const motion = useBoardMotion(globs.data, live);
+  // Opening the chat hides Signed Off and moves the other columns at once; they glide to their new places.
+  useColumnGlide(motion.container, hideSignedOff);
   // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens its page.
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -396,12 +390,12 @@ export const BoardPage = () => {
         className='flex-1 overflow-auto px-5 py-4'
       >
         <div className='flex min-h-full min-w-full items-stretch gap-3'>
-          {LISTS.map((list) => {
+          {LISTS.filter((list) => !(hideSignedOff && list === 'signed_off')).map((list) => {
             const items = all
               .filter((g) => g.list === list)
               .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
             return (
-              <Column key={list} list={list} collapsed={hideSignedOff && list === 'signed_off'} count={items.length} ghost={preview?.target === list ? preview : null}>
+              <Column key={list} list={list} count={items.length} ghost={preview?.target === list ? preview : null}>
                 {items.map((glob) => {
                   const moves = movesFor(glob);
                   return (
