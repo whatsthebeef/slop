@@ -15,11 +15,13 @@ const PUSH = 'We will push sync jobs over a websocket connection instead of poll
 class ScriptedLlm implements Llm {
   calls = 0;
   checkAnswer = '{"replaces": []}';
+  /** The glob of the polling decision: the push decision names it, as a decision across globs must to replace one. */
+  older = '';
   complete(request: LlmRequest): Promise<string> {
     this.calls++;
-    const entry = (quote: string, decidedAt: string) => JSON.stringify({ decisions: [{ statement: quote, quote, decidedBy: null, decidedAt }] });
+    const entry = (quote: string, decidedAt: string, statement = quote) => JSON.stringify({ decisions: [{ statement, quote, decidedBy: null, decidedAt }] });
     if (request.prompt.includes('Document:')) {
-      return Promise.resolve(request.prompt.includes('websocket') ? entry(PUSH, '2026-09-01') : entry(POLLING, '2026-06-01'));
+      return Promise.resolve(request.prompt.includes('websocket') ? entry(PUSH, '2026-09-01', `${PUSH} (replaces ${this.older})`) : entry(POLLING, '2026-06-01'));
     }
     return Promise.resolve(this.checkAnswer);
   }
@@ -71,6 +73,7 @@ describe('decisions store', () => {
     ] as const) {
       const created = await globs.create(DEV, { boardId, title, summary: title, type: 'same', category: 'task', group: 'sync', environment: null, autoTrigger: false, idempotencyKey: null });
       if (!created.ok) throw new Error(created.error.message);
+      if (llm.older === '') llm.older = created.value.id;
       await store.transaction((tx) =>
         tx.insertArtifact({
           globId: created.value.id,
@@ -91,7 +94,7 @@ describe('decisions store', () => {
   });
 
   it('extracts each source once and a second sync changes nothing', async () => {
-    llm.checkAnswer = JSON.stringify({ replaces: [{ id: 1, oldQuote: POLLING, newQuote: PUSH, reason: 'Push replaces polling.' }] });
+    llm.checkAnswer = JSON.stringify({ replaces: [{ id: 1, oldQuote: POLLING, newQuote: PUSH, sameSubject: true, reason: 'Push replaces polling.' }] });
     expect(await pipeline.syncBoard(boardId)).toMatchObject({ queued: 2, written: 0, removed: 0 });
     await drain();
     expect(await count(schema.decisions)).toBe(2);

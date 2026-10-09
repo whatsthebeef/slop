@@ -56,11 +56,12 @@ Respond with one JSON object and nothing else:
 - decidedAt: the date it was made as YYYY-MM-DD, only when the text says; otherwise null.
 Report only choices the text actually states. Don't invent decisions, reasons or people. No decisions: {"decisions": []}.`;
 
-export const SUPERSEDE_SYSTEM = `You decide whether a new decision replaces earlier decisions of a software team. An earlier decision is replaced only when it is about the SAME question as the new one and the new one contradicts or overrides it (a different choice for the same thing, a reversal, a changed rule). Decisions about different questions, and related decisions that can both stand, are not replaced.
+export const SUPERSEDE_SYSTEM = `You decide whether a new decision replaces earlier decisions of a software team. An earlier decision is replaced only when it is about the SAME subject as the new one (the same thing in the same place: the same feature, setting or component) and the new one contradicts or overrides it (a different choice for the same thing, a reversal, a changed rule). Decisions that merely share words or a topic, decisions about different things, a more general or more specific statement of the same rule, and related decisions that can both stand, are not replaced.
 
 Respond with one JSON object and nothing else:
-{"replaces": [{"id": number, "oldQuote": string, "newQuote": string, "reason": string}]}
+{"replaces": [{"id": number, "sameSubject": boolean, "oldQuote": string, "newQuote": string, "reason": string}]}
 - id: the number of the earlier decision.
+- sameSubject: true only when the earlier decision and the new one are about the same subject and the new one changes it; false when they only share words or a topic.
 - oldQuote: words copied word for word from that earlier decision's text (its statement or its source quote) that the new decision contradicts or replaces.
 - newQuote: words copied word for word from the new decision's text (its statement or its source quote) that does so.
 - reason: one sentence.
@@ -126,7 +127,7 @@ interface Replacement {
   readonly oldQuote: string;
   readonly newQuote: string;
   readonly reason: string;
-  /** Both quotes were found verbatim and are long enough: the replacement is applied, not only proposed. */
+  /** Both quotes were found verbatim and are long enough, and the model said the subject is the same. */
   readonly checked: boolean;
 }
 
@@ -142,7 +143,9 @@ const parseReplaces = (answer: string, candidates: readonly Decision[], next: De
     const oldQuote = verifiedQuote(field(entry, 'oldQuote'), decisionBody(old));
     const newQuote = verifiedQuote(field(entry, 'newQuote'), decisionBody(next));
     const reason = oneLine(field(entry, 'reason'), REASON_LIMIT) ?? '';
-    const checked = oldQuote !== null && newQuote !== null && longEnoughQuote(oldQuote) && longEnoughQuote(newQuote);
+    // Without the model's explicit same-subject classification a replacement is at most a proposal.
+    const sameSubject = field(entry, 'sameSubject') === true;
+    const checked = sameSubject && oldQuote !== null && newQuote !== null && longEnoughQuote(oldQuote) && longEnoughQuote(newQuote);
     out.push({
       old,
       oldQuote: oldQuote ?? oneLine(field(entry, 'oldQuote'), 500) ?? '',
@@ -166,6 +169,19 @@ const checkPrompt = (next: Decision, candidates: readonly Decision[]): string =>
     ),
   ].join('\n');
 
+/**
+ * Whether a replacement of `old` by `next` may be applied without a person: both are in one glob, or the newer
+ * decision's own text names the older one's glob. Otherwise two globs that only share words would supersede each other.
+ */
+const mayApply = (old: Decision, next: Decision): boolean => {
+  if (old.globId === null) return false;
+  if (old.globId === next.globId) return true;
+  return new RegExp(`(?<![\\w-])${old.globId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`, 'i').test(decisionBody(next));
+};
+
+/** Decisions from one source text (one artifact, attachment, inbox item or learning) state one author's intent at one moment: none replaces another. */
+const sameSource = (a: Decision, b: Decision): boolean => a.sourceRef === b.sourceRef;
+
 type Outcome<T> = { ok: T } | { failure: string } | { unavailable: LlmUnavailable };
 
 /**
@@ -173,7 +189,7 @@ type Outcome<T> = { ok: T } | { failure: string } | { unavailable: LlmUnavailabl
  * implementation record's `## Decisions`, plan.md, Clarifications and Assumptions, approved decision learnings) and
  * queues each new or changed one; `processNext` extracts one queued source with one Haiku call (a decision is kept only
  * when its quote is found verbatim in the text shown), else checks one new decision against earlier ones for a
- * replacement (applied only when both quotes check out, else only proposed). Claims, deadlines, retries and waiting
+ * replacement (applied only when both quotes check out, the model classes them as the same subject and, across globs, the new decision names the older glob; else only proposed; decisions of one source never replace each other). Claims, deadlines, retries and waiting
  * while the LLM is unavailable follow the findings pipeline.
  */
 export class DecisionPipeline {
@@ -534,7 +550,7 @@ export class DecisionPipeline {
       const all = await tx.listDecisions(next.boardId);
       const byItem = new Map(all.map((d) => [d.itemId, d]));
       const eligible = (d: Decision | undefined): d is Decision =>
-        d !== undefined && d.id !== next.id && !isSuperseded(d) && d.decidedAt <= next.decidedAt;
+        d !== undefined && d.id !== next.id && !sameSource(d, next) && !isSuperseded(d) && d.decidedAt <= next.decidedAt;
       const query = { boardId: next.boardId, query: next.statement.slice(0, MAX_QUERY_LENGTH), mode: 'all_time', sourceTypes: ['decision'] } as const;
       const near: Candidate[] = [];
       if (embedding !== null) near.push(...(await tx.vectorCandidates(query, embedding, NEAR_POOL)).filter((c) => c.relevance >= VECTOR_MIN_RELEVANCE));
@@ -602,16 +618,16 @@ export class DecisionPipeline {
     if (globs !== null) for (const globId of globs) this.deps.notifier.publish({ kind: 'glob.decisions', boardId: next.boardId, globId });
   }
 
-  /** Records one replacement in the transaction (applied when its quotes checked out, else a proposal); false when nothing was written. */
+  /** Records one replacement in the transaction (applied when it is checked and allowed by `mayApply`, else a proposal); false when nothing was written. */
   private async applyReplacement(tx: Tx, next: Decision, r: Replacement): Promise<boolean> {
     const old = await tx.getDecision(r.old.id);
     // Both sides are read again: either may have changed while the model worked.
-    if (old === null || isSuperseded(old) || isSuperseded(next) || old.id === next.id) return false;
+    if (old === null || isSuperseded(old) || isSuperseded(next) || old.id === next.id || sameSource(old, next)) return false;
     // A person's undo for this pair stands, and a proposal the other way round would make a cycle.
     if (old.replaceState === 'undone' && old.replacedBy === next.id) return false;
     if (next.replacedBy === old.id && next.replaceState !== null && next.replaceState !== 'undone') return false;
     const fields = { replacedBy: next.id, replaceOldQuote: r.oldQuote, replaceNewQuote: r.newQuote, replaceReason: r.reason };
-    if (r.checked) {
+    if (r.checked && mayApply(old, next)) {
       await tx.updateDecision(old.id, { ...fields, replaceState: 'applied' });
       await tx.setItemSupersession(old.itemId, 'superseded', next.itemId);
       return true;
