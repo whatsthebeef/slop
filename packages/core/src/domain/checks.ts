@@ -21,6 +21,25 @@ export const inheritedFailure = (
   return sameFailure(failure, base.failure) ? { base: baseBranch, since: base.since } : null;
 };
 
+/** Steps GitHub or the workflow runs before the project's own commands: job set-up, service containers, checkout, tool set-up, install. */
+const SETUP_STEP = /^(set up job|initialize containers|run actions\/(checkout|setup-[\w-]+|cache)\b|run pnpm\/action-setup\b|set up |install\b|pnpm install\b)/i;
+/** Log lines that name an outage when no step is known: a pull limit, a lost runner, an unreachable registry. */
+const SETUP_LINE = /toomanyrequests|rate limit exceeded|failed to pull image|lost communication with the server|runner has received a shutdown signal|unable to resolve action|ECONNRESET|ETIMEDOUT|EAI_AGAIN|503 service unavailable/i;
+/** An install that fails because of the change itself (the lockfile or a version that doesn't exist), not an outage. */
+const INSTALL_CODE_ERROR = /lockfile|ERR_PNPM_(OUTDATED|NO_MATCHING|FROZEN|UNSUPPORTED|PEER)/i;
+
+/**
+ * Whether a failed check broke before the project's own steps ran (an outage in CI's setup, not the change): the
+ * failed step is job set-up, a service container, checkout, tool set-up or install, or, when no step is known, the log
+ * names an outage. Anything else (Lint, Type check, Test, an unknown step) is a code failure.
+ */
+export const isSetupFailure = (failure: CheckFailure): boolean => {
+  const text = failure.lines.join('\n');
+  if (failure.step === null) return SETUP_LINE.test(text);
+  if (!SETUP_STEP.test(failure.step.trim())) return false;
+  return !(/^(install\b|pnpm install\b)/i.test(failure.step.trim()) && INSTALL_CODE_ERROR.test(text));
+};
+
 const MAX_LINES = 6;
 const MAX_LINE_LENGTH = 240;
 const ERROR_LINE = /error|fail|✖|✘|✗|not ok|assertion|cannot find|is missing|exception|exit code [1-9]/i;

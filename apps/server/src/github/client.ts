@@ -4,7 +4,7 @@ import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
 import type { BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PrSnapshot, Repo, RepoConnection } from '../codehost.js';
-import { readCancelledChecks, readCommitChecks } from './commit-checks.js';
+import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
 
@@ -325,6 +325,11 @@ export class GitHub implements CodeHost, CommitGraph {
       // Only the app that created a check run can ask for it again; another app's run is left to its own retry.
       if (!isStatus(error, 403, 404, 422)) throw error;
     }
+  }
+
+  async rerunFailedJobs(repo: Repo, sha: string): Promise<'rerun' | 'already_rerun' | 'unavailable'> {
+    const gh = await this.octokit(repo);
+    return rerunFailedJobs((route, params) => gh.request(route, params), repo, sha);
   }
 
   async updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'> {

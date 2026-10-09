@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readCancelledChecks, readCommitChecks } from '../src/github/commit-checks.js';
+import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from '../src/github/commit-checks.js';
 import type { Request } from '../src/github/commit-checks.js';
 
 const repo = { owner: 'acme', name: 'app', base: 'main' };
@@ -125,5 +125,35 @@ describe('cancelled check runs', () => {
   it('are listed with when they ended', async () => {
     const { request } = fakeGitHub({ runs: [run({ conclusion: 'success' }), run({ id: 12, conclusion: 'cancelled', completed_at: '2026-10-07T10:05:00Z' })] });
     expect(await readCancelledChecks(request, repo, 'abc')).toEqual([{ id: 12, completedAt: '2026-10-07T10:05:00Z' }]);
+  });
+});
+
+describe('re-running failed jobs', () => {
+  const runsOf = (runs: unknown[], post: (route: string) => Promise<{ data: unknown }> = () => Promise.resolve({ data: {} })) => {
+    const posted: string[] = [];
+    const request: Request = (route, params) => {
+      if (route.startsWith('GET')) return Promise.resolve({ data: { workflow_runs: runs } });
+      posted.push(`${route} ${String(params.run_id)}`);
+      return post(route);
+    };
+    return { request, posted };
+  };
+
+  it('asks for the failed jobs of each failed run once', async () => {
+    const gh = runsOf([{ id: 1, conclusion: 'failure', run_attempt: 1 }, { id: 2, conclusion: 'success', run_attempt: 1 }]);
+    expect(await rerunFailedJobs(gh.request, repo, 'abc')).toBe('rerun');
+    expect(gh.posted).toEqual(['POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs 1']);
+  });
+
+  it('does nothing when a failed run is already a re-run', async () => {
+    const gh = runsOf([{ id: 1, conclusion: 'failure', run_attempt: 2 }]);
+    expect(await rerunFailedJobs(gh.request, repo, 'abc')).toBe('already_rerun');
+    expect(gh.posted).toEqual([]);
+  });
+
+  it('is unavailable when GitHub refuses (no Actions permission) or nothing failed', async () => {
+    const refused = runsOf([{ id: 1, conclusion: 'failure', run_attempt: 1 }], () => Promise.reject(Object.assign(new Error('Forbidden'), { status: 403 })));
+    expect(await rerunFailedJobs(refused.request, repo, 'abc')).toBe('unavailable');
+    expect(await rerunFailedJobs(runsOf([]).request, repo, 'abc')).toBe('unavailable');
   });
 });

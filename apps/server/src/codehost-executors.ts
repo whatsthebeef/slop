@@ -1,7 +1,7 @@
 import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { FileRoutines } from './routines.js';
-import { isRepoAccessFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
+import { isRepoAccessFailure, isSetupFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -241,9 +241,13 @@ export const codeHostExecutors = (
       // Still running: the check's completion sends another event.
       if (result.state === 'pending') return 'done';
       const passed = result.state === 'passed';
+      // A failure in CI's own setup says nothing about the commit: run the failed jobs again once, and record nothing
+      // until they finish. A second setup failure (or no permission to re-run) is recorded, but never blamed on a sub.
+      const setupFailure = !passed && result.failure !== null && isSetupFailure(result.failure);
+      if (setupFailure && (await host.rerunFailedJobs(repo, head.sha)) === 'rerun') return 'done';
       const recorded = await boards.recordBaseChecks(
         board.id,
-        { sha: head.sha, passed, failure: result.failure, merged: passed ? null : globOfSubject(head.subject) },
+        { sha: head.sha, passed, failure: result.failure, merged: passed || setupFailure ? null : globOfSubject(head.subject) },
         now(),
       );
       if (recorded === null) return 'done';
@@ -253,7 +257,7 @@ export const codeHostExecutors = (
       const { checks, change } = recorded;
       // A sub whose merge commit turned the base red is reverted and failed; sames are left to a person.
       const headGlob = globOfSubject(head.subject);
-      const culprit = passed || headGlob === null || checks.since !== headGlob ? null : await globs.peek(headGlob);
+      const culprit = passed || setupFailure || headGlob === null || checks.since !== headGlob ? null : await globs.peek(headGlob);
       if (culprit?.type === 'sub') {
         await globs.applyEvent(culprit.id, (g, ctx) =>
           machine.mergeTurnedBaseRed(g, { sha: head.sha, failure: result.failure, base: repo.base }, ctx),

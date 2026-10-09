@@ -1,4 +1,4 @@
-import { failureSummary } from './checks.js';
+import { failureSummary, isSetupFailure } from './checks.js';
 import type { BaseChecks } from './types.js';
 
 export const NOTIFICATION_SEVERITIES = ['critical', 'warning', 'info'] as const;
@@ -98,7 +98,10 @@ export const mainRedNotification = (boardId: number, baseBranch: string, checks:
     boardId,
     source: MAIN_RED_SOURCE,
     severity: 'critical',
-    title: `${baseBranch} is red${checks.since === null ? '' : ` since ${checks.since} merged`}`,
+    title:
+      failure !== undefined && isSetupFailure(failure)
+        ? `CI setup failing: ${failure.step ?? failure.name}`
+        : `${baseBranch} is red${checks.since === null ? '' : ` since ${checks.since} merged`}`,
     detail: `${failure === undefined ? 'Its checks fail.' : `${failureSummary(failure)}.`} Globs failing the same way are waiting for it; don't fix it in their branches.`,
     link: failure?.url ?? null,
     action: failure?.url == null ? null : { label: 'Open the run', href: failure.url },

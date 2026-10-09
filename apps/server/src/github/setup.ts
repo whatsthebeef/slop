@@ -26,6 +26,8 @@ export const appManifest = (publicUrl: string, name: string) => ({
     pull_requests: 'write',
     issues: 'write',
     checks: 'read',
+    // Re-runs the failed jobs of a base check that broke in CI's setup (an existing installation must accept this).
+    actions: 'write',
     statuses: 'read',
   },
   default_events: [
