@@ -79,7 +79,7 @@ describe('start after', () => {
     expect(kinds()).toEqual([]);
     expect(store.state.events.filter((e) => e.globId === second.id).map((e) => e.type)).toEqual(['GlobCreated', 'Waiting']);
     const view = unwrap(await globs.get(DEV, second.id));
-    expect(view.waitingFor.map((w) => w.why)).toEqual([`waiting for ${first.id} to merge (it is in Planning)`]);
+    expect(view.waitingFor.map((w) => w.why)).toEqual([`Waits for ${first.id} to merge (it is in Planning)`]);
     expect(view.allowedActions).toContain('start_anyway');
     expect(unwrap(await globs.get(DEV, first.id)).waitedOnBy).toEqual([second.id]);
   });
@@ -137,12 +137,23 @@ describe('start after', () => {
     expect(run.runs).toHaveLength(1);
   });
 
+  it('the board list offers the same actions as a single read for a same held only by `after`', async () => {
+    const first = await create();
+    const second = await create({ after: [first.id] });
+    const listed = unwrap(await globs.listWithArtifacts(DEV, second.boardId, {}));
+    const row = listed.find((r) => r.glob.id === second.id);
+    const fromList = machine.allowedActions(second, { email: DEV, role: 'dev' }, { dependencies: row?.dependencies });
+    expect(fromList).toContain('start_anyway');
+    expect(fromList).not.toContain('start');
+    expect(fromList).toEqual(unwrap(await globs.get(DEV, second.id)).allowedActions);
+  });
+
   it('refuses Start on a same while it waits; Start anyway goes ahead', async () => {
     const first = await create();
     const second = await create({ after: [first.id] });
     const refused = await globs.start(DEV, second.id, second.version);
     expect(!refused.ok && refused.error.code).toBe('invalid_transition');
-    expect(!refused.ok && refused.error.message).toContain(`waiting for ${first.id} to merge`);
+    expect(!refused.ok && refused.error.message).toContain(`Waits for ${first.id} to merge`);
     const view = unwrap(await globs.get(DEV, second.id));
     expect(view.allowedActions).not.toContain('start');
     expect(view.allowedActions).toContain('start_anyway');
@@ -259,7 +270,7 @@ describe('start after', () => {
     expect(await globs.releaseDependents(first.id, boardId)).toEqual([]);
     const view = unwrap(await globs.get(DEV, second.id));
     expect(view.glob.status).toBe('planning');
-    expect(view.waitingFor.map((w) => w.why)).toEqual([`${first.id} was deleted; waiting`]);
+    expect(view.waitingFor.map((w) => w.why)).toEqual([`Waits for ${first.id}, which was deleted`]);
     // A person edits the list to let it go.
     const freed = unwrap(await globs.update(DEV, second.id, view.glob.version, { after: [] }));
     expect(freed.status).toBe('implementing');
@@ -326,7 +337,7 @@ describe('waiting (pure)', () => {
   it('words an implied hold with its paths', () => {
     const states = new Map<string, DependencyState>([['s1t2', 'open']]);
     const [first] = waitingFor({ impliedAfter: [{ id: 's1t2', paths: ['apps/server/drizzle/0001.sql'] }] }, states);
-    expect(first?.why).toBe('waits for s1t2: both may change apps/server/drizzle/0001.sql');
+    expect(first?.why).toBe('Waits for s1t2: both may change apps/server/drizzle/0001.sql');
   });
 
   it('checkAfter drops merged ids, de-duplicates and caps the list', () => {
