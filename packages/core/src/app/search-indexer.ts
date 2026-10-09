@@ -7,10 +7,10 @@ import { SOURCE_TYPES } from '../domain/search.js';
 import type { AuthorityTier, KnowledgeItem, NewChunk, NewKnowledgeItem, SourceType } from '../domain/search.js';
 import type { Board, Glob } from '../domain/types.js';
 import type { ChangeSource, Clock, Embedder, Store, Tx } from '../ports.js';
-import { LlmUnavailable } from './intake-service.js';
+import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm } from './intake-service.js';
 import { LLM_TIMEOUT_MS, LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
-import { completeWithDeadline } from './llm-call.js';
+import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { hash } from './text-hash.js';
 
 /** Chunks embedded per call to the embedder (and per `processNext` step). */
@@ -136,6 +136,8 @@ const filesLine = (files: readonly string[]): string => {
  * When a model is unavailable, items wait (nothing is failed, no attempt counted) and keep what they already have.
  */
 export class SearchIndexer {
+  private readonly busy = new BusyBackoff();
+
   /** While the embedder is down or backing off, embedding is skipped until this time (ms). */
   private embedWaitUntil = 0;
 
@@ -221,9 +223,11 @@ export class SearchIndexer {
         return embedding === undefined ? [] : [{ id: c.id, embedding }];
       });
       await this.deps.store.transaction((tx) => tx.setEmbeddings(rows));
+      this.busy.clear('embed');
     } catch (error) {
       // The chunks stay as they are (keyword-searchable, no embedding) and are tried again later.
-      this.embedWaitUntil = Date.parse(now) + (error instanceof LlmUnavailable ? LLM_WAIT_MS : EMBED_BACKOFF_MS);
+      this.embedWaitUntil =
+        Date.parse(now) + (error instanceof LlmBusy ? this.busy.next('embed') : error instanceof LlmUnavailable ? LLM_WAIT_MS : EMBED_BACKOFF_MS);
       if (error instanceof LlmUnavailable) return 'embed';
       throw error;
     }
@@ -388,12 +392,10 @@ export class SearchIndexer {
       await this.finish(item, files, summary, null);
     } catch (error) {
       if (error instanceof LlmUnavailable) {
+        const processAfter = this.later(now, error instanceof LlmBusy ? this.busy.next(item.id) : LLM_WAIT_MS);
+        const lastError = error instanceof LlmBusy ? busyMessage(processAfter) : `${LLM_WAITING_PREFIX}${error.reason}`;
         await this.deps.store.transaction((tx) =>
-          tx.setItemProgress(item.id, {
-            attempts: item.attempts,
-            processAfter: this.later(now, LLM_WAIT_MS),
-            lastError: `${LLM_WAITING_PREFIX}${error.reason}`.slice(0, 500),
-          }),
+          tx.setItemProgress(item.id, { attempts: item.attempts, processAfter, lastError: lastError.slice(0, 500) }),
         );
         return;
       }

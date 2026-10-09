@@ -700,6 +700,13 @@ export class PgStore implements Store {
           .limit(1);
         return row === undefined ? null : toKbItem(row);
       },
+      listFailedKbItems: async () =>
+        (
+          await t
+            .select()
+            .from(schema.kbProposals)
+            .where(and(eq(schema.kbProposals.status, 'open'), eq(schema.kbProposals.processing, 'failed')))
+        ).map(toKbItem),
       updateKbItem: async (item, expectedVersion) => {
         const rows = await t
           .update(schema.kbProposals)

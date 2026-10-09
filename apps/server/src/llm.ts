@@ -1,5 +1,5 @@
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
-import { LlmUnavailable } from '@slop/core';
+import { LlmBusy, LlmUnavailable } from '@slop/core';
 import type { Llm, LlmRequest } from '@slop/core';
 
 /** A Bedrock model and the setting that chose it (named in the fix when the model can't be used). */
@@ -42,6 +42,27 @@ const MODEL_ID_INVALID =
 const modelFix = (site: CallSite): string =>
   `Check ${site.model.configKey} and that model access is enabled in the Bedrock console (${site.region})`;
 
+/**
+ * Transient Bedrock errors: throttling, overload ("Bedrock is unable to process your request" is the message of
+ * `ServiceUnavailableException`), a model still loading, quota bursts, server errors and SDK timeouts. They pass,
+ * so they become `LlmBusy` (wait and retry, no attempt spent), not a failure and not "unavailable".
+ */
+const BUSY_ERRORS: ReadonlySet<string> = new Set([
+  'ThrottlingException',
+  'TooManyRequestsException',
+  'ServiceUnavailableException',
+  'ModelNotReadyException',
+  'ServiceQuotaExceededException',
+  'InternalServerException',
+  'ModelTimeoutException',
+  'TimeoutError',
+  'RequestTimeout',
+  'RequestTimeoutException',
+]);
+
+/** Adaptive retry spreads the SDK's own retries under throttling; the pipelines' waits take over after these. */
+export const BEDROCK_CLIENT_RETRY = { retryMode: 'adaptive', maxAttempts: 5 } as const;
+
 const nameOf = (error: unknown): string =>
   error instanceof Error ? error.name : '';
 
@@ -50,12 +71,13 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 /**
  * Credential and access failures, which no retry fixes until a person acts, as `LlmUnavailable`
  * with a plain-language reason and fix (built from the call site only: never the SDK's message,
- * which can carry request IDs and account details). Anything else (throttling, timeouts, model
+ * which can carry request IDs and account details), and transient ones as `LlmBusy`. Anything else (model
  * errors, aborts) returns null and is thrown as it was.
  */
 export const classifyBedrockError = (error: unknown, site: CallSite): LlmUnavailable | null => {
   const name = nameOf(error);
   const message = messageOf(error);
+  if (BUSY_ERRORS.has(name) || (name === 'Error' && /unable to process your request/i.test(message))) return new LlmBusy();
   switch (name) {
     // The SDK's credential chain: the SSO token provider and the credential providers.
     case 'TokenProviderError':
@@ -100,7 +122,7 @@ export const classifyBedrockError = (error: unknown, site: CallSite): LlmUnavail
 /**
  * The LLM port on Amazon Bedrock (Converse API), with slop's IAM role or the developer's AWS
  * profile. Token usage is reported so it can be priced for the spend line on the board. Credential
- * and access failures throw `LlmUnavailable`; other failures are rethrown unchanged.
+ * and access failures throw `LlmUnavailable`, transient ones `LlmBusy`; other failures are rethrown unchanged.
  */
 export class BedrockLlm implements Llm {
   private readonly client: BedrockRuntimeClient;
@@ -116,7 +138,7 @@ export class BedrockLlm implements Llm {
     private readonly temperature: number | null = 0,
   ) {
     this.modelId = model.id;
-    this.client = new BedrockRuntimeClient({ region });
+    this.client = new BedrockRuntimeClient({ region, ...BEDROCK_CLIENT_RETRY });
     this.site = { model, region, profile: process.env.AWS_PROFILE };
   }
 

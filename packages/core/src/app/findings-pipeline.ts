@@ -11,11 +11,11 @@ import {
 import type { FindingClass, FindingSeverity, NewFinding, ReviewFinding, ReviewSource, SplitFinding } from '../domain/findings.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import type { Clock, Notifier, Store } from '../ports.js';
-import { LlmUnavailable } from './intake-service.js';
+import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm } from './intake-service.js';
 import { verifiedQuote } from './kb-dedupe.js';
 import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
-import { completeWithDeadline } from './llm-call.js';
+import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 
 /** Haiku answers a classification in seconds; a stalled call fails the attempt well inside the lease. */
@@ -111,7 +111,7 @@ const classifyPrompt = (finding: ReviewFinding): string =>
     '>>>',
   ].join('\n');
 
-type Outcome<T> = { ok: T } | { failure: string } | { unavailable: string };
+type Outcome<T> = { ok: T } | { failure: string } | { unavailable: LlmUnavailable };
 
 /**
  * The review findings pipeline (spec, self-improvement signals): a background job claims each new
@@ -121,6 +121,8 @@ type Outcome<T> = { ok: T } | { failure: string } | { unavailable: string };
  * call. Claims, deadlines, retries and waiting while the LLM is unavailable follow the KB pipeline.
  */
 export class FindingsPipeline {
+  private readonly busy = new BusyBackoff();
+
   constructor(
     private readonly deps: {
       store: Store;
@@ -251,7 +253,7 @@ export class FindingsPipeline {
       const findings = parseSplit(answer, shown);
       return findings === null ? { failure: 'The split answer was not usable JSON' } : { ok: findings };
     } catch (error) {
-      if (error instanceof LlmUnavailable) return { unavailable: error.reason };
+      if (error instanceof LlmUnavailable) return { unavailable: error };
       return { failure: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -267,7 +269,7 @@ export class FindingsPipeline {
         ),
       );
     } catch (error) {
-      if (error instanceof LlmUnavailable) await this.waitFinding(finding, error.reason);
+      if (error instanceof LlmUnavailable) await this.waitFinding(finding, error);
       else await this.failFinding(finding, error instanceof Error ? error.message : String(error));
       return;
     }
@@ -345,21 +347,20 @@ export class FindingsPipeline {
    * Releases a source the LLM couldn't be used for (credentials, model access), to be tried again
    * after LLM_WAIT_MS. Not a failed attempt: only a person can fix it, and sources shouldn't fail meanwhile.
    */
-  private async waitSource(source: ReviewSource, reason: string): Promise<void> {
-    const now = this.deps.clock.now();
-    await this.writeSource(source, (current) => ({
-      ...current,
-      error: `${LLM_WAITING_PREFIX}${reason}`.slice(0, 500),
-      processAfter: later(now, LLM_WAIT_MS),
-    }));
+  private async waitSource(source: ReviewSource, unavailable: LlmUnavailable): Promise<void> {
+    const wait = this.waitFor(source.id, unavailable);
+    await this.writeSource(source, (current) => ({ ...current, error: wait.error, processAfter: wait.processAfter }));
   }
 
-  private async waitFinding(finding: ReviewFinding, reason: string): Promise<void> {
-    const now = this.deps.clock.now();
-    await this.writeFinding(finding, (current) => ({
-      ...current,
-      error: `${LLM_WAITING_PREFIX}${reason}`.slice(0, 500),
-      processAfter: later(now, LLM_WAIT_MS),
-    }));
+  private async waitFinding(finding: ReviewFinding, unavailable: LlmUnavailable): Promise<void> {
+    const wait = this.waitFor(finding.id, unavailable);
+    await this.writeFinding(finding, (current) => ({ ...current, error: wait.error, processAfter: wait.processAfter }));
+  }
+
+  /** When and why an unusable LLM releases an item: a minute for `LlmUnavailable`, a growing, jittered wait for `LlmBusy`. */
+  private waitFor(key: number | string, unavailable: LlmUnavailable): { error: string; processAfter: string } {
+    const processAfter = later(this.deps.clock.now(), unavailable instanceof LlmBusy ? this.busy.next(key) : LLM_WAIT_MS);
+    const error = unavailable instanceof LlmBusy ? busyMessage(processAfter) : `${LLM_WAITING_PREFIX}${unavailable.reason}`;
+    return { error: error.slice(0, 500), processAfter };
   }
 }

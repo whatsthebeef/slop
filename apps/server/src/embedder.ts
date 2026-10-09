@@ -1,7 +1,7 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { EMBEDDING_DIMENSIONS } from '@slop/core';
 import type { Embedder } from '@slop/core';
-import { classifyBedrockError } from './llm.js';
+import { BEDROCK_CLIENT_RETRY, classifyBedrockError } from './llm.js';
 import type { BedrockModel } from './llm.js';
 
 /** Titan embeddings take one text per call, so a batch runs a few calls at a time. */
@@ -28,7 +28,7 @@ export class BedrockEmbedder implements Embedder {
     private readonly region: string,
   ) {
     this.model = bedrockModel.id;
-    this.client = new BedrockRuntimeClient({ region });
+    this.client = new BedrockRuntimeClient({ region, ...BEDROCK_CLIENT_RETRY });
   }
 
   async embed(texts: readonly string[], signal?: AbortSignal): Promise<number[][]> {

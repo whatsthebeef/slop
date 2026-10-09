@@ -370,6 +370,8 @@ export class MemoryStore implements Store {
             )
             .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] ?? null,
         ),
+      listFailedKbItems: () =>
+        Promise.resolve([...s.kbItems.values()].filter((i) => i.status === 'open' && i.processing === 'failed')),
       updateKbItem: (item, expectedVersion) => {
         if (s.kbItems.get(item.id)?.version !== expectedVersion) return Promise.resolve(false);
         s.kbItems.set(item.id, item);

@@ -1,7 +1,7 @@
-import { LlmUnavailable } from '@slop/core';
+import { LlmBusy, LlmUnavailable } from '@slop/core';
 import type { Embedder, Llm } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { LlmHealth } from '../src/llm-health.js';
+import { BUSY_WARNING_COUNT, LlmHealth } from '../src/llm-health.js';
 import type { LlmHealthState } from '../src/llm-health.js';
 
 const REQUEST = { system: 's', prompt: 'p', maxTokens: 10 };
@@ -116,5 +116,26 @@ describe('LlmHealth', () => {
     await tracked.embed(['a']);
     expect(health.isDown(['titan'])).toBe(false);
     expect(changes.map((c) => c.state)).toEqual(['ok', 'down', 'ok']);
+  });
+
+  it('ignores busy answers: the model stays ok, and many in a row warn until the next success', async () => {
+    const changes: LlmHealthState[] = [];
+    const warnings: boolean[] = [];
+    const health = new LlmHealth((_model, s) => changes.push(s), () => '2026-10-07T00:00:00.000Z', (_model, on) => warnings.push(on));
+    const opus = scripted();
+    const tracked = health.track(opus.llm, 'opus');
+    await tracked.complete(REQUEST);
+    opus.fail(new LlmBusy());
+    for (let i = 0; i < BUSY_WARNING_COUNT - 1; i++) await expect(tracked.complete(REQUEST)).rejects.toBeInstanceOf(LlmBusy);
+    expect(health.state()).toMatchObject({ state: 'ok' });
+    expect(warnings).toEqual([]);
+    await expect(tracked.complete(REQUEST)).rejects.toBeInstanceOf(LlmBusy);
+    expect(health.isDown(['opus'])).toBe(false);
+    expect(health.state()).toMatchObject({ state: 'ok' });
+    expect(changes).toHaveLength(1);
+    expect(warnings).toEqual([true]);
+    opus.succeed();
+    await tracked.complete(REQUEST);
+    expect(warnings).toEqual([true, false]);
   });
 });

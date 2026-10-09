@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
-import { LlmUnavailable } from '../src/app/intake-service.js';
+import { LlmBusy, LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
 import { DEDUPE_SYSTEM, KbPipeline, ROUTE_SYSTEM } from '../src/app/kb-pipeline.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
@@ -1051,6 +1051,61 @@ describe('KB pipeline: routing and dedupe', () => {
     const routed = await item(id);
     expect(routed).toMatchObject({ processing: 'routed', processingError: null, processingAttempts: 0 });
     expect(llmWaitingReason(routed)).toBeNull();
+  });
+
+  it('backs off on a busy Bedrock without spending an attempt: three busy answers never fail an item', async () => {
+    const id = await submit();
+    llm.answer(new Error('Bedrock is down'));
+    await pipeline.processNext();
+    expect(await item(id)).toMatchObject({ processingAttempts: 1 });
+    advance(30_000);
+    const delays: number[] = [];
+    for (let round = 0; round < 6; round++) {
+      llm.answer(new LlmBusy());
+      expect(await pipeline.processNext()).toBe(id);
+      const waiting = await item(id);
+      expect(waiting).toMatchObject({ status: 'open', processing: 'pending', processingAttempts: 1 });
+      expect(waiting.processingError).toMatch(/^Waiting: Bedrock busy \(retrying at \d\d:\d\d UTC\)$/);
+      const delay = Date.parse(waiting.processAfter ?? '') - Date.parse(now);
+      delays.push(delay);
+      expect(await pipeline.processNext()).toBeNull();
+      advance(delay);
+    }
+    // 1, 2, 4, 8, 15, 15 minutes, each with up to 25% jitter.
+    [1, 2, 4, 8, 15, 15].forEach((minutes, i) => {
+      expect(delays[i]).toBeGreaterThanOrEqual(minutes * 60_000);
+      expect(delays[i]).toBeLessThanOrEqual(minutes * 60_000 * 1.25);
+    });
+    // A real failure still counts.
+    llm.answer(new Error('Bedrock is down'));
+    await pipeline.processNext();
+    expect(await item(id)).toMatchObject({ processing: 'pending', processingAttempts: 2, processingError: 'Bedrock is down' });
+  });
+
+  it('requeues only the items that failed because Bedrock was busy, at their stage with fresh attempts', async () => {
+    const busyRouting = await submit({ statement: 'Busy while routing' });
+    const busyDrafting = await submit({ statement: 'Busy while drafting' });
+    const real = await submit({ statement: 'Real failure' });
+    const fail = async (id: string, error: string, target: KbItem['target']) => {
+      await store.transaction(async (tx) => {
+        const current = await tx.getKbItem(id);
+        if (current === null) throw new Error('missing');
+        await tx.updateKbItem(
+          { ...current, processing: 'failed', processingAttempts: 3, processingError: error, processAfter: null, target, version: current.version + 1 },
+          current.version,
+        );
+      });
+    };
+    const target = { kind: 'doc', name: 'build_test_lint', section: null, newDocument: null } as const;
+    await fail(busyRouting, 'Bedrock is unable to process your request.', null);
+    await fail(busyDrafting, 'Too many requests, please wait before trying again.', target);
+    await fail(real, 'The routing answer was not usable JSON', null);
+
+    expect(await pipeline.requeueBusyFailed()).toBe(2);
+    expect(await item(busyRouting)).toMatchObject({ processing: 'pending', processingAttempts: 0, processingError: null });
+    expect(await item(busyDrafting)).toMatchObject({ processing: 'routed', processingAttempts: 0, processingError: null });
+    expect(await item(real)).toMatchObject({ processing: 'failed', processingAttempts: 3 });
+    expect(await pipeline.requeueBusyFailed()).toBe(0);
   });
 
   it('accepts the dedupe answer with its restated fact and checked relations, merging only a "same fact" candidate', async () => {
