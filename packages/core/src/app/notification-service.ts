@@ -66,8 +66,8 @@ export class NotificationService implements NotificationSink {
    * Makes the board's setup notifications match its readiness checklist: a warning per failing item, one info line for
    * the missing ones. What no longer holds is cleared. Idempotent.
    */
-  async syncReadiness(boardId: number, items: readonly ReadinessItem[]): Promise<void> {
-    const raised = readinessNotifications(boardId, items);
+  async syncReadiness(boardId: number, boardName: string, items: readonly ReadinessItem[]): Promise<void> {
+    const raised = readinessNotifications(boardId, boardName, items);
     const wanted = new Set(raised.map((n) => n.source));
     for (const n of raised) await this.raise(n);
     const existing = await this.deps.store.transaction((tx) => tx.listNotifications(boardId));
