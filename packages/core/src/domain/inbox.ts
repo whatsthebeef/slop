@@ -56,9 +56,9 @@ export interface InboxItem {
   /** As pasted; empty until the summary step writes one (display falls back to the first line). */
   readonly title: string;
   readonly text: string;
-  /** Where it came from: `paste` or an integration (`slack`). */
+  /** Where it came from: `paste` or an integration (`meet`, `slack`). */
   readonly source: string;
-  /** The source's own key for the thing (a Slack thread's permalink); empty for a paste. Sending it again updates the item. */
+  /** The source's own ID for it (a Meet notes doc's ID): one item per board, source and ref. Empty for a paste. */
   readonly sourceRef: string;
   readonly sourceLabel: string;
   readonly sourceType: InboxSourceType;
@@ -106,6 +106,13 @@ export interface InboxLink {
   readonly linkedBy: string | null;
   readonly linkedAt: string;
 }
+
+/** The sources an integration token may deliver from. */
+export const INTEGRATION_SOURCES = ['meet'] as const;
+export type IntegrationSource = (typeof INTEGRATION_SOURCES)[number];
+export const isIntegrationSource = (value: unknown): value is IntegrationSource =>
+  INTEGRATION_SOURCES.some((s) => s === value);
+export const SOURCE_REF_LIMIT = 200;
 
 /** The text a repeat paste is recognised by: whitespace collapsed. */
 export const inboxContentHash = (text: string): string => hash(text.replace(/\s+/g, ' ').trim());

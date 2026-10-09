@@ -1,4 +1,4 @@
-import type { BoardNotification, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { BoardNotification, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -349,6 +349,15 @@ const toInboxItem = (row: typeof schema.inboxItems.$inferSelect): InboxItem => (
   itemId: row.itemId,
   version: row.version,
   updatedAt: row.updatedAt.toISOString(),
+});
+
+const toIntegrationToken = (row: typeof schema.integrationTokens.$inferSelect): IntegrationToken => ({
+  id: row.id,
+  boardId: row.boardId,
+  tokenHash: row.tokenHash,
+  createdAt: row.createdAt.toISOString(),
+  createdBy: row.createdBy,
+  revokedAt: row.revokedAt?.toISOString() ?? null,
 });
 
 const toInboxLink = (row: typeof schema.inboxLinks.$inferSelect): InboxLink => ({
@@ -1513,7 +1522,7 @@ export class PgStore implements Store {
           .onConflictDoNothing()
           .returning();
         if (created !== undefined) return { item: toInboxItem(created), created: true };
-        // The same source key (preferred) or the same text is in already, or a racing paste got there first.
+        // The same source ref (an integration's delivery), or the same text, is in the inbox already (or a racing insert got there first).
         const [bySource] =
           input.sourceRef === ''
             ? []
@@ -1524,6 +1533,28 @@ export class PgStore implements Store {
             : await t.select().from(n).where(and(eq(n.boardId, input.boardId), eq(n.contentHash, input.contentHash)));
         if (existing === undefined) throw new Error('Inbox item insert returned nothing');
         return { item: toInboxItem(existing), created: false };
+      },
+      getActiveIntegrationToken: async (boardId) => {
+        const k = schema.integrationTokens;
+        const [row] = await t.select().from(k).where(and(eq(k.boardId, boardId), isNull(k.revokedAt)));
+        return row === undefined ? null : toIntegrationToken(row);
+      },
+      findIntegrationToken: async (tokenHash) => {
+        const k = schema.integrationTokens;
+        const [row] = await t.select().from(k).where(eq(k.tokenHash, tokenHash));
+        return row === undefined ? null : toIntegrationToken(row);
+      },
+      insertIntegrationToken: async (token) => {
+        await t.insert(schema.integrationTokens).values({
+          boardId: token.boardId,
+          tokenHash: token.tokenHash,
+          createdAt: new Date(token.createdAt),
+          createdBy: token.createdBy,
+        });
+      },
+      revokeIntegrationTokens: async (boardId, at) => {
+        const k = schema.integrationTokens;
+        await t.update(k).set({ revokedAt: new Date(at) }).where(and(eq(k.boardId, boardId), isNull(k.revokedAt)));
       },
       getInboxItem: async (boardId, id) => {
         const n = schema.inboxItems;

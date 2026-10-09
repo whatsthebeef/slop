@@ -11,8 +11,17 @@ import {
   inboxRef,
   inboxTitle,
   inboxView,
+  isIntegrationSource,
+  SOURCE_REF_LIMIT,
 } from '../domain/inbox.js';
-import type { InboxDetail, InboxItem, InboxSourceType, InboxStatus, InboxView } from '../domain/inbox.js';
+import type {
+  InboxDetail,
+  InboxItem,
+  InboxSourceType,
+  InboxStatus,
+  InboxView,
+  IntegrationSource,
+} from '../domain/inbox.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
@@ -43,6 +52,12 @@ export interface NewSourceItem {
   readonly createdBy: string;
 }
 
+/** An item an integration delivers: `sourceRef` (the source's own ID for it) makes delivery idempotent. */
+export interface NewDelivery extends NewPaste {
+  readonly source: IntegrationSource;
+  readonly sourceRef: string;
+}
+
 /** The item changed (or was linked) under an attach: thrown to roll the transaction back. */
 class AttachConflict extends Error {
   constructor() {
@@ -64,6 +79,32 @@ export class InboxService {
     boardId: number,
     input: NewPaste,
   ): Promise<Result<{ id: number; created: boolean }>> {
+    return this.put(boardId, input, 'paste', '', email, (tx) => memberOf(tx, email, boardId));
+  }
+
+  /**
+   * Stores an item an integration delivers for `boardId` (the caller has checked its token for that board). One item
+   * per board, source and `sourceRef`: delivering it again returns the existing item, even one that was discarded.
+   */
+  async deliver(boardId: number, input: NewDelivery): Promise<Result<{ id: number; created: boolean }>> {
+    if (!isIntegrationSource(input.source)) return invalidInput('Unknown source');
+    const sourceRef = input.sourceRef.trim();
+    if (sourceRef === '') return invalidInput('Give the source reference');
+    if (sourceRef.length > SOURCE_REF_LIMIT)
+      return invalidInput(`The source reference is over ${String(SOURCE_REF_LIMIT)} characters`);
+    return this.put(boardId, input, input.source, sourceRef, null, async (tx) =>
+      (await tx.getBoard(boardId)) === null ? notFound(`No board ${String(boardId)}`) : ok(null),
+    );
+  }
+
+  private async put(
+    boardId: number,
+    input: NewPaste,
+    source: string,
+    sourceRef: string,
+    createdBy: string | null,
+    allowed: (tx: Tx) => Promise<Result<unknown>>,
+  ): Promise<Result<{ id: number; created: boolean }>> {
     const text = input.text.trim();
     if (text === '') return invalidInput('Paste some text');
     if (text.length > INBOX_TEXT_LIMIT)
@@ -81,23 +122,24 @@ export class InboxService {
       input.occurredAt === undefined ? now : new Date(input.occurredAt).toISOString();
     const result = await this.deps.store.transaction(
       async (tx): Promise<Result<{ id: number; created: boolean }>> => {
-        const actor = await memberOf(tx, email, boardId);
-        if (!actor.ok) return actor;
+        const permitted = await allowed(tx);
+        if (!permitted.ok) return permitted;
         const stored = await tx.insertInboxItem({
           boardId,
           title,
           text,
-          source: 'paste',
-          sourceRef: '',
+          source,
+          sourceRef,
           sourceLabel,
           sourceType: 'meeting',
           occurredAt,
           createdAt: now,
-          createdBy: email,
+          createdBy,
           contentHash: inboxContentHash(text),
         });
-        // A repeat of text that is in the inbox changes nothing; one that was discarded comes back as new.
-        if (!stored.created && stored.item.status !== 'discarded')
+        // A repeat of text that is in the inbox changes nothing; pasted text that was discarded comes back as new,
+        // but an integration's item stays discarded (its source ref is what makes delivery idempotent).
+        if (!stored.created && (stored.item.status !== 'discarded' || sourceRef !== ''))
           return ok({ id: stored.item.id, created: false });
         const fresh: InboxItem = stored.created
           ? stored.item

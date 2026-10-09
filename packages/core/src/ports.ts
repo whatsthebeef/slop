@@ -7,6 +7,7 @@ import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, NewChatMessage } from './domain/chat.js';
 import type { Decision, DecisionPatch, DecisionSource, NewDecision } from './domain/decisions.js';
 import type { InboxItem, InboxLink, InboxStatus, NewInboxItem } from './domain/inbox.js';
+import type { IntegrationToken } from './domain/integration-tokens.js';
 import type { Candidate, ItemStatus, KnowledgeItem, NewChunk, NewKnowledgeItem, PendingChunk, SearchQuery, SourceType } from './domain/search.js';
 import type { DiffSummary } from './domain/sub-gate.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
@@ -301,8 +302,8 @@ export interface Tx {
   /** Deletes the person's conversation on the board. */
   clearChat(boardId: number, email: string): Promise<void>;
   /**
-   * Stores a pasted item (status `new`, summary pending). A board's item with the same content hash, or with the same
-   * non-empty source and source key, is returned instead, with `created: false`.
+   * Stores a pasted or delivered item (status `new`, summary pending). A board's item with the same content hash, or
+   * the same source and non-empty source ref, is returned instead, with `created: false`.
    */
   insertInboxItem(item: NewInboxItem): Promise<{ item: InboxItem; created: boolean }>;
   getInboxItem(boardId: number, id: number): Promise<InboxItem | null>;
@@ -323,6 +324,14 @@ export interface Tx {
   setItemLinks(itemId: number, globIds: readonly string[], globGroup: string | null): Promise<void>;
   /** Deletes a board's search item with this external ref, with its chunks; a no-op when none. */
   deleteItemByRef(boardId: number, externalRef: string): Promise<void>;
+
+  /** The board's integration token that has not been revoked; null when none. */
+  getActiveIntegrationToken(boardId: number): Promise<IntegrationToken | null>;
+  /** A token by the hash of its secret, revoked or not; null when unknown. */
+  findIntegrationToken(tokenHash: string): Promise<IntegrationToken | null>;
+  insertIntegrationToken(token: Omit<IntegrationToken, 'id' | 'revokedAt'>): Promise<void>;
+  /** Revokes the board's active token (if any) at `at`. */
+  revokeIntegrationTokens(boardId: number, at: string): Promise<void>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
