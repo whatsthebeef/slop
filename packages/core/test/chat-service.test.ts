@@ -8,6 +8,7 @@ import type { Result } from '../src/domain/errors.js';
 import type { AuthorityTier, ItemStatus, NewKnowledgeItem, SourceType } from '../src/domain/search.js';
 import { FakeEmbedder, vectorOf } from '../src/testing/fake-embedder.js';
 import { MemoryStore } from '../src/testing/memory-store.js';
+import { glob as makeGlob } from './fixtures.js';
 
 const NOW = '2026-10-05T12:00:00.000Z';
 const DEV = 'dev@example.com';
@@ -235,5 +236,83 @@ describe('ChatService', () => {
   it('rejects an empty or over-long question', async () => {
     expect(errorCode(await ask('   '))).toBe('invalid_input');
     expect(errorCode(await ask('x'.repeat(2001)))).toBe('invalid_input');
+  });
+
+  describe('rewrite, board state and logging', () => {
+    let rewriter: FakeLlm;
+    let warnings: string[];
+    beforeEach(() => {
+      rewriter = new FakeLlm();
+      warnings = [];
+      chat = new ChatService({
+        store,
+        clock: { now: () => NOW },
+        search: new SearchService({ store, clock: { now: () => NOW }, embedder: new FakeEmbedder() }),
+        llm,
+        rewriteLlm: rewriter,
+        warn: (m) => warnings.push(m),
+      });
+    });
+    const addGlob = (patch: Parameters<typeof makeGlob>[0] = {}) =>
+      store.transaction((tx) => tx.insertGlob(makeGlob({ boardId, ...patch }), null));
+
+    it('searches with the rewritten query, while the answer prompt keeps the original words', async () => {
+      await seed('n', 'notifications are raised by sources', { title: 'Notifications' });
+      rewriter.next = JSON.stringify({ query: 'notifications' });
+      llm.next = says('Sources raise them [1]', [1]);
+      const reply = unwrap(await ask('awhy did we do notifcations like that?'));
+      expect(reply.answered).toBe(true);
+      expect(llm.requests[0]?.prompt).toContain('Question: awhy did we do notifcations like that?');
+      expect(rewriter.requests[0]?.prompt).toContain('awhy did we do notifcations like that?');
+    });
+
+    it('falls back to the original question when the rewrite fails or is unreadable', async () => {
+      await seed('a', 'retry backoff is exponential');
+      llm.next = says('Yes [1]', [1]);
+      rewriter.next = new Error('timeout');
+      expect(unwrap(await ask('retry backoff')).answered).toBe(true);
+      rewriter.next = 'not json';
+      expect(unwrap(await ask('retry backoff')).answered).toBe(true);
+      rewriter.next = new LlmUnavailable('down', 'fix');
+      expect(unwrap(await ask('retry backoff')).answered).toBe(true);
+    });
+
+    it('answers what is in Doing from the board state, cited and capped', async () => {
+      await addGlob({ id: 's1t1', title: 'Add exports', status: 'in_progress' });
+      await addGlob({ id: 's1t2', title: 'Old work', status: 'signed_off' });
+      rewriter.next = JSON.stringify({ query: 'doing' });
+      llm.next = says('s1t1 is in Doing [1]', [1]);
+      const reply = unwrap(await ask('what are we working on'));
+      const prompt = llm.requests[0]?.prompt ?? '';
+      expect(prompt).toContain('[1] Board state (now)');
+      expect(prompt).toContain('s1t1 "Add exports"');
+      expect(prompt).not.toContain('s1t2');
+      expect(reply.answered).toBe(true);
+      expect(reply.reply.citations).toEqual([expect.objectContaining({ source: 'board_state', title: 'Board state (now)', link: `/boards/${boardId}` })]);
+    });
+
+    it('caps the board state', async () => {
+      for (let i = 0; i < 80; i++) await addGlob({ id: `s1t${i + 1}`, title: `Glob number ${i} ${'x'.repeat(60)}`, status: 'in_progress' });
+      llm.next = says('many [1]', [1]);
+      unwrap(await ask('what is open'));
+      const prompt = llm.requests[0]?.prompt ?? '';
+      const block = prompt.slice(prompt.indexOf('[1] Board state (now)'), prompt.indexOf('Question:'));
+      expect(block.length).toBeLessThan(4200);
+      expect(block).toMatch(/more open globs not shown/);
+    });
+
+    it('logs an unreadable reply and still says it does not know', async () => {
+      await seed('a', 'retry backoff is exponential');
+      llm.next = 'sure, exponential, I think';
+      expect(unwrap(await ask()).reply.content).toBe(CHAT_DONT_KNOW);
+      llm.next = says('Something', []);
+      expect(unwrap(await ask()).reply.content).toBe(CHAT_DONT_KNOW);
+      expect(warnings).toHaveLength(2);
+      expect(warnings[0]).toContain(`board ${boardId}`);
+      expect(warnings[0]).toContain('sure, exponential');
+      llm.next = says(CHAT_DONT_KNOW, []);
+      await ask();
+      expect(warnings).toHaveLength(2);
+    });
   });
 });

@@ -9,7 +9,8 @@ export const CHAT_HISTORY_LIMIT = 50;
 export interface ChatCitation {
   /** The source's number in the prompt, the `[n]` the answer uses (the lowest, when one item has several chunks). */
   readonly n: number;
-  readonly source: SourceType;
+  /** `board_state` is the live snapshot of the board, not a stored record. */
+  readonly source: SourceType | 'board_state';
   /** `Decision`, `Plan`, ... as search shows it. */
   readonly sourceLabel: string;
   readonly title: string;
