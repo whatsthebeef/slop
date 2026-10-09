@@ -344,6 +344,17 @@ describe('slop new', () => {
     ]);
   });
 
+  it('passes --after (repeatable, or a comma list) and says the glob waits', async () => {
+    const run = setup(
+      { create_glob: () => created({ type: 'sub', after: ['s1t7', 's1t8'], waiting: true }) },
+      { board: '1' },
+    );
+    await newCommand(['--sub', '--after', 's1t7,s1t8', '--after=s1t6', 'add', 'a', 'column'], run.deps);
+    expect(run.slop.calls[0]?.args).toMatchObject({ type: 'sub', after: ['s1t7', 's1t8', 's1t6'] });
+    expect(run.out.join('')).toContain('waiting for s1t7, s1t8 to merge');
+    await expect(newCommand(['--after', 'oops', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
+  });
+
   it('maps type, category and --routine to create_glob arguments', async () => {
     const run = setup({ create_glob: () => created({ status: 'implementing' }) }, { board: '2' });
     await newCommand(['--same', '--bug', '--routine', '--json', 'crash on save'], run.deps);

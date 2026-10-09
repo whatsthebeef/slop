@@ -2,6 +2,7 @@ import type { Action, ArtifactKind, Category, CodeReviewBadge, DeployIndicator, 
 import { Bot, Bug, ListChecks, Loader2, MessageSquareCode, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
+import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { activityLabel, statusLine } from '@/lib/status-line';
@@ -303,6 +304,38 @@ export const CodeReviewIcon = ({ badge }: { badge: CodeReviewBadge }) => {
   );
 };
 
+/**
+ * A glob held for others to merge: "after s15t7", or the reason when the board's merge policy held it. Each ID opens
+ * that glob on the board.
+ */
+export const AfterChip = ({ glob }: { glob: GlobView }) => {
+  if (glob.status !== 'planning') return null;
+  const implied = (glob.impliedAfter ?? []).filter((i) => i.overridden !== true);
+  const ids = [...new Set([...(glob.after ?? []), ...implied.map((i) => i.id)])];
+  if (ids.length === 0) return null;
+  const reason = implied.map((i) => `${i.id}: both may change ${i.paths.join(', ')}`).join('; ');
+  return (
+    <Tip text={reason === '' ? `Starts after ${ids.join(', ')} merge${ids.length === 1 ? 's' : ''}` : `Waits: ${reason}`}>
+      <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
+        {reason === '' ? 'after ' : 'waits for '}
+        {ids.map((id, i) => (
+          <span key={id}>
+            {i > 0 && ', '}
+            <Link
+              to={`/boards/${glob.boardId}?glob=${encodeURIComponent(id)}`}
+              className='underline-offset-2 hover:underline'
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              {id}
+            </Link>
+          </span>
+        ))}
+      </span>
+    </Tip>
+  );
+};
+
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -405,6 +438,14 @@ export const GlobCard = ({
         {glob.group !== null && <GroupChip name={glob.group} />}
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
+        <AfterChip glob={glob} />
+        {glob.clash != null && (
+          <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict`}>
+            <span className='font-mono text-[11px] text-required' data-testid='clash-chip'>
+              clashes with {glob.clash.with}
+            </span>
+          </Tip>
+        )}
         {codeReview !== undefined && <CodeReviewIcon badge={codeReview} />}
         {deploy !== undefined && <DeployChip deploy={deploy} />}
         {environments !== undefined && <EnvironmentChips environments={environments} />}

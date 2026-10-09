@@ -199,6 +199,21 @@ export const KnowledgePage = () => {
         )}
       </section>
 
+      <section className='grid gap-2' data-testid='merge-policy'>
+        <h2 className='text-sm font-semibold'>
+          Merge policy{kb.data.mergePolicy.version === null ? '' : ` · version ${kb.data.mergePolicy.version}`}
+        </h2>
+        <p className='text-xs text-muted-foreground'>
+          Which paths only one open glob may change at a time (<code>exclusivePaths</code>: globs that would both change one wait for each other) and which are left out when a sub is sized (<code>sizeIgnoredPaths</code>). It changes only through an approved proposal (target: Merge policy).
+        </p>
+        {kb.data.mergePolicy.problem !== null && <p className='text-xs text-destructive'>{kb.data.mergePolicy.problem}; it isn't used.</p>}
+        {kb.data.mergePolicy.content === null ? (
+          <p className='text-xs text-muted-foreground'>Not set.</p>
+        ) : (
+          <pre className='overflow-x-auto rounded border p-2 text-xs'>{kb.data.mergePolicy.content}</pre>
+        )}
+      </section>
+
       {viewing !== null && (
         <Dialog open onOpenChange={(o) => !o && setViewing(null)}>
           <DialogContent title={viewing} className='max-w-3xl'>

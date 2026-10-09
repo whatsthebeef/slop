@@ -1,14 +1,25 @@
 /**
  * The board's knowledge base: documents (conventions, build commands, architecture, review
- * checklists), the agent-set files that `sstor init` writes into a checkout, and the local-run spec
- * (`local_run`, `domain/local-run.ts`).
+ * checklists), the agent-set files that `sstor init` writes into a checkout, the local-run spec
+ * (`local_run`, `domain/local-run.ts`) and the merge policy (`merge_policy`, `domain/merge-policy.ts`).
  */
-export const KNOWLEDGE_KINDS = ['doc', 'agent', 'command', 'hook', 'settings', 'mcp', 'claude_md', 'local_run'] as const;
+export const KNOWLEDGE_KINDS = [
+  'doc',
+  'agent',
+  'command',
+  'hook',
+  'settings',
+  'mcp',
+  'claude_md',
+  'local_run',
+  'merge_policy',
+] as const;
 export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
 
 /**
  * The kinds that belong to the agent set and change its version. Not documents, and not the local-run
- * spec: it is delivered beside the set (never under `.claude/`) and versioned on its own row.
+ * spec (delivered beside the set, never under `.claude/`) or the merge policy (read by slop itself): each is
+ * versioned on its own row.
  */
 export const AGENT_SET_KINDS: readonly KnowledgeKind[] = ['agent', 'command', 'hook', 'settings', 'mcp', 'claude_md'];
 export const isAgentSetKind = (kind: KnowledgeKind): boolean => AGENT_SET_KINDS.includes(kind);

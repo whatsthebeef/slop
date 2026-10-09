@@ -257,6 +257,20 @@ export const codeHostExecutors = (
       return 'done';
     },
 
+    release_waiting: async (effect, glob, { globs }) => {
+      // Only a glob that really merged releases others (a Merge and continue never queues this).
+      if (effect.kind !== 'release_waiting' || glob === null || (glob.status !== 'reviewing' && glob.status !== 'signed_off')) {
+        return 'dropped';
+      }
+      // Each release is its own version-checked write that queues the provision and the run; a repeat changes nothing.
+      await globs.releaseDependents(glob.id, glob.boardId);
+      // A clash warning about this glob is over: it merged.
+      for (const other of await globs.peekAll(glob.boardId, { status: ['in_progress', 'pr_open', 'implementing'] })) {
+        if (other.clash?.with === glob.id) await globs.applyEvent(other.id, (g, ctx) => machine.clashChanged(g, null, ctx));
+      }
+      return 'done';
+    },
+
     check_conflict: async (effect, glob, { globs }) => {
       if (effect.kind !== 'check_conflict' || glob?.pr == null) return 'dropped';
       if (glob.status !== 'pr_open' && glob.status !== 'in_progress') return 'dropped';

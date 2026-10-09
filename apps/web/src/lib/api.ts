@@ -1,5 +1,6 @@
 import type {
   Action,
+  AwaitedDependency,
   AgentSetEntry,
   AgentSetFileView,
   Approval,
@@ -27,6 +28,7 @@ import type {
   KbSignal,
   LabelCommand,
   LocalRunView,
+  MergePolicyView,
   LabelName,
   List,
   Member,
@@ -45,6 +47,9 @@ export interface GlobView extends Glob {
   readonly allowedActions?: readonly Action[];
   /** The latest version of each artifact (board list and glob reads; absent from some write responses). */
   readonly artifacts?: readonly ArtifactSummaryView[];
+  /** What the glob still waits for, and the globs in Planning that wait for it (single-glob reads only). */
+  readonly waitingFor?: readonly AwaitedDependency[];
+  readonly waitedOnBy?: readonly string[];
 }
 
 export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;
@@ -81,6 +86,8 @@ export interface KnowledgeIndex {
   readonly catalogUpdates: readonly CatalogUpdate[];
   /** The local-run spec, read-only (it changes through proposals). */
   readonly localRun: LocalRunView;
+  /** The merge policy (which paths clash between globs), read-only (it changes through proposals). */
+  readonly mergePolicy: MergePolicyView;
 }
 
 export interface CatalogEntry {
@@ -173,12 +180,17 @@ export interface NewGlob {
   group: string | null;
   environment: string | null;
   autoTrigger: boolean;
+  /** IDs of globs on the board to start after. */
+  after?: string[];
+  /** Files intake guessed the work changes (sent back as given). */
+  files?: string[];
 }
 
-export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment'>>;
+export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'after'>>;
 
 export type ActionPath =
   | 'start'
+  | 'start-anyway'
   | 'retrigger'
   | 'retry-autofix'
   | 'resolve-conflict'
@@ -276,7 +288,7 @@ export const api = {
   action: (id: string, action: ActionPath, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, { version }),
   intake: (boardId: number, text: string) =>
-    request<NewGlob & { plan: string; autoTriggerReason: string | null }>('POST', `/api/boards/${boardId}/intake`, { text }),
+    request<NewGlob & { plan: string; autoTriggerReason: string | null; suggestedAfter: string[] }>('POST', `/api/boards/${boardId}/intake`, { text }),
   repoConnection: (boardId: number) =>
     request<{ repo: string | null; configured: boolean; connected: boolean; installUrl: string | null; appName: string | null }>(
       'GET',
@@ -328,6 +340,7 @@ export const api = {
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   start: 'start',
+  start_anyway: 'start-anyway',
   pick_up: 'pick-up',
   take_over: 'take-over',
   retrigger: 'retrigger',
@@ -342,6 +355,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
 
 export const ACTION_LABELS: Record<Action, string> = {
   start: 'Start',
+  start_anyway: 'Start anyway',
   pick_up: 'Pick up',
   take_over: 'Take over',
   retrigger: 'Re-trigger',

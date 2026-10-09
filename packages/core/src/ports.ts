@@ -341,6 +341,12 @@ export interface ChangeSource {
   mergedDiff(board: Board, sha: string): Promise<DiffSummary | null>;
 }
 
+/** The files a glob's branch changes against the base branch, read from the code host. */
+export interface BranchFiles {
+  /** Null when unknown: the glob has no branch yet, or the code host couldn't say. Never throws. */
+  filesOf(board: Board, glob: Glob): Promise<readonly string[] | null>;
+}
+
 export interface Clock {
   now(): string;
 }

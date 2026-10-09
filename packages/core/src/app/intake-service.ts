@@ -79,12 +79,16 @@ export interface IntakeProposal {
   readonly autoTrigger: boolean;
   /** Why auto-trigger was set, quoting the instruction; null when it was not. */
   readonly autoTriggerReason: string | null;
+  /** Repo paths the work probably changes (the model's guess; with the plan it decides whether exclusive paths hold the glob). */
+  readonly files: readonly string[];
+  /** Unmerged globs on the board the request says to wait for ("once s15t7 is merged"); a suggestion, never applied by itself. */
+  readonly suggestedAfter: readonly string[];
 }
 
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
 
 Respond with one JSON object and nothing else:
-{"title": string, "summary": string, "plan": string, "type": "sub" | "same" | "super", "category": "feature" | "task" | "bug", "group": string | null, "autoTrigger": boolean, "autoTriggerQuote": string | null}
+{"title": string, "summary": string, "plan": string, "type": "sub" | "same" | "super", "category": "feature" | "task" | "bug", "group": string | null, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
 
 - title: a short imperative title, at most 70 characters.
 - summary: one or two plain sentences saying what is wanted, for a card on the board. Not the spec.
@@ -92,6 +96,7 @@ Respond with one JSON object and nothing else:
 - type: "sub" for a small bug fix or minor UI or UX tweak that can be implemented and merged without human review; "super" only when the request says the work is done by a developer pairing with the product owner; otherwise "same".
 - category: "feature" for new capability, "bug" for something broken, "task" for other maintenance.
 - group: reuse an existing group (its exact name) only when the work clearly belongs to that same area; otherwise a new short group name if the request names an area of work, otherwise null. Never pick an existing group just because it is the only one.
+- files: repo paths the work most likely changes, only ones the request names or clearly implies (a migration directory for a schema change, a named file); an empty list when unknown. Never invent paths.
 - autoTrigger: true only if the request explicitly says to start the work immediately or to let an agent implement it now. Then autoTriggerQuote is the exact words from the request that say so; otherwise null.`;
 
 const normalise = (s: string) => s.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
@@ -113,6 +118,34 @@ export const environmentNamedIn = (request: string, environments: readonly Envir
         'iu',
       ).test(request),
   )?.name ?? null;
+
+const GLOB_ID_IN_TEXT = /\bs\d+[ftb]\d+\b/gi;
+/** A cue that the glob named next must merge first: "after s15t7", "once s15t7 is merged", "wait for s15t7". */
+const WAIT_CUE = /(after|once|when|until|following|wait(?:s|ing)?\s+for)\b[^.\n;]{0,40}$/i;
+
+/**
+ * The open globs the request says to wait for. Deterministic, like the environment: only IDs that exist on the board and
+ * haven't merged can be suggested.
+ */
+export const waitedForIn = (request: string, open: ReadonlySet<string>): string[] => {
+  const found: string[] = [];
+  for (const match of request.matchAll(GLOB_ID_IN_TEXT)) {
+    const id = match[0].toLowerCase();
+    if (!open.has(id) || found.includes(id)) continue;
+    if (WAIT_CUE.test(request.slice(Math.max(0, match.index - 60), match.index))) found.push(id);
+  }
+  return found;
+};
+
+/** The model's file guesses: strings that look like repo-relative paths, a few at most. */
+const pathList = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value
+        .filter((v: unknown): v is string => typeof v === 'string')
+        .map((v) => v.trim())
+        .filter((v) => v !== '' && v.length <= 200 && !v.startsWith('/') && !v.includes('..') && !/[\0\r\n]/.test(v))
+        .slice(0, 20)
+    : [];
 
 const oneOf = <T extends string>(values: readonly T[], value: unknown): T | null =>
   values.find((v) => v === value) ?? null;
@@ -136,10 +169,11 @@ export class IntakeService {
       return ok({
         groups: [...new Set(globs.flatMap((g) => (g.group === null ? [] : [g.group])))],
         environments: board?.environments ?? [],
+        open: new Set(globs.filter((g) => g.status !== 'reviewing' && g.status !== 'signed_off').map((g) => g.id)),
       });
     });
     if (!known.ok) return known;
-    const { groups, environments } = known.value;
+    const { groups, environments, open } = known.value;
 
     const prompt = [
       `Existing groups: ${groups.length === 0 ? '(none)' : groups.join(', ')}`,
@@ -154,7 +188,7 @@ export class IntakeService {
       if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
       throw error;
     }
-    return ok(this.validate(parseJson(completion), input, groups, environments));
+    return ok(this.validate(parseJson(completion), input, groups, environments, open));
   }
 
   private validate(
@@ -162,6 +196,7 @@ export class IntakeService {
     input: IntakeInput,
     groups: readonly string[],
     environments: readonly Environment[],
+    open: ReadonlySet<string>,
   ): IntakeProposal {
     const request = input.text.trim();
     const title = (input.explicit.title ?? text(field(answer, 'title')) ?? '').trim() || request.split('\n')[0]?.slice(0, 70) || 'Untitled';
@@ -203,6 +238,8 @@ export class IntakeService {
       environment: input.explicit.environment ?? environmentNamedIn(request, environments),
       autoTrigger,
       autoTriggerReason: autoTrigger && typeof quote === 'string' ? `The request says: "${quote.trim()}"` : null,
+      files: pathList(field(answer, 'files')),
+      suggestedAfter: waitedForIn(request, open),
     };
   }
 }
