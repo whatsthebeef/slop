@@ -9,6 +9,7 @@ import {
   parseDecidedAt,
 } from '../domain/decisions.js';
 import type { Decision, DecisionSource, DecisionSourceKind } from '../domain/decisions.js';
+import { inboxLink, inboxTitle } from '../domain/inbox.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import { sameHeading, sectionText } from '../domain/sections.js';
 import { MAX_QUERY_LENGTH } from '../domain/search.js';
@@ -329,6 +330,28 @@ export class DecisionPipeline {
         createdAt: artifact.createdAt,
         url: globLink(boardId, glob.id),
       });
+    }
+    // Attached inbox items are read on each glob they are on, so the glob's decisions show them.
+    const links = await tx.listInboxLinks(boardId);
+    for (const item of await tx.listInboxItems(boardId, ['attached'])) {
+      const shown = item.text.trim().slice(0, SOURCE_TEXT_LIMIT);
+      if (shown === '') continue;
+      for (const link of links) {
+        const glob = link.inboxId === item.id ? globs.get(link.globId) : undefined;
+        if (glob === undefined) continue;
+        out.push({
+          ref: `inbox:${String(item.id)}:${glob.id}`,
+          kind: 'inbox',
+          label: inboxTitle(item),
+          globId: glob.id,
+          group: glob.group,
+          text: shown,
+          hash: hash(shown),
+          // A decision without a date is taken on the day of the meeting.
+          createdAt: item.occurredAt,
+          url: inboxLink(boardId, item.id),
+        });
+      }
     }
     return out;
   }

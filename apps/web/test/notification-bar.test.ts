@@ -44,6 +44,7 @@ describe('the notification bar', () => {
   it('follows the route for the active tab, the board being the default', () => {
     expect(activeTab('/boards/3', 3)).toBe('board');
     expect(activeTab('/boards/3/', 3)).toBe('board');
+    expect(activeTab('/boards/3/inbox', 3)).toBe('inbox');
     expect(activeTab('/boards/3/signed-off', 3)).toBe('signed-off');
     expect(activeTab('/boards/3/knowledge', 3)).toBe('knowledge');
     expect(activeTab('/boards/3/settings', 3)).toBe('settings');
@@ -54,6 +55,7 @@ describe('the notification bar', () => {
     expect(showBoardTools('settings')).toBe(false);
     expect(showBoardTools('signed-off')).toBe(false);
     expect(showBoardTools('knowledge')).toBe(false);
+    expect(showBoardTools('inbox')).toBe(false);
   });
 
   it('puts the most important first and the rest behind the "more…" button, in order', () => {

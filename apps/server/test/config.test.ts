@@ -7,6 +7,12 @@ describe('SLOP_JOBS', () => {
     expect([...loadConfig({ SLOP_JOBS: 'all' }).SLOP_JOBS]).toEqual([...JOBS]);
   });
 
+  it('has the inbox job, started by default', () => {
+    expect(JOBS).toContain('inbox');
+    expect(loadConfig({}).SLOP_JOBS.has('inbox')).toBe(true);
+    expect(loadConfig({ SLOP_JOBS: 'inbox' }).SLOP_JOBS.has('inbox')).toBe(true);
+  });
+
   it('starts none, or only the listed ones', () => {
     expect(loadConfig({ SLOP_JOBS: 'none' }).SLOP_JOBS.size).toBe(0);
     expect([...loadConfig({ SLOP_JOBS: 'kb, outbox' }).SLOP_JOBS]).toEqual(['kb', 'outbox']);

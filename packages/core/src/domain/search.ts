@@ -20,6 +20,9 @@ export const SOURCE_TYPES = [
   'code_review',
   'kb_doc',
   'learning',
+  'meeting',
+  'thread',
+  'doc',
 ] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 
@@ -37,13 +40,24 @@ export const SOURCE_LABELS: Readonly<Record<SourceType, string>> = {
   code_review: 'Code review',
   kb_doc: 'Knowledge',
   learning: 'Learning',
+  meeting: 'Meeting',
+  thread: 'Thread',
+  doc: 'Document',
 };
 
 /**
  * Sources that belong to one glob and go with it when it is deleted. A decision taken from a knowledge item has no
  * glob link, so only decisions taken on a glob are matched.
  */
-export const GLOB_OWNED_SOURCES: readonly SourceType[] = SOURCE_TYPES.filter((s) => s !== 'kb_doc' && s !== 'learning');
+export const GLOB_OWNED_SOURCES: readonly SourceType[] = SOURCE_TYPES.filter(
+  (s) => s !== 'kb_doc' && s !== 'learning' && s !== 'meeting' && s !== 'thread' && s !== 'doc',
+);
+
+/**
+ * Sources whose items a pipeline writes and removes itself (decisions: DecisionPipeline; pasted material: InboxService
+ * and InboxPipeline): the indexer's sweep must leave them alone or it would delete them all.
+ */
+export const PIPELINE_OWNED_SOURCES: readonly SourceType[] = ['decision', 'meeting', 'thread', 'doc'];
 
 /**
  * Order of authority, highest first (spec): merged code and the implementation record, then current decisions, then
