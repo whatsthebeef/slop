@@ -87,7 +87,7 @@ const globs = new GlobService({
   // Embeds a new glob's request for its intake snapshot; `embedder` exists by the time the first glob is created.
   embedder: { model: config.EMBED_MODEL, dimensions: 1024, embed: (texts, signal) => embedder.embed(texts, signal) },
   // Judges a new glob's size; `sizeCheck` exists by the time the first glob is created.
-  sizeCheck: { assess: (boardId, plan) => sizeCheck.assess(boardId, plan), refresh: (globId) => sizeCheck.refresh(globId) },
+  sizeCheck: { assess: (boardId, plan, options): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan, options), refresh: (globId) => sizeCheck.refresh(globId) },
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.
 let awsSignInEnabled = false;
@@ -206,7 +206,7 @@ const intakeLlm = trackLlm(
   config.INTAKE_MODEL,
 );
 // The size check: the intake model judges a plan's independent parts and proposes a split; a failing model leaves the text estimate.
-const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm });
+const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, onRechecked: (id): Promise<void> => globs.reconcileSizeHold(id) });
 const intake = new IntakeService({
   store,
   llm: intakeLlm,
