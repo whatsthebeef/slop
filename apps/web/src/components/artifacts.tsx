@@ -3,8 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { ClipboardCheck, FileCheck, FileText, Paperclip } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import { api } from '@/lib/api';
 import type { ArtifactSummaryView } from '@/lib/api';
+import { isInboxLink } from '@/lib/inbox';
 import { artifactKey } from '@/lib/live';
 import { cn } from '@/lib/utils';
 import { MarkdownView } from './markdown-view';
@@ -137,11 +139,17 @@ const ArtifactViewer = ({ globId, summary }: { globId: string; summary: Artifact
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : (
         <>
-          {shown.link !== null && (
-            <a className="text-sm underline" href={shown.link} target="_blank" rel="noreferrer">
-              {shown.link}
-            </a>
-          )}
+          {shown.link !== null &&
+            // A link into slop (an inbox item) opens in place; anything else in a new tab.
+            (isInboxLink(shown.link) ? (
+              <Link className="text-sm underline" to={shown.link}>
+                Open in the inbox
+              </Link>
+            ) : (
+              <a className="text-sm underline" href={shown.link} target="_blank" rel="noreferrer">
+                {shown.link}
+              </a>
+            ))}
           <MarkdownView content={shown.content} />
         </>
       )}

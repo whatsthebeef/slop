@@ -18,7 +18,8 @@ interface Hint {
     | 'board.kb'
     | 'board.tests'
     | 'board.health'
-    | 'board.notifications';
+    | 'board.notifications'
+    | 'board.inbox';
   readonly globId?: string;
   readonly version?: number;
 }
@@ -47,6 +48,9 @@ export const globCodeReviewKey = (globId: string) => ['glob-code-review', globId
 
 /** One glob's review findings in the glob view; invalidated by `glob.findings` hints and on reconnect. */
 export const findingsKey = (globId: string) => ['findings', globId] as const;
+
+/** The board's inbox items; invalidated by `board.inbox` hints and on reconnect (and polled while one is being summarised). */
+export const inboxKey = (boardId: number) => ['inbox', boardId] as const;
 
 /** One glob's decisions in the glob view; invalidated by `glob.decisions` hints and on reconnect. */
 export const globDecisionsKey = (globId: string) => ['glob-decisions', globId] as const;
@@ -144,6 +148,24 @@ export const useLiveKnowledge = (boardId: number): LiveState => {
   });
 };
 
+/** Keeps the Inbox page live: `board.inbox` hints (an item added, summarised, attached, kept or discarded) and every reconnect refetch it. */
+export const useLiveInbox = (boardId: number): LiveState => {
+  const client = useQueryClient();
+  return useBoardEvents(boardId, {
+    onHint: (hint) => {
+      if (hint.kind === 'board.inbox') void client.invalidateQueries({ queryKey: inboxKey(boardId) });
+      if (hint.kind === 'board.notifications') void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
+      // An attach puts an attachment on globs; the page lists their titles from the board's glob list.
+      if (hint.kind === 'glob.changed' || hint.kind === 'glob.deleted') void client.invalidateQueries({ queryKey: globsKey(boardId) });
+    },
+    onReconnect: () => {
+      void client.invalidateQueries({ queryKey: inboxKey(boardId) });
+      void client.invalidateQueries({ queryKey: globsKey(boardId) });
+      void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
+    },
+  });
+};
+
 /**
  * Keeps the board's glob list live: each hint refetches only that glob, and every reconnect
  * reloads the whole board in case hints were missed.
@@ -172,6 +194,11 @@ export const useLiveBoard = (boardId: number): LiveState => {
     }
     if (hint.kind === 'board.notifications') {
       void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
+      return;
+    }
+    if (hint.kind === 'board.inbox') {
+      // The Inbox tab's count shows on every board page.
+      void client.invalidateQueries({ queryKey: inboxKey(boardId) });
       return;
     }
     if (hint.kind === 'board.health') {
@@ -236,6 +263,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
     void client.invalidateQueries({ queryKey: ['glob-tests'] });
     void client.invalidateQueries({ queryKey: ['readiness', boardId] });
     void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
+    void client.invalidateQueries({ queryKey: inboxKey(boardId) });
     void client.invalidateQueries({ queryKey: ['findings'] });
     void client.invalidateQueries({ queryKey: ['glob-decisions'] });
     void client.invalidateQueries({ queryKey: codeReviewsKey(boardId) });
