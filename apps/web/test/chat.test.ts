@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RequestError } from '../src/lib/api';
 import type { ChatCitation } from '../src/lib/api';
-import { actionsFor, citedGlobs, globScope, hideSignedOff, isChatShortcut, mentionedGlobs, saveLabel, scopeLabel, scopeOf, sourceTone, stateLabel, suggestionsFor, unavailableNotice, withCiteLinks } from '../src/lib/chat';
+import { actionsFor, citedGlobs, globScope, hideSignedOff, isChatShortcut, MESSAGE_LIST, mentionedGlobs, openGlobOf, saveLabel, scopeLabel, scopeName, scopeOf, showScopeChip, sourceTone, stateLabel, suggestionsFor, unavailableNotice, WRAP_LONG, withCiteLinks } from '../src/lib/chat';
 import { takeSseEvents } from '../src/lib/sse';
 
 const cite = (patch: Partial<ChatCitation>): ChatCitation => ({
@@ -56,9 +56,9 @@ describe('the scope chip', () => {
     expect(scopeOf(glob, null, false)).toEqual(glob);
     expect(scopeOf(inbox, glob, false)).toEqual(glob);
     expect(scopeOf(inbox, glob, true)).toEqual({ type: 'board' });
-    expect(scopeLabel(glob)).toBe('Glob s15f25');
-    expect(scopeLabel(inbox)).toBe('Inbox item 3');
-    expect(scopeLabel({ type: 'board' })).toBe('Board');
+    expect(scopeName(glob)).toBe('Glob s15f25');
+    expect(scopeName(inbox)).toBe('Inbox item 3');
+    expect(scopeName({ type: 'board' })).toBe('Board');
     expect(globScope(glob)).toBe('s15f25');
     expect(globScope(inbox)).toBeUndefined();
   });
@@ -69,6 +69,28 @@ describe('the scope chip', () => {
     expect(suggestionsFor({ ...glob, state: 'merged' })[0]).toBe('What changed?');
     expect(suggestionsFor({ type: 'knowledge', id: 'build' })[0]).toBe('What evidence supports this?');
     expect(suggestionsFor(inbox)[0]).toBe('Which globs does this relate to?');
+  });
+});
+
+describe('the scope chip wording', () => {
+  it('is hidden for the whole board and names what a narrower scope is about', () => {
+    expect(showScopeChip({ type: 'board' })).toBe(false);
+    expect(showScopeChip({ type: 'glob', id: 's15f26' })).toBe(true);
+    expect(scopeLabel({ type: 'glob', id: 's15f26', title: 'Fix login timeout' })).toBe('About s15f26 · Fix login timeout');
+    expect(scopeLabel({ type: 'glob', id: 's15f26' })).toBe('About s15f26');
+    expect(scopeLabel({ type: 'inbox', id: '3' })).toBe('About inbox item 3');
+  });
+});
+
+describe('the panel never scrolls sideways', () => {
+  it('wraps a long status line and keeps the message list to one column', () => {
+    const line = `Used 3 steps: Searched the board's records (all time, including history, s15t52 only): 12 found ${'x'.repeat(300)}`;
+    expect(line.length).toBeGreaterThan(300);
+    expect(WRAP_LONG).toContain('[overflow-wrap:anywhere]');
+    expect(WRAP_LONG).toContain('min-w-0');
+    expect(MESSAGE_LIST).toContain('grid-cols-[minmax(0,1fr)]');
+    expect(MESSAGE_LIST).toContain('overflow-x-hidden');
+    expect(MESSAGE_LIST).not.toMatch(/(^| )overflow-auto/);
   });
 });
 
@@ -90,20 +112,25 @@ describe('answers', () => {
     expect(sourceTone('board_state')).toContain('muted');
   });
 
-  const reply = (citations: ChatCitation[]) => ({ content: 'x', citations });
+  const reply = (citations: ChatCitation[], actions: ('create_glob' | 'save')[] = [], content = 'x') => ({ content, citations, actions });
   const withGlob = cite({ globId: 's1t1' });
 
-  it('offers actions by what the answer cites and where the person is', () => {
-    expect(actionsFor(reply([withGlob]), { type: 'board' }, true)).toEqual(['create_glob', 'save', 'open_glob']);
-    expect(actionsFor(reply([cite({})]), { type: 'board' }, true)).toEqual(['create_glob']);
+  it('offers actions only where they fit', () => {
+    // Nothing under small talk or "couldn't find" (no sources), whatever the model asked for.
+    expect(actionsFor(reply([], ['create_glob', 'save']), { type: 'glob', id: 's1t9' })).toEqual([]);
+    // Create glob and Save come from the model; Open is derived from the sources.
+    expect(actionsFor(reply([withGlob]), { type: 'board' })).toEqual(['open_glob']);
+    expect(actionsFor(reply([withGlob], ['create_glob', 'save']), { type: 'board' })).toEqual(['create_glob', 'save', 'open_glob']);
+    // Save needs a glob to point at.
+    expect(actionsFor(reply([cite({})], ['save']), { type: 'board' })).toEqual([]);
+    // Open in glob view: one glob only, or the page's own.
+    expect(openGlobOf(reply([withGlob, cite({ globId: 's1t2' })]), { type: 'board' })).toBeUndefined();
+    expect(openGlobOf(reply([withGlob], [], 'see s1t1'), { type: 'board' })).toBe('s1t1');
+    expect(openGlobOf(reply([cite({})]), { type: 'glob', id: 's1t9' })).toBe('s1t9');
     // Attach is for an open inbox item and an answer that cites a glob.
-    expect(actionsFor(reply([withGlob]), { type: 'inbox', id: '3' }, true)).toEqual(['create_glob', 'attach', 'save', 'open_glob']);
-    expect(actionsFor(reply([withGlob]), { type: 'inbox' }, true)).not.toContain('attach');
-    // The page's own glob is a source to save against, and one to open, when the answer cites none.
-    expect(actionsFor(reply([cite({})]), { type: 'glob', id: 's1t9' }, true)).toEqual(['create_glob', 'save', 'open_glob']);
+    expect(actionsFor(reply([withGlob]), { type: 'inbox', id: '3' })).toEqual(['attach', 'open_glob']);
+    expect(actionsFor(reply([withGlob]), { type: 'inbox' })).not.toContain('attach');
     expect(citedGlobs(reply([withGlob, cite({ globId: 's1t1' })]), { type: 'glob', id: 's1t9' })).toEqual(['s1t1', 's1t9']);
-    // Nothing to save or open after "I don't know".
-    expect(actionsFor(reply([]), { type: 'glob', id: 's1t9' }, false)).toEqual([]);
     expect(saveLabel({ type: 'knowledge', id: 'build' })).toBe('Propose a change');
     expect(saveLabel({ type: 'board' })).toBe('Save to knowledge');
   });

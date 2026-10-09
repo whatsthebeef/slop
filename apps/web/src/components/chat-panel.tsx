@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CHAT_DONT_KNOW, MAX_QUERY_LENGTH } from '@slop/core';
+import { MAX_QUERY_LENGTH } from '@slop/core';
 import { History, Maximize2, Minimize2, Pin, PinOff, Plus, Square, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, SyntheticEvent } from 'react';
@@ -8,7 +8,7 @@ import remarkGfm from 'remark-gfm';
 import { Link, useNavigate } from 'react-router';
 import { api, RequestError } from '@/lib/api';
 import type { ChatCitation, ChatMessage, ChatQuestion, GlobView } from '@/lib/api';
-import { actionsFor, citedGlobs, globScope, mentionedGlobs, saveLabel, scopeLabel, scopeOf, sourceTone, stateLabel, suggestionsFor, unavailableNotice, withCiteLinks } from '@/lib/chat';
+import { actionsFor, globScope, MESSAGE_LIST, mentionedGlobs, openGlobOf, saveLabel, scopeLabel, scopeName, scopeOf, showScopeChip, sourceTone, stateLabel, suggestionsFor, unavailableNotice, WRAP_LONG, withCiteLinks } from '@/lib/chat';
 import { globsKey } from '@/lib/live';
 import { useCurrentPage } from '@/lib/page-context';
 import type { PageContext } from '@/lib/page-context';
@@ -54,7 +54,7 @@ const Chip = ({ citation, onNavigate }: { citation: ChatCitation; onNavigate: ()
 
 /** The answer as Markdown. `[n]` becomes a chip for its source; the model's own links are shown as plain text, since nothing it writes is trusted to point anywhere. */
 const Answer = ({ text, citations, onNavigate }: { text: string; citations: readonly ChatCitation[]; onNavigate: () => void }) => (
-  <div className='text-sm leading-relaxed [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:text-xs [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1 [&_pre]:overflow-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_table]:text-xs [&_td]:border [&_td]:px-1 [&_th]:border [&_th]:px-1 [&_ul]:list-disc'>
+  <div className={cn(WRAP_LONG, 'text-sm leading-relaxed [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:text-xs [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1 [&_pre]:max-w-full [&_pre]:overflow-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-auto [&_table]:text-xs [&_td]:border [&_td]:px-1 [&_th]:border [&_th]:px-1 [&_ul]:list-disc')}>
     <Markdown
       remarkPlugins={[remarkGfm]}
       urlTransform={(url) => (url.startsWith('cite:') ? url : defaultUrlTransform(url))}
@@ -77,7 +77,7 @@ const GlobCards = ({ boardId, ids, onNavigate }: { boardId: number; ids: readonl
   const found = ids.flatMap((id) => globs.data?.find((g) => g.id === id) ?? []);
   if (found.length === 0) return null;
   return (
-    <div className='mt-1 flex flex-wrap gap-1' data-testid='chat-glob-cards'>
+    <div className='mt-1 flex min-w-0 flex-wrap gap-1' data-testid='chat-glob-cards'>
       {found.map((g: GlobView) => (
         <Link key={g.id} to={`/boards/${String(boardId)}/globs/${g.id}`} onClick={onNavigate} className='max-w-full rounded border bg-background px-2 py-1 text-xs hover:bg-muted'>
           <span className='font-medium'>{g.id}</span> <span className='text-muted-foreground'>{g.status.replace('_', ' ')}</span>
@@ -89,7 +89,7 @@ const GlobCards = ({ boardId, ids, onNavigate }: { boardId: number; ids: readonl
 };
 
 const Sources = ({ citations }: { citations: readonly ChatCitation[] }) => (
-  <details className='mt-1 text-xs text-muted-foreground'>
+  <details className={cn(WRAP_LONG, 'mt-1 text-xs text-muted-foreground')}>
     <summary className='cursor-pointer'>Sources ({citations.length})</summary>
     <ol className='mt-1 grid gap-0.5' aria-label='Sources'>
       {citations.map((c) => {
@@ -106,7 +106,7 @@ const Sources = ({ citations }: { citations: readonly ChatCitation[] }) => (
 );
 
 const Tools = ({ tools }: { tools: readonly string[] }) => (
-  <details className='mt-1 text-xs text-muted-foreground' data-testid='chat-tools'>
+  <details className={cn(WRAP_LONG, 'mt-1 text-xs text-muted-foreground')} data-testid='chat-tools'>
     <summary className='cursor-pointer'>
       Used {tools.length} {tools.length === 1 ? 'step' : 'steps'}
     </summary>
@@ -124,22 +124,19 @@ const Actions = ({
   chatId,
   message,
   page,
-  answered,
   onNavigate,
 }: {
   boardId: number;
   chatId: number;
   message: ChatMessage;
   page: PageContext;
-  answered: boolean;
   onNavigate: () => void;
 }) => {
   const navigate = useNavigate();
   const toast = useToast();
   const client = useQueryClient();
-  const globs = citedGlobs(message, page);
   const [saved, setSaved] = useState<string | null>(null);
-  const actions = actionsFor(message, page, answered);
+  const actions = actionsFor(message, page);
   const save = useMutation({
     mutationFn: () => api.saveChatAnswer(boardId, chatId, message.id, page.type === 'glob' ? page.id : undefined),
     onSuccess: (r) => {
@@ -157,9 +154,9 @@ const Actions = ({
     onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not attach'),
   });
   if (actions.length === 0) return null;
-  const firstGlob = globs[0];
+  const openGlob = openGlobOf(message, page);
   return (
-    <div className='mt-1 flex flex-wrap gap-1 border-t pt-1' data-testid='chat-actions'>
+    <div className='mt-1 flex flex-wrap gap-1 pt-1' data-testid='chat-actions'>
       {actions.includes('create_glob') && (
         <Button
           size='sm'
@@ -187,8 +184,8 @@ const Actions = ({
             Sent to the proposal queue as {saved}
           </span>
         ))}
-      {actions.includes('open_glob') && firstGlob !== undefined && (
-        <Button size='sm' variant='outline' onClick={() => { onNavigate(); void navigate(`/boards/${String(boardId)}/globs/${firstGlob}`); }}>
+      {actions.includes('open_glob') && openGlob !== undefined && (
+        <Button size='sm' variant='outline' onClick={() => { onNavigate(); void navigate(`/boards/${String(boardId)}/globs/${openGlob}`); }}>
           Open in glob view
         </Button>
       )}
@@ -200,14 +197,12 @@ const Message = ({
   boardId,
   chatId,
   message,
-  answered,
   page,
   onNavigate,
 }: {
   boardId: number;
   chatId: number;
   message: ChatMessage;
-  answered: boolean;
   page: PageContext;
   onNavigate: () => void;
 }) => {
@@ -216,14 +211,14 @@ const Message = ({
   return (
     <article className={user ? 'ml-8 rounded-md bg-muted p-2' : 'py-1'} data-testid={`chat-${message.role}`}>
       {user ? (
-        <p className='whitespace-pre-wrap text-sm'>{message.content}</p>
+        <p className={cn(WRAP_LONG, 'whitespace-pre-wrap text-sm')}>{message.content}</p>
       ) : (
         <>
           <Answer text={message.content} citations={citations} onNavigate={onNavigate} />
           <GlobCards boardId={boardId} ids={mentionedGlobs(message.content)} onNavigate={onNavigate} />
           {citations.length > 0 && <Sources citations={citations} />}
           {message.tools != null && message.tools.length > 0 && <Tools tools={message.tools} />}
-          <Actions boardId={boardId} chatId={chatId} message={message} page={page} answered={answered} onNavigate={onNavigate} />
+          <Actions boardId={boardId} chatId={chatId} message={message} page={page} onNavigate={onNavigate} />
         </>
       )}
     </article>
@@ -245,7 +240,6 @@ export const ChatPanel = ({
   onChatChange,
   onClose,
   onFullScreenChange,
-  width,
   divider,
 }: {
   boardId: number;
@@ -257,8 +251,6 @@ export const ChatPanel = ({
   onChatChange: (chatId: number | null) => void;
   onClose: () => void;
   onFullScreenChange: (fullScreen: boolean) => void;
-  /** The docked width in px; the dock clips the panel to its own width while it slides, so the panel keeps this one. */
-  width: number;
   /** The drag handle on the panel's left edge (not shown on the narrow-screen sheet or in full screen). */
   divider?: ReactNode;
 }) => {
@@ -351,7 +343,6 @@ export const ChatPanel = ({
       className={cn(
         'relative flex h-full min-h-0 w-full flex-col border-l-2 border-foreground/80 bg-card p-3 text-sm',
       )}
-      style={{ minWidth: width }}
       aria-label='Board chat'
       data-testid='chat-panel'
       data-fullscreen={fullScreen}
@@ -387,27 +378,33 @@ export const ChatPanel = ({
             </button>
           </div>
         </div>
-        <div className='flex flex-wrap items-center gap-1 text-xs' data-testid='chat-scope'>
-          <span className='rounded-full border px-2 py-0.5' data-testid='chat-scope-chip'>
-            {scopeLabel(scope)}
-          </span>
-          {scope.type !== 'board' && (
-            <button
-              className='rounded p-1 hover:bg-muted'
-              aria-label={pinned === null ? 'Pin the scope' : 'Unpin the scope'}
-              aria-pressed={pinned !== null}
-              title={pinned === null ? 'Keep this scope when you move to another page' : 'Follow the page again'}
-              onClick={() => setPinned(pinned === null ? scope : null)}
-            >
-              {pinned === null ? <Pin className='h-3.5 w-3.5' /> : <PinOff className='h-3.5 w-3.5' />}
-            </button>
-          )}
-          {(scope.type !== 'board' || widened) && (
-            <button className='rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted' aria-pressed={widened} onClick={() => setWidened((v) => !v)}>
-              {widened ? `Back to ${scopeLabel(pinned ?? page)}` : 'Whole board'}
-            </button>
-          )}
-        </div>
+        {(showScopeChip(scope) || (widened && showScopeChip(pinned ?? page))) && (
+          <div className='flex min-w-0 items-center gap-1 text-xs' data-testid='chat-scope'>
+            {showScopeChip(scope) ? (
+              <>
+                <span className='min-w-0 truncate rounded-full border px-2 py-0.5' title={scopeLabel(scope)} data-testid='chat-scope-chip'>
+                  {scopeLabel(scope)}
+                </span>
+                <button
+                  className='shrink-0 rounded p-1 hover:bg-muted'
+                  aria-label={pinned === null ? 'Pin the scope' : 'Unpin the scope'}
+                  aria-pressed={pinned !== null}
+                  title={pinned === null ? 'Keep this scope when you move to another page' : 'Follow the page again'}
+                  onClick={() => setPinned(pinned === null ? scope : null)}
+                >
+                  {pinned === null ? <Pin className='h-3.5 w-3.5' /> : <PinOff className='h-3.5 w-3.5' />}
+                </button>
+                <button className='shrink-0 rounded p-1 hover:bg-muted' aria-label='Ask about the whole board' title='Ask about the whole board' onClick={() => setWidened(true)}>
+                  <X className='h-3.5 w-3.5' />
+                </button>
+              </>
+            ) : (
+              <button className='min-w-0 truncate rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted' onClick={() => setWidened(false)}>
+                Back to {scopeName(pinned ?? page)}
+              </button>
+            )}
+          </div>
+        )}
         {showPast && (
           <ul className='max-h-40 overflow-auto rounded border p-1 text-xs' aria-label='Past conversations'>
             {past.data?.length === 0 && <li className='p-1 text-muted-foreground'>No earlier conversations.</li>}
@@ -429,7 +426,7 @@ export const ChatPanel = ({
             ))}
           </ul>
         )}
-        <div className='grid min-h-0 flex-1 content-start gap-2 overflow-auto' aria-live='polite'>
+        <div className={MESSAGE_LIST} aria-live='polite'>
           {messages.isPending && chatId !== null && <p className='text-muted-foreground'>Loading…</p>}
           {messages.error !== null && <p className='text-destructive'>{messages.error.message}</p>}
           {(chatId === null || shown.length === 0) && pending === null && (
@@ -445,14 +442,14 @@ export const ChatPanel = ({
             </div>
           )}
           {chatId !== null &&
-            shown.map((m) => <Message key={m.id} boardId={boardId} chatId={chatId} message={m} answered={m.content !== CHAT_DONT_KNOW} page={scope} onNavigate={followed} />)}
+            shown.map((m) => <Message key={m.id} boardId={boardId} chatId={chatId} message={m} page={scope} onNavigate={followed} />)}
           {pending !== null && (
             <>
               <article className='ml-8 rounded-md bg-muted p-2' data-testid='chat-user'>
-                <p className='whitespace-pre-wrap text-sm'>{pending.question}</p>
+                <p className={cn(WRAP_LONG, 'whitespace-pre-wrap text-sm')}>{pending.question}</p>
               </article>
               <article className='py-1' data-testid='chat-streaming'>
-                {pending.text === '' ? <p className='text-muted-foreground'>Reading the board's records…</p> : <Answer text={pending.text} citations={[]} onNavigate={followed} />}
+                {pending.text === '' ? <p className={cn(WRAP_LONG, 'text-muted-foreground')}>Reading the board's records…</p> : <Answer text={pending.text} citations={[]} onNavigate={followed} />}
               </article>
             </>
           )}
@@ -460,7 +457,7 @@ export const ChatPanel = ({
           {error !== null && notice === null && <p className='text-destructive' role='alert'>{error instanceof Error ? error.message : 'Something went wrong'}</p>}
           <div ref={end} />
         </div>
-        <form className='grid gap-2 border-t pt-2' onSubmit={submit}>
+        <form className='grid gap-2 pt-1' onSubmit={submit}>
           <Textarea
             ref={input}
             aria-label='Your question'
