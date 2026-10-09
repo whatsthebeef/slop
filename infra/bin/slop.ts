@@ -3,6 +3,7 @@ import { AuthStack } from '../lib/auth-stack.js';
 import { SlopSecrets } from '../lib/secrets.js';
 import { Stack } from 'aws-cdk-lib';
 import { DeployTargetStack } from '../lib/deploy-target-stack.js';
+import { HostStack } from '../lib/host-stack.js';
 
 const app = new App();
 const stage = String(app.node.tryGetContext('stage') ?? 'dev');
@@ -32,15 +33,35 @@ new AuthStack(app, `slop-${stage}-auth`, {
 });
 
 /**
- * Production's secrets (server `SECRETS=aws`), only when asked for: `cdk deploy slop-prod-secrets -c secrets=true -c stage=prod`.
- * s15f32's server stack reuses the construct and grants the instance role with `grantServer`.
+ * Production's secrets (server `SECRETS=aws`) and host. The host reuses the secrets construct and grants its instance
+ * role with `grantServer`, so asking for the host (`-c host=true`, or just giving it `deployConnectionArn`) also creates the secrets stack.
+ * Other stacks (`slop-prod-auth`) synth without it.
+ *   cdk deploy slop-prod-secrets -c secrets=true -c stage=prod                the secrets alone
+ *   cdk deploy slop-prod-host -c stage=prod -c deployConnectionArn=arn:...    the host, CloudFront and the deploy project
  */
-if (app.node.tryGetContext('secrets') === 'true' || app.node.tryGetContext('secrets') === true) {
-  const secretsStack = new Stack(app, `slop-${stage}-secrets`, {
-    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION ?? 'us-east-1' },
-    tags: { project: 'slop', stage },
-  });
-  new SlopSecrets(secretsStack, 'Secrets', { stage });
+const flag = (key: string): boolean => app.node.tryGetContext(key) === 'true' || app.node.tryGetContext(key) === true;
+const wantsHost = flag('host') || app.node.tryGetContext('deployConnectionArn') !== undefined;
+if (flag('secrets') || wantsHost) {
+  const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION ?? 'us-east-1' };
+  const secretsStack = new Stack(app, `slop-${stage}-secrets`, { env, tags: { project: 'slop', stage } });
+  const secrets = new SlopSecrets(secretsStack, 'Secrets', { stage });
+  if (wantsHost) {
+    const connectionArn = app.node.tryGetContext('deployConnectionArn') as unknown;
+    if (typeof connectionArn !== 'string' || connectionArn === '') {
+      throw new Error('-c deployConnectionArn=arn:aws:codeconnections:... (a GitHub connection that can read the repo) is required for the host stack');
+    }
+    new HostStack(app, `slop-${stage}-host`, {
+      env,
+      stage,
+      secrets,
+      connectionArn,
+      repo: (app.node.tryGetContext('hostRepo') as string | undefined) ?? 'whatsthebeef/slop',
+      branch: (app.node.tryGetContext('hostBranch') as string | undefined) ?? 'main',
+      // com.amazonaws.global.cloudfront.origin-facing in us-east-1; pass -c cloudFrontPrefixListId=pl-... elsewhere.
+      cloudFrontPrefixListId: (app.node.tryGetContext('cloudFrontPrefixListId') as string | undefined) ?? 'pl-3b927c52',
+      tags: { project: 'slop', stage },
+    });
+  }
 }
 
 /**
