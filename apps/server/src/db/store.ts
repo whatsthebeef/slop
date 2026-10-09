@@ -388,6 +388,7 @@ const toChatMessage = (row: typeof schema.boardChatMessages.$inferSelect): ChatM
   content: row.content,
   citations: row.citations,
   tools: row.tools,
+  actions: row.actions,
   createdAt: row.createdAt.toISOString(),
 });
 
@@ -1770,6 +1771,7 @@ export class PgStore implements Store {
             ...message,
             citations: message.citations === null ? null : [...message.citations],
             tools: message.tools == null ? null : [...message.tools],
+            actions: message.actions == null ? null : [...message.actions],
             createdAt: new Date(message.createdAt),
           })
           .returning();

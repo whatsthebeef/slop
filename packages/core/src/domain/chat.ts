@@ -1,9 +1,60 @@
 import type { ItemStatus, SourceType } from './search.js';
 
 /** What the assistant says when the board's records don't answer (also when the model says so). */
-export const CHAT_DONT_KNOW = "I don't know from the board's records.";
+export const CHAT_DONT_KNOW = "I couldn't find anything about that in the board's records.";
 /** The most messages a conversation returns (and the most turns' worth kept readable). */
 export const CHAT_HISTORY_LIMIT = 50;
+
+/** What the answering model can ask to be offered under its answer; opening a glob and attaching are derived from the sources. */
+export const CHAT_ACTIONS = ['create_glob', 'save'] as const;
+export type ChatAction = (typeof CHAT_ACTIONS)[number];
+
+const ACTIONS_OPEN = '<actions>';
+const ACTIONS_CLOSE = '</actions>';
+
+/** The answer without its trailing `<actions>create_glob, save</actions>` line, and the actions it named (unknown names are dropped). */
+export const parseActions = (raw: string): { text: string; actions: ChatAction[] } => {
+  const start = raw.lastIndexOf(ACTIONS_OPEN);
+  if (start < 0) return { text: raw.trim(), actions: [] };
+  const end = raw.indexOf(ACTIONS_CLOSE, start);
+  const names = raw.slice(start + ACTIONS_OPEN.length, end < 0 ? undefined : end).split(/[\s,]+/);
+  const actions = CHAT_ACTIONS.filter((a) => names.includes(a));
+  return { text: raw.slice(0, start).trim(), actions };
+};
+
+/**
+ * Wraps a streaming callback so the `<actions>` line never reaches the person: text is passed on up to the tag, and a
+ * tail that could still turn into the tag is held back until the next piece shows which it is.
+ */
+export const withoutActionsTag = (onText: (text: string) => void): ((piece: string) => void) => {
+  let seen = '';
+  let sent = 0;
+  return (piece) => {
+    seen += piece;
+    const tag = seen.indexOf(ACTIONS_OPEN);
+    let safe = tag >= 0 ? tag : seen.length;
+    if (tag < 0) {
+      for (let keep = Math.min(ACTIONS_OPEN.length - 1, seen.length); keep > 0; keep -= 1) {
+        if (ACTIONS_OPEN.startsWith(seen.slice(seen.length - keep))) {
+          safe = seen.length - keep;
+          break;
+        }
+      }
+    }
+    if (safe > sent) {
+      onText(seen.slice(sent, safe));
+      sent = safe;
+    }
+  };
+};
+
+/** Greetings, thanks and "what can you do?": answered as conversation, without searching the records. */
+export const isSmallTalk = (question: string): boolean => {
+  const q = question.trim().toLowerCase().replace(/[!?.,\s]+$/, '');
+  if (q.length > 60) return false;
+  return /^(hi|hello|hey|hiya|howdy|yo|good (morning|afternoon|evening)|thanks|thank you|thx|cheers|ok|okay|cool|great|nice|bye|goodbye|see you)( (there|all|team|everyone|so much|a lot|very much))?$/.test(q) ||
+    /^(what can you (do|help( me)? with)|what are you|who are you|how (do|can) you help|how does this (chat )?work|help)$/.test(q);
+};
 
 /** A source an answer used, built from the retrieved hit and never from model text. */
 export interface ChatCitation {
@@ -71,6 +122,8 @@ export interface NewChatMessage {
   readonly citations: readonly ChatCitation[] | null;
   /** Assistant messages only: what the answer did, one line each (searches, live state, the stronger model). */
   readonly tools?: readonly string[] | null;
+  /** Assistant messages only: the buttons the answering model asked for (null on answers stored before it did, and on replies that call for none). */
+  readonly actions?: readonly ChatAction[] | null;
   readonly createdAt: string;
 }
 

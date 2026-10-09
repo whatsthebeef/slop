@@ -8,6 +8,8 @@ export interface PageContext {
   readonly id?: string;
   /** For a glob: failed or merged change which questions are suggested. */
   readonly state?: 'failed' | 'merged' | 'open';
+  /** For a glob: its title, for the chat's scope chip. */
+  readonly title?: string;
 }
 
 export const BOARD_PAGE: PageContext = { type: 'board' };
@@ -24,9 +26,9 @@ export const useCurrentPage = (): PageContext => useContext(PageContextValue).pa
 /** A page declares what it shows: `usePageContext({ type: 'glob', id: 's15f25' })`. The chat's scope chip follows it. */
 export const usePageContext = (page: PageContext): void => {
   const { setPage } = useContext(PageContextValue);
-  const { type, id, state } = page;
+  const { type, id, state, title } = page;
   useEffect(() => {
-    setPage({ type, ...(id === undefined ? {} : { id }), ...(state === undefined ? {} : { state }) });
+    setPage({ type, ...(id === undefined ? {} : { id }), ...(state === undefined ? {} : { state }), ...(title === undefined ? {} : { title }) });
     return () => setPage(BOARD_PAGE);
-  }, [setPage, type, id, state]);
+  }, [setPage, type, id, state, title]);
 };

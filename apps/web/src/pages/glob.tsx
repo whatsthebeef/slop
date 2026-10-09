@@ -30,7 +30,7 @@ export const GlobPage = () => {
   const glob = useQuery({ queryKey: globKey(globId), queryFn: () => api.glob(globId), refetchInterval: REFRESH_MS });
   const view = glob.data;
   const state = view === undefined ? undefined : view.status === 'failed' || view.failure !== null ? 'failed' : view.status === 'signed_off' || view.pr?.state === 'merged' ? 'merged' : 'open';
-  usePageContext({ type: 'glob', id: globId, ...(state === undefined ? {} : { state }) });
+  usePageContext({ type: 'glob', id: globId, ...(state === undefined ? {} : { state }), ...(view === undefined ? {} : { title: view.title }) });
   const kind = search.get('artifact');
   const initialArtifact = kind === null ? null : ({ kind, label: '' } as ArtifactRef);
   const toBoard = () => void navigate(`/boards/${String(boardId)}`);
