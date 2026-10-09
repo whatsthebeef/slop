@@ -19,6 +19,7 @@ import {
   readyCommand,
   type GlobDeps,
 } from './globs.js';
+import { IMPORT_USAGE, importCommand } from './import.js';
 import { PUT_ARTIFACT_USAGE, putArtifactCommand } from './put-artifact.js';
 import { resolveBoard, resolveMcpServer, runInit } from './init.js';
 import { describeError, parseJsonOrUndefined } from './util.js';
@@ -34,6 +35,8 @@ export interface CliContext extends AuthDeps {
   readonly sleep: (ms: number) => Promise<void>;
   /** Reads a file's text, or stdin for `-`; tests inject a fake. */
   readonly readInput?: (path: string) => Promise<string>;
+  /** The process environment (the import's Jira and Google credentials); empty when not given. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 async function readInputDefault(path: string): Promise<string> {
@@ -205,6 +208,18 @@ const COMMANDS: Readonly<Record<string, Command>> = {
         stdout: context.stdout,
       }),
   },
+  import: {
+    usage: IMPORT_USAGE,
+    summary: "Import a Jira project (and its linked Google Docs) into a board's inbox, archived and searchable",
+    run: (args, context) =>
+      importCommand(args, {
+        client: clientFor(context),
+        fetch: context.fetch,
+        env: context.env ?? {},
+        stdout: context.stdout,
+        log: context.log,
+      }),
+  },
   merge: {
     usage: MERGE_USAGE,
     summary: "Merge the glob (default: the current branch's) through slop, like its Merge button",
@@ -239,6 +254,7 @@ export function helpText(): string {
     '  SLOP_DEV_EMAIL  sign in as this person against a server with AUTH_MODE=dev',
     '  SLOP_BOARD      the board for slop init (when none is given) and slop new',
     "  SLOP_MCP_SERVER slop's MCP server name in Claude Code (default slop)",
+    '  slop import also reads JIRA_SITE_URL, JIRA_EMAIL and JIRA_API_TOKEN from the environment (and GOOGLE_ACCESS_TOKEN with --docs)',
     '',
     'Exit codes: 0 ok, 1 slop or sign-in error, 2 usage error.',
     '',

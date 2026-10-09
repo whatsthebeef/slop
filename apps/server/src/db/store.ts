@@ -322,6 +322,7 @@ const toInboxItem = (row: typeof schema.inboxItems.$inferSelect): InboxItem => (
   title: row.title,
   text: row.text,
   source: row.source,
+  sourceKey: row.sourceKey,
   sourceLabel: row.sourceLabel,
   sourceType: row.sourceType,
   occurredAt: row.occurredAt.toISOString(),
@@ -1473,12 +1474,15 @@ export class PgStore implements Store {
             title: input.title,
             text: input.text,
             source: input.source,
+            sourceKey: input.sourceKey ?? null,
             sourceLabel: input.sourceLabel,
             sourceType: input.sourceType,
             occurredAt: new Date(input.occurredAt),
             createdAt: new Date(input.createdAt),
             createdBy: input.createdBy,
             contentHash: input.contentHash,
+            ...(input.status === undefined ? {} : { status: input.status }),
+            ...(input.state === undefined ? {} : { state: input.state }),
             updatedAt: new Date(input.createdAt),
           })
           .onConflictDoNothing({ target: [n.boardId, n.contentHash] })
@@ -1492,6 +1496,11 @@ export class PgStore implements Store {
       getInboxItem: async (boardId, id) => {
         const n = schema.inboxItems;
         const [row] = await t.select().from(n).where(and(eq(n.boardId, boardId), eq(n.id, id)));
+        return row === undefined ? null : toInboxItem(row);
+      },
+      findInboxItemBySource: async (boardId, source, sourceKey) => {
+        const n = schema.inboxItems;
+        const [row] = await t.select().from(n).where(and(eq(n.boardId, boardId), eq(n.source, source), eq(n.sourceKey, sourceKey)));
         return row === undefined ? null : toInboxItem(row);
       },
       listInboxItems: async (boardId, statuses) => {
@@ -1509,6 +1518,10 @@ export class PgStore implements Store {
           .update(n)
           .set({
             title: item.title,
+            text: item.text,
+            sourceLabel: item.sourceLabel,
+            occurredAt: new Date(item.occurredAt),
+            contentHash: item.contentHash,
             sourceType: item.sourceType,
             status: item.status,
             summary: item.summary,

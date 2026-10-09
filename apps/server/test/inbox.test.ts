@@ -411,4 +411,55 @@ describe('inbox', () => {
       .where(eq(schema.inboxItems.id, added.json.id));
     expect(row?.state).toBe('done');
   });
+
+  it('imports through the route: archived, searchable, deduped by source key, updated on change', async () => {
+    const item = (text: string, extra: Record<string, unknown> = {}) => ({
+      source: 'jira',
+      sourceKey: 'APP-1',
+      title: 'APP-1: Sync store',
+      text,
+      sourceType: 'thread',
+      occurredAt: '2025-03-01T10:00:00.000Z',
+      ...extra,
+    });
+    const outcomes = async (items: unknown[], email = DEV) => {
+      const res = await post('/import', { items }, email);
+      return { status: res.status, json: (await res.json()) as unknown };
+    };
+    const first = await outcomes([item('APP-1: we chose Postgres over DynamoDB')]);
+    expect(first).toEqual({
+      status: 200,
+      json: { outcomes: [{ sourceKey: 'APP-1', result: 'added' }] },
+    });
+    const [row] = await database.db
+      .select()
+      .from(schema.inboxItems)
+      .where(eq(schema.inboxItems.sourceKey, 'APP-1'));
+    expect(row).toMatchObject({ boardId, source: 'jira', status: 'archived', state: 'done' });
+    const found = await store.transaction((tx) =>
+      tx.keywordCandidates({ boardId, query: 'DynamoDB', mode: 'all_time', sourceTypes: ['thread'] }, 10),
+    );
+    expect(found.map((f) => f.itemId)).toContain(row?.itemId);
+    // Archived items are out of the default list and in the archived one.
+    const live = itemsOf.parse(await (await req('')).json());
+    expect(live.items.some((i) => i.id === row?.id)).toBe(false);
+    const archived = itemsOf.parse(await (await req('?status=archived')).json());
+    expect(archived.items.some((i) => i.id === row?.id)).toBe(true);
+
+    expect((await outcomes([item('APP-1: we chose Postgres over DynamoDB')])).json).toEqual({
+      outcomes: [{ sourceKey: 'APP-1', result: 'skipped' }],
+    });
+    expect((await outcomes([item('APP-1: we moved to long polling')])).json).toEqual({
+      outcomes: [{ sourceKey: 'APP-1', result: 'updated' }],
+    });
+    const [changed] = await database.db
+      .select()
+      .from(schema.inboxItems)
+      .where(eq(schema.inboxItems.sourceKey, 'APP-1'));
+    expect(changed?.id).toBe(row?.id);
+    expect(changed?.text).toContain('long polling');
+    expect((await outcomes([item('x')], STRANGER)).status).toBe(403);
+    expect((await outcomes([])).status).toBe(422);
+    expect((await outcomes([item('x', { source: 'slack' })])).status).toBe(422);
+  });
 });

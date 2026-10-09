@@ -785,11 +785,12 @@ export class MemoryStore implements Store {
         if (existing !== undefined) return Promise.resolve({ item: existing, created: false });
         const item: InboxItem = {
           ...input,
+          sourceKey: input.sourceKey ?? null,
           id: this.nextRowId++,
-          status: 'new',
+          status: input.status ?? 'new',
           summary: null,
           suggestions: [],
-          state: 'pending',
+          state: input.state ?? 'pending',
           attempts: 0,
           processAfter: null,
           lastError: null,
@@ -801,6 +802,8 @@ export class MemoryStore implements Store {
         return Promise.resolve({ item, created: true });
       },
       getInboxItem: (boardId, id) => Promise.resolve(s.inboxItems.find((i) => i.boardId === boardId && i.id === id) ?? null),
+      findInboxItemBySource: (boardId, source, sourceKey) =>
+        Promise.resolve(s.inboxItems.find((i) => i.boardId === boardId && i.source === source && i.sourceKey === sourceKey) ?? null),
       listInboxItems: (boardId, statuses) =>
         Promise.resolve(
           s.inboxItems

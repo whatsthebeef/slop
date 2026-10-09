@@ -300,9 +300,14 @@ export interface Tx {
    */
   insertInboxItem(item: NewInboxItem): Promise<{ item: InboxItem; created: boolean }>;
   getInboxItem(boardId: number, id: number): Promise<InboxItem | null>;
+  /** An imported item by its source and the id it has there (a Jira key, a Google Doc id). */
+  findInboxItemBySource(boardId: number, source: string, sourceKey: string): Promise<InboxItem | null>;
   /** A board's items, newest `occurredAt` first, optionally with one of `statuses`. */
   listInboxItems(boardId: number, statuses?: readonly InboxStatus[]): Promise<InboxItem[]>;
-  /** Writes `item` if the stored version is still `expectedVersion` (the version is then bumped); returns false otherwise. */
+  /**
+   * Writes `item` (an import's re-run changes its text, hash, date and label too) if the stored version is still
+   * `expectedVersion` (the version is then bumped); returns false otherwise.
+   */
   updateInboxItem(item: InboxItem, expectedVersion: number): Promise<boolean>;
   /** The oldest pending, not discarded item on any board whose `processAfter` is unset or not after `now`. */
   nextInboxItemToProcess(now: string): Promise<InboxItem | null>;

@@ -12,7 +12,15 @@ import {
   inboxTitle,
   inboxView,
 } from '../domain/inbox.js';
-import type { InboxDetail, InboxItem, InboxStatus, InboxView } from '../domain/inbox.js';
+import { IMPORT_SOURCES } from '../domain/inbox.js';
+import type {
+  ImportSource,
+  InboxDetail,
+  InboxItem,
+  InboxSourceType,
+  InboxStatus,
+  InboxView,
+} from '../domain/inbox.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
@@ -29,6 +37,25 @@ export interface NewPaste {
   readonly occurredAt?: string | undefined;
   readonly sourceLabel?: string | undefined;
 }
+
+/** One legacy item an import delivers (a Jira issue, a Google Doc), already turned into text by the importer. */
+export interface ImportedItem {
+  readonly source: ImportSource;
+  /** Its id in the source (the issue key, the doc id): re-delivering it updates the same item. */
+  readonly sourceKey: string;
+  readonly title: string;
+  readonly text: string;
+  readonly sourceType: InboxSourceType;
+  readonly sourceLabel?: string | undefined;
+  readonly occurredAt?: string | undefined;
+}
+
+export type ImportOutcome =
+  | { readonly sourceKey: string; readonly result: 'added' | 'updated' | 'skipped' }
+  | { readonly sourceKey: string; readonly result: 'failed'; readonly reason: string };
+
+/** The most items one import call takes. */
+export const MAX_IMPORT_ITEMS = 50;
 
 /** The item changed (or was linked) under an attach: thrown to roll the transaction back. */
 class AttachConflict extends Error {
@@ -114,6 +141,116 @@ export class InboxService {
     );
     if (result.ok) this.deps.notifier.publish({ kind: 'board.inbox', boardId });
     return result;
+  }
+
+  /**
+   * Delivers imported history (spec, Inbox and ingest): each item is stored `archived` (indexed and attachable, out of
+   * the live inbox) and already summarised, so a backfill neither floods the inbox nor spends the model. The source and
+   * key identify the item: an unchanged one is `skipped`, a changed one is `updated` and re-indexed. An item a person
+   * discarded stays discarded. One item failing does not stop the others.
+   */
+  async importItems(
+    email: string,
+    boardId: number,
+    items: readonly ImportedItem[],
+  ): Promise<Result<ImportOutcome[]>> {
+    if (items.length === 0) return invalidInput('Nothing to import');
+    if (items.length > MAX_IMPORT_ITEMS)
+      return invalidInput(`Import at most ${String(MAX_IMPORT_ITEMS)} items at a time`);
+    const member = await this.deps.store.transaction((tx) => memberOf(tx, email, boardId));
+    if (!member.ok) return member;
+    const outcomes: ImportOutcome[] = [];
+    for (const item of items) {
+      try {
+        outcomes.push(await this.importOne(email, boardId, item));
+      } catch (error) {
+        // The item's transaction rolled back (e.g. its text is the same as another item's): report it, carry on.
+        outcomes.push({
+          sourceKey: item.sourceKey,
+          result: 'failed',
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (outcomes.some((o) => o.result === 'added' || o.result === 'updated'))
+      this.deps.notifier.publish({ kind: 'board.inbox', boardId });
+    return ok(outcomes);
+  }
+
+  private async importOne(
+    email: string,
+    boardId: number,
+    input: ImportedItem,
+  ): Promise<ImportOutcome> {
+    const sourceKey = input.sourceKey.trim();
+    const failed = (reason: string): ImportOutcome => ({ sourceKey, result: 'failed', reason });
+    if (!IMPORT_SOURCES.some((s) => s === input.source)) return failed('Unknown import source');
+    if (sourceKey === '') return failed('The item has no key');
+    const text = input.text.trim();
+    if (text === '') return failed('The item has no text');
+    const title = input.title.trim().slice(0, TITLE_LIMIT);
+    const sourceLabel = (input.sourceLabel ?? '').trim().slice(0, SOURCE_LABEL_LIMIT);
+    if (input.occurredAt !== undefined && Number.isNaN(Date.parse(input.occurredAt)))
+      return failed('The date is not a date');
+    // Over the limit is cut (a long Doc stays findable by its start) rather than refused.
+    const body = text.length > INBOX_TEXT_LIMIT ? text.slice(0, INBOX_TEXT_LIMIT) : text;
+    const now = this.deps.clock.now();
+    const occurredAt = input.occurredAt === undefined ? now : new Date(input.occurredAt).toISOString();
+    return this.deps.store.transaction(async (tx): Promise<ImportOutcome> => {
+      const existing = await tx.findInboxItemBySource(boardId, input.source, sourceKey);
+      const contentHash = inboxContentHash(body);
+      if (existing === null) {
+        const stored = await tx.insertInboxItem({
+          boardId,
+          title,
+          text: body,
+          source: input.source,
+          sourceKey,
+          sourceLabel,
+          sourceType: input.sourceType,
+          occurredAt,
+          createdAt: now,
+          createdBy: email,
+          contentHash,
+          status: 'archived',
+          state: 'done',
+        });
+        // The same text is in the inbox already (pasted, or another source's): nothing to add.
+        if (!stored.created) return { sourceKey, result: 'skipped' };
+        await this.index(tx, stored.item, now);
+        return { sourceKey, result: 'added' };
+      }
+      if (existing.status === 'discarded') return { sourceKey, result: 'skipped' };
+      const unchanged =
+        existing.contentHash === contentHash &&
+        existing.title === title &&
+        existing.occurredAt === occurredAt;
+      if (unchanged) return { sourceKey, result: 'skipped' };
+      const changed: InboxItem = {
+        ...existing,
+        title,
+        text: body,
+        sourceLabel,
+        sourceType: input.sourceType,
+        occurredAt,
+        contentHash,
+        updatedAt: now,
+      };
+      await this.index(tx, changed, now);
+      return { sourceKey, result: 'updated' };
+    });
+  }
+
+  /** Writes the search item for a row (its links kept) and points the row at it. */
+  private async index(tx: Tx, row: InboxItem, now: string): Promise<void> {
+    const links = (await tx.listInboxLinks(row.boardId))
+      .filter((l) => l.inboxId === row.id)
+      .map((l) => l.globId);
+    await tx.replaceItem(inboxItemOf(row, links, links.length > 0 ? await groupOf(tx, links) : null), inboxChunks(row));
+    const indexed = await tx.getItemByRef(row.boardId, inboxRef(row.id));
+    if (indexed === null) throw new Error('Inbox item write returned nothing');
+    if (!(await tx.updateInboxItem({ ...row, itemId: indexed.id, updatedAt: now }, row.version)))
+      throw new Error('Inbox item changed while it was imported');
   }
 
   /** The board's items (default: new, attached and kept), newest first; `discarded` only when asked for. */

@@ -753,6 +753,8 @@ export const inboxItems = pgTable(
     title: text('title').notNull().default(''),
     text: text('text').notNull(),
     source: text('source').notNull().default('paste'),
+    /** An import's id for the item in its source (Jira key, Google Doc id); null for a paste. */
+    sourceKey: text('source_key'),
     sourceLabel: text('source_label').notNull().default(''),
     sourceType: text('source_type', { enum: INBOX_SOURCE_TYPES }).notNull(),
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
@@ -773,6 +775,9 @@ export const inboxItems = pgTable(
   },
   (t) => [
     uniqueIndex('inbox_items_hash_idx').on(t.boardId, t.contentHash),
+    uniqueIndex('inbox_items_source_idx')
+      .on(t.boardId, t.source, t.sourceKey)
+      .where(sql`${t.sourceKey} is not null`),
     index('inbox_items_board_idx').on(t.boardId, t.status, t.occurredAt),
     index('inbox_items_queue_idx').on(t.state, t.processAfter),
   ],
