@@ -14,6 +14,12 @@ describe('Start again labels', () => {
     expect(actionLabel('start_again', 'super', ACTION_LABELS)).toBe('Start over');
   });
 
+  it('does not say Back to Planning for a glob already in Planning', () => {
+    expect(actionLabel('start_again', 'same', ACTION_LABELS, 'planning')).toBe('Start over');
+    expect(actionLabel('start_again', 'same', ACTION_LABELS, 'in_progress')).toBe('Back to Planning');
+    expect(actionLabel('start_again', 'sub', ACTION_LABELS, 'planning')).toBe('Start over (new run)');
+  });
+
   it('leaves other actions alone', () => {
     expect(actionLabel('merge', 'sub', ACTION_LABELS)).toBe('Merge');
   });

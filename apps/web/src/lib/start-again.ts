@@ -16,12 +16,16 @@ const START_AGAIN_OUTCOME = (type: SlopType, base: string): string =>
       ? 'it goes back to Planning'
       : 'it stays in Doing with its creator';
 
-/** An action's name for this glob: Start again is named by type, the rest are the same for all. */
+/** An action's name for this glob: Start again is named by type (and never says "Back to Planning" from Planning), the rest are the same for all. */
 export const actionLabel = (
   action: Action,
   type: SlopType,
   labels: Record<Action, string>,
-): string => (action === 'start_again' ? START_AGAIN_LABELS[type] : labels[action]);
+  status?: string,
+): string => {
+  if (action !== 'start_again') return labels[action];
+  return status === 'planning' && type === 'same' ? 'Start over' : START_AGAIN_LABELS[type];
+};
 
 /** Said before Start again runs: where the glob goes, whether a run starts, and what is discarded. */
 export const startAgainConfirmation = (

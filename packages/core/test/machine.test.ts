@@ -1030,6 +1030,28 @@ describe('run sessions and timeouts', () => {
   });
 });
 
+describe('a session that never reaches slop', () => {
+  const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
+  const queuedAt = '2026-10-07T02:01:55.115Z';
+  const after = (minutes: number) => new Date(Date.parse(queuedAt) + minutes * 60_000).toISOString();
+  const queued = (sessionId: string | null) => glob({ status: 'implementing', runs: [run({ state: 'queued', queuedAt, startedAt: null, sessionId })] });
+
+  it('fails at 5 minutes once the session was created, and not before', () => {
+    expect(m.runTimeoutReason(queued('cse_1'), limits, after(4))).toBeNull();
+    expect(m.runTimeoutReason(queued('cse_1'), limits, after(5))).toMatch(/^The run's session never reached slop/);
+  });
+
+  it('does not fail a session that called slop at 4 minutes', () => {
+    const started = value(m.runProgress(queued('cse_1'), 'run-0', { ...ctx(null), now: after(4) }));
+    expect(m.runTimeoutReason(started.glob, limits, after(6))).toBeNull();
+  });
+
+  it('keeps the board\'s start time for a run with no session', () => {
+    expect(m.runTimeoutReason(queued(null), limits, after(29))).toBeNull();
+    expect(m.runTimeoutReason(queued(null), limits, after(30))).toMatch(/^Routine run never started/);
+  });
+});
+
 describe('Retry auto-fix', () => {
   const ended = run({ state: 'ended', outcome: 'failed', endedAt: NOW, failureReason: "Auto-fix didn't respond to failed checks (Type check) on 47f4a3d" });
   const stuck = () =>

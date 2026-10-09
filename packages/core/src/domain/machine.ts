@@ -1174,6 +1174,15 @@ const minutesSince = (from: string, now: string): number => (Date.parse(now) - D
 /** `2026-10-07 02:01 UTC`: a time in a failure reason. */
 const queuedAtText = (at: string): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
+/**
+ * A queued run whose cloud session exists but hasn't called slop within this many minutes of
+ * being queued never reached slop (typically the Slop connector didn't attach). Shorter than the
+ * board's `runStartMinutes`, which still covers runs whose session was never created.
+ */
+export const SESSION_NEVER_REACHED_SLOP_MINUTES = 5;
+
+const SESSION_NEVER_REACHED_SLOP = "The run's session never reached slop (the Slop connector may not have attached). Start again.";
+
 /** The reason `runTimeoutReason` gives a watching run that ignored failed checks. */
 const GAVE_UP = /^Auto-fix didn't respond/;
 
@@ -1208,7 +1217,9 @@ export const runTimeoutReason = (
   if (run === null || run.state === 'ended') return null;
   // Queued runs have made no slop call yet: one that never starts (no session, a session that never called slop).
   if (run.state === 'queued') {
-    return minutesSince(run.queuedAt, now) >= board.runStartMinutes
+    const waited = minutesSince(run.queuedAt, now);
+    if (run.sessionId !== null && waited >= SESSION_NEVER_REACHED_SLOP_MINUTES) return SESSION_NEVER_REACHED_SLOP;
+    return waited >= board.runStartMinutes
       ? `Routine run never started (queued at ${queuedAtText(run.queuedAt)})`
       : null;
   }

@@ -11,7 +11,9 @@ export const marksBoardDirty = (hint: Hint): boolean =>
   hint.kind === 'glob.reviews' ||
   hint.kind === 'glob.changed' ||
   hint.kind === 'glob.deleted' ||
-  hint.kind === 'board.kb';
+  hint.kind === 'board.kb' ||
+  // An attach or discard changes which inbox items are decision sources.
+  hint.kind === 'board.inbox';
 
 /**
  * Keeps a board-derived store in step with the board's material: a full sync on start (the backfill; idempotent, so a
