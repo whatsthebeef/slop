@@ -148,7 +148,7 @@ const Unavailable = ({ boardId, error }: { boardId: number; error: unknown }) =>
     ) : status === 404 ? (
       <>
         There's no board {boardId}.{' '}
-        <Link className='underline' to='/'>
+        <Link className='underline' to='/boards'>
           Open your boards
         </Link>
       </>

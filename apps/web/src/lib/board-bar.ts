@@ -8,8 +8,8 @@ export interface BarRows {
   readonly sessions: readonly BoardView[];
   /** The current board when it isn't a session (opened from a link, or just removed): shown with an add button. */
   readonly loose: BoardView | undefined;
-  /** Behind More boards: the boards not in the bar, but the current one; most recently viewed first, never viewed last. */
-  readonly more: readonly BoardView[];
+  /** How many boards are neither in the bar nor shown as the current one: the All boards row's "+N more". */
+  readonly others: number;
 }
 
 const viewedAt = (b: BoardView): number => {
@@ -25,10 +25,18 @@ export const barRows = (boards: readonly BoardView[], current: number | undefine
     .sort((a, b) => (a.position ?? 0) - (b.position ?? 0) || a.id - b.id);
   const rest = boards.filter((b) => (b.position ?? null) === null);
   const loose = rest.find((b) => b.id === current);
-  const more = rest
-    .filter((b) => b.id !== current)
+  const others = rest.filter((b) => b.id !== current).length;
+  return { managed, sessions, loose, others };
+};
+
+/** The All boards page's order: the sessions by position, then the rest, most recently viewed first (never viewed last). */
+export const allBoardsOrder = (boards: readonly BoardView[]): readonly BoardView[] => {
+  const { sessions } = barRows(boards, undefined);
+  const inBar = new Set(sessions.map((b) => b.id));
+  const rest = boards
+    .filter((b) => !inBar.has(b.id))
     .sort((a, b) => viewedAt(b) - viewedAt(a) || b.id - a.id);
-  return { managed, sessions, loose, more };
+  return [...sessions, ...rest];
 };
 
 const MINUTE = 60_000;

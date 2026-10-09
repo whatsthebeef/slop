@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardView, Me } from '../src/lib/api';
 import {
+  allBoardsOrder,
   barRows,
   lastViewedBoard,
   lastViewedLabel,
@@ -54,24 +55,10 @@ describe('barRows', () => {
     expect(rows.loose).toBeUndefined();
   });
 
-  it('shows the current board outside the bar as loose, and keeps it out of More', () => {
+  it('shows the current board outside the bar as loose, and counts the others', () => {
     const rows = barRows([board(1, 1), board(2, null), board(3, null)], 2);
     expect(rows.loose?.id).toBe(2);
-    expect(ids(rows.more)).toEqual([3]);
-  });
-
-  it('lists More by last viewed, never viewed last (newest board first)', () => {
-    const rows = barRows(
-      [
-        board(1, 1),
-        board(2, null, ago(DAY)),
-        board(3, null),
-        board(4, null, ago(HOUR)),
-        board(5, null),
-      ],
-      1,
-    );
-    expect(ids(rows.more)).toEqual([4, 2, 5, 3]);
+    expect(rows.others).toBe(1);
   });
 
   it('copes with an older API that sends no sessions', () => {
@@ -79,7 +66,7 @@ describe('barRows', () => {
     expect(rows.managed).toBe(false);
     expect(rows.sessions).toEqual([]);
     expect(rows.loose?.id).toBe(2);
-    expect(ids(rows.more)).toEqual([3, 1]);
+    expect(rows.others).toBe(2);
   });
 
   it('keeps managing an emptied bar, so boards can still be added (s15t42)', () => {
@@ -87,7 +74,7 @@ describe('barRows', () => {
     expect(rows.managed).toBe(true);
     expect(rows.sessions).toEqual([]);
     expect(rows.loose?.id).toBe(1);
-    expect(ids(rows.more)).toEqual([2]);
+    expect(rows.others).toBe(1);
   });
 
   it('has nothing to show without boards', () => {
@@ -95,8 +82,22 @@ describe('barRows', () => {
       managed: false,
       sessions: [],
       loose: undefined,
-      more: [],
+      others: 0,
     });
+  });
+});
+
+describe('allBoardsOrder', () => {
+  it('lists sessions by position, then the rest by last viewed, never viewed last', () => {
+    const order = allBoardsOrder([
+      board(1, null, ago(DAY)),
+      board(2, 2, ago(DAY)),
+      board(3, null),
+      board(4, 1),
+      board(5, null, ago(HOUR)),
+      board(6, null),
+    ]);
+    expect(ids(order)).toEqual([4, 2, 5, 1, 6, 3]);
   });
 });
 
