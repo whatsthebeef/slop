@@ -400,7 +400,7 @@ export const isReadinessFailingSource = (source: string): boolean => source.star
  * it worked (clears when it passes), and one dismissible-per-person info line for the items never set up. Unknown and
  * ok items raise nothing.
  */
-export const readinessNotifications = (boardId: number, items: readonly ReadinessItem[]): RaisedNotification[] => {
+export const readinessNotifications = (boardId: number, boardName: string, items: readonly ReadinessItem[]): RaisedNotification[] => {
   const link = `/boards/${String(boardId)}/settings#readiness`;
   const raised: RaisedNotification[] = items
     .filter((i) => i.state === 'failing')
@@ -408,7 +408,7 @@ export const readinessNotifications = (boardId: number, items: readonly Readines
       boardId,
       source: readinessFailingSource(i.key),
       severity: 'warning',
-      title: `${i.title} is failing`,
+      title: `${boardName}: ${i.title} is failing`,
       detail: i.detail,
       link,
       action: { label: i.fix?.label ?? 'Readiness checklist', href: i.fix === null ? link : i.fix.kind === 'link' ? i.fix.href : link },
@@ -420,7 +420,7 @@ export const readinessNotifications = (boardId: number, items: readonly Readines
       boardId,
       source: READINESS_SOURCE,
       severity: 'info',
-      title: `Board setup: ${String(missing.length)} ${missing.length === 1 ? 'item' : 'items'} to do`,
+      title: `${boardName} board setup: ${String(missing.length)} ${missing.length === 1 ? 'item' : 'items'} to do`,
       detail: missing.map((i) => i.title).join(', '),
       link,
       action: { label: 'Readiness checklist', href: link },
