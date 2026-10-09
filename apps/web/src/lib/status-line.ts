@@ -115,7 +115,7 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
     }
   }
   if (failed && !provisioningFailed) {
-    const tip = `${reason}${glob.failure?.reason.startsWith('Routine run never started') === true && session !== null ? `\nSession: ${session}` : ''}`;
+    const tip = `${reason}${/^(Routine run never started|The run's session never reached slop)/.test(glob.failure?.reason ?? '') && session !== null ? `\nSession: ${session}` : ''}`;
     candidates.push(make({ kind: 'failure', full: reason, tone: 'text-red', tip }));
   }
   if (hint !== null)
