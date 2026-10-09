@@ -16,6 +16,7 @@ import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/l
 import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
+import { useColumnGlide } from '@/lib/column-glide';
 import { withGlob } from '@/lib/glob-list';
 import { usePageContext } from '@/lib/page-context';
 import { codeReviewsKey, deploysKey, globsKey, useLiveBoard } from '@/lib/live';
@@ -215,6 +216,8 @@ export const BoardPage = () => {
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId), ...KEEP_TRYING });
   const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId), ...KEEP_TRYING });
   const motion = useBoardMotion(globs.data, live);
+  // Opening the chat hides Signed Off and moves the other columns at once; they glide to their new places.
+  useColumnGlide(motion.container, hideSignedOff);
   // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens its page.
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();

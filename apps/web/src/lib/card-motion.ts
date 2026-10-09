@@ -3,8 +3,8 @@ import type { LiveState } from './live';
 
 /** The one card that changed list steps across like a block; the cards it displaces glide. */
 export const STEP_MS = 630;
-const GLIDE_MS = 500;
-const GLIDE_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
+export const GLIDE_MS = 500;
+export const GLIDE_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
 /** The stepped easing of a card that changed list; the chat panel slides in and out with it. */
 export const STEP_EASING = 'steps(4, end)';
 const LOCK_MS = 165;

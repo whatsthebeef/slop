@@ -39,8 +39,14 @@ export const ChatDock = ({ open, wide, ...panel }: { open: boolean; wide: boolea
     setSavedWidth(clamped);
     writeChatWidth(clamped);
   };
+  // One style write per frame, however fast the pointer reports.
+  const frame = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
   const preview = (next: number) => {
-    if (dock.current !== null) dock.current.style.flexBasis = `${next}px`;
+    cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(() => {
+      if (dock.current !== null) dock.current.style.flexBasis = `${next}px`;
+    });
   };
 
   return (
