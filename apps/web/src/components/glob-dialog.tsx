@@ -1,5 +1,5 @@
-import { CATEGORIES, isValidCombination, machine, SLOP_TYPES } from '@slop/core';
-import type { Action, Category, EditFailure, SlopType } from '@slop/core';
+import { isValidCombination, machine } from '@slop/core';
+import type { Action, Category, EditFailure } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,15 @@ import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { viewStatusLine, waitingFor } from '@/lib/status-line';
+import {
+  categoryOptions,
+  saveCategory,
+  subConfirmation,
+  typeActionChanges,
+  typeActions,
+  typeChangeBlocker,
+} from '@/lib/type-change';
+import type { TypeAction } from '@/lib/type-change';
 import { ArtifactsSection } from './artifacts';
 import { CodeReviewSection } from './code-review';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
@@ -76,14 +85,36 @@ export const GlobDialog = ({
     setDraft({});
     setFailure(null);
     setConfirmingAgain(false);
+    setConfirmingType(null);
+    setTypeFailure(null);
+    setCategoryNote(null);
   }, [glob.id]);
   /** Edits the draft; a refusal shown earlier no longer applies to what the person is typing. */
   const edit = (changes: GlobChanges) => {
     setDraft((d) => ({ ...d, ...changes }));
     setFailure(null);
   };
-  const swapBlocker =
-    glob.type === 'sub' ? null : machine.sameSuperSwapBlocker(glob);
+  // Type changes are actions that say what follows; a feature can only be a sub as a task, so that confirms first.
+  const [confirmingType, setConfirmingType] = useState<TypeAction | null>(null);
+  const [typeFailure, setTypeFailure] = useState<EditFailure | null>(null);
+  const typeButtons = typeActions(glob, board.role);
+  const typeBlocker = typeChangeBlocker(glob, board.role);
+  // Category saves when it changes, and says so with an Undo.
+  const [categoryNote, setCategoryNote] = useState<{ undo: Category } | null>(null);
+  const changeCategory = async (to: Category, from: Category) => {
+    const result = await saveCategory(onUpdate, from, to);
+    if (result.saved) {
+      setFailure(null);
+      setCategoryNote({ undo: result.undo });
+    } else {
+      setFailure(result.failure);
+      setCategoryNote(null);
+    }
+  };
+  const changeType = async (action: TypeAction) => {
+    setConfirmingType(null);
+    setTypeFailure(await onUpdate(typeActionChanges(action)));
+  };
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
 
   // The globs it starts after can change until it has a branch.
@@ -134,6 +165,11 @@ export const GlobDialog = ({
         <div className='grid gap-4'>
           <div className='flex flex-wrap items-center gap-2 text-sm'>
             <span className='rounded bg-muted px-2 py-0.5'>{STATUS_TEXT[glob.status]}</span>
+            <Tip text={typeBlocker ?? `This is a ${glob.type}`}>
+              <span className='rounded border px-2 py-0.5 text-xs' data-testid='glob-type'>
+                {glob.type}
+              </span>
+            </Tip>
             <ActivityLabel glob={glob} />
             {glob.group !== null && <GroupChip name={glob.group} />}
             <LabelChips glob={glob} />
@@ -242,9 +278,25 @@ export const GlobDialog = ({
             </div>
           )}
 
-          {actions.length + disabled.length > 0 && (
+          {actions.length + disabled.length + typeButtons.length > 0 && (
             <div className='grid gap-1'>
               <div className='flex flex-wrap gap-2'>
+                {typeButtons.map((action) => (
+                  <Tip key={action.to} text={action.tip}>
+                    <Button
+                      variant='outline'
+                      size='sm'
+                      disabled={busy}
+                      data-testid={`type-${action.to}`}
+                      onClick={() => {
+                        if (action.to === 'sub') setConfirmingType(action);
+                        else void run(() => changeType(action));
+                      }}
+                    >
+                      {action.label}
+                    </Button>
+                  </Tip>
+                ))}
                 {actions.map((action) => {
                   const button = (
                     <Button
@@ -287,6 +339,24 @@ export const GlobDialog = ({
                   </Tip>
                 ))}
               </div>
+              {confirmingType !== null && (
+                <div role='alert' className='flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs'>
+                  <span className='flex-1' data-testid='type-says'>
+                    {subConfirmation(confirmingType)}
+                  </span>
+                  <Button size='sm' variant='ghost' onClick={() => setConfirmingType(null)}>
+                    Cancel
+                  </Button>
+                  <Button size='sm' disabled={busy} data-testid='confirm-type' onClick={() => void run(() => changeType(confirmingType))}>
+                    {confirmingType.category === undefined ? 'Make it a sub' : `Make it a ${confirmingType.category} sub`}
+                  </Button>
+                </div>
+              )}
+              {typeFailure !== null && (
+                <p role='alert' className='text-xs text-red' data-testid='type-failure'>
+                  {typeFailure.message}
+                </p>
+              )}
               {confirmingReady && (
                 <div role='alert' className='flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs'>
                   <span className='flex-1'>
@@ -342,33 +412,17 @@ export const GlobDialog = ({
               Summary
               <Textarea value={merged.summary} onChange={(e) => edit({ summary: e.target.value })} />
             </Label>
-            <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
-              <Label>
-                Type
-                <Select
-                  value={merged.type}
-                  onChange={(e) => edit({ type: e.target.value as SlopType })}
-                >
-                  {SLOP_TYPES.map((t) => (
-                    <option key={t} disabled={swapBlocker !== null && t !== glob.type && t !== 'sub' && glob.type !== 'sub'}>
-                      {t}
-                    </option>
-                  ))}
-                </Select>
-                {swapBlocker !== null && glob.type !== 'sub' && (
-                  <span className='text-xs font-normal text-muted-foreground'>{swapBlocker}</span>
-                )}
-              </Label>
+            <div className='grid grid-cols-2 items-end gap-3 sm:grid-cols-3'>
               <Label>
                 Category
                 <Select
-                  value={merged.category}
-                  onChange={(e) => edit({ category: e.target.value as Category })}
+                  value={glob.category}
+                  disabled={busy}
+                  data-testid='category'
+                  onChange={(e) => void run(() => changeCategory(e.target.value as Category, glob.category))}
                 >
-                  {CATEGORIES.map((c) => (
-                    <option key={c} disabled={!isValidCombination(merged.type, c)}>
-                      {c}
-                    </option>
+                  {categoryOptions(glob.type).map((c) => (
+                    <option key={c}>{c}</option>
                   ))}
                 </Select>
               </Label>
@@ -394,6 +448,19 @@ export const GlobDialog = ({
                 </Select>
               </Label>
             </div>
+            {categoryNote !== null && failure === null && (
+              <div role='status' className='flex items-center justify-end gap-2 text-xs text-muted-foreground' data-testid='category-saved'>
+                <span>Saved</span>
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  disabled={busy}
+                  onClick={() => void run(() => changeCategory(categoryNote.undo, glob.category).then(() => setCategoryNote(null)))}
+                >
+                  Undo
+                </Button>
+              </div>
+            )}
             {failure !== null && (
               <div role='alert' className='flex flex-wrap items-center justify-end gap-2 text-sm text-red'>
                 <span>{failure.message}</span>

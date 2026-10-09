@@ -1261,3 +1261,33 @@ describe('provisioning failure', () => {
     expect(t.glob.provisioning).toBe('ok');
   });
 });
+
+describe('allowedTypeChanges', () => {
+  const tos = (g: Glob, role: 'dev' | 'po' = 'dev') => m.allowedTypeChanges(g, role).map((o) => o.to);
+
+  it('offers sub and super for a same task in planning', () => {
+    expect(m.allowedTypeChanges(glob({ type: 'same', category: 'task' }), 'dev')).toEqual([{ to: 'sub' }, { to: 'super' }]);
+  });
+
+  it('offers a feature only the task sub, and not a bug a super', () => {
+    expect(m.allowedTypeChanges(glob({ type: 'same', category: 'feature' }), 'dev')).toEqual([
+      { to: 'sub', category: 'task' },
+      { to: 'super' },
+    ]);
+    expect(tos(glob({ type: 'same', category: 'bug' }))).toEqual(['sub']);
+  });
+
+  it('offers a sub only a same before it merges', () => {
+    expect(tos(glob({ type: 'sub', category: 'task', status: 'implementing' }))).toEqual(['same']);
+    expect(tos(glob({ type: 'sub', category: 'task', status: 'reviewing' }))).toEqual([]);
+  });
+
+  it('offers a same no sub once it has left planning, and no super from the PO', () => {
+    expect(tos(glob({ type: 'same', category: 'task', status: 'in_progress' }))).toEqual(['super']);
+    expect(tos(glob({ type: 'same', category: 'task' }), 'po')).toEqual(['sub']);
+  });
+
+  it('offers nothing a refused change would be', () => {
+    expect(tos(glob({ type: 'same', category: 'task', status: 'merging' }))).toEqual([]);
+  });
+});
