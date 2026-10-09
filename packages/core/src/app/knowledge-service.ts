@@ -38,7 +38,7 @@ import { effectBasisOf, effectItemOf, isEffectMeasured, startEffectCheck } from 
 import type { EffectCheck } from '../domain/effect-check.js';
 import type { KbSignal } from '../domain/signals.js';
 import { splicePreview } from '../domain/sections.js';
-import type { Board } from '../domain/types.js';
+import type { AgentKbApproval, Board } from '../domain/types.js';
 import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 
@@ -255,12 +255,13 @@ const view = (item: KbItem, preview: DraftPreview | null): KbItemView => ({
 });
 
 /** Why an agent may not approve the item, or null when it may: these are decided by a person. */
-const keptForPeople = (item: KbItem): string | null => {
+const keptForPeople = (item: KbItem, setting: AgentKbApproval): string | null => {
+  const wider = setting === 'docs_and_agent_files';
   if (item.document !== null) return 'proposes a whole document';
-  if (item.contradicts.length > 0) return 'is flagged as contradicting existing knowledge';
+  if (!wider && item.contradicts.length > 0) return 'is flagged as contradicting existing knowledge';
   if (item.target?.kind === 'local_run') return "changes the local-run spec, which sstor runs on developers' machines";
   if (item.target?.kind === 'merge_policy') return 'changes the merge policy, which decides which globs wait for each other';
-  if (item.target !== null && isAgentSetKind(item.target.kind)) return `changes an agent-set file (${item.target.kind} ${item.target.name}), which changes how agents behave`;
+  if (!wider && item.target !== null && isAgentSetKind(item.target.kind)) return `changes an agent-set file (${item.target.kind} ${item.target.name}), which changes how agents behave`;
   return null;
 };
 
@@ -829,8 +830,9 @@ export class KnowledgeService {
       const stale = (current: KbItem) =>
         err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: current });
       if (item.version !== version) return stale(item);
+      if ((item.status === 'approved' || item.status === 'rejected') && item.outcome?.via === 'agent') return this.reopenAgentApproval(tx, email, item, stale);
       if (!(item.status === 'merged' || item.status === 'suppressed' || item.status === 'covered')) {
-        return invalidInput(`${item.id} is ${item.status}; only items the pipeline closed can be reopened`);
+        return invalidInput(`${item.id} is ${item.status}; only items the pipeline closed or an agent approved can be reopened`);
       }
       // A merge the admin undid keeps the pair apart: weekly consolidation never merges them again.
       const former = item.status === 'merged' ? item.duplicateOf : null;
@@ -869,6 +871,58 @@ export class KnowledgeService {
         ? notFound(`No KB item ${itemId}`)
         : err({ code: 'version_conflict', message: `${itemId} changed meanwhile; try again`, currentItem: current });
     });
+  }
+
+  /**
+   * Reopens an item an agent decided (a rejection simply returns to the queue): an approval's change is reverted through a new knowledge version (the version before the
+   * approval's, written again), and the item goes back to the open queue to be drafted afresh. Refused when the target
+   * changed since the approval (reverting would undo later work), or when the approval created the document, which has
+   * no earlier version to restore.
+   */
+  private async reopenAgentApproval(
+    tx: Tx,
+    email: string,
+    item: KbItem,
+    stale: (current: KbItem) => Result<never>,
+  ): Promise<Result<KbItem>> {
+    const outcome = item.outcome;
+    if (outcome?.kind === 'applied') {
+      const current = await tx.getKnowledge(item.boardId, outcome.target, outcome.name);
+      if (current === null || current.version !== outcome.version) {
+        return invalidInput(`${outcome.name} changed after ${item.id} was approved; revert it by hand under Edit, then reject or edit this item`);
+      }
+      const previous = await tx.getKnowledgeVersion(item.boardId, outcome.target, outcome.name, outcome.version - 1);
+      if (previous === null) {
+        return invalidInput(`${item.id} created ${outcome.name}, which has no earlier version to restore; delete or edit it by hand`);
+      }
+      const content = outcome.target === 'doc' ? renderFrontmatter(previous) + previous.content : previous.content;
+      const written = await this.write(
+        tx,
+        email,
+        item.boardId,
+        [{ kind: outcome.target, name: outcome.name, content, layer: previous.layer, source: `kb:${item.id}:reopened` }],
+        item.id,
+      );
+      if (!written.ok) return written;
+    }
+    const reopened: KbItem = {
+      ...item,
+      status: 'open',
+      decidedBy: null,
+      decidedAt: null,
+      decisionReason: null,
+      outcome: null,
+      effectCheck: null,
+    };
+    const next: KbItem = item.document !== null
+      ? { ...reopened, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
+      : needsDraft(reopened);
+    if (!(await tx.updateKbItem(next, item.version))) {
+      const current = await tx.getKbItem(item.id);
+      return current === null ? notFound(`No KB item ${item.id}`) : stale(current);
+    }
+    this.kbChanged(tx, item.boardId);
+    return ok(next);
   }
 
   /**
@@ -959,32 +1013,43 @@ export class KnowledgeService {
   }
 
   /**
-   * An agent (signed in as the admin) approves an open item as drafted, or rejects it with a reason: the same checks
-   * and writes as the page's buttons, recorded with `via: 'agent'` in the outcome. Approving is refused for what
-   * changes how agents or developers' machines behave, which a person decides on the Knowledge page: the local-run
-   * spec, the merge policy, agent-set files, a whole document, and any item flagged as contradicting. Rejecting is always allowed.
+   * An agent (signed in as the admin) approves an open item, as drafted or with an edited draft, or rejects it with a
+   * reason: the same checks and writes as the page's buttons, recorded with `via: 'agent'` in the outcome. Approving
+   * is always refused for the local-run spec, the merge policy (slop executes or enforces them) and a whole
+   * document. Agent-set files and items flagged as contradicting are refused unless the board's `agentKbApproval` is
+   * `docs_and_agent_files`; a contradicting item then needs a reason, recorded with the decision. Rejecting is always allowed.
    */
   async decideByAgent(
     email: string,
     itemId: string,
     version: number,
     decision: 'approve' | 'reject',
-    reason?: string,
+    options: { readonly reason?: string; readonly editedDraft?: string } = {},
   ): Promise<Result<KbItem>> {
     const via: KbVia = 'agent';
+    const reason = options.reason?.trim() ?? '';
     if (decision === 'reject') {
-      const trimmed = reason?.trim() ?? '';
-      if (trimmed === '') return invalidInput('Rejecting needs a reason');
-      return this.decide(email, itemId, version, () => Promise.resolve(ok({ reason: trimmed })), via);
+      if (options.editedDraft !== undefined) return invalidInput('editedDraft is for approving');
+      if (reason === '') return invalidInput('Rejecting needs a reason');
+      return this.decide(email, itemId, version, () => Promise.resolve(ok({ reason })), via);
     }
     return this.decide(
       email,
       itemId,
       version,
       async (tx, item) => {
-        const kept = keptForPeople(item);
+        const board = await tx.getBoard(item.boardId);
+        if (board === null) return notFound(`No board ${item.boardId}`);
+        const kept = keptForPeople(item, board.agentKbApproval);
         if (kept !== null) return forbidden(`${item.id} ${kept}: approve it on the Knowledge page, or reject it here`);
-        return this.approving(tx, email, item, { as: 'draft' });
+        if (item.contradicts.length > 0 && reason === '') {
+          return invalidInput(`${item.id} contradicts existing knowledge: give a reason (why the contradiction is intended or resolved)`);
+        }
+        if (options.editedDraft !== undefined && options.editedDraft.trim() === '') return invalidInput('The edited draft is empty');
+        const approval: Approval = options.editedDraft === undefined ? { as: 'draft' } : { as: 'draft', content: options.editedDraft };
+        const approved = await this.approving(tx, email, item, approval);
+        if (!approved.ok) return approved;
+        return ok(item.contradicts.length > 0 ? { ...approved.value, reason } : approved.value);
       },
       via,
     );
@@ -1103,7 +1168,7 @@ export class KnowledgeService {
     decision: (
       tx: Tx,
       item: KbItem,
-    ) => Promise<Result<{ statement: string; outcome: KbOutcome; signal?: KbSignal | null } | { reason: string }>>,
+    ) => Promise<Result<{ statement: string; outcome: KbOutcome; signal?: KbSignal | null; reason?: string } | { reason: string }>>,
     via?: KbVia,
   ): Promise<Result<KbItem>> {
     const stale = (item: KbItem) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
@@ -1120,16 +1185,17 @@ export class KnowledgeService {
         const decidedAt = this.deps.clock.now();
         const base = { ...item, decidedBy: email, decidedAt, version: item.version + 1 };
         let next: KbItem;
-        if ('reason' in decided.value) {
+        if (!('statement' in decided.value)) {
           next = { ...base, status: 'rejected', decisionReason: decided.value.reason, ...(via === undefined ? {} : { outcome: { kind: 'rejected', via } }) };
         }
         else {
           const { statement, outcome } = decided.value;
           const chosen = decided.value.signal ?? null;
+          const approvedReason = decided.value.reason ?? null;
           const signal = chosen ?? item.signal;
           // An approved change with a signal the check measures is watched (the daily effect check).
           const effectCheck = signal === null || !isEffectMeasured(signal.key) ? null : await this.effectCheckFor(tx, item.boardId, signal, outcome, decidedAt);
-          next = { ...base, status: 'approved', statement, outcome: via === undefined ? outcome : { ...outcome, via }, signal, effectCheck };
+          next = { ...base, status: 'approved', statement, ...(approvedReason === null ? {} : { decisionReason: approvedReason }), outcome: via === undefined ? outcome : { ...outcome, via }, signal, effectCheck };
           if (chosen !== null) await this.claimSignal(tx, next, chosen);
         }
         if (!(await tx.updateKbItem(next, item.version))) throw new StaleKbItem(item.id);

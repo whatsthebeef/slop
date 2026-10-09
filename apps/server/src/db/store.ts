@@ -50,6 +50,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   runRespondMinutes: row.runRespondMinutes,
   subMaxChangedLines: row.subMaxChangedLines,
   effectCheckGlobs: row.effectCheckGlobs,
+  agentKbApproval: row.agentKbApproval,
   deploy: row.deploy,
   readinessTicks: row.readinessTicks,
   baseChecks: row.baseChecks,
@@ -506,6 +507,7 @@ export class PgStore implements Store {
             readinessTicks: board.readinessTicks,
             // Not the learned sub limit: `setSubLimit` writes it, so a settings save doesn't undo a learned move.
             effectCheckGlobs: board.effectCheckGlobs,
+            agentKbApproval: board.agentKbApproval,
             version: board.version,
           })
           .where(and(eq(schema.boards.id, board.id), eq(schema.boards.version, expectedVersion)))
@@ -611,6 +613,20 @@ export class PgStore implements Store {
           .select()
           .from(schema.knowledge)
           .where(and(eq(schema.knowledge.boardId, boardId), eq(schema.knowledge.kind, kind), eq(schema.knowledge.name, name)));
+        return row === undefined ? null : toKnowledge(row);
+      },
+      getKnowledgeVersion: async (boardId, kind, name, version) => {
+        const [row] = await t
+          .select()
+          .from(schema.knowledgeHistory)
+          .where(
+            and(
+              eq(schema.knowledgeHistory.boardId, boardId),
+              eq(schema.knowledgeHistory.kind, kind),
+              eq(schema.knowledgeHistory.name, name),
+              eq(schema.knowledgeHistory.version, version),
+            ),
+          );
         return row === undefined ? null : toKnowledge(row);
       },
       saveKnowledge: async (doc) => {

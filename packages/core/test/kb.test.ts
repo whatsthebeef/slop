@@ -597,17 +597,17 @@ describe('KB review', () => {
     it('rejects with a required reason, marked via agent', async () => {
       const id = await submit();
       expect(errorCode(await knowledge.decideByAgent(ADMIN, id, 1, 'reject'))).toBe('invalid_input');
-      const rejected = unwrap(await knowledge.decideByAgent(ADMIN, id, 1, 'reject', ' Duplicate '));
+      const rejected = unwrap(await knowledge.decideByAgent(ADMIN, id, 1, 'reject', { reason: ' Duplicate ' }));
       expect(rejected).toMatchObject({ status: 'rejected', decisionReason: 'Duplicate', decidedBy: ADMIN, outcome: { kind: 'rejected', via: 'agent' } });
     });
 
     it('refuses non-admins and stale versions', async () => {
       const id = await drafted();
       expect(errorCode(await knowledge.decideByAgent(DEV, id, 1, 'approve'))).toBe('forbidden');
-      expect(errorCode(await knowledge.decideByAgent(DEV, id, 1, 'reject', 'No'))).toBe('forbidden');
+      expect(errorCode(await knowledge.decideByAgent(DEV, id, 1, 'reject', { reason: 'No' }))).toBe('forbidden');
       expect(errorCode(await knowledge.listItems(DEV, boardId))).toBe('forbidden');
       expect(errorCode(await knowledge.decideByAgent(ADMIN, id, 7, 'approve'))).toBe('version_conflict');
-      expect(errorCode(await knowledge.decideByAgent(ADMIN, id, 7, 'reject', 'No'))).toBe('version_conflict');
+      expect(errorCode(await knowledge.decideByAgent(ADMIN, id, 7, 'reject', { reason: 'No' }))).toBe('version_conflict');
       expect((await item(id)).status).toBe('open');
     });
 
@@ -632,9 +632,101 @@ describe('KB review', () => {
       expect(errorCode(refused)).toBe('forbidden');
       expect(refused.ok ? '' : refused.error.message).toContain('Knowledge page');
       expect((await item(id)).status).toBe('open');
-      expect(unwrap(await knowledge.decideByAgent(ADMIN, id, 1, 'reject', 'Not needed'))).toMatchObject({
+      expect(unwrap(await knowledge.decideByAgent(ADMIN, id, 1, 'reject', { reason: 'Not needed' }))).toMatchObject({
         status: 'rejected',
         outcome: { kind: 'rejected', via: 'agent' },
+      });
+    });
+
+    describe("with the board's agentKbApproval set to docs_and_agent_files", () => {
+      const allow = () =>
+        store.transaction(async (tx) => {
+          const board = await tx.getBoard(boardId);
+          if (board === null) throw new Error('no board');
+          await tx.updateBoard({ ...board, agentKbApproval: 'docs_and_agent_files', version: board.version + 1 }, board.version);
+        });
+      const contradicting = { contradicts: [{ kind: 'knowledge' as const, ref: 'build', note: 'says otherwise' }] };
+
+      it('approves an agent file and bumps the agent-set version', async () => {
+        await allow();
+        const id = await drafted({ target: target('agent', 'agents/implementer.md'), draftedAgainstVersion: 1 });
+        const before = await agentSetVersion();
+        const approved = unwrap(await knowledge.decideByAgent(ADMIN, id, 1, 'approve'));
+        expect(approved.outcome).toMatchObject({ kind: 'applied', target: 'agent', via: 'agent', agentSetVersion: (before ?? 0) + 1 });
+        expect(await agentSetVersion()).toBe((before ?? 0) + 1);
+      });
+
+      it('approves a contradicting item only with a reason, and records it', async () => {
+        await allow();
+        const id = await drafted(contradicting);
+        expect(errorCode(await knowledge.decideByAgent(ADMIN, id, 1, 'approve'))).toBe('invalid_input');
+        expect((await item(id)).status).toBe('open');
+        const approved = unwrap(await knowledge.decideByAgent(ADMIN, id, 1, 'approve', { reason: ' Intended: the build doc is replaced ' }));
+        expect(approved).toMatchObject({ status: 'approved', decisionReason: 'Intended: the build doc is replaced', outcome: { via: 'agent' } });
+      });
+
+      it.each([
+        ['the local-run spec', { target: target('local_run', 'local-run') }],
+        ['the merge policy', { target: { kind: 'merge_policy' as const, name: 'merge-policy', section: null, newDocument: null } }],
+        [
+          'a whole-document proposal',
+          { document: { name: 'architecture', area: 'architecture', audience: [], description: 'Overview', content: 'Body\n' } },
+        ],
+      ])('still refuses %s', async (_name, patch) => {
+        await allow();
+        const id = await drafted({ ...patch, ...contradicting });
+        expect(errorCode(await knowledge.decideByAgent(ADMIN, id, 1, 'approve', { reason: 'Intended' }))).toBe('forbidden');
+        expect((await item(id)).status).toBe('open');
+      });
+
+      it('still refuses non-admins', async () => {
+        await allow();
+        const id = await drafted({ target: target('agent', 'agents/implementer.md'), draftedAgainstVersion: 1 });
+        expect(errorCode(await knowledge.decideByAgent(DEV, id, 1, 'approve'))).toBe('forbidden');
+      });
+
+      it('reopens an agent approval, reverting the change through a new version', async () => {
+        await allow();
+        const id = await drafted({ target: target('agent', 'agents/implementer.md'), draftedAgainstVersion: 1 });
+        const original = (await doc('agent', 'agents/implementer.md'))?.content;
+        unwrap(await knowledge.decideByAgent(ADMIN, id, 1, 'approve'));
+        expect((await doc('agent', 'agents/implementer.md'))?.version).toBe(2);
+        const reopened = unwrap(await knowledge.reopen(ADMIN, id, (await item(id)).version));
+        expect(reopened).toMatchObject({ status: 'open', outcome: null, decidedBy: null });
+        expect(await doc('agent', 'agents/implementer.md')).toMatchObject({ version: 3, content: original });
+      });
+
+      it('refuses to reopen once the target changed since the approval', async () => {
+        const id = await drafted();
+        unwrap(await knowledge.decideByAgent(ADMIN, id, 1, 'approve'));
+        const other = await submit({ statement: 'Another' });
+        unwrap(await knowledge.approve(ADMIN, other, 1, { as: 'edit', target: { kind: 'doc', name: 'build' }, content: 'Changed.\n' }));
+        expect(errorCode(await knowledge.reopen(ADMIN, id, (await item(id)).version))).toBe('invalid_input');
+      });
+    });
+
+    describe('approving with an edited draft', () => {
+      it('applies the edit through the same path and keeps the draft untouched', async () => {
+        const id = await drafted();
+        const approved = unwrap(await knowledge.decideByAgent(ADMIN, id, 1, 'approve', { editedDraft: 'Edited by the agent.\n' }));
+        expect(approved.outcome).toMatchObject({ kind: 'applied', target: 'doc', name: 'build', via: 'agent' });
+        expect((await doc('doc', 'build'))?.content).toContain('Edited by the agent.');
+      });
+
+      it('validates it: an empty edit is refused and writes nothing', async () => {
+        const id = await drafted();
+        expect(errorCode(await knowledge.decideByAgent(ADMIN, id, 1, 'approve', { editedDraft: '  ' }))).toBe('invalid_input');
+        expect((await doc('doc', 'build'))?.version).toBe(1);
+      });
+
+      it('still checks the drafted-against version', async () => {
+        const id = await drafted({ draftedAgainstVersion: 0 });
+        expect(errorCode(await knowledge.decideByAgent(ADMIN, id, 1, 'approve', { editedDraft: 'x\n' }))).toBe('version_conflict');
+      });
+
+      it('is not accepted when rejecting', async () => {
+        const id = await drafted();
+        expect(errorCode(await knowledge.decideByAgent(ADMIN, id, 1, 'reject', { reason: 'No', editedDraft: 'x' }))).toBe('invalid_input');
       });
     });
 

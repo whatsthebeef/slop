@@ -243,7 +243,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs' };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -310,6 +310,10 @@ export class MemoryStore implements Store {
             .sort((a, b) => a.name.localeCompare(b.name)),
         ),
       getKnowledge: (boardId, kind, name) => Promise.resolve(s.knowledge.get(knowledgeKey(boardId, kind, name)) ?? null),
+      getKnowledgeVersion: (boardId, kind, name, version) =>
+        Promise.resolve(
+          s.knowledgeHistory.find((d) => d.boardId === boardId && d.kind === kind && d.name === name && d.version === version) ?? null,
+        ),
       saveKnowledge: (doc) => {
         const key = knowledgeKey(doc.boardId, doc.kind, doc.name);
         const previous = s.knowledge.get(key);

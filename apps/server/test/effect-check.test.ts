@@ -300,6 +300,21 @@ describe('Effect checks in Postgres', () => {
     expect((await board()).effectCheckGlobs).toBe(3);
   });
 
+  it('round-trips the agentKbApproval setting (default docs), validated, for admins', async () => {
+    const board = async () =>
+      (await (await request('GET', `/api/boards/${String(boardId)}`, undefined)).json()) as {
+        version: number;
+        agentKbApproval: string;
+      };
+    const patch = (body: object, as?: string) =>
+      request('PATCH', `/api/boards/${String(boardId)}/settings`, body, as);
+    expect((await board()).agentKbApproval).toBe('docs');
+    expect((await patch({ version: (await board()).version, agentKbApproval: 'everything' })).status).toBe(422);
+    expect((await patch({ version: (await board()).version, agentKbApproval: 'docs_and_agent_files' }, DEV)).status).toBe(403);
+    expect((await patch({ version: (await board()).version, agentKbApproval: 'docs_and_agent_files' })).status).toBe(200);
+    expect((await board()).agentKbApproval).toBe('docs_and_agent_files');
+  });
+
   it('gives the effect-check job lease to one claimer at a time', async () => {
     const lease = 30 * 60 * 1000;
     const claims = await Promise.all([
