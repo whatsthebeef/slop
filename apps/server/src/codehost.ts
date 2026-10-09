@@ -20,6 +20,15 @@ export const SUB_GATE_CHECK = 'sub-gate';
 /** Whether a review's head can merge, in the host's own view (required checks, conflicts, up to date). */
 export type MergeState = 'passed' | 'pending' | 'failed' | 'behind' | 'conflict' | 'unknown';
 
+/** A PR as the host reports it: what its webhooks would have said. */
+export interface PrSnapshot {
+  readonly state: 'open' | 'merged' | 'closed';
+  readonly draft: boolean;
+  readonly headSha: string;
+  /** The merge commit, once merged. */
+  readonly mergeSha: string | null;
+}
+
 export type MergeResult =
   | { readonly outcome: 'merged'; readonly sha: string }
   | { readonly outcome: 'updating' }
@@ -69,6 +78,8 @@ export interface CodeHost {
   deleteBranch(repo: Repo, branch: string): Promise<void>;
   reopenPr(repo: Repo, prNumber: number, branch: string): Promise<'reopened' | 'missing'>;
   mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState }>;
+  /** The PR as the host has it now: open (draft or ready), merged (with its merge commit) or closed, and its head. */
+  prState(repo: Repo, prNumber: number): Promise<PrSnapshot>;
   /** The latest completed check run named `name` on commit `sha`, or null if none has completed yet. */
   completedCheckRun(repo: Repo, sha: string, name: string): Promise<{ sha: string; passed: boolean } | null>;
   /** A file's text on a branch, or null when the file (or branch) doesn't exist. `signal` aborts the request. */

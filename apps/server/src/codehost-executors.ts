@@ -29,6 +29,7 @@ export const codeHostExecutors = (
   notifications: Pick<NotificationService, 'syncMainRed' | 'raise' | 'clear'> | null = null,
   /** The board's merge policy's `sizeIgnoredPaths` (undefined: none set, so the defaults apply). */
   sizeIgnoredPaths: (boardId: number) => Promise<readonly string[] | undefined> = () => Promise.resolve(undefined),
+  log: (task: string, message: string) => void = () => undefined,
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -151,6 +152,44 @@ export const codeHostExecutors = (
       if (pr === null) return 'done';
       // The `opened` webhook may have recorded it first; recording it again is a no-op.
       await globs.applyEvent(glob.id, (g, ctx) => machine.prOpened(g, pr, ctx));
+      return 'done';
+    },
+
+    /**
+     * Webhooks are best effort (a restart or tunnel blip loses them), so the code host is the source of truth: read the
+     * PR and apply what slop missed through the transitions the webhooks use. Idempotent; raises no notifications of its own.
+     */
+    reconcile_pr: async (_effect, glob, { globs }) => {
+      if (glob === null || !machine.isReconcilable(glob) || glob.pr === null) return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      const prNumber = glob.pr.number;
+      const pr = await host.prState(repo, prNumber);
+      const caught = (what: string) => log('reconcile', `${glob.id} ${what} (missed webhook)`);
+      if (pr.state === 'merged') {
+        caught(`merged as ${pr.mergeSha ?? pr.headSha}`);
+        await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: pr.mergeSha ?? pr.headSha, number: prNumber }, ctx));
+        return 'done';
+      }
+      if (pr.state === 'closed') {
+        caught('PR closed');
+        await globs.applyEvent(glob.id, (g, ctx) => machine.prClosed(g, ctx));
+        return 'done';
+      }
+      if (pr.headSha !== glob.pr.headSha) {
+        caught(`head moved to ${pr.headSha}`);
+        await globs.applyEvent(glob.id, (g, ctx) => machine.commitPushed(g, { sha: pr.headSha, runId: null }, ctx));
+      }
+      if (!pr.draft && glob.pr.state === 'draft') {
+        caught('PR ready for review');
+        await globs.applyEvent(glob.id, (g, ctx) => machine.prReadyForReview(g, { number: prNumber, headSha: pr.headSha }, ctx));
+      }
+      // The head's checks: re-read them when slop has no result for this head (the effect records it like a webhook would).
+      const now = await globs.peek(glob.id);
+      if (now?.status === 'pr_open' && (now.headChecks === null || now.headChecks.sha !== pr.headSha || now.headChecks.state === 'pending')) {
+        log('reconcile', `${glob.id} rereading head checks (no result recorded)`);
+        await globs.applyEvent(glob.id, (g, ctx) => machine.checksChanged(g, ctx));
+      }
       return 'done';
     },
 

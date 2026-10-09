@@ -92,6 +92,11 @@ export type Effect =
   | { readonly kind: 'delete_glob_data'; readonly globId: string; readonly boardId: number; readonly prNumber: number | null }
   /** Re-read whether the PR's current head can merge (required checks, conflicts). */
   | { readonly kind: 'refresh_checks'; readonly globId: string; readonly generation: number }
+  /**
+   * Webhooks are best effort: read the PR's state, head and merge from the code host and apply what was missed through
+   * the same transitions the webhooks use. Queued on start and by a periodic sweep; idempotent.
+   */
+  | { readonly kind: 'reconcile_pr'; readonly globId: string; readonly generation: number }
   /** Mark the glob's draft PR ready for review (the `ready_for_review` webhook then moves the glob, row 11). */
   | { readonly kind: 'mark_pr_ready'; readonly globId: string; readonly generation: number }
   /** Apply the board's sub-gate policy (size, sensitive paths) to the PR's head after its checks passed. */

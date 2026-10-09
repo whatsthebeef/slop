@@ -20,6 +20,7 @@ export * from './domain/signals.js';
 export * from './domain/effect-check.js';
 export * from './domain/sub-limit.js';
 export * from './domain/manifests.js';
+export * from './domain/reconcile.js';
 export * as deploys from './domain/deploys.js';
 export { DEPLOY_STATES, DEPLOY_TRIGGERS } from './domain/deploys.js';
 export type { Deploy, DeployChange, DeployIndicator, DeployState, DeployTrigger } from './domain/deploys.js';
