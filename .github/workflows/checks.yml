@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 # One run per PR: a newer push cancels the one in progress.
 concurrency:
@@ -26,7 +27,11 @@ jobs:
     services:
       # The server tests create throwaway databases next to this one.
       postgres:
-        image: pgvector/pgvector:pg17
+        # Mirrored from Docker Hub by mirror-postgres.yml, to stay under its anonymous pull limit.
+        image: ghcr.io/whatsthebeef/pgvector:pg17
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_USER: slop
           POSTGRES_PASSWORD: slop
