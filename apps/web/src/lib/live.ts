@@ -68,11 +68,16 @@ export const invalidateKnowledge = (client: QueryClient, boardId: number) => {
   }
 };
 
+/** Delay before reopening a stream the browser closed for good: 1s, doubling to a 30s ceiling. */
+export const reconnectDelay = (attempt: number): number => Math.min(1000 * 2 ** attempt, 30_000);
+
 /**
  * The board's event stream: `onHint` for each hint, `onReconnect` each time it is ready again after
  * the first time (hints may have been missed meanwhile). The stream is closed while the tab is
  * hidden, so background tabs don't hold one of the browser's few connections to the server
  * (over HTTP/1.1, Chrome allows six per host and long-lived streams count against them).
+ * The browser retries a dropped connection itself, but closes the stream for good on a non-200 reply
+ * (e.g. while the server restarts), so a closed stream is reopened here with backoff.
  */
 const useBoardEvents = (
   boardId: number,
@@ -88,21 +93,36 @@ const useBoardEvents = (
   useEffect(() => {
     let source: EventSource | null = null;
     let connectedBefore = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
 
     const open = () => {
       if (source !== null) return;
       const next = new EventSource(`/api/boards/${boardId}/events`);
       next.addEventListener('ready', () => {
         setState('live');
+        attempt = 0;
         if (connectedBefore) latest.current.onReconnect();
         connectedBefore = true;
       });
       next.addEventListener('hint', (event: MessageEvent<string>) => latest.current.onHint(JSON.parse(event.data) as Hint));
-      next.onerror = () => setState('reconnecting');
+      next.onerror = () => {
+        setState('reconnecting');
+        if (next.readyState !== EventSource.CLOSED || retry !== null) return;
+        next.close();
+        source = null;
+        retry = setTimeout(() => {
+          retry = null;
+          open();
+        }, reconnectDelay(attempt));
+        attempt += 1;
+      };
       source = next;
     };
 
     const close = () => {
+      if (retry !== null) clearTimeout(retry);
+      retry = null;
       source?.close();
       source = null;
     };
