@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
-import type { BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
+import type { BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PrSnapshot, Repo, RepoConnection } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -265,6 +265,17 @@ export class GitHub implements CodeHost, CommitGraph {
     }
     const state = classifyMergeState(data.mergeable_state, runs);
     return { sha: data.head.sha, state };
+  }
+
+  async prState(repo: Repo, prNumber: number): Promise<PrSnapshot> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner: repo.owner,
+      repo: repo.name,
+      pull_number: prNumber,
+    });
+    const state = data.merged ? 'merged' : data.state === 'closed' ? 'closed' : 'open';
+    return { state, draft: data.draft ?? false, headSha: data.head.sha, mergeSha: data.merge_commit_sha ?? null };
   }
 
   /** The latest completed check run named `name` on `sha`; only a `success` conclusion passes. */

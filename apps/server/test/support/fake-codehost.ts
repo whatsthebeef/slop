@@ -17,6 +17,7 @@ export class FakeCodeHost implements CodeHost {
   deleteBranch: CodeHost['deleteBranch'] = () => Promise.resolve();
   reopenPr: CodeHost['reopenPr'] = () => Promise.resolve('reopened');
   mergeState: CodeHost['mergeState'] = () => Promise.resolve({ sha: 'abcdef0123456789', state: 'passed' });
+  prState: CodeHost['prState'] = () => Promise.resolve({ state: 'open', draft: false, headSha: 'abcdef0123456789', mergeSha: null });
   completedCheckRun: CodeHost['completedCheckRun'] = () => Promise.resolve(null);
   readFile: CodeHost['readFile'] = () => Promise.resolve(null);
   listFiles: CodeHost['listFiles'] = () => Promise.resolve([]);

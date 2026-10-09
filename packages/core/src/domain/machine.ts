@@ -1270,6 +1270,18 @@ export const prReadyForReview = (
   return b.done();
 };
 
+/** Whether a glob has a PR that webhooks can still change: not merged or closed, and not yet reviewing. */
+export const isReconcilable = (glob: Glob): boolean =>
+  glob.pr !== null &&
+  (glob.pr.state === 'draft' || glob.pr.state === 'ready') &&
+  (glob.status === 'implementing' || glob.status === 'in_progress' || glob.status === 'pr_open' || glob.status === 'merging');
+
+/** Re-read the PR from the code host (on start, or when a webhook may have been lost) and apply what changed. */
+export const reconcileRequested = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (!isReconcilable(glob)) return unchanged(glob);
+  return new Builder(glob, ctx).effect({ kind: 'reconcile_pr', globId: glob.id, generation: glob.generation }).done();
+};
+
 /** A check suite or run changed on the glob's branch: re-read the head's merge state. */
 export const checksChanged = (glob: Glob, ctx: Context): Result<Transition> => {
   if (glob.pr === null || (glob.status !== 'pr_open' && glob.status !== 'merging')) return unchanged(glob);
