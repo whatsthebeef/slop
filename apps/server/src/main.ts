@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -46,6 +46,7 @@ import { TunnelWatch } from './tunnel-watch.js';
 import { FileRoutines } from './routines.js';
 import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
+import { ReconcileWatch } from './jobs/reconcile.js';
 import { DeployWatch } from './jobs/deploy-watch.js';
 import { KbPipelineJob } from './jobs/kb-pipeline.js';
 import { LearningJobs } from './jobs/learning-jobs.js';
@@ -105,7 +106,7 @@ const outbox = new OutboxRunner(
   db,
   { globs },
   {
-    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications),
+    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths, logError),
     ...deployExecutors(
       deploys,
       new Deployers({ codebuild: new CodeBuildDeployer() }),
@@ -389,6 +390,9 @@ const followWatch =
 if (runs('follow')) followWatch?.start();
 const readinessWatch = new ReadinessWatch(store, { globs, store, host: github, log: logError }, notifications, logError);
 if (runs('readiness')) readinessWatch.start();
+const reconcileWatch = new ReconcileWatch(store, globs, logError);
+// After the outbox starts, so the queued re-reads run.
+if (runs('reconcile')) reconcileWatch.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -396,6 +400,7 @@ const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
 const shutdown = () => {
   outbox.stop();
   runWatch.stop();
+  reconcileWatch.stop();
   deployWatch.stop();
   kbPipelineJob.stop();
   findingsJob.stop();

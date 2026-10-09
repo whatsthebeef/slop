@@ -57,6 +57,13 @@ describe('routine run instructions', () => {
     expect(text).toContain('git checkout -B s16b1 origin/s16b1');
   });
 
+  it('carry the failed check when slop retries a watcher that gave up', () => {
+    const text = runInstructions(glob, 'run-2', 'whatsthebeef/slop', true, 'Type check (Run tsc)\nsrc/a.ts(1,1): error TS2322');
+    expect(text).toContain('retrying it automatically, once');
+    expect(text).toContain('Type check (Run tsc)\nsrc/a.ts(1,1): error TS2322');
+    expect(runInstructions(glob, 'run-2', null, true)).not.toContain('retrying it automatically');
+  });
+
   it('leave the repository out for a board without one', () => {
     expect(runInstructions(glob, 'run-1', null)).not.toContain('Repository:');
   });

@@ -1,7 +1,7 @@
 import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { FileRoutines } from './routines.js';
-import { isRepoAccessFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, subGatePolicy } from '@slop/core';
+import { isRepoAccessFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -27,6 +27,9 @@ export const codeHostExecutors = (
   now: () => string = () => new Date().toISOString(),
   health: HealthSink | null = null,
   notifications: Pick<NotificationService, 'syncMainRed' | 'raise' | 'clear'> | null = null,
+  /** The board's merge policy's `sizeIgnoredPaths` (undefined: none set, so the defaults apply). */
+  sizeIgnoredPaths: (boardId: number) => Promise<readonly string[] | undefined> = () => Promise.resolve(undefined),
+  log: (task: string, message: string) => void = () => undefined,
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -149,6 +152,44 @@ export const codeHostExecutors = (
       if (pr === null) return 'done';
       // The `opened` webhook may have recorded it first; recording it again is a no-op.
       await globs.applyEvent(glob.id, (g, ctx) => machine.prOpened(g, pr, ctx));
+      return 'done';
+    },
+
+    /**
+     * Webhooks are best effort (a restart or tunnel blip loses them), so the code host is the source of truth: read the
+     * PR and apply what slop missed through the transitions the webhooks use. Idempotent; raises no notifications of its own.
+     */
+    reconcile_pr: async (_effect, glob, { globs }) => {
+      if (glob === null || !machine.isReconcilable(glob) || glob.pr === null) return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      const prNumber = glob.pr.number;
+      const pr = await host.prState(repo, prNumber);
+      const caught = (what: string) => log('reconcile', `${glob.id} ${what} (missed webhook)`);
+      if (pr.state === 'merged') {
+        caught(`merged as ${pr.mergeSha ?? pr.headSha}`);
+        await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: pr.mergeSha ?? pr.headSha, number: prNumber }, ctx));
+        return 'done';
+      }
+      if (pr.state === 'closed') {
+        caught('PR closed');
+        await globs.applyEvent(glob.id, (g, ctx) => machine.prClosed(g, ctx));
+        return 'done';
+      }
+      if (pr.headSha !== glob.pr.headSha) {
+        caught(`head moved to ${pr.headSha}`);
+        await globs.applyEvent(glob.id, (g, ctx) => machine.commitPushed(g, { sha: pr.headSha, runId: null }, ctx));
+      }
+      if (!pr.draft && glob.pr.state === 'draft') {
+        caught('PR ready for review');
+        await globs.applyEvent(glob.id, (g, ctx) => machine.prReadyForReview(g, { number: prNumber, headSha: pr.headSha }, ctx));
+      }
+      // The head's checks: re-read them when slop has no result for this head (the effect records it like a webhook would).
+      const now = await globs.peek(glob.id);
+      if (now?.status === 'pr_open' && (now.headChecks === null || now.headChecks.sha !== pr.headSha || now.headChecks.state === 'pending')) {
+        log('reconcile', `${glob.id} rereading head checks (no result recorded)`);
+        await globs.applyEvent(glob.id, (g, ctx) => machine.checksChanged(g, ctx));
+      }
       return 'done';
     },
 
@@ -377,7 +418,8 @@ export const codeHostExecutors = (
       const repo = board === null ? null : repoOf(board);
       if (board === null || repo === null) return 'dropped';
       // The board was read just now, so the verdict uses the learned limit as it is at this decision.
-      const verdict = subGatePolicy(await host.diffSummary(repo, effect.sha), board);
+      const ignored = sizeIgnoredPathsOf({ sizeIgnoredPaths: await sizeIgnoredPaths(board.id) });
+      const verdict = subGatePolicy(await host.diffSummary(repo, effect.sha), board, ignored);
       const limit = board.subMaxChangedLines;
       await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCompleted(g, { sha: effect.sha, ...verdict, limit }, ctx));
       return 'done';
@@ -397,7 +439,7 @@ export const codeHostExecutors = (
         return 'done';
       }
       const repo = await repoFor(glob.boardId);
-      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`, glob.status === 'pr_open'), health);
+      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`, glob.status === 'pr_open', effect.failureSummary ?? null), health);
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));

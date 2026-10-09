@@ -1065,6 +1065,62 @@ describe('Retry auto-fix', () => {
   });
 });
 
+describe('a watcher that gave up is retried once', () => {
+  const GAVE_UP = "Auto-fix didn't respond to failed checks (Type check) on 47f4a3d";
+  const headChecks = {
+    sha: '47f4a3d9c0',
+    state: 'failed' as const,
+    at: NOW,
+    failure: { name: 'Type check', step: 'Run tsc', lines: ['src/a.ts(1,1): error TS2322', 'second line'], url: null },
+  };
+  const watching = (extra: Partial<ReturnType<typeof glob>> = {}) =>
+    glob({
+      status: 'pr_open',
+      type: 'sub',
+      pr: { number: 7, state: 'ready', headSha: '47f4a3d9c0' },
+      headChecks,
+      runs: [run({ id: 'run-0', state: 'watching' })],
+      ...extra,
+    });
+
+  it('queues one new run on the same PR and generation, carrying the failure summary, and shows no failure', () => {
+    const g = watching();
+    const t = value(m.reportFailure(g, { reason: GAVE_UP, runId: 'run-0' }, ctx(null)));
+    expect(t.glob).toMatchObject({ status: 'pr_open', failure: null, generation: g.generation, pr: g.pr });
+    expect(t.glob.runs).toHaveLength(2);
+    expect(t.glob.runs[0]).toMatchObject({ state: 'ended', outcome: 'failed', failureReason: GAVE_UP });
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'queued', autoRetry: true });
+    const fire = t.effects.find((e) => e.kind === 'fire_routine');
+    expect(fire).toMatchObject({ failureSummary: 'Type check (Run tsc)\nsrc/a.ts(1,1): error TS2322\nsecond line' });
+    expect(t.events.map((e) => e.type)).toEqual(expect.arrayContaining(['RunFailed', 'RunTriggered']));
+    expect(t.events.find((e) => e.type === 'RunTriggered')?.data).toMatchObject({ automatic: true });
+    // The retried run watches from the start, since the PR is ready.
+    expect(m.currentRun(value(m.runProgress(t.glob, m.currentRun(t.glob)?.id ?? '', ctx(null))).glob)?.state).toBe('watching');
+  });
+
+  it('leaves the failure and the Retry auto-fix button for a person when the retried run gives up too', () => {
+    const first = value(m.reportFailure(watching(), { reason: GAVE_UP, runId: 'run-0' }, ctx(null))).glob;
+    const retryId = m.currentRun(first)?.id ?? '';
+    const watchingAgain = value(m.runProgress(first, retryId, ctx(null))).glob;
+    const second = value(m.reportFailure(watchingAgain, { reason: GAVE_UP, runId: retryId }, ctx(null)));
+    expect(second.glob.runs).toHaveLength(2);
+    expect(second.glob.failure).toMatchObject({ reason: GAVE_UP });
+    expect(second.effects).toEqual([]);
+    expect(m.allowedActions(second.glob, dev)).toContain('retry_autofix');
+  });
+
+  it('retries only a give-up for ignoring failed checks, not a run that reported another failure, and not a super or a person\'s PR', () => {
+    expect(value(m.reportFailure(watching(), { reason: 'Cannot fix it', runId: 'run-0' }, ctx(null))).glob.runs).toHaveLength(1);
+    expect(value(m.reportFailure(watching({ type: 'super' }), { reason: GAVE_UP, runId: 'run-0' }, ctx(null))).glob.runs).toHaveLength(1);
+    expect(value(m.reportFailure(watching({ implementer: 'dev@example.com' }), { reason: GAVE_UP, runId: 'run-0' }, ctx(null))).glob.runs).toHaveLength(1);
+  });
+
+  it('goes without a summary when the failing log was not read', () => {
+    const t = value(m.reportFailure(watching({ headChecks: { sha: '47f4a3d9c0', state: 'failed' } }), { reason: GAVE_UP, runId: 'run-0' }, ctx(null)));
+    expect(t.effects.find((e) => e.kind === 'fire_routine')).not.toHaveProperty('failureSummary');
+  });
+});
+
 describe('runs', () => {
   it('a slop call marks a queued run active; superseded runs are ignored', () => {
     const g = glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null })] });
@@ -1083,7 +1139,7 @@ describe('runs', () => {
 
 describe('supers: Merge and continue (row 31) and Ready for review on the board', () => {
   const HEAD = 'bbbbbbb1234567890';
-  const atHead = { postplanSha: HEAD.slice(0, 7) };
+  const atHead = { recordSha: HEAD.slice(0, 7) };
   const superReady = glob({
     type: 'super',
     status: 'pr_open',
@@ -1100,14 +1156,14 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     expect(m.squashTitle(second)).toBe(`${superReady.id}: ${superReady.title} (part 2)`);
   });
 
-  it('offers merge_continue only to supers with the latest postplan at the head', () => {
+  it('offers merge_continue only to supers with the latest implementation record at the head', () => {
     expect(m.allowedActions(superReady, dev, atHead)).toEqual(expect.arrayContaining(['merge', 'merge_continue']));
-    expect(m.allowedActions(superReady, dev, { postplanSha: HEAD })).toContain('merge_continue');
-    expect(m.allowedActions(superReady, dev, { postplanSha: 'ccccccc' })).not.toContain('merge_continue');
-    expect(m.allowedActions(superReady, dev, { postplanSha: null })).not.toContain('merge_continue');
+    expect(m.allowedActions(superReady, dev, { recordSha: HEAD })).toContain('merge_continue');
+    expect(m.allowedActions(superReady, dev, { recordSha: 'ccccccc' })).not.toContain('merge_continue');
+    expect(m.allowedActions(superReady, dev, { recordSha: null })).not.toContain('merge_continue');
     expect(m.allowedActions(superReady, dev)).not.toContain('merge_continue');
     // Too short to identify a commit.
-    expect(m.allowedActions(superReady, dev, { postplanSha: 'bbb' })).not.toContain('merge_continue');
+    expect(m.allowedActions(superReady, dev, { recordSha: 'bbb' })).not.toContain('merge_continue');
     const same = { ...superReady, type: 'same' as const };
     expect(m.allowedActions(same, dev, atHead)).toContain('merge');
     expect(m.allowedActions(same, dev, atHead)).not.toContain('merge_continue');
@@ -1116,12 +1172,12 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     expect(m.allowedActions(pending, dev, atHead)).not.toContain('merge_continue');
   });
 
-  it('merge_continue goes to merging in continue mode; it needs a super and the postplan at the head', () => {
+  it('merge_continue goes to merging in continue mode; it needs a super and the implementation record at the head', () => {
     const t = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead }));
     expect(t.glob.status).toBe('merging');
     expect(t.glob.mergeMode).toBe('continue');
     expect(t.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: HEAD }]);
-    expect(errorCode(m.requestMerge(superReady, ctx(), { continue: true, facts: { postplanSha: 'ccccccc' } }))).toBe(
+    expect(errorCode(m.requestMerge(superReady, ctx(), { continue: true, facts: { recordSha: 'ccccccc' } }))).toBe(
       'invalid_transition',
     );
     const same = { ...superReady, type: 'same' as const };
@@ -1191,7 +1247,7 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     expect(checksFailed.mergeMode).toBeNull();
   });
 
-  it('mark_ready from the board: supers with a draft PR and the postplan at the head', () => {
+  it('mark_ready from the board: supers with a draft PR and the implementation record at the head', () => {
     const drafting = glob({
       type: 'super',
       status: 'in_progress',
@@ -1199,21 +1255,21 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
       pr: { number: 7, state: 'draft', headSha: HEAD },
     });
     expect(m.allowedActions(drafting, dev, atHead)).toContain('mark_ready');
-    expect(m.allowedActions(drafting, dev, { postplanSha: 'ccccccc' })).not.toContain('mark_ready');
+    expect(m.allowedActions(drafting, dev, { recordSha: 'ccccccc' })).not.toContain('mark_ready');
     expect(m.allowedActions(drafting, dev)).not.toContain('mark_ready');
     expect(m.allowedActions({ ...drafting, type: 'same' }, dev, atHead)).not.toContain('mark_ready');
 
     const board = { from: 'board' as const, facts: atHead };
     expect(effectKinds(value(m.readyRequested(drafting, null, ctx(), board)))).toEqual(['mark_pr_ready']);
-    const behind = m.readyRequested(drafting, null, ctx(), { from: 'board', facts: { postplanSha: 'ccccccc' } });
-    expect(!behind.ok && behind.error.message).toBe(m.POSTPLAN_NOT_AT_HEAD);
+    const behind = m.readyRequested(drafting, null, ctx(), { from: 'board', facts: { recordSha: 'ccccccc' } });
+    expect(!behind.ok && behind.error.message).toBe(m.RECORD_NOT_AT_HEAD);
     expect(errorCode(m.readyRequested({ ...drafting, type: 'same' }, null, ctx(), board))).toBe('invalid_transition');
     // QA and PO can't mark a super ready from the board, and aren't offered it.
     for (const actor of [po, { email: 'qa@example.com', role: 'qa' } as const]) {
       expect(errorCode(m.readyRequested(drafting, null, ctx(actor), board))).toBe('forbidden');
       expect(m.allowedActions(drafting, actor, atHead)).not.toContain('mark_ready');
     }
-    // The MCP tool (sstor --ready) is unchanged: it needs no postplan.
+    // The MCP tool (sstor --ready) is unchanged: it needs no record.
     expect(effectKinds(value(m.readyRequested(drafting, null, ctx())))).toEqual(['mark_pr_ready']);
   });
 

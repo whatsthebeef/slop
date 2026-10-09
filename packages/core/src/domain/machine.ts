@@ -77,17 +77,18 @@ export type Action =
  * the glob document.
  */
 export interface ActionFacts {
-  /** The commit SHA of the glob's latest postplan, or null without one (or without a SHA). */
-  readonly postplanSha?: string | null;
+  /** The commit SHA of the glob's latest implementation record, or null without one (or without a SHA). */
+  readonly recordSha?: string | null;
   /** The state of every glob this one waits for (a missing entry reads as deleted); absent when not loaded. */
   readonly dependencies?: ReadonlyMap<string, DependencyState>;
 }
 
 const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
 
-/** The latest postplan's commit SHA among a glob's artifact summaries. */
-export const postplanShaOf = (artifacts: readonly Pick<ArtifactSummary, 'kind' | 'label' | 'commitSha'>[]): string | null =>
-  artifacts.find((a) => a.kind === 'postplan' && a.label === '')?.commitSha ?? null;
+/** The latest implementation record's commit SHA among a glob's artifact summaries (a legacy postplan counts until migrated). */
+export const recordShaOf = (artifacts: readonly Pick<ArtifactSummary, 'kind' | 'label' | 'commitSha'>[]): string | null =>
+  (artifacts.find((a) => a.kind === 'implementation_plan' && a.label === '') ??
+    artifacts.find((a) => a.kind === 'postplan' && a.label === ''))?.commitSha ?? null;
 
 /** Short SHAs are at least this long (git's default abbreviation). */
 const MIN_SHA_LENGTH = 7;
@@ -100,11 +101,11 @@ export const sameCommit = (a: string | null | undefined, b: string | null | unde
   return x.startsWith(y) || y.startsWith(x);
 };
 
-/** A super's latest postplan was written at its PR's current head. */
-export const postplanAtHead = (glob: Glob, facts: ActionFacts): boolean =>
-  glob.type === 'super' && sameCommit(facts.postplanSha, glob.pr?.headSha);
+/** A super's latest implementation record was written at its PR's current head. */
+export const recordAtHead = (glob: Glob, facts: ActionFacts): boolean =>
+  glob.type === 'super' && sameCommit(facts.recordSha, glob.pr?.headSha);
 
-export const POSTPLAN_NOT_AT_HEAD = 'Update the postplan at the head first (/finalise)';
+export const RECORD_NOT_AT_HEAD = 'Update the implementation record at the head first (/finalise)';
 
 /**
  * The squash commit's title: `<id>: <title>`. A piece landed with Merge and continue says which
@@ -216,7 +217,7 @@ class Builder {
   }
 
   /** Queues a new routine run for whoever triggered it. */
-  queueRun(triggeredBy: string): this {
+  queueRun(triggeredBy: string, retry?: { readonly failureSummary: string | null }): this {
     const run: Run = {
       id: this.ctx.newRunId(),
       state: 'queued',
@@ -231,12 +232,14 @@ class Builder {
       failureReason: null,
       sessionId: null,
       sessionUrl: null,
+      ...(retry === undefined ? {} : { autoRetry: true as const }),
     };
     this.set({ runs: [...this.glob.runs, run] });
     this.event('RunTriggered', {
       runId: run.id,
       triggeredBy,
       routineOwner: run.routineOwner,
+      ...(retry === undefined ? {} : { automatic: true }),
     });
     return this.effect({
       kind: 'fire_routine',
@@ -244,6 +247,7 @@ class Builder {
       generation: this.glob.generation,
       runId: run.id,
       routineOwner: run.routineOwner,
+      ...(retry?.failureSummary == null ? {} : { failureSummary: retry.failureSummary }),
     });
   }
 
@@ -760,7 +764,7 @@ export const requestMerge = (
   }
   if (options.continue) {
     if (glob.type !== 'super') return invalidTransition(glob, actor, 'Only a super can merge and continue');
-    if (!postplanAtHead(glob, options.facts ?? {})) return invalidTransition(glob, actor, POSTPLAN_NOT_AT_HEAD);
+    if (!recordAtHead(glob, options.facts ?? {})) return invalidTransition(glob, actor, RECORD_NOT_AT_HEAD);
   }
   return new Builder(glob, ctx)
     .set({ mergeMode: options.continue ? 'continue' : null })
@@ -1170,6 +1174,17 @@ const minutesSince = (from: string, now: string): number => (Date.parse(now) - D
 /** `2026-10-07 02:01 UTC`: a time in a failure reason. */
 const queuedAtText = (at: string): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
+/** The reason `runTimeoutReason` gives a watching run that ignored failed checks. */
+const GAVE_UP = /^Auto-fix didn't respond/;
+
+/** The failing check and its first lines, as the retried run's fire text carries them; null when the log wasn't read. */
+const failureSummaryOf = (glob: Glob): string | null => {
+  const failure = glob.headChecks?.state === 'failed' ? glob.headChecks.failure : undefined;
+  if (failure === undefined) return null;
+  const where = failure.step === null ? failure.name : `${failure.name} (${failure.step})`;
+  return [where, ...failure.lines.slice(0, 5)].join('\n');
+};
+
 /** The head's failed checks that are the glob's own to fix (not inherited from the base): what a watching run is asked to respond to. */
 const ownFailedHead = (glob: Glob): HeadChecks | null => {
   const checks = glob.headChecks;
@@ -1253,6 +1268,18 @@ export const prReadyForReview = (
   // A sub doesn't wait for the PR's checks: the board's policy decides at once, and the checks run on the base after it merges.
   if (glob.type === 'sub') b.effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha: pr.headSha });
   return b.done();
+};
+
+/** Whether a glob has a PR that webhooks can still change: not merged or closed, and not yet reviewing. */
+export const isReconcilable = (glob: Glob): boolean =>
+  glob.pr !== null &&
+  (glob.pr.state === 'draft' || glob.pr.state === 'ready') &&
+  (glob.status === 'implementing' || glob.status === 'in_progress' || glob.status === 'pr_open' || glob.status === 'merging');
+
+/** Re-read the PR from the code host (on start, or when a webhook may have been lost) and apply what changed. */
+export const reconcileRequested = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (!isReconcilable(glob)) return unchanged(glob);
+  return new Builder(glob, ctx).effect({ kind: 'reconcile_pr', globId: glob.id, generation: glob.generation }).done();
 };
 
 /** A check suite or run changed on the glob's branch: re-read the head's merge state. */
@@ -1371,7 +1398,7 @@ export const baseTurnedGreen = (glob: Glob, ctx: Context): Result<Transition> =>
     .done();
 };
 
-/** Where `mark_ready` came from: the board offers it to supers only, once the postplan is at the head. */
+/** Where `mark_ready` came from: the board offers it to supers only, once the implementation record is at the head. */
 export type ReadySource = { readonly from: 'tool' } | { readonly from: 'board'; readonly facts: ActionFacts };
 
 /**
@@ -1391,7 +1418,7 @@ export const readyRequested = (
   if (source.from === 'board') {
     if (glob.type !== 'super') return invalidTransition(glob, ctx.actor, 'Only a super is marked ready from the board');
     if (restrictedFrom(requireActor(ctx), glob)) return forbidden('QA and PO members cannot mark a super ready');
-    if (!postplanAtHead(glob, source.facts)) return invalidTransition(glob, ctx.actor, POSTPLAN_NOT_AT_HEAD);
+    if (!recordAtHead(glob, source.facts)) return invalidTransition(glob, ctx.actor, RECORD_NOT_AT_HEAD);
   }
   const run = currentRun(glob);
   if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
@@ -1428,6 +1455,8 @@ export const subGateCompleted = (
     /** Recorded for the learned sub limit: why it converted, the lines it changes and the limit applied. */
     cause?: SubGateCause | null;
     changedLines?: number;
+    /** Generated lines left out of `changedLines` (the board's `sizeIgnoredPaths`). */
+    ignoredLines?: number;
     limit?: number;
   },
   ctx: Context,
@@ -1441,6 +1470,7 @@ export const subGateCompleted = (
     reason: gate.reason,
     ...(gate.cause !== undefined && { cause: gate.cause }),
     ...(gate.changedLines !== undefined && { changedLines: gate.changedLines }),
+    ...(gate.ignoredLines !== undefined && gate.ignoredLines > 0 && { ignoredLines: gate.ignoredLines }),
     ...(gate.limit !== undefined && { limit: gate.limit }),
   });
   if (gate.passed) {
@@ -1575,10 +1605,14 @@ export const reportFailure = (
   }
   if (glob.status === 'pr_open' && run.state === 'watching') {
     // Row 25: auto-fix ended; the glob stays in pr_open and shows the failure.
-    return new Builder(glob, ctx)
-      .endRun('failed', report.reason, { agentSetVersion })
-      .set({ failure })
-      .done();
+    const b = new Builder(glob, ctx).endRun('failed', report.reason, { agentSetVersion });
+    // A watcher that gave up is retried once by slop itself, on the same PR and branch; only if that run also ends
+    // without fixing it does the glob show the failure and the Retry auto-fix button.
+    const retried = glob.runs.some((r) => r.autoRetry === true);
+    if (GAVE_UP.test(report.reason) && !retried && glob.type !== 'super' && glob.implementer === null && glob.pr !== null) {
+      return b.queueRun(run.triggeredBy, { failureSummary: failureSummaryOf(glob) }).done();
+    }
+    return b.set({ failure }).done();
   }
   return invalidTransition(glob, ctx.actor, `Run failure ignored: glob is ${glob.status}`);
 };
@@ -1641,13 +1675,13 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     glob.headChecks.state === 'passed'
   ) {
     actions.push('merge');
-    if (postplanAtHead(glob, facts)) actions.push('merge_continue');
+    if (recordAtHead(glob, facts)) actions.push('merge_continue');
   }
   if (
     !restricted &&
     glob.status === 'in_progress' &&
     glob.pr?.state === 'draft' &&
-    postplanAtHead(glob, facts)
+    recordAtHead(glob, facts)
   ) {
     actions.push('mark_ready');
   }

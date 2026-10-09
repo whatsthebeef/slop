@@ -203,12 +203,12 @@ describe('knowledge and artifacts', () => {
     unwrap(await artifacts.putArtifact(DEV, glob.id, 'implementation_plan', '# Impl\n\nDetails', { commitSha: 'abc', runId: null, agentSetVersion: null }));
     const lean = unwrap(await artifacts.context(DEV, glob.id));
     expect(lean.attachments.map((a) => a.label).sort()).toEqual(['Assumptions', 'Clarifications']);
-    expect(lean.implementationPlan).toBeNull();
-    expect(lean.available.map((a) => a.kind).sort()).toEqual(['attachment', 'implementation_plan']);
-    expect(lean.available.find((a) => a.kind === 'implementation_plan')).toMatchObject({ commitSha: 'abc', size: 15, description: 'Impl' });
+    // The record comes in full for every glob; only the other artifacts are listed.
+    expect(lean.implementationRecord).toEqual({ version: 1, commitSha: 'abc', content: '# Impl\n\nDetails' });
+    expect(lean.available.map((a) => a.kind)).toEqual(['attachment']);
 
-    const asked = unwrap(await artifacts.context(DEV, glob.id, ['implementation_plan', 'attachment:meeting']));
-    expect(asked.implementationPlan).toEqual({ version: 1, content: '# Impl\n\nDetails' });
+    const asked = unwrap(await artifacts.context(DEV, glob.id, ['attachment:meeting']));
+    expect(asked.implementationRecord).toMatchObject({ version: 1, content: '# Impl\n\nDetails' });
     expect(asked.attachments.map((a) => a.label).sort()).toEqual(['Assumptions', 'Clarifications', 'Meeting']);
     expect(asked.available).toEqual([]);
     expect(unwrap(await artifacts.context(DEV, glob.id, ['all'])).available).toEqual([]);
@@ -219,7 +219,7 @@ describe('knowledge and artifacts', () => {
     expect(unwrap(await artifacts.plan(DEV, glob.id, null)).versions).toHaveLength(1);
   });
 
-  it("uses a super's plan.md until it has a postplan, then the postplan", async () => {
+  it('keeps plan.md and the implementation record apart; a postplan write is an alias for the record', async () => {
     const glob = unwrap(
       await globs.create(DEV, {
         boardId,
@@ -238,8 +238,14 @@ describe('knowledge and artifacts', () => {
     expect(unwrap(await artifacts.plan(DEV, glob.id, null))).toMatchObject({ kind: 'plan', current: { content: '# Plan from the PO' } });
 
     unwrap(await artifacts.putArtifact(DEV, glob.id, 'postplan', '# What was built', { commitSha: 'abc', runId: null, agentSetVersion: null }));
-    expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 1, content: '# What was built' });
-    expect(unwrap(await artifacts.plan(DEV, glob.id, null))).toMatchObject({ kind: 'postplan', current: { content: '# What was built' } });
+    const context = unwrap(await artifacts.context(DEV, glob.id));
+    expect(context.plan).toEqual({ version: 1, content: '# Plan from the PO' });
+    expect(context.implementationRecord).toEqual({ version: 1, commitSha: 'abc', content: '# What was built' });
+    expect(unwrap(await artifacts.plan(DEV, glob.id, null))).toMatchObject({ kind: 'plan', current: { content: '# Plan from the PO' } });
+    // A later put of either kind is the next version of the one record.
+    unwrap(await artifacts.putArtifact(DEV, glob.id, 'implementation_plan', '# Record v2', { commitSha: 'def', runId: null, agentSetVersion: null }));
+    expect(unwrap(await artifacts.context(DEV, glob.id)).implementationRecord).toMatchObject({ version: 2, commitSha: 'def' });
+    expect(unwrap(await artifacts.versions(DEV, glob.id, 'postplan', ''))).toEqual([]);
   });
 
   it('ignores artifacts from a run that is not current', async () => {
@@ -324,7 +330,7 @@ describe('knowledge and artifacts', () => {
     const view = unwrap(await globs.get(DEV, glob.id));
     expect(view.artifacts.map((a) => [a.kind, a.version, a.versions, a.commitSha])).toEqual([
       ['plan', 1, 1, null],
-      ['postplan', 1, 1, 'bbb'],
+      ['implementation_plan', 1, 1, 'bbb'],
       ['local_review', 2, 2, 'bbb'],
     ]);
     expect(view.artifacts[2]).toMatchObject({ by: 'sessionator', actor: DEV, createdAt: clock.now() });
@@ -338,7 +344,7 @@ describe('knowledge and artifacts', () => {
 
     const board = unwrap(await globs.listWithArtifacts(DEV, boardId, {}));
     const kinds = Object.fromEntries(board.map((g) => [g.glob.id, g.artifacts.map((a) => a.kind)]));
-    expect(kinds).toEqual({ [glob.id]: ['plan', 'postplan', 'local_review'], [other.id]: ['postplan'] });
+    expect(kinds).toEqual({ [glob.id]: ['plan', 'implementation_plan', 'local_review'], [other.id]: ['implementation_plan'] });
     // Globs the board doesn't show are dropped before their summaries are read.
     const shown = unwrap(await globs.listWithArtifacts(DEV, boardId, {}, (g) => g.id === other.id));
     expect(shown.map((g) => g.glob.id)).toEqual([other.id]);

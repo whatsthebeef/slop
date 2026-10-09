@@ -366,7 +366,7 @@ export const BoardPage = () => {
     <div className='flex h-full flex-col' data-testid='board' data-live={live}>
       <OfflineNotice live={live} />
       {/* Under the tabs and the line: New Glob and the type filters (this page is the board tab only). */}
-      <div className='flex flex-wrap items-center gap-3 px-5 pt-2'>
+      <div className='mx-5 flex flex-wrap items-center gap-3 border-b border-edge/50 pb-3 pt-2'>
         <h1 className='sr-only'>{board.data.name}</h1>
         <div className='flex gap-0.5 rounded-md border bg-muted p-0.5' role='group' aria-label='Filter by type'>
           {(['all', ...SLOP_TYPES] as const).map((t) => (

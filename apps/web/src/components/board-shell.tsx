@@ -5,7 +5,7 @@ import { StatusBar } from '@/components/status-bar';
 import { activeTab, BOARD_TABS } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
 
-/** Board, Signed off, Knowledge and Settings as tabs; the active one sits on the line (or the notification banner) below. */
+/** Board, Signed off, Knowledge and Settings as tabs; the active one sits on the line below. */
 const BoardTabs = ({ boardId }: { boardId: number }) => {
   const current = activeTab(useLocation().pathname, boardId);
   return (
@@ -36,8 +36,9 @@ export const BoardShell = () => {
   return (
     <div className='flex h-dvh flex-col'>
       <StatusBar current={isBoard ? boardId : undefined} />
-      {isBoard && <BoardTabs boardId={boardId} />}
       {isBoard && <NotificationBar boardId={boardId} />}
+      {isBoard && <BoardTabs boardId={boardId} />}
+      {isBoard && <hr className='mx-5 border-edge' />}
       <div className='min-h-0 flex-1 overflow-auto'>
         <Outlet />
       </div>

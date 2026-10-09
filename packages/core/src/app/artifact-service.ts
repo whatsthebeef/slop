@@ -12,10 +12,10 @@ import { memberOf } from './access.js';
 export interface GlobContext {
   readonly glob: Pick<Glob, 'id' | 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'status'>;
   readonly board: { readonly id: number; readonly repo: string | null; readonly baseBranch: string };
-  /** plan.md (a super's postplan once it has one): the latest version, or the summary when no plan has been written yet. */
+  /** plan.md: the latest version, or the summary when no plan has been written yet. */
   readonly plan: { readonly version: number; readonly content: string } | null;
-  /** The implementation plan (a super's decision log), in full only when asked for with `include`. */
-  readonly implementationPlan: { readonly version: number; readonly content: string } | null;
+  /** The implementation record (every glob type, one format): the latest version, in full; null before the first is pushed. */
+  readonly implementationRecord: { readonly version: number; readonly commitSha: string | null; readonly content: string } | null;
   /** Attachments in full: Clarifications and Assumptions always (they carry intent), others when asked for with `include`. */
   readonly attachments: readonly { readonly label: string; readonly content: string; readonly link: string | null }[];
   /**
@@ -55,7 +55,7 @@ export interface ArtifactListing {
 /** Attachments with these labels always come inline: agents must follow them and pass them verbatim. */
 const INLINE_LABELS = new Set(['clarifications', 'assumptions']);
 
-/** `include` entries: a kind (`implementation_plan`, `local_review`, ...), `attachment:<label>`, or `all`. */
+/** `include` entries: a kind (`local_review`, `local_review`, ...), `attachment:<label>`, or `all`. */
 const wanted = (include: readonly string[], a: Artifact): boolean =>
   include.includes('all') ||
   include.includes(a.kind) ||
@@ -108,7 +108,7 @@ export interface PutOptions {
 }
 
 /**
- * Glob artifacts: plan.md, the implementation plan, postplans, local reviews and attachments,
+ * Glob artifacts: plan.md, the implementation record (stored as kind `implementation_plan`), local reviews and attachments,
  * kept as versioned records with provenance. Writes are append-style: they carry no glob
  * version, and results from a superseded routine run are ignored.
  */
@@ -149,7 +149,10 @@ export class ArtifactService {
     });
   }
 
-  /** `put_artifact`: implementation plans, postplans and local reviews from implementers. */
+  /**
+   * `put_artifact`: the implementation record and local reviews from implementers. `postplan` is an alias that writes
+   * the record, so agent sets that haven't been refreshed keep working.
+   */
   async putArtifact(
     email: string,
     globId: string,
@@ -158,10 +161,10 @@ export class ArtifactService {
     options: PutOptions,
   ): Promise<Result<Artifact | Ignored>> {
     if (content.trim() === '') return invalidInput('An artifact needs content');
-    return this.put(email, globId, kind, '', content, null, options);
+    return this.put(email, globId, kind === 'postplan' ? 'implementation_plan' : kind, '', content, null, options);
   }
 
-  /** `get_plan`: plan.md (or a super's postplan, once it has one) with its version history. */
+  /** `get_plan`: plan.md with its version history. */
   async plan(
     email: string,
     globId: string,
@@ -172,10 +175,8 @@ export class ArtifactService {
       if (glob === null) return notFound(`No glob ${globId}`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      // A super's postplan replaces plan.md once it exists; until then plan.md is its plan.
-      const postplans = glob.type === 'super' ? await tx.artifactVersions(globId, 'postplan', '') : [];
-      const kind: ArtifactKind = postplans.length > 0 ? 'postplan' : 'plan';
-      const versions = kind === 'postplan' ? postplans : await tx.artifactVersions(globId, kind, '');
+      const kind: ArtifactKind = 'plan';
+      const versions = await tx.artifactVersions(globId, kind, '');
       const current = version === null ? (versions.at(-1) ?? null) : (versions.find((v) => v.version === version) ?? null);
       if (version !== null && current === null) return notFound(`${globId} has no ${kind} version ${version}`);
       return ok({
@@ -208,7 +209,7 @@ export class ArtifactService {
   }
 
   /**
-   * `get_context` (basic): the glob and its plan in full, Clarifications and Assumptions in full, and a listing of
+   * `get_context` (basic): the glob, its plan.md and implementation record in full, Clarifications and Assumptions in full, and a listing of
    * every other artifact. `include` returns more in full. `related` adds ranked search results when search is configured.
    */
   async context(email: string, globId: string, include: readonly string[] = []): Promise<Result<GlobContext>> {
@@ -221,13 +222,13 @@ export class ArtifactService {
       if (board === null) return notFound(`No board ${glob.boardId}`);
       const artifacts = await tx.listArtifacts(globId);
       const latest = (kind: ArtifactKind) => artifacts.find((a) => a.kind === kind) ?? null;
-      // A super's postplan replaces plan.md once it exists; until then plan.md is its plan.
-      const plan = (glob.type === 'super' ? latest('postplan') : null) ?? latest('plan');
-      const implementation = latest('implementation_plan');
+      const plan = latest('plan');
+      const record = latest('implementation_plan');
       // listArtifacts returns the latest version of each (kind, label).
       const full = (a: Artifact) =>
         (a.kind === 'attachment' && INLINE_LABELS.has(a.label.toLowerCase())) || wanted(include, a);
-      const others = artifacts.filter((a) => a.kind !== 'plan' && a.kind !== 'postplan' && !full(a));
+      // Legacy postplan rows were migrated into the record; they stay as history, not listed.
+      const others = artifacts.filter((a) => a.kind !== 'plan' && a.kind !== 'implementation_plan' && a.kind !== 'postplan' && !full(a));
       const codeReview = await tx.listCodeReviewComments(glob.boardId, [globId]);
       const codeReviewInFull = include.includes('all') || include.includes('code_review');
       const related = this.deps.related === undefined ? undefined : await this.deps.related(tx, glob);
@@ -249,10 +250,8 @@ export class ArtifactService {
             : glob.summary.trim() === ''
               ? null
               : { version: 0, content: glob.summary },
-        implementationPlan:
-          implementation === null || !full(implementation)
-            ? null
-            : { version: implementation.version, content: implementation.content },
+        implementationRecord:
+          record === null ? null : { version: record.version, commitSha: record.commitSha, content: record.content },
         attachments: artifacts
           .filter((a) => a.kind === 'attachment' && full(a))
           .map((a) => ({ label: a.label, content: a.content, link: a.link })),
@@ -270,7 +269,7 @@ export class ArtifactService {
         codeReview: codeReview.length === 0 || !codeReviewInFull ? null : codeReviewContext(codeReview),
         ...(related === undefined ? {} : { related }),
         fetch:
-          "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['implementation_plan', 'local_review', 'attachment:<label>', 'code_review', 'all']).",
+          "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'code_review', 'all']).",
       });
     });
   }
@@ -317,7 +316,7 @@ export class ArtifactService {
         }
       }
       const provenance: Provenance = {
-        by: options.runId !== null ? 'routine' : kind === 'postplan' || kind === 'local_review' ? 'sessionator' : 'human',
+        by: options.runId !== null ? 'routine' : kind === 'implementation_plan' || kind === 'local_review' ? 'sessionator' : 'human',
         actor: email,
         runId: options.runId,
         agentSetVersion: options.agentSetVersion,

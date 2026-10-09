@@ -183,7 +183,7 @@ const failedWhy = (glob: GlobView, head: string): string => {
 
 /**
  * Actions the glob is heading for but can't take yet: merging waits for the checks on the PR head, and a super's
- * Merge and continue and Ready for review wait for the latest postplan at the head.
+ * Merge and continue and Ready for review wait for the latest implementation record at the head.
  */
 export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Role): Waiting[] => {
   // QA and PO can't take these actions at all, so a reason would mislead them.
@@ -212,15 +212,15 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
     if (glob.type === 'super') waiting.push({ action: 'merge_continue', ...wait });
   }
   if (glob.type !== 'super') return waiting;
-  const postplan = { tip: machine.POSTPLAN_NOT_AT_HEAD, why: 'for the postplan at the head' };
+  const record = { tip: machine.RECORD_NOT_AT_HEAD, why: 'for the implementation record at the head' };
   if (actions.includes('merge') && !actions.includes('merge_continue'))
-    waiting.push({ action: 'merge_continue', ...postplan });
+    waiting.push({ action: 'merge_continue', ...record });
   if (
     glob.status === 'in_progress' &&
     glob.pr?.state === 'draft' &&
     !actions.includes('mark_ready')
   ) {
-    waiting.push({ action: 'mark_ready', ...postplan });
+    waiting.push({ action: 'mark_ready', ...record });
   }
   return waiting;
 };

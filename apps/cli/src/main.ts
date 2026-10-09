@@ -197,7 +197,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   },
   'put-artifact': {
     usage: PUT_ARTIFACT_USAGE,
-    summary: 'Upload a plan, postplan or local review from a file (or - for stdin) to a glob',
+    summary: 'Upload the implementation record (postplan is an alias) or a local review from a file (or - for stdin) to a glob',
     run: (args, context) =>
       putArtifactCommand(args, {
         client: clientFor(context),

@@ -15,6 +15,15 @@ export const barView = (items: readonly BoardNotification[]): BarView | null => 
 /** "more… (2)" for the button that expands the others. */
 export const moreLabel = (count: number): string => `more… (${String(count)})`;
 
+/** The toggle's text: "more… (2)" on the lead while collapsed, "Show less" below the last notification once expanded. */
+export const toggleLabel = (expanded: boolean, restCount: number): string => (expanded ? 'Show less' : moreLabel(restCount));
+
+/** The notifications shown, in order: the lead alone while collapsed, then all of them as one stack. */
+export const shownRows = (view: BarView, expanded: boolean): readonly BoardNotification[] => (expanded ? [view.lead, ...view.rest] : [view.lead]);
+
+/** The board page top to bottom: the notifications sit above the tabs, and the line under the tabs is always there. */
+export const SHELL_ORDER = ['notifications', 'tabs', 'line', 'page'] as const;
+
 export type BoardTab = 'board' | 'signed-off' | 'knowledge' | 'settings';
 
 export const BOARD_TABS: readonly { readonly tab: BoardTab; readonly label: string; readonly path: string }[] = [
