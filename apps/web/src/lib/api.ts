@@ -1,11 +1,13 @@
 import type {
   Action,
+  AwaitedDependency,
   AgentSetEntry,
   AgentSetFileView,
   Approval,
   ArtifactKind,
   ArtifactSummary,
   Board,
+  BoardNotification,
   BoardJob,
   BoardJobStatus,
   CatalogUpdate,
@@ -26,11 +28,13 @@ import type {
   KbSignal,
   LabelCommand,
   LocalRunView,
+  MergePolicyView,
   LabelName,
   List,
   Member,
   Role,
   Run,
+  SearchHit,
   SlopType,
   SubLimitView,
   TargetChange,
@@ -43,6 +47,9 @@ export interface GlobView extends Glob {
   readonly allowedActions?: readonly Action[];
   /** The latest version of each artifact (board list and glob reads; absent from some write responses). */
   readonly artifacts?: readonly ArtifactSummaryView[];
+  /** What the glob still waits for, and the globs in Planning that wait for it (single-glob reads only). */
+  readonly waitingFor?: readonly AwaitedDependency[];
+  readonly waitedOnBy?: readonly string[];
 }
 
 export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;
@@ -79,6 +86,8 @@ export interface KnowledgeIndex {
   readonly catalogUpdates: readonly CatalogUpdate[];
   /** The local-run spec, read-only (it changes through proposals). */
   readonly localRun: LocalRunView;
+  /** The merge policy (which paths clash between globs), read-only (it changes through proposals). */
+  readonly mergePolicy: MergePolicyView;
 }
 
 export interface CatalogEntry {
@@ -130,6 +139,12 @@ export interface BoardDeploys {
   readonly atf?: Readonly<Record<string, readonly AtfRun[]>>;
 }
 
+/** The board search box's results; `semantic: 'unavailable'` means keyword matches only (the embedding model is down). */
+export interface BoardSearchResult {
+  readonly hits: readonly SearchHit[];
+  readonly semantic: 'ok' | 'unavailable';
+}
+
 export class RequestError extends Error {
   constructor(
     readonly status: number,
@@ -156,19 +171,28 @@ const request = async <T>(method: string, path: string, body?: unknown): Promise
 
 export interface NewGlob {
   title: string;
+  /** One or two sentences for the card. */
   summary: string;
+  /** plan.md v1, when it is more than the summary (intake's write-up of the request). */
+  plan?: string;
   type: SlopType;
   category: Category;
   group: string | null;
   environment: string | null;
   autoTrigger: boolean;
+  /** IDs of globs on the board to start after. */
+  after?: string[];
+  /** Files intake guessed the work changes (sent back as given). */
+  files?: string[];
 }
 
-export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment'>>;
+export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'after'>>;
 
 export type ActionPath =
   | 'start'
+  | 'start-anyway'
   | 'retrigger'
+  | 'retry-autofix'
   | 'resolve-conflict'
   | 'pick-up'
   | 'take-over'
@@ -200,8 +224,15 @@ export interface IntegrationHealthView {
 
 export const healthKey = ['health'] as const;
 
+/** The board's notifications; invalidated by `board.notifications` hints and on reconnect. */
+export const notificationsKey = (boardId: number) => ['notifications', boardId] as const;
+
 export const api = {
   health: () => request<IntegrationHealthView>('GET', '/api/health'),
+  notifications: (boardId: number) =>
+    request<{ value: BoardNotification[] }>('GET', `/api/boards/${boardId}/notifications`).then((r) => r.value),
+  dismissNotification: (boardId: number, id: string) =>
+    request<object>('POST', `/api/boards/${boardId}/notifications/dismiss`, { id }),
   startAwsSignIn: () => request<object>('POST', '/api/aws-sign-in'),
   authConfig: () => request<{ mode: 'dev' | 'cognito' }>('GET', '/auth/config'),
   devLogin: (email: string, returnTo?: string) =>
@@ -241,6 +272,11 @@ export const api = {
       'GET',
       `/api/boards/${boardId}/code-reviews?globs=${globIds.map(encodeURIComponent).join(',')}`,
     ).then((r) => r.value),
+  searchBoard: (boardId: number, q: string, history: boolean) =>
+    request<{ value: BoardSearchResult }>(
+      'GET',
+      `/api/boards/${boardId}/search?q=${encodeURIComponent(q)}${history ? '&history=1' : ''}`,
+    ).then((r) => r.value),
   globCodeReview: (id: string) => request<{ value: GlobCodeReview }>('GET', `/api/globs/${id}/code-review`).then((r) => r.value),
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
   deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),
@@ -252,7 +288,7 @@ export const api = {
   action: (id: string, action: ActionPath, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, { version }),
   intake: (boardId: number, text: string) =>
-    request<NewGlob & { autoTriggerReason: string | null }>('POST', `/api/boards/${boardId}/intake`, { text }),
+    request<NewGlob & { plan: string; autoTriggerReason: string | null; suggestedAfter: string[] }>('POST', `/api/boards/${boardId}/intake`, { text }),
   repoConnection: (boardId: number) =>
     request<{ repo: string | null; configured: boolean; connected: boolean; installUrl: string | null; appName: string | null }>(
       'GET',
@@ -304,9 +340,11 @@ export const api = {
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   start: 'start',
+  start_anyway: 'start-anyway',
   pick_up: 'pick-up',
   take_over: 'take-over',
   retrigger: 'retrigger',
+  retry_autofix: 'retry-autofix',
   resolve_conflict: 'resolve-conflict',
   start_again: 'start-again',
   merge: 'merge',
@@ -317,9 +355,11 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
 
 export const ACTION_LABELS: Record<Action, string> = {
   start: 'Start',
+  start_anyway: 'Start anyway',
   pick_up: 'Pick up',
   take_over: 'Take over',
   retrigger: 'Re-trigger',
+  retry_autofix: 'Retry auto-fix',
   resolve_conflict: 'Resolve conflict',
   start_again: 'Start again',
   merge: 'Merge',

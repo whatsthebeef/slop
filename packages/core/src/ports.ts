@@ -3,6 +3,9 @@ import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './do
 import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
 import type { CodeReviewComment, NewCodeReviewComment } from './domain/code-review.js';
+import type { BoardNotification } from './domain/notifications.js';
+import type { Candidate, KnowledgeItem, NewChunk, NewKnowledgeItem, PendingChunk, SearchQuery, SourceType } from './domain/search.js';
+import type { DiffSummary } from './domain/sub-gate.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
@@ -48,7 +51,7 @@ export interface Tx {
   updateGlob(glob: Glob, expectedVersion: number): Promise<boolean>;
   /**
    * Deletes the glob with its artifacts, review sources, findings, environment presence, branch test runs and stored
-   * CodeRabbit items.
+   * CodeRabbit items, and its items in the search store (an item shared with other globs, a learning, only loses the link).
    */
   deleteGlob(id: string): Promise<void>;
   findGlobByCreationKey(boardId: number, key: string): Promise<Glob | null>;
@@ -57,7 +60,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'subMaxChangedLines' | 'effectCheckGlobs' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'effectCheckGlobs' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   /**
    * Sets the board's learned sub size limit to `to` if it is still `from`; returns false otherwise. It has no board
@@ -70,6 +73,13 @@ export interface Tx {
   listSubLimitChanges(boardId: number): Promise<SubLimitChange[]>;
   /** Records the base branch's latest check result. It has no board version: check results arrive on their own. */
   setBaseChecks(boardId: number, baseChecks: BaseChecks): Promise<void>;
+  /** Board notifications have no version: sources raise and clear them on their own. */
+  getNotification(id: string): Promise<BoardNotification | null>;
+  saveNotification(notification: BoardNotification): Promise<void>;
+  /** True when it existed. */
+  deleteNotification(id: string): Promise<boolean>;
+  /** The board's own notifications and the global ones. */
+  listNotifications(boardId: number): Promise<BoardNotification[]>;
   listBoards(email: string): Promise<Board[]>;
   /** Every board, for background jobs. */
   listAllBoards(): Promise<Board[]>;
@@ -111,6 +121,8 @@ export interface Tx {
    * `routed`, waiting for its draft) whose `processAfter` is unset or not after `now`.
    */
   nextKbItemToProcess(now: string): Promise<KbItem | null>;
+  /** Open items, on every board, whose processing ended `failed` (the busy-recovery pass picks from these). */
+  listFailedKbItems(): Promise<KbItem[]>;
   /** Writes `item` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateKbItem(item: KbItem, expectedVersion: number): Promise<boolean>;
 
@@ -220,6 +232,35 @@ export interface Tx {
    */
   lockBoardJob(boardId: number, job: BoardJobName): Promise<void>;
 
+  /** A board's indexed items: external ref to content hash (the indexer re-chunks only what changed). */
+  itemHashes(boardId: number): Promise<Map<string, string>>;
+  /**
+   * Inserts or replaces the item with this board and external ref, and replaces its chunks (stored without an
+   * embedding) in the same transaction.
+   */
+  replaceItem(item: NewKnowledgeItem, chunks: readonly NewChunk[]): Promise<void>;
+  /** Deletes a board's items of one source type whose external ref isn't in `refs` (their source is gone); returns how many. */
+  deleteItemsNotIn(boardId: number, sourceType: SourceType, refs: ReadonlySet<string>): Promise<number>;
+  /** The oldest item on any board awaiting its summary whose `processAfter` is unset or not after `now`. */
+  nextItemToSummarise(now: string): Promise<KnowledgeItem | null>;
+  /** Records a summary step's progress on an item: the attempt count, when to try again, and the last error. */
+  setItemProgress(id: number, progress: { attempts: number; processAfter: string | null; lastError: string | null }): Promise<void>;
+  /** Up to `limit` chunks without an embedding, oldest first. */
+  chunksToEmbed(limit: number): Promise<PendingChunk[]>;
+  /** Stores embeddings (each of `EMBEDDING_DIMENSIONS` numbers) on chunks. */
+  setEmbeddings(rows: readonly { id: number; embedding: readonly number[] }[]): Promise<void>;
+  /**
+   * Chunks matching the query's words (full text, plus trigram matches for identifiers and paths), best first, with
+   * relevance in [0, 1]. Always one board; superseded and legacy items are returned too (core ranks them down).
+   */
+  keywordCandidates(q: SearchQuery, limit: number): Promise<Candidate[]>;
+  /** Chunks nearest to `embedding` by cosine similarity (relevance = similarity), best first; only embedded chunks. */
+  vectorCandidates(q: SearchQuery, embedding: readonly number[], limit: number): Promise<Candidate[]>;
+  /** Merged-change summaries matching `q.query` (words in the summary, or a path in its `Files:` line), newest first. */
+  changeCandidates(q: SearchQuery, limit: number): Promise<Candidate[]>;
+  /** The latest version of each artifact (per glob, kind and label) on a board, with content. */
+  listLatestArtifacts(boardId: number): Promise<Artifact[]>;
+
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
   enqueueEffects(effects: readonly Effect[]): Promise<void>;
@@ -250,7 +291,9 @@ export type Hint =
   /** The board's KB items, documents or agent-set files changed (the board itself only on an agent-set version bump). */
   | { readonly kind: 'board.kb'; readonly boardId: number }
   /** An integration's health changed (sent to every open board): the banner refetches it. */
-  | { readonly kind: 'board.health'; readonly boardId: number };
+  | { readonly kind: 'board.health'; readonly boardId: number }
+  /** A board notification was raised, changed or cleared (beside the board, no version bump). */
+  | { readonly kind: 'board.notifications'; readonly boardId: number };
 
 /** Publishes small change hints to open boards after a commit. */
 export interface Notifier {
@@ -281,6 +324,27 @@ export interface ManifestSource {
 export interface SubDiffSource {
   /** Lines the merge commit `sha` changed against its parent; null when the board's repo can't be read. */
   mergedChangedLines(board: Board, sha: string): Promise<number | null>;
+}
+
+/** Turns text into vectors for semantic search (slop's one embedding model). */
+export interface Embedder {
+  /** The model ID, for logs and health. */
+  readonly model: string;
+  readonly dimensions: 1024;
+  /** One vector per text, in order. Throws `LlmUnavailable` when credentials or model access are missing. */
+  embed(texts: readonly string[], signal?: AbortSignal): Promise<number[][]>;
+}
+
+/** The code host's account of merged commits, for the change index. */
+export interface ChangeSource {
+  /** The files and changed lines of merge commit `sha`; null when the board's repo can't be read. */
+  mergedDiff(board: Board, sha: string): Promise<DiffSummary | null>;
+}
+
+/** The files a glob's branch changes against the base branch, read from the code host. */
+export interface BranchFiles {
+  /** Null when unknown: the glob has no branch yet, or the code host couldn't say. Never throws. */
+  filesOf(board: Board, glob: Glob): Promise<readonly string[] | null>;
 }
 
 export interface Clock {

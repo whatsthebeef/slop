@@ -1,12 +1,19 @@
-import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService } from '@slop/core';
+import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { FileRoutines } from './routines.js';
-import { machine, parseId, subGatePolicy } from '@slop/core';
+import { isRepoAccessFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
 import { SUB_GATE_CHECK, repoOf } from './codehost.js';
 import { conflictCommentBody, conflictCommentMarker } from './conflict-comment.js';
+
+/** How long a cancelled check run may wait for a newer run on the same head before it is re-requested. */
+const CANCELLED_CHECK_WAIT_MS = 5 * 60_000;
+
+/** The HTTP status of a code host error (Octokit's `status`), when it has one. */
+const httpStatus = (error: unknown): number | null =>
+  typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number' ? error.status : null;
 
 /**
  * Outbox executors for the code host (the GitHub App today). Each turns one effect into GitHub calls and feeds what
@@ -19,6 +26,7 @@ export const codeHostExecutors = (
   boards: Pick<BoardService, 'recordBaseChecks'>,
   now: () => string = () => new Date().toISOString(),
   health: HealthSink | null = null,
+  notifications: Pick<NotificationService, 'syncMainRed' | 'raise' | 'clear'> | null = null,
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -37,6 +45,18 @@ export const codeHostExecutors = (
     await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCheckCompleted(g, check, ctx));
   };
 
+  /**
+   * A cancelled check run leaves the head pending until a newer run on the same head replaces it. When none has come
+   * after `CANCELLED_CHECK_WAIT_MS`, ask the app to run it again; before that, retry the effect later.
+   */
+  const waitForCancelledChecks = async (repo: Repo, sha: string) => {
+    const cancelled = await host.cancelledChecks(repo, sha);
+    if (cancelled.length === 0) return;
+    const waited = cancelled.every((c) => c.completedAt !== null && Date.parse(now()) - Date.parse(c.completedAt) >= CANCELLED_CHECK_WAIT_MS);
+    if (!waited) throw new Error('A check run was cancelled; waiting for the newer run on the same head');
+    for (const c of cancelled) await host.rerequestCheck(repo, c.id);
+  };
+
   /** The failing check's name, step and first error lines; best effort, since the checks' state is already known. */
   const explainFailure = async (repo: Repo, sha: string): Promise<CheckFailure | null> => {
     try {
@@ -53,7 +73,7 @@ export const codeHostExecutors = (
   };
 
   return {
-    provision: async (_effect, glob, { globs }) => {
+    provision: async (_effect, glob, { globs }, attempt) => {
       if (glob === null) return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null || !host.configured) {
@@ -61,13 +81,23 @@ export const codeHostExecutors = (
         await globs.applyEvent(glob.id, (g, ctx) => machine.provisioned(g, { branch: g.id, pr: null }, ctx));
         return 'done';
       }
+      const name = `${repo.owner}/${repo.name}`;
       try {
         const result = await host.provision(repo, glob);
         await globs.applyEvent(glob.id, (g, ctx) => machine.provisioned(g, result, ctx));
+        await notifications?.clear(glob.boardId, REPO_ACCESS_SOURCE);
         return 'done';
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        await globs.applyEvent(glob.id, (g, ctx) => machine.provisioningFailed(g, reason, ctx));
+        const message = error instanceof Error ? error.message : String(error);
+        const code = httpStatus(error);
+        // A 404 or 403 means the App can't reach the repo: say so on the glob and the board, and don't retry.
+        const impossible = isRepoAccessFailure(code, message);
+        const reason = provisioningFailureReason(glob.id, name, code, message);
+        await globs.applyEvent(glob.id, (g, ctx) => machine.provisioningFailed(g, reason, ctx, impossible || attempt?.final === true));
+        if (impossible) {
+          await notifications?.raise(repoAccessNotification(glob.boardId, name));
+          return 'done';
+        }
         throw error;
       }
     },
@@ -133,7 +163,10 @@ export const codeHostExecutors = (
       await lookUpSubGate(repo, glob, sha, globs);
       // A flagged conflict clears once the PR can merge into the base branch again.
       if (state !== 'conflict' && glob.conflict != null) await globs.applyEvent(glob.id, (g, ctx) => machine.conflictCleared(g, ctx));
-      if (state === 'pending') return 'done';
+      if (state === 'pending') {
+        await waitForCancelledChecks(repo, sha);
+        return 'done';
+      }
       const passed = state === 'passed' || state === 'behind';
       // A conflict after slop updated the branch is its own failure, not a failing check.
       const conflict = state === 'conflict' ? { base: repo.base, files: await host.conflictFiles(repo, glob.pr.number) } : undefined;
@@ -162,6 +195,8 @@ export const codeHostExecutors = (
       const head = await host.headOf(repo, repo.base);
       if (head === null) return 'dropped';
       const result = await host.commitChecks(repo, head.sha);
+      // The calls above reached the repo, so the App can see it again.
+      await notifications?.clear(board.id, REPO_ACCESS_SOURCE);
       // Still running: the check's completion sends another event.
       if (result.state === 'pending') return 'done';
       const passed = result.state === 'passed';
@@ -170,8 +205,19 @@ export const codeHostExecutors = (
         { sha: head.sha, passed, failure: result.failure, merged: passed ? null : globOfSubject(head.subject) },
         now(),
       );
-      if (recorded === null || !recorded.change.changed) return 'done';
+      if (recorded === null) return 'done';
+      // Whether or not the result changed: a retry after a crash between recording and raising still raises it.
+      await notifications?.syncMainRed(board.id, repo.base, recorded.checks);
+      if (!recorded.change.changed) return 'done';
       const { checks, change } = recorded;
+      // A sub whose merge commit turned the base red is reverted and failed; sames are left to a person.
+      const headGlob = globOfSubject(head.subject);
+      const culprit = passed || headGlob === null || checks.since !== headGlob ? null : await globs.peek(headGlob);
+      if (culprit?.type === 'sub') {
+        await globs.applyEvent(culprit.id, (g, ctx) =>
+          machine.mergeTurnedBaseRed(g, { sha: head.sha, failure: result.failure, base: repo.base }, ctx),
+        );
+      }
       for (const other of await globs.peekAll(board.id, { status: ['pr_open', 'in_progress'] })) {
         // A red base marks the globs that fail the same way; a base that just turned green brings them up to date.
         await globs.applyEvent(other.id, (g, ctx) =>
@@ -207,6 +253,20 @@ export const codeHostExecutors = (
       // Each open PR rechecks through its own effect, which retries while GitHub computes mergeability.
       for (const other of await globs.peekAll(glob.boardId, { status: ['pr_open', 'in_progress'] })) {
         await globs.applyEvent(other.id, (g, ctx) => machine.baseMerged(g, { since: glob.id }, ctx));
+      }
+      return 'done';
+    },
+
+    release_waiting: async (effect, glob, { globs }) => {
+      // Only a glob that really merged releases others (a Merge and continue never queues this).
+      if (effect.kind !== 'release_waiting' || glob === null || (glob.status !== 'reviewing' && glob.status !== 'signed_off')) {
+        return 'dropped';
+      }
+      // Each release is its own version-checked write that queues the provision and the run; a repeat changes nothing.
+      await globs.releaseDependents(glob.id, glob.boardId);
+      // A clash warning about this glob is over: it merged.
+      for (const other of await globs.peekAll(glob.boardId, { status: ['in_progress', 'pr_open', 'implementing'] })) {
+        if (other.clash?.with === glob.id) await globs.applyEvent(other.id, (g, ctx) => machine.clashChanged(g, null, ctx));
       }
       return 'done';
     },
@@ -277,6 +337,18 @@ export const codeHostExecutors = (
       return 'done';
     },
 
+    revert_merge: async (effect, glob, { globs }) => {
+      if (effect.kind !== 'revert_merge' || glob === null || glob.failure?.kind !== 'reverted') return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      if ((await host.revertCommit(repo, effect.sha)) === 'moved') {
+        await globs.applyEvent(glob.id, (g, ctx) =>
+          machine.revertFailed(g, `${repo.base} has moved on, so slop could not revert ${effect.sha.slice(0, 7)}: revert it by hand`, ctx),
+        );
+      }
+      return 'done';
+    },
+
     mark_pr_ready: async (_effect, glob, { globs }) => {
       if (glob?.pr == null) return 'dropped';
       const repo = await repoFor(glob.boardId);
@@ -325,7 +397,7 @@ export const codeHostExecutors = (
         return 'done';
       }
       const repo = await repoFor(glob.boardId);
-      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`), health);
+      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`, glob.status === 'pr_open'), health);
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));

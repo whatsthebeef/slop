@@ -1,4 +1,4 @@
-import { failureSummary, MANUAL_READINESS_KEYS } from '@slop/core';
+import { MANUAL_READINESS_KEYS } from '@slop/core';
 import type { ManualReadinessKey, ReadinessItem } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
@@ -93,54 +93,5 @@ export const ReadinessChecklist = ({ board }: { board: BoardView }) => {
         </ul>
       )}
     </section>
-  );
-};
-
-/** A banner on the board while any readiness item needs doing (unknown items don't count). */
-export const ReadinessBanner = ({ boardId }: { boardId: number }) => {
-  const items = useQuery({ queryKey: readinessKey(boardId), queryFn: () => api.readiness(boardId), staleTime: 60_000 });
-  const open = (items.data ?? []).filter((i) => i.state === 'missing' || i.state === 'failing');
-  if (open.length === 0) return null;
-  const failing = open.some((i) => i.state === 'failing');
-  return (
-    <div
-      role='status'
-      className={cn(
-        'mx-5 mt-3 flex flex-wrap items-center gap-2 rounded-md border px-3 py-1.5 text-sm',
-        failing ? 'border-red/60 bg-red/10' : 'border-required-border bg-card',
-      )}
-      data-testid='readiness-banner'
-    >
-      <span>
-        Board setup: {open.length} {open.length === 1 ? 'item needs' : 'items need'} doing ({open.map((i) => i.title).join(', ')}).
-      </span>
-      <Link className='underline' to={`/boards/${String(boardId)}/settings#readiness`}>
-        Readiness checklist
-      </Link>
-    </div>
-  );
-};
-
-/** A banner on the board while its base branch's checks fail, naming the glob whose merge turned it red. */
-export const BaseRedBanner = ({ board }: { board: BoardView }) => {
-  const checks = board.baseChecks;
-  if (checks == null || checks.state !== 'failed') return null;
-  const failure = checks.failure;
-  return (
-    <div
-      role='status'
-      className='mx-5 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-red/60 bg-red/10 px-3 py-1.5 text-sm'
-      data-testid='base-red-banner'
-    >
-      <span>
-        {board.baseBranch} is red{checks.since === null ? '' : ` since ${checks.since} merged`}
-        {failure === undefined ? '' : `: ${failureSummary(failure)}`}. Globs failing the same way are waiting for it; don't fix it in their branches.
-      </span>
-      {failure?.url != null && (
-        <a className='underline' href={failure.url} target='_blank' rel='noreferrer'>
-          Open the run
-        </a>
-      )}
-    </div>
   );
 };

@@ -22,6 +22,7 @@ export class FakeCodeHost implements CodeHost {
   listFiles: CodeHost['listFiles'] = () => Promise.resolve([]);
   commitFiles: CodeHost['commitFiles'] = () => Promise.resolve({ parent: null, files: [] });
   markReady: CodeHost['markReady'] = () => Promise.resolve({ wasDraft: true, sha: 'abcdef0123456789' });
+  conflictState: CodeHost['conflictState'] = () => Promise.resolve('clean');
   conflictFiles: CodeHost['conflictFiles'] = () => Promise.resolve([]);
   behindBase: CodeHost['behindBase'] = () => Promise.resolve({ behindBy: 0, files: [] });
   commentOnce: CodeHost['commentOnce'] = () => Promise.resolve('posted');
@@ -29,8 +30,11 @@ export class FakeCodeHost implements CodeHost {
   commitDiffSummary: CodeHost['commitDiffSummary'] = () => Promise.resolve({ changedLines: 0, files: [] });
   headOf: CodeHost['headOf'] = () => Promise.resolve(null);
   commitChecks: CodeHost['commitChecks'] = () => Promise.resolve({ state: 'passed', failure: null });
+  cancelledChecks: CodeHost['cancelledChecks'] = () => Promise.resolve([]);
+  rerequestCheck: CodeHost['rerequestCheck'] = () => Promise.resolve();
   updateBranch: CodeHost['updateBranch'] = () => Promise.resolve('up_to_date');
   squashMerge: CodeHost['squashMerge'] = () => Promise.resolve({ outcome: 'merged', sha: 'm1' });
+  revertCommit: CodeHost['revertCommit'] = () => Promise.resolve('reverted');
 }
 
 /** A fake host with `overrides` in place of the defaults. */

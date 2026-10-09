@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
-import { copyOrSelect, planBaseline, planText } from '@/lib/plan-text';
+import { copyOrSelect, planBaseline, planText, planVersionLine } from '@/lib/plan-text';
+import { MarkdownView } from '@/components/markdown-view';
 import { useToast } from '@/toast';
 
 /** plan.md for a glob: what the implementer works from. Every save is a new version. */
@@ -11,7 +12,8 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
   const client = useQueryClient();
   const toast = useToast();
   const plan = useQuery({ queryKey: ['plan', globId], queryFn: () => api.plan(globId) });
-  const saved = plan.data?.current?.content ?? null;
+  const current = plan.data?.current ?? null;
+  const saved = current?.content ?? null;
   const [draft, setDraft] = useState<string | null>(null);
   // The saved content the draft started from: live updates refetch the plan, and a change
   // underneath a draft is flagged rather than allowed to wipe it.
@@ -39,25 +41,33 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
     const ok = await copyOrSelect(value, navigator.clipboard, () => area.current?.select());
     toast(ok ? 'Copied' : 'Could not copy; the text is selected, press Ctrl+C');
   };
-  const versions = plan.data?.versions.length ?? 0;
+  const [preview, setPreview] = useState(false);
+  const dirty = draft !== null && draft !== planBaseline(saved, summary);
   return (
     <div className='grid gap-2'>
       <div className='flex items-center justify-between text-xs text-muted-foreground'>
-        <span className='font-semibold'>plan.md</span>
+        <span className='font-semibold'>{current?.kind === 'postplan' ? 'postplan' : 'plan.md'}</span>
         <span className='flex items-center gap-2'>
-          <span>{versions === 0 ? 'not written yet' : `version ${versions}`}</span>
+          <span data-testid='plan-version'>{planVersionLine(current, dirty)}</span>
+          <Button variant='ghost' size='sm' onClick={() => setPreview(!preview)}>
+            {preview ? 'Edit' : 'Preview'}
+          </Button>
           <Button variant='ghost' size='sm' onClick={() => void copy()}>
             Copy
           </Button>
         </span>
       </div>
-      <Textarea
-        ref={area}
-        className='min-h-40 font-mono text-xs'
-        value={value}
-        placeholder='What to build, and "Done when:" lines…'
-        onChange={(e) => edit(e.target.value)}
-      />
+      {preview ? (
+        <MarkdownView content={value} />
+      ) : (
+        <Textarea
+          ref={area}
+          className='min-h-40 font-mono text-xs'
+          value={value}
+          placeholder='What to build, and "Done when:" lines…'
+          onChange={(e) => edit(e.target.value)}
+        />
+      )}
       {changedUnderneath && (
         <div className='flex items-center justify-between gap-2 rounded border border-amber/50 bg-amber/10 px-2 py-1 text-xs'>
           <span>plan.md changed since you started editing.</span>
@@ -71,7 +81,7 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
           </span>
         </div>
       )}
-      {draft !== null && draft !== planBaseline(saved, summary) && (
+      {dirty && (
         <div className='flex justify-end gap-2'>
           <Button variant='outline' size='sm' onClick={() => setDraft(null)}>
             Discard

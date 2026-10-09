@@ -1,11 +1,11 @@
-import { queuedRunNotice } from '@slop/core';
 import type { Action, ArtifactKind, Category, CodeReviewBadge, DeployIndicator, EnvironmentIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, MessageSquareCode, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
+import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
-import { statusLine } from '@/lib/status-line';
+import { activityLabel, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { Tip } from './ui/tip';
@@ -82,20 +82,20 @@ export const GroupChip = ({ name }: { name: string }) => {
   );
 };
 
-const RunIndicator = ({ glob }: { glob: GlobView }) => {
-  const run = glob.currentRun;
-  // Ended runs are covered by the status line.
-  if (run === null || run.state === 'ended') return null;
-  const label = run.state;
-  const watching = 'Routine session watching the PR to auto-fix CI failures and review comments';
+/** The one label for what runs on its own (merging, checks, the routine): shared with the glob view. */
+export const ActivityLabel = ({ glob }: { glob: GlobView }) => {
+  const activity = activityLabel(glob, new Date().toISOString());
+  if (activity === null) return null;
   return (
-    <Tip text={queuedRunNotice(glob, new Date().toISOString()) ?? (run.state === 'watching' ? watching : `Routine run ${label}: owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`)}>
-    <span
-      className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground'
-    >
-      {run.state === 'active' ? <Loader2 className='h-3 w-3 animate-spin' /> : <Bot className='h-3 w-3' />}
-      {label}
-    </span>
+    <Tip text={activity.tip}>
+      <span
+        className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground'
+        data-testid='activity-label'
+        data-kind={activity.kind}
+      >
+        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <Bot className='h-3 w-3' />}
+        {activity.text}
+      </span>
     </Tip>
   );
 };
@@ -304,6 +304,38 @@ export const CodeReviewIcon = ({ badge }: { badge: CodeReviewBadge }) => {
   );
 };
 
+/**
+ * A glob held for others to merge: "after s15t7", or the reason when the board's merge policy held it. Each ID opens
+ * that glob on the board.
+ */
+export const AfterChip = ({ glob }: { glob: GlobView }) => {
+  if (glob.status !== 'planning') return null;
+  const implied = (glob.impliedAfter ?? []).filter((i) => i.overridden !== true);
+  const ids = [...new Set([...(glob.after ?? []), ...implied.map((i) => i.id)])];
+  if (ids.length === 0) return null;
+  const reason = implied.map((i) => `${i.id}: both may change ${i.paths.join(', ')}`).join('; ');
+  return (
+    <Tip text={reason === '' ? `Starts after ${ids.join(', ')} merge${ids.length === 1 ? 's' : ''}` : `Waits: ${reason}`}>
+      <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
+        {reason === '' ? 'after ' : 'waits for '}
+        {ids.map((id, i) => (
+          <span key={id}>
+            {i > 0 && ', '}
+            <Link
+              to={`/boards/${glob.boardId}?glob=${encodeURIComponent(id)}`}
+              className='underline-offset-2 hover:underline'
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              {id}
+            </Link>
+          </span>
+        ))}
+      </span>
+    </Tip>
+  );
+};
+
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -397,7 +429,7 @@ export const GlobCard = ({
           {glob.id} · {glob.type}
         </span>
         <span className='inline-flex items-center gap-1.5'>
-          <RunIndicator glob={glob} />
+          <ActivityLabel glob={glob} />
           <CategoryIcon category={glob.category} />
         </span>
       </div>
@@ -406,6 +438,14 @@ export const GlobCard = ({
         {glob.group !== null && <GroupChip name={glob.group} />}
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
+        <AfterChip glob={glob} />
+        {glob.clash != null && (
+          <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict`}>
+            <span className='font-mono text-[11px] text-required' data-testid='clash-chip'>
+              clashes with {glob.clash.with}
+            </span>
+          </Tip>
+        )}
         {codeReview !== undefined && <CodeReviewIcon badge={codeReview} />}
         {deploy !== undefined && <DeployChip deploy={deploy} />}
         {environments !== undefined && <EnvironmentChips environments={environments} />}

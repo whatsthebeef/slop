@@ -1,8 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { api, healthKey, RequestError } from './api';
+import { api, healthKey, notificationsKey, RequestError } from './api';
 import type { GlobView } from './api';
+import { withGlob } from './glob-list';
 
 interface Hint {
   readonly kind:
@@ -15,7 +16,8 @@ interface Hint {
     | 'board.changed'
     | 'board.kb'
     | 'board.tests'
-    | 'board.health';
+    | 'board.health'
+    | 'board.notifications';
   readonly globId?: string;
   readonly version?: number;
 }
@@ -127,10 +129,12 @@ export const useLiveKnowledge = (boardId: number): LiveState => {
   return useBoardEvents(boardId, {
     onHint: (hint) => {
       if (hint.kind === 'board.changed') void client.invalidateQueries({ queryKey: ['board', boardId] });
+      if (hint.kind === 'board.notifications') void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
       if (hint.kind === 'board.kb' || hint.kind === 'board.changed') invalidateKnowledge(client, boardId);
     },
     onReconnect: () => {
       void client.invalidateQueries({ queryKey: ['board', boardId] });
+      void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
       invalidateKnowledge(client, boardId);
     },
   });
@@ -144,10 +148,9 @@ export const useLiveBoard = (boardId: number): LiveState => {
   const client = useQueryClient();
 
   const replace = (glob: GlobView | null, id: string) =>
-    client.setQueryData<GlobView[]>(globsKey(boardId), (list = []) => {
-      const rest = list.filter((g) => g.id !== id);
-      return glob === null ? rest : [...rest, glob];
-    });
+    client.setQueryData<GlobView[]>(globsKey(boardId), (list) =>
+      glob === null ? list?.filter((g) => g.id !== id) : withGlob(list, glob, boardId),
+    );
 
   const onHint = (hint: Hint) => {
     if (hint.kind === 'board.changed') {
@@ -163,8 +166,14 @@ export const useLiveBoard = (boardId: number): LiveState => {
       void client.invalidateQueries({ queryKey: ['glob-tests'] });
       return;
     }
+    if (hint.kind === 'board.notifications') {
+      void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
+      return;
+    }
     if (hint.kind === 'board.health') {
       void client.invalidateQueries({ queryKey: healthKey });
+      // Integration problems are global notifications, which raise no board hint of their own.
+      void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
       return;
     }
     const id = hint.globId;
@@ -217,6 +226,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
     void client.invalidateQueries({ queryKey: ['glob-environments'] });
     void client.invalidateQueries({ queryKey: ['glob-tests'] });
     void client.invalidateQueries({ queryKey: ['readiness', boardId] });
+    void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
     void client.invalidateQueries({ queryKey: ['findings'] });
     void client.invalidateQueries({ queryKey: codeReviewsKey(boardId) });
     void client.invalidateQueries({ queryKey: ['glob-code-review'] });

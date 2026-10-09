@@ -41,7 +41,7 @@ class FakeHost extends FakeCodeHost {
   override diffSummary = () => Promise.resolve(this.diff);
 }
 
-describe('a sub gate that completed before the PR was recorded as ready', () => {
+describe('a sub whose PR is ready', () => {
   let database: Database;
   let drop: () => Promise<void>;
   let store: PgStore;
@@ -132,21 +132,6 @@ describe('a sub gate that completed before the PR was recorded as ready', () => 
     }
     return outcomes;
   };
-  const checkRun = (passed: boolean) => ({
-    id: deliveryId(),
-    event: 'check_run',
-    payload: {
-      action: 'completed',
-      check_run: {
-        name: 'sub-gate',
-        status: 'completed',
-        conclusion: passed ? 'success' : 'failure',
-        head_sha: HEAD,
-        check_suite: { head_branch: globId },
-      },
-      repository: { full_name: REPO },
-    },
-  });
   const readyForReview = () => ({
     id: deliveryId(),
     event: 'pull_request',
@@ -157,47 +142,24 @@ describe('a sub gate that completed before the PR was recorded as ready', () => 
     },
   });
 
-  it('a gate that passed before ready is evaluated after the ready confirmation and the sub merges', async () => {
-    // The webhook for the finished gate arrives while the PR is still a draft: ignored.
-    host.subGate = { passed: true };
-    await handle(checkRun(true));
-    expect((await current()).status).not.toBe('pr_open');
-    expect(await pending('evaluate_sub_gate')).toHaveLength(0);
-
+  it('a sub is evaluated as soon as its PR is ready, without its checks, and merges', async () => {
+    // Checks haven't run (or are still running): the sub merges anyway; they run on the base afterwards.
     await handle(readyForReview());
     expect((await current()).status).toBe('pr_open');
-    expect(await run('refresh_sub_gate')).toEqual(['done']);
-    expect(host.lookups).toEqual([`sub-gate@${HEAD}`]);
     expect(await run('evaluate_sub_gate')).toEqual(['done']);
     expect((await current()).status).toBe('merging');
     await run('squash_merge');
     expect((await current()).status).toBe('reviewing');
+    expect(host.lookups).toEqual([]);
   });
 
-  it('a gate that passed before ready on a sub the policy flags converts it to a same', async () => {
-    host.subGate = { passed: true };
+  it('a sub the policy flags converts to a same at ready', async () => {
     host.diff = { changedLines: 10, files: ['infra/main.tf'] };
     await handle(readyForReview());
-    await run('refresh_sub_gate');
     await run('evaluate_sub_gate');
     const glob = await current();
     expect(glob.type).toBe('same');
     expect(glob.status).toBe('pr_open');
-  });
-
-  it('no completed gate at ready does nothing, and a later refresh of the checks picks it up', async () => {
-    await handle(readyForReview());
-    const version = (await current()).version;
-    expect(await run('refresh_sub_gate')).toEqual(['done']);
-    expect(await pending('evaluate_sub_gate')).toHaveLength(0);
-    expect((await current()).version).toBe(version);
-
-    // The gate finishes, and a refresh of the head's checks (here with other checks still pending) finds it.
-    host.subGate = { passed: true };
-    expect(await run('refresh_checks')).toEqual(['done']);
-    expect(await pending('evaluate_sub_gate')).toHaveLength(1);
-    await run('evaluate_sub_gate');
-    expect((await current()).status).toBe('merging');
   });
 
   it('a conflict found while merging fails the glob as a merge conflict naming the files', async () => {
@@ -214,13 +176,11 @@ describe('a sub gate that completed before the PR was recorded as ready', () => 
     host.conflicting = [];
   });
 
-  it('the gate decides with the learned limit as it is now, and records its cause, size and limit (s15f8)', async () => {
+  it('the policy decides with the learned limit as it is now, and records its cause, size and limit (s15f8)', async () => {
     await store.transaction((tx) => tx.setSubLimit(1, 2000, 200));
     try {
-      host.subGate = { passed: true };
       host.diff = { changedLines: 250, files: ['src/a.ts'] };
       await handle(readyForReview());
-      await run('refresh_sub_gate');
       await run('evaluate_sub_gate');
       const glob = await current();
       expect(glob.type).toBe('same');
@@ -235,15 +195,5 @@ describe('a sub gate that completed before the PR was recorded as ready', () => 
     } finally {
       await store.transaction((tx) => tx.setSubLimit(1, 200, 2000));
     }
-  });
-
-  it('a failed gate found at ready is left to the routine', async () => {
-    host.subGate = { passed: false };
-    await handle(readyForReview());
-    const version = (await current()).version;
-    await run('refresh_sub_gate');
-    expect(await pending('evaluate_sub_gate')).toHaveLength(0);
-    expect((await current()).version).toBe(version);
-    expect((await current()).status).toBe('pr_open');
   });
 });

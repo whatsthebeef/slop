@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
-import { IntakeService, LlmUnavailable } from '../src/app/intake-service.js';
+import { IntakeService, LlmUnavailable, waitedForIn } from '../src/app/intake-service.js';
 import type { Result } from '../src/domain/errors.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -31,17 +31,44 @@ describe('intake', () => {
   const propose = (text: string, explicit = {}) => intake.propose(DEV, boardId, { text, explicit }).then(unwrap);
 
   it('uses the model answer, matching an existing group', async () => {
-    answer = '```json\n{"title":"Fix sync retry","summary":"Retries stop. Done when: they resume.","type":"sub","category":"bug","group":"device-sync","autoTrigger":false,"autoTriggerQuote":null}\n```';
+    answer = '```json\n{"title":"Fix sync retry","summary":"Retries stop.","plan":"Retries stop after a timeout. Done when: they resume.","type":"sub","category":"bug","group":"device-sync","autoTrigger":false,"autoTriggerQuote":null}\n```';
     expect(await propose('sync retries stop after a timeout')).toEqual({
       title: 'Fix sync retry',
-      summary: 'Retries stop. Done when: they resume.',
+      summary: 'Retries stop.',
+      plan: 'Retries stop after a timeout. Done when: they resume.',
       type: 'sub',
       category: 'bug',
       group: 'Device Sync',
       environment: null,
       autoTrigger: false,
       autoTriggerReason: null,
+      files: [],
+      suggestedAfter: [],
     });
+  });
+
+  it('keeps the model\'s file guesses that look like repo paths, and suggests globs the request waits for', async () => {
+    answer = JSON.stringify({ title: 'T', summary: 'S', files: ['apps/server/drizzle/0023_x.sql', '/etc/passwd', '../x', 3, ' src/a.ts '] });
+    const open = `s${String(boardId)}t1`;
+    const p = await propose(`Add a column once ${open} is merged. Ignore s9t9 and mention ${open} again; also s${String(boardId)}t99 does not exist.`);
+    expect(p.files).toEqual(['apps/server/drizzle/0023_x.sql', 'src/a.ts']);
+    expect(p.suggestedAfter).toEqual([open]);
+    // A mention without a waiting cue, or a glob that merged, is not suggested.
+    expect((await propose(`This relates to ${open} but is separate`)).suggestedAfter).toEqual([]);
+    expect(waitedForIn(`wait for ${open}`, new Set())).toEqual([]);
+    expect(waitedForIn(`Start after ${open.toUpperCase()}.`, new Set([open]))).toEqual([open]);
+  });
+
+  it('keeps the spec in plan, so the short summary never replaces it', async () => {
+    answer = '{"title":"T","summary":"Short.","plan":"The full spec.\\nDone when: it works.","type":"same","category":"task","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
+    const p = await propose('the whole request');
+    expect([p.summary, p.plan]).toEqual(['Short.', 'The full spec.\nDone when: it works.']);
+    // An explicit summary wins for the card only; plan still comes from the request.
+    const q = await propose('the whole request', { summary: 'Mine.' });
+    expect([q.summary, q.plan]).toEqual(['Mine.', 'The full spec.\nDone when: it works.']);
+    // No plan from the model: the request as written.
+    answer = '{"title":"T","summary":"Short."}';
+    expect((await propose('the whole request')).plan).toBe('the whole request');
   });
 
   it('lets explicit fields win and repairs the matrix around them', async () => {

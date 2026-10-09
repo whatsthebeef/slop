@@ -4,15 +4,19 @@ import type { DomainEvent, Effect } from '../domain/events.js';
 import { sameCommit } from '../domain/signals.js';
 import type { TestRun } from '../domain/test-runs.js';
 import type { CodeReviewComment } from '../domain/code-review.js';
+import type { BoardNotification } from '../domain/notifications.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import type { KbItem } from '../domain/kb.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
+import { GLOB_OWNED_SOURCES, matchesFilters } from '../domain/search.js';
+import type { Candidate, KnowledgeItem } from '../domain/search.js';
 import type { SubLimitChange } from '../domain/sub-limit.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
+import type { SearchQuery } from '../domain/search.js';
 
 interface State {
   globs: Map<string, { glob: Glob; creationKey: string | null }>;
@@ -42,7 +46,46 @@ interface State {
   /** External IDs of CodeRabbit items deleted on the code host (tombstones). */
   /** Tombstones: external ID and when it was deleted, as Postgres keeps `deleted_at`. */
   deletedCodeReviews: { externalId: string; at: string }[];
+  notifications: Map<string, BoardNotification>;
+  /** Search store: items keyed by board and external ref, and their chunks. */
+  searchItems: Map<string, KnowledgeItem>;
+  searchChunks: StoredChunk[];
 }
+
+interface StoredChunk {
+  readonly id: number;
+  readonly itemId: number;
+  readonly position: number;
+  readonly header: string;
+  readonly text: string;
+  readonly embedding: readonly number[] | null;
+}
+
+const itemKey = (boardId: number, externalRef: string) => `${boardId}:${externalRef}`;
+
+const words = (text: string): string[] => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w !== '');
+
+/** Naive relevance for tests: the share of the query's words found in the text, or 1 for the whole query as a substring. */
+const matchRelevance = (query: string, haystack: string): number => {
+  const text = haystack.toLowerCase();
+  if (query.trim() !== '' && text.includes(query.trim().toLowerCase())) return 1;
+  const terms = words(query);
+  if (terms.length === 0) return 0;
+  return terms.filter((t) => text.includes(t)).length / terms.length;
+};
+
+const cosine = (a: readonly number[], b: readonly number[]): number => {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  a.forEach((x, i) => {
+    const y = b[i] ?? 0;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  });
+  return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
+};
 
 const memberKey = (boardId: number, email: string) => `${boardId}:${email}`;
 
@@ -71,6 +114,9 @@ const clone = (state: State): State => ({
   testRuns: [...state.testRuns],
   codeReviews: [...state.codeReviews],
   deletedCodeReviews: [...state.deletedCodeReviews],
+  notifications: new Map(state.notifications),
+  searchItems: new Map(state.searchItems),
+  searchChunks: [...state.searchChunks],
 });
 
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
@@ -102,6 +148,9 @@ export class MemoryStore implements Store {
     testRuns: [],
     codeReviews: [],
     deletedCodeReviews: [],
+    notifications: new Map(),
+    searchItems: new Map(),
+    searchChunks: [],
   };
   /** Row IDs, like Postgres sequences: never reused, even after a rolled-back transaction. */
   private nextRowId = 1;
@@ -136,6 +185,18 @@ export class MemoryStore implements Store {
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
         s.testRuns = s.testRuns.filter((r) => r.globId !== id);
         s.codeReviews = s.codeReviews.filter((c) => c.globId !== id);
+        // A glob's own items go with it; a learning or document it fed only loses the link.
+        const gone = new Set<number>();
+        for (const [key, item] of s.searchItems) {
+          if (!item.globIds.includes(id)) continue;
+          if (GLOB_OWNED_SOURCES.includes(item.sourceType)) {
+            s.searchItems.delete(key);
+            gone.add(item.id);
+          } else {
+            s.searchItems.set(key, { ...item, globIds: item.globIds.filter((g) => g !== id) });
+          }
+        }
+        s.searchChunks = s.searchChunks.filter((c) => !gone.has(c.itemId));
         return Promise.resolve();
       },
       findGlobByCreationKey: (boardId, key) =>
@@ -166,7 +227,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, subMaxChangedLines: 2000, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -197,6 +258,14 @@ export class MemoryStore implements Store {
         if (current !== undefined) s.boards.set(boardId, { ...current, baseChecks });
         return Promise.resolve();
       },
+      getNotification: (id) => Promise.resolve(s.notifications.get(id) ?? null),
+      saveNotification: (notification) => {
+        s.notifications.set(notification.id, notification);
+        return Promise.resolve();
+      },
+      deleteNotification: (id) => Promise.resolve(s.notifications.delete(id)),
+      listNotifications: (boardId) =>
+        Promise.resolve([...s.notifications.values()].filter((n) => n.boardId === null || n.boardId === boardId)),
       listBoards: (email) =>
         Promise.resolve(
           [...s.boards.values()].filter((b) => s.members.has(memberKey(b.id, email))),
@@ -301,6 +370,8 @@ export class MemoryStore implements Store {
             )
             .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] ?? null,
         ),
+      listFailedKbItems: () =>
+        Promise.resolve([...s.kbItems.values()].filter((i) => i.status === 'open' && i.processing === 'failed')),
       updateKbItem: (item, expectedVersion) => {
         if (s.kbItems.get(item.id)?.version !== expectedVersion) return Promise.resolve(false);
         s.kbItems.set(item.id, item);
@@ -538,6 +609,71 @@ export class MemoryStore implements Store {
       },
       // Memory transactions run one at a time, so there is nothing to serialise.
       lockBoardJob: () => Promise.resolve(),
+      itemHashes: (boardId) =>
+        Promise.resolve(new Map([...s.searchItems.values()].filter((i) => i.boardId === boardId).map((i) => [i.externalRef, i.contentHash]))),
+      replaceItem: (item, chunks) => {
+        const key = itemKey(item.boardId, item.externalRef);
+        const id = s.searchItems.get(key)?.id ?? this.nextRowId++;
+        s.searchItems.set(key, { ...item, id, attempts: 0, processAfter: null, lastError: null });
+        s.searchChunks = [
+          ...s.searchChunks.filter((c) => c.itemId !== id),
+          ...chunks.map((c) => ({ id: this.nextRowId++, itemId: id, position: c.position, header: c.header, text: c.text, embedding: null })),
+        ];
+        return Promise.resolve();
+      },
+      deleteItemsNotIn: (boardId, sourceType, refs) => {
+        const gone = new Set<number>();
+        for (const [key, item] of s.searchItems) {
+          if (item.boardId === boardId && item.sourceType === sourceType && !refs.has(item.externalRef)) {
+            s.searchItems.delete(key);
+            gone.add(item.id);
+          }
+        }
+        s.searchChunks = s.searchChunks.filter((c) => !gone.has(c.itemId));
+        return Promise.resolve(gone.size);
+      },
+      nextItemToSummarise: (now) =>
+        Promise.resolve(
+          [...s.searchItems.values()]
+            .filter((i) => i.state === 'pending_summary' && (i.processAfter === null || i.processAfter <= now))
+            .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt) || a.id - b.id)[0] ?? null,
+        ),
+      setItemProgress: (id, progress) => {
+        for (const [key, item] of s.searchItems) if (item.id === id) s.searchItems.set(key, { ...item, ...progress });
+        return Promise.resolve();
+      },
+      chunksToEmbed: (limit) =>
+        Promise.resolve(s.searchChunks.filter((c) => c.embedding === null).slice(0, limit).map((c) => ({ id: c.id, header: c.header, text: c.text }))),
+      setEmbeddings: (rows) => {
+        const byId = new Map(rows.map((r) => [r.id, r.embedding]));
+        s.searchChunks = s.searchChunks.map((c) => ({ ...c, embedding: byId.get(c.id) ?? c.embedding }));
+        return Promise.resolve();
+      },
+      keywordCandidates: (q, limit) =>
+        Promise.resolve(
+          this.candidates(s, q, (c, item) => matchRelevance(q.query, `${c.header} ${c.text} ${item.title}`)).slice(0, limit),
+        ),
+      vectorCandidates: (q, embedding, limit) =>
+        Promise.resolve(
+          this.candidates(s, q, (c) => (c.embedding === null ? 0 : Math.max(0, cosine(embedding, c.embedding))), (c) => c.embedding !== null).slice(0, limit),
+        ),
+      changeCandidates: (q, limit) =>
+        Promise.resolve(
+          this.candidates(
+            s,
+            { ...q, sourceTypes: ['change_summary'] },
+            (c, item) => (q.query.trim() === '' ? 1 : matchRelevance(q.query, `${c.text} ${item.title}`)),
+          )
+            .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.chunkId - b.chunkId)
+            .slice(0, limit),
+        ),
+      listLatestArtifacts: (boardId) => {
+        const latest = new Map<string, Artifact>();
+        for (const a of s.artifacts) {
+          if (s.globs.get(a.globId)?.glob.boardId === boardId) latest.set(`${a.globId}:${a.kind}:${a.label}`, a);
+        }
+        return Promise.resolve([...latest.values()]);
+      },
       appendEvents: (events) => {
         s.events.push(...events);
         return Promise.resolve();
@@ -551,6 +687,40 @@ export class MemoryStore implements Store {
         return Promise.resolve();
       },
     };
+  }
+
+  /** Chunks of one board that pass the query's filters and score above zero, best first. */
+  private candidates(
+    s: State,
+    q: SearchQuery,
+    relevance: (chunk: StoredChunk, item: KnowledgeItem) => number,
+    include: (chunk: StoredChunk) => boolean = () => true,
+  ): Candidate[] {
+    const items = new Map([...s.searchItems.values()].map((i) => [i.id, i]));
+    const out: Candidate[] = [];
+    for (const chunk of s.searchChunks) {
+      const item = items.get(chunk.itemId);
+      if (item?.boardId !== q.boardId || !include(chunk) || !matchesFilters(item, q)) continue;
+      const score = relevance(chunk, item);
+      if (score <= 0) continue;
+      out.push({
+        chunkId: chunk.id,
+        itemId: item.id,
+        header: chunk.header,
+        text: chunk.text,
+        relevance: Math.min(1, score),
+        sourceType: item.sourceType,
+        title: item.title,
+        occurredAt: item.occurredAt,
+        authority: item.authority,
+        status: item.status,
+        supersededByTitle: item.supersededBy === null ? null : (items.get(item.supersededBy)?.title ?? null),
+        globIds: item.globIds,
+        globGroup: item.globGroup,
+        externalUrl: item.externalUrl,
+      });
+    }
+    return out.sort((a, b) => b.relevance - a.relevance || a.chunkId - b.chunkId);
   }
 }
 

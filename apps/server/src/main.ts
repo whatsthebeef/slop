@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, SubLimitService } from '@slop/core';
-import type { Llm } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
+import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { JOBS, loadConfig, type Job } from './config.js';
@@ -11,26 +11,35 @@ import { createApp } from './http/app.js';
 import { mountKnowledge } from './http/knowledge.js';
 import { OutboxRunner } from './jobs/outbox.js';
 import { mountMcp } from './mcp/server.js';
+import { readyGate } from './ready-gate.js';
 import { GitHub } from './github/client.js';
 import { AppCredentialsStore } from './github/credentials.js';
 import { githubDeliveryHandler } from './github/events.js';
+import { HostBranchFiles } from './branch-files.js';
 import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { environmentExecutors } from './environment-executors.js';
+import { exclusivePathExecutors } from './exclusive-path-executors.js';
 import { codeReviewExecutors } from './code-review-executors.js';
 import { mountArtifactUploads } from './http/artifact-upload.js';
 import { mountDeploys } from './http/deploys.js';
 import { mountWeb } from './http/web.js';
 import { LocalFollowWatch } from './local-follow.js';
 import { mountReadiness } from './http/readiness.js';
+import { ReadinessWatch } from './readiness-watch.js';
 import { HintHub } from './notifier.js';
-import { BedrockLlm } from './llm.js';
+import { BedrockLlm, shownModelId } from './llm.js';
+import { BedrockEmbedder } from './embedder.js';
+import { CodeHostChanges } from './code-host-changes.js';
+import { marksBoardDirty, SearchSync } from './jobs/search-sync.js';
 import { LlmHealth } from './llm-health.js';
 import { mountHealth } from './http/health.js';
 import { mountCodeReviews } from './http/code-reviews.js';
+import { mountSearch } from './http/search.js';
+import { mountNotifications } from './http/notifications.js';
 import { AwsSignIn, AwsSsoOidc, readSsoSession, ssoCacheFile } from './aws-sso.js';
 import { IntegrationRegistry } from './integration-health.js';
 import { TunnelWatch } from './tunnel-watch.js';
@@ -58,18 +67,24 @@ const routines = new FileRoutines(config.ROUTINES_FILE);
 const hub = new HintHub();
 const auth = new Auth(db, config);
 const boards = new BoardService({ store, notifier: hub });
+// The board's merge policy reads which files a branch changes; `github` exists by the time this is first called.
+const branchFiles = new HostBranchFiles(() => github, logError);
 const globs = new GlobService({
   store,
   notifier: hub,
   clock: { now: () => new Date().toISOString() },
   ids: { runId: () => randomUUID() },
   routines,
+  branchFiles,
 });
+// Set once the SSO profile is read below; the registry asks when a status changes.
+let awsSignInEnabled = false;
+const notifications = new NotificationService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 // Each integration reports its health here; a change tells every open board's banner to refetch.
 const integrations = new IntegrationRegistry((status) => {
   console.log(`[health] ${status.name} ${status.state}${status.reason === null ? '' : `: ${status.reason}`}`);
   hub.broadcast('board.health');
-});
+}, undefined, notifications, () => awsSignInEnabled, (message) => logError('integrations', message));
 const githubCredentials = new AppCredentialsStore(config.GITHUB_APP_FILE);
 await githubCredentials.load();
 const github = new GitHub(githubCredentials, integrations);
@@ -90,7 +105,7 @@ const outbox = new OutboxRunner(
   db,
   { globs },
   {
-    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations),
+    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications),
     ...deployExecutors(
       deploys,
       new Deployers({ codebuild: new CodeBuildDeployer() }),
@@ -99,6 +114,7 @@ const outbox = new OutboxRunner(
       logError,
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
+    ...exclusivePathExecutors(store, branchFiles, boardOf),
     // Runs only once the outbox starts, after `knowledge` below exists.
     ...codeReviewExecutors(github, boardOf, (boardId) => knowledge.hasReviewGuide(boardId)),
   },
@@ -110,7 +126,6 @@ const clock = { now: () => new Date().toISOString() };
 // Mining measures the board's signals: the weekly job, and the signal an admin picks to watch when approving.
 const mining = new MiningService({ store, notifier: hub });
 const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub, signals: mining });
-const artifacts = new ArtifactService({ store, clock, notifier: hub });
 const findings = new FindingsService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
@@ -122,6 +137,19 @@ const llmHealth: LlmHealth = new LlmHealth((model, h) => {
   const worst = llmHealth.state();
   if (worst.state === 'down') integrations.report('bedrock', { state: 'down', reason: worst.reason, fix: worst.fix });
   else if (worst.state === 'ok') integrations.report('bedrock', { state: 'ok' });
+}, undefined, (model, throttled) => {
+  // Throttling slows KB drafting down but pauses nothing, so it is a warning on every board, cleared by the next success.
+  const source = `bedrock-throttling:${model}`;
+  const done = throttled
+    ? notifications.raise({
+        boardId: null,
+        source,
+        severity: 'warning',
+        title: `Bedrock is throttling ${shownModelId(model)}`,
+        detail: 'KB drafting and other AI work are slowed down: busy calls wait and retry without failing.',
+      })
+    : notifications.clear(null, source);
+  done.catch((error: unknown) => logError('llm-health', error instanceof Error ? error.message : String(error)));
 });
 // Each tracked model's LLM, so a finished AWS sign-in can probe the ones that were down.
 const probes = new Map<string, Llm>();
@@ -161,6 +189,31 @@ const findingsLlm = trackLlm(
 );
 const findingsPipeline = new FindingsPipeline({ store, clock, notifier: hub, llm: findingsLlm });
 
+// The search index (spec, Knowledge and context): derived from the board's own material, so it syncs by content hash
+// (the start-up run is the backfill). Titan embeds chunks; Haiku writes each merged change's "why". Both wait while
+// unavailable, and chunks stay keyword-searchable meanwhile.
+const embedder = llmHealth.trackEmbedder(
+  new BedrockEmbedder({ id: config.EMBED_MODEL, configKey: 'EMBED_MODEL' }, config.BEDROCK_REGION),
+  config.EMBED_MODEL,
+);
+const searchIndexer = new SearchIndexer({
+  store,
+  clock,
+  embedder,
+  changes: new CodeHostChanges(github, logError),
+  llm: trackLlm(
+    new BedrockLlm({ id: config.SEARCH_MODEL, configKey: 'SEARCH_MODEL' }, config.BEDROCK_REGION, logUsage),
+    config.SEARCH_MODEL,
+  ),
+});
+const search = new SearchService({ store, clock, embedder });
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob) });
+const searchSync = new SearchSync(searchIndexer, logError);
+// A change to a board's material marks it for the next sync.
+hub.tap((hint) => {
+  if (marksBoardDirty(hint)) searchSync.mark(hint.boardId);
+});
+
 // Weekly mining: signals from the board's own activity become mined KB items for the KB pipeline. Weekly
 // consolidation then merges same-fact open items (verified quotes) and flags stale ones; it waits while its model is down.
 // Daily effect checks compare each approved change's signal before and after it. Hourly, the sub size limit learns
@@ -191,6 +244,7 @@ if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
 
 const app = createApp({
   auth,
+  readyGate: readyGate(github, globs, boards),
   links,
   boards,
   globs,
@@ -202,7 +256,7 @@ const app = createApp({
   },
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
-mountReadiness(app, { boards, globs, knowledge, host: github, log: logError });
+mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
 mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
@@ -220,8 +274,14 @@ const awsSignIn =
           );
         },
       });
+awsSignInEnabled = awsSignIn !== null;
+// The registry starts empty: drop notifications a previous run left, so a problem fixed while the server was down doesn't linger.
+for (const id of Object.keys(INTEGRATION_NAMES) as IntegrationId[]) await notifications.clear(null, integrationSource(id));
+await notifications.clear(null, 'integration:local'); // the retired fake integration of local follow
 mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
 mountCodeReviews(app, { codeReviews });
+mountSearch(app, { search });
+mountNotifications(app, { notifications });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
 const agentSetValues = { SLOP_URL: config.PUBLIC_URL, COGNITO_CLAUDE_CODE_CLIENT_ID: config.CLAUDE_CODE_CLIENT_ID };
@@ -244,12 +304,14 @@ app.get('/downloads/agent-set/:board', async (c) => {
 mountArtifactUploads(app, { artifacts, globs, links });
 mountMcp(app, {
   auth,
+  readyGate: readyGate(github, globs, boards),
   boards,
   globs,
   deploys,
   outbox,
   knowledge,
   artifacts,
+  search,
   intake,
   publicUrl: config.PUBLIC_URL,
   agentSetValues,
@@ -300,11 +362,22 @@ const deployWatch = new DeployWatch(deploys, logError);
 if (runs('deploys')) deployWatch.start();
 // The pipeline pauses on its own models only: intake's model says nothing about them.
 const kbModels = [config.KB_ROUTE_MODEL, config.KB_DRAFT_MODEL];
+// One-off on start: items that failed only because Bedrock was busy (before that stopped spending attempts) go back to their stage.
+void kbPipeline
+  .requeueBusyFailed()
+  .then((count) => count > 0 && console.log(`[kb-pipeline] requeued ${String(count)} item(s) that failed while Bedrock was busy`))
+  .catch((error: unknown) => logError('kb-pipeline', error instanceof Error ? error.message : String(error)));
 const kbPipelineJob = new KbPipelineJob(kbPipeline, logError, { isDown: () => llmHealth.isDown(kbModels) });
 if (runs('kb')) kbPipelineJob.start();
 // Findings pause on the findings model only, like the KB pipeline on its own.
 const findingsJob = new KbPipelineJob(findingsPipeline, logError, { isDown: () => llmHealth.isDown([config.FINDINGS_MODEL]) }, Date.now, 'findings');
 if (runs('findings')) findingsJob.start();
+// The index pauses on its own two models, like the other pipelines.
+const searchJob = new KbPipelineJob(searchIndexer, logError, { isDown: () => llmHealth.isDown([config.EMBED_MODEL, config.SEARCH_MODEL]) }, Date.now, 'search');
+if (runs('search')) {
+  searchSync.start();
+  searchJob.start();
+}
 const learningJobsRunner = new LearningJobs(learningJobs, logError);
 if (runs('learning')) learningJobsRunner.start();
 const tunnelWatch = config.SLOP_TUNNEL_DOMAIN === undefined ? null : new TunnelWatch(config.SLOP_TUNNEL_DOMAIN, integrations);
@@ -312,8 +385,10 @@ if (runs('tunnel')) tunnelWatch?.start();
 const followWatch =
   config.SLOP_FOLLOW_FILE === undefined
     ? null
-    : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, config.SLOP_FOLLOW_ENVIRONMENT, integrations, (d) => environments.recordDeploy(d), logError);
+    : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, config.SLOP_FOLLOW_ENVIRONMENT, notifications, (d) => environments.recordDeploy(d), logError);
 if (runs('follow')) followWatch?.start();
+const readinessWatch = new ReadinessWatch(store, { globs, store, host: github, log: logError }, notifications, logError);
+if (runs('readiness')) readinessWatch.start();
 const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`slop listening on http://localhost:${info.port} (auth: ${config.AUTH_MODE})`);
 });
@@ -324,9 +399,12 @@ const shutdown = () => {
   deployWatch.stop();
   kbPipelineJob.stop();
   findingsJob.stop();
+  searchSync.stop();
+  searchJob.stop();
   learningJobsRunner.stop();
   tunnelWatch?.stop();
   followWatch?.stop();
+  readinessWatch.stop();
   server.close();
   void database.close();
 };

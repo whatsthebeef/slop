@@ -79,6 +79,8 @@ export interface CodeHost {
   commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles>;
   /** Marks a draft PR ready for review. */
   markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }>;
+  /** Whether the PR's branch merges cleanly into its base, in the host's own view; `unknown` while the host is still working it out. */
+  conflictState(repo: Repo, prNumber: number): Promise<'clean' | 'conflict' | 'unknown'>;
   /** Files changed on both the PR's branch and the base branch since they diverged: where a conflict can be. Best effort; empty when unknown. */
   conflictFiles(repo: Repo, prNumber: number): Promise<string[]>;
   /**
@@ -99,10 +101,19 @@ export interface CodeHost {
    * error lines from its log. Explaining is best effort: a failure with no lines still names the check.
    */
   commitChecks(repo: Repo, sha: string): Promise<{ state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }>;
+  /** The head's latest check runs that were cancelled and their end times: a newer run normally replaces them. */
+  cancelledChecks(repo: Repo, sha: string): Promise<{ id: number; completedAt: string | null }[]>;
+  /** Asks the app that owns a check run to run it again; best effort (another app's run can't be re-requested). */
+  rerequestCheck(repo: Repo, checkRunId: number): Promise<void>;
   /** Merges the base branch into the PR's branch (GitHub's update-branch) when it's behind, at exactly `sha`. */
   updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'>;
   /** Squash-merges at exactly `sha` as `<id>: <title>`, or updates a branch that is behind. */
   squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult>;
+  /**
+   * Reverts commit `sha` on the base branch as a new commit `Revert "<subject>"`. `moved` when the base has commits
+   * after `sha` (the revert is then left to a person).
+   */
+  revertCommit(repo: Repo, sha: string): Promise<'reverted' | 'moved'>;
 }
 
 /**

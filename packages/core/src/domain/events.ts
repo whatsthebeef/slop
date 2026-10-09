@@ -22,6 +22,8 @@ export const DOMAIN_EVENT_TYPES = [
   'ReviewReceived',
   'Merged',
   'MergeFailed',
+  'MergeReverted',
+  'MergeRevertFailed',
   'MergeFailureRecovered',
   'ConflictFlagged',
   'ConflictCleared',
@@ -41,6 +43,14 @@ export const DOMAIN_EVENT_TYPES = [
   'Deployed',
   /** A release or integration environment no longer holds a glob it held (a rollback). */
   'DeployRolledBack',
+  /** A glob was held in Planning for globs it starts after (`after`, or a merge-policy hold). */
+  'Waiting',
+  /** What a glob waited for merged: it started by itself. */
+  'Released',
+  /** A person started a held glob (or picked it up) before what it waits for merged. */
+  'HoldOverridden',
+  /** Another open glob started or stopped changing the same exclusive paths as this one. */
+  'ClashChanged',
   'GlobDeleted',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
@@ -69,6 +79,8 @@ export type Effect =
       readonly routineOwner: string;
     }
   | { readonly kind: 'squash_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
+  /** Revert a sub's merge commit on the base branch after the checks on it failed. */
+  | { readonly kind: 'revert_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
   | { readonly kind: 'reopen_pr'; readonly globId: string; readonly generation: number }
   /** Open a fresh draft PR for the glob's branch (after Merge and continue, on the next push). */
   | { readonly kind: 'open_pr'; readonly globId: string; readonly generation: number }
@@ -123,6 +135,13 @@ export type Effect =
    * its automatic reviews off and the board has a review guide. Posted once per PR.
    */
   | { readonly kind: 'request_code_review'; readonly globId: string; readonly generation: number }
+  /**
+   * A glob merged: start the globs that waited for it, if nothing else holds them. Runs after commit; each released
+   * glob is its own version-checked write, so a retry or a second delivery changes nothing.
+   */
+  | { readonly kind: 'release_waiting'; readonly globId: string; readonly generation: number }
+  /** Read which exclusive paths the glob's branch changes and whether another open glob changes them too. */
+  | { readonly kind: 'check_exclusive_paths'; readonly globId: string; readonly generation: number }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
   | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number };
 

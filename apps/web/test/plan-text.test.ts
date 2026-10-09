@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { copyOrSelect, planBaseline, planText } from '@/lib/plan-text';
+import { copyOrSelect, planBaseline, planText, planVersionLine } from '@/lib/plan-text';
 
 describe('plan text', () => {
   it('starts from the summary when no version is saved, so it is selectable text', () => {
@@ -40,5 +40,20 @@ describe('copyOrSelect', () => {
     const select = vi.fn();
     expect(await copyOrSelect('hello', undefined, select)).toBe(false);
     expect(select).toHaveBeenCalledOnce();
+  });
+});
+
+describe('plan version line', () => {
+  const saved = { version: 3, createdAt: '2026-10-08T19:52:08.000Z', provenance: { by: 'human', actor: 'a@x.com' } };
+
+  it('says which version is shown and who saved it', () => {
+    expect(planVersionLine(saved)).toBe('version 3 · saved by a@x.com · 2026-10-08 19:52 UTC');
+    expect(planVersionLine({ ...saved, provenance: { by: 'routine', actor: 'a@x.com' } })).toContain('a@x.com (routine)');
+  });
+
+  it('says what Save will make while editing', () => {
+    expect(planVersionLine(saved, true)).toMatch(/Save makes version 4$/);
+    expect(planVersionLine(null)).toBe('not written yet');
+    expect(planVersionLine(null, true)).toBe('not written yet · Save makes version 1');
   });
 });

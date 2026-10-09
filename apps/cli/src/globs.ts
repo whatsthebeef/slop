@@ -23,7 +23,7 @@ export interface GlobDeps {
 export const GLOB_USAGE = 'glob <id> [--json]';
 export const PICK_UP_USAGE = 'pick-up <id> [--take-over] [--env <name>] [--json]';
 export const NEW_USAGE =
-  'new [--same|--sub|--super] [--feature|--task|--bug] [--routine] [--env <name>] [--json] <prompt...>';
+  'new [--same|--sub|--super] [--feature|--task|--bug] [--routine] [--env <name>] [--after <id>[,<id>...]] [--json] <prompt...>';
 export const READY_USAGE = 'ready [<id>] [--json]';
 export const MERGE_USAGE = 'merge [<id>] [--continue] [--json]';
 
@@ -72,6 +72,8 @@ const createdSchema = z.object({
   category: z.string(),
   status: z.string(),
   provisioning: z.string(),
+  after: z.array(z.string()).optional(),
+  waiting: z.boolean().optional(),
 });
 
 const markedReadySchema = z.object({ id: z.string(), status: z.string(), pr: prSchema.nullable() });
@@ -105,7 +107,9 @@ function parseArgs(
         const value = eq < 0 ? args[++i] : arg.slice(eq + 1);
         if (value === undefined || value === '' || value.startsWith('--'))
           throw new UsageError(`${name} needs a value\nusage: slop ${usage}`);
-        values.set(name, value);
+        // --after may be repeated; the IDs add up.
+        const earlier = values.get(name);
+        values.set(name, name === '--after' && earlier !== undefined ? `${earlier},${value}` : value);
         continue;
       }
       if (!allowed.includes(arg))
@@ -317,9 +321,14 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
     args,
     [...Object.keys(TYPE_FLAGS), ...Object.keys(CATEGORY_FLAGS), '--routine', '--json'],
     NEW_USAGE,
-    ['--env'],
+    ['--env', '--after'],
   );
   const environment = values.get('--env');
+  const after = (values.get('--after') ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id !== '');
+  for (const id of after) requireGlobId(id, NEW_USAGE);
   const type = oneOf(flags, TYPE_FLAGS);
   const category = oneOf(flags, CATEGORY_FLAGS);
   const routine = flags.has('--routine');
@@ -338,6 +347,7 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
       ...(category === undefined ? {} : { category }),
       ...(routine ? { autoTrigger: true } : {}),
       ...(environment === undefined ? {} : { environment }),
+      ...(after.length === 0 ? {} : { after }),
     }),
   );
   if (!created.success) throw new SlopError('create_glob: unexpected response from slop');
@@ -352,10 +362,16 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
       category: glob.category,
       status: glob.status,
       routine: routineWillImplement,
+      waiting: glob.waiting === true,
+      after: glob.after ?? [],
     });
     return;
   }
-  const who = routineWillImplement ? 'a routine will implement it' : 'pick it up to implement it';
+  const who = glob.waiting === true
+    ? `waiting for ${(glob.after ?? []).join(', ')} to merge, then a routine will implement it`
+    : routineWillImplement
+      ? 'a routine will implement it'
+      : 'pick it up to implement it';
   deps.stdout(
     `${glob.id} [${glob.type} ${glob.category}] ${glob.status}: branch ${glob.branch}; ${who}\n`,
   );

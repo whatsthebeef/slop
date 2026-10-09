@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { Result } from '../src/domain/errors.js';
 import * as m from '../src/domain/machine.js';
 import type { Transition } from '../src/domain/machine.js';
+import type { Glob } from '../src/domain/types.js';
 import { NOW, board, ctx, dev, glob, other, po, run } from './fixtures.js';
+import { isRepoAccessFailure, provisioningFailureReason } from '../src/domain/provisioning.js';
 
 const value = (result: Result<Transition>): Transition => {
   if (!result.ok) throw new Error(`Expected ok, got ${result.error.code}: ${result.error.message}`);
@@ -720,17 +722,33 @@ describe('checks and merging (slice 2)', () => {
     expect(effectKinds(pushed)).toEqual(['refresh_checks']);
   });
 
-  it('a sub entering pr_open also looks up a sub gate that finished before the PR was ready', () => {
+  it('a sub entering pr_open goes straight to the sub policy, without waiting for its checks', () => {
     const sub = value(m.prReadyForReview(glob({ type: 'sub', status: 'implementing' }), { number: 7, headSha: 'bbb' }, ctx(null)));
     expect(sub.effects).toEqual([
       { kind: 'refresh_checks', globId: 's1t1', generation: 1 },
       { kind: 'request_code_review', globId: 's1t1', generation: 1 },
-      { kind: 'refresh_sub_gate', globId: 's1t1', generation: 1 },
+      { kind: 'evaluate_sub_gate', globId: 's1t1', generation: 1, sha: 'bbb' },
     ]);
     const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
     expect(effectKinds(same)).toEqual(['refresh_checks', 'request_code_review']);
     const superGlob = value(m.prReadyForReview(glob({ type: 'super', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
     expect(effectKinds(superGlob)).toEqual(['refresh_checks', 'request_code_review']);
+  });
+
+  it('red checks on a sub\'s merge commit revert it and fail the sub; sames and supers are left alone', () => {
+    const failure = { name: 'Type check', step: null, lines: [], url: 'https://ci/1' };
+    const merged = (type: 'sub' | 'same' | 'super') =>
+      glob({ type, status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'bbb' } });
+    const t = value(m.mergeTurnedBaseRed(merged('sub'), { sha: 'm1', failure, base: 'main' }, ctx(null)));
+    expect(t.glob.status).toBe('failed');
+    expect(t.glob.failure?.kind).toBe('reverted');
+    expect(t.glob.failure?.reason).toContain('Reverted from main');
+    expect(t.glob.failure?.reason).toContain('https://ci/1');
+    expect(t.effects).toEqual([{ kind: 'revert_merge', globId: 's1t1', generation: 1, sha: 'm1' }]);
+    expect(value(m.mergeTurnedBaseRed(merged('same'), { sha: 'm1', failure, base: 'main' }, ctx(null))).changed).toBe(false);
+    expect(value(m.mergeTurnedBaseRed(merged('super'), { sha: 'm1', failure, base: 'main' }, ctx(null))).changed).toBe(false);
+    const failed = t.glob;
+    expect(value(m.revertFailed(failed, 'by hand', ctx(null))).glob.failure?.reason).toContain('by hand');
   });
 
   it('a check change queues a refresh without changing the glob', () => {
@@ -836,7 +854,7 @@ describe('conflicts flagged after a merge', () => {
 
   it('a merge queues the recheck of other globs with an open PR only', () => {
     const merged = value(m.merged(glob({ status: 'pr_open' }), { sha: 'm1' }, ctx(null)));
-    expect(effectKinds(merged)).toEqual(['flag_conflicts']);
+    expect(effectKinds(merged)).toEqual(['flag_conflicts', 'release_waiting']);
     const open = value(m.baseMerged(glob({ status: 'in_progress', pr }), { since: 's1t2' }, ctx(null)));
     expect(open.effects).toEqual([{ kind: 'check_conflict', globId: 's1t1', generation: 1, since: 's1t2' }]);
     expect(value(m.baseMerged(glob({ status: 'in_progress', pr: null }), { since: 's1t2' }, ctx(null))).effects).toEqual([]);
@@ -943,7 +961,7 @@ describe('run sessions and timeouts', () => {
   });
 
   it('times out a run with no progress, or one that never marks its PR ready', () => {
-    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30 };
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
     const at = (hours: number) => new Date(Date.parse('2026-10-05T00:00:00.000Z') + hours * 3_600_000).toISOString();
     const active = (lastProgress: number) =>
       glob({ status: 'implementing', runs: [run({ state: 'active', startedAt: at(0), lastProgressAt: at(lastProgress) })] });
@@ -954,8 +972,51 @@ describe('run sessions and timeouts', () => {
     expect(m.runTimeoutReason(watching, limits, at(9))).toBeNull();
   });
 
+  describe('a watching run', () => {
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
+    const t0 = Date.parse('2026-10-05T00:00:00.000Z');
+    const at = (minutes: number) => new Date(t0 + minutes * 60_000).toISOString();
+    const watching = (headChecks: Glob['headChecks'], lastProgress = 0) =>
+      glob({
+        status: 'pr_open',
+        pr: { number: 7, state: 'ready', headSha: '47f4a3d9c0' },
+        headChecks,
+        runs: [run({ state: 'watching', startedAt: at(0), lastProgressAt: at(lastProgress) })],
+      });
+    const failed = (at0: number, extra: object = {}) => ({
+      sha: '47f4a3d9c0',
+      state: 'failed' as const,
+      at: at(at0),
+      failure: { name: 'Type check', step: null, lines: [], url: null },
+      ...extra,
+    });
+
+    it('is never failed for being idle while the checks pass or are pending', () => {
+      expect(m.runTimeoutReason(watching({ sha: '47f4a3d9c0', state: 'passed' }), limits, at(24 * 60))).toBeNull();
+      expect(m.runTimeoutReason(watching(null), limits, at(24 * 60))).toBeNull();
+    });
+
+    it('is failed once it has not responded to failed checks within the window, naming what it ignored', () => {
+      const g = watching(failed(10));
+      expect(m.runTimeoutReason(g, limits, at(39))).toBeNull();
+      expect(m.runTimeoutReason(g, limits, at(40))).toBe("Auto-fix didn't respond to failed checks (Type check) on 47f4a3d");
+      expect(m.runTimeoutReason(g, { ...limits, runRespondMinutes: 60 }, at(60))).toBeNull();
+    });
+
+    it('counts from its last slop call or push when that is later than the failure', () => {
+      expect(m.runTimeoutReason(watching(failed(10), 30), limits, at(59))).toBeNull();
+      expect(m.runTimeoutReason(watching(failed(10), 30), limits, at(60))).toMatch(/didn't respond/);
+    });
+
+    it('ignores failures inherited from the base and failures of an older head', () => {
+      const inherited = failed(10, { inheritedFrom: { base: 'main', since: 's1t1' } });
+      expect(m.runTimeoutReason(watching(inherited), limits, at(600))).toBeNull();
+      expect(m.runTimeoutReason(watching(failed(10, { sha: 'old' })), limits, at(600))).toBeNull();
+    });
+  });
+
   it('fails a queued run that never started after the board\'s time, and leaves younger ones', () => {
-    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30 };
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
     const queuedAt = '2026-10-07T02:01:55.115Z';
     const after = (minutes: number) => new Date(Date.parse(queuedAt) + minutes * 60_000).toISOString();
     const queued = glob({ status: 'implementing', runs: [run({ state: 'queued', queuedAt, startedAt: null })] });
@@ -966,6 +1027,41 @@ describe('run sessions and timeouts', () => {
     const started = value(m.runProgress(queued, 'run-0', { ...ctx(null), now: after(5) }));
     expect(m.runTimeoutReason(started.glob, limits, after(60))).toBeNull();
     expect(m.runTimeoutReason(started.glob, limits, after(5 + 121))).toMatch(/No progress for 2 hours/);
+  });
+});
+
+describe('Retry auto-fix', () => {
+  const ended = run({ state: 'ended', outcome: 'failed', endedAt: NOW, failureReason: "Auto-fix didn't respond to failed checks (Type check) on 47f4a3d" });
+  const stuck = () =>
+    glob({
+      status: 'pr_open',
+      type: 'sub',
+      pr: { number: 7, state: 'ready', headSha: '47f4a3d9c0' },
+      failure: { reason: ended.failureReason ?? '', at: NOW },
+      runs: [ended],
+    });
+
+  it('is offered next to Pick up, and queues a new run keeping the PR, branch and generation', () => {
+    expect(m.allowedActions(stuck(), dev)).toEqual(expect.arrayContaining(['pick_up', 'retry_autofix']));
+    const t = value(m.retryAutofix(stuck(), ctx(dev)));
+    expect(t.glob).toMatchObject({ status: 'pr_open', failure: null, generation: stuck().generation, pr: stuck().pr });
+    expect(t.glob.runs).toHaveLength(2);
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'queued' });
+    expect(t.effects.map((e) => e.kind)).toEqual(['fire_routine']);
+  });
+
+  it('starts the retried run watching, since there is no PR to mark ready', () => {
+    const queued = value(m.retryAutofix(stuck(), ctx(dev))).glob;
+    expect(m.currentRun(value(m.runProgress(queued, m.currentRun(queued)?.id ?? '', ctx(null))).glob)?.state).toBe('watching');
+  });
+
+  it('is refused while a run is live, for merge failures and without an ended failed run', () => {
+    const live = { ...stuck(), runs: [ended, run({ id: 'run-1', state: 'watching' })] };
+    expect(m.allowedActions(live, dev)).not.toContain('retry_autofix');
+    expect(m.retryAutofix(live, ctx(dev)).ok).toBe(false);
+    const merge = { ...stuck(), failure: { reason: 'x', at: NOW, kind: 'merge' as const } };
+    expect(m.allowedActions(merge, dev)).not.toContain('retry_autofix');
+    expect(m.retryAutofix({ ...stuck(), runs: [] }, ctx(dev)).ok).toBe(false);
   });
 });
 
@@ -1061,7 +1157,7 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     expect(value(m.prOpened(opened.glob, { number: 8, headSha: 'ddd' }, ctx(null))).changed).toBe(false);
     // Once it has a PR, pushes don't open another.
     // (Only the check of how far the branch is behind the base.)
-    expect(effectKinds(value(m.commitPushed(opened.glob, { sha: 'eee', runId: null }, ctx(null))))).toEqual(['check_behind']);
+    expect(effectKinds(value(m.commitPushed(opened.glob, { sha: 'eee', runId: null }, ctx(null))))).toEqual(['check_behind', 'check_exclusive_paths']);
     // Neither do pushes while provisioning is still under way.
     const provisioning = glob({ type: 'super', status: 'in_progress', pr: null, provisioning: 'pending' });
     expect(effectKinds(value(m.commitPushed(provisioning, { sha: 'fff', runId: null }, ctx(null))))).toEqual([]);
@@ -1127,5 +1223,71 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     const t = value(m.startAgain(withHistory, ctx()));
     expect(t.glob.mergeMode).toBeNull();
     expect(t.glob.prs).toHaveLength(1);
+  });
+});
+
+describe('provisioning failure', () => {
+  const queued = () => glob({ status: 'implementing', provisioning: 'pending', pr: null, runs: [run({ state: 'queued' })] });
+  const reason = "Couldn't create branch s1t1 on acme/app: the slop GitHub App can't see that repo. Install it on the repo, or add the repo to its access, then Start over.";
+
+  it('a retryable failure only records the attempt', () => {
+    const t = value(m.provisioningFailed(queued(), 'boom', ctx()));
+    expect(t.glob.provisioning).toBe('failed');
+    expect(t.glob.failure).toBeNull();
+    expect(m.currentRun(t.glob)?.state).toBe('queued');
+  });
+
+  it('one that will not be retried puts the reason on the glob and ends the queued run with it', () => {
+    const t = value(m.provisioningFailed(queued(), reason, ctx(), true));
+    expect(t.glob.status).toBe('failed');
+    expect(t.glob.failure).toMatchObject({ reason, kind: 'provisioning' });
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'failed', failureReason: reason });
+  });
+
+  it('maps a 404 and a 403 to what a person can act on, and leaves throttling alone', () => {
+    expect(provisioningFailureReason('s1t1', 'acme/app', 404, 'Not Found')).toBe(reason);
+    expect(provisioningFailureReason('s1t1', 'acme/app', 403, 'Resource not accessible')).toContain('lacks permission (contents: write)');
+    expect(provisioningFailureReason('s1t1', 'acme/app', 500, 'oops')).toBe("Couldn't create branch s1t1 on acme/app: oops");
+    expect(isRepoAccessFailure(404)).toBe(true);
+    expect(isRepoAccessFailure(403, 'Resource not accessible by integration')).toBe(true);
+    expect(isRepoAccessFailure(403, 'You have exceeded a secondary rate limit')).toBe(false);
+    expect(isRepoAccessFailure(500)).toBe(false);
+  });
+
+  it('a later successful provision clears the failure', () => {
+    const failed = value(m.provisioningFailed(queued(), reason, ctx(), true)).glob;
+    const t = value(m.provisioned(failed, { branch: 's1t1', pr: null }, ctx()));
+    expect(t.glob.failure).toBeNull();
+    expect(t.glob.provisioning).toBe('ok');
+  });
+});
+
+describe('allowedTypeChanges', () => {
+  const tos = (g: Glob, role: 'dev' | 'po' = 'dev') => m.allowedTypeChanges(g, role).map((o) => o.to);
+
+  it('offers sub and super for a same task in planning', () => {
+    expect(m.allowedTypeChanges(glob({ type: 'same', category: 'task' }), 'dev')).toEqual([{ to: 'sub' }, { to: 'super' }]);
+  });
+
+  it('offers a feature only the task sub, and not a bug a super', () => {
+    expect(m.allowedTypeChanges(glob({ type: 'same', category: 'feature' }), 'dev')).toEqual([
+      { to: 'sub', category: 'task' },
+      { to: 'super' },
+    ]);
+    expect(tos(glob({ type: 'same', category: 'bug' }))).toEqual(['sub']);
+  });
+
+  it('offers a sub only a same before it merges', () => {
+    expect(tos(glob({ type: 'sub', category: 'task', status: 'implementing' }))).toEqual(['same']);
+    expect(tos(glob({ type: 'sub', category: 'task', status: 'reviewing' }))).toEqual([]);
+  });
+
+  it('offers a same no sub once it has left planning, and no super from the PO', () => {
+    expect(tos(glob({ type: 'same', category: 'task', status: 'in_progress' }))).toEqual(['super']);
+    expect(tos(glob({ type: 'same', category: 'task' }), 'po')).toEqual(['sub']);
+  });
+
+  it('offers nothing a refused change would be', () => {
+    expect(tos(glob({ type: 'same', category: 'task', status: 'merging' }))).toEqual([]);
   });
 });

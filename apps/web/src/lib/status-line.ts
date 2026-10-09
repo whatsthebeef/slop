@@ -12,7 +12,7 @@ import type { GlobView } from './api';
 /** One problem on a glob, in plain words: what the card shows in a line and the glob view shows in full. */
 export interface StatusLine {
   readonly kind:
-    'base-red' | 'checks' | 'failure' | 'stuck' | 'behind' | 'ready' | 'waiting' | 'merge-waits';
+    'provisioning' | 'base-red' | 'checks' | 'failure' | 'stuck' | 'behind' | 'ready' | 'merge-waits';
   /** One line, cut short: the card's text. */
   readonly text: string;
   /** The whole sentence, for the glob view. */
@@ -39,13 +39,13 @@ export const hintSentence = (hint: string): string =>
   (hint.split(/\.\s|\s+Fix:/)[0] ?? hint).replace(/\.$/, '');
 
 const ALSO = {
+  provisioning: "the branch couldn't be created",
   'base-red': 'the base branch is red',
   checks: 'checks failed',
   failure: 'the routine run failed',
   stuck: 'looks stuck',
   behind: 'the branch is behind the base',
   ready: '',
-  waiting: '',
   'merge-waits': '',
 } as const;
 
@@ -57,6 +57,7 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
   const reason = glob.failure?.reason ?? 'Routine run failed';
   const run = glob.currentRun ?? null;
   const session = run?.sessionUrl ?? null;
+  const provisioningFailed = glob.provisioning === 'failed' && glob.failure?.kind === 'provisioning';
   const candidates: StatusLine[] = [];
   const make = (
     line: Omit<StatusLine, 'text' | 'url' | 'doing' | 'sessionUrl'> &
@@ -68,6 +69,10 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
     sessionUrl: null,
     ...line,
   });
+  // A glob with no branch can't do anything else, so this comes before every other problem.
+  if (provisioningFailed) {
+    candidates.push(make({ kind: 'provisioning', full: reason, tone: 'text-red', tip: reason }));
+  }
   if (checks !== null) {
     const details = [checks.text, ...checks.lines.slice(1, 4), checks.url ?? ''].filter(
       (l) => l !== '',
@@ -109,7 +114,7 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
       );
     }
   }
-  if (failed) {
+  if (failed && !provisioningFailed) {
     const tip = `${reason}${glob.failure?.reason.startsWith('Routine run never started') === true && session !== null ? `\nSession: ${session}` : ''}`;
     candidates.push(make({ kind: 'failure', full: reason, tone: 'text-red', tip }));
   }
@@ -132,11 +137,12 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
   if (candidates.length === 0) {
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha);
-    if (ready !== null)
+    // Waiting for checks is activity, not a problem or a next step: the activity label carries it.
+    if (ready !== null && ready.kind === 'ready')
       return make({
         kind: ready.kind,
         full: ready.text,
-        tone: ready.kind === 'ready' ? 'text-signal-strong' : 'text-muted-foreground',
+        tone: 'text-signal-strong',
         tip: ready.tip,
       });
   }
@@ -153,6 +159,8 @@ export interface Waiting {
   readonly tip: string;
   /** What it waits for, finishing "Merge waits …". */
   readonly why: string;
+  /** True when it only waits for checks that are still running: shown as activity, not on the status line. */
+  readonly running?: true;
 }
 
 const MERGE_WAIT_LABELS: Partial<Record<Action, string>> = {
@@ -184,9 +192,9 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
   if (glob.status === 'pr_open' && glob.type !== 'sub' && !actions.includes('merge')) {
     const head = glob.pr?.headSha ?? null;
     const checks = glob.headChecks;
-    const wait: Pick<Waiting, 'tip' | 'why'> =
+    const wait: Pick<Waiting, 'tip' | 'why' | 'running'> =
       head === null
-        ? { tip: 'Waiting for the PR head', why: 'for the PR head' }
+        ? { tip: 'Waiting for the PR head', why: 'for the PR head', running: true }
         : checks?.sha === head && checks.state === 'failed'
           ? {
               tip:
@@ -198,6 +206,7 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
           : {
               tip: `Waiting for the checks on ${head.slice(0, 7)} to pass`,
               why: `for the checks on ${head.slice(0, 7)}`,
+              running: true,
             };
     waiting.push({ action: 'merge', ...wait });
     if (glob.type === 'super') waiting.push({ action: 'merge_continue', ...wait });
@@ -236,12 +245,13 @@ export const viewStatusLine = (
   waiting: readonly Waiting[],
 ): StatusLine | null => {
   const base = statusLine(glob, now);
-  if (waiting.length === 0) return base;
-  const full = waitingSentences(waiting).join('. ');
+  // Checks still running are shown by the activity label.
+  const stopped = waiting.filter((w) => w.running !== true);
+  if (stopped.length === 0) return base;
+  const full = waitingSentences(stopped).join('. ');
   const blocking =
     base === null ||
     base.kind === 'ready' ||
-    base.kind === 'waiting' ||
     base.kind === 'checks' ||
     base.kind === 'base-red';
   // A failure, a stuck hint or a conflict outranks the wait; the buttons still carry their short reason.
@@ -254,12 +264,96 @@ export const viewStatusLine = (
     text: oneLine(full),
     full,
     tone:
-      base === null || base.kind === 'ready' || base.kind === 'waiting'
+      base === null || base.kind === 'ready'
         ? 'text-muted-foreground'
         : base.tone,
     tip: base?.tip ?? full,
     url: base?.url ?? null,
-    doing: base?.kind === 'ready' || base?.kind === 'waiting' ? null : (base?.doing ?? null),
+    doing: base?.kind === 'ready' ? null : (base?.doing ?? null),
     sessionUrl: base?.sessionUrl ?? null,
+  };
+};
+
+/** What slop or a routine is doing on its own, in one label: the card's chip and the glob view's, from the same function. */
+export interface Activity {
+  readonly kind: 'merging' | 'checks' | 'working' | 'watching' | 'queued';
+  readonly text: string;
+  /** The detail: session link, owner, who triggered it, the queued notice. */
+  readonly tip: string;
+  /** Spins while something is running. */
+  readonly spinning: boolean;
+}
+
+const QUEUED_NOTICE_MINUTES = 10;
+
+/**
+ * One activity label, by precedence: merging, then checks running or awaited on the PR head, then the routine run
+ * (working, watching the PR, queued). Null when nothing runs on its own. Problems and next steps stay on the status line.
+ */
+export const activityLabel = (glob: GlobView, now: string): Activity | null => {
+  const run = glob.currentRun ?? null;
+  const live = run !== null && run.state !== 'ended' ? run : null;
+  const runDetail =
+    live === null
+      ? []
+      : [
+          `Owned by ${live.routineOwner}, triggered by ${live.triggeredBy}`,
+          ...(live.sessionUrl === null ? [] : [`Session: ${live.sessionUrl}`]),
+        ];
+  if (glob.status === 'merging') {
+    return {
+      kind: 'merging',
+      text: 'Merging',
+      tip: 'slop is updating the branch and squash-merging the PR once the checks pass',
+      spinning: true,
+    };
+  }
+  const head = glob.pr?.headSha ?? null;
+  const checks = glob.headChecks;
+  const checksSettled =
+    head !== null &&
+    checks?.sha === head &&
+    (checks.state === 'passed' || checks.state === 'failed');
+  if (
+    glob.status === 'pr_open' &&
+    glob.pr?.state === 'ready' &&
+    head !== null &&
+    !checksSettled &&
+    glob.failure === null &&
+    glob.conflict == null
+  ) {
+    const short = head.slice(0, 7);
+    const running = checks?.sha === head && checks.state === 'pending';
+    return {
+      kind: 'checks',
+      text: running ? `Checks running on ${short}` : `Waiting for checks on ${short}`,
+      tip: `Merging waits for the checks on ${short} to pass`,
+      spinning: running,
+    };
+  }
+  if (live === null) return null;
+  if (live.state === 'active') {
+    return { kind: 'working', text: 'Routine working', tip: runDetail.join('\n'), spinning: true };
+  }
+  if (live.state === 'watching') {
+    return {
+      kind: 'watching',
+      text: 'Routine watching the PR',
+      tip: ['Auto-fixing CI failures and review comments', ...runDetail].join('\n'),
+      spinning: false,
+    };
+  }
+  const minutes = Math.floor((Date.parse(now) - Date.parse(live.queuedAt)) / 60_000);
+  const long = minutes >= QUEUED_NOTICE_MINUTES;
+  return {
+    kind: 'queued',
+    text: long ? `Queued for ${String(minutes)} min` : 'Queued',
+    tip: [
+      long
+        ? `Routine run queued for ${String(minutes)} min: ${live.sessionUrl === null ? 'no session yet' : 'open the session'}`
+        : 'Routine run queued',
+      ...runDetail,
+    ].join('\n'),
+    spinning: false,
   };
 };

@@ -1,4 +1,4 @@
-import { err, invalidInput, notFound, ok } from '../domain/errors.js';
+import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
 import { composeAgentSet, contextDiff, overlayProblem } from '../domain/agent-set.js';
@@ -13,6 +13,7 @@ import type {
   KbOutcome,
   KbProposalList,
   KbTarget,
+  KbVia,
   LearningType,
   NewDocumentMeta,
   ProposedDocument,
@@ -30,6 +31,8 @@ import {
 import type { CatalogUpdate, KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
 import { LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
 import type { LocalRun } from '../domain/local-run.js';
+import { MERGE_POLICY_NAME, parseMergePolicy, renderMergePolicy } from '../domain/merge-policy.js';
+import type { MergePolicy } from '../domain/merge-policy.js';
 import { isReviewGuide } from '../domain/code-review.js';
 import { effectBasisOf, effectItemOf, isEffectMeasured, startEffectCheck } from '../domain/effect-check.js';
 import type { EffectCheck } from '../domain/effect-check.js';
@@ -94,6 +97,39 @@ const checkedLocalRun = (content: string): Result<string> => {
   const parsed = parseLocalRun(content);
   return parsed.ok ? ok(renderLocalRun(parsed.value)) : parsed;
 };
+
+/** The board's merge policy for the Knowledge page (read-only there; it changes through KB items). */
+export interface MergePolicyView {
+  /** Null when the board has none, or its stored value fails the check (`problem`). */
+  readonly policy: MergePolicy | null;
+  readonly content: string | null;
+  readonly version: number | null;
+  readonly updatedBy: string | null;
+  readonly updatedAt: string | null;
+  readonly problem: string | null;
+}
+
+/** A stored merge-policy row, checked again on read: a value that fails the check is never served. */
+const storedMergePolicy = (row: KnowledgeDoc | null): { policy: MergePolicy | null; problem: string | null } => {
+  if (row === null) return { policy: null, problem: null };
+  const parsed = parseMergePolicy(row.content);
+  return parsed.ok
+    ? { policy: parsed.value, problem: null }
+    : { policy: null, problem: `The stored merge policy (version ${row.version}) is invalid: ${parsed.error.message}` };
+};
+
+/** A merge-policy value from an approval or draft, checked and in canonical form. */
+const checkedMergePolicy = (content: string): Result<string> => {
+  const parsed = parseMergePolicy(content);
+  return parsed.ok ? ok(renderMergePolicy(parsed.value)) : parsed;
+};
+
+/**
+ * The board's merge policy as slop acts on it: empty when it has none or its stored value fails the check, so a bad
+ * row never holds a glob.
+ */
+export const readMergePolicy = async (tx: Tx, boardId: number): Promise<MergePolicy> =>
+  storedMergePolicy(await tx.getKnowledge(boardId, 'merge_policy', MERGE_POLICY_NAME)).policy ?? {};
 
 /** Every path in the board's agent set and how it is served, for the Knowledge page. */
 export interface AgentSetIndex {
@@ -218,6 +254,16 @@ const view = (item: KbItem, preview: DraftPreview | null): KbItemView => ({
   lastEvidenceAt: lastEvidenceAt(item),
 });
 
+/** Why an agent may not approve the item, or null when it may: these are decided by a person. */
+const keptForPeople = (item: KbItem): string | null => {
+  if (item.document !== null) return 'proposes a whole document';
+  if (item.contradicts.length > 0) return 'is flagged as contradicting existing knowledge';
+  if (item.target?.kind === 'local_run') return "changes the local-run spec, which sstor runs on developers' machines";
+  if (item.target?.kind === 'merge_policy') return 'changes the merge policy, which decides which globs wait for each other';
+  if (item.target !== null && isAgentSetKind(item.target.kind)) return `changes an agent-set file (${item.target.kind} ${item.target.name}), which changes how agents behave`;
+  return null;
+};
+
 /** `ids` with `id` added once. */
 const apart = (ids: readonly string[], id: string): string[] => (ids.includes(id) ? [...ids] : [...ids, id]);
 
@@ -282,6 +328,11 @@ export const targetState = async (
   if (target.kind === 'local_run') {
     // The whole value is drafted and replaced; the first value creates the row.
     if (target.name !== LOCAL_RUN_NAME) return null;
+    return { text: existing?.content ?? '', version: existing?.version ?? 0, existing, catalog: null, newDocument: false };
+  }
+  if (target.kind === 'merge_policy') {
+    // Like the local-run spec: the whole value is replaced, and the first value creates the row.
+    if (target.name !== MERGE_POLICY_NAME) return null;
     return { text: existing?.content ?? '', version: existing?.version ?? 0, existing, catalog: null, newDocument: false };
   }
   if (target.kind === 'doc') {
@@ -441,6 +492,24 @@ export class KnowledgeService {
       const { spec, problem } = storedLocalRun(row);
       return ok({
         spec,
+        content: row?.content ?? null,
+        version: row?.version ?? null,
+        updatedBy: row?.updatedBy ?? null,
+        updatedAt: row?.updatedAt ?? null,
+        problem,
+      });
+    });
+  }
+
+  /** The board's merge policy as stored and as served, for the Knowledge page. */
+  async mergePolicy(email: string, boardId: number): Promise<Result<MergePolicyView>> {
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      const row = await tx.getKnowledge(boardId, 'merge_policy', MERGE_POLICY_NAME);
+      const { policy, problem } = storedMergePolicy(row);
+      return ok({
+        policy,
         content: row?.content ?? null,
         version: row?.version ?? null,
         updatedBy: row?.updatedBy ?? null,
@@ -869,15 +938,72 @@ export class KnowledgeService {
    * and an agent-set file bumps the board's agent-set version.
    */
   async approve(email: string, itemId: string, version: number, approval: Approval): Promise<Result<KbItem>> {
-    return this.decide(email, itemId, version, async (tx, item) => {
-      // A watched signal is claimed in `kb_signals` under mining's lock, so a mining run neither overwrites the claim
-      // with the row it read before nor raises the signal meanwhile; taken first, so the measurement sees its rows.
-      if (approval.watchSignal !== undefined) await tx.lockBoardJob(item.boardId, 'mining');
-      // Checked before anything is written: a refused decision commits nothing it wrote.
-      const watched = await this.watchedSignal(tx, item, approval.watchSignal);
-      if (!watched.ok) return watched;
-      const applied = await this.applyApproval(tx, email, item, approval);
-      return applied.ok ? ok({ ...applied.value, signal: watched.value }) : applied;
+    return this.decide(email, itemId, version, (tx, item) => this.approving(tx, email, item, approval));
+  }
+
+  /** The approval's checks and writes, shared by a person's approval and an agent's. */
+  private async approving(
+    tx: Tx,
+    email: string,
+    item: KbItem,
+    approval: Approval,
+  ): Promise<Result<{ statement: string; outcome: KbOutcome; signal: KbSignal | null }>> {
+    // A watched signal is claimed in `kb_signals` under mining's lock, so a mining run neither overwrites the claim
+    // with the row it read before nor raises the signal meanwhile; taken first, so the measurement sees its rows.
+    if (approval.watchSignal !== undefined) await tx.lockBoardJob(item.boardId, 'mining');
+    // Checked before anything is written: a refused decision commits nothing it wrote.
+    const watched = await this.watchedSignal(tx, item, approval.watchSignal);
+    if (!watched.ok) return watched;
+    const applied = await this.applyApproval(tx, email, item, approval);
+    return applied.ok ? ok({ ...applied.value, signal: watched.value }) : applied;
+  }
+
+  /**
+   * An agent (signed in as the admin) approves an open item as drafted, or rejects it with a reason: the same checks
+   * and writes as the page's buttons, recorded with `via: 'agent'` in the outcome. Approving is refused for what
+   * changes how agents or developers' machines behave, which a person decides on the Knowledge page: the local-run
+   * spec, the merge policy, agent-set files, a whole document, and any item flagged as contradicting. Rejecting is always allowed.
+   */
+  async decideByAgent(
+    email: string,
+    itemId: string,
+    version: number,
+    decision: 'approve' | 'reject',
+    reason?: string,
+  ): Promise<Result<KbItem>> {
+    const via: KbVia = 'agent';
+    if (decision === 'reject') {
+      const trimmed = reason?.trim() ?? '';
+      if (trimmed === '') return invalidInput('Rejecting needs a reason');
+      return this.decide(email, itemId, version, () => Promise.resolve(ok({ reason: trimmed })), via);
+    }
+    return this.decide(
+      email,
+      itemId,
+      version,
+      async (tx, item) => {
+        const kept = keptForPeople(item);
+        if (kept !== null) return forbidden(`${item.id} ${kept}: approve it on the Knowledge page, or reject it here`);
+        return this.approving(tx, email, item, { as: 'draft' });
+      },
+      via,
+    );
+  }
+
+  /**
+   * The board's KB items with the given status (open by default), for an admin's agent: the open queue in the page's
+   * order, others newest decision first. Admins only, like deciding.
+   */
+  async listItems(email: string, boardId: number, status: KbItemStatus = 'open'): Promise<Result<KbItemView[]>> {
+    const catalog = await this.deps.catalog.agentSet();
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await adminOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      const items = await tx.listKbItems(boardId, status);
+      if (status !== 'open') return ok(items.map((item) => view(item, null)));
+      const views: KbItemView[] = [];
+      for (const item of [...items].sort(byEvidence)) views.push(view(item, await this.preview(tx, catalog, item)));
+      return ok(views);
     });
   }
 
@@ -939,6 +1065,13 @@ export class KnowledgeService {
       const outcome = await this.apply(tx, email, item, kind, name, content.value);
       return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
     }
+    if (kind === 'merge_policy') {
+      if (name !== MERGE_POLICY_NAME) return invalidInput(`The merge policy is named ${MERGE_POLICY_NAME}`);
+      const content = checkedMergePolicy(approval.content);
+      if (!content.ok) return content;
+      const outcome = await this.apply(tx, email, item, kind, name, content.value);
+      return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
+    }
     const existing = await tx.getKnowledge(item.boardId, kind, name);
     if (isAgentSetKind(kind)) {
       const outcome = await this.applyAgentSetEdit(tx, email, item, kind, name, approval.content, existing);
@@ -971,6 +1104,7 @@ export class KnowledgeService {
       tx: Tx,
       item: KbItem,
     ) => Promise<Result<{ statement: string; outcome: KbOutcome; signal?: KbSignal | null } | { reason: string }>>,
+    via?: KbVia,
   ): Promise<Result<KbItem>> {
     const stale = (item: KbItem) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
     try {
@@ -986,14 +1120,16 @@ export class KnowledgeService {
         const decidedAt = this.deps.clock.now();
         const base = { ...item, decidedBy: email, decidedAt, version: item.version + 1 };
         let next: KbItem;
-        if ('reason' in decided.value) next = { ...base, status: 'rejected', decisionReason: decided.value.reason };
+        if ('reason' in decided.value) {
+          next = { ...base, status: 'rejected', decisionReason: decided.value.reason, ...(via === undefined ? {} : { outcome: { kind: 'rejected', via } }) };
+        }
         else {
           const { statement, outcome } = decided.value;
           const chosen = decided.value.signal ?? null;
           const signal = chosen ?? item.signal;
           // An approved change with a signal the check measures is watched (the daily effect check).
           const effectCheck = signal === null || !isEffectMeasured(signal.key) ? null : await this.effectCheckFor(tx, item.boardId, signal, outcome, decidedAt);
-          next = { ...base, status: 'approved', statement, outcome, signal, effectCheck };
+          next = { ...base, status: 'approved', statement, outcome: via === undefined ? outcome : { ...outcome, via }, signal, effectCheck };
           if (chosen !== null) await this.claimSignal(tx, next, chosen);
         }
         if (!(await tx.updateKbItem(next, item.version))) throw new StaleKbItem(item.id);
@@ -1082,6 +1218,11 @@ export class KnowledgeService {
       if (!content.ok) return content;
       return this.apply(tx, email, item, 'local_run', LOCAL_RUN_NAME, content.value);
     }
+    if (target.kind === 'merge_policy') {
+      const content = checkedMergePolicy(draft.content);
+      if (!content.ok) return content;
+      return this.apply(tx, email, item, 'merge_policy', MERGE_POLICY_NAME, content.value);
+    }
     const { after } = splicePreview(state.text, draft.section, draft.content, state.newDocument);
     if (target.kind === 'doc') {
       const meta = state.existing ?? target.newDocument;
@@ -1099,7 +1240,7 @@ export class KnowledgeService {
     const state = await targetState(tx, catalog, item.boardId, item.target);
     if (state === null) return null;
     // The local-run spec is replaced whole (a draft holds its canonical text).
-    const whole = state.newDocument || item.target.kind === 'local_run';
+    const whole = state.newDocument || item.target.kind === 'local_run' || item.target.kind === 'merge_policy';
     const { diff } = splicePreview(state.text, item.draft.section, item.draft.content, whole);
     return { version: state.version, stale: state.version !== item.draftedAgainstVersion, diff: contextDiff(diff) };
   }
@@ -1112,6 +1253,10 @@ export class KnowledgeService {
       // One row per board, replaced whole; it may not exist yet (the first value arrives as a draft too).
       if (change.name !== LOCAL_RUN_NAME) return invalidInput(`The local-run spec is named ${LOCAL_RUN_NAME}`);
       return ok({ kind: 'local_run', name: LOCAL_RUN_NAME, section: null, newDocument: null });
+    }
+    if (change.kind === 'merge_policy') {
+      if (change.name !== MERGE_POLICY_NAME) return invalidInput(`The merge policy is named ${MERGE_POLICY_NAME}`);
+      return ok({ kind: 'merge_policy', name: MERGE_POLICY_NAME, section: null, newDocument: null });
     }
     if (change.kind === 'doc') {
       const name = docName(change.name);

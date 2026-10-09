@@ -139,7 +139,7 @@ export interface Failure {
   /** Set when slop's merge failed on a conflict with the base branch (`files`: those both sides changed, when known). */
   readonly conflict?: MergeConflict;
   /** Set when slop's own merge attempt failed: a later push to the branch recovers the glob (row 16a). */
-  readonly kind?: 'merge';
+  readonly kind?: 'merge' | 'reverted' | 'provisioning';
 }
 
 export interface MergeConflict {
@@ -164,6 +164,20 @@ export interface BehindBase {
   /** Files changed on both sides since they diverged: where a conflict can be. */
   readonly files: readonly string[];
   readonly at: string;
+}
+
+/** A hold the board's merge policy put on a glob: it waits for `id` because both may change `paths`. */
+export interface ImpliedAfter {
+  readonly id: string;
+  readonly paths: readonly string[];
+  /** Set when a person chose Start anyway: kept for display, no longer holds. */
+  readonly overridden?: true;
+}
+
+/** Another open glob that changes some of the same exclusive paths as this one; a warning, never a block. */
+export interface PathClash {
+  readonly with: string;
+  readonly paths: readonly string[];
 }
 
 export interface Glob {
@@ -197,6 +211,14 @@ export interface Glob {
   readonly conflict?: OpenConflict | null;
   /** Set while the branch of a glob in Doing lacks commits from the base branch; cleared when it is up to date. */
   readonly behind?: BehindBase | null;
+  /** IDs of globs on the board this one waits for before it starts (unmerged when set). */
+  readonly after?: readonly string[];
+  /** Holds from the board's merge policy (exclusive paths): the same as `after`, with the reason. */
+  readonly impliedAfter?: readonly ImpliedAfter[];
+  /** Set while the glob is held in Planning for its `after`; cleared when released, started anyway or picked up. */
+  readonly waiting?: { readonly since: string } | null;
+  /** Set while another open glob changes the same exclusive paths; cleared when it no longer does. */
+  readonly clash?: PathClash | null;
   readonly provisioning: ProvisioningState;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -268,6 +290,8 @@ export interface Board {
   readonly runNoProgressHours: number;
   /** A queued run that hasn't called slop within this many minutes never started and is failed. */
   readonly runStartMinutes: number;
+  /** A watching run that makes no slop call or push within this many minutes of its PR's checks failing is failed. */
+  readonly runRespondMinutes: number;
   /** A run that has not marked its PR ready for review within this long is failed. */
   readonly runReadyHours: number;
   /** Sub gate: subs changing more lines than this convert to sames. */

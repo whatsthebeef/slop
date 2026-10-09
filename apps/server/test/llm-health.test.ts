@@ -1,7 +1,7 @@
-import { LlmUnavailable } from '@slop/core';
-import type { Llm } from '@slop/core';
+import { LlmBusy, LlmUnavailable } from '@slop/core';
+import type { Embedder, Llm } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { LlmHealth } from '../src/llm-health.js';
+import { BUSY_WARNING_COUNT, LlmHealth } from '../src/llm-health.js';
 import type { LlmHealthState } from '../src/llm-health.js';
 
 const REQUEST = { system: 's', prompt: 'p', maxTokens: 10 };
@@ -88,5 +88,54 @@ describe('LlmHealth', () => {
     await trackedDraft.complete(REQUEST);
     expect(health.isDown()).toBe(false);
     expect(health.state()).toMatchObject({ state: 'ok' });
+  });
+
+  it('tracks an embedder like an LLM: ok on success, down on LlmUnavailable, untouched by ordinary failures', async () => {
+    const { health, changes } = setup();
+    let next: () => Promise<number[][]> = () => Promise.resolve([[1]]);
+    const embedder: Embedder = { model: 'titan', dimensions: 1024, embed: () => next() };
+    const tracked = health.trackEmbedder(embedder, 'titan');
+    expect(tracked.model).toBe('titan');
+    expect(tracked.dimensions).toBe(1024);
+
+    expect(await tracked.embed(['a'])).toEqual([[1]]);
+    expect(health.isDown(['titan'])).toBe(false);
+
+    const throttled = new Error('Too many requests');
+    next = () => Promise.reject(throttled);
+    await expect(tracked.embed(['a'])).rejects.toBe(throttled);
+    expect(health.isDown(['titan'])).toBe(false);
+
+    const denied = new LlmUnavailable('No access to the Bedrock model titan', 'Enable it');
+    next = () => Promise.reject(denied);
+    await expect(tracked.embed(['a'])).rejects.toBe(denied);
+    expect(health.isDown(['titan'])).toBe(true);
+    expect(health.state()).toMatchObject({ state: 'down', reason: 'No access to the Bedrock model titan' });
+
+    next = () => Promise.resolve([[2]]);
+    await tracked.embed(['a']);
+    expect(health.isDown(['titan'])).toBe(false);
+    expect(changes.map((c) => c.state)).toEqual(['ok', 'down', 'ok']);
+  });
+
+  it('ignores busy answers: the model stays ok, and many in a row warn until the next success', async () => {
+    const changes: LlmHealthState[] = [];
+    const warnings: boolean[] = [];
+    const health = new LlmHealth((_model, s) => changes.push(s), () => '2026-10-07T00:00:00.000Z', (_model, on) => warnings.push(on));
+    const opus = scripted();
+    const tracked = health.track(opus.llm, 'opus');
+    await tracked.complete(REQUEST);
+    opus.fail(new LlmBusy());
+    for (let i = 0; i < BUSY_WARNING_COUNT - 1; i++) await expect(tracked.complete(REQUEST)).rejects.toBeInstanceOf(LlmBusy);
+    expect(health.state()).toMatchObject({ state: 'ok' });
+    expect(warnings).toEqual([]);
+    await expect(tracked.complete(REQUEST)).rejects.toBeInstanceOf(LlmBusy);
+    expect(health.isDown(['opus'])).toBe(false);
+    expect(health.state()).toMatchObject({ state: 'ok' });
+    expect(changes).toHaveLength(1);
+    expect(warnings).toEqual([true]);
+    opus.succeed();
+    await tracked.complete(REQUEST);
+    expect(warnings).toEqual([true, false]);
   });
 });

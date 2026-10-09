@@ -1,4 +1,4 @@
-import { BoardService, GlobService, machine } from '@slop/core';
+import { BoardService, GlobService, NotificationService, machine } from '@slop/core';
 import type { Board, CheckFailure, Effect, Glob, Result } from '@slop/core';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -30,12 +30,19 @@ const typecheck: CheckFailure = {
 class FakeHost extends FakeCodeHost {
   baseHead = { sha: 'm1', subject: 's1f5: Slice 8, part 1' };
   checks: Record<string, { state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }> = {};
-  mergeStateNow: 'passed' | 'failed' | 'behind' | 'conflict' = 'failed';
+  mergeStateNow: 'passed' | 'failed' | 'pending' | 'behind' | 'conflict' = 'failed';
+  cancelled: { id: number; completedAt: string | null }[] = [];
+  readonly rerequested: number[] = [];
   headSha = 'h1';
   readonly updated: { pr: number; sha: string }[] = [];
 
   override provision = (_repo: unknown, glob: Glob) => Promise.resolve({ branch: glob.id, pr: { number: 7, headSha: this.headSha } });
   override mergeState = () => Promise.resolve({ sha: this.headSha, state: this.mergeStateNow });
+  override cancelledChecks = () => Promise.resolve(this.cancelled);
+  override rerequestCheck = (_repo: unknown, id: number) => {
+    this.rerequested.push(id);
+    return Promise.resolve();
+  };
   override markReady = () => Promise.resolve({ wasDraft: true, sha: this.headSha });
   override conflictFiles = () => Promise.resolve(['src/a.ts']);
   override squashMerge = () => Promise.resolve({ outcome: 'merged' as const, sha: 'm9' });
@@ -54,6 +61,7 @@ describe('a red base branch', () => {
   let store: PgStore;
   let globs: GlobService;
   let boards: BoardService;
+  let notifications: NotificationService;
   let host: FakeHost;
   let executors: ReturnType<typeof codeHostExecutors>;
   let handle: ReturnType<typeof githubDeliveryHandler>;
@@ -73,6 +81,7 @@ describe('a red base branch', () => {
       routines: { hasRoutine: () => Promise.resolve(true) },
     });
     boards = new BoardService({ store, notifier });
+    notifications = new NotificationService({ store, notifier, clock: { now: () => new Date().toISOString() } });
     await store.transaction(async (tx) => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
       const board = await tx.insertBoard({
@@ -87,7 +96,7 @@ describe('a red base branch', () => {
       await tx.upsertMember({ boardId: board.id, email: DEV, role: 'admin' });
     });
     host = new FakeHost();
-    executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), boards);
+    executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), boards, undefined, null, notifications);
     // These deliveries never carry review comments.
     const findings = { recordCodeRabbitComment: () => Promise.reject(new Error('not used here')) };
     const codeReviews = { record: () => Promise.reject(new Error('not used here')), remove: () => Promise.reject(new Error('not used here')) };
@@ -174,6 +183,13 @@ describe('a red base branch', () => {
     expect((await boardOf(1))?.baseChecks).toMatchObject({ state: 'failed', sha: 'm1', since: 's1f5', failure: { name: 'Check' } });
     expect((await current(early)).headChecks?.inheritedFrom).toEqual({ base: 'main', since: 's1f5' });
 
+    // The board's bar says what failed and who caused it.
+    const raised = unwrap(await notifications.list(DEV, 1));
+    expect(raised).toHaveLength(1);
+    expect(raised[0]).toMatchObject({ source: 'main-red', severity: 'critical', title: 'main is red since s1f5 merged', clears: { kind: 'condition' }, link: typecheck.url });
+    expect(raised[0]?.detail).toContain('error TS2739');
+    expect(raised[0]?.detail).toContain('Globs failing the same way are waiting');
+
     // A glob whose checks fail after the base's result is marked as the failure is recorded.
     const late = await newOpenGlob('Created on a red base');
     await globs.applyEvent(late, (g, ctx) => machine.checksChanged(g, ctx));
@@ -208,6 +224,7 @@ describe('a red base branch', () => {
     await handle(checkRunDelivery('main'));
     await run('board-1', 'refresh_base_checks');
     expect((await boardOf(1))?.baseChecks).toMatchObject({ state: 'passed', sha: 'm2' });
+    expect(unwrap(await notifications.list(DEV, 1))).toEqual([]);
     for (const id of inherited) expect(await pending(id, 'update_branch')).toHaveLength(1);
     for (const id of own) expect(await pending(id, 'update_branch')).toHaveLength(0);
 
@@ -248,5 +265,78 @@ describe('a red base branch', () => {
     host.updateBranchResult = 'conflict';
     expect(await run(conflicting, 'update_branch')).toEqual(['done']);
     expect((await current(conflicting)).conflict).toMatchObject({ base: 'main', files: ['src/a.ts'] });
+  });
+  it('reverts a sub whose merge commit turned the base red, and leaves a same alone', async () => {
+    const reverted: string[] = [];
+    host.revertCommit = (_repo, sha) => {
+      reverted.push(sha);
+      return Promise.resolve('reverted');
+    };
+    // The base is green first, so the next red result is blamed on the commit that caused it.
+    host.baseHead = { sha: 'g1', subject: 's1t9: green' };
+    host.checks = { g1: { state: 'passed', failure: null } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+
+    const merged = async (type: 'sub' | 'same') => {
+      const id = await newOpenGlob(`Merged ${type}`);
+      await store.transaction(async (tx) => {
+        const g = await tx.getGlob(id);
+        if (g === null) throw new Error('missing');
+        await tx.updateGlob({ ...g, type, status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'h1' }, version: g.version + 1 }, g.version);
+      });
+      return id;
+    };
+    const sub = await merged('sub');
+    host.baseHead = { sha: 'r1', subject: `${sub}: Merged sub` };
+    host.checks = { r1: { state: 'failed', failure: typecheck } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    const failed = await current(sub);
+    expect(failed.status).toBe('failed');
+    expect(failed.failure).toMatchObject({ kind: 'reverted' });
+    expect(failed.failure?.reason).toContain('Reverted from main');
+    expect(failed.failure?.reason).toContain(typecheck.url);
+    expect(await run(sub, 'revert_merge')).toEqual(['done']);
+    expect(reverted).toEqual(['r1']);
+
+    // A same that turns the base red is not reverted: a person decides.
+    host.baseHead = { sha: 'g2', subject: 's1t9: green again' };
+    host.checks = { g2: { state: 'passed', failure: null } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    const same = await merged('same');
+    host.baseHead = { sha: 'r2', subject: `${same}: Merged same` };
+    host.checks = { r2: { state: 'failed', failure: typecheck } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    expect((await current(same)).status).toBe('reviewing');
+    expect(await pending(same, 'revert_merge')).toHaveLength(0);
+  });
+
+  it('leaves the head pending while a check run is cancelled, re-requests it after five minutes, and passes on a later success', async () => {
+    host.mergeStateNow = 'pending';
+    host.rerequested.length = 0;
+    const id = await newOpenGlob('Cancelled gate');
+    const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+    host.cancelled = [{ id: 5, completedAt: minutesAgo(1) }];
+    await globs.applyEvent(id, (g, ctx) => machine.checksChanged(g, ctx));
+    // Too soon: the effect retries later, and nothing is recorded (not a failed head).
+    await expect(run(id, 'refresh_checks')).rejects.toThrow(/cancelled/);
+    expect((await current(id)).headChecks).toBeNull();
+    expect(host.rerequested).toEqual([]);
+    // No newer run after five minutes: the check run is asked for again; still pending.
+    host.cancelled = [{ id: 5, completedAt: minutesAgo(6) }];
+    await globs.applyEvent(id, (g, ctx) => machine.checksChanged(g, ctx));
+    // (The first, retried request is still queued beside the new one.)
+    expect(new Set(await run(id, 'refresh_checks'))).toEqual(new Set(['done']));
+    expect(new Set(host.rerequested)).toEqual(new Set([5]));
+    expect((await current(id)).headChecks).toBeNull();
+    // The newer run succeeds.
+    host.cancelled = [];
+    host.mergeStateNow = 'passed';
+    await globs.applyEvent(id, (g, ctx) => machine.checksChanged(g, ctx));
+    await run(id, 'refresh_checks');
+    expect((await current(id)).headChecks).toMatchObject({ sha: 'h1', state: 'passed' });
   });
 });

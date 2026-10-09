@@ -4,7 +4,7 @@ import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
 import type { BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, Repo, RepoConnection } from '../codehost.js';
-import { readCommitChecks } from './commit-checks.js';
+import { readCancelledChecks, readCommitChecks } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
 
@@ -279,7 +279,8 @@ export class GitHub implements CodeHost, CommitGraph {
       filter: 'latest',
     });
     const latest = data.check_runs
-      .filter((run) => run.status === 'completed' && run.head_sha === sha)
+      // A cancelled run has no verdict: a newer run replaces it, and its webhook follows.
+      .filter((run) => run.status === 'completed' && run.conclusion !== 'cancelled' && run.head_sha === sha)
       .sort((a, b) => (b.completed_at ?? '').localeCompare(a.completed_at ?? ''))[0];
     return latest === undefined ? null : { sha, passed: latest.conclusion === 'success' };
   }
@@ -298,6 +299,21 @@ export class GitHub implements CodeHost, CommitGraph {
   async commitChecks(repo: Repo, sha: string): Promise<{ state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }> {
     const gh = await this.octokit(repo);
     return readCommitChecks((route, params) => gh.request(route, params), repo, sha);
+  }
+
+  async cancelledChecks(repo: Repo, sha: string): Promise<{ id: number; completedAt: string | null }[]> {
+    const gh = await this.octokit(repo);
+    return readCancelledChecks((route, params) => gh.request(route, params), repo, sha);
+  }
+
+  async rerequestCheck(repo: Repo, checkRunId: number): Promise<void> {
+    const gh = await this.octokit(repo);
+    try {
+      await gh.request('POST /repos/{owner}/{repo}/check-runs/{check_run_id}/rerequest', { owner: repo.owner, repo: repo.name, check_run_id: checkRunId });
+    } catch (error) {
+      // Only the app that created a check run can ask for it again; another app's run is left to its own retry.
+      if (!isStatus(error, 403, 404, 422)) throw error;
+    }
   }
 
   async updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'> {
@@ -355,6 +371,31 @@ export class GitHub implements CodeHost, CommitGraph {
     }
   }
 
+  async revertCommit(repo: Repo, sha: string): Promise<'reverted' | 'moved'> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name };
+    const { data: ref } = await gh.request('GET /repos/{owner}/{repo}/git/ref/{ref}', { ...r, ref: `heads/${repo.base}` });
+    if (ref.object.sha !== sha) return 'moved';
+    const { data: commit } = await gh.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', { ...r, commit_sha: sha });
+    const parent = commit.parents[0]?.sha;
+    if (parent === undefined) return 'moved';
+    const { data: before } = await gh.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', { ...r, commit_sha: parent });
+    // The base is still at `sha`, so the revert is the parent's tree on top of it.
+    const { data: made } = await gh.request('POST /repos/{owner}/{repo}/git/commits', {
+      ...r,
+      message: `Revert "${commit.message.split('\n')[0] ?? sha}"\n\nThis reverts commit ${sha}: the checks failed on it.`,
+      tree: before.tree.sha,
+      parents: [sha],
+    });
+    try {
+      await gh.request('PATCH /repos/{owner}/{repo}/git/refs/{ref}', { ...r, ref: `heads/${repo.base}`, sha: made.sha, force: false });
+    } catch (error) {
+      if (isStatus(error, 422)) return 'moved';
+      throw error;
+    }
+    return 'reverted';
+  }
+
   async markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
@@ -368,6 +409,18 @@ export class GitHub implements CodeHost, CommitGraph {
       id: data.node_id,
     });
     return { wasDraft: true, sha: data.head.sha };
+  }
+
+  async conflictState(repo: Repo, prNumber: number): Promise<'clean' | 'conflict' | 'unknown'> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner: repo.owner,
+      repo: repo.name,
+      pull_number: prNumber,
+    });
+    // `mergeable` is null while GitHub computes it. A draft's `mergeable_state` is "draft", so `mergeable` decides.
+    if (data.mergeable === false || data.mergeable_state === 'dirty') return 'conflict';
+    return data.mergeable === true ? 'clean' : 'unknown';
   }
 
   async conflictFiles(repo: Repo, prNumber: number): Promise<string[]> {

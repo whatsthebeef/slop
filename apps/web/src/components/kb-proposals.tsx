@@ -62,6 +62,7 @@ const ownedPaths = (entries: readonly AgentSetEntry[]) =>
 /** A target as a readable path: `build_test_lint › Build`, `agents/implementer.md › Board rules`, or a new document. */
 const targetPath = (target: KbTarget, owned: ReadonlySet<string>): string => {
   if (target.kind === 'local_run') return 'Local-run spec';
+  if (target.kind === 'merge_policy') return 'Merge policy';
   if (target.newDocument !== null) {
     const { area, audience } = target.newDocument;
     return `new document: ${target.name} (${area}${audience.length === 0 ? '' : `, for ${audience.join(', ')}`})`;
@@ -986,7 +987,8 @@ const ProposalCard = ({
           {outcomeText(item, board)}{' '}
           {item.decidedBy !== null && (
             <span className='text-muted-foreground'>
-              · {item.decidedBy} · {when(item.decidedAt)}
+              · {item.decidedBy}
+              {item.outcome?.via === 'agent' && ' via agent'} · {when(item.decidedAt)}
             </span>
           )}
         </p>
@@ -1152,6 +1154,7 @@ const useTargetText = (boardId: number, kind: KnowledgeKind | null, name: string
     queryFn: async () => {
       if (kind === 'doc') return (await api.knowledgeDoc(boardId, name)).find((d) => d.name === name)?.content ?? '';
       if (kind === 'local_run') return (await api.knowledge(boardId)).localRun.content ?? '';
+      if (kind === 'merge_policy') return (await api.knowledge(boardId)).mergePolicy.content ?? '';
       return (await api.agentSetFile(boardId, name)).content;
     },
     enabled: kind !== null && name !== '' && !isNew,
@@ -1164,7 +1167,7 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
   const { markLocal } = useContext(KbMotion);
   const isNew = target.newDocument !== null;
   // The local-run spec is replaced whole, like a new document's body.
-  const isSpec = target.kind === 'local_run';
+  const isSpec = target.kind === 'local_run' || target.kind === 'merge_policy';
   const text = useTargetText(boardId, target.kind, target.name, isNew);
   const current = isNew ? '' : text.data;
   const headings = current === undefined ? [] : spliceHeadings(current).map((h) => h.text);
@@ -1252,7 +1255,7 @@ const DraftEditor = ({ boardId, item, target, onClose }: { boardId: number; item
   );
 };
 
-type TargetKind = 'doc' | 'agent' | 'new' | 'local_run';
+type TargetKind = 'doc' | 'agent' | 'new' | 'local_run' | 'merge_policy';
 
 /** Points the item at another target; its draft is cleared and it is drafted again there. */
 const TargetEditor = ({
@@ -1275,13 +1278,15 @@ const TargetEditor = ({
       ? 'doc'
       : target.newDocument !== null
         ? 'new'
-        : target.kind === 'doc' || target.kind === 'local_run'
+        : target.kind === 'doc' || target.kind === 'local_run' || target.kind === 'merge_policy'
           ? target.kind
           : 'agent',
   );
   const [docName, setDocName] = useState(target?.kind === 'doc' && target.newDocument === null ? target.name : (documents[0]?.name ?? ''));
   const [agentPath, setAgentPath] = useState(
-    target !== null && target.kind !== 'doc' && target.kind !== 'local_run' ? target.name : (agentFiles[0]?.path ?? ''),
+    target !== null && target.kind !== 'doc' && target.kind !== 'local_run' && target.kind !== 'merge_policy'
+      ? target.name
+      : (agentFiles[0]?.path ?? ''),
   );
   const [section, setSection] = useState(target?.section ?? '');
   const [newName, setNewName] = useState(target !== null && target.newDocument !== null ? target.name : '');
@@ -1293,7 +1298,7 @@ const TargetEditor = ({
   const name = kind === 'doc' ? docName : kind === 'agent' ? agentPath : newName.trim();
   const textKind = kind === 'doc' ? 'doc' : kind === 'agent' ? (agent?.kind ?? null) : null;
   // The spec has no sections, so its text isn't needed here.
-  const text = useTargetText(boardId, textKind, name, kind === 'new' || kind === 'local_run');
+  const text = useTargetText(boardId, textKind, name, kind === 'new' || kind === 'local_run' || kind === 'merge_policy');
   const headings = text.data === undefined ? [] : [...new Set(spliceHeadings(text.data).map((h) => h.text))];
 
   const change = (): TargetChange | null => {
@@ -1301,6 +1306,7 @@ const TargetEditor = ({
     if (kind === 'doc') return docName === '' ? null : { kind: 'doc', name: docName, section: heading };
     if (kind === 'agent') return agent === null ? null : { kind: agent.kind, name: agent.path, section: heading };
     if (kind === 'local_run') return { kind: 'local_run', name: 'local-run', section: null };
+    if (kind === 'merge_policy') return { kind: 'merge_policy', name: 'merge-policy', section: null };
     const people = audience
       .split(',')
       .map((a) => a.trim())
@@ -1340,6 +1346,7 @@ const TargetEditor = ({
             ['agent', 'An agent file (board rules)'],
             ['new', 'A new document'],
             ['local_run', 'Local-run spec'],
+            ['merge_policy', 'Merge policy'],
           ] as const
         ).map(([value, label]) => (
           <Button

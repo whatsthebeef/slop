@@ -10,13 +10,13 @@ import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
 import { GlobDialog } from '@/components/glob-dialog';
-import { BaseRedBanner, ReadinessBanner } from '@/components/readiness';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
+import { withGlob } from '@/lib/glob-list';
 import { codeReviewsKey, deploysKey, globsKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useToast } from '@/toast';
@@ -58,7 +58,7 @@ const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
     };
   };
   if (glob.list === 'planning') {
-    return (['start', 'pick_up', 'take_over', 'retrigger'] as const)
+    return (['start', 'start_anyway', 'pick_up', 'take_over', 'retrigger'] as const)
       .filter((a) => allowed.includes(a))
       .map((a) => make(a, 'right', 'doing'));
   }
@@ -278,12 +278,10 @@ export const BoardPage = () => {
     return () => clearTimeout(timer);
   }, [globs.dataUpdatedAt, client]);
 
-  // Keeps the known artifact summaries when a response carries none.
+  // Keeps the known artifact summaries when a response carries none. A response can land after the
+  // page has moved to another board, so it goes to the list of the glob's own board.
   const store = (glob: GlobView) =>
-    client.setQueryData<GlobView[]>(globsKey(boardId), (list = []) => {
-      const artifacts = glob.artifacts ?? list.find((g) => g.id === glob.id)?.artifacts;
-      return [...list.filter((g) => g.id !== glob.id), artifacts === undefined ? glob : { ...glob, artifacts }];
-    });
+    client.setQueryData<GlobView[]>(globsKey(glob.boardId), (list) => withGlob(list, glob, glob.boardId));
 
   /** Shows the error; on a version conflict, takes the current glob so the next click works. */
   const fail = (error: unknown) => {
@@ -367,8 +365,8 @@ export const BoardPage = () => {
   return (
     <div className='flex h-full flex-col' data-testid='board' data-live={live}>
       <OfflineNotice live={live} />
-      {/* The board's toolbar, under the app's status bar; the board's own top padding spaces it below. */}
-      <header className='flex flex-wrap items-center gap-3 px-5 pt-4'>
+      {/* Under the tabs and the line: New Glob and the type filters (this page is the board tab only). */}
+      <div className='flex flex-wrap items-center gap-3 px-5 pt-2'>
         <h1 className='sr-only'>{board.data.name}</h1>
         <div className='flex gap-0.5 rounded-md border bg-muted p-0.5' role='group' aria-label='Filter by type'>
           {(['all', ...SLOP_TYPES] as const).map((t) => (
@@ -384,25 +382,11 @@ export const BoardPage = () => {
             </Button>
           ))}
         </div>
-        <nav className='ml-auto flex flex-wrap items-center gap-8 text-sm'>
-          <Link className='hover:underline' to={`/boards/${boardId}/signed-off`}>
-            Signed off
-          </Link>
-          <Link className='hover:underline' to={`/boards/${boardId}/knowledge`}>
-            Knowledge
-          </Link>
-          <Link className='hover:underline' to={`/boards/${boardId}/settings`}>
-            Settings
-          </Link>
-          {/* Same text size as the nav links beside it (the small button size uses text-xs). */}
-          <Button size='sm' className='text-sm' onClick={() => setCreating(true)}>
-            <Plus className='h-4 w-4' /> New glob
-          </Button>
-        </nav>
-      </header>
+        <Button size='sm' className='ml-auto text-sm' onClick={() => setCreating(true)}>
+          <Plus className='h-4 w-4' /> New Glob
+        </Button>
+      </div>
 
-      <BaseRedBanner board={board.data} />
-      <ReadinessBanner boardId={boardId} />
 
       <main
         ref={(el) => {
