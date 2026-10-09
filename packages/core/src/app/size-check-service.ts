@@ -38,7 +38,8 @@ export type SizeAssessment = Pick<SizeCheck, 'planHash' | 'estimate' | 'evidence
 
 /** What `GlobService` and `ArtifactService` need: assess a plan before creating a glob, and refresh a glob's check after a plan save. */
 export interface SizeAssessor {
-  assess(boardId: number, plan: string): Promise<SizeAssessment>;
+  /** `summaryOnly`: no plan was written, `plan` is the glob's summary; the model's parts estimate is not used for it. */
+  assess(boardId: number, plan: string, options?: { summaryOnly?: boolean }): Promise<SizeAssessment>;
   /** Re-assesses a glob in Planning after its plan.md changed. Never throws. */
   refresh(globId: string): Promise<void>;
 }
@@ -101,13 +102,16 @@ export class SizeCheckService implements SizeAssessor {
       /** The intake model; absent: estimates come from the text alone. */
       llm?: Llm;
       llmTimeoutMs?: number;
+      /** Called after a re-judged check was written, so the glob's hold follows it (set when newly flagged, lifted when not). */
+      onRechecked?: (globId: string) => Promise<void>;
     },
   ) {}
 
-  async assess(boardId: number, plan: string): Promise<SizeAssessment> {
+  async assess(boardId: number, plan: string, options: { summaryOnly?: boolean } = {}): Promise<SizeAssessment> {
     const threshold = await this.deps.store.transaction((tx) => tx.getSizeThreshold(boardId));
     let estimate = estimateFromText(plan);
-    if (this.deps.llm !== undefined && plan.trim().length >= MIN_JUDGED_CHARS) {
+    // A sentence of summary says nothing about how many parts the work has: only the text estimate, which cannot hold a glob.
+    if (this.deps.llm !== undefined && options.summaryOnly !== true && plan.trim().length >= MIN_JUDGED_CHARS) {
       try {
         const answer = await completeWithDeadline(
           this.deps.llm,
@@ -169,7 +173,10 @@ export class SizeCheckService implements SizeAssessor {
         await tx.updateSizeAssessment(checkFrom(globId, read.boardId, assessment, await tx.getSizeCheck(globId), this.deps.clock.now()));
         return true;
       });
-      if (written) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: read.boardId, globId });
+      if (written) {
+        await this.deps.onRechecked?.(globId);
+        this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: read.boardId, globId });
+      }
     } catch {
       // Best effort: the check made at creation stands.
     }
