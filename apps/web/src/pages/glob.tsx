@@ -8,6 +8,7 @@ import { ACTION_PATHS, api, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView } from '@/lib/api';
 import { withGlob } from '@/lib/glob-list';
 import { globsKey, useLiveBoard } from '@/lib/live';
+import { usePageContext } from '@/lib/page-context';
 import { useToast } from '@/toast';
 
 /** How often the glob is read again; the board's live hints refresh the cards, not this page's glob. */
@@ -27,6 +28,9 @@ export const GlobPage = () => {
   useLiveBoard(boardId);
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
   const glob = useQuery({ queryKey: globKey(globId), queryFn: () => api.glob(globId), refetchInterval: REFRESH_MS });
+  const view = glob.data;
+  const state = view === undefined ? undefined : view.status === 'failed' || view.failure !== null ? 'failed' : view.status === 'signed_off' || view.pr?.state === 'merged' ? 'merged' : 'open';
+  usePageContext({ type: 'glob', id: globId, ...(state === undefined ? {} : { state }) });
   const kind = search.get('artifact');
   const initialArtifact = kind === null ? null : ({ kind, label: '' } as ArtifactRef);
   const toBoard = () => void navigate(`/boards/${String(boardId)}`);

@@ -8,6 +8,8 @@ import { BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
 import { hideSignedOff, isChatShortcut, WIDE_QUERY } from '@/lib/chat';
 import { newCount } from '@/lib/inbox';
+import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
+import type { PageContext } from '@/lib/page-context';
 import { inboxKey } from '@/lib/live';
 import { activeTab, BOARD_TABS, pollInterval } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
@@ -90,6 +92,9 @@ export const BoardShell = () => {
   const [chatOpen, setChatOpen] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
   const [focusToken, setFocusToken] = useState(0);
+  // The conversation stays open across pages and while the panel is closed; the pages say where the person is.
+  const [chatId, setChatId] = useState<number | null>(null);
+  const [page, setPage] = useState<PageContext>(BOARD_PAGE);
   const wide = useMedia(WIDE_QUERY);
   const openChat = () => {
     setChatOpen(true);
@@ -111,6 +116,7 @@ export const BoardShell = () => {
   }, [isBoard]);
   const showChat = isBoard && chatOpen;
   return (
+    <PageContextProvider page={page} setPage={setPage}>
     <div className='flex h-dvh flex-col'>
       <BoardBar current={isBoard ? boardId : undefined} />
       {isBoard && <NotificationBar boardId={boardId} />}
@@ -119,8 +125,9 @@ export const BoardShell = () => {
         <div className={cn('min-h-0 min-w-0 flex-1 overflow-auto', showChat && fullScreen && 'hidden')} data-testid='main-area'>
           <Outlet context={{ headerActions, hideSignedOff: hideSignedOff(showChat, wide) } satisfies BoardShellContext} />
         </div>
-        {showChat && <ChatPanel boardId={boardId} fullScreen={fullScreen} focusToken={focusToken} onClose={closeChat} onFullScreenChange={setFullScreen} />}
+        {showChat && <ChatPanel boardId={boardId} fullScreen={fullScreen} focusToken={focusToken} chatId={chatId} onChatChange={setChatId} onClose={closeChat} onFullScreenChange={setFullScreen} />}
       </div>
     </div>
+    </PageContextProvider>
   );
 };

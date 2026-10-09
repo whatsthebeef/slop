@@ -26,6 +26,8 @@ export interface LlmRequest {
 
 export interface Llm {
   complete(request: LlmRequest): Promise<string>;
+  /** Like `complete`, but hands each piece of text over as it arrives; resolves with the whole answer. Adapters that can't stream leave it out. */
+  stream?(request: LlmRequest, onText: (text: string) => void): Promise<string>;
 }
 
 /**

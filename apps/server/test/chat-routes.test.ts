@@ -1,5 +1,5 @@
-import { llmUnavailable, forbidden, ok } from '@slop/core';
-import type { ChatCitation, ChatMessage, ChatService, Result } from '@slop/core';
+import { llmUnavailable, forbidden, notFound, ok } from '@slop/core';
+import type { ChatCitation, ChatMessage, ChatService, ChatThread, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Hono } from 'hono';
@@ -12,7 +12,8 @@ import type { McpDeps } from '../src/mcp/server.js';
 
 const DEV = 'dev@example.com';
 const AT = '2026-10-05T12:00:00.000Z';
-const message = (id: number, role: 'user' | 'assistant', content: string): ChatMessage => ({ id, boardId: 1, email: DEV, role, content, citations: null, createdAt: AT });
+const thread: ChatThread = { id: 7, boardId: 1, email: DEV, title: 'q', createdAt: AT, updatedAt: AT };
+const message = (id: number, role: 'user' | 'assistant', content: string): ChatMessage => ({ id, chatId: 7, boardId: 1, email: DEV, role, content, citations: null, createdAt: AT });
 const citation: ChatCitation = { n: 1, source: 'decision', sourceLabel: 'Decision', title: 'Use backoff', date: AT, link: '/boards/1?glob=s1t1', globId: 's1t1', status: 'active', supersededBy: null };
 
 type Ask = ChatService['ask'];
@@ -22,23 +23,33 @@ type Answer = ChatService['answer'];
 describe('chat route and ask_board', () => {
   let asked: Parameters<Ask>[];
   let answered: Parameters<Answer>[];
-  let next: Result<{ question: ChatMessage; reply: ChatMessage; answered: boolean }>;
-  let cleared: [string, number][];
+  let next: Result<{ chat: ChatThread; question: ChatMessage; reply: ChatMessage; answered: boolean }>;
+  let removed: [string, number, number][];
+  let saved: unknown[][];
+  /** What the stand-in streams before it answers. */
+  let pieces: string[];
   let app: Hono<Env>;
 
   const chat = {
     ask: (...args: Parameters<Ask>) => {
       asked.push(args);
+      for (const piece of pieces) args[2]?.(piece);
       return Promise.resolve(next);
     },
     answer: (...args: Parameters<Answer>) => {
       answered.push(args);
       return Promise.resolve(ok({ answer: 'Exponential [1]', answered: true, citations: [citation] }));
     },
-    history: (email: string, board: number) => Promise.resolve(board === 1 ? ok([message(1, 'user', 'q')]) : forbidden(`${email} is not on board ${String(board)}`)),
-    clear: (email: string, board: number) => {
-      cleared.push([email, board]);
+    chats: (email: string, board: number) => Promise.resolve(board === 1 ? ok([thread]) : forbidden(`${email} is not on board ${String(board)}`)),
+    history: (email: string, board: number, id: number) =>
+      Promise.resolve(board !== 1 ? forbidden(`${email} is not on board ${String(board)}`) : id === 7 ? ok([message(1, 'user', 'q')]) : notFound('No conversation')),
+    remove: (email: string, board: number, id: number) => {
+      removed.push([email, board, id]);
       return Promise.resolve(ok(null));
+    },
+    saveToKnowledge: (...args: unknown[]) => {
+      saved.push(args);
+      return Promise.resolve(ok({ id: 's1k4' }));
     },
   };
 
@@ -52,8 +63,10 @@ describe('chat route and ask_board', () => {
   beforeEach(() => {
     asked = [];
     answered = [];
-    cleared = [];
-    next = ok({ question: message(2, 'user', 'q'), reply: message(3, 'assistant', 'a'), answered: true });
+    removed = [];
+    saved = [];
+    pieces = [];
+    next = ok({ chat: thread, question: message(2, 'user', 'q'), reply: message(3, 'assistant', 'a'), answered: true });
     app = new Hono<Env>();
     app.use('/api/*', async (c, nextHandler) => {
       c.set('email', DEV);
@@ -62,23 +75,70 @@ describe('chat route and ask_board', () => {
     mountChat(app, { chat });
   });
 
-  it('GET returns the person\'s messages, and the service\'s refusal as 403', async () => {
-    const ok200 = await send('GET', '1/chat');
-    expect(ok200.status).toBe(200);
-    expect(await ok200.json()).toEqual({ messages: [message(1, 'user', 'q')] });
-    expect((await send('GET', '2/chat')).status).toBe(403);
-    expect((await send('GET', 'x/chat')).status).toBe(422);
+  it('GET lists the person\'s conversations and one conversation\'s messages, with the service\'s refusals', async () => {
+    const list = await send('GET', '1/chats');
+    expect(list.status).toBe(200);
+    expect(await list.json()).toEqual({ chats: [thread] });
+    expect((await send('GET', '2/chats')).status).toBe(403);
+    expect((await send('GET', 'x/chats')).status).toBe(422);
+    const one = await send('GET', '1/chats/7');
+    expect(await one.json()).toEqual({ messages: [message(1, 'user', 'q')] });
+    expect((await send('GET', '1/chats/8')).status).toBe(404);
+    expect((await send('GET', '1/chats/x')).status).toBe(422);
   });
 
-  it('POST passes the question and scope to the service and returns both messages', async () => {
-    const res = await send('POST', '1/chat', { question: '  why backoff? ', history: true, glob: 's1t1', group: 'sync' });
+  it('POST passes the question, conversation, scope, page and think to the service and returns the messages', async () => {
+    const res = await send('POST', '1/chat', {
+      question: '  why backoff? ',
+      chat: 7,
+      history: true,
+      glob: 's1t1',
+      group: 'sync',
+      page: { type: 'glob', id: 's1t1' },
+      think: true,
+    });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ reply: { content: 'a' }, answered: true });
-    expect(asked).toEqual([[DEV, { boardId: 1, question: 'why backoff?', history: true, globId: 's1t1', group: 'sync' }]]);
+    expect(await res.json()).toMatchObject({ chat: { id: 7 }, reply: { content: 'a' }, answered: true });
+    expect(asked.map(([email, request]) => [email, request])).toEqual([
+      [DEV, { boardId: 1, question: 'why backoff?', chatId: 7, history: true, globId: 's1t1', group: 'sync', page: { type: 'glob', id: 's1t1' }, thinkHarder: true }],
+    ]);
+  });
+
+  it('POST streams text pieces then the stored messages when the client accepts an event stream', async () => {
+    pieces = ['Expo', 'nential [1]'];
+    const res = await app.request('/api/boards/1/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+      body: JSON.stringify({ question: 'why backoff?' }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
+    const body = await res.text();
+    const events = body
+      .split('\n\n')
+      .filter((e) => e.trim() !== '')
+      .map((e) => ({ event: /event: (.*)/.exec(e)?.[1], data: JSON.parse(/data: (.*)/.exec(e)?.[1] ?? 'null') as unknown }));
+    expect(events.map((e) => e.event)).toEqual(['text', 'text', 'done']);
+    expect(events[0]?.data).toEqual({ text: 'Expo' });
+    expect(events[2]?.data).toMatchObject({ chat: { id: 7 }, answered: true });
+    // The service is given a signal to stop on.
+    expect(asked[0]?.[1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('POST streams an error event with the status and body when the service refuses', async () => {
+    next = llmUnavailable('Bedrock is busy', 'It is retried automatically, with a growing delay');
+    const res = await app.request('/api/boards/1/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+      body: JSON.stringify({ question: 'q' }),
+    });
+    const body = await res.text();
+    expect(body).toContain('event: error');
+    expect(JSON.parse(/data: (.*)/.exec(body)?.[1] ?? 'null')).toMatchObject({ status: 503, body: { code: 'llm_unavailable', reason: 'Bedrock is busy' } });
   });
 
   it('POST rejects a missing, blank, over-long or non-JSON question with 422 and does not call the service', async () => {
-    for (const body of [{}, { question: '   ' }, { question: 'x'.repeat(2001) }, { question: 'q', history: 'yes' }, 'not json']) {
+    for (const body of [{}, { question: '   ' }, { question: 'x'.repeat(2001) }, { question: 'q', history: 'yes' }, { question: 'q', page: { type: 'elsewhere' } }, { question: 'q', chat: 0 }, 'not json']) {
       expect((await send('POST', '1/chat', body)).status).toBe(422);
     }
     expect(asked).toEqual([]);
@@ -91,9 +151,19 @@ describe('chat route and ask_board', () => {
     expect(await res.json()).toMatchObject({ code: 'llm_unavailable', reason: 'Bedrock is busy' });
   });
 
-  it('DELETE clears the conversation', async () => {
-    expect((await send('DELETE', '1/chat')).status).toBe(200);
-    expect(cleared).toEqual([[DEV, 1]]);
+  it('DELETE removes one conversation', async () => {
+    expect((await send('DELETE', '1/chats/7')).status).toBe(200);
+    expect(removed).toEqual([[DEV, 1, 7]]);
+    expect((await send('DELETE', '1/chats/x')).status).toBe(422);
+  });
+
+  it('save sends the answer to the proposal queue, optionally naming the page\'s glob', async () => {
+    const res = await send('POST', '1/chats/7/messages/3/save', { glob: 's1t1' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: 's1k4' });
+    expect((await send('POST', '1/chats/7/messages/4/save')).status).toBe(200);
+    expect(saved).toEqual([[DEV, 1, 7, 3, 's1t1'], [DEV, 1, 7, 4, undefined]]);
+    expect((await send('POST', '1/chats/7/messages/x/save')).status).toBe(422);
   });
 
   it('ask_board returns the answer with its citations and takes the optional glob', async () => {

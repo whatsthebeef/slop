@@ -9,12 +9,14 @@ import { ReadinessChecklist } from '@/components/readiness';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
+import { usePageContext } from '@/lib/page-context';
 import { useToast } from '@/toast';
 
 const message = (error: unknown) => (error instanceof RequestError ? error.body.message : 'Something went wrong');
 
 export const SettingsPage = () => {
   const boardId = Number(useParams().boardId);
+  usePageContext({ type: 'settings' });
   const client = useQueryClient();
   const toast = useToast();
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
@@ -769,6 +771,7 @@ const DeploySettings = ({
 
 export const SignedOffPage = () => {
   const boardId = Number(useParams().boardId);
+  usePageContext({ type: 'signed_off' });
   const pages = useInfiniteQuery({
     queryKey: ['signed-off', boardId],
     queryFn: ({ pageParam }) => api.signedOff(boardId, pageParam),

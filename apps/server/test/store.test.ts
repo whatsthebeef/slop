@@ -234,20 +234,33 @@ describe('PgStore', () => {
     expect(await store.transaction((tx) => tx.getUser('ghost@example.com'))).toBeNull();
   });
 
-  it('keeps each person\'s chat messages with their citations, latest first limited, and clears only theirs', async () => {
+  it('keeps conversations per person with their messages, citations and tools, and deletes one with its messages', async () => {
     const citation = { n: 1, source: 'decision' as const, sourceLabel: 'Decision', title: 'T', date: '2026-10-01T00:00:00.000Z', link: null, globId: null, status: 'active' as const, supersededBy: null };
     const at = '2026-10-05T12:00:00.000Z';
+    const later = '2026-10-05T13:00:00.000Z';
+    const mine = await store.transaction((tx) => tx.createChat({ boardId: 1, email: 'dev@example.com', title: 'first', createdAt: at }));
+    const second = await store.transaction((tx) => tx.createChat({ boardId: 1, email: 'dev@example.com', title: 'second', createdAt: at }));
+    const theirs = await store.transaction((tx) => tx.createChat({ boardId: 1, email: 'other@example.com', title: 'theirs', createdAt: at }));
+    const base = (chatId: number, email: string) => ({ chatId, boardId: 1, email, createdAt: at });
     await store.transaction(async (tx) => {
-      await tx.addChatMessage({ boardId: 1, email: 'dev@example.com', role: 'user', content: 'q1', citations: null, createdAt: at });
-      await tx.addChatMessage({ boardId: 1, email: 'dev@example.com', role: 'assistant', content: 'a1', citations: [citation], createdAt: at });
-      await tx.addChatMessage({ boardId: 1, email: 'dev@example.com', role: 'user', content: 'q2', citations: null, createdAt: at });
-      await tx.addChatMessage({ boardId: 1, email: 'other@example.com', role: 'user', content: 'theirs', citations: null, createdAt: at });
+      await tx.addChatMessage({ ...base(mine.id, 'dev@example.com'), role: 'user', content: 'q1', citations: null });
+      await tx.addChatMessage({ ...base(mine.id, 'dev@example.com'), role: 'assistant', content: 'a1', citations: [citation], tools: ['Searched'] });
+      await tx.addChatMessage({ ...base(mine.id, 'dev@example.com'), role: 'user', content: 'q2', citations: null });
+      await tx.addChatMessage({ ...base(theirs.id, 'other@example.com'), role: 'user', content: 'theirs', citations: null });
     });
-    const latest = await store.transaction((tx) => tx.listChatMessages(1, 'dev@example.com', 2));
+    const latest = await store.transaction((tx) => tx.listChatMessages(mine.id, 2));
     expect(latest.map((m) => m.content)).toEqual(['a1', 'q2']);
     expect(latest[0]?.citations).toEqual([citation]);
-    await store.transaction((tx) => tx.clearChat(1, 'dev@example.com'));
-    expect(await store.transaction((tx) => tx.listChatMessages(1, 'dev@example.com', 50))).toEqual([]);
-    expect((await store.transaction((tx) => tx.listChatMessages(1, 'other@example.com', 50))).map((m) => m.content)).toEqual(['theirs']);
+    expect(latest[0]?.tools).toEqual(['Searched']);
+    await store.transaction((tx) => tx.touchChat(mine.id, later));
+    expect((await store.transaction((tx) => tx.listChats(1, 'dev@example.com', 10))).map((c) => [c.title, c.updatedAt])).toEqual([
+      ['first', later],
+      ['second', at],
+    ]);
+    expect((await store.transaction((tx) => tx.getChat(second.id)))?.title).toBe('second');
+    await store.transaction((tx) => tx.deleteChat(mine.id));
+    expect(await store.transaction((tx) => tx.getChat(mine.id))).toBeNull();
+    expect(await store.transaction((tx) => tx.listChatMessages(mine.id, 50))).toEqual([]);
+    expect((await store.transaction((tx) => tx.listChatMessages(theirs.id, 50))).map((m) => m.content)).toEqual(['theirs']);
   });
 });

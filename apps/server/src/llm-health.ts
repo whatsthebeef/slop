@@ -48,18 +48,20 @@ export class LlmHealth {
 
   /** The LLM port for `model`, recording each call's outcome here and passing results and errors through unchanged. */
   track(llm: Llm, model: string): Llm {
+    const watch = async (call: () => Promise<string>): Promise<string> => {
+      try {
+        const answer = await call();
+        this.record(model, { state: 'ok', since: this.now() });
+        this.setThrottled(model, false);
+        return answer;
+      } catch (error) {
+        this.noteFailure(model, error);
+        throw error;
+      }
+    };
     return {
-      complete: async (request: LlmRequest) => {
-        try {
-          const answer = await llm.complete(request);
-          this.record(model, { state: 'ok', since: this.now() });
-          this.setThrottled(model, false);
-          return answer;
-        } catch (error) {
-          this.noteFailure(model, error);
-          throw error;
-        }
-      },
+      complete: (request: LlmRequest) => watch(() => llm.complete(request)),
+      ...(llm.stream === undefined ? {} : { stream: (request: LlmRequest, onText: (text: string) => void) => watch(() => llm.stream?.(request, onText) ?? Promise.resolve('')) }),
     };
   }
 

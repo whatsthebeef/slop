@@ -12,6 +12,7 @@ import { api, RequestError } from '@/lib/api';
 import type { GlobView, InboxItemView } from '@/lib/api';
 import { attachableGlobs, pendingCount, processingNote, visibleItems } from '@/lib/inbox';
 import { globsKey, inboxKey, useLiveInbox } from '@/lib/live';
+import { usePageContext } from '@/lib/page-context';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
 
@@ -274,6 +275,7 @@ export const InboxPage = () => {
   const { headerActions } = useOutletContext<BoardShellContext>();
   const [params] = useSearchParams();
   const target = Number(params.get('item'));
+  usePageContext({ type: 'inbox', ...(Number.isInteger(target) && target > 0 ? { id: String(target) } : {}) });
   const [pasting, setPasting] = useState(false);
   const [onlyNew, setOnlyNew] = useState(false);
   const items = useQuery({

@@ -1,4 +1,4 @@
-import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import { LlmBusy, LlmUnavailable } from '@slop/core';
 import type { Llm, LlmRequest } from '@slop/core';
 
@@ -167,5 +167,37 @@ export class BedrockLlm implements Llm {
       output: response.usage?.outputTokens ?? 0,
     });
     return (response.output?.message?.content ?? []).map((block) => block.text ?? '').join('');
+  }
+
+  /** `complete`, handing each piece of text over as it arrives (the board chat's streaming answers). */
+  async stream(request: LlmRequest, onText: (text: string) => void): Promise<string> {
+    let whole = '';
+    try {
+      const response = await this.client.send(
+        new ConverseStreamCommand({
+          modelId: this.modelId,
+          system: [{ text: request.system }],
+          messages: [{ role: 'user', content: [{ text: request.prompt }] }],
+          inferenceConfig:
+            this.temperature === null
+              ? { maxTokens: request.maxTokens }
+              : { maxTokens: request.maxTokens, temperature: this.temperature },
+        }),
+        request.signal === undefined ? {} : { abortSignal: request.signal },
+      );
+      for await (const event of response.stream ?? []) {
+        const piece = event.contentBlockDelta?.delta?.text;
+        if (piece !== undefined && piece !== '') {
+          whole += piece;
+          onText(piece);
+        }
+        if (event.metadata?.usage !== undefined) {
+          this.onUsage({ model: this.modelId, input: event.metadata.usage.inputTokens ?? 0, output: event.metadata.usage.outputTokens ?? 0 });
+        }
+      }
+    } catch (error) {
+      throw classifyBedrockError(error, this.site) ?? error;
+    }
+    return whole;
   }
 }
