@@ -353,6 +353,14 @@ export const api = {
   boardSignals: (boardId: number) => request<KbSignal[]>('GET', `/api/boards/${boardId}/kb/signals`),
   /** The board's learned sub size limit, its bounds and its history (members). */
   subLimit: (boardId: number) => request<SubLimitView>('GET', `/api/boards/${boardId}/sub-limit`),
+  /** Whether the board has an active integration token (members); the secret is never returned here. */
+  integrationToken: (boardId: number) =>
+    request<{ active: boolean; createdAt: string | null }>('GET', `/api/boards/${boardId}/integration-token`),
+  /** Makes a token (admins), revoking the old one; the response carries the secret, once. */
+  createIntegrationToken: (boardId: number) =>
+    request<{ token: string; createdAt: string }>('POST', `/api/boards/${boardId}/integration-token`),
+  revokeIntegrationToken: (boardId: number) =>
+    request<{ active: boolean; createdAt: string | null }>('DELETE', `/api/boards/${boardId}/integration-token`),
   plan: (id: string) =>
     request<{ current: ArtifactView | null; versions: { version: number; createdAt: string; by: string }[] }>(
       'GET',

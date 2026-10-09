@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -41,6 +41,7 @@ import { mountCodeReviews } from './http/code-reviews.js';
 import { mountSearch } from './http/search.js';
 import { mountDecisions } from './http/decisions.js';
 import { mountInbox } from './http/inbox.js';
+import { mountIntegrations } from './http/integrations.js';
 import { mountNotifications } from './http/notifications.js';
 import { AwsSignIn, AwsSsoOidc, readSsoSession, ssoCacheFile } from './aws-sso.js';
 import { IntegrationRegistry } from './integration-health.js';
@@ -227,6 +228,13 @@ const decisionSync = new SearchSync(decisionPipeline, logError, Date.now, 'decis
 const decisions = new DecisionService({ store, clock, notifier: hub });
 // The board inbox: `add` stores and indexes a paste at once; the pipeline then summarises it and suggests globs (Haiku).
 const inbox = new InboxService({ store, clock, notifier: hub });
+// The Meet notes Apps Script (and later integrations) deliver with a per-board token: only its hash is stored.
+const integrationTokens = new IntegrationTokenService({
+  store,
+  clock,
+  newSecret: () => `slopit_${randomBytes(32).toString('base64url')}`,
+  hashSecret: (secret) => createHash('sha256').update(secret).digest('hex'),
+});
 const inboxPipeline = new InboxPipeline({ store, clock, notifier: hub, embedder, llm: searchLlm });
 // A change to a board's material marks it for the next sync.
 hub.tap((hint) => {
@@ -305,6 +313,7 @@ mountCodeReviews(app, { codeReviews });
 mountSearch(app, { search });
 mountDecisions(app, { decisions });
 mountInbox(app, { inbox });
+mountIntegrations(app, { inbox, tokens: integrationTokens });
 mountNotifications(app, { notifications });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.

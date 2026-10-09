@@ -264,6 +264,7 @@ export const SettingsPage = () => {
           Agents may approve agent-file and contradicting items
         </label>
         <SubLimit boardId={boardId} admin={admin} />
+        <IntegrationToken boardId={boardId} admin={admin} />
         <DeploySettings
           deploy={deploy}
           environments={envs.filter((e) => e.allowBranchDeploy && e.name.trim() !== '').map((e) => e.name)}
@@ -344,6 +345,63 @@ const outcomeText = (change: SubLimitChange): string =>
  * The learned sub size limit: read-only (slop moves it with outcomes), with its history. Every value is rendered as
  * text, including the evidence quotes, which come from labels' checklists and bug reports.
  */
+/** The board's integration token (the Meet notes script's credential): created and shown once, or revoked. */
+const IntegrationToken = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const client = useQueryClient();
+  const toast = useToast();
+  const status = useQuery({ queryKey: ['integration-token', boardId], queryFn: () => api.integrationToken(boardId) });
+  // The secret lives only in this state: leaving the page loses it, as the server keeps just its hash.
+  const [secret, setSecret] = useState<string | null>(null);
+  const refresh = () => client.invalidateQueries({ queryKey: ['integration-token', boardId] });
+  const create = useMutation({
+    mutationFn: () => api.createIntegrationToken(boardId),
+    onSuccess: (made) => {
+      setSecret(made.token);
+      void refresh();
+    },
+    onError: (e) => toast(message(e)),
+  });
+  const revoke = useMutation({
+    mutationFn: () => api.revokeIntegrationToken(boardId),
+    onSuccess: () => {
+      setSecret(null);
+      void refresh();
+    },
+    onError: (e) => toast(message(e)),
+  });
+  return (
+    <div className='grid gap-2' data-testid='integration-token'>
+      <h3 className='text-xs font-semibold text-muted-foreground'>Integration token</h3>
+      <p className='text-xs text-muted-foreground'>
+        Lets an outside script (the Google Meet notes Apps Script) add items to this board's inbox, and nothing else.
+        slop keeps only its hash, so copy it when it is shown. Creating a new token revokes the old one.
+      </p>
+      {status.data !== undefined && (
+        <p className='text-sm'>
+          {status.data.active ? `Active since ${new Date(status.data.createdAt ?? '').toLocaleString()}` : 'No active token'}
+        </p>
+      )}
+      {secret !== null && (
+        <p className='break-all rounded border p-2 font-mono text-xs' data-testid='integration-token-secret'>
+          {secret}
+        </p>
+      )}
+      {admin && (
+        <div className='flex gap-2'>
+          <Button size='sm' variant='outline' disabled={create.isPending} onClick={() => create.mutate()}>
+            {status.data?.active === true ? 'Replace token' : 'Create token'}
+          </Button>
+          {status.data?.active === true && (
+            <Button size='sm' variant='outline' disabled={revoke.isPending} onClick={() => revoke.mutate()}>
+              Revoke
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SubLimit = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
   const client = useQueryClient();
   const limit = useQuery({ queryKey: ['sub-limit', boardId], queryFn: () => api.subLimit(boardId) });
