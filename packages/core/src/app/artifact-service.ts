@@ -4,6 +4,7 @@ import { decisionViews } from '../domain/decisions.js';
 import type { DecisionView } from '../domain/decisions.js';
 import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import { INBOX_CONTEXT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
 import type { Artifact, ArtifactKind, Provenance, ReviewStats } from '../domain/knowledge.js';
 import { currentRun } from '../domain/machine.js';
 import type { SearchHit } from '../domain/search.js';
@@ -37,9 +38,25 @@ export interface GlobContext {
    * Assumptions), current ones first, each with its source link; a superseded one says what replaced it and when.
    */
   readonly decisions: readonly DecisionView[];
+  /**
+   * Inbox items attached to this glob (pasted meeting notes, threads, documents), with their text up to
+   * `INBOX_CONTEXT_CHARS` (`truncated` beyond it; `search_text` finds the rest).
+   */
+  readonly inbox: readonly InboxContextItem[];
   /** Which source wins when sources disagree (the spec's order of authority). */
   readonly authority: string;
   readonly fetch: string;
+}
+
+export interface InboxContextItem {
+  readonly id: number;
+  readonly title: string;
+  readonly sourceLabel: string;
+  readonly occurredAt: string;
+  readonly summary: string | null;
+  readonly url: string;
+  readonly text: string;
+  readonly truncated: boolean;
 }
 
 /** What `get_context` tells an agent about conflicting sources. */
@@ -122,6 +139,73 @@ export interface PutOptions {
   /** plan.md only: the version the writer read (0 before the first is saved); a later one is refused. */
   readonly expectedPlanVersion?: number;
 }
+
+/** What an artifact write carries beyond the glob and the writer. */
+interface NewArtifact {
+  readonly kind: ArtifactKind;
+  readonly label: string;
+  readonly content: string;
+  readonly link: string | null;
+  readonly commitSha: string | null;
+  readonly runId: string | null;
+  readonly agentSetVersion: number | null;
+  readonly reviewStats: ReviewStats | null;
+}
+
+/**
+ * Appends an artifact version with its provenance and `ArtifactAdded` event, in the caller's transaction (which has
+ * checked the writer's access). The one write path for artifacts: `put` and the inbox's attach both use it. The
+ * caller publishes `glob.artifacts` after the commit.
+ */
+const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: string, input: NewArtifact): Promise<Artifact> => {
+  const { kind, label, content, link } = input;
+  const globId = glob.id;
+  const provenance: Provenance = {
+    by: input.runId !== null ? 'routine' : kind === 'implementation_plan' || kind === 'local_review' ? 'sessionator' : 'human',
+    actor: email,
+    runId: input.runId,
+    agentSetVersion: input.agentSetVersion,
+    ...(kind === 'local_review' && input.reviewStats !== null && { reviewStats: input.reviewStats }),
+  };
+  const now = clock.now();
+  const artifact = await tx.insertArtifact({ globId, kind, label, content, link, commitSha: input.commitSha, provenance, createdAt: now });
+  // Queued for the findings pipeline in the same transaction; nothing is parsed or asked here.
+  if (kind === 'local_review') {
+    await tx.insertReviewSource({
+      boardId: glob.boardId,
+      globId,
+      kind: 'local_review',
+      artifactId: artifact.id,
+      externalId: null,
+      commitSha: input.commitSha,
+      agentSetVersion: input.agentSetVersion,
+      content: null,
+      path: null,
+      line: null,
+      createdAt: now,
+    });
+  }
+  await tx.appendEvents([
+    {
+      type: 'ArtifactAdded',
+      globId,
+      actor: email,
+      at: now,
+      data: { kind, label, version: artifact.version, commitSha: input.commitSha, runId: input.runId, agentSetVersion: input.agentSetVersion },
+    },
+  ]);
+  return artifact;
+};
+
+/** A link attachment on a glob in the caller's transaction (the inbox's attach); the caller publishes `glob.artifacts` after commit. */
+export const addAttachment = (
+  tx: Tx,
+  clock: Clock,
+  glob: Glob,
+  email: string,
+  input: { readonly label: string; readonly content: string; readonly link: string | null },
+): Promise<Artifact> =>
+  addArtifact(tx, clock, glob, email, { kind: 'attachment', ...input, commitSha: null, runId: null, agentSetVersion: null, reviewStats: null });
 
 /**
  * Glob artifacts: plan.md, the implementation record (stored as kind `implementation_plan`), local reviews and attachments,
@@ -256,6 +340,16 @@ export class ArtifactService {
         // Current first (stable: each group stays newest first).
         .sort((a, b) => Number(a.status === 'superseded') - Number(b.status === 'superseded'))
         .slice(0, CONTEXT_DECISIONS);
+      const inbox = (await tx.listInboxForGlob(globId)).map((i) => ({
+        id: i.id,
+        title: inboxTitle(i),
+        sourceLabel: i.sourceLabel,
+        occurredAt: i.occurredAt,
+        summary: i.summary,
+        url: inboxLink(i.boardId, i.id),
+        text: i.text.slice(0, INBOX_CONTEXT_CHARS),
+        truncated: i.text.length > INBOX_CONTEXT_CHARS,
+      }));
       return ok({
         glob: {
           id: glob.id,
@@ -293,9 +387,10 @@ export class ArtifactService {
         codeReview: codeReview.length === 0 || !codeReviewInFull ? null : codeReviewContext(codeReview),
         ...(related === undefined ? {} : { related }),
         decisions,
+        inbox,
         authority: AUTHORITY_STATEMENT,
         fetch:
-          "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'code_review', 'all']).",
+          "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'code_review', 'all']). Inbox items are attached notes: their text is cut at 12000 characters (truncated: true); search_text finds the rest.",
       });
     });
   }
@@ -341,56 +436,16 @@ export class ArtifactService {
           });
         }
       }
-      const provenance: Provenance = {
-        by: options.runId !== null ? 'routine' : kind === 'implementation_plan' || kind === 'local_review' ? 'sessionator' : 'human',
-        actor: email,
-        runId: options.runId,
-        agentSetVersion: options.agentSetVersion,
-        ...(kind === 'local_review' && options.reviewStats != null && { reviewStats: options.reviewStats }),
-      };
-      const now = this.deps.clock.now();
-      const artifact = await tx.insertArtifact({
-        globId,
+      const artifact = await addArtifact(tx, this.deps.clock, glob, email, {
         kind,
         label,
         content,
         link,
         commitSha: options.commitSha,
-        provenance,
-        createdAt: now,
+        runId: options.runId,
+        agentSetVersion: options.agentSetVersion,
+        reviewStats: options.reviewStats ?? null,
       });
-      // Queued for the findings pipeline in the same transaction; nothing is parsed or asked here.
-      if (kind === 'local_review') {
-        await tx.insertReviewSource({
-          boardId: glob.boardId,
-          globId,
-          kind: 'local_review',
-          artifactId: artifact.id,
-          externalId: null,
-          commitSha: options.commitSha,
-          agentSetVersion: options.agentSetVersion,
-          content: null,
-          path: null,
-          line: null,
-          createdAt: now,
-        });
-      }
-      await tx.appendEvents([
-        {
-          type: 'ArtifactAdded',
-          globId,
-          actor: email,
-          at: now,
-          data: {
-            kind,
-            label,
-            version: artifact.version,
-            commitSha: options.commitSha,
-            runId: options.runId,
-            agentSetVersion: options.agentSetVersion,
-          },
-        },
-      ]);
       return ok({ artifact, boardId: glob.boardId });
     });
     if (!result.ok) return result;

@@ -26,6 +26,7 @@ import type {
   Environment,
   Glob,
   GlobFindings,
+  InboxStatus,
   KbItem,
   KbProposalList,
   KbSignal,
@@ -245,6 +246,34 @@ export interface IntegrationHealthView {
     | null;
 }
 
+/** An inbox item as the board lists it (spec, Inbox and ingest). Fields added after the first release are optional: the web may run against an older API. */
+export interface InboxItemView {
+  readonly id: number;
+  readonly title: string;
+  readonly source?: string;
+  readonly sourceLabel?: string;
+  readonly sourceType?: string;
+  readonly occurredAt: string;
+  readonly createdAt?: string;
+  readonly status: InboxStatus;
+  readonly summary?: string | null;
+  /** `waiting` while the model can't be used. */
+  readonly processing?: 'pending' | 'waiting' | 'done' | 'failed';
+  readonly lastError?: string | null;
+  readonly excerpt?: string;
+  readonly suggestions?: readonly { readonly globId: string; readonly title: string; readonly reason: string }[];
+  readonly attachedTo?: readonly { readonly globId: string; readonly title: string }[];
+  /** Only on a single-item read. */
+  readonly text?: string;
+}
+
+export interface NewInboxPaste {
+  readonly text: string;
+  readonly title?: string;
+  readonly occurredAt?: string;
+  readonly sourceLabel?: string;
+}
+
 export const healthKey = ['health'] as const;
 
 /** The board's notifications; invalidated by `board.notifications` hints and on reconnect. */
@@ -365,6 +394,14 @@ export const api = {
   confirmDecision: (boardId: number, id: number) => request<DecisionView>('POST', `/api/boards/${boardId}/decisions/${id}/confirm`),
   /** Undoes a replacement, or dismisses a proposed one. */
   undoDecision: (boardId: number, id: number) => request<DecisionView>('POST', `/api/boards/${boardId}/decisions/${id}/undo`),
+  /** The board's inbox: new, attached and kept items (newest first). */
+  inbox: (boardId: number) => request<{ items: InboxItemView[] }>('GET', `/api/boards/${boardId}/inbox`).then((r) => r.items),
+  inboxItem: (boardId: number, id: number) => request<InboxItemView>('GET', `/api/boards/${boardId}/inbox/${id}`),
+  addToInbox: (boardId: number, paste: NewInboxPaste) => request<{ id: number; created: boolean }>('POST', `/api/boards/${boardId}/inbox`, paste),
+  attachInbox: (boardId: number, id: number, globIds: readonly string[]) =>
+    request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/attach`, { globIds }),
+  keepInbox: (boardId: number, id: number) => request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/keep`),
+  discardInbox: (boardId: number, id: number) => request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/discard`),
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel: (id: string, label: LabelName, command: LabelCommand, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/labels/${label}`, { command, version }),

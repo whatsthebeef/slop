@@ -22,9 +22,10 @@ import type {
   KbTarget,
   Provenance,
   ProposedDocument,
+  InboxSuggestion,
   SignalFigures,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
+import { AGENT_KB_APPROVALS, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -753,4 +754,60 @@ export const boardChatMessages = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
   (t) => [index('board_chat_messages_person_idx').on(t.boardId, t.email, t.id)],
+);
+
+/**
+ * The board inbox (spec, Inbox and ingest): pasted text with its summary step's state. The search item (`item_id`) is a
+ * projection of the row, deleted on discard. A repeat paste of the same text is the same row (unique per board).
+ */
+export const inboxItems = pgTable(
+  'inbox_items',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    /** Empty until given or written by the summary step. */
+    title: text('title').notNull().default(''),
+    text: text('text').notNull(),
+    source: text('source').notNull().default('paste'),
+    sourceLabel: text('source_label').notNull().default(''),
+    sourceType: text('source_type', { enum: INBOX_SOURCE_TYPES }).notNull(),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    createdBy: text('created_by'),
+    contentHash: text('content_hash').notNull(),
+    status: text('status', { enum: INBOX_STATUSES }).notNull().default('new'),
+    summary: text('summary'),
+    suggestions: jsonb('suggestions').$type<InboxSuggestion[]>().notNull().default([]),
+    state: text('state', { enum: INBOX_STATES }).notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    /** Retry backoff, waiting for the model, or a claimed item's lease. */
+    processAfter: timestamp('process_after', { withTimezone: true }),
+    lastError: text('last_error'),
+    itemId: bigint('item_id', { mode: 'number' }).references(() => knowledgeItems.id, { onDelete: 'set null' }),
+    version: integer('version').notNull().default(1),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('inbox_items_hash_idx').on(t.boardId, t.contentHash),
+    index('inbox_items_board_idx').on(t.boardId, t.status, t.occurredAt),
+    index('inbox_items_queue_idx').on(t.state, t.processAfter),
+  ],
+);
+
+/** An inbox item attached to a glob (globs are JSON rows, so no foreign key: `deleteGlob` removes the links). */
+export const inboxLinks = pgTable(
+  'inbox_links',
+  {
+    inboxId: bigint('inbox_id', { mode: 'number' })
+      .notNull()
+      .references(() => inboxItems.id, { onDelete: 'cascade' }),
+    globId: text('glob_id').notNull(),
+    /** The attachment the link put on the glob. */
+    artifactId: bigint('artifact_id', { mode: 'number' }),
+    linkedBy: text('linked_by'),
+    linkedAt: timestamp('linked_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.inboxId, t.globId] }), index('inbox_links_glob_idx').on(t.globId)],
 );

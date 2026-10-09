@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, IntakeService, KnowledgeService, Result, SearchService, ChatService } from '@slop/core';
+import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, Result, SearchService, ChatService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
 import { ARTIFACT_KINDS, CATEGORIES, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -14,7 +14,7 @@ import type { SignedLinks } from '../signed-links.js';
 import { parseLabelCommand } from '../http/labels.js';
 import { issueUploadUrl } from '../http/artifact-upload.js';
 import { requestOrigin } from '../http/origin.js';
-import { isDate, toRequest } from '../search-request.js';
+import { isDate, parseBound, toRequest } from '../search-request.js';
 import { errorBody, globView, globViewOf, onBoard } from '../http/views.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
 import type { ReadyGate } from '../ready-gate.js';
@@ -30,6 +30,7 @@ export interface McpDeps {
   readonly search: SearchService;
   readonly chat: Pick<ChatService, 'answer'>;
   readonly intake: IntakeService;
+  readonly inbox: InboxService;
   /** Refuses `mark_ready` for a branch that conflicts with its base. */
   readonly readyGate: ReadyGate;
   readonly publicUrl: string;
@@ -568,7 +569,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields, plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). Pass `include` to get more in full: 'local_review', 'attachment:<label>', 'code_review' (CodeRabbit's summary, reviews and inline comments on the PR, verbatim), or 'all'.",
+        "The glob's context bundle: its fields, plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). Pass `include` to get more in full: 'local_review', 'attachment:<label>', 'code_review' (CodeRabbit's summary, reviews and inline comments on the PR, verbatim), or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {
@@ -679,6 +680,26 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       reply(await artifacts.attach(email, id, { label, text: text ?? null, link: link ?? null }), (a) =>
         'ignored' in a ? a : { id: a.id, label: a.label, version: a.version },
       ),
+  );
+
+  server.registerTool(
+    'add_to_inbox',
+    {
+      description:
+        "Put pasted text (meeting notes, a chat thread, a document) into a board's inbox. It is stored and searchable at once; slop then summarises it and suggests up to three globs, and a person attaches it to globs, keeps it or discards it in the board's Inbox. Pasting the same text again returns the existing item (`duplicate: true`). Member of the board required.",
+      inputSchema: {
+        board: z.number().int().describe('Board ID (the number in a glob ID: s1t4 is on board 1)'),
+        text: z.string().min(1).max(100_000).describe('The text to file'),
+        title: z.string().max(200).optional().describe('A title; slop writes one when omitted'),
+        occurredAt: z.string().refine(isDate, 'Use an ISO date, e.g. 2026-09-01').optional().describe('When it happened (the meeting date); defaults to now'),
+        sourceLabel: z.string().max(100).optional().describe('Where it came from, e.g. "Tuesday standup"'),
+      },
+    },
+    async ({ board, text, title, occurredAt, sourceLabel }) =>
+      reply(await deps.inbox.add(email, board, { text, title, sourceLabel, occurredAt: occurredAt === undefined ? undefined : (parseBound(occurredAt, 'from') ?? undefined) }), (r) => ({
+        id: r.id,
+        duplicate: !r.created,
+      })),
   );
 
   server.registerTool(

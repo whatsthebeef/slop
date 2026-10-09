@@ -6,6 +6,7 @@ import type { CodeReviewComment, NewCodeReviewComment } from './domain/code-revi
 import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, NewChatMessage } from './domain/chat.js';
 import type { Decision, DecisionPatch, DecisionSource, NewDecision } from './domain/decisions.js';
+import type { InboxItem, InboxLink, InboxStatus, NewInboxItem } from './domain/inbox.js';
 import type { Candidate, ItemStatus, KnowledgeItem, NewChunk, NewKnowledgeItem, PendingChunk, SearchQuery, SourceType } from './domain/search.js';
 import type { DiffSummary } from './domain/sub-gate.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
@@ -55,7 +56,7 @@ export interface Tx {
    * Deletes the glob with its artifacts, review sources, findings, environment presence, branch test runs and stored
    * CodeRabbit items, and its items in the search store (an item shared with other globs, a learning, only loses the link).
    * Its decisions go with it; decisions it took that older ones point at are released (their `replacedBy` cleared and
-   * the item active again).
+   * the item active again). Inbox items attached to it only lose the link (and become `kept` with their last one).
    */
   deleteGlob(id: string): Promise<void>;
   findGlobByCreationKey(boardId: number, key: string): Promise<Glob | null>;
@@ -299,6 +300,27 @@ export interface Tx {
   addChatMessage(message: NewChatMessage): Promise<ChatMessage>;
   /** Deletes the person's conversation on the board. */
   clearChat(boardId: number, email: string): Promise<void>;
+  /**
+   * Stores a pasted item (status `new`, summary pending). A board's item with the same content hash is returned
+   * instead, with `created: false`.
+   */
+  insertInboxItem(item: NewInboxItem): Promise<{ item: InboxItem; created: boolean }>;
+  getInboxItem(boardId: number, id: number): Promise<InboxItem | null>;
+  /** A board's items, newest `occurredAt` first, optionally with one of `statuses`. */
+  listInboxItems(boardId: number, statuses?: readonly InboxStatus[]): Promise<InboxItem[]>;
+  /** Writes `item` if the stored version is still `expectedVersion` (the version is then bumped); returns false otherwise. */
+  updateInboxItem(item: InboxItem, expectedVersion: number): Promise<boolean>;
+  /** The oldest pending, not discarded item on any board whose `processAfter` is unset or not after `now`. */
+  nextInboxItemToProcess(now: string): Promise<InboxItem | null>;
+  /** Records a link; false when the item is already linked to the glob. */
+  insertInboxLink(link: InboxLink): Promise<boolean>;
+  listInboxLinks(boardId: number): Promise<InboxLink[]>;
+  /** The attached items linked to a glob, oldest link first. */
+  listInboxForGlob(globId: string): Promise<InboxItem[]>;
+  /** Sets the globs (and group) a search item links to, without touching its chunks. */
+  setItemLinks(itemId: number, globIds: readonly string[], globGroup: string | null): Promise<void>;
+  /** Deletes a board's search item with this external ref, with its chunks; a no-op when none. */
+  deleteItemByRef(boardId: number, externalRef: string): Promise<void>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
@@ -334,7 +356,9 @@ export type Hint =
   /** An integration's health changed (sent to every open board): the banner refetches it. */
   | { readonly kind: 'board.health'; readonly boardId: number }
   /** A board notification was raised, changed or cleared (beside the board, no version bump). */
-  | { readonly kind: 'board.notifications'; readonly boardId: number };
+  | { readonly kind: 'board.notifications'; readonly boardId: number }
+  /** The board's inbox changed (an item added, summarised, attached, kept or discarded). */
+  | { readonly kind: 'board.inbox'; readonly boardId: number };
 
 /** Publishes small change hints to open boards after a commit. */
 export interface Notifier {

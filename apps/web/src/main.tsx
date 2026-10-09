@@ -6,6 +6,7 @@ import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-ro
 import './index.css';
 import { RequestError } from './lib/api';
 import { BoardPage } from './pages/board';
+import { InboxPage } from './pages/inbox';
 import { KnowledgePage } from './pages/knowledge';
 import { BoardsPage, HomePage, LoginPage } from './pages/home';
 import { SettingsPage, SignedOffPage } from './pages/settings';
@@ -57,6 +58,7 @@ createRoot(root).render(
               <Route path='/boards' element={<BoardsPage />} />
               <Route path='/boards/:boardId' element={<BoardShell />}>
                 <Route index element={<BoardPage />} />
+                <Route path='inbox' element={<InboxPage />} />
                 <Route path='signed-off' element={<SignedOffPage />} />
                 <Route path='settings' element={<SettingsPage />} />
                 <Route path='knowledge' element={<KnowledgePage />} />

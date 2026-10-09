@@ -1,6 +1,6 @@
-import type { BoardNotification, ChatMessage, Artifact, Candidate, Decision, DecisionSource, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { GLOB_OWNED_SOURCES, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
-import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
+import type { BoardNotification, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
@@ -326,6 +326,38 @@ const toChatMessage = (row: typeof schema.boardChatMessages.$inferSelect): ChatM
   createdAt: row.createdAt.toISOString(),
 });
 
+const toInboxItem = (row: typeof schema.inboxItems.$inferSelect): InboxItem => ({
+  id: row.id,
+  boardId: row.boardId,
+  title: row.title,
+  text: row.text,
+  source: row.source,
+  sourceLabel: row.sourceLabel,
+  sourceType: row.sourceType,
+  occurredAt: row.occurredAt.toISOString(),
+  createdAt: row.createdAt.toISOString(),
+  createdBy: row.createdBy,
+  contentHash: row.contentHash,
+  status: row.status,
+  summary: row.summary,
+  suggestions: suggestionsOf(row.suggestions),
+  state: row.state,
+  attempts: row.attempts,
+  processAfter: row.processAfter?.toISOString() ?? null,
+  lastError: row.lastError,
+  itemId: row.itemId,
+  version: row.version,
+  updatedAt: row.updatedAt.toISOString(),
+});
+
+const toInboxLink = (row: typeof schema.inboxLinks.$inferSelect): InboxLink => ({
+  inboxId: row.inboxId,
+  globId: row.globId,
+  artifactId: row.artifactId,
+  linkedBy: row.linkedBy,
+  linkedAt: row.linkedAt.toISOString(),
+});
+
 const supersededItems = alias(schema.knowledgeItems, 'superseding');
 
 /** What a candidate query selects: the chunk, its item's facts and the title of the item that replaced it. */
@@ -441,6 +473,22 @@ export class PgStore implements Store {
             .where(inArray(schema.knowledgeItems.id, released.map((r) => r.itemId)));
         }
         await t.delete(schema.decisionSources).where(eq(schema.decisionSources.globId, id));
+        // Pasted items stay; one whose last glob went is only kept.
+        const l = schema.inboxLinks;
+        const unlinked = await t.delete(l).where(eq(l.globId, id)).returning({ inboxId: l.inboxId });
+        if (unlinked.length > 0) {
+          const n = schema.inboxItems;
+          await t
+            .update(n)
+            .set({ status: 'kept', version: sql`${n.version} + 1` })
+            .where(
+              and(
+                inArray(n.id, unlinked.map((u) => u.inboxId)),
+                eq(n.status, 'attached'),
+                sql`not exists (select 1 from ${l} where ${l.inboxId} = ${n.id})`,
+              ),
+            );
+        }
         // Its own search items go with it; a learning or document it fed only loses the link.
         const i = schema.knowledgeItems;
         const linked = sql`${i.globIds} @> ARRAY[${id}]::text[]`;
@@ -1443,6 +1491,112 @@ export class PgStore implements Store {
         const m = schema.boardChatMessages;
         await t.delete(m).where(and(eq(m.boardId, boardId), eq(m.email, email)));
       },
+      insertInboxItem: async (input) => {
+        const n = schema.inboxItems;
+        const [created] = await t
+          .insert(n)
+          .values({
+            boardId: input.boardId,
+            title: input.title,
+            text: input.text,
+            source: input.source,
+            sourceLabel: input.sourceLabel,
+            sourceType: input.sourceType,
+            occurredAt: new Date(input.occurredAt),
+            createdAt: new Date(input.createdAt),
+            createdBy: input.createdBy,
+            contentHash: input.contentHash,
+            updatedAt: new Date(input.createdAt),
+          })
+          .onConflictDoNothing({ target: [n.boardId, n.contentHash] })
+          .returning();
+        if (created !== undefined) return { item: toInboxItem(created), created: true };
+        // A racing paste of the same text got there first.
+        const [existing] = await t.select().from(n).where(and(eq(n.boardId, input.boardId), eq(n.contentHash, input.contentHash)));
+        if (existing === undefined) throw new Error('Inbox item insert returned nothing');
+        return { item: toInboxItem(existing), created: false };
+      },
+      getInboxItem: async (boardId, id) => {
+        const n = schema.inboxItems;
+        const [row] = await t.select().from(n).where(and(eq(n.boardId, boardId), eq(n.id, id)));
+        return row === undefined ? null : toInboxItem(row);
+      },
+      listInboxItems: async (boardId, statuses) => {
+        const n = schema.inboxItems;
+        const rows = await t
+          .select()
+          .from(n)
+          .where(and(eq(n.boardId, boardId), statuses === undefined ? undefined : inArray(n.status, [...statuses])))
+          .orderBy(desc(n.occurredAt), desc(n.id));
+        return rows.map(toInboxItem);
+      },
+      updateInboxItem: async (item, expectedVersion) => {
+        const n = schema.inboxItems;
+        const rows = await t
+          .update(n)
+          .set({
+            title: item.title,
+            sourceType: item.sourceType,
+            status: item.status,
+            summary: item.summary,
+            suggestions: [...item.suggestions],
+            state: item.state,
+            attempts: item.attempts,
+            processAfter: item.processAfter === null ? null : new Date(item.processAfter),
+            lastError: item.lastError,
+            itemId: item.itemId,
+            version: expectedVersion + 1,
+            updatedAt: new Date(item.updatedAt),
+          })
+          .where(and(eq(n.id, item.id), eq(n.version, expectedVersion)))
+          .returning({ id: n.id });
+        return rows.length === 1;
+      },
+      nextInboxItemToProcess: async (now) => {
+        const n = schema.inboxItems;
+        const [row] = await t
+          .select()
+          .from(n)
+          .where(and(eq(n.state, 'pending'), ne(n.status, 'discarded'), or(isNull(n.processAfter), lte(n.processAfter, new Date(now)))))
+          .orderBy(asc(n.createdAt), asc(n.id))
+          .limit(1);
+        return row === undefined ? null : toInboxItem(row);
+      },
+      insertInboxLink: async (link) => {
+        const rows = await t
+          .insert(schema.inboxLinks)
+          .values({ ...link, linkedAt: new Date(link.linkedAt) })
+          .onConflictDoNothing()
+          .returning({ id: schema.inboxLinks.inboxId });
+        return rows.length === 1;
+      },
+      listInboxLinks: async (boardId) => {
+        const rows = await t
+          .select({ link: getTableColumns(schema.inboxLinks) })
+          .from(schema.inboxLinks)
+          .innerJoin(schema.inboxItems, eq(schema.inboxItems.id, schema.inboxLinks.inboxId))
+          .where(eq(schema.inboxItems.boardId, boardId))
+          .orderBy(asc(schema.inboxLinks.linkedAt));
+        return rows.map((r) => toInboxLink(r.link));
+      },
+      listInboxForGlob: async (globId) => {
+        const rows = await t
+          .select({ item: getTableColumns(schema.inboxItems) })
+          .from(schema.inboxLinks)
+          .innerJoin(schema.inboxItems, eq(schema.inboxItems.id, schema.inboxLinks.inboxId))
+          .where(eq(schema.inboxLinks.globId, globId))
+          .orderBy(asc(schema.inboxLinks.linkedAt));
+        return rows.map((r) => toInboxItem(r.item));
+      },
+      setItemLinks: async (itemId, globIds, globGroup) => {
+        await t.update(schema.knowledgeItems).set({ globIds: [...globIds], globGroup }).where(eq(schema.knowledgeItems.id, itemId));
+      },
+      deleteItemByRef: async (boardId, externalRef) => {
+        const i = schema.knowledgeItems;
+        // The item's delete cascades to its chunks, and sets the inbox row's item_id to null.
+        await t.delete(i).where(and(eq(i.boardId, boardId), eq(i.externalRef, externalRef)));
+      },
+
       appendEvents: async (events) => {
         if (events.length === 0) return;
         await t.insert(schema.events).values(

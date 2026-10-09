@@ -24,10 +24,11 @@ export const shownRows = (view: BarView, expanded: boolean): readonly BoardNotif
 /** The board page top to bottom: the notifications sit above the tabs, and the line under the tabs is always there. */
 export const SHELL_ORDER = ['notifications', 'tabs', 'line', 'page'] as const;
 
-export type BoardTab = 'board' | 'signed-off' | 'knowledge' | 'settings';
+export type BoardTab = 'board' | 'inbox' | 'signed-off' | 'knowledge' | 'settings';
 
 export const BOARD_TABS: readonly { readonly tab: BoardTab; readonly label: string; readonly path: string }[] = [
   { tab: 'board', label: 'Board', path: '' },
+  { tab: 'inbox', label: 'Inbox', path: '/inbox' },
   { tab: 'signed-off', label: 'Signed off', path: '/signed-off' },
   { tab: 'knowledge', label: 'Knowledge', path: '/knowledge' },
   { tab: 'settings', label: 'Settings', path: '/settings' },
