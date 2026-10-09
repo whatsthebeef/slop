@@ -1,5 +1,7 @@
 import { App } from 'aws-cdk-lib';
 import { AuthStack } from '../lib/auth-stack.js';
+import { SlopSecrets } from '../lib/secrets.js';
+import { Stack } from 'aws-cdk-lib';
 import { DeployTargetStack } from '../lib/deploy-target-stack.js';
 
 const app = new App();
@@ -28,6 +30,18 @@ new AuthStack(app, `slop-${stage}-auth`, {
   identityCenterMetadataUrl: (app.node.tryGetContext('identityCenterMetadataUrl') as string | undefined) ?? null,
   tags: { project: 'slop', stage },
 });
+
+/**
+ * Production's secrets (server `SECRETS=aws`), only when asked for: `cdk deploy slop-prod-secrets -c secrets=true -c stage=prod`.
+ * s15f32's server stack reuses the construct and grants the instance role with `grantServer`.
+ */
+if (app.node.tryGetContext('secrets') === 'true' || app.node.tryGetContext('secrets') === true) {
+  const secretsStack = new Stack(app, `slop-${stage}-secrets`, {
+    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION ?? 'us-east-1' },
+    tags: { project: 'slop', stage },
+  });
+  new SlopSecrets(secretsStack, 'Secrets', { stage });
+}
 
 /**
  * A branch-deploy target for a board (e.g. a sandbox), only when its context is given. Either a new

@@ -2,12 +2,19 @@ import { readFile } from 'node:fs/promises';
 import { classifyRoutineFailure } from '@slop/core';
 import type { HealthSink, RoutineDirectory } from '@slop/core';
 import { z } from 'zod';
+import type { SecretStore } from './secrets.js';
 
-const routinesSchema = z.record(z.string(), z.object({ url: z.url(), token: z.string().min(1) }));
+const secretSchema = z.object({ url: z.url(), token: z.string().min(1) });
+const routinesSchema = z.record(z.string(), secretSchema);
 
 export interface RoutineSecret {
   readonly url: string;
   readonly token: string;
+}
+
+/** What the server needs from the routines' secrets: whether a developer has one, and its URL and token. */
+export interface RoutineSource extends RoutineDirectory {
+  secretFor(email: string, boardId?: number): Promise<RoutineSecret | null>;
 }
 
 /**
@@ -16,7 +23,7 @@ export interface RoutineSecret {
  * environment has a fixed set of repositories, so a developer can add one per board under
  * `<email>#<boardId>` (Secrets Manager: `slop/routines/<email>/<boardId>`, since names can't hold `#`); a board without its own entry uses the developer's default.
  */
-export class FileRoutines implements RoutineDirectory {
+export class FileRoutines implements RoutineSource {
   constructor(private readonly file: string) {}
 
   private async all(): Promise<Record<string, RoutineSecret>> {
@@ -36,6 +43,58 @@ export class FileRoutines implements RoutineDirectory {
     const all = await this.all();
     const key = email.toLowerCase();
     return (boardId === undefined ? undefined : all[`${key}#${String(boardId)}`]) ?? all[key] ?? null;
+  }
+}
+
+/**
+ * Production's routines, in Secrets Manager at `<prefix>routines/<email>/<boardId>` (a board's own) and
+ * `<prefix>routines/<email>/default`, each `{url, token}` JSON. Reads are cached for a short TTL (misses too),
+ * so a newly set routine is picked up without a restart.
+ */
+export class SecretRoutines implements RoutineSource {
+  private readonly cache = new Map<string, { readonly at: number; readonly secret: RoutineSecret | null }>();
+
+  constructor(
+    private readonly store: SecretStore,
+    private readonly prefix: string,
+    private readonly ttlMs: number,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  private name(email: string, board: number | 'default'): string {
+    return `${this.prefix}${email.toLowerCase()}/${String(board)}`;
+  }
+
+  private async read(name: string): Promise<RoutineSecret | null> {
+    const hit = this.cache.get(name);
+    if (hit !== undefined && this.now() - hit.at < this.ttlMs) return hit.secret;
+    const raw = await this.store.get(name);
+    let secret: RoutineSecret | null = null;
+    if (raw !== null) {
+      try {
+        const parsed = secretSchema.safeParse(JSON.parse(raw));
+        secret = parsed.success ? parsed.data : null;
+      } catch {
+        secret = null;
+      }
+    }
+    this.cache.set(name, { at: this.now(), secret });
+    return secret;
+  }
+
+  async hasRoutine(email: string, boardId: number): Promise<boolean> {
+    return (await this.secretFor(email, boardId)) !== null;
+  }
+
+  async secretFor(email: string, boardId?: number): Promise<RoutineSecret | null> {
+    return (boardId === undefined ? null : await this.read(this.name(email, boardId))) ?? (await this.read(this.name(email, 'default')));
+  }
+
+  /** Stores a developer's routine for a board, or their default when `boardId` is omitted. */
+  async set(email: string, secret: RoutineSecret, boardId?: number): Promise<void> {
+    const name = this.name(email, boardId ?? 'default');
+    await this.store.put(name, JSON.stringify(secretSchema.parse(secret)));
+    this.cache.delete(name);
   }
 }
 

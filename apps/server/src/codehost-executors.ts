@@ -1,6 +1,6 @@
 import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
-import type { FileRoutines } from './routines.js';
+import type { RoutineSource } from './routines.js';
 import { isRepoAccessFailure, isSetupFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
@@ -22,7 +22,7 @@ const httpStatus = (error: unknown): number | null =>
 export const codeHostExecutors = (
   host: CodeHost,
   boardOf: (id: number) => Promise<Board | null>,
-  routines: FileRoutines,
+  routines: RoutineSource,
   boards: Pick<BoardService, 'recordBaseChecks'>,
   now: () => string = () => new Date().toISOString(),
   health: HealthSink | null = null,
