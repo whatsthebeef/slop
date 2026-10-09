@@ -204,6 +204,13 @@
       "when": 1791490943828,
       "tag": "0028_decisions",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1791490944828,
+      "tag": "0029_board_chat",
+      "breakpoints": true
     }
   ]
 }

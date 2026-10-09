@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, IntakeService, KnowledgeService, Result, SearchService } from '@slop/core';
+import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, IntakeService, KnowledgeService, Result, SearchService, ChatService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
 import { ARTIFACT_KINDS, CATEGORIES, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -28,6 +28,7 @@ export interface McpDeps {
   readonly knowledge: KnowledgeService;
   readonly artifacts: ArtifactService;
   readonly search: SearchService;
+  readonly chat: Pick<ChatService, 'answer'>;
   readonly intake: IntakeService;
   /** Refuses `mark_ready` for a branch that conflicts with its base. */
   readonly readyGate: ReadyGate;
@@ -610,6 +611,21 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       inputSchema: { ...searchFields, query: z.string().min(1).max(MAX_QUERY_LENGTH), sourceTypes },
     },
     async (p) => reply(await deps.search.semantic(email, toRequest(p))),
+  );
+
+  server.registerTool(
+    'ask_board',
+    {
+      description:
+        "Ask a question about the board in plain words (e.g. \"why did we decide X?\") and get an answer written only from the board's own records, with `citations` (source, title, date, link, glob, status; a superseded decision names what replaced it). `answered` is false, with \"I don't know from the board's records.\", when the records don't answer. Current material is preferred; pass `globId` to scope it to one glob. One-off: nothing is added to the person's chat panel. Fails with llm_unavailable while the chat model is busy or down; use search_text then. Member of the board required.",
+      inputSchema: {
+        board: searchFields.board,
+        question: z.string().min(1).max(MAX_QUERY_LENGTH),
+        globId: z.string().optional().describe('Only records linked to this glob ID'),
+      },
+    },
+    async ({ board, question, globId }) =>
+      reply(await deps.chat.answer(email, { boardId: board, question, ...(globId === undefined ? {} : { globId }) })),
   );
 
   server.registerTool(

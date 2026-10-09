@@ -68,7 +68,7 @@ Everything specific to the board and its project (build commands, conventions, r
 - Build, test, lint, format and dependency-check commands always come from the board's build document; never assume or hard-code them. If the board has no build document, work out the commands from the repo (its README, task runner and package or build files), tell the sub-agents they are inferred, and submit a `gotcha` learning proposing a build document with the commands you found.
 - Give the learnings file to every sub-agent, telling it these are approved decisions, gotchas and patterns from earlier globs.
 
-Use `search_text(board, query, mode?, from?, to?, glob?, group?, sourceTypes?)` for exact words, names and file paths, `search_semantic` (same parameters) when you don't know the words used, and `search_changes(board, query or path, from?, to?)` for why a file or area changed; `mode` is `current` (default) or `all_time`. Results are cited and labelled when superseded or legacy. `get_context` also returns a `related` section: the board's existing material on the glob's title and summary.
+Use `search_text(board, query, mode?, from?, to?, glob?, group?, sourceTypes?)` for exact words, names and file paths, `search_semantic` (same parameters) when you don't know the words used, `search_changes(board, query or path, from?, to?)` for why a file or area changed, and `ask_board(board, question, globId?)` for a plain-words question answered from the board's records with citations ("why did we decide X"); `mode` is `current` (default) or `all_time`. Results are cited and labelled when superseded or legacy. `get_context` also returns a `related` section: the board's existing material on the glob's title and summary.
 
 ## Server URL and browser testing
 

@@ -1,4 +1,4 @@
-import type { BoardNotification, Artifact, Candidate, Decision, DecisionSource, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { BoardNotification, ChatMessage, Artifact, Candidate, Decision, DecisionSource, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { GLOB_OWNED_SOURCES, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -314,6 +314,16 @@ const toDecisionSource = (row: typeof schema.decisionSources.$inferSelect): Deci
   lastError: row.lastError,
   globId: row.globId,
   updatedAt: row.updatedAt.toISOString(),
+});
+
+const toChatMessage = (row: typeof schema.boardChatMessages.$inferSelect): ChatMessage => ({
+  id: row.id,
+  boardId: row.boardId,
+  email: row.email,
+  role: row.role,
+  content: row.content,
+  citations: row.citations,
+  createdAt: row.createdAt.toISOString(),
 });
 
 const supersededItems = alias(schema.knowledgeItems, 'superseding');
@@ -1416,6 +1426,23 @@ export class PgStore implements Store {
         return row === undefined ? null : toDecisionSource(row);
       },
 
+      listChatMessages: async (boardId, email, limit) => {
+        const m = schema.boardChatMessages;
+        const rows = await t.select().from(m).where(and(eq(m.boardId, boardId), eq(m.email, email))).orderBy(desc(m.id)).limit(limit);
+        return rows.reverse().map(toChatMessage);
+      },
+      addChatMessage: async (message) => {
+        const [row] = await t
+          .insert(schema.boardChatMessages)
+          .values({ ...message, citations: message.citations === null ? null : [...message.citations], createdAt: new Date(message.createdAt) })
+          .returning();
+        if (row === undefined) throw new Error('chat message insert returned no row');
+        return toChatMessage(row);
+      },
+      clearChat: async (boardId, email) => {
+        const m = schema.boardChatMessages;
+        await t.delete(m).where(and(eq(m.boardId, boardId), eq(m.email, email)));
+      },
       appendEvents: async (events) => {
         if (events.length === 0) return;
         await t.insert(schema.events).values(

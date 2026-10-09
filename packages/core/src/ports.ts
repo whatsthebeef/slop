@@ -4,6 +4,7 @@ import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
 import type { CodeReviewComment, NewCodeReviewComment } from './domain/code-review.js';
 import type { BoardNotification } from './domain/notifications.js';
+import type { ChatMessage, NewChatMessage } from './domain/chat.js';
 import type { Decision, DecisionPatch, DecisionSource, NewDecision } from './domain/decisions.js';
 import type { Candidate, ItemStatus, KnowledgeItem, NewChunk, NewKnowledgeItem, PendingChunk, SearchQuery, SourceType } from './domain/search.js';
 import type { DiffSummary } from './domain/sub-gate.js';
@@ -292,6 +293,12 @@ export interface Tx {
   nextDecisionSourceToExtract(now: string): Promise<DecisionSource | null>;
   /** The stored item for a board and external ref: its ID, status, replacing item and content hash; null when none. */
   getItemByRef(boardId: number, externalRef: string): Promise<{ id: number; status: ItemStatus; supersededBy: number | null; contentHash: string } | null>;
+
+  /** The person's latest `limit` chat messages on a board, oldest first. */
+  listChatMessages(boardId: number, email: string, limit: number): Promise<ChatMessage[]>;
+  addChatMessage(message: NewChatMessage): Promise<ChatMessage>;
+  /** Deletes the person's conversation on the board. */
+  clearChat(boardId: number, email: string): Promise<void>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
