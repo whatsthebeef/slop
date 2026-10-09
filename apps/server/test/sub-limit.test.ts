@@ -355,7 +355,7 @@ describe('The learned sub limit in Postgres', () => {
           passed: true,
           reason: null,
           cause: null,
-          changedLines: 2,
+          changedLines: 1200,
           limit: 2000,
         }),
         event('s8t2', 'Merged', MERGED, { sha: 'm2' }),
@@ -370,6 +370,7 @@ describe('The learned sub limit in Postgres', () => {
     const learn = () =>
       new SubLimitService({ store, notifier, diffs: null }).learn(other, NOW, null);
     const runs = await Promise.all([learn(), learn(), learn()]);
+    // s8t2 changed 1,200 lines, over half of the 2,250 it merged under, so it lowers the limit.
     // Every run reads the same candidates; under the lock each outcome is recorded by exactly one of them, and each
     // move starts from the limit the one before left.
     expect(runs.flatMap((r) => r.changes).sort((x, y) => x.from - y.from)).toEqual([
