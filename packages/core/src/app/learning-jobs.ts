@@ -12,6 +12,7 @@ import { LLM_TIMEOUT_MS } from './kb-pipeline.js';
 import type { MiningService } from './mining-service.js';
 import type { EffectCheckService } from './effect-check-service.js';
 import type { SubLimitService } from './sub-limit-service.js';
+import type { IntakeLearningService } from './intake-learning-service.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -33,6 +34,7 @@ const INTERVALS: readonly (readonly [BoardJobName, number])[] = [
   ['consolidation', CONSOLIDATION_INTERVAL_MS],
   ['effect_check', EFFECT_CHECK_INTERVAL_MS],
   ['sub_limit', SUB_LIMIT_INTERVAL_MS],
+  ['intake_outcome', SUB_LIMIT_INTERVAL_MS],
 ];
 /** A board job's lease: another server doesn't start the same job meanwhile. */
 export const BOARD_JOB_LEASE_MS = 30 * 60 * 1000;
@@ -100,6 +102,8 @@ export class LearningJobService {
       effectChecks?: EffectCheckService;
       /** Absent: the sub-limit learning isn't available. */
       subLimit?: SubLimitService;
+      /** Absent: intake outcomes aren't recorded. */
+      intakeLearning?: IntakeLearningService;
       /** Null without a code host: the dependency signal isn't measured. */
       manifests: ManifestSource | null;
       /** Where a run that outlived its lease is reported (the server's error log). */
@@ -114,6 +118,7 @@ export class LearningJobService {
       ...(this.deps.consolidation === undefined ? [] : ['consolidation' as const]),
       ...(this.deps.effectChecks === undefined ? [] : ['effect_check' as const]),
       ...(this.deps.subLimit === undefined ? [] : ['sub_limit' as const]),
+      ...(this.deps.intakeLearning === undefined ? [] : ['intake_outcome' as const]),
     ];
   }
 
@@ -218,6 +223,11 @@ export class LearningJobService {
       const { subLimit } = this.deps;
       if (subLimit === undefined) throw new Error('The sub-limit job is not wired');
       return subLimit.learn(board.id, started, lastRunAt);
+    }
+    if (job === 'intake_outcome') {
+      const { intakeLearning } = this.deps;
+      if (intakeLearning === undefined) throw new Error('The intake-outcome job is not wired');
+      return intakeLearning.run(board.id, started);
     }
     const commits = await this.deps.mining.mergedCommits(board.id, started);
     const manifestChanges =

@@ -1,4 +1,6 @@
 import type {
+  GlobOutcome,
+  PlanFeatures,
   ChatCitation,
   NotificationAction,
   NotificationClears,
@@ -25,7 +27,7 @@ import type {
   InboxSuggestion,
   SignalFigures,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
+import { AGENT_KB_APPROVALS, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -495,6 +497,69 @@ export const subLimitChanges = pgTable(
     evidence: text('evidence').notNull(),
   },
   (t) => [uniqueIndex('sub_limit_changes_outcome_idx').on(t.boardId, t.globId, t.outcome)],
+);
+
+/**
+ * What intake saw and decided when a glob was created (spec, Intake), one row per (glob, version): never updated except
+ * to fill a missing embedding. A plan rewritten before the glob starts adds the next version. The request's embedding
+ * serves nearest-example retrieval at intake.
+ */
+export const intakeSnapshots = pgTable(
+  'intake_snapshots',
+  {
+    globId: text('glob_id')
+      .notNull()
+      .references(() => globs.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    request: text('request').notNull(),
+    title: text('title').notNull(),
+    summary: text('summary').notNull(),
+    plan: text('plan').notNull(),
+    creator: text('creator').notNull(),
+    source: text('source', { enum: SNAPSHOT_SOURCES }).notNull(),
+    type: text('type', { enum: SLOP_TYPES }).notNull(),
+    category: text('category', { enum: CATEGORIES }).notNull(),
+    groupName: text('group_name'),
+    environment: text('environment'),
+    categoryConfidence: text('category_confidence', { enum: CONFIDENCES }),
+    reason: text('reason'),
+    model: text('model'),
+    promptVersion: integer('prompt_version'),
+    features: jsonb('features').$type<PlanFeatures>().notNull(),
+    /** The globs whose examples intake was shown. */
+    examples: jsonb('examples').$type<string[]>().notNull(),
+    backfilled: boolean('backfilled').notNull().default(false),
+    /** Null until computed (no embedder, or it failed): the intake-outcome job fills it. */
+    embedding: vector('embedding', { dimensions: EMBEDDING_DIMENSIONS }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.globId, t.version] }),
+    index('intake_snapshots_board_idx').on(t.boardId),
+    index('intake_snapshots_embedding_idx').using('hnsw', t.embedding.op('vector_cosine_ops')),
+  ],
+);
+
+/** A merged glob's outcome (spec, Intake): written at the merge and refreshed once, 14 days after it. */
+export const globOutcomes = pgTable(
+  'glob_outcomes',
+  {
+    globId: text('glob_id')
+      .primaryKey()
+      .references(() => globs.id, { onDelete: 'cascade' }),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    snapshotVersion: integer('snapshot_version').notNull(),
+    outcome: jsonb('outcome').$type<GlobOutcome>().notNull(),
+    final: boolean('final').notNull(),
+    mergedAt: timestamp('merged_at', { withTimezone: true }).notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [index('glob_outcomes_board_idx').on(t.boardId)],
 );
 
 /** Deploys pipelines report to release and integration environments (`slop.ci` events): the commit each one ran. */

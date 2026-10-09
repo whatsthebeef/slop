@@ -8,8 +8,10 @@ import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.
 import type { Actor, Board, Category, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
 import { MAX_AFTER, checkAfter, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
 import type { AwaitedDependency, DependencyState } from '../domain/waiting.js';
-import type { BranchFiles, Clock, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
+import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
+import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { findHolds } from './hold-service.js';
+import { embedRequest, snapshotOf } from './intake-learning-service.js';
 
 export interface GlobServiceDeps {
   readonly store: Store;
@@ -19,6 +21,8 @@ export interface GlobServiceDeps {
   readonly routines: RoutineDirectory;
   /** The files a branch changes, for the board's merge policy (exclusive paths); without it no glob is held for them. */
   readonly branchFiles?: BranchFiles;
+  /** Embeds a new glob's request for its intake snapshot; without it (or when it fails) the snapshot's embedding is filled later. */
+  readonly embedder?: Embedder;
 }
 
 export interface CreateGlobInput {
@@ -42,6 +46,10 @@ export interface CreateGlobInput {
   readonly after?: readonly string[];
   /** Files intake guessed the work changes (advisory: with the plan, they decide whether exclusive paths hold it). */
   readonly files?: readonly string[];
+  /** What intake saw and decided, for the glob's snapshot; absent when intake didn't run. */
+  readonly intake?: IntakeRecord | null;
+  /** Where the glob is created from, for the snapshot when intake didn't run (default: `api`). */
+  readonly source?: SnapshotSource;
 }
 
 /** One part of a split. Part 0 is the original glob (it keeps its ID); the others become new globs in its group. */
@@ -213,6 +221,8 @@ export class GlobService {
         holds = await findHolds(this.deps.store, this.deps.branchFiles, board, candidate, new Set(input.after ?? []));
       }
     }
+    // The snapshot's embedding is computed here, outside the transaction (it calls a model).
+    const embedding = await embedRequest(this.deps.embedder, input.intake?.request ?? input.summary);
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Transition>> => {
       const board = await tx.getBoard(input.boardId);
       if (board === null) return notFound(`No board ${input.boardId}`);
@@ -243,6 +253,8 @@ export class GlobService {
       }
       await tx.appendEvents(transition.value.events);
       await tx.enqueueEffects(transition.value.effects);
+      // The frozen record of what intake saw and decided (spec, Intake): written with the glob, never edited.
+      await tx.insertIntakeSnapshot(snapshotOf(glob, input.plan ?? input.summary, input.intake ?? null, input.source ?? 'api'), embedding);
       const plan = input.plan ?? '';
       if (plan.trim() !== '') {
         const artifact = await tx.insertArtifact({

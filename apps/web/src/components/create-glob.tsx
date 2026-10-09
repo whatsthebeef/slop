@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api } from '@/lib/api';
-import type { BoardView, NewGlob } from '@/lib/api';
+import type { BoardView, IntakeProposalView, NewGlob } from '@/lib/api';
 
 const empty = (): NewGlob => ({
   title: '',
@@ -39,6 +39,9 @@ export const CreateGlobDialog = ({
   const [request, setRequest] = useState('');
   const [processing, setProcessing] = useState(false);
   const [reason, setReason] = useState<string | null>(null);
+  // What the last Process said about its category: how sure it was and the past globs it was shown.
+  const [insight, setInsight] = useState<IntakeProposalView | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [afterText, setAfterText] = useState('');
@@ -68,6 +71,8 @@ export const CreateGlobDialog = ({
       // Only a suggestion: the person sees it in the field and may clear it.
       if (proposal.suggestedAfter.length > 0) setAfterText(proposal.suggestedAfter.join(', '));
       setReason(proposal.autoTriggerReason);
+      setInsight(proposal);
+      setConfirmed(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not process the request');
     } finally {
@@ -81,11 +86,28 @@ export const CreateGlobDialog = ({
     setError(null);
     try {
       const after = afterText.split(/[\s,]+/).filter((id) => id !== '');
-      await onCreate({ ...form, group: form.group?.trim() === '' ? null : form.group, ...(after.length === 0 ? {} : { after }) });
+      await onCreate({
+        ...form,
+        group: form.group?.trim() === '' ? null : form.group,
+        ...(after.length === 0 ? {} : { after }),
+        ...(insight === null
+          ? {}
+          : {
+              intake: {
+                request,
+                categoryConfidence: insight.categoryConfidence,
+                reason: insight.categoryReason,
+                model: insight.model,
+                promptVersion: insight.promptVersion,
+                examples: insight.examples.map((e) => e.globId),
+              },
+            }),
+      });
       setForm(empty());
       setAfterText('');
       setRequest('');
       setReason(null);
+      setInsight(null);
       onOpenChange(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create the glob');
@@ -174,6 +196,25 @@ export const CreateGlobDialog = ({
               </Select>
             </Label>
           </div>
+          {insight !== null && insight.needsConfirmation && !confirmed && (
+            <div className='grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-xs' data-testid='intake-unsure'>
+              <p>
+                Intake is not sure about the category ({insight.category}
+                {insight.categoryReason === null ? '' : `: ${insight.categoryReason}`}). Check it, then confirm.
+              </p>
+              <Button type='button' variant='outline' size='sm' className='w-fit' onClick={() => setConfirmed(true)}>
+                Category is right
+              </Button>
+            </div>
+          )}
+          {insight !== null && insight.examples.length > 0 && (
+            <p className='text-xs text-muted-foreground' data-testid='intake-examples'>
+              Based on similar globs:{' '}
+              {insight.examples
+                .map((e) => `${e.globId} (${e.type} ${e.category}${e.note === null ? '' : `, ${e.note}`})`)
+                .join('; ')}
+            </p>
+          )}
           <Label>
             Start after (glob IDs, optional)
             <Input value={afterText} onChange={(e) => setAfterText(e.target.value)} placeholder='s15t7, s15b18' />

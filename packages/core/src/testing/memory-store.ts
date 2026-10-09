@@ -19,6 +19,7 @@ import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledg
 import { GLOB_OWNED_SOURCES, matchesFilters } from '../domain/search.js';
 import type { Candidate, KnowledgeItem } from '../domain/search.js';
 import type { SubLimitChange } from '../domain/sub-limit.js';
+import type { GlobOutcome, IntakeSnapshot } from '../domain/intake-learning.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
 import type { SearchQuery } from '../domain/search.js';
@@ -45,6 +46,8 @@ interface State {
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
+  intakeSnapshots: { snapshot: IntakeSnapshot; embedding: readonly number[] | null }[];
+  globOutcomes: GlobOutcome[];
   environmentDeploys: EnvironmentDeploy[];
   /** Keyed by glob and environment. */
   globPresence: Map<string, GlobPresence>;
@@ -123,6 +126,8 @@ const clone = (state: State): State => ({
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
+  intakeSnapshots: [...state.intakeSnapshots],
+  globOutcomes: [...state.globOutcomes],
   environmentDeploys: [...state.environmentDeploys],
   globPresence: new Map(state.globPresence),
   testRuns: [...state.testRuns],
@@ -164,6 +169,8 @@ export class MemoryStore implements Store {
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
+    intakeSnapshots: [],
+    globOutcomes: [],
     environmentDeploys: [],
     globPresence: new Map(),
     testRuns: [],
@@ -213,6 +220,8 @@ export class MemoryStore implements Store {
       },
       deleteGlob: (id) => {
         s.globs.delete(id);
+        s.intakeSnapshots = s.intakeSnapshots.filter((r) => r.snapshot.globId !== id);
+        s.globOutcomes = s.globOutcomes.filter((o) => o.globId !== id);
         s.artifacts = s.artifacts.filter((a) => a.globId !== id);
         s.findings = s.findings.filter((f) => f.globId !== id);
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
@@ -764,6 +773,48 @@ export class MemoryStore implements Store {
         }
         return Promise.resolve([...latest.values()]);
       },
+      insertIntakeSnapshot: (snapshot, embedding) => {
+        if (s.intakeSnapshots.some((r) => r.snapshot.globId === snapshot.globId && r.snapshot.version === snapshot.version)) return Promise.resolve(false);
+        s.intakeSnapshots.push({ snapshot, embedding });
+        return Promise.resolve(true);
+      },
+      listLatestIntakeSnapshots: (boardId) => {
+        const latest = new Map<string, IntakeSnapshot>();
+        for (const { snapshot } of s.intakeSnapshots) {
+          const seen = latest.get(snapshot.globId);
+          if (snapshot.boardId === boardId && (seen === undefined || seen.version < snapshot.version)) latest.set(snapshot.globId, snapshot);
+        }
+        return Promise.resolve([...latest.values()]);
+      },
+      snapshotsToEmbed: (boardId, limit) =>
+        Promise.resolve(
+          s.intakeSnapshots
+            .filter((r) => r.snapshot.boardId === boardId && r.embedding === null)
+            .slice(0, limit)
+            .map((r) => ({ globId: r.snapshot.globId, version: r.snapshot.version, request: r.snapshot.request })),
+        ),
+      setSnapshotEmbedding: (globId, version, embedding) => {
+        s.intakeSnapshots = s.intakeSnapshots.map((r) =>
+          r.snapshot.globId === globId && r.snapshot.version === version && r.embedding === null ? { ...r, embedding } : r,
+        );
+        return Promise.resolve();
+      },
+      nearestIntakeSnapshots: (boardId, embedding, limit) =>
+        Promise.resolve(
+          s.intakeSnapshots
+            .flatMap((r) =>
+              r.snapshot.boardId === boardId && r.embedding !== null
+                ? [{ globId: r.snapshot.globId, version: r.snapshot.version, distance: 1 - cosine(embedding, r.embedding) }]
+                : [],
+            )
+            .sort((a, b) => a.distance - b.distance)
+            .slice(0, limit),
+        ),
+      upsertGlobOutcome: (outcome) => {
+        s.globOutcomes = [...s.globOutcomes.filter((o) => o.globId !== outcome.globId), outcome];
+        return Promise.resolve();
+      },
+      listGlobOutcomes: (boardId) => Promise.resolve(s.globOutcomes.filter((o) => o.boardId === boardId)),
       listDecisions: (boardId) =>
         Promise.resolve(s.decisions.filter((d) => d.boardId === boardId).sort((a, b) => a.decidedAt.localeCompare(b.decidedAt) || a.id - b.id)),
       getDecision: (id) => Promise.resolve(s.decisions.find((d) => d.id === id) ?? null),

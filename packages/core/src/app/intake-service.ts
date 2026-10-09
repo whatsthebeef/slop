@@ -4,7 +4,11 @@ import { isValidCombination } from '../domain/matrix.js';
 import { CATEGORIES, SLOP_TYPES } from '../domain/types.js';
 import type { Category, Environment, SlopType } from '../domain/types.js';
 import type { Store } from '../ports.js';
+import { CONFIDENCES, INTAKE_PROMPT_VERSION, examplesBlock, needsConfirmation } from '../domain/intake-learning.js';
+import type { Confidence, IntakeExample } from '../domain/intake-learning.js';
+import type { Embedder } from '../ports.js';
 import { memberOf } from './access.js';
+import { embedRequest, nearestExamples } from './intake-learning-service.js';
 import { field, parseJson, text } from './llm-json.js';
 
 /**
@@ -83,18 +87,31 @@ export interface IntakeProposal {
   readonly files: readonly string[];
   /** Unmerged globs on the board the request says to wait for ("once s15t7 is merged"); a suggestion, never applied by itself. */
   readonly suggestedAfter: readonly string[];
+  /** How sure intake is of the category (an explicit category is `high`); null when the model gave none. */
+  readonly categoryConfidence: Confidence | null;
+  /** The model's one-line reason for the category; null when none or the category was explicit. */
+  readonly categoryReason: string | null;
+  /** The board's nearest past globs intake was shown, corrected ones first (the card shows them). */
+  readonly examples: readonly IntakeExample[];
+  /** The card asks the person to confirm the category: intake is unsure, or the nearest examples disagree. */
+  readonly needsConfirmation: boolean;
+  /** The model and prompt version that decided, recorded in the glob's snapshot. */
+  readonly model: string | null;
+  readonly promptVersion: number;
 }
 
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
 
 Respond with one JSON object and nothing else:
-{"title": string, "summary": string, "plan": string, "type": "sub" | "same" | "super", "category": "feature" | "task" | "bug", "group": string | null, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
+{"title": string, "summary": string, "plan": string, "type": "sub" | "same" | "super", "category": "feature" | "task" | "bug", "group": string | null, "categoryConfidence": "high" | "medium" | "low", "categoryReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
 
 - title: a short imperative title, at most 70 characters.
 - summary: one or two plain sentences saying what is wanted, for a card on the board. Not the spec.
 - plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
 - type: "sub" for a small bug fix or minor UI or UX tweak that can be implemented and merged without human review; "super" only when the request says the work is done by a developer pairing with the product owner; otherwise "same".
 - category: "feature" for new capability, "bug" for something broken, "task" for other maintenance.
+- categoryConfidence: how sure you are of the category: "low" when the request could reasonably be a different category. categoryReason: one short sentence saying why.
+- Examples from the board's history may follow the request. Examples marked as changed show what the team wanted after a person corrected the first choice: follow them over your own reading when the request is similar.
 - group: reuse an existing group (its exact name) only when the work clearly belongs to that same area; otherwise a new short group name if the request names an area of work, otherwise null. Never pick an existing group just because it is the only one.
 - files: repo paths the work most likely changes, only ones the request names or clearly implies (a migration directory for a schema change, a named file); an empty list when unknown. Never invent paths.
 - autoTrigger: true only if the request explicitly says to start the work immediately or to let an agent implement it now. Then autoTriggerQuote is the exact words from the request that say so; otherwise null.`;
@@ -157,7 +174,16 @@ const oneOf = <T extends string>(values: readonly T[], value: unknown): T | null
  * appear in the request).
  */
 export class IntakeService {
-  constructor(private readonly deps: { store: Store; llm: Llm }) {}
+  constructor(
+    private readonly deps: {
+      store: Store;
+      llm: Llm;
+      /** Absent: no examples are retrieved (intake works as before). */
+      embedder?: Embedder;
+      /** The intake model's ID, recorded with each glob's snapshot. */
+      model?: string;
+    },
+  ) {}
 
   async propose(email: string, boardId: number, input: IntakeInput): Promise<Result<IntakeProposal>> {
     if (input.text.trim() === '') return invalidInput('Describe the work first');
@@ -175,11 +201,14 @@ export class IntakeService {
     if (!known.ok) return known;
     const { groups, environments, open } = known.value;
 
+    const examples = await this.examplesFor(boardId, input.text);
+    const block = examplesBlock(examples);
     const prompt = [
       `Existing groups: ${groups.length === 0 ? '(none)' : groups.join(', ')}`,
       '',
       'Request:',
       input.text.trim(),
+      ...(block === '' ? [] : ['', block]),
     ].join('\n');
     let completion: string;
     try {
@@ -188,7 +217,18 @@ export class IntakeService {
       if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
       throw error;
     }
-    return ok(this.validate(parseJson(completion), input, groups, environments, open));
+    return ok(this.validate(parseJson(completion), input, groups, environments, open, examples));
+  }
+
+  /** The nearest past snapshots; none when there is no embedder, it fails, or the board has none. Never fails intake. */
+  private async examplesFor(boardId: number, text: string): Promise<IntakeExample[]> {
+    const embedding = await embedRequest(this.deps.embedder, text);
+    if (embedding === null) return [];
+    try {
+      return await this.deps.store.transaction((tx) => nearestExamples(tx, boardId, embedding));
+    } catch {
+      return [];
+    }
   }
 
   private validate(
@@ -197,6 +237,7 @@ export class IntakeService {
     groups: readonly string[],
     environments: readonly Environment[],
     open: ReadonlySet<string>,
+    examples: readonly IntakeExample[],
   ): IntakeProposal {
     const request = input.text.trim();
     const title = (input.explicit.title ?? text(field(answer, 'title')) ?? '').trim() || request.split('\n')[0]?.slice(0, 70) || 'Untitled';
@@ -228,6 +269,10 @@ export class IntakeService {
       normalise(request).includes(normalise(quote));
     const autoTrigger = type === 'same' && explicitInstruction;
 
+    const explicitCategory = input.explicit.category !== undefined;
+    const confidence = explicitCategory ? 'high' : (oneOf(CONFIDENCES, field(answer, 'categoryConfidence')));
+    const reason = explicitCategory ? null : text(field(answer, 'categoryReason'))?.trim().slice(0, 300) || null;
+
     return {
       title: title.slice(0, 120),
       summary,
@@ -240,6 +285,12 @@ export class IntakeService {
       autoTriggerReason: autoTrigger && typeof quote === 'string' ? `The request says: "${quote.trim()}"` : null,
       files: pathList(field(answer, 'files')),
       suggestedAfter: waitedForIn(request, open),
+      categoryConfidence: confidence,
+      categoryReason: reason,
+      examples,
+      needsConfirmation: !explicitCategory && needsConfirmation(confidence, examples),
+      model: this.deps.model ?? null,
+      promptVersion: INTAKE_PROMPT_VERSION,
     };
   }
 }

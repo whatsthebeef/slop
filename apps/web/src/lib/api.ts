@@ -16,6 +16,9 @@ import type {
   ChatCitation,
   ChatMessage,
   CodeReviewBadge,
+  Confidence,
+  IntakeAccuracy,
+  IntakeExample,
   GlobCodeReview,
   DecisionView,
   Deploy,
@@ -230,7 +233,29 @@ export interface NewGlob {
   after?: string[];
   /** Files intake guessed the work changes (sent back as given). */
   files?: string[];
+  /** What the intake proposal behind the form said, sent back so the glob's snapshot records it. */
+  intake?: {
+    request: string;
+    categoryConfidence: Confidence | null;
+    reason: string | null;
+    model: string | null;
+    promptVersion: number;
+    examples: string[];
+  };
 }
+
+/** Intake's answer: the form's fields, plus how sure it is and the past globs it was shown. */
+export type IntakeProposalView = NewGlob & {
+  plan: string;
+  autoTriggerReason: string | null;
+  suggestedAfter: string[];
+  categoryConfidence: Confidence | null;
+  categoryReason: string | null;
+  examples: IntakeExample[];
+  needsConfirmation: boolean;
+  model: string | null;
+  promptVersion: number;
+};
 
 export interface SplitPartInput {
   title: string;
@@ -392,7 +417,8 @@ export const api = {
   action: (id: string, action: ActionPath, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, { version }),
   intake: (boardId: number, text: string) =>
-    request<NewGlob & { plan: string; autoTriggerReason: string | null; suggestedAfter: string[] }>('POST', `/api/boards/${boardId}/intake`, { text }),
+    request<IntakeProposalView>('POST', `/api/boards/${boardId}/intake`, { text }),
+  intakeAccuracy: (boardId: number) => request<IntakeAccuracy>('GET', `/api/boards/${boardId}/intake-accuracy`),
   repoConnection: (boardId: number) =>
     request<{ repo: string | null; configured: boolean; connected: boolean; installUrl: string | null; appName: string | null }>(
       'GET',
