@@ -5,7 +5,7 @@ import { StatusBar } from '@/components/status-bar';
 import { activeTab, BOARD_TABS } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
 
-/** Board, Signed off, Knowledge and Settings as tabs; the active one sits on the line below. */
+/** Board, Signed off, Knowledge and Settings as tabs; only the active one is underlined. */
 const BoardTabs = ({ boardId }: { boardId: number }) => {
   const current = activeTab(useLocation().pathname, boardId);
   return (
@@ -16,7 +16,7 @@ const BoardTabs = ({ boardId }: { boardId: number }) => {
             key={tab}
             to={`/boards/${String(boardId)}${path}`}
             aria-current={current === tab ? 'page' : undefined}
-            className={cn('-mb-px border-b-2 pb-1.5', current === tab ? 'border-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground')}
+            className={cn('border-b-2 pb-1.5', current === tab ? 'border-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground')}
           >
             {label}
           </Link>
@@ -38,7 +38,6 @@ export const BoardShell = () => {
       <StatusBar current={isBoard ? boardId : undefined} />
       {isBoard && <NotificationBar boardId={boardId} />}
       {isBoard && <BoardTabs boardId={boardId} />}
-      {isBoard && <hr className='mx-5 border-edge' />}
       <div className='min-h-0 flex-1 overflow-auto'>
         <Outlet />
       </div>
