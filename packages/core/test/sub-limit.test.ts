@@ -63,6 +63,9 @@ class FakeLlm implements Llm {
   }
 }
 
+/** A size at least half of the 2000-line limit: a sub this large that needed fixes lowers it. */
+const NEAR = 1500;
+
 class FakeDiffs implements SubDiffSource {
   readonly asked: string[] = [];
   constructor(private readonly lines: number | null) {}
@@ -95,8 +98,15 @@ describe('the sub-limit rule', () => {
   });
 
   it('moves by the step whatever the sub changed', () => {
-    expect(nextLimit('merged_unchanged', 2000)).toBe(2250);
-    expect(nextLimit('needed_fixes', 2000)).toBe(1750);
+    expect(nextLimit('merged_unchanged', 2000, 10)).toBe(2250);
+    expect(nextLimit('needed_fixes', 2000, 1000)).toBe(1750);
+  });
+
+  it('lowers only for a sub that changed at least half the limit', () => {
+    expect(nextLimit('needed_fixes', 2000, 999)).toBe(2000);
+    expect(nextLimit('needed_fixes', 2000, 1000)).toBe(1750);
+    expect(nextLimit('needed_fixes', 2000, null)).toBe(2000);
+    expect(nextLimit('merged_unchanged', 2000, null)).toBe(2250);
   });
 
   it('reads gate verdicts recorded before line counts from their reason', () => {
@@ -345,7 +355,7 @@ describe('SubLimitService', () => {
     it('lowers the limit when a sign-off label asks for changes within 14 days of the merge', async () => {
       addGlobs(sub('s1t1'));
       addEvents(
-        ...passed('s1t1', 400),
+        ...passed('s1t1', NEAR),
         event('s1t1', 'LabelChanged', at(HOUR), {
           label: 'QA',
           from: 'required',
@@ -373,16 +383,16 @@ describe('SubLimitService', () => {
           items: [],
         }),
       );
-      const diffs = new FakeDiffs(2);
+      const diffs = new FakeDiffs(NEAR);
       expect((await service(undefined, diffs).learn(boardId, NOW, null)).changes).toEqual([
         { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
       expect(diffs.asked).toEqual(['m-s1t1']);
       expect((await history())[0]).toMatchObject({
-        changedLines: 2,
+        changedLines: NEAR,
         evidence: 'QA review asked for changes',
       });
-      // Without a code host the count is unknown: the step doesn't depend on it, so the outcome is recorded anyway.
+      // Without a code host the count is unknown: the outcome is recorded, and says nothing about the limit.
       addGlobs(sub('s1t2'));
       addEvents(
         ...passed('s1t2', null),
@@ -394,10 +404,30 @@ describe('SubLimitService', () => {
         }),
       );
       expect(await service(undefined, null).learn(boardId, NOW, null)).toMatchObject({
-        changes: [{ globId: 's1t2', outcome: 'needed_fixes', from: 1750, to: 1500 }],
+        changes: [{ globId: 's1t2', outcome: 'needed_fixes', from: 1750, to: 1750 }],
         waiting: 0,
       });
       expect((await history())[0]).toMatchObject({ globId: 's1t2', changedLines: null });
+    });
+
+    it('records a small sub that needed fixes without moving the limit, and a sub at half the limit lowers it', async () => {
+      addGlobs(sub('s1t1'), sub('s1t2'));
+      const asked = (id: string, lines: number, ...rest: [number]) => [
+        ...passed(id, lines),
+        event(id, 'LabelChanged', at(HOUR + rest[0]), { label: 'QA', from: 'required', to: 'added', items: ['Broken'] }),
+      ];
+      addEvents(...asked('s1t1', 2, 0), ...asked('s1t2', 1000, 1));
+      const result = await service().learn(boardId, NOW, null);
+      expect(result.changes).toEqual([
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 2000 },
+        { globId: 's1t2', outcome: 'needed_fixes', from: 2000, to: 1750 },
+      ]);
+      expect(await limit()).toBe(1750);
+      const rows = await history();
+      expect(rows.find((r) => r.globId === 's1t1')).toMatchObject({ fromLines: 2000, toLines: 2000, changedLines: 2 });
+      expect(rows.find((r) => r.globId === 's1t1')?.evidence).toContain('Too small to say anything about the limit');
+      // Recorded once: a later run neither repeats it nor lowers the limit for the small sub.
+      expect((await service().learn(boardId, at(3 * HOUR), NOW)).changes).toEqual([]);
     });
 
     it("doesn't read the merge commit for a bug reference already answered, or one the model doesn't blame", async () => {
@@ -414,7 +444,7 @@ describe('SubLimitService', () => {
     it('ignores labels after the window, and subs merged before it', async () => {
       addGlobs(sub('s1t1'));
       addEvents(
-        ...passed('s1t1', 400),
+        ...passed('s1t1', NEAR),
         event('s1t1', 'LabelChanged', at(15 * DAY), {
           label: 'QA',
           from: 'required',
@@ -439,7 +469,7 @@ describe('SubLimitService', () => {
           'Cards overflow. The defect was introduced by s1t1, which reverted the fix.',
         ),
       );
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       const result = await service(llm).learn(boardId, NOW, null);
       expect(result).toMatchObject({
         changes: [{ globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 }],
@@ -457,7 +487,7 @@ describe('SubLimitService', () => {
     it("doesn't lower on 'caused: false', and doesn't ask about that bug again", async () => {
       const llm = new FakeLlm(['{"caused": false, "quote": ""}']);
       addGlobs(sub('s1t1'), bug('s1b2', at(HOUR), 'Related to s1t1, which touched the same file.'));
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect((await service(llm).learn(boardId, NOW, null)).changes).toEqual([]);
       expect((await service(llm).learn(boardId, at(3 * HOUR), NOW)).asked).toBe(0);
       expect(llm.requests).toHaveLength(1);
@@ -468,7 +498,7 @@ describe('SubLimitService', () => {
       const llm = new FakeLlm();
       const first = bug('s1b2', at(HOUR), 'Related to s1t1.');
       addGlobs(sub('s1t1'), first);
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       await service(llm).learn(boardId, NOW, null);
       addGlobs({ ...first, summary: 'Related to s1t1. It was introduced by s1t1 after all.' });
       await service(llm).learn(boardId, at(3 * HOUR), NOW);
@@ -485,7 +515,7 @@ describe('SubLimitService', () => {
         bug('s1b2', at(HOUR), 'Board looks wrong after s1t1.'),
         bug('s1b3', at(2 * HOUR), 'Broken by s1t1.'),
       );
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect((await service(llm).learn(boardId, at(3 * HOUR), null)).changes).toEqual([]);
       expect(llm.requests).toHaveLength(2);
       expect(await limit()).toBe(2000);
@@ -507,7 +537,7 @@ describe('SubLimitService', () => {
         bug('s1b3', at(HOUR), 'The defect was introduced by s1t10'),
         bug('s1b4', at(15 * DAY), 'The defect was introduced by s1t1'),
       );
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect((await service(llm).learn(boardId, NOW, null)).asked).toBe(0);
       expect(llm.requests).toEqual([]);
     });
@@ -516,7 +546,7 @@ describe('SubLimitService', () => {
       const llm = new FakeLlm();
       addGlobs(sub('s1t1'), bug('s1b2', at(HOUR), 'The defect was introduced by s1t1'));
       addEvents(
-        ...passed('s1t1', 2),
+        ...passed('s1t1', NEAR),
         event('s1t1', 'LabelChanged', at(2 * HOUR), {
           label: 'QA',
           from: 'required',
@@ -537,7 +567,7 @@ describe('SubLimitService', () => {
         bug('s1b2', at(HOUR), 'The defect was introduced by s1t1'),
         bug('s1b3', at(HOUR), 'The defect was introduced by s1t2'),
       );
-      addEvents(...passed('s1t1', 2), ...passed('s1t2', 2));
+      addEvents(...passed('s1t1', NEAR), ...passed('s1t2', NEAR));
       const down = await service(llm).learn(boardId, NOW, null);
       // The first call finds it down; the second reference isn't asked.
       expect(down).toMatchObject({ changes: [], asked: 1, waiting: 2 });
@@ -553,7 +583,7 @@ describe('SubLimitService', () => {
       const llm = new FakeLlm(['{"caused": true, "quote": "The defect was introduced by s1t1"}']);
       llm.down = true;
       addGlobs(sub('s1t1'), bug('s1b2', at(13 * DAY), 'The defect was introduced by s1t1'));
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       // Hourly runs from day 13 to two days after the window ended, all with the model down.
       let last: string | null = null;
       for (let t = 13 * DAY + HOUR; t <= 16 * DAY; t += HOUR) {
@@ -585,8 +615,8 @@ describe('SubLimitService', () => {
         bug('s1b2', at(HOUR), 'The defect was introduced by s1t1'),
       );
       addEvents(
-        ...passed('s1t1', 2),
-        ...passed('s1t2', 2),
+        ...passed('s1t1', NEAR),
+        ...passed('s1t2', NEAR),
         event('s1t2', 'LabelChanged', at(HOUR), {
           label: 'QA',
           from: 'required',
@@ -607,7 +637,7 @@ describe('SubLimitService', () => {
     it('skips a bug reference after 3 asks without a usable answer, and notes it', async () => {
       const llm = new FakeLlm(['not json', '{"caused": "maybe"}', 'still not json']);
       addGlobs(sub('s1t1'), bug('s1b2', at(HOUR), 'The defect was introduced by s1t1'));
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect(await service(llm).learn(boardId, NOW, null)).toMatchObject({ asked: 1, waiting: 1 });
       expect(await service(llm).learn(boardId, at(3 * HOUR), NOW)).toMatchObject({
         asked: 1,
@@ -631,7 +661,7 @@ describe('SubLimitService', () => {
         '{"caused": true, "quote": "The defect was introduced by s1t1"}',
       ]);
       addGlobs(sub('s1t1'), bug('s1b2', at(HOUR), 'The defect was introduced by s1t1'));
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect(await service(llm).learn(boardId, NOW, null)).toMatchObject({ asked: 1, waiting: 1 });
       const state = () => store.transaction((tx) => tx.getBoardJobState(boardId, 'sub_limit'));
       const before = (await state()) as { attempts: Record<string, number> };
@@ -660,7 +690,7 @@ describe('SubLimitService', () => {
       const down = new FakeLlm();
       down.down = true;
       addGlobs(sub('s1t1'), bug('s1b2', at(HOUR), 'The defect was introduced by s1t1'));
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       await service(down).learn(boardId, NOW, null);
       await service(down).learn(boardId, NOW, null);
       expect(await timing.learn(boardId, NOW, null)).toMatchObject({ waiting: 1 });
@@ -691,7 +721,7 @@ describe('SubLimitService', () => {
       addGlobs(sub('s1t1', { type: 'same', status: 'signed_off' }), sub('s1t2'));
       addEvents(
         ...converted('s1t1'),
-        ...passed('s1t2', 2),
+        ...passed('s1t2', NEAR),
         event('s1t2', 'LabelChanged', at(HOUR), {
           label: 'QA',
           from: 'required',
@@ -828,9 +858,9 @@ describe('SubLimitService', () => {
     it('counts a label moved to added up to exactly 14 days after the merge, and not a moment later', async () => {
       addGlobs(sub('s1t1'), sub('s1t2'));
       addEvents(
-        ...passed('s1t1', 400),
+        ...passed('s1t1', NEAR),
         qaAdded('s1t1', at(14 * DAY)),
-        ...passed('s1t2', 400),
+        ...passed('s1t2', NEAR),
         qaAdded('s1t2', at(14 * DAY + 1)),
       );
       // The job last ran just before the merges, so both subs are in reach although the window has passed.
@@ -843,7 +873,7 @@ describe('SubLimitService', () => {
     it('counts a label or a bug that arrives in the last hour of the window, on the hourly run after it ends', async () => {
       const llm = new FakeLlm(['{"caused": true, "quote": "The defect was introduced by s1t2"}']);
       addGlobs(sub('s1t1'), sub('s1t2'));
-      addEvents(...passed('s1t1', 400), ...passed('s1t2', 400));
+      addEvents(...passed('s1t1', NEAR), ...passed('s1t2', NEAR));
       const before = at(14 * DAY - 30 * 60 * 1000);
       expect(
         (await service(llm).learn(boardId, before, at(14 * DAY - 90 * 60 * 1000))).changes,
@@ -879,7 +909,7 @@ describe('SubLimitService', () => {
     it('still counts a label that moved to added and was later cleared: fixes were asked for', async () => {
       addGlobs(sub('s1t1', { status: 'signed_off' }));
       addEvents(
-        ...passed('s1t1', 400),
+        ...passed('s1t1', NEAR),
         event('s1t1', 'LabelChanged', at(HOUR), {
           label: 'CR',
           from: 'required',
@@ -989,7 +1019,7 @@ describe('SubLimitService', () => {
         bug('s1b1', at(14 * DAY), 'The defect was introduced by s1t1'),
         bug('s1b2', at(14 * DAY + 1), 'The defect was introduced by s1t2'),
       );
-      addEvents(...passed('s1t1', 2), ...passed('s1t2', 2));
+      addEvents(...passed('s1t1', NEAR), ...passed('s1t2', NEAR));
       const result = await service(llm).learn(boardId, at(15 * DAY), at(-HOUR));
       expect(result.changes).toEqual([
         { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
@@ -1000,7 +1030,7 @@ describe('SubLimitService', () => {
     it('a bug glob created at the same moment as the merge does not count', async () => {
       const llm = new FakeLlm();
       addGlobs(sub('s1t1'), bug('s1b2', MERGED, 'The defect was introduced by s1t1'));
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect((await service(llm).learn(boardId, NOW, null)).asked).toBe(0);
     });
 
@@ -1010,7 +1040,7 @@ describe('SubLimitService', () => {
         sub('s1t1'),
         bug('s1b2', at(HOUR), 'Cards overflow.', { title: 'Regression introduced by s1t1' }),
       );
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect((await service(llm).learn(boardId, NOW, null)).changes).toEqual([
         { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
@@ -1019,7 +1049,7 @@ describe('SubLimitService', () => {
     it("'caused: false' does not count even with a verified quote", async () => {
       const llm = new FakeLlm(['{"caused": false, "quote": "The defect was introduced by s1t1"}']);
       addGlobs(sub('s1t1'), bug('s1b2', at(HOUR), 'The defect was introduced by s1t1'));
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect((await service(llm).learn(boardId, NOW, null)).changes).toEqual([]);
       expect(await limit()).toBe(2000);
     });
@@ -1027,7 +1057,7 @@ describe('SubLimitService', () => {
     it('a verified quote that is too short does not count, and the answer is remembered', async () => {
       const llm = new FakeLlm(['{"caused": true, "quote": "s1t1"}']);
       addGlobs(sub('s1t1'), bug('s1b2', at(HOUR), 'The defect was introduced by s1t1'));
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect((await service(llm).learn(boardId, NOW, null)).changes).toEqual([]);
       expect((await service(llm).learn(boardId, at(3 * HOUR), NOW)).asked).toBe(0);
       expect(llm.requests).toHaveLength(1);
@@ -1039,7 +1069,7 @@ describe('SubLimitService', () => {
         '{"caused": true, "quote": "The defect was introduced by s1t1"}',
       ]);
       addGlobs(sub('s1t1'), bug('s1b2', at(HOUR), 'The defect was introduced by s1t1'));
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect(await service(llm).learn(boardId, NOW, null)).toMatchObject({
         changes: [],
         asked: 1,
@@ -1052,7 +1082,7 @@ describe('SubLimitService', () => {
 
     it('without a model, bug references wait and nothing is remembered', async () => {
       addGlobs(sub('s1t1'), bug('s1b2', at(HOUR), 'The defect was introduced by s1t1'));
-      addEvents(...passed('s1t1', 2));
+      addEvents(...passed('s1t1', NEAR));
       expect(await service().learn(boardId, NOW, null)).toMatchObject({
         changes: [],
         asked: 0,

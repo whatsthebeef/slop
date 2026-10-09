@@ -1065,6 +1065,62 @@ describe('Retry auto-fix', () => {
   });
 });
 
+describe('a watcher that gave up is retried once', () => {
+  const GAVE_UP = "Auto-fix didn't respond to failed checks (Type check) on 47f4a3d";
+  const headChecks = {
+    sha: '47f4a3d9c0',
+    state: 'failed' as const,
+    at: NOW,
+    failure: { name: 'Type check', step: 'Run tsc', lines: ['src/a.ts(1,1): error TS2322', 'second line'], url: null },
+  };
+  const watching = (extra: Partial<ReturnType<typeof glob>> = {}) =>
+    glob({
+      status: 'pr_open',
+      type: 'sub',
+      pr: { number: 7, state: 'ready', headSha: '47f4a3d9c0' },
+      headChecks,
+      runs: [run({ id: 'run-0', state: 'watching' })],
+      ...extra,
+    });
+
+  it('queues one new run on the same PR and generation, carrying the failure summary, and shows no failure', () => {
+    const g = watching();
+    const t = value(m.reportFailure(g, { reason: GAVE_UP, runId: 'run-0' }, ctx(null)));
+    expect(t.glob).toMatchObject({ status: 'pr_open', failure: null, generation: g.generation, pr: g.pr });
+    expect(t.glob.runs).toHaveLength(2);
+    expect(t.glob.runs[0]).toMatchObject({ state: 'ended', outcome: 'failed', failureReason: GAVE_UP });
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'queued', autoRetry: true });
+    const fire = t.effects.find((e) => e.kind === 'fire_routine');
+    expect(fire).toMatchObject({ failureSummary: 'Type check (Run tsc)\nsrc/a.ts(1,1): error TS2322\nsecond line' });
+    expect(t.events.map((e) => e.type)).toEqual(expect.arrayContaining(['RunFailed', 'RunTriggered']));
+    expect(t.events.find((e) => e.type === 'RunTriggered')?.data).toMatchObject({ automatic: true });
+    // The retried run watches from the start, since the PR is ready.
+    expect(m.currentRun(value(m.runProgress(t.glob, m.currentRun(t.glob)?.id ?? '', ctx(null))).glob)?.state).toBe('watching');
+  });
+
+  it('leaves the failure and the Retry auto-fix button for a person when the retried run gives up too', () => {
+    const first = value(m.reportFailure(watching(), { reason: GAVE_UP, runId: 'run-0' }, ctx(null))).glob;
+    const retryId = m.currentRun(first)?.id ?? '';
+    const watchingAgain = value(m.runProgress(first, retryId, ctx(null))).glob;
+    const second = value(m.reportFailure(watchingAgain, { reason: GAVE_UP, runId: retryId }, ctx(null)));
+    expect(second.glob.runs).toHaveLength(2);
+    expect(second.glob.failure).toMatchObject({ reason: GAVE_UP });
+    expect(second.effects).toEqual([]);
+    expect(m.allowedActions(second.glob, dev)).toContain('retry_autofix');
+  });
+
+  it('retries only a give-up for ignoring failed checks, not a run that reported another failure, and not a super or a person\'s PR', () => {
+    expect(value(m.reportFailure(watching(), { reason: 'Cannot fix it', runId: 'run-0' }, ctx(null))).glob.runs).toHaveLength(1);
+    expect(value(m.reportFailure(watching({ type: 'super' }), { reason: GAVE_UP, runId: 'run-0' }, ctx(null))).glob.runs).toHaveLength(1);
+    expect(value(m.reportFailure(watching({ implementer: 'dev@example.com' }), { reason: GAVE_UP, runId: 'run-0' }, ctx(null))).glob.runs).toHaveLength(1);
+  });
+
+  it('goes without a summary when the failing log was not read', () => {
+    const t = value(m.reportFailure(watching({ headChecks: { sha: '47f4a3d9c0', state: 'failed' } }), { reason: GAVE_UP, runId: 'run-0' }, ctx(null)));
+    expect(t.effects.find((e) => e.kind === 'fire_routine')).not.toHaveProperty('failureSummary');
+  });
+});
+
 describe('runs', () => {
   it('a slop call marks a queued run active; superseded runs are ignored', () => {
     const g = glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null })] });
@@ -1259,5 +1315,35 @@ describe('provisioning failure', () => {
     const t = value(m.provisioned(failed, { branch: 's1t1', pr: null }, ctx()));
     expect(t.glob.failure).toBeNull();
     expect(t.glob.provisioning).toBe('ok');
+  });
+});
+
+describe('allowedTypeChanges', () => {
+  const tos = (g: Glob, role: 'dev' | 'po' = 'dev') => m.allowedTypeChanges(g, role).map((o) => o.to);
+
+  it('offers sub and super for a same task in planning', () => {
+    expect(m.allowedTypeChanges(glob({ type: 'same', category: 'task' }), 'dev')).toEqual([{ to: 'sub' }, { to: 'super' }]);
+  });
+
+  it('offers a feature only the task sub, and not a bug a super', () => {
+    expect(m.allowedTypeChanges(glob({ type: 'same', category: 'feature' }), 'dev')).toEqual([
+      { to: 'sub', category: 'task' },
+      { to: 'super' },
+    ]);
+    expect(tos(glob({ type: 'same', category: 'bug' }))).toEqual(['sub']);
+  });
+
+  it('offers a sub only a same before it merges', () => {
+    expect(tos(glob({ type: 'sub', category: 'task', status: 'implementing' }))).toEqual(['same']);
+    expect(tos(glob({ type: 'sub', category: 'task', status: 'reviewing' }))).toEqual([]);
+  });
+
+  it('offers a same no sub once it has left planning, and no super from the PO', () => {
+    expect(tos(glob({ type: 'same', category: 'task', status: 'in_progress' }))).toEqual(['super']);
+    expect(tos(glob({ type: 'same', category: 'task' }), 'po')).toEqual(['sub']);
+  });
+
+  it('offers nothing a refused change would be', () => {
+    expect(tos(glob({ type: 'same', category: 'task', status: 'merging' }))).toEqual([]);
   });
 });
