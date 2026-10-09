@@ -181,16 +181,25 @@ export class RequestError extends Error {
 /** A failure that can pass by itself: the server unreachable (fetch throws) or a 5xx. */
 export const isTransient = (error: unknown): boolean => !(error instanceof RequestError) || error.status >= 500;
 
-const request = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+export const request = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
   const response = await fetch(path, {
     method,
     credentials: 'same-origin',
     headers: body === undefined ? {} : { 'content-type': 'application/json' },
     body: body === undefined ? null : JSON.stringify(body),
   });
-  const data = (await response.json().catch(() => ({}))) as unknown;
-  if (!response.ok) throw new RequestError(response.status, data as ApiError);
-  return data as T;
+  const parsed = await response.json().then(
+    (json: unknown) => ({ json }),
+    () => null,
+  );
+  if (!response.ok) {
+    throw new RequestError(response.status, (parsed?.json ?? { code: 'internal', message: `${method} ${path} failed (${response.status})` }) as ApiError);
+  }
+  // An OK answer that isn't JSON is not the API (a server older than the board answers an unknown route with the page).
+  if (parsed === null) {
+    throw new RequestError(response.status, { code: 'internal', message: `${method} ${path} did not answer with JSON (is the server older than the board?)` });
+  }
+  return parsed.json as T;
 };
 
 export interface NewGlob {
