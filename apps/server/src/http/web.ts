@@ -20,6 +20,13 @@ export const mountWeb = (app: Hono<Env>, root: string): void => {
   app.use('/*', serveStatic({ root }));
   // The board is a single-page app: extension-less paths (/boards/15) get index.html.
   app.get('*', async (c) => {
+    // An API route this server doesn't have is a JSON 404, never the page (the board would read the HTML as data).
+    if (/^\/(api|auth)(\/|$)/.test(c.req.path)) {
+      return c.json(
+        { code: 'not_found', message: `No such API route: ${c.req.method} ${c.req.path} (is the server older than the board?)` },
+        404,
+      );
+    }
     const last = c.req.path.slice(c.req.path.lastIndexOf('/') + 1);
     if (c.req.path.startsWith('/assets/') || last.includes('.')) return c.notFound();
     return c.html(await index());

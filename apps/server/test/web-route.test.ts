@@ -43,4 +43,15 @@ describe('web app serving', () => {
     expect(response.headers.get('content-type') ?? '').not.toContain('text/html');
     expect((await app.request('/favicon.ico')).status).toBe(404);
   });
+
+  it('answers an unknown API or auth route with a JSON 404, not the app page', async () => {
+    for (const path of ['/api/boards/15/chat', '/api', '/auth/nope']) {
+      const response = await app.request(path);
+      expect(response.status).toBe(404);
+      expect(response.headers.get('content-type') ?? '').toContain('application/json');
+      expect(await response.json()).toMatchObject({ code: 'not_found' });
+    }
+    expect((await app.request('/boards/15')).status).toBe(200);
+    expect((await app.request('/apiary')).status).toBe(200);
+  });
 });
