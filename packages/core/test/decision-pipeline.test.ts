@@ -24,7 +24,7 @@ const OUTSIDER = 'outsider@example.com';
 
 // No trailing full stop: a quote is kept without sentence punctuation at its ends.
 const POLLING = 'We will poll the server every thirty seconds for new sync jobs';
-const PUSH = 'We will push sync jobs over a websocket connection instead of polling';
+const PUSH = 'Replacing s1t1, we will push sync jobs over a websocket connection instead of polling';
 const RETRY = 'Failed syncs are retried three times with exponential backoff';
 
 const errorCode = (r: Result<unknown>) => (r.ok ? 'ok' : r.error.code);
@@ -43,8 +43,8 @@ const extractAnswer = (...entries: Entry[]): string =>
   JSON.stringify({
     decisions: entries.map((e) => ({ statement: e.statement ?? e.quote, quote: e.quote, decidedBy: e.decidedBy ?? null, decidedAt: e.decidedAt ?? null })),
   });
-const replaces = (...items: { id: number; oldQuote: string; newQuote: string; reason?: string }[]): string =>
-  JSON.stringify({ replaces: items.map((i) => ({ reason: 'Same question, new answer.', ...i })) });
+const replaces = (...items: { id: number; oldQuote: string; newQuote: string; reason?: string; sameSubject?: boolean }[]): string =>
+  JSON.stringify({ replaces: items.map((i) => ({ reason: 'Same question, new answer.', sameSubject: true, ...i })) });
 
 /** A check answer naming whichever earlier decision in the prompt contains `old`, whatever its number. */
 const replacing =
@@ -296,8 +296,8 @@ describe('decisions', () => {
         { match: 'poll the server', answer: extractAnswer({ quote: POLLING, decidedAt: '2026-06-01' }, { quote: RETRY, decidedAt: '2026-06-02' }) },
         { match: 'websocket', answer: extractAnswer({ quote: PUSH, decidedAt: '2026-09-01' }) },
       );
-      // Retry is checked against polling first (same record), then push against both.
-      llm.checks.push(replaces(), replacing(POLLING, { oldQuote: POLLING, newQuote: PUSH }));
+      // Retry and polling come from one record, so neither is compared with the other: only push is checked.
+      llm.checks.push(replacing(POLLING, { oldQuote: POLLING, newQuote: PUSH }));
       await run();
       expect((await byQuote(POLLING)).replaceState).toBe('applied');
 
@@ -451,8 +451,8 @@ describe('decisions', () => {
       const a = await addGlob({ id: 's1t1' });
       const b = await addGlob({ id: 's1t2' });
       await addArtifact(a.id, 'implementation_plan', record(`- ${POLLING}`));
-      await addArtifact(b.id, 'implementation_plan', record(`- ${POLLING} Now every ten seconds.`));
-      const NEWER = `${POLLING} Now every ten seconds.`;
+      await addArtifact(b.id, 'implementation_plan', record(`- ${POLLING} Now every ten seconds, as s1t1 said.`));
+      const NEWER = `${POLLING} Now every ten seconds, as s1t1 said.`;
       llm.extractions.push(
         { match: 'Now every ten seconds', answer: extractAnswer({ quote: NEWER, decidedAt: '2026-09-01' }) },
         { match: POLLING, answer: extractAnswer({ quote: POLLING, decidedAt: '2026-06-01' }) },
@@ -486,9 +486,9 @@ describe('decisions', () => {
       const b = await addGlob({ id: 's1t2', group: 'sync' });
       await addArtifact(a.id, 'implementation_plan', record(`- ${POLLING}`));
       await addArtifact(b.id, 'implementation_plan', record(`- ${PUSH}`));
-      // The same moment: each is a candidate for the other.
+      // The same moment, each naming the other's glob: each is a candidate for the other.
       llm.extractions.push(
-        { match: 'poll the server', answer: extractAnswer({ quote: POLLING, decidedAt: '2026-09-01' }) },
+        { match: 'poll the server', answer: extractAnswer({ statement: `Against s1t2, ${POLLING}`, quote: POLLING, decidedAt: '2026-09-01' }) },
         { match: 'websocket', answer: extractAnswer({ quote: PUSH, decidedAt: '2026-09-01' }) },
       );
       llm.checks.push(replaces({ id: 1, oldQuote: PUSH, newQuote: POLLING }), replaces({ id: 1, oldQuote: POLLING, newQuote: PUSH }));
@@ -497,6 +497,77 @@ describe('decisions', () => {
       expect(states.filter((s) => s === 'applied')).toHaveLength(1);
       // The superseded one was not even asked about.
       expect(llm.count(SUPERSEDE_SYSTEM)).toBe(1);
+    });
+
+    it('never compares decisions of one source with each other, however much they overlap', async () => {
+      const a = await addGlob({ id: 's1t1' });
+      const GENERAL = 'Time zones are a server-wide setting and not a per board setting';
+      const SPECIFIC = 'The server-wide time zone setting is not stored per board either';
+      await addArtifact(a.id, 'plan', `${GENERAL}. ${SPECIFIC}.`);
+      llm.extractions.push({ match: 'server-wide', answer: extractAnswer({ quote: GENERAL, decidedAt: '2026-09-01' }, { quote: SPECIFIC, decidedAt: '2026-09-01' }) });
+      llm.checks.push(replaces({ id: 1, oldQuote: GENERAL, newQuote: SPECIFIC }));
+      await run();
+      expect(llm.count(SUPERSEDE_SYSTEM)).toBe(0);
+      expect((await decisions()).map((d) => d.replaceState)).toEqual([null, null]);
+    });
+
+    it('does not apply a same-source replacement the model names anyway', async () => {
+      const a = await addGlob({ id: 's1t1' });
+      await addArtifact(a.id, 'plan', `${POLLING}. ${PUSH}.`);
+      llm.extractions.push({ match: 'poll the server', answer: extractAnswer({ quote: POLLING, decidedAt: '2026-06-01' }, { quote: PUSH, decidedAt: '2026-09-01' }) });
+      await run();
+      const polling = await byQuote(POLLING);
+      const push = await byQuote(PUSH);
+      // Even if a stale check answer reached it, the pair is refused when it is written.
+      llm.checks.push(replaces({ id: 1, oldQuote: POLLING, newQuote: PUSH }));
+      await store.transaction((tx) => tx.updateDecision(push.id, { checkedAt: null }));
+      await run();
+      expect((await byQuote(POLLING)).replaceState).toBeNull();
+      expect(itemOf(polling)?.status).toBe('active');
+    });
+
+    it('only proposes a replacement the model does not class as the same subject', async () => {
+      await twoDecisions();
+      llm.checks.push(replaces({ id: 1, oldQuote: 'poll the server every thirty seconds', newQuote: 'push sync jobs over a websocket', sameSubject: false }));
+      await run();
+      const old = await byQuote(POLLING);
+      expect(old).toMatchObject({ replaceState: 'hint', replacedBy: (await byQuote(PUSH)).id });
+      expect(itemOf(old)?.status).toBe('active');
+    });
+
+    it('only proposes a replacement when the answer has no same-subject classification', async () => {
+      await twoDecisions();
+      llm.checks.push(JSON.stringify({ replaces: [{ id: 1, oldQuote: 'poll the server every thirty seconds', newQuote: 'push sync jobs over a websocket', reason: 'Shared words.' }] }));
+      await run();
+      expect((await byQuote(POLLING)).replaceState).toBe('hint');
+    });
+
+    it('only proposes a replacement across globs unless the newer decision names the older glob', async () => {
+      const a = await addGlob({ id: 's1t1', group: 'sync' });
+      const b = await addGlob({ id: 's1t2', group: 'sync' });
+      const UNNAMED = 'We will push sync jobs over a websocket connection instead of polling';
+      await addArtifact(a.id, 'implementation_plan', record(`- ${POLLING}`));
+      await addArtifact(b.id, 'implementation_plan', record(`- ${UNNAMED}`));
+      llm.extractions.push(
+        { match: 'poll the server', answer: extractAnswer({ quote: POLLING, decidedAt: '2026-06-01' }) },
+        { match: 'websocket', answer: extractAnswer({ quote: UNNAMED, decidedAt: '2026-09-01' }) },
+      );
+      llm.checks.push(replaces({ id: 1, oldQuote: 'poll the server every thirty seconds', newQuote: 'push sync jobs over a websocket' }));
+      await run();
+      expect(await byQuote(POLLING)).toMatchObject({ replaceState: 'hint', replacedBy: (await byQuote(UNNAMED)).id });
+    });
+
+    it('still applies a real contradiction between two sources of one glob', async () => {
+      const a = await addGlob({ id: 's1t1' });
+      await addArtifact(a.id, 'plan', POLLING);
+      await addArtifact(a.id, 'attachment', PUSH, 'Clarifications');
+      llm.extractions.push(
+        { match: 'poll the server', answer: extractAnswer({ quote: POLLING, decidedAt: '2026-06-01' }) },
+        { match: 'websocket', answer: extractAnswer({ quote: PUSH, decidedAt: '2026-09-01' }) },
+      );
+      llm.checks.push(replaces({ id: 1, oldQuote: 'poll the server every thirty seconds', newQuote: 'push sync jobs over a websocket' }));
+      await run();
+      expect(await byQuote(POLLING)).toMatchObject({ replaceState: 'applied', replacedBy: (await byQuote(PUSH)).id });
     });
 
     it('does not offer an already superseded decision as a candidate', async () => {
