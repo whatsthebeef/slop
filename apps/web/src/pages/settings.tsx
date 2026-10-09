@@ -1,5 +1,5 @@
 import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, recentPeriods, ROLES } from '@slop/core';
-import type { AgentKbApproval, DeployIntegration, Environment, Role, SubLimitChange } from '@slop/core';
+import type { AgentKbApproval, DeployIntegration, Environment, Role, SizeOutcome, SubLimitChange } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -262,6 +262,7 @@ export const SettingsPage = () => {
           Agents may approve agent-file and contradicting items
         </label>
         <SubLimit boardId={boardId} admin={admin} />
+        <SizeThreshold boardId={boardId} admin={admin} />
         <IntakeAccuracyView boardId={boardId} admin={admin} />
         <IntegrationToken boardId={boardId} admin={admin} />
         <DeploySettings
@@ -346,6 +347,85 @@ const outcomeText = (change: SubLimitChange): string =>
  * The learned sub size limit: read-only (slop moves it with outcomes), with its history. Every value is rendered as
  * text, including the evidence quotes, which come from labels' checklists and bug reports.
  */
+const SIZE_OUTCOME_TEXT: Record<SizeOutcome, string> = {
+  kept_whole_clean: 'Flagged, kept whole and merged cleanly: raised',
+  unflagged_struggled: 'Not flagged, and it struggled: lowered',
+  flag_confirmed: 'Flag confirmed: unchanged',
+};
+
+/**
+ * The learned size threshold (oversized flag): read-only, with its history. Evidence is rendered as text.
+ */
+const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const client = useQueryClient();
+  const threshold = useQuery({ queryKey: ['size-threshold', boardId], queryFn: () => api.sizeThreshold(boardId) });
+  const jobs = useQuery({ queryKey: ['kb-jobs', boardId], queryFn: () => api.boardJobs(boardId) });
+  const lastRun = jobs.data === undefined ? undefined : (jobs.data.find((j) => j.job === 'size_threshold')?.lastRunAt ?? null);
+  const seenRun = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (lastRun === undefined) return;
+    if (seenRun.current !== undefined && seenRun.current !== lastRun) void client.invalidateQueries({ queryKey: ['size-threshold', boardId] });
+    seenRun.current = lastRun;
+  }, [client, boardId, lastRun]);
+  if (threshold.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load the size threshold.
+        <Button size='sm' variant='outline' onClick={() => void threshold.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (threshold.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the size threshold…</p>;
+  const { current, bounds, history } = threshold.data;
+  return (
+    <div className='grid gap-2' data-testid='size-threshold'>
+      <p className='text-sm'>
+        Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts (learned from outcomes)
+      </p>
+      <p className='text-xs text-muted-foreground'>
+        Intake flags a glob above it and proposes a split. A flagged glob kept whole that merges cleanly raises the threshold; an
+        unflagged glob that struggles (the most review rounds, a failed run, a very long PR, or a split after it started) lowers it.
+        Tasks stay between {bounds.tasks.min} and {bounds.tasks.max}, parts between {bounds.parts.min} and {bounds.parts.max}, in steps of {bounds.step}.
+      </p>
+      <JobStatus boardId={boardId} admin={admin} job='size_threshold' />
+      {history.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No outcomes recorded yet.</p>
+      ) : (
+        <table className='text-xs'>
+          <thead className='text-left text-muted-foreground'>
+            <tr>
+              <th className='pr-3 font-normal'>Date</th>
+              <th className='pr-3 font-normal'>Tasks / parts</th>
+              <th className='pr-3 font-normal'>Why</th>
+              <th className='font-normal'>Glob</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((change) => (
+              <tr key={change.id} className='align-top'>
+                <td className='pr-3 whitespace-nowrap'>{new Date(change.at).toLocaleDateString()}</td>
+                <td className='pr-3 whitespace-nowrap'>
+                  {change.from.maxTasks} / {change.from.maxParts} → {change.to.maxTasks} / {change.to.maxParts}
+                </td>
+                <td className='pr-3'>
+                  {SIZE_OUTCOME_TEXT[change.outcome]}
+                  <span className='block text-muted-foreground'>{change.evidence}</span>
+                </td>
+                <td>
+                  <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
+                    {change.globId}
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
+
 /** The board's integration token (the Meet notes script's credential): created and shown once, or revoked. */
 const IntegrationToken = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
   const client = useQueryClient();

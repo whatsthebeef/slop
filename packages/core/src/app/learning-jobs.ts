@@ -13,6 +13,7 @@ import type { MiningService } from './mining-service.js';
 import type { EffectCheckService } from './effect-check-service.js';
 import type { SubLimitService } from './sub-limit-service.js';
 import type { IntakeLearningService } from './intake-learning-service.js';
+import type { SizeCheckService } from './size-check-service.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -35,6 +36,7 @@ const INTERVALS: readonly (readonly [BoardJobName, number])[] = [
   ['effect_check', EFFECT_CHECK_INTERVAL_MS],
   ['sub_limit', SUB_LIMIT_INTERVAL_MS],
   ['intake_outcome', SUB_LIMIT_INTERVAL_MS],
+  ['size_threshold', SUB_LIMIT_INTERVAL_MS],
 ];
 /** A board job's lease: another server doesn't start the same job meanwhile. */
 export const BOARD_JOB_LEASE_MS = 30 * 60 * 1000;
@@ -104,6 +106,8 @@ export class LearningJobService {
       subLimit?: SubLimitService;
       /** Absent: intake outcomes aren't recorded. */
       intakeLearning?: IntakeLearningService;
+      /** Absent: the size threshold isn't learned. */
+      sizeCheck?: SizeCheckService;
       /** Null without a code host: the dependency signal isn't measured. */
       manifests: ManifestSource | null;
       /** Where a run that outlived its lease is reported (the server's error log). */
@@ -119,6 +123,7 @@ export class LearningJobService {
       ...(this.deps.effectChecks === undefined ? [] : ['effect_check' as const]),
       ...(this.deps.subLimit === undefined ? [] : ['sub_limit' as const]),
       ...(this.deps.intakeLearning === undefined ? [] : ['intake_outcome' as const]),
+      ...(this.deps.sizeCheck === undefined ? [] : ['size_threshold' as const]),
     ];
   }
 
@@ -228,6 +233,11 @@ export class LearningJobService {
       const { intakeLearning } = this.deps;
       if (intakeLearning === undefined) throw new Error('The intake-outcome job is not wired');
       return intakeLearning.run(board.id, started);
+    }
+    if (job === 'size_threshold') {
+      const { sizeCheck } = this.deps;
+      if (sizeCheck === undefined) throw new Error('The size-threshold job is not wired');
+      return sizeCheck.learn(board.id);
     }
     const commits = await this.deps.mining.mergedCommits(board.id, started);
     const manifestChanges =

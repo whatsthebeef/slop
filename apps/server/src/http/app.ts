@@ -1,4 +1,4 @@
-import type { BoardService, GlobService, Result, SplitInfo } from '@slop/core';
+import type { BoardService, GlobService, Result, SizeCheckService, SplitInfo } from '@slop/core';
 import { AGENT_KB_APPROVALS, CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, ROLES, SLOP_TYPES, STATUSES, isMine, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -22,6 +22,8 @@ export interface AppDeps {
   readonly globs: GlobService;
   readonly hub: HintHub;
   readonly outbox: OutboxRunner;
+  /** Keep whole on a flagged glob; absent: its route isn't mounted. */
+  readonly sizeCheck?: SizeCheckService;
   /** Refuses Ready for review for a branch that conflicts with its base. */
   readonly readyGate?: ReadyGate;
   /** Signs the board sign-in `state`. */
@@ -348,10 +350,12 @@ export const createApp = (deps: AppDeps) => {
       (g) => onBoard(g, now),
     );
     const splits = await globs.splitsOf(boardId);
+    const oversized = await globs.oversizedOf(boardId);
     return send(c, result, (list) =>
       list.map(({ glob, artifacts }) => ({
         ...globViewFor(glob, email, membership.value.role, artifacts),
         ...splitField(splits.get(glob.id)),
+        ...(oversized.has(glob.id) ? { oversized: true } : {}),
       })),
     );
   });
@@ -423,6 +427,21 @@ export const createApp = (deps: AppDeps) => {
     for (const glob of split.value) await deps.outbox.drain(glob.id);
     return send(c, split, (list) => ({ parts: list.map((glob) => globView(glob)) }));
   });
+
+  // Keep whole: a person decides a flagged glob stays one glob; a glob held for the flag then starts.
+  const { sizeCheck } = deps;
+  if (sizeCheck !== undefined) {
+    app.post('/api/globs/:id/keep-whole', async (c) => {
+      const email = c.get('email');
+      const id = c.req.param('id');
+      const kept = await sizeCheck.keepWhole(email, id);
+      if (!kept.ok) return send(c, kept);
+      const released = await globs.release(id);
+      if (!released.ok) return send(c, released);
+      await deps.outbox.drain(id);
+      return send(c, await globs.get(email, id), globViewOf);
+    });
+  }
 
   app.delete('/api/globs/:id', async (c) => {
     const body = await parse(c, versionSchema);

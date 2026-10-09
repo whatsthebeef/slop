@@ -11,6 +11,8 @@ import type { SearchHit } from '../domain/search.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
+import type { SizeAssessor } from './size-check-service.js';
+import type { SizeCheck } from '../domain/size-check.js';
 
 export interface GlobContext {
   readonly glob: Pick<Glob, 'id' | 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'status'>;
@@ -45,8 +47,28 @@ export interface GlobContext {
   readonly inbox: readonly InboxContextItem[];
   /** Which source wins when sources disagree (the spec's order of authority). */
   readonly authority: string;
+  /** Present when intake judged the glob: the oversized flag, its reasons and the proposed split (apply it with split_glob). */
+  readonly size?: SizeContext;
   readonly fetch: string;
 }
+
+export interface SizeContext {
+  readonly oversized: boolean;
+  readonly reasons: readonly string[];
+  readonly evidence: readonly string[];
+  /** What a person did about the flag: `kept_whole`, or `split`; null while it is unresolved. */
+  readonly decision: SizeCheck['decision'];
+  /** Parts in the shape split_glob takes (part 0 is this glob; `after` holds earlier part indexes). */
+  readonly proposal: SizeCheck['proposal'];
+}
+
+const sizeContext = (check: SizeCheck): SizeContext => ({
+  oversized: check.flagged,
+  reasons: check.reasons,
+  evidence: check.evidence,
+  decision: check.decision,
+  proposal: check.proposal,
+});
 
 export interface InboxContextItem {
   readonly id: number;
@@ -220,6 +242,8 @@ export class ArtifactService {
       notifier: Notifier;
       /** Ranked material related to a glob, for `get_context`; runs in the context transaction. */
       related?: (tx: Tx, glob: Glob) => Promise<readonly SearchHit[]>;
+      /** Re-judges a glob's size when its plan.md is saved in Planning. */
+      sizeCheck?: SizeAssessor;
     },
   ) {}
 
@@ -340,6 +364,7 @@ export class ArtifactService {
         // Current first (stable: each group stays newest first).
         .sort((a, b) => Number(a.status === 'superseded') - Number(b.status === 'superseded'))
         .slice(0, CONTEXT_DECISIONS);
+      const sizeCheck = await tx.getSizeCheck(globId);
       const inbox = (await tx.listInboxForGlob(globId)).map((i) => ({
         id: i.id,
         title: inboxTitle(i),
@@ -389,6 +414,7 @@ export class ArtifactService {
         decisions,
         inbox,
         authority: AUTHORITY_STATEMENT,
+        ...(sizeCheck === null ? {} : { size: sizeContext(sizeCheck) }),
         fetch:
           "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'code_review', 'all']). Inbox items are attached notes: their text is cut at 12000 characters (truncated: true); search_text finds the rest.",
       });
@@ -453,6 +479,8 @@ export class ArtifactService {
     // Artifacts don't bump the glob's version, so open boards get their own hint kind.
     if (!('ignored' in artifact)) {
       this.deps.notifier.publish({ kind: 'glob.artifacts', boardId, globId });
+      // Not awaited: the model's judgement must not hold up a save. It never throws and publishes when it has written.
+      if (kind === 'plan') void this.deps.sizeCheck?.refresh(globId);
       // A queued review shows as being read in an open glob view straight away.
       if (kind === 'local_review') this.deps.notifier.publish({ kind: 'glob.findings', boardId, globId });
     }

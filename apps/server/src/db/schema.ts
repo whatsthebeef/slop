@@ -1,5 +1,8 @@
 import type {
   GlobOutcome,
+  SizeEstimate,
+  SizeProposal,
+  SizeThreshold,
   PlanFeatures,
   ChatCitation,
   NotificationAction,
@@ -27,7 +30,7 @@ import type {
   InboxSuggestion,
   SignalFigures,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
+import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -477,6 +480,61 @@ export const subLimitChanges = pgTable(
     evidence: text('evidence').notNull(),
   },
   (t) => [uniqueIndex('sub_limit_changes_outcome_idx').on(t.boardId, t.globId, t.outcome)],
+);
+
+/** What the size check judged about a glob (spec, Intake): the estimate with its evidence, the flag and the proposed split. */
+export const globSizeChecks = pgTable(
+  'glob_size_checks',
+  {
+    globId: text('glob_id')
+      .primaryKey()
+      .references(() => globs.id, { onDelete: 'cascade' }),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    planHash: text('plan_hash').notNull(),
+    estimate: jsonb('estimate').$type<SizeEstimate>().notNull(),
+    evidence: jsonb('evidence').$type<readonly string[]>().notNull(),
+    threshold: jsonb('threshold').$type<SizeThreshold>().notNull(),
+    flagged: boolean('flagged').notNull(),
+    reasons: jsonb('reasons').$type<readonly string[]>().notNull(),
+    proposal: jsonb('proposal').$type<SizeProposal>(),
+    decision: text('decision', { enum: SIZE_DECISIONS }),
+    decidedBy: text('decided_by'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [index('glob_size_checks_board_idx').on(t.boardId)],
+);
+
+/** The board's learned size threshold; no row means the default. */
+export const sizeThresholds = pgTable('size_thresholds', {
+  boardId: integer('board_id')
+    .primaryKey()
+    .references(() => boards.id, { onDelete: 'cascade' }),
+  maxTasks: integer('max_tasks').notNull(),
+  maxParts: integer('max_parts').notNull(),
+});
+
+/** The size threshold's history: each outcome recorded once per board and glob, with the threshold before and after it. */
+export const sizeThresholdChanges = pgTable(
+  'size_threshold_changes',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    fromTasks: integer('from_tasks').notNull(),
+    toTasks: integer('to_tasks').notNull(),
+    fromParts: integer('from_parts').notNull(),
+    toParts: integer('to_parts').notNull(),
+    outcome: text('outcome', { enum: SIZE_OUTCOMES }).notNull(),
+    globId: text('glob_id').notNull(),
+    evidence: text('evidence').notNull(),
+  },
+  (t) => [uniqueIndex('size_threshold_changes_glob_idx').on(t.boardId, t.globId)],
 );
 
 /**

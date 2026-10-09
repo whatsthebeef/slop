@@ -1,5 +1,5 @@
-import type { Action, ArtifactSummary, AwaitedDependency, DomainError, Glob, Role } from '@slop/core';
-import { checksExplanation, listOf, machine } from '@slop/core';
+import type { Action, ArtifactSummary, AwaitedDependency, DomainError, Glob, Role, SizeCheck } from '@slop/core';
+import { checksExplanation, listOf, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /**
@@ -25,8 +25,14 @@ export const globView = (
 });
 
 /** A glob read through the service: its view with the actions open to the caller and what it waits for. */
-export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[] }) =>
-  ({ ...globView(v.glob, v.allowedActions, v.artifacts, v), waitingFor: v.waitingFor, waitedOnBy: v.waitedOnBy });
+export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; sizeCheck?: SizeCheck | null }) =>
+  ({
+    ...globView(v.glob, v.allowedActions, v.artifacts, v),
+    waitingFor: v.waitingFor,
+    waitedOnBy: v.waitedOnBy,
+    // The size check: the flag, why, the estimate's evidence and the proposed split (get_glob carries it to routines).
+    ...(v.sizeCheck == null ? {} : { sizeCheck: v.sizeCheck, oversized: v.glob.status === 'planning' && unresolved(v.sizeCheck) }),
+  });
 
 /** An artifact summary on a glob view (the glob ID is implied). */
 const artifactView = ({ kind, label, version, versions, commitSha, createdAt, by, actor }: ArtifactSummary) => ({
