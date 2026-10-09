@@ -101,6 +101,8 @@ const authorityOf = (source: SourceType): AuthorityTier => {
     case 'attachment':
     case 'code_review':
       return 'discussion';
+    case 'decision':
+      return 'decision';
     case 'glob_plan':
     case 'glob_summary':
     case 'decision_log':
@@ -185,6 +187,8 @@ export class SearchIndexer {
       const queued = await this.queueChanges(tx, board, hashes);
       let removed = 0;
       for (const sourceType of SOURCE_TYPES) {
+        // Decision items belong to the DecisionPipeline, which writes and removes them: the sweep would delete them all.
+        if (sourceType === 'decision') continue;
         const refs = new Set(desired.filter((d) => d.sourceType === sourceType).map((d) => d.externalRef));
         if (sourceType === 'change_summary') for (const ref of await this.changeRefs(tx, boardId)) refs.add(ref);
         removed += await tx.deleteItemsNotIn(boardId, sourceType, refs);
@@ -292,6 +296,8 @@ export class SearchIndexer {
     for (const item of await tx.listKbItems(board.id, 'approved')) {
       // A whole-document proposal became a knowledge document; its text is indexed as that.
       if (item.document !== null) continue;
+      // A decision learning is indexed as a decision (DecisionPipeline), so search doesn't return it twice.
+      if (item.type === 'decision') continue;
       push({
         sourceType: 'learning',
         externalRef: `learning:${item.id}`,

@@ -14,7 +14,7 @@ export const marksBoardDirty = (hint: Hint): boolean =>
   hint.kind === 'board.kb';
 
 /**
- * Keeps the search index in step with the board's material: a full sync on start (the backfill; idempotent, so a
+ * Keeps a board-derived store in step with the board's material: a full sync on start (the backfill; idempotent, so a
  * restart only reads), a re-sync of each board a hint marked dirty (debounced), and a full sync every 15 minutes. The
  * indexer re-chunks only what changed, so a sync that finds nothing writes nothing. One sync runs at a time.
  */
@@ -29,6 +29,8 @@ export class SearchSync {
     private readonly indexer: { syncBoard(boardId: number): Promise<unknown>; syncAll(): Promise<void> },
     private readonly log: (task: string, message: string) => void,
     private readonly now: () => number = Date.now,
+    /** Named in the error log (the decision pipeline's sync is another instance). */
+    private readonly task = 'search',
   ) {}
 
   start(): void {
@@ -71,7 +73,7 @@ export class SearchSync {
         await this.indexer.syncBoard(boardId);
       }
     } catch (error) {
-      this.log('search', error instanceof Error ? (error.stack ?? error.message) : String(error));
+      this.log(this.task, error instanceof Error ? (error.stack ?? error.message) : String(error));
     } finally {
       this.running = false;
     }

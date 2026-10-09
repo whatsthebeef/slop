@@ -74,13 +74,15 @@ describe('SearchSync', () => {
 
 describe('marksBoardDirty and HintHub.tap', () => {
   it('marks the hints that change searchable material', () => {
-    const hint = (kind: Hint['kind']): Hint => (kind === 'glob.changed' || kind === 'glob.deleted' ? { kind, boardId: 1, globId: 's1t1', version: 1 } : kind === 'glob.artifacts' || kind === 'glob.deploys' || kind === 'glob.findings' || kind === 'glob.reviews' ? { kind, boardId: 1, globId: 's1t1' } : { kind, boardId: 1 });
+    const hint = (kind: Hint['kind']): Hint => (kind === 'glob.changed' || kind === 'glob.deleted' ? { kind, boardId: 1, globId: 's1t1', version: 1 } : kind === 'glob.artifacts' || kind === 'glob.deploys' || kind === 'glob.findings' || kind === 'glob.decisions' || kind === 'glob.reviews' ? { kind, boardId: 1, globId: 's1t1' } : { kind, boardId: 1 });
     expect(marksBoardDirty(hint('glob.artifacts'))).toBe(true);
     expect(marksBoardDirty(hint('glob.reviews'))).toBe(true);
     expect(marksBoardDirty(hint('glob.changed'))).toBe(true);
     expect(marksBoardDirty(hint('glob.deleted'))).toBe(true);
     expect(marksBoardDirty(hint('board.kb'))).toBe(true);
     expect(marksBoardDirty(hint('glob.deploys'))).toBe(false);
+    // The decision pipeline publishes this itself: marking the board dirty would sync it in a loop.
+    expect(marksBoardDirty(hint('glob.decisions'))).toBe(false);
     expect(marksBoardDirty(hint('board.health'))).toBe(false);
   });
 

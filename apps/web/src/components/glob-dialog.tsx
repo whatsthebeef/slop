@@ -26,6 +26,7 @@ import { ActivityLabel, GroupChip } from './glob-card';
 import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
+import { GlobDecisions } from './glob-decisions';
 import { ReviewFindings } from './review-findings';
 import { cn } from '@/lib/utils';
 import { Tip } from './ui/tip';
@@ -521,6 +522,8 @@ export const GlobDialog = ({
           <ArtifactsSection globId={glob.id} artifacts={glob.artifacts ?? []} selected={artifact} onSelect={setArtifact} />
 
           <CodeReviewSection globId={glob.id} />
+
+          <GlobDecisions boardId={glob.boardId} globId={glob.id} />
 
           <ReviewFindings globId={glob.id} />
 

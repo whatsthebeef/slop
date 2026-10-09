@@ -98,6 +98,7 @@ const candidate = (patch: Partial<Candidate> & { chunkId: number }): Candidate =
   authority: 'approved_plan',
   status: 'active',
   supersededByTitle: null,
+  supersededByAt: null,
   globIds: ['s1t1'],
   globGroup: null,
   externalUrl: null,
@@ -122,7 +123,7 @@ describe('ranking', () => {
   });
 
   it('weights authority in the spec order', () => {
-    const weights = ['merged_code', 'approved_plan', 'decision', 'discussion', 'legacy'] as const;
+    const weights = ['merged_code', 'decision', 'approved_plan', 'discussion', 'legacy'] as const;
     expect(weights.map((w) => AUTHORITY_WEIGHTS[w])).toEqual([...weights.map((w) => AUTHORITY_WEIGHTS[w])].sort((a, b) => b - a));
     const hits = rankCandidates(
       [
@@ -136,13 +137,43 @@ describe('ranking', () => {
     expect(hits.map((h) => h.itemId)).toEqual([2, 3, 1]);
   });
 
+  it('weights authority as 1, 0.95, 0.9, 0.6, 0.3 (merged code, decision, plan, discussion, legacy)', () => {
+    expect(AUTHORITY_WEIGHTS).toEqual({ merged_code: 1, decision: 0.95, approved_plan: 0.9, discussion: 0.6, legacy: 0.3 });
+    const hits = rankCandidates(
+      [candidate({ chunkId: 1, authority: 'approved_plan' }), candidate({ chunkId: 2, authority: 'decision', sourceType: 'decision' })],
+      'current',
+      NOW,
+    );
+    expect(hits.map((h) => h.itemId)).toEqual([2, 1]);
+  });
+
+  it('ranks a current decision above any superseded one, labels the superseded with the date, and keeps both in all-time', () => {
+    const old = candidate({
+      chunkId: 1,
+      relevance: 1,
+      sourceType: 'decision',
+      authority: 'decision',
+      status: 'superseded',
+      supersededByTitle: 'Use queues',
+      supersededByAt: '2026-09-30T10:00:00.000Z',
+    });
+    const current = candidate({ chunkId: 2, relevance: 0.2, sourceType: 'decision', authority: 'decision', occurredAt: daysAgo(400) });
+    const ranked = rankCandidates([old, current], 'current', NOW);
+    expect(ranked.map((h) => h.itemId)).toEqual([2, 1]);
+    expect(ranked[1]?.label).toBe('superseded by "Use queues" on 2026-09-30');
+    expect(ranked[1]?.supersededBy).toEqual({ title: 'Use queues', date: '2026-09-30T10:00:00.000Z' });
+    const all = rankCandidates([old, current], 'all_time', NOW);
+    expect(all.map((h) => h.itemId)).toEqual([1, 2]);
+    expect(all[0]?.label).toBe('superseded by "Use queues" on 2026-09-30');
+  });
+
   it('down-ranks and labels superseded items, in both modes', () => {
     const superseded = candidate({ chunkId: 1, relevance: 1, status: 'superseded', supersededByTitle: 'New design' });
     const active = candidate({ chunkId: 2, relevance: 0.3 });
     const current = rankCandidates([superseded, active], 'current', NOW);
     expect(current.map((h) => h.itemId)).toEqual([2, 1]);
     expect(current[1]?.label).toBe('superseded by "New design"');
-    expect(current[1]?.supersededBy).toEqual({ title: 'New design' });
+    expect(current[1]?.supersededBy).toEqual({ title: 'New design', date: null });
     const all = rankCandidates([superseded, active], 'all_time', NOW);
     // All-time stops penalising it (its relevance wins) but still labels it.
     expect(all.map((h) => h.itemId)).toEqual([1, 2]);

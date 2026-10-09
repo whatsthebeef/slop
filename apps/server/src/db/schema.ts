@@ -23,7 +23,7 @@ import type {
   ProposedDocument,
   SignalFigures,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, AUTHORITY_TIERS, BOARD_JOBS, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
+import { AGENT_KB_APPROVALS, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -663,5 +663,76 @@ export const chunks = pgTable(
     index('chunks_text_trgm_idx').using('gin', t.text.op('gin_trgm_ops')),
     index('chunks_embedding_idx').using('hnsw', t.embedding.op('vector_cosine_ops')),
     index('chunks_unembedded_idx').on(t.id).where(sql`${t.embedding} is null`),
+  ],
+);
+
+/**
+ * Decisions (spec, Decisions and supersession): one row per decision beside its knowledge item (`item_id`, which
+ * search finds it by; deleting the item deletes the row), with its source, the verified quote and what replaced it.
+ */
+export const decisions = pgTable(
+  'decisions',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    itemId: bigint('item_id', { mode: 'number' })
+      .notNull()
+      .references(() => knowledgeItems.id, { onDelete: 'cascade' }),
+    /** Null for a decision from an approved knowledge item. */
+    globId: text('glob_id'),
+    globGroup: text('glob_group'),
+    statement: text('statement').notNull(),
+    quote: text('quote').notNull(),
+    decidedBy: text('decided_by'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }).notNull(),
+    sourceKind: text('source_kind', { enum: DECISION_SOURCE_KINDS }).notNull(),
+    sourceRef: text('source_ref').notNull(),
+    sourceLabel: text('source_label').notNull(),
+    sourceUrl: text('source_url'),
+    /** The newer decision that replaces this one, in any `replace_state`. */
+    replacedBy: bigint('replaced_by', { mode: 'number' }),
+    replaceState: text('replace_state', { enum: REPLACE_STATES }),
+    replaceOldQuote: text('replace_old_quote'),
+    replaceNewQuote: text('replace_new_quote'),
+    replaceReason: text('replace_reason'),
+    /** When the supersession check ran; null while it is due. */
+    checkedAt: timestamp('checked_at', { withTimezone: true }),
+    attempts: integer('attempts').notNull().default(0),
+    processAfter: timestamp('process_after', { withTimezone: true }),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('decisions_item_idx').on(t.itemId),
+    index('decisions_board_idx').on(t.boardId, t.decidedAt),
+    index('decisions_glob_idx').on(t.globId),
+    index('decisions_source_idx').on(t.boardId, t.sourceRef),
+    index('decisions_check_idx').on(t.checkedAt, t.processAfter),
+  ],
+);
+
+/** The texts decisions are extracted from, with the hash of what was extracted last (a changed text is extracted again). */
+export const decisionSources = pgTable(
+  'decision_sources',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    sourceRef: text('source_ref').notNull(),
+    contentHash: text('content_hash').notNull(),
+    state: text('state', { enum: DECISION_SOURCE_STATES }).notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    /** Retry backoff, or a claimed source's lease. */
+    processAfter: timestamp('process_after', { withTimezone: true }),
+    lastError: text('last_error'),
+    globId: text('glob_id'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('decision_sources_ref_idx').on(t.boardId, t.sourceRef),
+    index('decision_sources_queue_idx').on(t.state, t.processAfter),
+    index('decision_sources_glob_idx').on(t.globId),
   ],
 );
