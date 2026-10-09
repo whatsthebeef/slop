@@ -6,6 +6,7 @@ import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-ro
 import './index.css';
 import { RequestError } from './lib/api';
 import { BoardPage } from './pages/board';
+import { GlobPage } from './pages/glob';
 import { InboxPage } from './pages/inbox';
 import { KnowledgePage } from './pages/knowledge';
 import { BoardsPage, HomePage, LoginPage } from './pages/home';
@@ -62,6 +63,7 @@ createRoot(root).render(
                 <Route path='signed-off' element={<SignedOffPage />} />
                 <Route path='settings' element={<SettingsPage />} />
                 <Route path='knowledge' element={<KnowledgePage />} />
+                <Route path='globs/:globId' element={<GlobPage />} />
               </Route>
             </Routes>
           </RequireSession>

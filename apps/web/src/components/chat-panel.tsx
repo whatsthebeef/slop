@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MAX_QUERY_LENGTH } from '@slop/core';
-import { MessageCircle, X } from 'lucide-react';
+import { Maximize2, Minimize2, Plus, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { SyntheticEvent } from 'react';
 import { Link } from 'react-router';
 import { api } from '@/lib/api';
 import type { ChatCitation, ChatMessage } from '@/lib/api';
 import { stateLabel, unavailableNotice } from '@/lib/chat';
-import type { ChatRequest } from '@/lib/chat';
+import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
 import { Input, Textarea } from './ui/input';
 
@@ -52,32 +52,25 @@ const Message = ({ message, onNavigate }: { message: ChatMessage; onNavigate: ()
 );
 
 /**
- * The board chat: a side panel opened from the board header. Each person has their own conversation with the board's
- * records; answers cite their sources, and a decision is marked current or superseded by a newer one. Answer text
- * comes from a model, so it is plain text.
+ * The board chat, docked on the right of the app's layout beside the routed page (never a modal, nothing dimmed). Each
+ * person has their own conversation with the board's records; answers cite their sources, and a decision is marked
+ * current or superseded by a newer one. Full screen centres the conversation at a reading width; the same button or Esc
+ * returns it to the side with the conversation intact. Answer text comes from a model, so it is plain text.
  */
 export const ChatPanel = ({
   boardId,
-  open,
-  onOpenChange,
-  request,
+  fullScreen,
+  focusToken,
+  onClose,
+  onFullScreenChange,
 }: {
   boardId: number;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** A question sent from elsewhere (the search box's Ask); the panel asks it once per request. */
-  request: ChatRequest | null;
-}) => (
-  <>
-    <Button variant='outline' onClick={() => onOpenChange(!open)} aria-expanded={open} data-testid='chat-toggle'>
-      <MessageCircle className='h-4 w-4' aria-hidden />
-      Ask
-    </Button>
-    {open && <ChatSide boardId={boardId} request={request} onClose={() => onOpenChange(false)} />}
-  </>
-);
-
-const ChatSide = ({ boardId, request, onClose }: { boardId: number; request: ChatRequest | null; onClose: () => void }) => {
+  fullScreen: boolean;
+  /** Changes each time an opener (icon, `/`, ⌘K) asks for the cursor in the input. */
+  focusToken: number;
+  onClose: () => void;
+  onFullScreenChange: (fullScreen: boolean) => void;
+}) => {
   const client = useQueryClient();
   const key = ['chat', boardId];
   const history = useQuery({ queryKey: key, queryFn: () => api.chatHistory(boardId) });
@@ -86,6 +79,11 @@ const ChatSide = ({ boardId, request, onClose }: { boardId: number; request: Cha
   const [glob, setGlob] = useState('');
   const [group, setGroup] = useState('');
   const end = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    input.current?.focus();
+  }, [focusToken]);
 
   const ask = useMutation({
     mutationFn: ({ question: q, history: withHistory }: { question: string; history: boolean }) =>
@@ -116,74 +114,86 @@ const ChatSide = ({ boardId, request, onClose }: { boardId: number; request: Cha
     const q = question.trim();
     if (q !== '' && !ask.isPending) ask.mutate({ question: q, history: includeHistory });
   };
-
-  // A question from the search box is asked once, when its request arrives (also on opening the panel).
-  const handled = useRef<number | null>(null);
-  useEffect(() => {
-    if (request === null || handled.current === request.id) return;
-    handled.current = request.id;
-    setIncludeHistory(request.history);
-    ask.mutate({ question: request.question, history: request.history });
-  }, [request, ask]);
   const notice = ask.error === null ? null : unavailableNotice(ask.error);
+  // Following a citation shows its source in the main area; in full screen that also brings the chat back to the side.
+  const followed = () => onFullScreenChange(false);
 
   return (
     <aside
-      className='fixed top-0 right-0 z-40 flex h-dvh w-[26rem] max-w-full flex-col gap-2 border-l-2 border-foreground/80 bg-card p-3 text-sm shadow-lg'
+      className={cn(
+        'flex min-h-0 flex-col border-l-2 border-foreground/80 bg-card p-3 text-sm',
+        fullScreen ? 'flex-1' : 'w-[30rem] max-w-[85vw] shrink-0',
+      )}
       aria-label='Board chat'
       data-testid='chat-panel'
+      data-fullscreen={fullScreen}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') onClose();
+        if (e.key !== 'Escape') return;
+        if (fullScreen) onFullScreenChange(false);
+        else onClose();
       }}
     >
-      <div className='flex items-center justify-between gap-2'>
-        <h2 className='font-semibold'>Ask this board</h2>
-        <div className='flex items-center gap-1'>
-          <Button variant='ghost' size='sm' disabled={messages.length === 0 || clear.isPending} onClick={() => clear.mutate()}>
-            Clear conversation
-          </Button>
-          <button className='rounded p-1 hover:bg-muted' aria-label='Close chat' onClick={onClose}>
-            <X className='h-4 w-4' />
-          </button>
+      <div className={cn('mx-auto flex min-h-0 w-full flex-1 flex-col gap-2', fullScreen && 'max-w-3xl')}>
+        <div className='flex items-center justify-between gap-2'>
+          <h2 className='font-semibold'>Ask this board</h2>
+          <div className='flex items-center gap-1'>
+            <Button variant='ghost' size='sm' disabled={messages.length === 0 || clear.isPending} onClick={() => clear.mutate()}>
+              <Plus className='h-4 w-4' aria-hidden />
+              New chat
+            </Button>
+            <button
+              className='rounded p-1 hover:bg-muted'
+              aria-label={fullScreen ? 'Back to the side panel' : 'Full screen'}
+              aria-pressed={fullScreen}
+              data-testid='chat-fullscreen'
+              onClick={() => onFullScreenChange(!fullScreen)}
+            >
+              {fullScreen ? <Minimize2 className='h-4 w-4' /> : <Maximize2 className='h-4 w-4' />}
+            </button>
+            <button className='rounded p-1 hover:bg-muted' aria-label='Close chat' onClick={onClose}>
+              <X className='h-4 w-4' />
+            </button>
+          </div>
         </div>
-      </div>
-      <div className='grid min-h-0 flex-1 content-start gap-2 overflow-auto' aria-live='polite'>
-        {history.isPending && <p className='text-muted-foreground'>Loading…</p>}
-        {history.error !== null && <p className='text-destructive'>{history.error.message}</p>}
-        {history.data?.length === 0 && (
-          <p className='text-muted-foreground'>Ask why something was decided or built. Answers come only from the board's records, with their sources.</p>
-        )}
-        {messages.map((m) => (
-          <Message key={m.id} message={m} onNavigate={onClose} />
-        ))}
-        {ask.isPending && <p className='text-muted-foreground'>Reading the board's records…</p>}
-        {notice !== null && <p className='text-destructive' role='alert'>{notice}</p>}
-        {ask.error !== null && notice === null && <p className='text-destructive' role='alert'>{ask.error.message}</p>}
-        <div ref={end} />
-      </div>
-      <form className='grid gap-2 border-t pt-2' onSubmit={submit}>
-        <Textarea
-          aria-label='Your question'
-          placeholder='Why did we decide…?'
-          value={question}
-          maxLength={MAX_QUERY_LENGTH}
-          onChange={(e) => setQuestion(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e);
-          }}
-        />
-        <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
-          <label className='flex items-center gap-1'>
-            <input type='checkbox' checked={includeHistory} onChange={(e) => setIncludeHistory(e.target.checked)} />
-            Include history
-          </label>
-          <Input className='h-7 w-24 text-xs' aria-label='Limit to glob' placeholder='glob id' value={glob} onChange={(e) => setGlob(e.target.value)} />
-          <Input className='h-7 w-24 text-xs' aria-label='Limit to group' placeholder='group' value={group} onChange={(e) => setGroup(e.target.value)} />
-          <Button type='submit' size='sm' className='ml-auto' disabled={ask.isPending || question.trim() === ''}>
-            {ask.isPending ? 'Asking…' : 'Ask'}
-          </Button>
+        <div className='grid min-h-0 flex-1 content-start gap-2 overflow-auto' aria-live='polite'>
+          {history.isPending && <p className='text-muted-foreground'>Loading…</p>}
+          {history.error !== null && <p className='text-destructive'>{history.error.message}</p>}
+          {history.data?.length === 0 && (
+            <p className='text-muted-foreground'>Ask why something was decided or built. Answers come only from the board's records, with their sources.</p>
+          )}
+          {messages.map((m) => (
+            <Message key={m.id} message={m} onNavigate={followed} />
+          ))}
+          {ask.isPending && <p className='text-muted-foreground'>Reading the board's records…</p>}
+          {notice !== null && <p className='text-destructive' role='alert'>{notice}</p>}
+          {ask.error !== null && notice === null && <p className='text-destructive' role='alert'>{ask.error.message}</p>}
+          <div ref={end} />
         </div>
-      </form>
+        <form className='grid gap-2 border-t pt-2' onSubmit={submit}>
+          <Textarea
+            ref={input}
+            aria-label='Your question'
+            placeholder='Why did we decide…?'
+            value={question}
+            maxLength={MAX_QUERY_LENGTH}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e);
+            }}
+          />
+          <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
+            <label className='flex items-center gap-1'>
+              <input type='checkbox' checked={includeHistory} onChange={(e) => setIncludeHistory(e.target.checked)} />
+              Include history
+            </label>
+            <Input className='h-7 w-24 text-xs' aria-label='Limit to glob' placeholder='glob id' value={glob} onChange={(e) => setGlob(e.target.value)} />
+            <Input className='h-7 w-24 text-xs' aria-label='Limit to group' placeholder='group' value={group} onChange={(e) => setGroup(e.target.value)} />
+            <Button type='submit' size='sm' className='ml-auto' disabled={ask.isPending || question.trim() === ''}>
+              {ask.isPending ? 'Asking…' : 'Ask'}
+            </Button>
+          </div>
+        </form>
+      </div>
     </aside>
   );
 };

@@ -34,7 +34,7 @@ test('a glob created and moved on one board shows up live on another', async ({ 
   await expect(b.getByTestId('board')).toHaveAttribute('data-live', 'live');
 
   // Create in A; B sees it in Planning without reloading.
-  await a.getByRole('button', { name: 'New Glob' }).click();
+  await a.getByRole('button', { name: 'New glob' }).click();
   await a.getByLabel('Title').fill('Smoke glob');
   await a.getByRole('button', { name: 'Create', exact: true }).click();
   const planningB = b.getByTestId('list-planning');
@@ -49,6 +49,6 @@ test('a glob created and moved on one board shows up live on another', async ({ 
 
   // The glob view shows the new state and the actions now open.
   await b.getByTestId(card).click();
-  await expect(b.getByRole('dialog')).toContainText('In progress');
+  await expect(b.getByTestId('glob-page')).toContainText('In progress');
   await expect(b.getByRole('button', { name: 'Pick up' })).toBeVisible();
 });

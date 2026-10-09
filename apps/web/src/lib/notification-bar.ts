@@ -40,7 +40,7 @@ export const activeTab = (pathname: string, boardId: number): BoardTab => {
   return BOARD_TABS.find((t) => t.path !== '' && (rest === t.path || rest.startsWith(`${t.path}/`)))?.tab ?? 'board';
 };
 
-/** New Glob sits beside the search box on the board view only. */
+/** The ＋ New glob icon is in the tab row on the board view only. */
 export const showBoardTools = (tab: BoardTab): boolean => tab === 'board';
 
 /** Dismissible notifications offer a dismiss button; one whose condition holds never does. */
