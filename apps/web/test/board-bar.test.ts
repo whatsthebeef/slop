@@ -169,3 +169,20 @@ describe('withSessions', () => {
     ]);
   });
 });
+
+describe('opening a board not in the bar (s15t46)', () => {
+  it('shows it as the dashed row right away and leaves the bar as it was', () => {
+    const me: Me = {
+      email: 'dev@example.com',
+      boards: [board(1, 1, ago(DAY)), board(2, null, null)],
+    };
+    // The answer to POST /viewed: board 2 has a view time and no place.
+    const next = withSessions(me, [
+      { boardId: 1, position: 1, lastViewedAt: ago(DAY) },
+      { boardId: 2, position: null, lastViewedAt: ago(0) },
+    ]);
+    const rows = barRows(next.boards, 2);
+    expect(ids(rows.sessions)).toEqual([1]);
+    expect(rows.loose?.id).toBe(2);
+  });
+});
