@@ -10,6 +10,7 @@ import type { ArtifactSummary } from './knowledge.js';
 import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
+import { SLOP_TYPES } from './types.js';
 import { mergeImplied } from './exclusive-paths.js';
 import { dependencyIds, refusalText, waitingFor, waitSummary } from './waiting.js';
 import type { DependencyState } from './waiting.js';
@@ -29,6 +30,7 @@ import type {
   Labels,
   MergeConflict,
   OpenConflict,
+  Role,
   Run,
   RunOutcome,
   SlopType,
@@ -1003,6 +1005,20 @@ const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> =
   }
   return invalidTransition(glob, actor, `A ${from} cannot become a ${to}`);
 };
+
+/** A type change the glob view may offer: a feature can only become a sub as a task (`category`). */
+export interface TypeChangeOption {
+  readonly to: SlopType;
+  readonly category?: Category;
+}
+
+/** The type changes `changeFields` would accept now, so the glob view never offers one the server refuses. */
+export const allowedTypeChanges = (glob: Glob, role: Role): TypeChangeOption[] =>
+  SLOP_TYPES.flatMap((to): TypeChangeOption[] => {
+    if (to === glob.type || !checkTypeChange(glob, to, { email: '', role }).ok) return [];
+    if (isValidCombination(to, glob.category)) return [{ to }];
+    return glob.category === 'feature' && isValidCombination(to, 'task') ? [{ to, category: 'task' }] : [];
+  });
 
 // ---------------------------------------------------------------------------
 // Events from integrations and routines
