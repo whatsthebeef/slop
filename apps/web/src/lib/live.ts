@@ -12,6 +12,7 @@ interface Hint {
     | 'glob.artifacts'
     | 'glob.deploys'
     | 'glob.findings'
+    | 'glob.decisions'
     | 'glob.reviews'
     | 'board.changed'
     | 'board.kb'
@@ -46,6 +47,9 @@ export const globCodeReviewKey = (globId: string) => ['glob-code-review', globId
 
 /** One glob's review findings in the glob view; invalidated by `glob.findings` hints and on reconnect. */
 export const findingsKey = (globId: string) => ['findings', globId] as const;
+
+/** One glob's decisions in the glob view; invalidated by `glob.decisions` hints and on reconnect. */
+export const globDecisionsKey = (globId: string) => ['glob-decisions', globId] as const;
 
 /** One artifact's versions in the glob view; invalidated by `glob.artifacts` hints. */
 export const artifactKey = (globId: string, kind: string, label: string) => ['artifact', globId, kind, label] as const;
@@ -197,6 +201,11 @@ export const useLiveBoard = (boardId: number): LiveState => {
       void client.invalidateQueries({ queryKey: findingsKey(id) });
       return;
     }
+    if (hint.kind === 'glob.decisions') {
+      // Decisions live beside the glob too; only the glob view reads them.
+      void client.invalidateQueries({ queryKey: globDecisionsKey(id) });
+      return;
+    }
     if (hint.kind === 'glob.deleted') {
       replace(null, id);
       return;
@@ -228,6 +237,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
     void client.invalidateQueries({ queryKey: ['readiness', boardId] });
     void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
     void client.invalidateQueries({ queryKey: ['findings'] });
+    void client.invalidateQueries({ queryKey: ['glob-decisions'] });
     void client.invalidateQueries({ queryKey: codeReviewsKey(boardId) });
     void client.invalidateQueries({ queryKey: ['glob-code-review'] });
   };

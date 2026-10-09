@@ -13,6 +13,7 @@ export const SOURCE_TYPES = [
   'implementation_plan',
   'postplan',
   'decision_log',
+  'decision',
   'local_review',
   'attachment',
   'change_summary',
@@ -29,6 +30,7 @@ export const SOURCE_LABELS: Readonly<Record<SourceType, string>> = {
   implementation_plan: 'Implementation record',
   postplan: 'Postplan (legacy)',
   decision_log: 'Decision log (legacy)',
+  decision: 'Decision',
   local_review: 'Local review',
   attachment: 'Attachment',
   change_summary: 'Change',
@@ -37,24 +39,28 @@ export const SOURCE_LABELS: Readonly<Record<SourceType, string>> = {
   learning: 'Learning',
 };
 
-/** Sources that belong to one glob and go with it when it is deleted. */
+/**
+ * Sources that belong to one glob and go with it when it is deleted. A decision taken from a knowledge item has no
+ * glob link, so only decisions taken on a glob are matched.
+ */
 export const GLOB_OWNED_SOURCES: readonly SourceType[] = SOURCE_TYPES.filter((s) => s !== 'kb_doc' && s !== 'learning');
 
 /**
- * Order of authority, highest first (spec). `decision` is reserved: nothing produces decisions yet.
+ * Order of authority, highest first (spec): merged code and the implementation record, then current decisions, then
+ * plan.md and approved knowledge, then older discussion; superseded decisions are history, ranked down by status.
  */
-export const AUTHORITY_TIERS = ['merged_code', 'approved_plan', 'decision', 'discussion', 'legacy'] as const;
+export const AUTHORITY_TIERS = ['merged_code', 'decision', 'approved_plan', 'discussion', 'legacy'] as const;
 export type AuthorityTier = (typeof AUTHORITY_TIERS)[number];
 
 export const AUTHORITY_WEIGHTS: Readonly<Record<AuthorityTier, number>> = {
   merged_code: 1,
+  decision: 0.95,
   approved_plan: 0.9,
-  decision: 0.8,
   discussion: 0.6,
   legacy: 0.3,
 };
 
-/** `superseded` and `legacy` are reserved for later producers (decision extraction, imports); nothing sets them yet. */
+/** `superseded`: a decision a newer one replaced (decision supersession); `legacy` is reserved for imports, nothing sets it yet. */
 export const ITEM_STATUSES = ['active', 'superseded', 'legacy'] as const;
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
 
@@ -136,6 +142,8 @@ export interface Candidate {
   readonly status: ItemStatus;
   /** The title of the item that replaced this one (superseded items). */
   readonly supersededByTitle: string | null;
+  /** When the item that replaced this one happened (superseded items). */
+  readonly supersededByAt: string | null;
   readonly globIds: readonly string[];
   readonly globGroup: string | null;
   readonly externalUrl: string | null;
@@ -156,8 +164,8 @@ export interface SearchHit {
   readonly score: number;
   readonly citation: Citation;
   readonly status: ItemStatus;
-  readonly supersededBy: { readonly title: string } | null;
-  /** `superseded by "..."` or `legacy`, so a reader can tell history from current truth. */
+  readonly supersededBy: { readonly title: string; readonly date: string | null } | null;
+  /** `superseded by "..." on <date>` or `legacy`, so a reader can tell history from current truth. */
   readonly label: string | null;
 }
 
@@ -186,7 +194,10 @@ export const scoreOf = (c: Candidate, mode: SearchMode, now: string): number => 
 };
 
 const labelOf = (c: Candidate): string | null => {
-  if (c.status === 'superseded') return c.supersededByTitle === null ? 'superseded' : `superseded by "${c.supersededByTitle}"`;
+  if (c.status === 'superseded') {
+    if (c.supersededByTitle === null) return 'superseded';
+    return `superseded by "${c.supersededByTitle}"${c.supersededByAt === null ? '' : ` on ${c.supersededByAt.slice(0, 10)}`}`;
+  }
   return isLegacy(c) ? 'legacy' : null;
 };
 
@@ -197,18 +208,22 @@ export const toHit = (c: Candidate, score: number): SearchHit => ({
   score,
   citation: { source: c.sourceType, date: c.occurredAt, title: c.title, link: c.externalUrl, globId: c.globIds[0] ?? null },
   status: isLegacy(c) ? 'legacy' : c.status,
-  supersededBy: c.supersededByTitle === null ? null : { title: c.supersededByTitle },
+  supersededBy: c.supersededByTitle === null ? null : { title: c.supersededByTitle, date: c.supersededByAt },
   label: labelOf(c),
 });
 
+const isSupersededDecision = (c: Candidate): boolean => c.sourceType === 'decision' && c.status === 'superseded';
+
 /**
  * Candidates as hits, best first. In `current` mode legacy material ranks after everything else, however well it
- * matches; ties go to the newer item.
+ * matches, and a superseded decision ranks after every current one (the current decision comes first, its replaced
+ * predecessors follow labelled); ties go to the newer item. `all_time` ranks on relevance and authority alone.
  */
 export const rankCandidates = (candidates: readonly Candidate[], mode: SearchMode, now: string): SearchHit[] => {
   const scored = candidates.map((c) => ({ c, score: scoreOf(c, mode, now) }));
   scored.sort((a, b) => {
     if (mode === 'current' && isLegacy(a.c) !== isLegacy(b.c)) return isLegacy(a.c) ? 1 : -1;
+    if (mode === 'current' && isSupersededDecision(a.c) !== isSupersededDecision(b.c)) return isSupersededDecision(a.c) ? 1 : -1;
     return b.score - a.score || b.c.occurredAt.localeCompare(a.c.occurredAt) || a.c.chunkId - b.c.chunkId;
   });
   return scored.map(({ c, score }) => toHit(c, score));

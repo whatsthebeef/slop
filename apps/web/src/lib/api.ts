@@ -14,6 +14,7 @@ import type {
   Category,
   CodeReviewBadge,
   GlobCodeReview,
+  DecisionView,
   Deploy,
   DeployIndicator,
   AtfIndicator,
@@ -333,6 +334,12 @@ export const api = {
   artifactVersions: (id: string, kind: ArtifactKind, label: string) =>
     request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts/${kind}?label=${encodeURIComponent(label)}`),
   findings: (id: string) => request<GlobFindings>('GET', `/api/globs/${id}/findings`),
+  /** The decisions taken on a glob, newest first, with what replaced them. */
+  decisions: (boardId: number, id: string) => request<{ decisions: DecisionView[] }>('GET', `/api/boards/${boardId}/globs/${id}/decisions`),
+  /** Confirms a proposed replacement (the older decision becomes superseded). */
+  confirmDecision: (boardId: number, id: number) => request<DecisionView>('POST', `/api/boards/${boardId}/decisions/${id}/confirm`),
+  /** Undoes a replacement, or dismisses a proposed one. */
+  undoDecision: (boardId: number, id: number) => request<DecisionView>('POST', `/api/boards/${boardId}/decisions/${id}/undo`),
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel: (id: string, label: LabelName, command: LabelCommand, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/labels/${label}`, { command, version }),

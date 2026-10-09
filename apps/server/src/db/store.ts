@@ -1,4 +1,4 @@
-import type { BoardNotification, Artifact, Candidate, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { BoardNotification, Artifact, Candidate, Decision, DecisionSource, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { GLOB_OWNED_SOURCES, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -278,6 +278,44 @@ const toKnowledgeItem = (row: typeof schema.knowledgeItems.$inferSelect): Knowle
   lastError: row.lastError,
 });
 
+const toDecision = (row: typeof schema.decisions.$inferSelect): Decision => ({
+  id: row.id,
+  boardId: row.boardId,
+  itemId: row.itemId,
+  globId: row.globId,
+  group: row.globGroup,
+  statement: row.statement,
+  quote: row.quote,
+  decidedBy: row.decidedBy,
+  decidedAt: row.decidedAt.toISOString(),
+  sourceKind: row.sourceKind,
+  sourceRef: row.sourceRef,
+  sourceLabel: row.sourceLabel,
+  sourceUrl: row.sourceUrl,
+  replacedBy: row.replacedBy,
+  replaceState: row.replaceState,
+  replaceOldQuote: row.replaceOldQuote,
+  replaceNewQuote: row.replaceNewQuote,
+  replaceReason: row.replaceReason,
+  checkedAt: row.checkedAt?.toISOString() ?? null,
+  attempts: row.attempts,
+  processAfter: row.processAfter?.toISOString() ?? null,
+  lastError: row.lastError,
+  createdAt: row.createdAt.toISOString(),
+});
+
+const toDecisionSource = (row: typeof schema.decisionSources.$inferSelect): DecisionSource => ({
+  boardId: row.boardId,
+  sourceRef: row.sourceRef,
+  contentHash: row.contentHash,
+  state: row.state,
+  attempts: row.attempts,
+  processAfter: row.processAfter?.toISOString() ?? null,
+  lastError: row.lastError,
+  globId: row.globId,
+  updatedAt: row.updatedAt.toISOString(),
+});
+
 const supersededItems = alias(schema.knowledgeItems, 'superseding');
 
 /** What a candidate query selects: the chunk, its item's facts and the title of the item that replaced it. */
@@ -293,13 +331,17 @@ const candidateColumns = (relevance: SQL<number>) => ({
   authority: schema.knowledgeItems.authority,
   status: schema.knowledgeItems.status,
   supersededByTitle: supersededItems.title,
+  supersededByAt: supersededItems.occurredAt,
   globIds: schema.knowledgeItems.globIds,
   globGroup: schema.knowledgeItems.globGroup,
   externalUrl: schema.knowledgeItems.externalUrl,
 });
 
-const toCandidate = (row: { relevance: number; occurredAt: Date } & Omit<Candidate, 'relevance' | 'occurredAt'>): Candidate => ({
+const toCandidate = (
+  row: { relevance: number; occurredAt: Date; supersededByAt: Date | null } & Omit<Candidate, 'relevance' | 'occurredAt' | 'supersededByAt'>,
+): Candidate => ({
   ...row,
+  supersededByAt: row.supersededByAt?.toISOString() ?? null,
   // A zero vector has no cosine similarity (NaN): it matches nothing.
   relevance: Number.isFinite(row.relevance) ? Math.min(1, Math.max(0, row.relevance)) : 0,
   occurredAt: row.occurredAt.toISOString(),
@@ -375,6 +417,20 @@ export class PgStore implements Store {
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
+        // Older decisions that this glob's decisions replaced stand again; its own rows go with their items below.
+        const d = schema.decisions;
+        const released = await t
+          .update(d)
+          .set({ replacedBy: null, replaceState: null })
+          .where(inArray(d.replacedBy, t.select({ id: d.id }).from(d).where(eq(d.globId, id))))
+          .returning({ itemId: d.itemId });
+        if (released.length > 0) {
+          await t
+            .update(schema.knowledgeItems)
+            .set({ status: 'active', supersededBy: null })
+            .where(inArray(schema.knowledgeItems.id, released.map((r) => r.itemId)));
+        }
+        await t.delete(schema.decisionSources).where(eq(schema.decisionSources.globId, id));
         // Its own search items go with it; a learning or document it fed only loses the link.
         const i = schema.knowledgeItems;
         const linked = sql`${i.globIds} @> ARRAY[${id}]::text[]`;
@@ -1246,6 +1302,118 @@ export class PgStore implements Store {
           .where(eq(schema.globs.boardId, boardId))
           .orderBy(a.globId, a.kind, a.label, desc(a.version));
         return rows.map(toArtifact);
+      },
+
+      listDecisions: async (boardId) => {
+        const d = schema.decisions;
+        const rows = await t.select().from(d).where(eq(d.boardId, boardId)).orderBy(asc(d.decidedAt), asc(d.id));
+        return rows.map(toDecision);
+      },
+      getDecision: async (id) => {
+        const [row] = await t.select().from(schema.decisions).where(eq(schema.decisions.id, id));
+        return row === undefined ? null : toDecision(row);
+      },
+      upsertDecision: async (decision) => {
+        const d = schema.decisions;
+        const facts = {
+          globId: decision.globId,
+          globGroup: decision.group,
+          statement: decision.statement,
+          quote: decision.quote,
+          decidedBy: decision.decidedBy,
+          decidedAt: new Date(decision.decidedAt),
+          sourceKind: decision.sourceKind,
+          sourceRef: decision.sourceRef,
+          sourceLabel: decision.sourceLabel,
+          sourceUrl: decision.sourceUrl,
+        };
+        // A conflict updates the facts only: supersession state and check progress stay.
+        const [row] = await t
+          .insert(d)
+          .values({ boardId: decision.boardId, itemId: decision.itemId, createdAt: new Date(decision.createdAt), ...facts })
+          .onConflictDoUpdate({ target: d.itemId, set: facts })
+          .returning();
+        if (row === undefined) throw new Error('Decision upsert returned nothing');
+        return toDecision(row);
+      },
+      updateDecision: async (id, patch) => {
+        const set: Partial<typeof schema.decisions.$inferInsert> = {};
+        if (patch.replacedBy !== undefined) set.replacedBy = patch.replacedBy;
+        if (patch.replaceState !== undefined) set.replaceState = patch.replaceState;
+        if (patch.replaceOldQuote !== undefined) set.replaceOldQuote = patch.replaceOldQuote;
+        if (patch.replaceNewQuote !== undefined) set.replaceNewQuote = patch.replaceNewQuote;
+        if (patch.replaceReason !== undefined) set.replaceReason = patch.replaceReason;
+        if (patch.checkedAt !== undefined) set.checkedAt = patch.checkedAt === null ? null : new Date(patch.checkedAt);
+        if (patch.attempts !== undefined) set.attempts = patch.attempts;
+        if (patch.processAfter !== undefined) set.processAfter = patch.processAfter === null ? null : new Date(patch.processAfter);
+        if (patch.lastError !== undefined) set.lastError = patch.lastError;
+        if (Object.keys(set).length === 0) return;
+        await t.update(schema.decisions).set(set).where(eq(schema.decisions.id, id));
+      },
+      deleteDecision: async (id) => {
+        const [row] = await t.select({ itemId: schema.decisions.itemId }).from(schema.decisions).where(eq(schema.decisions.id, id));
+        // The item's delete cascades to the decision row and the item's chunks.
+        if (row !== undefined) await t.delete(schema.knowledgeItems).where(eq(schema.knowledgeItems.id, row.itemId));
+      },
+      nextDecisionToCheck: async (now) => {
+        const d = schema.decisions;
+        const [row] = await t
+          .select()
+          .from(d)
+          .where(and(isNull(d.checkedAt), or(isNull(d.processAfter), lte(d.processAfter, new Date(now)))))
+          .orderBy(asc(d.createdAt), asc(d.id))
+          .limit(1);
+        return row === undefined ? null : toDecision(row);
+      },
+      setItemSupersession: async (itemId, status, supersededBy) => {
+        await t.update(schema.knowledgeItems).set({ status, supersededBy }).where(eq(schema.knowledgeItems.id, itemId));
+      },
+      getItemByRef: async (boardId, externalRef) => {
+        const i = schema.knowledgeItems;
+        const [row] = await t
+          .select({ id: i.id, status: i.status, supersededBy: i.supersededBy, contentHash: i.contentHash })
+          .from(i)
+          .where(and(eq(i.boardId, boardId), eq(i.externalRef, externalRef)));
+        return row ?? null;
+      },
+      getDecisionSource: async (boardId, sourceRef) => {
+        const s = schema.decisionSources;
+        const [row] = await t.select().from(s).where(and(eq(s.boardId, boardId), eq(s.sourceRef, sourceRef)));
+        return row === undefined ? null : toDecisionSource(row);
+      },
+      listDecisionSources: async (boardId) => {
+        const rows = await t.select().from(schema.decisionSources).where(eq(schema.decisionSources.boardId, boardId));
+        return rows.map(toDecisionSource);
+      },
+      upsertDecisionSource: async (source) => {
+        const s = schema.decisionSources;
+        const columns = {
+          contentHash: source.contentHash,
+          state: source.state,
+          attempts: source.attempts,
+          processAfter: source.processAfter === null ? null : new Date(source.processAfter),
+          lastError: source.lastError,
+          globId: source.globId,
+          updatedAt: new Date(source.updatedAt),
+        };
+        await t
+          .insert(s)
+          .values({ boardId: source.boardId, sourceRef: source.sourceRef, ...columns })
+          .onConflictDoUpdate({ target: [s.boardId, s.sourceRef], set: columns });
+      },
+      deleteDecisionSource: async (boardId, sourceRef) => {
+        const s = schema.decisionSources;
+        await t.delete(s).where(and(eq(s.boardId, boardId), eq(s.sourceRef, sourceRef)));
+      },
+      nextDecisionSourceToExtract: async (now) => {
+        const s = schema.decisionSources;
+        const [row] = await t
+          .select()
+          .from(s)
+          .where(and(eq(s.state, 'pending'), or(isNull(s.processAfter), lte(s.processAfter, new Date(now)))))
+          .orderBy(asc(s.updatedAt), asc(s.sourceRef))
+          .limit(1);
+        return row === undefined ? null : toDecisionSource(row);
       },
 
       appendEvents: async (events) => {

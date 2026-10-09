@@ -1,5 +1,7 @@
 import { globCodeReview } from '../domain/code-review.js';
 import type { CodeReviewComment } from '../domain/code-review.js';
+import { decisionViews } from '../domain/decisions.js';
+import type { DecisionView } from '../domain/decisions.js';
 import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import type { Artifact, ArtifactKind, Provenance, ReviewStats } from '../domain/knowledge.js';
@@ -30,8 +32,22 @@ export interface GlobContext {
    * items left out). Absent when no search is configured.
    */
   readonly related?: readonly SearchHit[];
+  /**
+   * The decisions taken on this glob (from its implementation record's Decisions, plan.md, Clarifications and
+   * Assumptions), current ones first, each with its source link; a superseded one says what replaced it and when.
+   */
+  readonly decisions: readonly DecisionView[];
+  /** Which source wins when sources disagree (the spec's order of authority). */
+  readonly authority: string;
   readonly fetch: string;
 }
+
+/** What `get_context` tells an agent about conflicting sources. */
+export const AUTHORITY_STATEMENT =
+  'When sources disagree: merged code and the implementation record win, then current decisions (newest first), then plan.md, then older discussion. Superseded decisions are history: read them for why, not for what to do.';
+
+/** The most decisions one context bundle carries. */
+const CONTEXT_DECISIONS = 30;
 
 /** CodeRabbit's review of the glob's PR, as stored (R3). */
 export interface CodeReviewContext {
@@ -232,6 +248,14 @@ export class ArtifactService {
       const codeReview = await tx.listCodeReviewComments(glob.boardId, [globId]);
       const codeReviewInFull = include.includes('all') || include.includes('code_review');
       const related = this.deps.related === undefined ? undefined : await this.deps.related(tx, glob);
+      const allDecisions = await tx.listDecisions(glob.boardId);
+      const decisions = decisionViews(
+        allDecisions.filter((d) => d.globId === globId),
+        allDecisions,
+      )
+        // Current first (stable: each group stays newest first).
+        .sort((a, b) => Number(a.status === 'superseded') - Number(b.status === 'superseded'))
+        .slice(0, CONTEXT_DECISIONS);
       return ok({
         glob: {
           id: glob.id,
@@ -268,6 +292,8 @@ export class ArtifactService {
         ],
         codeReview: codeReview.length === 0 || !codeReviewInFull ? null : codeReviewContext(codeReview),
         ...(related === undefined ? {} : { related }),
+        decisions,
+        authority: AUTHORITY_STATEMENT,
         fetch:
           "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'code_review', 'all']).",
       });
