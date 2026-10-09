@@ -1,6 +1,8 @@
 import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN } from '../domain/effect-check.js';
+import { appendSession, displaySessions, isContiguous, removeSession, sessionOrder } from '../domain/board-sessions.js';
+import type { BoardSession } from '../domain/board-sessions.js';
 import { recordBaseChecks } from '../domain/checks.js';
 import type { BaseChecksChange } from '../domain/checks.js';
 import type { BaseChecks, Board, CheckFailure, Environment, Member, Role } from '../domain/types.js';
@@ -39,6 +41,10 @@ export type BoardSettings = Partial<
 export interface Membership {
   readonly board: Board;
   readonly role: Role;
+  /** The board's place in the person's board bar (1-based, gaps closed); null when it isn't in it. */
+  readonly position: number | null;
+  /** When the person last opened the board in the web app; null if never. */
+  readonly lastViewedAt: string | null;
 }
 
 export const DEFAULT_ENVIRONMENTS: readonly Environment[] = [{ name: 'main', allowBranchDeploy: false }];
@@ -98,10 +104,14 @@ export class BoardService {
   async memberships(email: string): Promise<Membership[]> {
     return this.deps.store.transaction(async (tx) => {
       const boards = await tx.listBoards(email);
+      const sessions = new Map(displaySessions(await tx.listBoardSessions(email)).map((s) => [s.boardId, s]));
       const result: Membership[] = [];
       for (const board of boards) {
         const member = await tx.getMember(board.id, email);
-        if (member !== null) result.push({ board, role: member.role });
+        const session = sessions.get(board.id);
+        if (member !== null) {
+          result.push({ board, role: member.role, position: session?.position ?? null, lastViewedAt: session?.lastViewedAt ?? null });
+        }
       }
       return result;
     });
@@ -128,13 +138,58 @@ export class BoardService {
     });
   }
 
-  async get(email: string, boardId: number): Promise<Result<Membership>> {
+  async get(email: string, boardId: number): Promise<Result<Pick<Membership, 'board' | 'role'>>> {
     return this.deps.store.transaction(async (tx) => {
       const board = await tx.getBoard(boardId);
       if (board === null) return notFound(`No board ${boardId}`);
       const member = await this.member(tx, email, boardId);
       if (!member.ok) return member;
       return ok({ board, role: member.value.role });
+    });
+  }
+
+  /**
+   * The person opened the board in the web app: records the time and appends the board to their bar if it isn't in it.
+   * Returns their sessions as shown. Personal state, so no board hint is published.
+   */
+  async openBoard(email: string, boardId: number, now: string): Promise<Result<BoardSession[]>> {
+    return this.writeSessions(email, boardId, async (tx, sessions) => {
+      await tx.touchBoardSession(email, boardId, now);
+      const order = sessionOrder(sessions);
+      if (!order.includes(boardId)) await tx.setBoardSessionOrder(email, appendSession(order, boardId));
+    });
+  }
+
+  /** Adds the board to the end of the person's bar. Idempotent: a board already in it stays where it is. */
+  async addSession(email: string, boardId: number): Promise<Result<BoardSession[]>> {
+    return this.writeSessions(email, boardId, async (tx, sessions) => {
+      const order = sessionOrder(sessions);
+      if (!order.includes(boardId)) await tx.setBoardSessionOrder(email, appendSession(order, boardId));
+    });
+  }
+
+  /** Takes the board out of the person's bar; the rest renumber 1..n. Idempotent. */
+  async removeSession(email: string, boardId: number): Promise<Result<BoardSession[]>> {
+    return this.writeSessions(email, boardId, async (tx, sessions) => {
+      const order = sessionOrder(sessions);
+      // Also renumbers a bar left with a gap by a membership that went.
+      if (order.includes(boardId) || !isContiguous(sessions)) await tx.setBoardSessionOrder(email, removeSession(order, boardId));
+    });
+  }
+
+  /** A session write for a member, serialised per person so concurrent opens can't take the same position. */
+  private async writeSessions(
+    email: string,
+    boardId: number,
+    write: (tx: Tx, sessions: readonly BoardSession[]) => Promise<void>,
+  ): Promise<Result<BoardSession[]>> {
+    if (!Number.isInteger(boardId)) return invalidInput('A board ID is a whole number');
+    return this.deps.store.transaction(async (tx) => {
+      const member = await this.member(tx, email, boardId);
+      if (!member.ok) return member;
+      await tx.lockBoardSessions(email);
+      await write(tx, await tx.listBoardSessions(email));
+      return ok(displaySessions(await tx.listBoardSessions(email)));
     });
   }
 

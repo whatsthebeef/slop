@@ -31,6 +31,7 @@ import {
   bigserial,
   boolean,
   customType,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -95,6 +96,25 @@ export const members = pgTable(
     role: text('role', { enum: ['admin', 'dev', 'qa', 'po'] }).notNull(),
   },
   (t) => [primaryKey({ columns: [t.boardId, t.email] }), index('members_email_idx').on(t.email)],
+);
+
+/**
+ * Per person and board: where the board sits in their board bar (null: not in it) and when they last opened it.
+ * Personal: never listed to other members. Goes with the membership.
+ */
+export const boardSessions = pgTable(
+  'board_sessions',
+  {
+    email: text('email').notNull(),
+    boardId: integer('board_id').notNull(),
+    position: integer('position'),
+    lastViewedAt: timestamp('last_viewed_at', { withTimezone: true }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.email, t.boardId] }),
+    foreignKey({ columns: [t.boardId, t.email], foreignColumns: [members.boardId, members.email] }).onDelete('cascade'),
+    uniqueIndex('board_sessions_position_idx').on(t.email, t.position).where(sql`${t.position} is not null`),
+  ],
 );
 
 /** The glob document plus the columns used for filtering and conditional writes. */

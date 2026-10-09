@@ -4,7 +4,7 @@ import { Link, Outlet, useLocation, useParams } from 'react-router';
 import { ChatPanel } from '@/components/chat-panel';
 import { NotificationBar } from '@/components/notification-bar';
 import { SearchBox } from '@/components/search-box';
-import { StatusBar } from '@/components/status-bar';
+import { BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
 import { askRequest } from '@/lib/chat';
 import type { ChatRequest } from '@/lib/chat';
@@ -57,14 +57,16 @@ const BoardTabs = ({ boardId, onActions }: { boardId: number; onActions: (el: HT
   );
 };
 
-/** Every board page sits under the app's status bar; the page fills the rest of the window. */
+/** Every board page sits under the app's board bar; the page fills the rest of the window. Opening a board records it. */
 export const BoardShell = () => {
   const boardId = Number(useParams().boardId);
   const isBoard = Number.isInteger(boardId);
   const [headerActions, setHeaderActions] = useState<HTMLElement | null>(null);
+  // The shell stays mounted across the board's tabs, so this records each open once.
+  const opened = useOpenBoard(isBoard ? boardId : undefined);
   return (
     <div className='flex h-dvh flex-col'>
-      <StatusBar current={isBoard ? boardId : undefined} />
+      <BoardBar current={isBoard ? boardId : undefined} opened={opened} />
       {isBoard && <NotificationBar boardId={boardId} />}
       {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} />}
       <div className='min-h-0 flex-1 overflow-auto'>

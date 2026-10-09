@@ -1,3 +1,4 @@
+import type { BoardSession } from './domain/board-sessions.js';
 import type { Deploy, DeployState } from './domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
 import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
@@ -100,6 +101,18 @@ export interface Tx {
   listMembers(boardId: number): Promise<Member[]>;
   upsertMember(member: Member): Promise<void>;
   deleteMember(boardId: number, email: string): Promise<void>;
+
+  /** Serialises a person's board-session writes until the transaction ends (a no-op where transactions don't overlap). */
+  lockBoardSessions(email: string): Promise<void>;
+  /** A person's sessions on the boards they belong to (a board they never opened or added has none). */
+  listBoardSessions(email: string): Promise<BoardSession[]>;
+  /** Records when the person last opened the board; leaves its place in the bar alone. Ignored for a non-member. */
+  touchBoardSession(email: string, boardId: number, at: string): Promise<void>;
+  /**
+   * Writes the person's bar: positions 1..n in the given order, null for the rest of their sessions. Creates the
+   * sessions that don't exist yet (with no view time). Every board must be one the person belongs to.
+   */
+  setBoardSessionOrder(email: string, boardIds: readonly number[]): Promise<void>;
 
   getUser(email: string): Promise<User | null>;
   upsertUser(user: User): Promise<void>;
