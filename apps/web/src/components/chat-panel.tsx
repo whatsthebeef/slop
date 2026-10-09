@@ -245,7 +245,6 @@ export const ChatPanel = ({
   onChatChange,
   onClose,
   onFullScreenChange,
-  width,
   divider,
 }: {
   boardId: number;
@@ -257,8 +256,6 @@ export const ChatPanel = ({
   onChatChange: (chatId: number | null) => void;
   onClose: () => void;
   onFullScreenChange: (fullScreen: boolean) => void;
-  /** The docked width in px; the dock clips the panel to its own width while it slides, so the panel keeps this one. */
-  width: number;
   /** The drag handle on the panel's left edge (not shown on the narrow-screen sheet or in full screen). */
   divider?: ReactNode;
 }) => {
@@ -351,7 +348,6 @@ export const ChatPanel = ({
       className={cn(
         'relative flex h-full min-h-0 w-full flex-col border-l-2 border-foreground/80 bg-card p-3 text-sm',
       )}
-      style={{ minWidth: width }}
       aria-label='Board chat'
       data-testid='chat-panel'
       data-fullscreen={fullScreen}

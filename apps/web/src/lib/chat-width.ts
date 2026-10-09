@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { GLIDE_MS, reducedMotion } from './card-motion';
+import { useEffect, useState } from 'react';
+import { reducedMotion, STEP_MS } from './card-motion';
 
 /** The docked chat's width in px: the default (30rem), no narrower than 20rem, and never so wide that the board's three columns fall under their minimum card width. */
 export const DEFAULT_CHAT_WIDTH = 480;
@@ -46,30 +46,16 @@ export const widthAfterKey = (key: string, shift: boolean, width: number, availa
   return null;
 };
 
-/**
- * Keeps the panel mounted while it slides out. `mounted` is true from opening until the close glide ends; `entered` turns true a
- * frame after mounting (so the slide in starts from the closed state) and false as soon as closing starts.
- */
-export const usePresence = (open: boolean): { mounted: boolean; entered: boolean } => {
+/** Keeps the panel mounted while it steps out: true from opening until the slide out ends. */
+export const usePresence = (open: boolean): boolean => {
   const [mounted, setMounted] = useState(false);
-  const [entered, setEntered] = useState(false);
-  const frame = useRef(0);
   useEffect(() => {
     if (open) {
       setMounted(true);
-      if (reducedMotion()) {
-        setEntered(true);
-        return;
-      }
-      // Two frames: the first paints the closed state, the second starts the transition to the open one.
-      frame.current = requestAnimationFrame(() => {
-        frame.current = requestAnimationFrame(() => setEntered(true));
-      });
-      return () => cancelAnimationFrame(frame.current);
+      return;
     }
-    setEntered(false);
-    const timer = window.setTimeout(() => setMounted(false), reducedMotion() ? 0 : GLIDE_MS);
+    const timer = window.setTimeout(() => setMounted(false), reducedMotion() ? 0 : STEP_MS);
     return () => window.clearTimeout(timer);
   }, [open]);
-  return { mounted, entered };
+  return mounted || open;
 };
