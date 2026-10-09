@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readinessNotifications } from '@slop/core';
 import type { BoardNotification, ReadinessItem } from '@slop/core';
-import { activeTab, barView, canDismiss, showBoardTools, linkTarget, moreLabel, pollInterval } from '../src/lib/notification-bar';
+import { activeTab, barView, canDismiss, showBoardTools, linkTarget, moreLabel, pollInterval, SHELL_ORDER, shownRows, toggleLabel } from '../src/lib/notification-bar';
 
 const n = (id: string, severity: BoardNotification['severity'], since: string, clears: BoardNotification['clears'] = { kind: 'condition' }): BoardNotification => ({
   id, boardId: 1, source: id, severity, title: id, detail: '', link: null, action: null, since, clears,
@@ -59,6 +59,30 @@ describe('the notification bar', () => {
   it('puts the most important first and the rest behind the "more…" button, in order', () => {
     const view = barView([n('i', 'info', '2026-10-05T09:00:00Z'), n('w2', 'warning', '2026-10-05T11:00:00Z'), n('w1', 'warning', '2026-10-05T10:00:00Z')]);
     expect([view?.lead.id, ...(view?.rest.map((x) => x.id) ?? [])]).toEqual(['w1', 'w2', 'i']);
+  });
+
+  describe('the stack', () => {
+    const view = barView([n('i', 'info', '2026-10-05T09:00:00Z'), n('w2', 'warning', '2026-10-05T11:00:00Z'), n('w1', 'warning', '2026-10-05T10:00:00Z')]);
+    if (view === null) throw new Error('no view');
+
+    it('collapsed shows the lead alone, with "more… (N)"', () => {
+      expect(shownRows(view, false).map((x) => x.id)).toEqual(['w1']);
+      expect(toggleLabel(false, view.rest.length)).toBe('more… (2)');
+    });
+
+    it('expanded shows all in order as one stack, with "Show less" after the last', () => {
+      expect(shownRows(view, true).map((x) => x.id)).toEqual(['w1', 'w2', 'i']);
+      expect(toggleLabel(true, view.rest.length)).toBe('Show less');
+    });
+
+    it('Show less collapses back to the lead', () => {
+      expect(shownRows(view, false)).toHaveLength(1);
+    });
+
+    it('puts the notifications above the tabs, with the line always shown', () => {
+      expect(SHELL_ORDER.indexOf('notifications')).toBeLessThan(SHELL_ORDER.indexOf('tabs'));
+      expect(SHELL_ORDER).toContain('line');
+    });
   });
 
   describe('board setup', () => {
