@@ -188,6 +188,13 @@ export class MemoryStore implements Store {
     return {
       getGlob: (id) => Promise.resolve(s.globs.get(id)?.glob ?? null),
       getGlobs: (ids) => Promise.resolve([...new Set(ids)].flatMap((id) => s.globs.get(id)?.glob ?? [])),
+      globFacts: (ids) =>
+        Promise.resolve(
+          [...new Set(ids)].flatMap((id) => {
+            const glob = s.globs.get(id)?.glob;
+            return glob === undefined ? [] : [{ id, boardId: glob.boardId, planner: glob.planner, category: glob.category, type: glob.type }];
+          }),
+        ),
       insertGlob: (glob, creationKey) => {
         if (s.globs.has(glob.id)) return Promise.resolve(false);
         s.globs.set(glob.id, { glob, creationKey });
@@ -605,6 +612,17 @@ export class MemoryStore implements Store {
             )
             .sort((a, b) => a.event.at.localeCompare(b.event.at) || a.index - b.index)
             .map(({ event }) => event),
+        ),
+      listEventsUntil: (until, types, dataKeys) =>
+        Promise.resolve(
+          s.events
+            .map((event, index) => ({ event, index }))
+            .filter(({ event }) => event.at < until && types.includes(event.type))
+            .sort((a, b) => a.event.at.localeCompare(b.event.at) || a.index - b.index)
+            .map(({ event }) => ({
+              ...event,
+              data: Object.fromEntries(Object.entries(event.data).filter(([key]) => dataKeys.includes(key))),
+            })),
         ),
       listArtifactMeta: (boardId, kinds, since) =>
         Promise.resolve(

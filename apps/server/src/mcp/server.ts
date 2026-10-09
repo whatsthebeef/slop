@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, Result, SearchService, ChatService } from '@slop/core';
+import type { ArtifactService, BoardService, Deploy, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
 import { ARTIFACT_KINDS, CATEGORIES, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -37,6 +37,8 @@ export interface McpDeps {
   /** Public values filled into agent-set files when served (slop's URL, the Claude Code client ID). */
   readonly agentSetValues: Record<string, string>;
   readonly links: SignedLinks;
+  /** Time reports (`get_report`). */
+  readonly reports: Pick<ReportService, 'report'>;
 }
 
 const json = (value: unknown): CallToolResult => ({
@@ -788,6 +790,19 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         ),
       );
     },
+  );
+
+  server.registerTool(
+    'get_report',
+    {
+      description:
+        "A board's monthly or yearly time report (% RnD vs maintenance per developer, counting only time on that board's globs), computed now from the event log: its board, period, kind, work time zone, when it was computed and the CSV (developer, period, RnD hours, maintenance hours, % RnD). A running period counts up to now. The board's admins only.",
+      inputSchema: {
+        board: z.number().int().describe('Board ID (the number in a glob ID: s1t4 is on board 1)'),
+        period: z.string().describe('YYYY-MM for a month or YYYY for a year, in the work time zone'),
+      },
+    },
+    async ({ board, period }) => reply(await deps.reports.report(email, board, period)),
   );
 
   return server;

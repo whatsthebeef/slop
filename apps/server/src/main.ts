@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, SubLimitService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, SubLimitService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -46,6 +46,7 @@ import { mountSlack } from './http/slack.js';
 import { slackApi } from './slack.js';
 import { mountIntegrations } from './http/integrations.js';
 import { mountNotifications } from './http/notifications.js';
+import { mountReports } from './http/reports.js';
 import { AwsSignIn, AwsSsoOidc, readSsoSession, ssoCacheFile } from './aws-sso.js';
 import { IntegrationRegistry } from './integration-health.js';
 import { TunnelWatch } from './tunnel-watch.js';
@@ -248,6 +249,7 @@ const integrationTokens = new IntegrationTokenService({
   newSecret: () => `slopit_${randomBytes(32).toString('base64url')}`,
   hashSecret: (secret) => createHash('sha256').update(secret).digest('hex'),
 });
+const reports = new ReportService({ store, clock, timeZone: config.SLOP_WORK_TIME_ZONE });
 const inboxPipeline = new InboxPipeline({ store, clock, notifier: hub, embedder, llm: searchLlm });
 // A change to a board's material marks it for the next sync.
 hub.tap((hint) => {
@@ -339,6 +341,7 @@ if (config.SLACK_SIGNING_SECRET !== undefined && config.SLACK_BOT_TOKEN !== unde
 }
 mountIntegrations(app, { inbox, tokens: integrationTokens });
 mountNotifications(app, { notifications });
+mountReports(app, { reports });
 
 // Signed agent-set downloads: the link was issued to a member through the authenticated MCP.
 const agentSetValues = { SLOP_URL: config.PUBLIC_URL, COGNITO_CLAUDE_CODE_CLIENT_ID: config.CLAUDE_CODE_CLIENT_ID };
@@ -375,6 +378,7 @@ mountMcp(app, {
   publicUrl: config.PUBLIC_URL,
   agentSetValues,
   links,
+  reports,
 });
 
 mountGitHubSetup(app, {

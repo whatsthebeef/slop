@@ -1,6 +1,6 @@
-import type { BoardNotification, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { BoardNotification, Category, SlopType, ChatMessage, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
-import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, ne, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
@@ -445,6 +445,16 @@ export class PgStore implements Store {
         if (ids.length === 0) return [];
         const rows = await t.select({ data: schema.globs.data }).from(schema.globs).where(inArray(schema.globs.id, [...new Set(ids)]));
         return rows.map((r) => r.data);
+      },
+      globFacts: async (ids) => {
+        if (ids.length === 0) return [];
+        const g = schema.globs;
+        // The IDs travel as one JSON parameter: a report can name more globs than Postgres's 65,535 bind parameters.
+        const wanted = JSON.stringify([...new Set(ids)]);
+        return t
+          .select({ id: g.id, boardId: g.boardId, planner: g.planner, category: sql<Category>`${g.data} ->> 'category'`, type: sql<SlopType>`${g.type}` })
+          .from(g)
+          .where(sql`${g.id} in (select jsonb_array_elements_text(${wanted}::jsonb))`);
       },
       insertGlob: async (glob, creationKey) => {
         const rows = await t
@@ -1154,6 +1164,25 @@ export class PgStore implements Store {
           .where(and(...conditions))
           .orderBy(asc(e.at), asc(e.id));
         // An event type this code doesn't know (written by newer code) is left out rather than failing the read.
+        return rows.flatMap((row): DomainEvent[] => {
+          const type = DOMAIN_EVENT_TYPES.find((known) => known === row.type);
+          return type === undefined ? [] : [{ type, globId: row.globId, actor: row.actor, at: row.at.toISOString(), data: row.data }];
+        });
+      },
+      listEventsUntil: async (until, types, dataKeys) => {
+        if (types.length === 0) return [];
+        const e = schema.events;
+        // Only the data keys the caller reads leave the database: payloads such as a glob's whole creation record stay behind.
+        const keys = sql.join(dataKeys.map((k) => sql`${k}`), sql`, `);
+        const data =
+          dataKeys.length === 0
+            ? sql<DomainEvent['data']>`'{}'::jsonb`.mapWith(e.data)
+            : sql<DomainEvent['data']>`(select coalesce(jsonb_object_agg(k, ${e.data} -> k), '{}'::jsonb) from unnest(array[${keys}]::text[]) as k where ${e.data} -> k is not null)`.mapWith(e.data);
+        const rows = await t
+          .select({ globId: e.globId, type: e.type, actor: e.actor, at: e.at, data })
+          .from(e)
+          .where(and(inArray(e.type, [...types]), lt(e.at, new Date(until))))
+          .orderBy(asc(e.at), asc(e.id));
         return rows.flatMap((row): DomainEvent[] => {
           const type = DOMAIN_EVENT_TYPES.find((known) => known === row.type);
           return type === undefined ? [] : [{ type, globId: row.globId, actor: row.actor, at: row.at.toISOString(), data: row.data }];

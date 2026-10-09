@@ -1,4 +1,4 @@
-import { describeEditFailure, EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, ROLES } from '@slop/core';
+import { describeEditFailure, EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, recentPeriods, ROLES } from '@slop/core';
 import type { AgentKbApproval, DeployIntegration, Environment, Role, SubLimitChange } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
@@ -283,6 +283,8 @@ export const SettingsPage = () => {
         )}
       </section>
 
+      <TimeReports boardId={boardId} />
+
       <section className='grid gap-3'>
         <h2 className='text-sm font-semibold'>Members</h2>
         {members.data?.map((m) => (
@@ -399,6 +401,62 @@ const IntegrationToken = ({ boardId, admin }: { boardId: number; admin: boolean 
         </div>
       )}
     </div>
+  );
+};
+
+/** Working hours and this board's time reports. The zone is the server's setting (one for every board), read-only here. */
+const TimeReports = ({ boardId }: { boardId: number }) => {
+  const toast = useToast();
+  const overview = useQuery({ queryKey: ['reports', boardId], queryFn: () => api.reports(boardId) });
+  // Fetched rather than linked, so a refusal (say the admin role was removed since the page loaded) shows as a message
+  // instead of being saved as the CSV.
+  const download = useMutation({
+    mutationFn: (period: string) => api.report(boardId, period),
+    onSuccess: (report) => {
+      const url = URL.createObjectURL(new Blob([report.csv], { type: 'text/csv;charset=utf-8' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `slop-report-${String(report.boardId)}-${report.period}.csv`;
+      // Some browsers only download from a link in the document, and need the URL to outlive the click.
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    },
+    onError: (error) => toast(message(error)),
+  });
+  // An older server without reports, or no access: the section is left out.
+  const timeZone = overview.data?.timeZone;
+  if (timeZone === undefined) return null;
+  // Reports are computed when downloaded, so any period that has begun can be offered; the running one counts up to now.
+  const periods = recentPeriods(new Date().toISOString(), timeZone);
+  return (
+    <section className='grid gap-3' data-testid='time-reports'>
+      <h2 className='text-sm font-semibold'>Time and reports</h2>
+      <p className='text-sm'>
+        Working hours: 09:00–17:00, weekdays, in <span className='font-mono'>{timeZone}</span>
+      </p>
+      <p className='text-xs text-muted-foreground'>
+        Time counts toward each person's active glob (one at a time, across every board) while it is in Doing. This board's
+        reports count only time on its globs and are worked out from the event log when you download them (% RnD per
+        developer, as CSV).
+      </p>
+      {overview.data?.canDownload === true && (
+        <div className='flex flex-wrap gap-x-3 gap-y-1 text-sm'>
+          {periods.map((p) => (
+            <button
+              key={p.key}
+              type='button'
+              className='font-mono underline disabled:opacity-50'
+              disabled={download.isPending}
+              onClick={() => download.mutate(p.key)}
+            >
+              {p.key}
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
   );
 };
 

@@ -35,3 +35,13 @@ describe('SLACK_WORKSPACES', () => {
     expect(() => loadConfig({ SLACK_WORKSPACES: 'T1=x' })).toThrow('SLACK_WORKSPACES');
   });
 });
+
+describe('SLOP_WORK_TIME_ZONE', () => {
+  it('defaults to UTC and accepts an IANA zone', () => {
+    expect(loadConfig({}).SLOP_WORK_TIME_ZONE).toBe('UTC');
+    expect(loadConfig({ SLOP_WORK_TIME_ZONE: 'Europe/London' }).SLOP_WORK_TIME_ZONE).toBe('Europe/London');
+  });
+  it('refuses an unknown zone', () => {
+    expect(() => loadConfig({ SLOP_WORK_TIME_ZONE: 'Mars/Base' })).toThrow('SLOP_WORK_TIME_ZONE');
+  });
+});
