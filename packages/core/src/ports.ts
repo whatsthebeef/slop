@@ -322,8 +322,8 @@ export interface ManifestSource {
 
 /** The code host's line counts for merged commits (the learned sub limit, for gate verdicts recorded without them). */
 export interface SubDiffSource {
-  /** Lines the merge commit `sha` changed against its parent, without files matching `sizeIgnoredPaths`; null when the board's repo can't be read. */
-  mergedChangedLines(board: Board, sha: string, sizeIgnoredPaths: readonly string[]): Promise<number | null>;
+  /** Lines the merge commit `sha` changed against its parent; null when the board's repo can't be read. */
+  mergedChangedLines(board: Board, sha: string): Promise<number | null>;
 }
 
 /** Turns text into vectors for semantic search (slop's one embedding model). */

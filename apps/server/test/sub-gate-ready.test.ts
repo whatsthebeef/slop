@@ -162,20 +162,6 @@ describe('a sub whose PR is ready', () => {
     expect(glob.status).toBe('pr_open');
   });
 
-  it("generated files (the defaults without a merge policy) don't count toward the size, and the verdict says how many", async () => {
-    await store.transaction((tx) => tx.setSubLimit(1, 2000, 200));
-    try {
-      host.diff = { changedLines: 3300, files: ['src/a.ts', 'pnpm-lock.yaml'], fileLines: { 'src/a.ts': 60, 'pnpm-lock.yaml': 3240 } };
-      await handle(readyForReview());
-      await run('evaluate_sub_gate');
-      expect((await current()).status).toBe('merging');
-      const verdicts = await store.transaction((tx) => tx.listBoardEvents(1, '2000-01-01T00:00:00.000Z', ['SubReviewCompleted']));
-      expect(verdicts.filter((e) => e.globId === globId).at(-1)?.data).toMatchObject({ passed: true, changedLines: 60, ignoredLines: 3240 });
-    } finally {
-      await store.transaction((tx) => tx.setSubLimit(1, 200, 2000));
-    }
-  });
-
   it('a conflict found while merging fails the glob as a merge conflict naming the files', async () => {
     await handle(readyForReview());
     await globs.applyEvent(globId, (g, ctx) => machine.subGateCompleted(g, { sha: HEAD, passed: true, reason: null }, ctx));

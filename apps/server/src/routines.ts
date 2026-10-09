@@ -86,8 +86,6 @@ export const runInstructions = (
   repo: string | null,
   /** The glob's PR is already ready for review (a retried auto-fix): the run watches it instead of doing the work again. */
   prReady = false,
-  /** Slop's own retry of a watcher that gave up: the failed check (name and first lines) it must fix. */
-  failureSummary: string | null = null,
 ): string =>
   [
     `Slop glob ${glob.id}: ${glob.title}`,
@@ -103,7 +101,6 @@ export const runInstructions = (
     ...(prReady
       ? [
           `The PR is already ready for review and its auto-fix ended without fixing it. Don't run the phases or call mark_ready: read .claude/agents/orchestrator.md and follow its "Auto-fix (watching the PR)" section for glob ${glob.id} with run ID ${runId}.`,
-          ...(failureSummary === null ? [] : ['This is slop retrying it automatically, once. The check that failed:', failureSummary]),
           "Start by calling slop's get_glob for the glob, passing the run ID: its headChecks say what failed on the PR's head.",
           'If you cannot fix it, call report_failure with the run ID.',
         ]

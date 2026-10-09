@@ -1,4 +1,3 @@
-import { countedLines } from '@slop/core';
 import type { Board, SubDiffSource } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
@@ -17,11 +16,12 @@ export class CodeHostSubDiffs implements SubDiffSource {
     private readonly log: (task: string, message: string) => void,
   ) {}
 
-  async mergedChangedLines(board: Board, sha: string, sizeIgnoredPaths: readonly string[]): Promise<number | null> {
+  async mergedChangedLines(board: Board, sha: string): Promise<number | null> {
     const repo = repoOf(board);
     if (repo === null || !this.host.configured) return null;
     try {
-      return countedLines(await this.host.commitDiffSummary(repo, sha, AbortSignal.timeout(CALL_TIMEOUT_MS)), sizeIgnoredPaths).changedLines;
+      return (await this.host.commitDiffSummary(repo, sha, AbortSignal.timeout(CALL_TIMEOUT_MS)))
+        .changedLines;
     } catch (error) {
       this.log(
         'sub_limit',

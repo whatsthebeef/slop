@@ -1,7 +1,7 @@
 import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { FileRoutines } from './routines.js';
-import { isRepoAccessFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
+import { isRepoAccessFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -27,8 +27,6 @@ export const codeHostExecutors = (
   now: () => string = () => new Date().toISOString(),
   health: HealthSink | null = null,
   notifications: Pick<NotificationService, 'syncMainRed' | 'raise' | 'clear'> | null = null,
-  /** The board's merge policy's `sizeIgnoredPaths` (undefined: none set, so the defaults apply). */
-  sizeIgnoredPaths: (boardId: number) => Promise<readonly string[] | undefined> = () => Promise.resolve(undefined),
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -379,8 +377,7 @@ export const codeHostExecutors = (
       const repo = board === null ? null : repoOf(board);
       if (board === null || repo === null) return 'dropped';
       // The board was read just now, so the verdict uses the learned limit as it is at this decision.
-      const ignored = sizeIgnoredPathsOf({ sizeIgnoredPaths: await sizeIgnoredPaths(board.id) });
-      const verdict = subGatePolicy(await host.diffSummary(repo, effect.sha), board, ignored);
+      const verdict = subGatePolicy(await host.diffSummary(repo, effect.sha), board);
       const limit = board.subMaxChangedLines;
       await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCompleted(g, { sha: effect.sha, ...verdict, limit }, ctx));
       return 'done';
@@ -400,7 +397,7 @@ export const codeHostExecutors = (
         return 'done';
       }
       const repo = await repoFor(glob.boardId);
-      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`, glob.status === 'pr_open', effect.failureSummary ?? null), health);
+      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`, glob.status === 'pr_open'), health);
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));
