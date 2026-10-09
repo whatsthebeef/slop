@@ -322,6 +322,7 @@ const toInboxItem = (row: typeof schema.inboxItems.$inferSelect): InboxItem => (
   title: row.title,
   text: row.text,
   source: row.source,
+  sourceRef: row.sourceRef,
   sourceLabel: row.sourceLabel,
   sourceType: row.sourceType,
   occurredAt: row.occurredAt.toISOString(),
@@ -1473,6 +1474,7 @@ export class PgStore implements Store {
             title: input.title,
             text: input.text,
             source: input.source,
+            sourceRef: input.sourceRef,
             sourceLabel: input.sourceLabel,
             sourceType: input.sourceType,
             occurredAt: new Date(input.occurredAt),
@@ -1481,17 +1483,29 @@ export class PgStore implements Store {
             contentHash: input.contentHash,
             updatedAt: new Date(input.createdAt),
           })
-          .onConflictDoNothing({ target: [n.boardId, n.contentHash] })
+          .onConflictDoNothing()
           .returning();
         if (created !== undefined) return { item: toInboxItem(created), created: true };
-        // A racing paste of the same text got there first.
-        const [existing] = await t.select().from(n).where(and(eq(n.boardId, input.boardId), eq(n.contentHash, input.contentHash)));
+        // The same source key (preferred) or the same text is in already, or a racing paste got there first.
+        const [bySource] =
+          input.sourceRef === ''
+            ? []
+            : await t.select().from(n).where(and(eq(n.boardId, input.boardId), eq(n.source, input.source), eq(n.sourceRef, input.sourceRef)));
+        const [existing] =
+          bySource !== undefined
+            ? [bySource]
+            : await t.select().from(n).where(and(eq(n.boardId, input.boardId), eq(n.contentHash, input.contentHash)));
         if (existing === undefined) throw new Error('Inbox item insert returned nothing');
         return { item: toInboxItem(existing), created: false };
       },
       getInboxItem: async (boardId, id) => {
         const n = schema.inboxItems;
         const [row] = await t.select().from(n).where(and(eq(n.boardId, boardId), eq(n.id, id)));
+        return row === undefined ? null : toInboxItem(row);
+      },
+      getInboxItemBySource: async (boardId, source, sourceRef) => {
+        const n = schema.inboxItems;
+        const [row] = await t.select().from(n).where(and(eq(n.boardId, boardId), eq(n.source, source), eq(n.sourceRef, sourceRef)));
         return row === undefined ? null : toInboxItem(row);
       },
       listInboxItems: async (boardId, statuses) => {
@@ -1509,6 +1523,10 @@ export class PgStore implements Store {
           .update(n)
           .set({
             title: item.title,
+            text: item.text,
+            contentHash: item.contentHash,
+            sourceLabel: item.sourceLabel,
+            occurredAt: new Date(item.occurredAt),
             sourceType: item.sourceType,
             status: item.status,
             summary: item.summary,

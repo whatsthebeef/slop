@@ -753,6 +753,8 @@ export const inboxItems = pgTable(
     title: text('title').notNull().default(''),
     text: text('text').notNull(),
     source: text('source').notNull().default('paste'),
+    /** The integration's own key (a Slack thread's permalink); empty for a paste. */
+    sourceRef: text('source_ref').notNull().default(''),
     sourceLabel: text('source_label').notNull().default(''),
     sourceType: text('source_type', { enum: INBOX_SOURCE_TYPES }).notNull(),
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
@@ -773,6 +775,7 @@ export const inboxItems = pgTable(
   },
   (t) => [
     uniqueIndex('inbox_items_hash_idx').on(t.boardId, t.contentHash),
+    uniqueIndex('inbox_items_source_idx').on(t.boardId, t.source, t.sourceRef).where(sql`${t.sourceRef} <> ''`),
     index('inbox_items_board_idx').on(t.boardId, t.status, t.occurredAt),
     index('inbox_items_queue_idx').on(t.state, t.processAfter),
   ],

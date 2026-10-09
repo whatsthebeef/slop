@@ -56,8 +56,10 @@ export interface InboxItem {
   /** As pasted; empty until the summary step writes one (display falls back to the first line). */
   readonly title: string;
   readonly text: string;
-  /** Where it came from; only `paste` exists so far. */
+  /** Where it came from: `paste` or an integration (`slack`). */
   readonly source: string;
+  /** The source's own key for the thing (a Slack thread's permalink); empty for a paste. Sending it again updates the item. */
+  readonly sourceRef: string;
   readonly sourceLabel: string;
   readonly sourceType: InboxSourceType;
   /** When the thing happened (the meeting's day); the paste time when not given. */
@@ -86,6 +88,7 @@ export type NewInboxItem = Pick<
   | 'title'
   | 'text'
   | 'source'
+  | 'sourceRef'
   | 'sourceLabel'
   | 'sourceType'
   | 'occurredAt'

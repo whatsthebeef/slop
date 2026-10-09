@@ -1,0 +1,2 @@
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "source_ref" text DEFAULT '' NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "inbox_items_source_idx" ON "inbox_items" USING btree ("board_id","source","source_ref") WHERE "inbox_items"."source_ref" <> '';

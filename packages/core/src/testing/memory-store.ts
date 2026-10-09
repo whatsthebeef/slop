@@ -781,7 +781,12 @@ export class MemoryStore implements Store {
             .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.sourceRef.localeCompare(b.sourceRef))[0] ?? null,
         ),
       insertInboxItem: (input) => {
-        const existing = s.inboxItems.find((i) => i.boardId === input.boardId && i.contentHash === input.contentHash);
+        const existing = s.inboxItems.find(
+          (i) =>
+            i.boardId === input.boardId &&
+            (i.contentHash === input.contentHash ||
+              (input.sourceRef !== '' && i.source === input.source && i.sourceRef === input.sourceRef)),
+        );
         if (existing !== undefined) return Promise.resolve({ item: existing, created: false });
         const item: InboxItem = {
           ...input,
@@ -801,6 +806,8 @@ export class MemoryStore implements Store {
         return Promise.resolve({ item, created: true });
       },
       getInboxItem: (boardId, id) => Promise.resolve(s.inboxItems.find((i) => i.boardId === boardId && i.id === id) ?? null),
+      getInboxItemBySource: (boardId, source, sourceRef) =>
+        Promise.resolve(s.inboxItems.find((i) => i.boardId === boardId && i.source === source && i.sourceRef === sourceRef) ?? null),
       listInboxItems: (boardId, statuses) =>
         Promise.resolve(
           s.inboxItems

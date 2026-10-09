@@ -86,6 +86,26 @@ const schema = z.object({
       }
       return new Set(names.filter(isJob));
     }),
+  /** The Slack app's signing secret and bot token (xoxb-...); the Send to slop shortcut is off without both. */
+  SLACK_SIGNING_SECRET: z.string().optional(),
+  SLACK_BOT_TOKEN: z.string().optional(),
+  /** Slack workspace (team) IDs and the board each one files into: `T012ABCDE=15,T0ZYXWVUT=16`. */
+  SLACK_WORKSPACES: z
+    .string()
+    .optional()
+    .transform((value, ctx): ReadonlyMap<string, number> => {
+      const map = new Map<string, number>();
+      for (const pair of (value ?? '').split(',').map((p) => p.trim()).filter((p) => p !== '')) {
+        const [team, board, ...rest] = pair.split('=').map((p) => p.trim());
+        const id = Number(board);
+        if (team === undefined || team === '' || rest.length > 0 || !Number.isSafeInteger(id) || id < 1) {
+          ctx.addIssue({ code: 'custom', message: `SLACK_WORKSPACES: "${pair}" is not <workspace id>=<board number>` });
+          return z.NEVER;
+        }
+        map.set(team, id);
+      }
+      return map;
+    }),
   BEDROCK_REGION: z.string().default('us-east-1'),
   /** Haiku 4.5 for intake and classification. */
   INTAKE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),

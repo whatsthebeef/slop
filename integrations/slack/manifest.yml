@@ -1,0 +1,32 @@
+# The slop Slack app: a "Send to slop" message shortcut that files a thread in a board's inbox.
+# Create it at https://api.slack.com/apps (From a manifest), then:
+#   1. replace https://YOUR-SLOP-HOST with the server's public URL (it must be reachable from Slack);
+#   2. install it to the workspace and invite it to the channels you want to send from (/invite @slop);
+#   3. give the server SLACK_SIGNING_SECRET (Basic Information), SLACK_BOT_TOKEN (the xoxb- token)
+#      and SLACK_WORKSPACES (<workspace id>=<board number>, e.g. T012ABCDE=15).
+display_information:
+  name: slop
+  description: Send a Slack thread to a slop board's inbox.
+features:
+  bot_user:
+    display_name: slop
+    always_online: false
+  shortcuts:
+    - name: Send to slop
+      type: message
+      callback_id: send_to_slop
+      description: Send this thread to the board inbox
+oauth_config:
+  scopes:
+    bot:
+      - commands
+      - channels:history
+      - groups:history
+      - users:read
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://YOUR-SLOP-HOST/integrations/slack/interactivity
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
