@@ -3,7 +3,7 @@ import type { ChunkInput } from '../domain/chunking.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import { parseFrontmatter } from '../domain/knowledge.js';
 import type { Artifact, ArtifactKind } from '../domain/knowledge.js';
-import { SOURCE_TYPES } from '../domain/search.js';
+import { PIPELINE_OWNED_SOURCES, SOURCE_TYPES } from '../domain/search.js';
 import type { AuthorityTier, KnowledgeItem, NewChunk, NewKnowledgeItem, SourceType } from '../domain/search.js';
 import type { Board, Glob } from '../domain/types.js';
 import type { ChangeSource, Clock, Embedder, Store, Tx } from '../ports.js';
@@ -100,6 +100,9 @@ const authorityOf = (source: SourceType): AuthorityTier => {
     case 'local_review':
     case 'attachment':
     case 'code_review':
+    case 'meeting':
+    case 'thread':
+    case 'doc':
       return 'discussion';
     case 'decision':
       return 'decision';
@@ -187,8 +190,8 @@ export class SearchIndexer {
       const queued = await this.queueChanges(tx, board, hashes);
       let removed = 0;
       for (const sourceType of SOURCE_TYPES) {
-        // Decision items belong to the DecisionPipeline, which writes and removes them: the sweep would delete them all.
-        if (sourceType === 'decision') continue;
+        // Decision items belong to the DecisionPipeline and pasted items to the InboxService, which write and remove them: the sweep would delete them all.
+        if (PIPELINE_OWNED_SOURCES.includes(sourceType)) continue;
         const refs = new Set(desired.filter((d) => d.sourceType === sourceType).map((d) => d.externalRef));
         if (sourceType === 'change_summary') for (const ref of await this.changeRefs(tx, boardId)) refs.add(ref);
         removed += await tx.deleteItemsNotIn(boardId, sourceType, refs);
