@@ -43,7 +43,7 @@ export const AREAS = ['migration', 'server', 'web', 'cli', 'llm', 'infra', 'cata
 export type Area = (typeof AREAS)[number];
 
 export interface PlanFeatures {
-  /** Checkbox and numbered task lines. */
+  /** Checkbox lines, and the lines under a Tasks heading. */
   readonly tasks: number;
   /** "Done when" lines (including the bullets under a bare "Done when:"). */
   readonly doneWhenLines: number;
@@ -65,7 +65,10 @@ const AREA_PATTERNS: readonly (readonly [Area, RegExp])[] = [
   ['catalog', /\bcatalog\b/i],
 ];
 
-const TASK_LINE = /^\s*(?:[-*+]\s+\[[ xX]\]|\d+[.)])\s+\S/;
+const CHECKBOX_LINE = /^\s*[-*+]\s+\[[ xX]\]\s+\S/;
+/** A top-level list line: under a Tasks heading, each is a task whether or not it has a checkbox. */
+const LIST_LINE = /^ {0,1}(?:[-*+]|\d+[.)])\s+\S/;
+const TASKS_HEADING = /^tasks?\b/i;
 const DONE_WHEN = /^\s*(?:[-*+]\s+)?(?:\*\*)?done when\b/i;
 const BULLET = /^\s*(?:[-*+]|\d+[.)])\s+\S/;
 const PATH_TOKEN = /(?:[\w.@-]+\/)+[\w.-]*\w\.\w{1,8}\b/g;
@@ -73,25 +76,56 @@ const PATH_TOKEN = /(?:[\w.@-]+\/)+[\w.-]*\w\.\w{1,8}\b/g;
 const CONTEXT_HEADINGS = /^(goal|summary|context|background|overview|why|notes?|risks?|constraints?|acceptance|done when|out of scope|assumptions?)\b/i;
 const MAX_PATHS = 30;
 
-/** The plan's sections (level 2 and below) that are work rather than context, have text and no task line of their own. */
-export const untaskedSectionList = (plan: string): { readonly heading: string; readonly body: string }[] => {
+/**
+ * Which lines of the plan are tasks: `- [ ]` checkbox lines anywhere, and list lines under a Tasks heading (or a
+ * heading inside one). Numbered lines under any other heading (an investigation list) are not tasks.
+ */
+const taskLineFlags = (plan: string): boolean[] => {
   const lines = plan.split(/\r?\n/);
-  const headings = markdownHeadings(plan).filter((h) => h.level >= 2);
+  const flags = lines.map((l) => CHECKBOX_LINE.test(l));
+  const stack: { level: number; tasks: boolean }[] = [];
+  const headings = markdownHeadings(plan);
+  let next = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const heading = headings[next];
+    if (heading !== undefined && heading.line === i) {
+      next++;
+      while ((stack.at(-1)?.level ?? 0) >= heading.level) stack.pop();
+      stack.push({ level: heading.level, tasks: TASKS_HEADING.test(heading.text) });
+      continue;
+    }
+    if (!flags[i] && stack.some((h) => h.tasks) && LIST_LINE.test(lines[i] ?? '')) flags[i] = true;
+  }
+  return flags;
+};
+
+/**
+ * The plan's sections (level 2 and below) with text and no task: context (Evidence, Why, Notes, an investigation list)
+ * rather than work. A split carries them into its parts and never makes one a part of its own.
+ */
+export const contextSectionList = (plan: string): { readonly heading: string; readonly body: string }[] => {
+  const lines = plan.split(/\r?\n/);
+  const flags = taskLineFlags(plan);
+  const all = markdownHeadings(plan);
   const found: { heading: string; body: string }[] = [];
-  for (const [index, heading] of headings.entries()) {
-    if (CONTEXT_HEADINGS.test(heading.text)) continue;
-    const next = headings.slice(index + 1).find((h) => h.level <= heading.level);
-    const body = lines.slice(heading.line + 1, next?.line ?? lines.length);
-    if (body.some((l) => l.trim() !== '') && !body.some((l) => TASK_LINE.test(l))) {
+  for (const heading of all.filter((h) => h.level >= 2)) {
+    const next = all.find((h) => h.line > heading.line && h.level <= heading.level);
+    const end = next?.line ?? lines.length;
+    const body = lines.slice(heading.line + 1, end);
+    if (body.some((l) => l.trim() !== '') && !flags.slice(heading.line + 1, end).some(Boolean)) {
       found.push({ heading: heading.text, body: body.join('\n').trim() });
     }
   }
   return found;
 };
 
+/** The context sections that count as prose of the spec: `contextSectionList` less the ones that are only framing. */
+export const untaskedSectionList = (plan: string): { readonly heading: string; readonly body: string }[] =>
+  contextSectionList(plan).filter((s) => !CONTEXT_HEADINGS.test(s.heading));
+
 export const extractPlanFeatures = (plan: string): PlanFeatures => {
   const lines = plan.split(/\r?\n/);
-  const tasks = lines.filter((l) => TASK_LINE.test(l)).length;
+  const tasks = taskLineFlags(plan).filter(Boolean).length;
 
   let doneWhenLines = 0;
   for (let i = 0; i < lines.length; i++) {

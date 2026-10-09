@@ -62,7 +62,7 @@ Answer with JSON only: {"independentParts": a whole number, at least 1, "reason"
 const PROPOSE_SYSTEM = `You split a plan that is too big for one pull request into parts that can each be built and merged on their own.
 Answer with JSON only: {"parts": [{"title": "...", "summary": "one or two sentences", "plan": "...", "after": [0]}]}.
 - 2 to 6 parts, in the order they should be built. Part 0 stays the original task.
-- "plan" is the part's share of the original plan, copied verbatim (keep the goal and any context it needs): every task goes to exactly one part, and a section with no task of its own is a part of its own.
+- "plan" is the part's share of the original plan, copied verbatim (keep the goal and any context it needs): every task goes to exactly one part. A section with no task (Evidence, Why, Background, Notes, an investigation list) is context: never make it a part, leave it with the parts that use it.
 - "after" lists the earlier parts (their index) this one must wait for, only where it needs their code, changes the same files or needs a migration; otherwise leave it empty so parts run in parallel.`;
 
 const intOf = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);

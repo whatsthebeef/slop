@@ -15,7 +15,7 @@ const unwrap = <T>(result: Result<T>): T => {
 
 const BIG = `# Big
 
-## Build
+## Tasks
 1. Add the migration for the new table in apps/server/drizzle
 2. Add the server endpoint in apps/server/src/http/app.ts
 3. Add the web card in apps/web/src/components/card.tsx
@@ -45,7 +45,7 @@ describe('The learned size check in Postgres', () => {
       return Promise.resolve(
         system.startsWith('You judge')
           ? '{"independentParts": 4, "reason": "four pieces"}'
-          : '{"parts":[{"title":"Data","summary":"a","plan":"## Build\\n1. migration","after":[]},{"title":"Web","summary":"b","plan":"## Build\\n3. card","after":[0]}]}',
+          : '{"parts":[{"title":"Data","summary":"a","plan":"## Tasks\\n1. migration","after":[]},{"title":"Web","summary":"b","plan":"## Tasks\\n3. card","after":[0]}]}',
       );
     },
   };
@@ -86,7 +86,7 @@ describe('The learned size check in Postgres', () => {
     const check = await store.transaction((tx) => tx.getSizeCheck(sub.id));
     expect(check).toMatchObject({ flagged: true, decision: null, threshold: { maxTasks: 5, maxParts: 3 } });
     expect(check?.estimate).toMatchObject({ tasks: 6, independentParts: 4, partsSource: 'model' });
-    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['Data', 'Web', 'Chat content']);
+    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['Data', 'Web']);
     expect(unwrap(await globs.get(DEV, sub.id)).sizeCheck?.flagged).toBe(true);
     expect([...(await globs.oversizedOf(boardId))]).toContain(sub.id);
     unwrap(await size.keepWhole(DEV, sub.id));

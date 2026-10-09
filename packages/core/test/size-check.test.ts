@@ -23,20 +23,39 @@ import type { SizeOutcomeInput } from '../src/domain/size-check.js';
 
 const PLAN = `# Big thing
 
-## Build
+## Chat content
+Some prose about the chat panel that has no task of its own.
+
+## Tasks
 1. Add the migration in apps/server/drizzle
 2. Server endpoint in apps/server/src/http/app.ts
 3. Web card in apps/web/src/components/card.tsx
 4. CLI command
 5. LLM prompt
 6. Infra pipeline change
+7. Core tests
 Done when: it works.
+`;
 
-## Chat content
-Some prose about the chat panel that has no task of its own.
+/** The shape of the deleted s15b31: context sections, an investigation list, and three real tasks. */
+const S15B31 = `# Thing
 
-## Tests
-1. Core tests
+## Evidence (2026-10-09)
+It went wrong on the board.
+
+## Investigate
+1. Look at the counter
+2. Look at the splitter
+3. Look at the prompt
+4. Look at the tests
+
+## Fix
+- Count real tasks only.
+
+## Tasks
+- [ ] T1: First. Done when: one.
+- [ ] T2: Second. Done when: two.
+- [ ] T3: Third. Done when: three.
 `;
 
 describe('estimate from plan text', () => {
@@ -47,13 +66,23 @@ describe('estimate from plan text', () => {
     expect(e.untaskedSections).toBe(1);
     expect(e.areas).toEqual(expect.arrayContaining(['migration', 'server', 'web', 'cli', 'llm', 'infra']));
     expect(e.partsSource).toBe('text');
-    // 7 tasks at 3 a part, and the untasked section a part of its own.
-    expect(e.independentParts).toBe(4);
+    // 7 tasks at 3 a part; the untasked section is context, not a part.
+    expect(e.independentParts).toBe(3);
+  });
+
+  it('counts only real tasks: an investigation list is not one', () => {
+    const e = estimateFromText(S15B31);
+    expect(e.tasks).toBe(3);
+    expect(e.independentParts).toBe(1);
+    expect(oversizedReasons(e, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
+  });
+
+  it('counts plain list lines under a Tasks heading, and checkboxes anywhere', () => {
+    expect(estimateFromText('## Tasks\n- one\n2. two\n  - nested\n\n## Steps\n1. not a task\n- [ ] a task\n').tasks).toBe(3);
   });
 
   it('is one part for a plan with a single task', () => {
-    const e = estimateFromText('## Do\n1. Fix the typo\n');
-    expect(e).toMatchObject({ tasks: 1, untaskedSections: 0, independentParts: 1 });
+    expect(estimateFromText('## Do\n- [ ] Fix the typo\n')).toMatchObject({ tasks: 1, untaskedSections: 0, independentParts: 1 });
   });
 
   it('takes the model count over the text count', () => {
@@ -63,7 +92,7 @@ describe('estimate from plan text', () => {
 });
 
 describe('flagging against the threshold', () => {
-  const base = estimateFromText('## Do\n1. one\n');
+  const base = estimateFromText('## Do\n- [ ] one\n');
   it('flags more than 5 tasks or more than 3 parts by default', () => {
     expect(oversizedReasons({ ...base, tasks: 5, independentParts: 3 }, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
     expect(oversizedReasons({ ...base, tasks: 6 }, DEFAULT_SIZE_THRESHOLD)).toHaveLength(1);
@@ -182,23 +211,39 @@ describe('outcome inputs from events', () => {
 
 describe('proposal from the model parts', () => {
   const part = (title: string, plan: string, after: number[] = []) => ({ title, summary: `${title} summary`, plan, after });
-  it('adds an untasked section as its own part and orders parts that share files', () => {
+  it('copies a context section into every part and orders parts that share files', () => {
     const proposal = buildProposal(PLAN, [
-      part('Data', '## Build\n1. Add the migration in apps/server/drizzle/0001.sql'),
-      part('Server', '## Build\n2. Endpoint in apps/server/drizzle/0001.sql'),
-      part('Web', '## Build\n3. Card'),
+      part('Data', '## Tasks\n1. Add the migration in apps/server/drizzle/0001.sql'),
+      part('Server', '## Tasks\n2. Endpoint in apps/server/drizzle/0001.sql'),
+      part('Web', '## Tasks\n3. Card'),
     ]);
-    expect(proposal?.parts.map((p) => p.title)).toEqual(['Data', 'Server', 'Web', 'Chat content']);
+    expect(proposal?.parts.map((p) => p.title)).toEqual(['Data', 'Server', 'Web']);
     expect(proposal?.parts[1]?.after).toEqual([0]);
     expect(proposal?.parts[2]?.after).toEqual([]);
-    expect(proposal?.parts[3]?.plan).toContain('Some prose about the chat panel');
+    for (const p of proposal?.parts ?? []) expect(p.plan).toContain('Some prose about the chat panel');
   });
-  it('does not add a section a part already carries, and drops bad `after` indexes', () => {
-    const proposal = buildProposal(PLAN, [part('A', 'x'), part('B', '## Chat content\nprose', [0, 1, 5, -1])]);
+  it('does not repeat a section a part already carries, and drops bad `after` indexes', () => {
+    const proposal = buildProposal(PLAN, [part('A', '## Tasks\n1. a'), part('B', '## Chat content\nprose\n\n## Tasks\n2. b', [0, 1, 5, -1])]);
     expect(proposal?.parts).toHaveLength(2);
     expect(proposal?.parts[1]?.after).toEqual([0]);
+    expect(proposal?.parts[1]?.plan.match(/Chat content/g)).toHaveLength(1);
+  });
+  it('never makes a part of a context section', () => {
+    const proposal = buildProposal(S15B31, [
+      part('T1 and T2', '## Tasks\n- [ ] T1: First.\n- [ ] T2: Second.'),
+      part('T3', '## Tasks\n- [ ] T3: Third.'),
+      part('Evidence (2026-10-09)', '## Evidence (2026-10-09)\n\nIt went wrong on the board.'),
+    ]);
+    expect(proposal?.parts.map((p) => p.title)).toEqual(['T1 and T2', 'T3']);
+    for (const p of proposal?.parts ?? []) {
+      expect(p.plan).toContain('It went wrong on the board.');
+      expect(p.plan).toContain('Look at the splitter');
+    }
+  });
+  it('is null when removing context-only parts leaves one part', () => {
+    expect(buildProposal(S15B31, [part('Work', '## Tasks\n- [ ] T1: First.'), part('Evidence', '## Evidence (2026-10-09)\n\nx')])).toBeNull();
   });
   it('is null with fewer than two usable parts', () => {
-    expect(buildProposal('## Do\n1. one\n', [part('Only', 'x'), part('', 'y')])).toBeNull();
+    expect(buildProposal('## Do\n- [ ] one\n', [part('Only', '- [ ] x'), part('', 'y')])).toBeNull();
   });
 });

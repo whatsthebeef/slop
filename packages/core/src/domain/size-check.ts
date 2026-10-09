@@ -1,5 +1,5 @@
 import type { DomainEvent } from './events.js';
-import { extractPlanFeatures, untaskedSectionList } from './intake-learning.js';
+import { contextSectionList, extractPlanFeatures } from './intake-learning.js';
 import type { Area, GlobOutcome } from './intake-learning.js';
 
 /**
@@ -100,7 +100,7 @@ export interface SizeEstimate {
   readonly reasoning: string | null;
 }
 
-/** Without the model: about three tasks to a part, and every untasked section is a part of its own. */
+/** Without the model: about three tasks to a part. Sections with no task are context, never parts. */
 const TASKS_PER_PART = 3;
 
 /** The estimate from plan text alone (what a failed or missing model leaves). */
@@ -111,7 +111,7 @@ export const estimateFromText = (plan: string): SizeEstimate => {
     doneWhenLines: features.doneWhenLines,
     areas: features.areas,
     untaskedSections: features.untaskedSections,
-    independentParts: Math.max(1, Math.ceil(features.tasks / TASKS_PER_PART)) + features.untaskedSections,
+    independentParts: Math.max(1, Math.ceil(features.tasks / TASKS_PER_PART)),
     partsSource: 'text',
     reasoning: null,
   };
@@ -207,25 +207,23 @@ const sharesWork = (a: string, b: string): boolean => {
 };
 
 /**
- * The proposal from the model's parts (pure). Part 0 stays the original glob. Every untasked section of the plan that no
- * part carries becomes a part of its own, and a part starts after earlier parts that share its files or both need a
- * migration, whatever the model said. Null when fewer than 2 parts remain.
+ * The proposal from the model's parts (pure). Part 0 stays the original glob. A section of the plan with no task is
+ * context, never a part: a part the model made of one (no task line, while the plan has tasks) is dropped, and every
+ * context section a part doesn't already carry is copied into it. A part starts after earlier parts that share its files
+ * or both need a migration, whatever the model said. Null when fewer than 2 parts remain.
  */
 export const buildProposal = (plan: string, modelParts: readonly ModelPart[]): SizeProposal | null => {
+  const hasTasks = extractPlanFeatures(plan).tasks > 0;
+  const context = contextSectionList(plan);
   const parts: ModelPart[] = modelParts
     .filter((p) => p.title.trim() !== '' && p.plan.trim() !== '')
+    .filter((p) => !hasTasks || extractPlanFeatures(p.plan).tasks > 0)
     .slice(0, MAX_PROPOSED_PARTS)
-    .map((p) => ({ title: p.title.trim().slice(0, 120), summary: p.summary.trim(), plan: p.plan.trim(), after: p.after }));
-  for (const section of untaskedSectionList(plan)) {
-    if (parts.length >= MAX_PROPOSED_PARTS) break;
-    if (parts.some((p) => lower(p.plan).includes(lower(section.heading)))) continue;
-    parts.push({
-      title: section.heading.slice(0, 120),
-      summary: `The "${section.heading}" section of the plan, as its own part.`,
-      plan: `## ${section.heading}\n\n${section.body}`,
-      after: [],
+    .map((p) => {
+      const missing = context.filter((section) => !lower(p.plan).includes(lower(section.heading)));
+      const carried = [p.plan.trim(), ...missing.map((section) => `## ${section.heading}\n\n${section.body}`)].join('\n\n');
+      return { title: p.title.trim().slice(0, 120), summary: p.summary.trim(), plan: carried, after: p.after };
     });
-  }
   if (parts.length < 2) return null;
   return {
     parts: parts.map((p, index) => {

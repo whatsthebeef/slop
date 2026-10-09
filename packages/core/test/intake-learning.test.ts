@@ -72,7 +72,8 @@ const event = (type: DomainEvent['type'], globId: string, at: string, data: Doma
 describe('extractPlanFeatures', () => {
   it('counts tasks, done-when lines, untasked sections, areas and paths', () => {
     const f = extractPlanFeatures(PLAN);
-    expect(f.tasks).toBe(4);
+    // Two checkboxes; the numbered lines under "Work" are not tasks.
+    expect(f.tasks).toBe(2);
     expect(f.doneWhenLines).toBe(4);
     // "Rollout order" has prose and no tasks; "Goal" is context.
     expect(f.untaskedSections).toBe(1);
