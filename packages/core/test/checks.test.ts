@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checksExplanation, failureLines, jobOwnLog, failureSummary, inheritedFailure, recordBaseChecks, sameFailure, stuckHint } from '../src/index.js';
+import { isSetupFailure, checksExplanation, failureLines, jobOwnLog, failureSummary, inheritedFailure, recordBaseChecks, sameFailure, stuckHint } from '../src/index.js';
 import type { BaseChecks, CheckFailure, Result, Transition } from '../src/index.js';
 import * as m from '../src/domain/machine.js';
 import { NOW, ctx, glob, run } from './fixtures.js';
@@ -207,5 +207,34 @@ describe('base branch green again', () => {
     const t = value(m.commitPushed(failedInherited(), { sha: 'newhead', runId: null }, ctx(null)));
     expect(t.glob.headChecks).toBeNull();
     expect(t.effects.map((e) => e.kind)).toContain('refresh_checks');
+  });
+});
+
+describe('setup failures', () => {
+  const failure = (step: string | null, lines: string[] = []): CheckFailure => ({ name: 'Check', step, lines, url: null });
+  it('are the steps that run before the project\'s own: job set-up, containers, checkout, tool set-up, install', () => {
+    for (const step of ['Set up job', 'Initialize containers', 'Run actions/checkout@v4', 'Run pnpm/action-setup@v4', 'Run actions/setup-node@v4', 'Install', 'Set up Node']) {
+      expect(isSetupFailure(failure(step)), step).toBe(true);
+    }
+  });
+  it('recognise the Docker Hub pull limit that stopped the Postgres service container', () => {
+    const pull = failure('Initialize containers', [
+      'Error response from daemon: toomanyrequests: You have reached your unauthenticated pull rate limit.',
+    ]);
+    expect(isSetupFailure(pull)).toBe(true);
+  });
+  it('are not lint, type check, test or an unknown step', () => {
+    for (const step of ['Lint', 'Type check', 'Test', 'Build', 'Run something']) expect(isSetupFailure(failure(step, ['error'])), step).toBe(false);
+    expect(isSetupFailure(typecheck)).toBe(false);
+    expect(isSetupFailure(lint)).toBe(false);
+  });
+  it('treat an install that fails on the lockfile as the change\'s own failure', () => {
+    expect(isSetupFailure(failure('Install', ['ERR_PNPM_OUTDATED_LOCKFILE Cannot install with "frozen-lockfile"']))).toBe(false);
+    expect(isSetupFailure(failure('Install', ['ERR_PNPM_FETCH_503 GET https://registry.npmjs.org/x: 503']))).toBe(true);
+  });
+  it('fall back to the log when no step is known, and an unreadable failure counts as code', () => {
+    expect(isSetupFailure(failure(null, ['The hosted runner lost communication with the server.']))).toBe(true);
+    expect(isSetupFailure(failure(null, ['3 tests failed']))).toBe(false);
+    expect(isSetupFailure(failure(null))).toBe(false);
   });
 });

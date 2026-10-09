@@ -33,6 +33,8 @@ class FakeHost extends FakeCodeHost {
   mergeStateNow: 'passed' | 'failed' | 'pending' | 'behind' | 'conflict' = 'failed';
   cancelled: { id: number; completedAt: string | null }[] = [];
   readonly rerequested: number[] = [];
+  rerunResult: 'rerun' | 'already_rerun' | 'unavailable' = 'rerun';
+  readonly reruns: string[] = [];
   headSha = 'h1';
   readonly updated: { pr: number; sha: string }[] = [];
 
@@ -42,6 +44,10 @@ class FakeHost extends FakeCodeHost {
   override rerequestCheck = (_repo: unknown, id: number) => {
     this.rerequested.push(id);
     return Promise.resolve();
+  };
+  override rerunFailedJobs = (_repo: unknown, sha: string) => {
+    this.reruns.push(sha);
+    return Promise.resolve(this.rerunResult);
   };
   override markReady = () => Promise.resolve({ wasDraft: true, sha: this.headSha });
   override conflictFiles = () => Promise.resolve(['src/a.ts']);
@@ -312,6 +318,50 @@ describe('a red base branch', () => {
     await run('board-1', 'refresh_base_checks');
     expect((await current(same)).status).toBe('reviewing');
     expect(await pending(same, 'revert_merge')).toHaveLength(0);
+  });
+
+  it('re-runs a base check that failed in CI setup instead of reverting the sub, and records a second setup failure without reverting', async () => {
+    const reverted: string[] = [];
+    host.revertCommit = (_repo, sha) => {
+      reverted.push(sha);
+      return Promise.resolve('reverted');
+    };
+    host.baseHead = { sha: 'g3', subject: 's1t9: green 3' };
+    host.checks = { g3: { state: 'passed', failure: null } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+
+    const id = await newOpenGlob('Merged sub with an outage');
+    await store.transaction(async (tx) => {
+      const g = await tx.getGlob(id);
+      if (g === null) throw new Error('missing');
+      await tx.updateGlob({ ...g, type: 'sub', status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'h1' }, version: g.version + 1 }, g.version);
+    });
+    const pull: CheckFailure = {
+      name: 'Check',
+      step: 'Initialize containers',
+      lines: ['Error response from daemon: toomanyrequests: You have reached your unauthenticated pull rate limit.'],
+      url: 'https://github.com/acme/app/actions/runs/2/job/3',
+    };
+    host.baseHead = { sha: 'o1', subject: `${id}: Merged sub with an outage` };
+    host.checks = { o1: { state: 'failed', failure: pull } };
+    host.reruns.length = 0;
+    host.rerunResult = 'rerun';
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    // Re-run, and nothing recorded or reverted.
+    expect(host.reruns).toEqual(['o1']);
+    expect((await boardOf(1))?.baseChecks).toMatchObject({ sha: 'g3', state: 'passed' });
+    expect((await current(id)).status).toBe('reviewing');
+
+    // The re-run fails in setup again: the base is recorded red, but the sub stays merged.
+    host.rerunResult = 'already_rerun';
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    expect((await boardOf(1))?.baseChecks).toMatchObject({ sha: 'o1', state: 'failed', since: null });
+    expect((await current(id)).status).toBe('reviewing');
+    expect(await pending(id, 'revert_merge')).toHaveLength(0);
+    expect(reverted).toEqual([]);
   });
 
   it('leaves the head pending while a check run is cancelled, re-requests it after five minutes, and passes on a later success', async () => {

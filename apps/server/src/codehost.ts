@@ -116,6 +116,12 @@ export interface CodeHost {
   cancelledChecks(repo: Repo, sha: string): Promise<{ id: number; completedAt: string | null }[]>;
   /** Asks the app that owns a check run to run it again; best effort (another app's run can't be re-requested). */
   rerequestCheck(repo: Repo, checkRunId: number): Promise<void>;
+  /**
+   * Re-runs the failed jobs of the workflow runs that failed on `sha`, once per commit: `rerun` when it asked for
+   * them, `already_rerun` when a failed run on the commit is already a re-run (so a redelivered event never re-runs
+   * twice), `unavailable` when the host refused (the integration lacks permission) or nothing could be re-run.
+   */
+  rerunFailedJobs(repo: Repo, sha: string): Promise<'rerun' | 'already_rerun' | 'unavailable'>;
   /** Merges the base branch into the PR's branch (GitHub's update-branch) when it's behind, at exactly `sha`. */
   updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'>;
   /** Squash-merges at exactly `sha` as `<id>: <title>`, or updates a branch that is behind. */
