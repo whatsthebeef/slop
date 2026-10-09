@@ -188,6 +188,29 @@ describe('learned size check', () => {
     expect((await store.transaction((tx) => tx.getSizeCheck(glob.id)))?.decision).toBe('kept_whole');
   });
 
+  it('a summary-only sub is not held by the model\'s parts estimate', async () => {
+    const sub = unwrap(
+      await globs.create(DEV, { boardId, title: 'T', summary: 'x'.repeat(300), type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+    );
+    expect(calls).toEqual([]);
+    expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.flagged).toBe(false);
+    expect(sub.status).toBe('implementing');
+  });
+
+  it('saving a smaller plan re-judges a held sub and lifts the hold, as save_plan does', async () => {
+    const sub = await create('sub', BIG);
+    expect(sub.status).toBe('planning');
+    expect(sub.waiting).not.toBeNull();
+    unwrap(await artifacts.putPlan(DEV, sub.id, SMALL));
+    await service.refresh(sub.id);
+    // The save's own background refresh may still be lifting the hold; the lift is idempotent.
+    await globs.reconcileSizeHold(sub.id);
+    expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.flagged).toBe(false);
+    const started = await get(sub.id);
+    expect(started.status).toBe('implementing');
+    expect(started.runs).toHaveLength(1);
+  });
+
   it('reports oversized only while the glob is in Planning, and skips the model for an unchanged plan', async () => {
     const glob = await create('same', BIG);
     expect([...(await globs.oversizedOf(boardId))]).toEqual([glob.id]);
