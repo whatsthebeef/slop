@@ -1,5 +1,5 @@
-import { CHAT_DONT_KNOW, CHAT_HISTORY_LIMIT, CHAT_LIST_LIMIT, CHAT_TITLE_MAX, impliesHistory } from '../domain/chat.js';
-import type { ChatCitation, ChatMessage, ChatThread, PageContext } from '../domain/chat.js';
+import { CHAT_DONT_KNOW, CHAT_HISTORY_LIMIT, CHAT_LIST_LIMIT, CHAT_TITLE_MAX, impliesHistory, isSmallTalk, parseActions, withoutActionsTag } from '../domain/chat.js';
+import type { ChatAction, ChatCitation, ChatMessage, ChatThread, PageContext } from '../domain/chat.js';
 import { invalidInput, llmUnavailable, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { listOf } from '../domain/matrix.js';
@@ -24,6 +24,7 @@ export const CHAT_THINK_TIMEOUT_MS = 120_000;
 /** The rewrite is a cheap call that must not hold the question up: past this the original question is searched. */
 export const REWRITE_TIMEOUT_MS = 10_000;
 const REWRITE_MAX_TOKENS = 200;
+const SMALL_TALK_MAX_TOKENS = 300;
 /** The board's live state is one source among the numbered ones, so it is kept short. */
 export const BOARD_STATE_MAX_CHARS = 4000;
 const BOARD_STATE_TITLE = 'Board state (now)';
@@ -42,11 +43,21 @@ Rules:
 - The source titled "Board state (now)" is the board's live state (open globs, their status and failures, active notifications), not a record of decisions: use it for questions about what is happening now.
 - Earlier conversation turns are only for understanding follow-up questions; they are not evidence.
 - When the person is viewing a page (given after the sources), "this" in their question means that page.
-Reply in short Markdown (a few sentences, lists where they help). Mention a glob by its ID, like s15f25.`;
+- If the sources do not answer, the reply names what you looked for: ${CHAT_DONT_KNOW}
+Reply in short Markdown (a few sentences, lists where they help). Mention a glob by its ID, like s15f25.
+After the answer, you may add one last line naming the buttons worth showing under it, as <actions>create_glob, save</actions>:
+- create_glob only when the answer points at work that is not on the board yet (a gap, a bug, a follow-up) or the person asked for something to be done;
+- save only when the answer states something durable and cited (a convention, a decision, a how-to).
+Most answers need neither: leave the line out.`;
+
+const SMALL_TALK_SYSTEM = `You are the chat of a software board. The person's message is not a question about the board's records (a greeting, thanks, or a question about the chat itself), so answer it like a friendly colleague in one or two short sentences.
+If they ask what you can do: you answer questions about the board's plans, decisions, implementation records, reviews and knowledge, with their sources; you know what is open on the board right now; and answers can lead to creating a glob, saving something to the knowledge base or opening a glob. Mention what fits the page they are on.
+Never claim facts about the board's contents, and do not say you cannot find anything.`;
 
 const REWRITE_SYSTEM = `You rewrite a question about a software board into a search query for its records (plans, decisions, implementation records, reviews, knowledge documents).
 Fix typos, resolve words like "that", "it" or "the Slack one" from the earlier turns, and name the subject explicitly. Keep the person's meaning; add nothing they did not ask.
-Reply with one JSON object and nothing else: {"query": string}.`;
+Also say whether the message is small talk: a greeting, thanks, or a question about the chat itself rather than about the board.
+Reply with one JSON object and nothing else: {"query": string, "smallTalk": boolean}.`;
 
 export interface ChatRequest {
   readonly boardId: number;
@@ -205,7 +216,7 @@ export class ChatService {
     const composed = await this.compose(email, request, recent.value, onText);
     if (!composed.ok) return composed;
     if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
-    const { question, answer, citations, tools } = composed.value;
+    const { question, answer, citations, tools, actions } = composed.value;
     // Nothing is stored for a failed call: the person asks again.
     return this.deps.store.transaction(async (tx) => {
       // Membership could have been removed while the model ran.
@@ -224,7 +235,7 @@ export class ChatService {
       }
       const base = { chatId: chat.id, boardId: request.boardId, email, createdAt: now };
       const asked = await tx.addChatMessage({ ...base, role: 'user', content: question, citations: null });
-      const reply = await tx.addChatMessage({ ...base, role: 'assistant', content: answer, citations, tools });
+      const reply = await tx.addChatMessage({ ...base, role: 'assistant', content: answer, citations, tools, actions });
       return ok({ chat, question: asked, reply, answered: answer !== CHAT_DONT_KNOW });
     });
   }
@@ -242,13 +253,16 @@ export class ChatService {
     request: ChatRequest,
     recent: readonly ChatMessage[],
     onText?: ChatDelta,
-  ): Promise<Result<{ question: string; answer: string; citations: ChatCitation[]; tools: string[] }>> {
+  ): Promise<Result<{ question: string; answer: string; citations: ChatCitation[]; tools: string[]; actions: ChatAction[] }>> {
     const question = request.question.trim();
     if (question === '') return invalidInput('question must not be empty');
     if (question.length > MAX_QUERY_LENGTH) return invalidInput(`question must be at most ${MAX_QUERY_LENGTH} characters`);
 
     const tools: string[] = [];
-    const query = await this.rewrite(question, recent);
+    // Obvious small talk skips the rewrite call too; anything else lets that one call classify the message.
+    const rewritten = isSmallTalk(question) ? { query: question, smallTalk: true } : await this.rewrite(question, recent);
+    if (rewritten.smallTalk) return this.smallTalk(question, request, onText);
+    const query = rewritten.query;
     if (query !== question) tools.push('Rewrote the question for search');
     const allTime = request.history ?? impliesHistory(question);
     const filters = {
@@ -283,6 +297,7 @@ export class ChatService {
     const page = await this.pageLine(request.boardId, request.page);
 
     let answer = CHAT_DONT_KNOW;
+    let actions: ChatAction[] = [];
     const citations: ChatCitation[] = [];
     if (hits.length > 0 || stateN > 0) {
       const deep = request.thinkHarder === true && this.deps.deepLlm !== undefined;
@@ -292,14 +307,15 @@ export class ChatService {
       const timeout = deep ? (this.deps.deepTimeoutMs ?? CHAT_THINK_TIMEOUT_MS) : (this.deps.llmTimeoutMs ?? CHAT_LLM_TIMEOUT_MS);
       let raw: string;
       try {
-        raw = await this.generate(llm, llmRequest, timeout, onText, request.signal);
+        raw = await this.generate(llm, llmRequest, timeout, onText === undefined ? undefined : withoutActionsTag(onText), request.signal);
       } catch (error) {
         if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
         if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
         // Throttling and timeouts are ordinary errors from the adapter: nothing the asker did wrong, and it passes.
         return llmUnavailable('The model did not answer', 'Try again shortly');
       }
-      const text = raw.trim();
+      const parsed = parseActions(raw);
+      const text = parsed.text;
       // A number outside 1..n is the model's invention: dropped, never linked.
       const total = hits.length + (stateN > 0 ? 1 : 0);
       const used = citedNumbers(text).filter((n) => n >= 1 && n <= total);
@@ -310,6 +326,8 @@ export class ChatService {
       }
       if (used.length > 0) {
         answer = text;
+        // Nothing is offered under "couldn't find"; saving needs sources to point at.
+        if (!text.startsWith(CHAT_DONT_KNOW)) actions = parsed.actions;
         const seen = new Set<number>();
         for (const n of [...used].sort((a, b) => a - b)) {
           if (n === stateN) {
@@ -323,7 +341,28 @@ export class ChatService {
         }
       }
     }
-    return ok({ question, answer, citations, tools });
+    if (citations.length === 0) actions = [];
+    return ok({ question, answer, citations, tools, actions });
+  }
+
+  /** A greeting or a question about the chat: one short model call with no search, no sources and no actions. */
+  private async smallTalk(
+    question: string,
+    request: ChatRequest,
+    onText?: ChatDelta,
+  ): Promise<Result<{ question: string; answer: string; citations: ChatCitation[]; tools: string[]; actions: ChatAction[] }>> {
+    const page = await this.pageLine(request.boardId, request.page);
+    const prompt = `${question}${page === '' ? '' : `\n\n${page}`}`;
+    let raw: string;
+    try {
+      raw = await this.generate(this.deps.llm, { system: SMALL_TALK_SYSTEM, prompt, maxTokens: SMALL_TALK_MAX_TOKENS }, this.deps.llmTimeoutMs ?? CHAT_LLM_TIMEOUT_MS, onText, request.signal);
+    } catch (error) {
+      if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
+      if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
+      return llmUnavailable('The model did not answer', 'Try again shortly');
+    }
+    const answer = raw.trim();
+    return ok({ question, answer: answer === '' ? 'Hello! Ask me about this board.' : answer, citations: [], tools: [], actions: [] });
   }
 
   /** One model call, streamed when the adapter can and someone is listening; the deadline and the person's stop both end it. */
@@ -363,9 +402,9 @@ export class ChatService {
    * The question as search should see it: typos fixed and follow-ups resolved from the recent turns. Any failure
    * (no model, a timeout, an unreadable reply) searches the question as typed; a rewrite never fails a question.
    */
-  private async rewrite(question: string, recent: readonly ChatMessage[]): Promise<string> {
+  private async rewrite(question: string, recent: readonly ChatMessage[]): Promise<{ query: string; smallTalk: boolean }> {
     const llm = this.deps.rewriteLlm;
-    if (llm === undefined) return question;
+    if (llm === undefined) return { query: question, smallTalk: false };
     try {
       const turns = recent.map((m) => `${m.role === 'user' ? 'Asker' : 'Assistant'}: ${clip(m.content)}`).join('\n');
       const raw = await completeWithDeadline(
@@ -373,10 +412,11 @@ export class ChatService {
         { system: REWRITE_SYSTEM, prompt: `${turns === '' ? '' : `Earlier in this conversation:\n${turns}\n\n`}Question: ${question}`, maxTokens: REWRITE_MAX_TOKENS },
         this.deps.rewriteTimeoutMs ?? REWRITE_TIMEOUT_MS,
       );
-      const rewritten = text(field(parseJson(raw), 'query'))?.trim() ?? '';
-      return rewritten === '' ? question : rewritten.slice(0, MAX_QUERY_LENGTH);
+      const json = parseJson(raw);
+      const rewritten = text(field(json, 'query'))?.trim() ?? '';
+      return { query: rewritten === '' ? question : rewritten.slice(0, MAX_QUERY_LENGTH), smallTalk: field(json, 'smallTalk') === true };
     } catch {
-      return question;
+      return { query: question, smallTalk: false };
     }
   }
 

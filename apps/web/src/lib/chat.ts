@@ -45,12 +45,26 @@ const PAGE_NAMES: Record<PageContext['type'], string> = {
   settings: 'Settings',
 };
 
-/** The scope chip's text: "Glob s15f25", "Inbox item 3", "Board". */
-export const scopeLabel = (scope: PageContext): string => {
+/** The scope's plain name, for "Back to …": "Glob s15f25", "Inbox item 3", "Board". */
+export const scopeName = (scope: PageContext): string => {
   if (scope.type === 'inbox' && scope.id !== undefined) return `Inbox item ${scope.id}`;
   if (scope.type === 'knowledge' && scope.id !== undefined) return `Knowledge item ${scope.id}`;
   return scope.id === undefined ? PAGE_NAMES[scope.type] : `${PAGE_NAMES[scope.type]} ${scope.id}`;
 };
+
+/** The scope chip's text, worded as what it is: "About s15f26 · Fix login timeout", "About inbox item 3". */
+export const scopeLabel = (scope: PageContext): string => {
+  if (scope.type === 'glob' && scope.id !== undefined) return scope.title === undefined || scope.title === '' ? `About ${scope.id}` : `About ${scope.id} · ${scope.title}`;
+  return `About ${scopeName(scope).toLowerCase()}`;
+};
+
+/** The chip is only for a narrower scope: on the whole board (the default) there is nothing to say. */
+export const showScopeChip = (scope: PageContext): boolean => scope.type !== 'board';
+
+/** Long lines (status lines, tool steps, URLs, glob titles) wrap instead of widening the panel; only code blocks scroll, inside themselves. */
+export const WRAP_LONG = 'min-w-0 max-w-full [overflow-wrap:anywhere]';
+/** The message list: one column the width of the panel, scrolling up and down only. */
+export const MESSAGE_LIST = 'grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-3 overflow-y-auto overflow-x-hidden';
 
 /** What the server's search is limited to for a scope: a glob's own records. Everything else asks the whole board. */
 export const globScope = (scope: PageContext): string | undefined => (scope.type === 'glob' ? scope.id : undefined);
@@ -86,17 +100,29 @@ export const citedGlobs = (message: Pick<ChatMessage, 'citations'>, page: PageCo
   return [...new Set(ids)];
 };
 
+/** The one glob an answer is about: the page's, or the single glob it cites or mentions; none when it names several or has no sources (small talk, "couldn't find"). */
+export const openGlobOf = (message: Pick<ChatMessage, 'citations' | 'content'>, page: PageContext): string | undefined => {
+  if ((message.citations ?? []).length === 0) return undefined;
+  if (page.type === 'glob' && page.id !== undefined) return page.id;
+  const about = [...new Set([...(message.citations ?? []).flatMap((c) => (c.globId === null ? [] : [c.globId])), ...mentionedGlobs(message.content)])];
+  return about.length === 1 ? about[0] : undefined;
+};
+
 /**
- * The buttons under an answer. *Save to knowledge* needs a glob to point at (one the answer cites, or the page's);
- * *Attach* adds the open inbox item to the globs the answer cites; *Open in glob view* opens the first of them.
- * Create glob is always there. Nothing is offered under "I don't know".
+ * The buttons under an answer, only where they fit. *Create glob* and *Save to knowledge* are what the answering model
+ * asked for (`actions`; saving also needs a glob to point at, one the answer cites or the page's). *Attach* adds the
+ * open inbox item to the globs the answer cites; *Open in glob view* is for an answer about one glob. An answer with
+ * no sources (small talk, "couldn't find") gets nothing.
  */
-export const actionsFor = (message: Pick<ChatMessage, 'citations' | 'content'>, page: PageContext, answered: boolean): AnswerAction[] => {
-  if (!answered) return page.type === 'board' ? ['create_glob'] : [];
-  const globs = citedGlobs(message, page);
-  const actions: AnswerAction[] = ['create_glob'];
-  if (page.type === 'inbox' && page.id !== undefined && (message.citations ?? []).some((c) => c.globId !== null)) actions.push('attach');
-  if (globs.length > 0) actions.push('save', 'open_glob');
+export const actionsFor = (message: Pick<ChatMessage, 'citations' | 'content' | 'actions'>, page: PageContext): AnswerAction[] => {
+  const cited = message.citations ?? [];
+  if (cited.length === 0) return [];
+  const asked = message.actions ?? [];
+  const actions: AnswerAction[] = [];
+  if (asked.includes('create_glob')) actions.push('create_glob');
+  if (page.type === 'inbox' && page.id !== undefined && cited.some((c) => c.globId !== null)) actions.push('attach');
+  if (asked.includes('save') && citedGlobs(message, page).length > 0) actions.push('save');
+  if (openGlobOf(message, page) !== undefined) actions.push('open_glob');
   return actions;
 };
 

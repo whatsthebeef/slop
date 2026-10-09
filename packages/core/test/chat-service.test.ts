@@ -4,7 +4,7 @@ import type { NewLearning } from '../src/app/knowledge-service.js';
 import { LlmBusy, LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
 import { SearchService } from '../src/app/search-service.js';
-import { CHAT_DONT_KNOW, impliesHistory } from '../src/domain/chat.js';
+import { CHAT_DONT_KNOW, impliesHistory, isSmallTalk, parseActions } from '../src/domain/chat.js';
 import type { PageContext } from '../src/domain/chat.js';
 import type { Result } from '../src/domain/errors.js';
 import type { AuthorityTier, ItemStatus, NewKnowledgeItem, SourceType } from '../src/domain/search.js';
@@ -104,6 +104,32 @@ describe('ChatService', () => {
     expect(answered.reply.citations).toEqual([
       expect.objectContaining({ source: 'decision', sourceLabel: 'Decision', title: 'Use backoff', link: '/boards/1/globs/use-backoff', status: 'active', supersededBy: null }),
     ]);
+  });
+
+  it('answers a greeting like a person, without searching, sources or actions', async () => {
+    await seed('a', 'retry backoff is exponential');
+    llm.next = 'Hello! Ask me about this board.';
+    const result = unwrap(await ask('hello'));
+    expect(result.reply).toMatchObject({ content: 'Hello! Ask me about this board.', citations: [], tools: [], actions: [] });
+    expect(llm.requests).toHaveLength(1);
+    expect(llm.requests[0]?.prompt).not.toContain('[1]');
+    llm.next = 'I can answer questions about this board.';
+    expect(unwrap(await ask('What can you do?')).reply.content).toBe('I can answer questions about this board.');
+  });
+
+  it('keeps the model\'s actions line out of the stream and on the stored answer, but only for a cited answer', async () => {
+    await seed('a', 'retry backoff is exponential');
+    const streaming = new StreamingLlm();
+    chat = new ChatService({ store, clock: { now: () => NOW }, search: new SearchService({ store, clock: { now: () => NOW }, embedder: new FakeEmbedder() }), llm: streaming });
+    streaming.next = 'Use backoff [1]\n<actions>create_glob, save, bogus</actions>';
+    streaming.pieces = ['Use backoff [1]\n<act', 'ions>create_glob, save, bogus</actions>'];
+    const seen: string[] = [];
+    const reply = unwrap(await ask('retry backoff', {}, DEV, (t) => seen.push(t))).reply;
+    expect(seen.join('')).toBe('Use backoff [1]\n');
+    expect(reply).toMatchObject({ content: 'Use backoff [1]', actions: ['create_glob', 'save'] });
+    streaming.next = `${CHAT_DONT_KNOW}\n<actions>create_glob</actions>`;
+    streaming.pieces = [];
+    expect(unwrap(await ask()).reply).toMatchObject({ content: CHAT_DONT_KNOW, actions: [] });
   });
 
   it('numbers citations by their [n] in the prompt, one per item', async () => {
@@ -416,6 +442,15 @@ describe('ChatService', () => {
       expect(rewriter.requests[0]?.prompt).toContain('awhy did we do notifcations like that?');
     });
 
+    it('treats a message the rewrite calls small talk as conversation, with no search', async () => {
+      await seed('n', 'notifications are raised by sources', { title: 'Notifications' });
+      rewriter.next = JSON.stringify({ query: 'thanks a lot, that helps', smallTalk: true });
+      llm.next = 'Glad it helped!';
+      const reply = unwrap(await ask('thanks a lot, that helps')).reply;
+      expect(reply).toMatchObject({ content: 'Glad it helped!', citations: [], actions: [] });
+      expect(llm.requests[0]?.system).not.toContain('numbered sources');
+    });
+
     it('falls back to the original question when the rewrite fails or is unreadable', async () => {
       await seed('a', 'retry backoff is exponential');
       llm.next = 'Yes [1]';
@@ -464,5 +499,18 @@ describe('ChatService', () => {
       await ask();
       expect(warnings).toHaveLength(2);
     });
+  });
+});
+
+describe('small talk and the actions line', () => {
+  it('spots greetings and questions about the chat, and leaves real questions alone', () => {
+    for (const q of ['hello', 'Hi!', 'thanks', 'Thank you so much', 'what can you do?', 'Good morning']) expect(isSmallTalk(q)).toBe(true);
+    for (const q of ['why did we choose backoff?', 'hello, why did s1t2 fail?', 'what changed this week']) expect(isSmallTalk(q)).toBe(false);
+  });
+
+  it('parses the trailing actions line', () => {
+    expect(parseActions('Answer [1]\n<actions>save</actions>')).toEqual({ text: 'Answer [1]', actions: ['save'] });
+    expect(parseActions('Answer [1]')).toEqual({ text: 'Answer [1]', actions: [] });
+    expect(parseActions('Answer\n<actions>create_glob,  nope')).toEqual({ text: 'Answer', actions: ['create_glob'] });
   });
 });
