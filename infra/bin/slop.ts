@@ -18,14 +18,30 @@ const extraOrigins = (process.env.SLOP_EXTRA_ORIGINS ?? '')
   .map((s) => s.trim().replace(/\/$/, ''))
   .filter((s) => s !== '');
 
+/**
+ * Production's sign-in addresses come from the public address (`-c publicUrl=https://<id>.cloudfront.net`, the host
+ * stack's PublicUrl output) and never include localhost. Claude Code's and the CLI's loopback callbacks stay, since
+ * those tools run on the developer's machine.
+ */
+const production = stage === 'prod';
+const publicUrl = (app.node.tryGetContext('publicUrl') as string | undefined)?.replace(/\/$/, '');
+if (production && (publicUrl === undefined || !publicUrl.startsWith('https://'))) {
+  throw new Error('-c publicUrl=https://<production address> (the host stack\'s PublicUrl output) is required for -c stage=prod');
+}
+const origins = production && publicUrl !== undefined ? [publicUrl] : [];
+
 new AuthStack(app, `slop-${stage}-auth`, {
   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION ?? 'us-east-1' },
   stage,
-  boardCallbackUrls: [
-    ...csv('boardCallbackUrls', ['http://localhost:3000/auth/callback', 'http://localhost:5173/auth/callback']),
-    ...extraOrigins.map((o) => `${o}/auth/callback`),
-  ],
-  boardLogoutUrls: [...csv('boardLogoutUrls', ['http://localhost:3000/', 'http://localhost:5173/']), ...extraOrigins.map((o) => `${o}/`)],
+  boardCallbackUrls: production
+    ? origins.map((o) => `${o}/auth/callback`)
+    : [
+        ...csv('boardCallbackUrls', ['http://localhost:3000/auth/callback', 'http://localhost:5173/auth/callback']),
+        ...extraOrigins.map((o) => `${o}/auth/callback`),
+      ],
+  boardLogoutUrls: production
+    ? origins.map((o) => `${o}/`)
+    : [...csv('boardLogoutUrls', ['http://localhost:3000/', 'http://localhost:5173/']), ...extraOrigins.map((o) => `${o}/`)],
   claudeCodeCallbackUrls: csv('claudeCodeCallbackUrls', ['http://localhost:7779/callback']),
   cliCallbackUrls: csv('cliCallbackUrls', ['http://localhost:7780/callback']),
   identityCenterMetadataUrl: (app.node.tryGetContext('identityCenterMetadataUrl') as string | undefined) ?? null,

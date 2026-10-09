@@ -58,8 +58,11 @@ export class AuthStack extends Stack {
     const mcpScope = new ResourceServerScope({ scopeName: 'mcp', scopeDescription: 'Use slop through MCP' });
     const resourceServer = pool.addResourceServer('Slop', { identifier: 'slop', scopes: [mcpScope] });
 
+    // Production's Hosted UI offers Identity Center only; native users stay for development (and for prod until the
+    // Identity Center metadata is passed, so the first deploy can happen before the console steps).
     const providers: UserPoolClientIdentityProvider[] = [UserPoolClientIdentityProvider.COGNITO];
     if (props.identityCenterMetadataUrl !== null) {
+      providers.length = 0;
       const identityCenter = new UserPoolIdentityProviderSaml(this, 'IdentityCenter', {
         userPool: pool,
         name: 'IdentityCenter',
@@ -115,8 +118,18 @@ export class AuthStack extends Stack {
       mcp: true,
     });
 
+    const hostedUiDomain = `${domain.domainName}.auth.${this.region}.amazoncognito.com`;
     new CfnOutput(this, 'UserPoolId', { value: pool.userPoolId });
-    new CfnOutput(this, 'Domain', { value: `${domain.domainName}.auth.${this.region}.amazoncognito.com` });
+    new CfnOutput(this, 'Domain', { value: hostedUiDomain });
+    // The values for the Identity Center custom SAML 2.0 application (docs/production-sign-in.md).
+    new CfnOutput(this, 'IdentityCenterAcsUrl', {
+      value: `https://${hostedUiDomain}/saml2/idpresponse`,
+      description: 'Application ACS URL in IAM Identity Center',
+    });
+    new CfnOutput(this, 'IdentityCenterAudience', {
+      value: `urn:amazon:cognito:sp:${pool.userPoolId}`,
+      description: 'Application SAML audience in IAM Identity Center',
+    });
     new CfnOutput(this, 'BoardClientId', { value: board.userPoolClientId });
     new CfnOutput(this, 'ClaudeConnectorClientId', { value: connector.userPoolClientId });
     new CfnOutput(this, 'ClaudeCodeClientId', { value: claudeCode.userPoolClientId });
