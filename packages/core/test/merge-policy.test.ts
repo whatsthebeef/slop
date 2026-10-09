@@ -247,7 +247,7 @@ describe('the merge policy through the KB', () => {
     expect(errorOf(refused)?.code).toBe('forbidden');
     expect(errorOf(refused)?.message).toContain('merge policy');
     expect(await row()).toBeNull();
-    unwrap(await knowledge.decideByAgent(ADMIN, id, (await item(id)).version, 'reject', 'not now'));
+    unwrap(await knowledge.decideByAgent(ADMIN, id, (await item(id)).version, 'reject', { reason: 'not now' }));
   });
 
   it('refuses a retarget to the policy under another name', async () => {

@@ -190,6 +190,13 @@
       "when": 1791489942828,
       "tag": "0026_implementation_record",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1791490942828,
+      "tag": "0027_agent_kb_approval",
+      "breakpoints": true
     }
   ]
 }

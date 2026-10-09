@@ -30,6 +30,7 @@ export type BoardSettings = Partial<
     | 'runStartMinutes'
     | 'runRespondMinutes'
     | 'effectCheckGlobs'
+    | 'agentKbApproval'
     | 'deploy'
     | 'readinessTicks'
   >

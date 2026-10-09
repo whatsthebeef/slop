@@ -1,5 +1,5 @@
 import { describeEditFailure, EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, ROLES } from '@slop/core';
-import type { DeployIntegration, Environment, Role, SubLimitChange } from '@slop/core';
+import type { AgentKbApproval, DeployIntegration, Environment, Role, SubLimitChange } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
@@ -35,6 +35,7 @@ export const SettingsPage = () => {
   const [newRole, setNewRole] = useState<Role>('dev');
   const [deploy, setDeploy] = useState<DeployIntegration | null>(null);
   const [effectCheckGlobs, setEffectCheckGlobs] = useState('');
+  const [agentKbApproval, setAgentKbApproval] = useState<AgentKbApproval>('docs');
 
   useEffect(() => {
     if (board.data === undefined) return;
@@ -44,6 +45,7 @@ export const SettingsPage = () => {
     setRepo(board.data.repo ?? '');
     setDeploy(board.data.deploy);
     setEffectCheckGlobs(String(board.data.effectCheckGlobs));
+    setAgentKbApproval(board.data.agentKbApproval);
   }, [board.data]);
 
   const save = useMutation({
@@ -55,6 +57,7 @@ export const SettingsPage = () => {
         baseBranch,
         repo: repo.trim() === '' ? null : repo.trim(),
         deploy,
+        agentKbApproval,
         // Checked by the server (3 to 50); a blank field leaves it as it is.
         ...(effectCheckGlobs.trim() === '' ? {} : { effectCheckGlobs: Number(effectCheckGlobs) }),
       });
@@ -249,6 +252,17 @@ export const SettingsPage = () => {
             data-testid='effect-check-globs'
           />
         </Label>
+        <h3 className='text-xs font-semibold text-muted-foreground'>Knowledge</h3>
+        <label className='flex items-center gap-2 text-sm' title='Local-run spec, merge policy and whole documents always need a person'>
+          <input
+            type='checkbox'
+            disabled={!admin}
+            checked={agentKbApproval === 'docs_and_agent_files'}
+            onChange={(e) => setAgentKbApproval(e.target.checked ? 'docs_and_agent_files' : 'docs')}
+            data-testid='agent-kb-approval'
+          />
+          Agents may approve agent-file and contradicting items
+        </label>
         <SubLimit boardId={boardId} admin={admin} />
         <DeploySettings
           deploy={deploy}

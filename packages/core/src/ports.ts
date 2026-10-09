@@ -60,7 +60,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'effectCheckGlobs' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'effectCheckGlobs' | 'agentKbApproval' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   /**
    * Sets the board's learned sub size limit to `to` if it is still `from`; returns false otherwise. It has no board
@@ -94,6 +94,8 @@ export interface Tx {
 
   listKnowledge(boardId: number, kinds?: readonly KnowledgeKind[]): Promise<KnowledgeDoc[]>;
   getKnowledge(boardId: number, kind: KnowledgeKind, name: string): Promise<KnowledgeDoc | null>;
+  /** An earlier version of a document (from its history), or null. */
+  getKnowledgeVersion(boardId: number, kind: KnowledgeKind, name: string, version: number): Promise<KnowledgeDoc | null>;
   /** Writes the document's current version and keeps the previous ones as history. */
   saveKnowledge(doc: KnowledgeDoc): Promise<void>;
   deleteKnowledge(boardId: number, kind: KnowledgeKind, name: string): Promise<void>;

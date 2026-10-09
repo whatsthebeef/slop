@@ -22,6 +22,7 @@ const board: Board = {
   runRespondMinutes: 30,
   subMaxChangedLines: 2000,
   effectCheckGlobs: 10,
+  agentKbApproval: 'docs',
   version: 1,
 };
 const glob = (patch: Partial<Glob> = {}): Glob => ({
