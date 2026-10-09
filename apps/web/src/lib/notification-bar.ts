@@ -12,8 +12,26 @@ export const barView = (items: readonly BoardNotification[]): BarView | null => 
   return lead === undefined ? null : { lead, rest };
 };
 
-/** "+2 more" for the collapsed count. */
-export const moreLabel = (count: number): string => `+${String(count)} more`;
+/** "more… (2)" for the button that expands the others. */
+export const moreLabel = (count: number): string => `more… (${String(count)})`;
+
+export type BoardTab = 'board' | 'signed-off' | 'knowledge' | 'settings';
+
+export const BOARD_TABS: readonly { readonly tab: BoardTab; readonly label: string; readonly path: string }[] = [
+  { tab: 'board', label: 'Board', path: '' },
+  { tab: 'signed-off', label: 'Signed off', path: '/signed-off' },
+  { tab: 'knowledge', label: 'Knowledge', path: '/knowledge' },
+  { tab: 'settings', label: 'Settings', path: '/settings' },
+];
+
+/** The header tab a route belongs to; the board itself is the default. */
+export const activeTab = (pathname: string, boardId: number): BoardTab => {
+  const rest = pathname.replace(/\/+$/, '').slice(`/boards/${String(boardId)}`.length);
+  return BOARD_TABS.find((t) => t.path !== '' && (rest === t.path || rest.startsWith(`${t.path}/`)))?.tab ?? 'board';
+};
+
+/** The filters and New Glob sit under the line on the board view only. */
+export const showBoardTools = (tab: BoardTab): boolean => tab === 'board';
 
 /** Dismissible notifications offer a dismiss button; one whose condition holds never does. */
 export const canDismiss = (n: BoardNotification): boolean => isDismissible(n);

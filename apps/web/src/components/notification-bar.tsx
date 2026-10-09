@@ -10,8 +10,8 @@ import { cn } from '@/lib/utils';
 
 const STYLE: Record<BoardNotification['severity'], string> = {
   critical: 'border-red bg-red/15 py-3 text-base font-semibold',
-  warning: 'border-amber bg-amber/15 py-1.5 text-sm',
-  info: 'border-edge bg-card py-1 text-xs text-muted-foreground',
+  warning: 'border-amber bg-amber/15 py-2 text-sm',
+  info: 'border-edge bg-card py-2 text-sm text-muted-foreground',
 };
 
 /** The AWS sign-in on the bar: the button, then the link and code to approve, or why it failed. */
@@ -65,7 +65,7 @@ const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: numbe
   return (
     <div
       role={item.severity === 'critical' ? 'alert' : 'status'}
-      className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-5', STYLE[item.severity], flash && 'notification-flash')}
+      className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-4', STYLE[item.severity], flash && 'notification-flash')}
       data-testid={`notification-${item.source}`}
       data-severity={item.severity}
     >
@@ -89,7 +89,7 @@ const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: numbe
 /**
  * One bar across the top of every board page for board-wide incidents that need a person. The most severe shows in
  * full (critical is big and red, flashes once on arrival and can't be dismissed while its condition holds); the
- * others show as a count that expands.
+ * others sit behind a "more… (N)" button that expands them. It takes the place of the header's separator line.
  */
 export const NotificationBar = ({ boardId }: { boardId: number }) => {
   const [expanded, setExpanded] = useState(false);
@@ -100,14 +100,14 @@ export const NotificationBar = ({ boardId }: { boardId: number }) => {
     refetchInterval: (query) => pollInterval((query.state.data?.length ?? 0) > 0),
   });
   const view = barView(items.data ?? []);
-  if (view === null) return null;
+  if (view === null) return <hr className='mx-5 border-edge' />;
   return (
-    <div data-testid='notification-bar'>
+    <div className='mx-5 my-2 space-y-2' data-testid='notification-bar'>
       {/* Keyed by id so a new arrival mounts afresh and flashes once. */}
       <Row key={view.lead.id} item={view.lead} boardId={boardId} flash={view.lead.severity === 'critical'} />
       {view.rest.length > 0 && (
-        <div className='border-b border-edge bg-card px-5 py-1 text-xs'>
-          <button type='button' className='underline' aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        <div className='text-sm'>
+          <button type='button' className='text-muted-foreground underline' aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
             {moreLabel(view.rest.length)}
           </button>
         </div>
