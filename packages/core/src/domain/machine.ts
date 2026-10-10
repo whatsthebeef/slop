@@ -66,6 +66,8 @@ export type Action =
   | 'resolve_conflict'
   | 'start_again'
   | 'merge'
+  /** A failed merge that GitHub never decided (no conflict, checks passed at the head): ask slop to merge again. */
+  | 'retry_merge'
   /** Supers: squash-merge what's done and keep going on the same glob and branch. */
   | 'merge_continue'
   /** Supers, from the board: ask slop to mark the draft PR ready (as the `mark_ready` tool does). */
@@ -773,6 +775,27 @@ export const requestMerge = (
     .set({ mergeMode: options.continue ? 'continue' : null })
     .status('merging', options.continue ? { mode: 'continue' } : {})
     .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
+    .done();
+};
+
+/** A failed merge slop can try again without a new run or push: no conflict, the PR is ready and its head passed. */
+const canRetryMerge = (glob: Glob): boolean =>
+  glob.status === 'failed' &&
+  glob.failure?.kind === 'merge' &&
+  glob.failure.conflict === undefined &&
+  glob.pr?.state === 'ready' &&
+  glob.pr.headSha != null &&
+  glob.headChecks?.sha === glob.pr.headSha &&
+  glob.headChecks.state === 'passed';
+
+/** Retry merge: a glob whose merge failed (e.g. GitHub hadn't decided mergeability) goes back to merging. */
+export const retryMerge = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (!canRetryMerge(glob)) return invalidTransition(glob, actor, 'Only a failed merge on a ready PR with passing checks can be retried');
+  return new Builder(glob, ctx)
+    .set({ failure: null, mergeMode: null })
+    .status('merging', { retry: true })
+    .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: glob.pr?.headSha ?? '' })
     .done();
 };
 
@@ -1677,6 +1700,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     actions.push('retrigger');
   }
   if (!restricted && !hasLiveRun(glob) && canRetryAutofix(glob)) actions.push('retry_autofix');
+  if (!restricted && !hasLiveRun(glob) && canRetryMerge(glob)) actions.push('retry_merge');
   if (canRequestConflictFix(glob)) actions.push('resolve_conflict');
   if (glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
   if (

@@ -300,6 +300,21 @@ describe('PR and merge events (rows 11–16)', () => {
     expect(bare.events.find((e) => e.type === 'SubReviewCompleted')?.data).toEqual({ sha: 'bbb', passed: true, reason: null });
   });
 
+  it('row 16c: Retry merge puts a failed, conflict-free merge back to merging at the head', () => {
+    const failed = {
+      ...glob({ status: 'failed', pr: { number: 7, state: 'ready', headSha: 'bbb' } }),
+      headChecks: { sha: 'bbb', state: 'passed' as const },
+      failure: { reason: "GitHub hasn't decided whether the PR can merge; try again", at: 'x', kind: 'merge' as const },
+    };
+    expect(m.allowedActions(failed, dev)).toContain('retry_merge');
+    const t = value(m.retryMerge(failed, ctx()));
+    expect(t.glob).toMatchObject({ status: 'merging', failure: null });
+    expect(t.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: 'bbb' }]);
+    const conflicted = { ...failed, failure: { ...failed.failure, conflict: { base: 'main', files: ['a'] } } };
+    expect(m.allowedActions(conflicted, dev)).not.toContain('retry_merge');
+    expect(errorCode(m.retryMerge(conflicted, ctx()))).toBe('invalid_transition');
+  });
+
   it('row 14: Merge needs passing checks on the current head', () => {
     const g = glob({ status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } });
     expect(errorCode(m.requestMerge(g, ctx()))).toBe('invalid_transition');

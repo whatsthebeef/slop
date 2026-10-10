@@ -343,6 +343,7 @@ export type ActionPath =
   | 'take-over'
   | 'start-again'
   | 'merge'
+  | 'retry-merge'
   | 'merge-continue'
   | 'mark-ready';
 
@@ -581,6 +582,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   resolve_conflict: 'resolve-conflict',
   start_again: 'start-again',
   merge: 'merge',
+  retry_merge: 'retry-merge',
   merge_continue: 'merge-continue',
   mark_ready: 'mark-ready',
   delete: null,
@@ -596,6 +598,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   resolve_conflict: 'Resolve conflict',
   start_again: 'Start again',
   merge: 'Merge',
+  retry_merge: 'Retry merge',
   merge_continue: 'Merge and continue',
   mark_ready: 'Ready for review',
   delete: 'Delete',
