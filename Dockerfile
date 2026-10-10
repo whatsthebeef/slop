@@ -19,6 +19,9 @@ COPY --from=build /out .
 COPY --from=build /app/apps/server/drizzle ./drizzle
 COPY --from=build /app/apps/web/dist ./web
 COPY catalog ./catalog
+# The files a deploy runs on the host (infra/deploy/deploy.sh extracts them from the pulled image).
+COPY compose.prod.yaml ./deploy/compose.yaml
+COPY infra/deploy/remote-deploy.sh infra/deploy/backup.sh ./deploy/
 USER node
 EXPOSE 3000
 CMD ["node", "dist/main.js"]

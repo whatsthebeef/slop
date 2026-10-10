@@ -1,5 +1,5 @@
 # CodeBuild for slop-<stage>-host: every push to main is checked, built as an arm64 image, pushed to ECR and
-# deployed to the instance. Environment (from infra/lib/host-stack.ts): AWS_REGION, STAGE, INSTANCE_ID, BUCKET,
+# deployed to the instance. Environment (from infra/lib/host-stack.ts): AWS_REGION, STAGE, INSTANCE_ID,
 # REPOSITORY_URI, PUBLIC_URL, BACKUP_BUCKET. A failure at any step leaves the running release alone.
 version: 0.2
 phases:
