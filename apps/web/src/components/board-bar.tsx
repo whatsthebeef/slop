@@ -88,7 +88,7 @@ export const Reviews = ({ name, count }: { name: LabelName; count: number }) => 
   />
 );
 
-/** Board rows and the All boards row share columns: number, name with its ID and last-viewed label, running, supers, waiting, reviews. */
+/** Board rows' columns: number, name with its ID and last-viewed label, running, supers, waiting, reviews. */
 const ROW =
   'grid grid-cols-[2rem_minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)_7rem_7rem_7rem_3.5rem_3.5rem_3.5rem]';
 
@@ -271,22 +271,15 @@ export const useSessionWrite = () => {
  * The app's top bar, like tmux's sessions: the boards you keep open, numbered by their place (name with its ID, when
  * you last viewed it, and your counts: runs in progress, supers, globs waiting on you and on each sign-off review).
  * + adds a board at the end (opening one doesn't); × takes one out and the rest renumber. The current board, if it isn't in the bar,
- * shows after them with an add button. The All boards row below links to the page where boards are added.
+ * shows after them with an add button. The All boards page, where boards are added, opens from the app settings button.
  * App settings float in a corner.
  */
-export const BoardBar = ({
-  current,
-  allBoards = false,
-}: {
-  current?: number;
-  /** The All boards page is showing: its row is the marked one. */
-  allBoards?: boolean;
-}) => {
+export const BoardBar = ({ current }: { current?: number }) => {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });
   const write = useSessionWrite();
 
   const boards = me.data?.boards ?? [];
-  const { managed, sessions, loose, others } = barRows(boards, current);
+  const { managed, sessions, loose } = barRows(boards, current);
   // The 30 s poll re-renders the bar, which keeps the labels fresh enough.
   const now = Date.now();
 
@@ -351,33 +344,12 @@ export const BoardBar = ({
   return (
     <>
       <AppSettings />
-      <header className="flex items-stretch gap-3 border-b border-edge px-3 pt-4 pb-2.5 sm:px-5">
+      <header className="flex items-stretch gap-3 px-3 pt-4 pb-2.5 sm:px-5">
         <nav className="min-w-0 flex-1" aria-label="Boards">
           <ul className="grid gap-0.5">
             {sessions.map((b, i) => row(b, 'session', String(i + 1)))}
             {loose !== undefined && row(loose, 'loose', '–')}
           </ul>
-          {boards.length > 0 && (
-            <Link
-              to="/boards"
-              aria-current={allBoards ? 'page' : undefined}
-              className={cn(
-                'mt-0.5 grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-x-4 rounded-sm border px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)]',
-                allBoards
-                  ? 'border-foreground bg-lcd text-lcd-foreground'
-                  : 'border-transparent text-muted-foreground hover:border-border hover:bg-muted',
-              )}
-              data-testid="all-boards"
-            >
-              <LayoutGrid className="h-3.5 w-3.5 opacity-60" aria-hidden />
-              <span className="truncate text-sm">
-                All boards
-                {others > 0 && (
-                  <span className="ml-2 font-mono text-xs opacity-70">+{others} more</span>
-                )}
-              </span>
-            </Link>
-          )}
         </nav>
       </header>
     </>
