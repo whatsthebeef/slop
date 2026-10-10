@@ -4,7 +4,8 @@
 # previous image is started again and the script fails, so CodeBuild goes red and the old release keeps serving.
 #
 # Environment: IMAGE (ECR URI with tag), PUBLIC_URL (https://<id>.cloudfront.net), AWS_REGION, STAGE, BACKUP_BUCKET.
-# Next to it: compose.yaml (compose.prod.yaml from the repo) and backup.sh (the nightly dump, scheduled below).
+# Next to it, extracted from the same image by the SSM command: compose.yaml (compose.prod.yaml from the repo) and
+# backup.sh (the nightly dump, scheduled below).
 set -euo pipefail
 : "${IMAGE:?}" "${PUBLIC_URL:?}" "${AWS_REGION:?}" "${STAGE:?}" "${BACKUP_BUCKET:?}"
 cd /opt/slop
