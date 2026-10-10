@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
-import type { BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PrSnapshot, Repo, RepoConnection } from '../codehost.js';
+import type { AppSettings, BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PrSnapshot, Repo, RepoConnection } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -15,6 +15,9 @@ const commitStats = z.object({
   stats: z.object({ additions: z.number().int().nonnegative(), deletions: z.number().int().nonnegative() }),
   files: z.array(z.object({ filename: z.string(), additions: z.number().int().nonnegative().optional(), deletions: z.number().int().nonnegative().optional() })).optional(),
 });
+
+/** How long the App's own settings are reused: readiness is read on every settings view. */
+const APP_SETTINGS_TTL_MS = 5 * 60_000;
 
 const status = (error: unknown): number | null =>
   typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number'
@@ -35,6 +38,7 @@ export class GitHub implements CodeHost, CommitGraph {
   private readonly installations = new Map<string, Octokit>();
   private app: App | null = null;
   private appId: number | null = null;
+  private appSettingsCache: { at: number; value: AppSettings } | null = null;
 
   constructor(
     private readonly credentials: AppCredentialsStore,
@@ -72,6 +76,7 @@ export class GitHub implements CodeHost, CommitGraph {
       this.watch(this.app.octokit);
       this.appId = credentials.id;
       this.installations.clear();
+      this.appSettingsCache = null;
     }
     return this.app;
   }
@@ -91,6 +96,23 @@ export class GitHub implements CodeHost, CommitGraph {
       this.installations.delete(`${repo.owner}/${repo.name}`);
       return { configured: true, connected: false, installUrl, appName: credentials.slug };
     }
+  }
+
+  /** `GET /app` with the App's JWT, cached for a few minutes since readiness is read often. */
+  async appSettings(): Promise<AppSettings | null> {
+    if (this.credentials.get() === null) return null;
+    const cached = this.appSettingsCache;
+    if (cached !== null && Date.now() - cached.at < APP_SETTINGS_TTL_MS) return cached.value;
+    const { data } = await this.getApp().octokit.request('GET /app');
+    if (data === null) return null;
+    const owner = data.owner;
+    const value: AppSettings = {
+      slug: data.slug ?? this.credentials.get()?.slug ?? '',
+      events: data.events,
+      owner: { login: 'login' in owner ? owner.login : '', type: 'type' in owner ? owner.type : 'User' },
+    };
+    this.appSettingsCache = { at: Date.now(), value };
+    return value;
   }
 
   private async octokit(repo: Repo): Promise<Octokit> {

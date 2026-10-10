@@ -1,9 +1,10 @@
 import type { Board, BoardService, GlobService, NotificationService, ReadinessFacts, ReadinessItem, Store } from '@slop/core';
-import { allowsBot, readiness, recentRoutineFailures, runsClaudeAction, unreactedCheckFailures } from '@slop/core';
+import { allowsBot, appSettingsUrl, missingAppEvents, readiness, recentRoutineFailures, runsClaudeAction, unreactedCheckFailures } from '@slop/core';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
+import { REQUIRED_APP_EVENTS } from '../github/setup.js';
 import type { Repo } from '../codehost.js';
 import type { Env } from './app.js';
 import { errorBody, statusOf } from './views.js';
@@ -85,6 +86,21 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
     }
   }
 
+  let appEvents: ReadinessFacts['appEvents'] = null;
+  if (deps.host.configured) {
+    try {
+      const settings = await deps.host.appSettings();
+      if (settings !== null) {
+        appEvents = {
+          missing: missingAppEvents(REQUIRED_APP_EVENTS, settings.events),
+          settingsUrl: appSettingsUrl(settings.slug, settings.owner),
+        };
+      }
+    } catch (error) {
+      deps.log('readiness', `${String(board.id)}: app settings: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   const [docs, globs] = await Promise.all([
     deps.store.transaction((tx) => tx.listKnowledge(board.id, ['doc'])),
     deps.globs.peekAll(board.id, {}),
@@ -98,6 +114,7 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
     claudeWorkflow,
     slopBot,
     claudeAllowsSlop,
+    appEvents,
     committedAgentSetVersion: agentSetRead ? committedAgentSetVersion : 'unknown',
     hasBuildDoc: docs.some((d) => d.area === 'build'),
     ticks: board.readinessTicks,
