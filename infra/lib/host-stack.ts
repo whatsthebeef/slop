@@ -68,7 +68,7 @@ const APP_PORT = 3000;
  * CloudFront address, and deployed by CodeBuild on every push to the branch (`infra/deploy/`).
  *
  *   viewer ──https──▶ CloudFront ──http :3000──▶ EC2 (security group: CloudFront's prefix list only)
- *   push to main ──▶ CodeBuild: checks, arm64 image ──▶ ECR ──▶ SSM Run Command ──▶ pull, compose up, health, rollback
+ *   push to main ──▶ CodeBuild: arm64 image ──▶ ECR ──▶ SSM Run Command ──▶ pull, compose up, health, rollback
  *
  * The image carries its own deploy files (`/app/deploy`: compose file, remote-deploy.sh, backup.sh); the SSM command
  * extracts them from the image it pulls, so there is no deploy-files bucket (the backups bucket below is the only S3).

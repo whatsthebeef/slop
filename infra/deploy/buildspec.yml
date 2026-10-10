@@ -1,17 +1,13 @@
-# CodeBuild for slop-<stage>-host: every push to main is checked, built as an arm64 image, pushed to ECR and
+# CodeBuild for slop-<stage>-host: every push to main is built as an arm64 image, pushed to ECR and
 # deployed to the instance. Environment (from infra/lib/host-stack.ts): AWS_REGION, STAGE, INSTANCE_ID,
-# REPOSITORY_URI, PUBLIC_URL, BACKUP_BUCKET. A failure at any step leaves the running release alone.
+# REPOSITORY_URI, PUBLIC_URL, BACKUP_BUCKET.
+# Lint, type check and tests are not re-run here: the `checks` workflow runs them on GitHub for every merge to
+# main, and remote-deploy.sh health-checks the new release and rolls back if it doesn't come up.
+# A failure at any step leaves the running release alone.
 version: 0.2
 phases:
   pre_build:
     commands:
-      # The checks run in a Node 24 container (the image's runtime), against a throwaway pgvector database.
-      # NODE_OPTIONS lifts the 2 GB default heap (type-checked eslint needs more) on the 8 GB build machine; the
-      # database comes from GHCR, as in CI, because Docker Hub rate-limits shared CodeBuild IPs.
-      - docker run -d --name slop-pg -p 5432:5432 -e POSTGRES_USER=slop -e POSTGRES_PASSWORD=slop -e POSTGRES_DB=slop ghcr.io/whatsthebeef/pgvector:pg17
-      - until docker exec slop-pg pg_isready -U slop -d slop; do sleep 2; done
-      - docker run --rm --network host -e NODE_OPTIONS=--max-old-space-size=6144 -v "$PWD":/work -w /work node:24-slim sh -c 'corepack enable && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test'
-      - docker rm -f slop-pg
       - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${REPOSITORY_URI%%/*}"
   build:
     commands:
