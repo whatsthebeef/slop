@@ -25,10 +25,12 @@ const BoardTabs = ({
   boardId,
   onActions,
   onChat,
+  chatOpen,
 }: {
   boardId: number;
   onActions: (el: HTMLElement | null) => void;
   onChat: () => void;
+  chatOpen: boolean;
 }) => {
   const current = activeTab(useLocation().pathname, boardId);
   // The Inbox tab counts items waiting for a person; hints refresh it on the pages that listen, and a slow poll covers the rest.
@@ -55,6 +57,7 @@ const BoardTabs = ({
           type='button'
           className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground'
           aria-label='Ask the board chat'
+          aria-pressed={chatOpen}
           title='Ask the board chat (/ or ⌘K)'
           data-testid='chat-toggle'
           onClick={onChat}
@@ -106,6 +109,11 @@ export const BoardShell = () => {
     setChatOpen(false);
     setFullScreen(false);
   };
+  // The tab row's chat icon opens a closed panel and closes an open one; the shortcuts below only open it.
+  const toggleChat = () => {
+    if (chatOpen) closeChat();
+    else openChat();
+  };
   useEffect(() => {
     if (!isBoard) return;
     const onKey = (e: KeyboardEvent) => {
@@ -128,7 +136,7 @@ export const BoardShell = () => {
     <div className='flex h-dvh flex-col'>
       <BoardBar current={isBoard ? boardId : undefined} />
       {isBoard && <NotificationBar boardId={boardId} />}
-      {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={openChat} />}
+      {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={toggleChat} chatOpen={showChat} />}
       <div className='flex min-h-0 flex-1'>
         <div className='min-h-0 min-w-0 flex-1 overflow-auto' inert={showChat && fullScreen} data-testid='main-area'>
           <Outlet context={{ headerActions, hideSignedOff: hideSignedOff(mounted, wide) } satisfies BoardShellContext} />
