@@ -96,7 +96,7 @@ const MENU_ITEM =
   'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted';
 
 /**
- * App-wide settings and actions behind a floating button in the corner: the theme, a new board,
+ * App-wide settings and actions behind a floating button in the corner: the theme, all boards,
  * signing out. App-level config (seed agents and the like) goes here later.
  */
 const AppSettings = () => {
@@ -104,7 +104,6 @@ const AppSettings = () => {
   const navigate = useNavigate();
   const client = useQueryClient();
   const [menu, setMenu] = useState(false);
-  const [creating, setCreating] = useState(false);
   return (
     <>
       <Popover open={menu} onOpenChange={setMenu}>
@@ -155,11 +154,11 @@ const AppSettings = () => {
                 className={MENU_ITEM}
                 onClick={() => {
                   setMenu(false);
-                  setCreating(true);
+                  void navigate('/boards');
                 }}
-                data-testid="new-board"
+                data-testid="all-boards-menu"
               >
-                <Plus className="h-4 w-4" /> New board…
+                <LayoutGrid className="h-4 w-4" /> All boards
               </button>
               <button
                 type="button"
@@ -178,12 +177,11 @@ const AppSettings = () => {
           </div>
         </PopoverContent>
       </Popover>
-      <NewBoardDialog open={creating} onOpenChange={setCreating} />
     </>
   );
 };
 
-/** The New board dialog, shared by the app settings and the board bar. */
+/** The New board dialog, used by the home page. */
 export const NewBoardDialog = ({
   open,
   onOpenChange,
