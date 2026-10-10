@@ -3,7 +3,7 @@ import type { KeyboardEvent, PointerEvent } from 'react';
 import { clampChatWidth, DEFAULT_CHAT_WIDTH, MIN_CHAT_WIDTH, maxChatWidth, widthAfterKey } from '@/lib/chat-width';
 
 /**
- * The line between the main area and the docked chat, as a drag handle: drag it, or focus it and use the arrow keys (Shift for
+ * The (invisible at rest) line between the main area and the docked chat, as a drag handle: drag it, or focus it and use the arrow keys (Shift for
  * bigger steps, Home and End for the limits); double-click puts the width back to the default.
  */
 export const ChatDivider = ({
@@ -49,7 +49,7 @@ export const ChatDivider = ({
       aria-valuemax={maxChatWidth(available)}
       tabIndex={0}
       data-testid='chat-divider'
-      className='absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize touch-none hover:bg-foreground/20 focus-visible:bg-foreground/30 focus-visible:outline-none active:bg-foreground/30'
+      className='absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize touch-none hover:bg-edge/60 focus-visible:bg-edge/60 focus-visible:outline-none active:bg-edge/60'
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
         dragged.current = width;
