@@ -1,6 +1,3 @@
-import { useEffect, useState } from 'react';
-import { reducedMotion, STEP_MS } from './card-motion';
-
 /** The docked chat's width in px: the default (30rem), no narrower than 20rem, and never so wide that the board's three columns fall under their minimum card width. */
 export const DEFAULT_CHAT_WIDTH = 480;
 export const MIN_CHAT_WIDTH = 320;
@@ -44,18 +41,4 @@ export const widthAfterKey = (key: string, shift: boolean, width: number, availa
   if (key === 'Home') return MIN_CHAT_WIDTH;
   if (key === 'End') return maxChatWidth(available);
   return null;
-};
-
-/** Keeps the panel mounted while it steps out: true from opening until the slide out ends. */
-export const usePresence = (open: boolean): boolean => {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    if (open) {
-      setMounted(true);
-      return;
-    }
-    const timer = window.setTimeout(() => setMounted(false), reducedMotion() ? 0 : STEP_MS);
-    return () => window.clearTimeout(timer);
-  }, [open]);
-  return mounted || open;
 };
