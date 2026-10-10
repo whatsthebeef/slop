@@ -25,11 +25,19 @@ const extraOrigins = (process.env.SLOP_EXTRA_ORIGINS ?? '')
  */
 const production = stage === 'prod';
 const publicUrl = (app.node.tryGetContext('publicUrl') as string | undefined)?.replace(/\/$/, '');
-if (production && (publicUrl === undefined || !publicUrl.startsWith('https://'))) {
-  throw new Error('-c publicUrl=https://<production address> (the host stack\'s PublicUrl output) is required for -c stage=prod');
+if (production && publicUrl !== undefined && !publicUrl.startsWith('https://')) {
+  throw new Error('-c publicUrl must be https://<production address> (the host stack\'s PublicUrl output)');
 }
 const origins = production && publicUrl !== undefined ? [publicUrl] : [];
 
+/**
+ * Production deploys in order: the secrets and host first (`-c deployConnectionArn=...`, no publicUrl), then, once the
+ * host's PublicUrl output exists, the auth stack with `-c publicUrl=$(PublicUrl output)`. Without publicUrl in prod the
+ * auth stack isn't defined, so it can't block the host stack that produces the URL.
+ */
+if (production && publicUrl === undefined) {
+  console.warn('slop-prod-auth not defined: it needs -c publicUrl=https://<production address> (the host stack\'s PublicUrl output)');
+} else {
 new AuthStack(app, `slop-${stage}-auth`, {
   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION ?? 'us-east-1' },
   stage,
@@ -47,6 +55,7 @@ new AuthStack(app, `slop-${stage}-auth`, {
   identityCenterMetadataUrl: (app.node.tryGetContext('identityCenterMetadataUrl') as string | undefined) ?? null,
   tags: { project: 'slop', stage },
 });
+}
 
 /**
  * Production's secrets (server `SECRETS=aws`) and host. The host reuses the secrets construct and grants its instance
