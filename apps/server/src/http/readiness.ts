@@ -1,5 +1,5 @@
 import type { Board, BoardService, GlobService, NotificationService, ReadinessFacts, ReadinessItem, Store } from '@slop/core';
-import { readiness, recentRoutineFailures, runsClaudeAction, unreactedCheckFailures } from '@slop/core';
+import { allowsBot, readiness, recentRoutineFailures, runsClaudeAction, unreactedCheckFailures } from '@slop/core';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import type { CodeHost } from '../codehost.js';
@@ -37,12 +37,12 @@ const parseAgentSetVersion = (text: string): number | 'unreadable' => {
   return parsed.success ? parsed.data.version : 'unreadable';
 };
 
-/** Whether any workflow file on `ref` runs the Claude Code action. */
-const hasClaudeWorkflow = async (host: CodeHost, repo: Repo, ref: string): Promise<boolean> => {
+/** The text of each workflow file on `ref` that runs the Claude Code action. */
+const claudeWorkflows = async (host: CodeHost, repo: Repo, ref: string): Promise<string[]> => {
   const dir = '.github/workflows';
   const names = (await host.listFiles(repo, ref, dir)).filter((n) => /\.ya?ml$/i.test(n));
   const texts = await Promise.all(names.map((n) => host.readFile(repo, ref, `${dir}/${n}`)));
-  return texts.some((t) => t !== null && runsClaudeAction(t));
+  return texts.filter((t): t is string => t !== null && runsClaudeAction(t));
 };
 
 /**
@@ -56,6 +56,8 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
   let installUrl: string | null = null;
   let subGateWorkflow: boolean | null = null;
   let claudeWorkflow: boolean | null = null;
+  let slopBot: string | null = null;
+  let claudeAllowsSlop: boolean | null = null;
   let committedAgentSetVersion: number | 'unreadable' | null = null;
   let agentSetRead = false;
   if (repo !== null && deps.host.configured) {
@@ -67,9 +69,12 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
         const [workflow, agentSet, claude] = await Promise.all([
           deps.host.readFile(repo, board.baseBranch, '.github/workflows/sub-gate.yml'),
           deps.host.readFile(repo, board.baseBranch, '.claude/slop-agent-set.json'),
-          hasClaudeWorkflow(deps.host, repo, board.baseBranch),
+          claudeWorkflows(deps.host, repo, board.baseBranch),
         ]);
-        claudeWorkflow = claude;
+        claudeWorkflow = claude.length > 0;
+        slopBot = connection.appName === null ? null : `${connection.appName}[bot]`;
+        const bot = slopBot;
+        claudeAllowsSlop = bot === null || claude.length === 0 ? null : claude.some((t) => allowsBot(t, bot));
         subGateWorkflow = workflow !== null;
         agentSetRead = true;
         committedAgentSetVersion = agentSet === null ? null : parseAgentSetVersion(agentSet);
@@ -91,6 +96,8 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
     installUrl,
     subGateWorkflow,
     claudeWorkflow,
+    slopBot,
+    claudeAllowsSlop,
     committedAgentSetVersion: agentSetRead ? committedAgentSetVersion : 'unknown',
     hasBuildDoc: docs.some((d) => d.area === 'build'),
     ticks: board.readinessTicks,
