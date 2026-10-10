@@ -396,8 +396,15 @@ follow() {
       if $held; then held=false; follow_status following "sha=$running" "repo=$repo"; fi
       continue
     fi
-    if [[ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]]; then
-      hold "the main checkout has uncommitted changes" "Commit or discard them in $root; follow carries on by itself"
+    local dirty
+    dirty="$(git -C "$root" status --porcelain --untracked-files=no)"
+    if [[ -n "$dirty" ]]; then
+      if ! grep -qvE '^.. (\.claude/|CLAUDE\.md$)' <<<"$dirty"; then
+        hold "the main checkout has uncommitted agent-set files (.claude/, CLAUDE.md), likely from a Claude session's agent-set refresh" \
+          "git -C $root checkout -- .claude CLAUDE.md to discard them; follow carries on by itself"
+      else
+        hold "the main checkout has uncommitted changes" "Commit or discard them in $root; follow carries on by itself"
+      fi
       continue
     fi
     if ! git -C "$root" merge-base --is-ancestor HEAD "origin/$base"; then

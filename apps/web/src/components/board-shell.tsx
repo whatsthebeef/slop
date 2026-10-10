@@ -1,12 +1,11 @@
 import { MessageCircle } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useLocation, useParams } from 'react-router';
 import { ChatDock } from '@/components/chat-dock';
 import { NotificationBar } from '@/components/notification-bar';
 import { AppSettings, BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
-import { usePresence } from '@/lib/chat-width';
 import { hideSignedOff, isChatShortcut, WIDE_QUERY } from '@/lib/chat';
 import { newCount } from '@/lib/inbox';
 import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
@@ -118,8 +117,12 @@ export const BoardShell = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, [isBoard]);
   const showChat = isBoard && chatOpen;
-  // The panel stays mounted while it steps out, so Signed Off stays hidden until the dock is gone.
-  const mounted = usePresence(showChat);
+  // The panel stays mounted while it steps out (the dock says when it is gone), so Signed Off stays hidden until then.
+  const [docked, setDocked] = useState(false);
+  useLayoutEffect(() => {
+    if (showChat) setDocked(true);
+  }, [showChat]);
+  const mounted = showChat || docked;
   return (
     <PageContextProvider page={page} setPage={setPage}>
     <div className='flex h-dvh flex-col'>
@@ -127,12 +130,13 @@ export const BoardShell = () => {
       {isBoard && <NotificationBar boardId={boardId} />}
       {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={openChat} />}
       <div className='flex min-h-0 flex-1'>
-        <div className={cn('min-h-0 min-w-0 flex-1 overflow-auto', showChat && fullScreen && 'hidden')} data-testid='main-area'>
+        <div className='min-h-0 min-w-0 flex-1 overflow-auto' inert={showChat && fullScreen} data-testid='main-area'>
           <Outlet context={{ headerActions, hideSignedOff: hideSignedOff(mounted, wide) } satisfies BoardShellContext} />
         </div>
         {isBoard && mounted && (
           <ChatDock
             open={showChat}
+            onExited={() => setDocked(false)}
             wide={wide}
             boardId={boardId}
             fullScreen={fullScreen}

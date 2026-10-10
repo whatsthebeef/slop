@@ -341,7 +341,7 @@ export const ChatPanel = ({
   return (
     <aside
       className={cn(
-        'relative flex h-full min-h-0 w-full flex-col border-l-2 border-foreground/80 bg-card p-3 text-sm',
+        'relative flex h-full min-h-0 w-full flex-col bg-card p-3 text-sm',
       )}
       aria-label='Board chat'
       data-testid='chat-panel'
@@ -459,6 +459,7 @@ export const ChatPanel = ({
         </div>
         <form className='grid gap-2 pt-1' onSubmit={submit}>
           <Textarea
+            className='border-transparent bg-muted'
             ref={input}
             aria-label='Your question'
             placeholder='Why did we decide…?'
