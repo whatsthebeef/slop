@@ -94,7 +94,7 @@ export const BoardsPage = () => {
   const now = Date.now();
   return (
     <div className='flex h-dvh flex-col'>
-      <BoardBar allBoards />
+      <BoardBar />
       <main className='mx-auto grid w-full max-w-[63rem] content-start gap-3 overflow-auto p-6'>
         <div className='flex items-center justify-between gap-3'>
           <h1 className='text-base font-semibold'>All boards</h1>

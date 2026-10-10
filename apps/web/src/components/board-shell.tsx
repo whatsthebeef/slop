@@ -51,6 +51,7 @@ const BoardTabs = ({
         ))}
       </nav>
       <div className='ml-auto flex items-center gap-1 pb-1.5'>
+        <div ref={onActions} className='flex items-center' data-testid='header-actions' />
         <button
           type='button'
           className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground'
@@ -61,7 +62,6 @@ const BoardTabs = ({
         >
           <MessageCircle className='h-4 w-4' aria-hidden />
         </button>
-        <div ref={onActions} className='flex items-center' data-testid='header-actions' />
       </div>
     </header>
   );
