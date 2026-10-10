@@ -159,6 +159,16 @@ When resuming from a phase, read the output files of the earlier phases. The dev
    - **Unattended:** do not ask. Write down the assumption you would otherwise have asked about.
    - Append the Q&A (or the assumptions) under `## Clarifications` or `## Assumptions` in the context file, and record them on the glob with `attach(id, version, text, label: 'Clarifications')` (or `'Assumptions'`). These carry intent and **must be passed verbatim** to every sub-agent later.
 
+6. **Check the size.** Do this after the context is written and before Phase 2.
+   - If `get_glob` or `get_context` flags the glob as oversized (`oversized` is true; `sizeCheck` / `size` carry the reasons and the proposed split), use slop's proposed split. Also use your own judgement when slop hasn't flagged it but plan.md clearly holds parts that could each ship and be reviewed on their own: several migrations, server, web and LLM work together, large sections with no "Done when", many separate tasks.
+   - **Don't split** a glob that has already started work (commits beyond the start commit). Finish part 1's scope and create the rest as follow-ups with `create_glob`, each with `after: [<id>]`, and record that.
+   - **Split** with `split_glob(id, version, idempotencyKey, parts)`, never by hand-assembling `create_glob` calls. Use the version you most recently read and a stable key (e.g. `<id>-<runId or date>`). Part 0 is this glob: it keeps its ID and the run carries on with it, with the new, smaller plan. Give every other part its share of plan.md (`{part:N}` stands for part N's glob ID), the attachments it needs, and the same category unless the cut says otherwise. Untasked sections become their own part, with a note in its plan to trim them before starting.
+   - **Chain** parts with `after` where they share files or one builds on another (apply the overlap rules under Board rules, if the board has them); parts that don't touch the same code run in parallel. Parts are sames unless the proposal says sub and the part is small and independent.
+   - **Only split, never drop scope:** every "Done when" line and section of the original plan must end up in exactly one part.
+   - **Record** the split: as an `Assumptions` attachment (unattended) or, interactively, show the developer the proposed parts and ask once with `AskUserQuestion` before splitting, then record the answer as `Clarifications`. Add it to the context file and, once the record exists, to its `## Decisions`. Re-read the glob afterwards and rewrite `.reviews/<id>-context.md` with the new plan.md.
+   - **Unattended, the cut isn't clear** (the parts can't be separated without guessing, or `split_glob` is refused): don't guess. Call `report_failure` with the proposed split.
+   - If a split was needed but slop hadn't flagged it, submit an `agent-behaviour` learning in Phase 6 (name the glob and what in the plan showed it was too big), as evidence for the size threshold.
+
 ### Phase 2: Investigation
 
 1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 5.
@@ -171,6 +181,7 @@ When resuming from a phase, read the output files of the earlier phases. The dev
    - the current repo structure;
    - the output path `.reviews/<id>-plan.md`;
    - whether Chrome MCP tools are available.
+   - the reminder: "If your proposals show the glob is too big for one PR, say so under `## Size` in the plan file, with the parts you would cut." If it does, apply step 6 of Phase 1 before going on.
 3. The investigator writes its proposals to `.reviews/<id>-plan.md`.
 4. Choose a proposal:
    - **Interactive:** summarise each proposal (name, one-line summary, complexity, key trade-off), state the recommendation and ask the developer to choose or give further instructions.
