@@ -137,12 +137,12 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
     (await database.db.select().from(schema.outbox).where(eq(schema.outbox.globId, globId))).filter(
       (row) => row.kind === kind && row.state === 'pending',
     );
-  const run = async (kind: Effect['kind']) => {
+  const run = async (kind: Effect['kind'], attempt?: { final: boolean }) => {
     const executor = executors[kind];
     if (executor === undefined) throw new Error(`No executor for ${kind}`);
     const [row] = await pendingEffects(kind);
     if (row === undefined) throw new Error(`No pending ${kind}`);
-    return executor(row.effect, await current(), { globs });
+    return executor(row.effect, await current(), { globs }, attempt);
   };
   const mergeContinue = async () =>
     unwrap(await globs.merge(DEV, globId, (await current()).version, true));
@@ -183,6 +183,33 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
     const after = await current();
     expect(after.version).toBe(continued.version);
     expect(after.status).toBe('in_progress');
+  });
+
+  it('an undecided merge is retried, and the next try merges (the s15t58 sequence)', async () => {
+    await mergeContinue();
+    host.mergeResult = { outcome: 'undecided' };
+    try {
+      await expect(run('squash_merge', { final: false })).rejects.toThrow(/not decided/);
+    } finally {
+      host.mergeResult = { outcome: 'merged', sha: 'm1' };
+    }
+    expect((await current()).status).toBe('merging');
+    expect(await run('squash_merge', { final: false })).toBe('done');
+    expect((await current()).status).toBe('in_progress');
+  });
+
+  it('an undecided merge on the last attempt fails the glob with a clear reason', async () => {
+    await mergeContinue();
+    host.mergeResult = { outcome: 'undecided' };
+    try {
+      expect(await run('squash_merge', { final: true })).toBe('done');
+    } finally {
+      host.mergeResult = { outcome: 'merged', sha: 'm1' };
+    }
+    expect(await current()).toMatchObject({
+      status: 'failed',
+      failure: { kind: 'merge', reason: "GitHub hasn't decided whether the PR can merge; try again" },
+    });
   });
 
   it('the merged webhook first, then the merge response, is the same', async () => {

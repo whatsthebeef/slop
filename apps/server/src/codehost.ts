@@ -33,6 +33,8 @@ export type MergeResult =
   | { readonly outcome: 'merged'; readonly sha: string }
   | { readonly outcome: 'updating' }
   | { readonly outcome: 'conflict' }
+  /** GitHub hasn't decided whether the PR can merge (mergeable still null, or a 405 on a PR that looked clean): retry. */
+  | { readonly outcome: 'undecided' }
   | { readonly outcome: 'refused'; readonly reason: string };
 
 /**
@@ -61,11 +63,20 @@ export interface BehindBase {
   readonly files: readonly string[];
 }
 
+/** What the host's integration is subscribed to, read with its own credentials. */
+export interface AppSettings {
+  readonly slug: string;
+  readonly events: readonly string[];
+  readonly owner: { readonly login: string; readonly type: string };
+}
+
 export interface CodeHost {
   /** True once the host integration is configured (e.g. the GitHub App exists). */
   readonly configured: boolean;
   /** Checks whether slop can reach the repo right now. */
   connection(repo: Repo): Promise<RepoConnection>;
+  /** The integration's own settings (its event subscriptions and owner); null when it isn't set up or the host can't say. */
+  appSettings(): Promise<AppSettings | null>;
   /** Creates the glob's branch (empty `<id>: start` commit) and draft review with labels. Idempotent. */
   provision(repo: Repo, glob: Glob): Promise<{ branch: string; pr: { number: number; headSha: string } }>;
   /**

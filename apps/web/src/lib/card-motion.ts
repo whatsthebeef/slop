@@ -1,12 +1,30 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { LiveState } from './live';
 
-/** The one card that changed list steps across like a block; the cards it displaces glide. */
-export const STEP_MS = 630;
-export const GLIDE_MS = 500;
-export const GLIDE_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
-/** The stepped easing of a card that changed list; the chat panel slides in and out with it. */
-export const STEP_EASING = 'steps(4, end)';
+/**
+ * The board's one motion: everything that moves (a card that changed list, the cards it pushes, the chat panel and the board's edge)
+ * crosses its distance in small equal steps. Each step is about `STEP_PX` long and lasts `STEP_MS`, so a longer move takes more
+ * steps rather than bigger ones, up to `MAX_MS` (a move across one column is a little under a second).
+ */
+export const STEP_PX = 20;
+export const STEP_MS = 50;
+export const MIN_STEPS = 2;
+export const MAX_MS = 1000;
+
+export interface StepMotion {
+  readonly duration: number;
+  readonly easing: string;
+}
+
+/**
+ * The timing for moving `distance` px. With no `duration`, the move takes as long as its steps need (capped at `MAX_MS`, where the
+ * steps grow instead). Pass the `duration` of the main move for a smaller one that must finish with it: it keeps its own small steps.
+ */
+export const stepMotion = (distance: number, duration?: number): StepMotion => {
+  const wanted = Math.max(MIN_STEPS, Math.ceil(Math.abs(distance) / STEP_PX));
+  const total = duration ?? Math.min(MAX_MS, wanted * STEP_MS);
+  return { duration: total, easing: `steps(${String(Math.min(wanted, Math.max(MIN_STEPS, Math.floor(total / STEP_MS))))}, end)` };
+};
 const LOCK_MS = 165;
 const TAG_MS = 3000;
 /** Several moves at once (a burst of webhooks) play one after another, and only the first few. */
@@ -55,7 +73,7 @@ export interface CardMotionOptions<T> {
  * commit, and when the items change each card that moved is played from its old place to its new
  * one. Only an item whose group changed gets the stepped, block-like move and the lock flash
  * (`local` for your own moves, `remote` for moves made elsewhere, which may also get a short tag);
- * every other card it pushed or pulled glides. Nothing animates on the first load, right after a
+ * every other card it pushed or pulled steps the same way, finishing with it. Nothing animates on the first load, right after a
  * reconnect, in a hidden tab, or for people who prefer reduced motion (they still get the tag).
  * `items` must keep its identity while unchanged (a query's data, or memoised).
  */
@@ -164,6 +182,13 @@ export const useCardMotion = <T>(
     const quiet = Date.now() < quietUntil.current || document.visibilityState === 'hidden';
     const still = quiet || reducedMotion();
 
+    const travel = (id: string) => {
+      const from = before.get(id);
+      const to = after.get(id);
+      return from === undefined || to === undefined ? 0 : Math.hypot(from.x - to.x, from.y - to.y);
+    };
+    const total = still ? 0 : Math.max(0, ...movers.slice(0, MAX_ANIMATED).map((item) => stepMotion(travel(idOf(item))).duration));
+
     movers.forEach((item, index) => {
       const id = idOf(item);
       const was = prior.get(id);
@@ -179,8 +204,7 @@ export const useCardMotion = <T>(
       const motion = el.animate(
         [{ transform: `translate(${from.x - to.x}px, ${from.y - to.y}px)` }, { transform: 'none' }],
         {
-          duration: STEP_MS,
-          easing: STEP_EASING,
+          ...stepMotion(Math.hypot(from.x - to.x, from.y - to.y)),
           delay: index * STAGGER_MS,
           fill: 'backwards',
         },
@@ -195,10 +219,7 @@ export const useCardMotion = <T>(
       if (moved.has(id) || from === undefined || (from.x === to.x && from.y === to.y)) continue;
       cardAt(root, id)?.animate(
         [{ transform: `translate(${from.x - to.x}px, ${from.y - to.y}px)` }, { transform: 'none' }],
-        {
-          duration: GLIDE_MS,
-          easing: GLIDE_EASING,
-        },
+        stepMotion(Math.hypot(from.x - to.x, from.y - to.y), total),
       );
     }
   });

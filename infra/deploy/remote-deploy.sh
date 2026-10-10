@@ -4,7 +4,8 @@
 # previous image is started again and the script fails, so CodeBuild goes red and the old release keeps serving.
 #
 # Environment: IMAGE (ECR URI with tag), PUBLIC_URL (https://<id>.cloudfront.net), AWS_REGION, STAGE, BACKUP_BUCKET.
-# Next to it: compose.yaml (compose.prod.yaml from the repo) and backup.sh (the nightly dump, scheduled below).
+# Next to it, extracted from the same image by the SSM command: compose.yaml (compose.prod.yaml from the repo) and
+# backup.sh (the nightly dump, scheduled below).
 set -euo pipefail
 : "${IMAGE:?}" "${PUBLIC_URL:?}" "${AWS_REGION:?}" "${STAGE:?}" "${BACKUP_BUCKET:?}"
 cd /opt/slop
@@ -37,6 +38,10 @@ COGNITO_CLIENT_IDS=unset
 COGNITO_BOARD_CLIENT_ID=unset"
 fi
 
+# Production always signs in through Cognito: whatever the parameter says about AUTH_MODE is dropped, and the
+# server defaults to dev when it is absent, so it is set explicitly after the parameter's lines.
+EXTRA="$(printf '%s\n' "$EXTRA" | grep -v '^[[:space:]]*AUTH_MODE=' || true)"
+
 (umask 077 && {
   echo "PUBLIC_URL=${PUBLIC_URL}"
   echo "DATABASE_URL=postgres://slop:${POSTGRES_PASSWORD}@postgres:5432/slop"
@@ -46,6 +51,7 @@ fi
   echo "BEDROCK_REGION=${AWS_REGION}"
   echo "AWS_REGION=${AWS_REGION}"
   printf '%s\n' "$EXTRA"
+  echo "AUTH_MODE=cognito"
 } > app.env.new)
 mv app.env.new app.env
 
@@ -76,8 +82,9 @@ compose() { SLOP_IMAGE="$1" POSTGRES_PASSWORD="$POSTGRES_PASSWORD" docker compos
 
 wait_healthy() {
   # /auth/config needs no sign-in; the server answers only after its migrations have run.
+  # Each attempt is bounded, so an app that accepts the connection but never answers still ends the wait and rolls back.
   for _ in $(seq 1 60); do
-    if curl -fsS -o /dev/null http://localhost:3000/auth/config; then return 0; fi
+    if curl -fsS --connect-timeout 2 --max-time 5 -o /dev/null http://localhost:3000/auth/config; then return 0; fi
     sleep 3
   done
   return 1

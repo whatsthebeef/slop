@@ -404,7 +404,7 @@ export const BoardPage = () => {
         ref={(el) => {
           motion.container.current = el;
         }}
-        className='flex-1 overflow-auto px-5 py-4'
+        className='flex-1 overflow-auto px-5 pb-4 pt-1.5'
       >
         <div className='flex min-h-full min-w-full items-stretch gap-3'>
           {LISTS.filter((list) => !(hideSignedOff && list === 'signed_off')).map((list) => {

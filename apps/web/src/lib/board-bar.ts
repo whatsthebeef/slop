@@ -8,8 +8,6 @@ export interface BarRows {
   readonly sessions: readonly BoardView[];
   /** The current board when it isn't a session (opened from a link, or just removed): shown with an add button. */
   readonly loose: BoardView | undefined;
-  /** How many boards are neither in the bar nor shown as the current one: the All boards row's "+N more". */
-  readonly others: number;
 }
 
 const viewedAt = (b: BoardView): number => {
@@ -25,8 +23,7 @@ export const barRows = (boards: readonly BoardView[], current: number | undefine
     .sort((a, b) => (a.position ?? 0) - (b.position ?? 0) || a.id - b.id);
   const rest = boards.filter((b) => (b.position ?? null) === null);
   const loose = rest.find((b) => b.id === current);
-  const others = rest.filter((b) => b.id !== current).length;
-  return { managed, sessions, loose, others };
+  return { managed, sessions, loose };
 };
 
 /** The All boards page's order: the sessions by position, then the rest, most recently viewed first (never viewed last). */

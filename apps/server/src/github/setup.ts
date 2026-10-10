@@ -10,6 +10,20 @@ import type { AppCredentialsStore } from './credentials.js';
 
 const STATE_COOKIE = 'slop_github_setup';
 
+/**
+ * The events slop needs, from the spec's GitHub App section. GitHub applies a manifest's events only when the App is
+ * created, so readiness compares these with the live App's. `catalog/scripts/setup-repo.sh` hard-codes the same list.
+ */
+export const REQUIRED_APP_EVENTS = [
+  'push',
+  'pull_request',
+  'pull_request_review',
+  'pull_request_review_comment',
+  'issue_comment',
+  'check_run',
+  'check_suite',
+] as const;
+
 /** Events and permissions from the spec's GitHub App section. */
 export const appManifest = (publicUrl: string, name: string) => ({
   name,
@@ -30,15 +44,7 @@ export const appManifest = (publicUrl: string, name: string) => ({
     actions: 'write',
     statuses: 'read',
   },
-  default_events: [
-    'push',
-    'pull_request',
-    'pull_request_review',
-    'pull_request_review_comment',
-    'issue_comment',
-    'check_run',
-    'check_suite',
-  ],
+  default_events: [...REQUIRED_APP_EVENTS],
 });
 
 const page = (title: string, body: ReturnType<typeof html>) => html`<!doctype html>

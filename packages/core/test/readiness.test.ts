@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { behindWarning, queuedRunNotice, readiness, runsClaudeAction, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
+import { appSettingsUrl, behindWarning, missingAppEvents, queuedRunNotice, readiness, runsClaudeAction, allowsBot, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
 import type { ReadinessFacts } from '../src/domain/readiness.js';
 import { NOW, board, glob, run } from './fixtures.js';
 
@@ -16,6 +16,9 @@ const ready: ReadinessFacts = {
   installUrl: null,
   subGateWorkflow: true,
   claudeWorkflow: true,
+  slopBot: 'slop[bot]',
+  claudeAllowsSlop: true,
+  appEvents: { missing: [], settingsUrl: 'https://github.com/settings/apps/slop/permissions' },
   committedAgentSetVersion: 3,
   hasBuildDoc: true,
   ticks: { routines: true, routine_repo: true, claude_app: true },
@@ -46,6 +49,26 @@ describe('Claude workflow readiness', () => {
   it('recognises only files that reference the action', () => {
     expect(runsClaudeAction('steps:\n  - uses: anthropics/claude-code-action@v1\n')).toBe(true);
     expect(runsClaudeAction('steps:\n  - uses: actions/checkout@v4\n')).toBe(false);
+  });
+
+  it("warns with the exact line when the workflow does not allow slop's App", () => {
+    const warned = readiness({ ...ready, claudeAllowsSlop: false }).find((i) => i.key === 'claude_workflow');
+    expect(warned).toMatchObject({ state: 'missing' });
+    expect(warned?.detail).toContain('allowed_bots: "slop[bot]"');
+    expect(readiness({ ...ready, claudeAllowsSlop: null }).find((i) => i.key === 'claude_workflow')).toMatchObject({ state: 'ok' });
+    expect(readiness({ ...ready, slopBot: null, claudeAllowsSlop: false }).find((i) => i.key === 'claude_workflow')).toMatchObject({ state: 'ok' });
+  });
+
+  it('reads allowed_bots from a workflow', () => {
+    const wf = (line: string) => `steps:\n  - uses: anthropics/claude-code-action@v1\n    with:\n      ${line}\n`;
+    expect(allowsBot(wf('allowed_bots: "slop[bot]"'), 'slop[bot]')).toBe(true);
+    expect(allowsBot(wf("allowed_bots: 'dependabot[bot], Slop[bot]' # slop"), 'slop[bot]')).toBe(true);
+    expect(allowsBot(wf('allowed_bots: slop'), 'slop[bot]')).toBe(true);
+    expect(allowsBot(wf('allowed_bots: "*"'), 'slop[bot]')).toBe(true);
+    expect(allowsBot(wf('allowed_bots: "other[bot]"'), 'slop[bot]')).toBe(false);
+    expect(allowsBot(wf('allowed_bots: ""'), 'slop[bot]')).toBe(false);
+    expect(allowsBot(wf('# allowed_bots: slop[bot]'), 'slop[bot]')).toBe(false);
+    expect(allowsBot('steps: []', 'slop[bot]')).toBe(false);
   });
 
   it('names the missing workflow when checks failed and the run has not reacted', () => {
@@ -233,5 +256,30 @@ describe('the behind-main warning', () => {
     expect(behindWarning(doing({ behind: { ...behind, behindBy: 0 } }))).toBeNull();
     expect(behindWarning(doing({ status: 'pr_open' }))).toBeNull();
     expect(behindWarning(doing({ conflict: { base: 'main', files: [], since: null, at: NOW } }))).toBeNull();
+  });
+});
+
+describe('GitHub App events readiness', () => {
+  const item = (appEvents: ReadinessFacts['appEvents']) => readiness({ ...ready, appEvents }).find((i) => i.key === 'app_events');
+
+  it('is ok when the App has every required event', () => {
+    expect(item({ missing: [], settingsUrl: 'u' })).toMatchObject({ state: 'ok', manual: false });
+  });
+
+  it('names the missing events and links the settings page', () => {
+    const missing = item({ missing: ['pull_request_review', 'pull_request_review_comment'], settingsUrl: 'https://github.com/settings/apps/slop/permissions' });
+    expect(missing).toMatchObject({ state: 'missing', fix: { kind: 'link', href: 'https://github.com/settings/apps/slop/permissions' } });
+    expect(missing?.detail).toContain('pull_request_review, pull_request_review_comment');
+  });
+
+  it('is unknown when the App settings could not be read', () => {
+    expect(item(null)).toMatchObject({ state: 'unknown' });
+  });
+
+  it('compares the lists and picks the settings page by owner type', () => {
+    expect(missingAppEvents(['push', 'issue_comment', 'check_run'], ['push', 'check_run', 'star'])).toEqual(['issue_comment']);
+    expect(missingAppEvents(['push'], ['push'])).toEqual([]);
+    expect(appSettingsUrl('slop', { login: 'me', type: 'User' })).toBe('https://github.com/settings/apps/slop/permissions');
+    expect(appSettingsUrl('slop', { login: 'acme', type: 'Organization' })).toBe('https://github.com/organizations/acme/settings/apps/slop/permissions');
   });
 });

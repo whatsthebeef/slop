@@ -1,24 +1,22 @@
 #!/bin/bash
-# Runs in CodeBuild after the image is pushed: copies the deploy files to S3 and has the instance switch to the
-# new image through SSM Run Command, then waits for the result. Exits non-zero when the deploy failed.
+# Runs in CodeBuild after the image is pushed: has the instance switch to the new image through SSM Run Command,
+# then waits for the result. The instance takes the deploy files (compose.yaml, remote-deploy.sh, backup.sh) from
+# the image it is deploying (/app/deploy), so no bucket carries them. Exits non-zero when the deploy failed.
 #
-# Environment (set by the CodeBuild project): AWS_REGION, STAGE, INSTANCE_ID, BUCKET, BACKUP_BUCKET, IMAGE, PUBLIC_URL.
+# Environment (set by the CodeBuild project): AWS_REGION, STAGE, INSTANCE_ID, BACKUP_BUCKET, IMAGE, PUBLIC_URL.
 set -euo pipefail
-: "${AWS_REGION:?}" "${STAGE:?}" "${INSTANCE_ID:?}" "${BUCKET:?}" "${BACKUP_BUCKET:?}" "${IMAGE:?}" "${PUBLIC_URL:?}"
+: "${AWS_REGION:?}" "${STAGE:?}" "${INSTANCE_ID:?}" "${BACKUP_BUCKET:?}" "${IMAGE:?}" "${PUBLIC_URL:?}"
 
-PREFIX="releases/${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
-aws s3 cp compose.prod.yaml "s3://${BUCKET}/${PREFIX}/compose.yaml" --only-show-errors
-aws s3 cp infra/deploy/remote-deploy.sh "s3://${BUCKET}/${PREFIX}/remote-deploy.sh" --only-show-errors
-aws s3 cp infra/deploy/backup.sh "s3://${BUCKET}/${PREFIX}/backup.sh" --only-show-errors
-
-# The instance's own commands; the values are ARNs, URLs and tags, with no characters the shell would treat specially.
+# The instance's own commands; executionTimeout (20 min) covers the pull and a health wait (up to 8 min) plus a rollback's, so a stuck command can't run for SSM's 1-hour default; the values are ARNs, URLs and tags, with no characters the shell would treat specially.
 cat > ssm-parameters.json <<JSON
-{"commands": [
+{"executionTimeout": ["1200"], "commands": [
   "set -euo pipefail",
   "mkdir -p /opt/slop",
-  "aws s3 cp s3://${BUCKET}/${PREFIX}/compose.yaml /opt/slop/compose.yaml --region ${AWS_REGION} --only-show-errors",
-  "aws s3 cp s3://${BUCKET}/${PREFIX}/remote-deploy.sh /opt/slop/remote-deploy.sh --region ${AWS_REGION} --only-show-errors",
-  "aws s3 cp s3://${BUCKET}/${PREFIX}/backup.sh /opt/slop/backup.sh --region ${AWS_REGION} --only-show-errors",
+  "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${IMAGE%%/*}",
+  "docker pull ${IMAGE}",
+  "CID=\$(docker create ${IMAGE})",
+  "docker cp \$CID:/app/deploy/. /opt/slop/",
+  "docker rm \$CID >/dev/null",
   "IMAGE=${IMAGE} BACKUP_BUCKET=${BACKUP_BUCKET} PUBLIC_URL=${PUBLIC_URL} AWS_REGION=${AWS_REGION} STAGE=${STAGE} bash /opt/slop/remote-deploy.sh"
 ]}
 JSON
@@ -29,7 +27,7 @@ COMMAND_ID="$(aws ssm send-command --region "$AWS_REGION" --instance-ids "$INSTA
 echo "SSM command ${COMMAND_ID}"
 
 STATUS=Pending
-for _ in $(seq 1 200); do
+for _ in $(seq 1 250); do
   sleep 5
   STATUS="$(aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
     --query Status --output text 2>/dev/null || echo Pending)"

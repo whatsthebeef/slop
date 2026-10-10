@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
-import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { LABEL_NAMES } from '@slop/core';
-import { Plus, X } from 'lucide-react';
+import { ArrowLeft, Plus, X } from 'lucide-react';
 import {
+  AppSettings,
   Attention,
   BoardBar,
   NewBoardDialog,
@@ -74,7 +75,10 @@ export const HomePage = () => {
     <div className='flex h-dvh flex-col'>
       <BoardBar />
       <main className='mx-auto grid w-full max-w-sm gap-3 p-6'>
-        <h1 className='text-base font-semibold'>Create your first board</h1>
+        <div className='flex items-center justify-between gap-3'>
+          <h1 className='text-base font-semibold'>Create your first board</h1>
+          <AppSettings />
+        </div>
         <NewBoardForm />
       </main>
     </div>
@@ -89,18 +93,34 @@ export const BoardsPage = () => {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });
   const write = useSessionWrite();
   const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
+  // A fresh history entry means the page was opened directly; there is nothing to go back to.
+  const hasHistory = useLocation().key !== 'default';
+  const back = () => {
+    if (hasHistory) return void navigate(-1);
+    const last = lastViewedBoard(me.data?.boards ?? []);
+    void navigate(last === undefined ? '/' : `/boards/${String(last.id)}`);
+  };
   const boards = allBoardsOrder(me.data?.boards ?? []);
   const managed = (me.data?.boards ?? []).some((b) => b.position !== undefined);
   const now = Date.now();
   return (
     <div className='flex h-dvh flex-col'>
-      <BoardBar allBoards />
+      <BoardBar />
       <main className='mx-auto grid w-full max-w-[63rem] content-start gap-3 overflow-auto p-6'>
         <div className='flex items-center justify-between gap-3'>
-          <h1 className='text-base font-semibold'>All boards</h1>
-          <Button type='button' variant='outline' onClick={() => setCreating(true)} data-testid='new-board-page'>
-            <Plus className='h-4 w-4' aria-hidden /> New board
-          </Button>
+          <div className='flex items-center gap-3'>
+            <button type='button' className='rounded p-1 hover:bg-muted' aria-label='Back' title='Back' data-testid='boards-back' onClick={back}>
+              <ArrowLeft className='h-4 w-4' aria-hidden />
+            </button>
+            <h1 className='text-base font-semibold'>All boards</h1>
+          </div>
+          <div className='flex items-center gap-2'>
+            <Button type='button' variant='outline' onClick={() => setCreating(true)} data-testid='new-board-page'>
+              <Plus className='h-4 w-4' aria-hidden /> New board
+            </Button>
+            <AppSettings />
+          </div>
         </div>
         {me.data === undefined && <p className='text-sm text-muted-foreground'>Loading…</p>}
         <ul className='grid gap-1.5'>

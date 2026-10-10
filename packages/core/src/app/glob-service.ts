@@ -580,6 +580,11 @@ export class GlobService {
     );
   }
 
+  /** Retry merge: a failed merge (not a conflict) goes back to merging at the head, which already passed. */
+  retryMerge(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.retryMerge(glob, ctx));
+  }
+
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel(email: string, id: string, version: number, name: LabelName, command: LabelCommand) {
     return this.command(email, id, version, (glob, ctx) => machine.reviewLabel(glob, name, command, ctx));

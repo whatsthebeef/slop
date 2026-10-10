@@ -73,7 +73,10 @@ const APP_PORT = 3000;
  * CloudFront address, and deployed by CodeBuild on every push to the branch (`infra/deploy/`).
  *
  *   viewer ──https──▶ CloudFront ──http :3000──▶ EC2 (security group: CloudFront's prefix list only)
- *   push to main ──▶ CodeBuild: checks, arm64 image ──▶ ECR ──▶ SSM Run Command ──▶ pull, compose up, health, rollback
+ *   push to main ──▶ CodeBuild: arm64 image ──▶ ECR ──▶ SSM Run Command ──▶ pull, compose up, health, rollback
+ *
+ * The image carries its own deploy files (`/app/deploy`: compose file, remote-deploy.sh, backup.sh); the SSM command
+ * extracts them from the image it pulls, so there is no deploy-files bucket (the backups bucket below is the only S3).
  *
  * The instance has no key pair and no port 22; access is SSM Session Manager. Its role reads the server's secrets,
  * pulls from ECR, calls Bedrock, and reads the `/slop/<stage>/*` parameters (`server-env` holds the settings that
@@ -96,16 +99,6 @@ export class HostStack extends Stack {
       lifecycleRules: [{ description: 'Keep the 30 most recent images', tagStatus: TagStatus.ANY, maxImageCount: 30 }],
     });
 
-    // The deploy files for each release (compose file, deploy script): CodeBuild writes them, the instance reads them.
-    const artifacts = new Bucket(this, 'DeployFiles', {
-      encryption: BucketEncryption.S3_MANAGED,
-      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
-      enforceSSL: true,
-      removalPolicy: RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
-      lifecycleRules: [{ expiration: Duration.days(30) }],
-    });
-
     const vpc = Vpc.fromLookup(this, 'Vpc', { isDefault: true });
     const securityGroup = new SecurityGroup(this, 'HostSecurityGroup', {
       vpc,
@@ -116,11 +109,10 @@ export class HostStack extends Stack {
 
     const role = new Role(this, 'HostRole', {
       assumedBy: new ServicePrincipal('ec2.amazonaws.com'),
-      description: 'slop host: SSM, ECR pull, Secrets Manager, Bedrock, deploy files',
+      description: 'slop host: SSM, ECR pull, Secrets Manager, Bedrock',
       managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')],
     });
     repository.grantPull(role);
-    artifacts.grantRead(role);
     props.secrets.grantServer(role);
     role.addToPolicy(
       new PolicyStatement({
@@ -251,7 +243,6 @@ export class HostStack extends Stack {
       },
     });
     repository.grantPullPush(buildRole);
-    artifacts.grantReadWrite(buildRole);
     buildRole.addToPolicy(
       new PolicyStatement({
         actions: ['ssm:SendCommand'],
@@ -283,7 +274,6 @@ export class HostStack extends Stack {
         AWS_REGION: { value: this.region },
         STAGE: { value: stage },
         INSTANCE_ID: { value: instance.instanceId },
-        BUCKET: { value: artifacts.bucketName },
         REPOSITORY_URI: { value: repository.repositoryUri },
         PUBLIC_URL: { value: publicUrl },
         BACKUP_BUCKET: { value: backups.bucketName },

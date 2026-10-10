@@ -1,12 +1,11 @@
 import { MessageCircle } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useLocation, useParams } from 'react-router';
 import { ChatDock } from '@/components/chat-dock';
 import { NotificationBar } from '@/components/notification-bar';
-import { BoardBar, useOpenBoard } from '@/components/board-bar';
+import { AppSettings, BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
-import { usePresence } from '@/lib/chat-width';
 import { hideSignedOff, isChatShortcut, WIDE_QUERY } from '@/lib/chat';
 import { newCount } from '@/lib/inbox';
 import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
@@ -21,22 +20,24 @@ export interface BoardShellContext {
   hideSignedOff: boolean;
 }
 
-/** Board, Inbox, Signed off, Knowledge and Settings as tabs on a thin line; the active one is underlined on it. The chat and ＋ icons sit at its right. */
+/** Board, Inbox, Signed off, Knowledge and Settings as tabs on a thin line; the active one is underlined on it. The ＋, chat and settings icons sit at its right. */
 const BoardTabs = ({
   boardId,
   onActions,
   onChat,
+  chatOpen,
 }: {
   boardId: number;
   onActions: (el: HTMLElement | null) => void;
   onChat: () => void;
+  chatOpen: boolean;
 }) => {
   const current = activeTab(useLocation().pathname, boardId);
   // The Inbox tab counts items waiting for a person; hints refresh it on the pages that listen, and a slow poll covers the rest.
   const inbox = useQuery({ queryKey: inboxKey(boardId), queryFn: () => api.inbox(boardId), refetchInterval: pollInterval(false) });
   const waiting = newCount(inbox.data ?? []);
   return (
-    <header className='mx-5 mt-4 flex flex-wrap items-end gap-x-6 border-b border-edge/50 text-sm'>
+    <header className='mx-5 mt-1.5 flex flex-wrap items-end gap-x-6 border-b border-edge/50 text-sm'>
       <nav className='flex gap-6' aria-label='Board sections'>
         {BOARD_TABS.map(({ tab, label, path }) => (
           <Link
@@ -51,17 +52,20 @@ const BoardTabs = ({
         ))}
       </nav>
       <div className='ml-auto flex items-center gap-1 pb-1.5'>
+        <div ref={onActions} className='flex items-center' data-testid='header-actions' />
         <button
           type='button'
           className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground'
           aria-label='Ask the board chat'
+          aria-pressed={chatOpen}
           title='Ask the board chat (/ or ⌘K)'
           data-testid='chat-toggle'
           onClick={onChat}
         >
           <MessageCircle className='h-4 w-4' aria-hidden />
         </button>
-        <div ref={onActions} className='flex items-center' data-testid='header-actions' />
+        <span className='mx-1 h-4 w-px bg-edge/50' aria-hidden />
+        <AppSettings />
       </div>
     </header>
   );
@@ -105,6 +109,11 @@ export const BoardShell = () => {
     setChatOpen(false);
     setFullScreen(false);
   };
+  // The tab row's chat icon opens a closed panel and closes an open one; the shortcuts below only open it.
+  const toggleChat = () => {
+    if (chatOpen) closeChat();
+    else openChat();
+  };
   useEffect(() => {
     if (!isBoard) return;
     const onKey = (e: KeyboardEvent) => {
@@ -116,21 +125,26 @@ export const BoardShell = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, [isBoard]);
   const showChat = isBoard && chatOpen;
-  // The panel stays mounted while it steps out, so Signed Off stays hidden until the dock is gone.
-  const mounted = usePresence(showChat);
+  // The panel stays mounted while it steps out (the dock says when it is gone), so Signed Off stays hidden until then.
+  const [docked, setDocked] = useState(false);
+  useLayoutEffect(() => {
+    if (showChat) setDocked(true);
+  }, [showChat]);
+  const mounted = showChat || docked;
   return (
     <PageContextProvider page={page} setPage={setPage}>
     <div className='flex h-dvh flex-col'>
       <BoardBar current={isBoard ? boardId : undefined} />
       {isBoard && <NotificationBar boardId={boardId} />}
-      {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={openChat} />}
+      {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={toggleChat} chatOpen={showChat} />}
       <div className='flex min-h-0 flex-1'>
-        <div className={cn('min-h-0 min-w-0 flex-1 overflow-auto', showChat && fullScreen && 'hidden')} data-testid='main-area'>
+        <div className='min-h-0 min-w-0 flex-1 overflow-auto' inert={showChat && fullScreen} data-testid='main-area'>
           <Outlet context={{ headerActions, hideSignedOff: hideSignedOff(mounted, wide) } satisfies BoardShellContext} />
         </div>
         {isBoard && mounted && (
           <ChatDock
             open={showChat}
+            onExited={() => setDocked(false)}
             wide={wide}
             boardId={boardId}
             fullScreen={fullScreen}

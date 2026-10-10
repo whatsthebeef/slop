@@ -88,7 +88,7 @@ export const Reviews = ({ name, count }: { name: LabelName; count: number }) => 
   />
 );
 
-/** Board rows and the All boards row share columns: number, name with its ID and last-viewed label, running, supers, waiting, reviews. */
+/** Board rows' columns: number, name with its ID and last-viewed label, running, supers, waiting, reviews. */
 const ROW =
   'grid grid-cols-[2rem_minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)_7rem_7rem_7rem_3.5rem_3.5rem_3.5rem]';
 
@@ -96,26 +96,26 @@ const MENU_ITEM =
   'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted';
 
 /**
- * App-wide settings and actions behind a floating button in the corner: the theme, a new board,
- * signing out. App-level config (seed agents and the like) goes here later.
+ * App-wide settings and actions behind a settings icon (at the right of the tab row, or of a page's header where
+ * there are no tabs): the theme, all boards, signing out. App-level config (seed agents and the like) goes here later.
  */
-const AppSettings = () => {
+export const AppSettings = () => {
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
   const client = useQueryClient();
   const [menu, setMenu] = useState(false);
-  const [creating, setCreating] = useState(false);
   return (
     <>
       <Popover open={menu} onOpenChange={setMenu}>
         <PopoverTrigger
-          className="press fixed right-4 bottom-4 z-30 inline-flex h-9 w-9 items-center justify-center rounded-md border border-foreground/70 bg-card text-foreground shadow-[2px_2px_0_var(--edge)] hover:bg-muted"
-          aria-label="App settings"
+          className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label="Settings"
+          title="Settings"
           data-testid="app-settings"
         >
-          <Settings2 className="h-4 w-4" />
+          <Settings2 className="h-4 w-4" aria-hidden />
         </PopoverTrigger>
-        <PopoverContent align="end" side="top" className="w-56 p-3">
+        <PopoverContent align="end" side="bottom" className="w-56 p-3">
           <div className="grid gap-2">
             <h2 className="text-xs font-semibold text-muted-foreground">App settings</h2>
             <div className="flex items-center justify-between gap-2 text-sm">
@@ -155,11 +155,11 @@ const AppSettings = () => {
                 className={MENU_ITEM}
                 onClick={() => {
                   setMenu(false);
-                  setCreating(true);
+                  void navigate('/boards');
                 }}
-                data-testid="new-board"
+                data-testid="all-boards-menu"
               >
-                <Plus className="h-4 w-4" /> New board…
+                <LayoutGrid className="h-4 w-4" /> All boards
               </button>
               <button
                 type="button"
@@ -178,12 +178,11 @@ const AppSettings = () => {
           </div>
         </PopoverContent>
       </Popover>
-      <NewBoardDialog open={creating} onOpenChange={setCreating} />
     </>
   );
 };
 
-/** The New board dialog, shared by the app settings and the board bar. */
+/** The New board dialog, used by the home page. */
 export const NewBoardDialog = ({
   open,
   onOpenChange,
@@ -273,22 +272,15 @@ export const useSessionWrite = () => {
  * The app's top bar, like tmux's sessions: the boards you keep open, numbered by their place (name with its ID, when
  * you last viewed it, and your counts: runs in progress, supers, globs waiting on you and on each sign-off review).
  * + adds a board at the end (opening one doesn't); × takes one out and the rest renumber. The current board, if it isn't in the bar,
- * shows after them with an add button. The All boards row below links to the page where boards are added.
+ * shows after them with an add button. The All boards page, where boards are added, opens from the app settings button.
  * App settings float in a corner.
  */
-export const BoardBar = ({
-  current,
-  allBoards = false,
-}: {
-  current?: number;
-  /** The All boards page is showing: its row is the marked one. */
-  allBoards?: boolean;
-}) => {
+export const BoardBar = ({ current }: { current?: number }) => {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });
   const write = useSessionWrite();
 
   const boards = me.data?.boards ?? [];
-  const { managed, sessions, loose, others } = barRows(boards, current);
+  const { managed, sessions, loose } = barRows(boards, current);
   // The 30 s poll re-renders the bar, which keeps the labels fresh enough.
   const now = Date.now();
 
@@ -352,34 +344,12 @@ export const BoardBar = ({
 
   return (
     <>
-      <AppSettings />
-      <header className="flex items-stretch gap-3 border-b border-edge px-3 pt-4 pb-2.5 sm:px-5">
+      <header className="flex items-stretch gap-3 px-3 pt-4 pb-2.5 sm:px-5">
         <nav className="min-w-0 flex-1" aria-label="Boards">
           <ul className="grid gap-0.5">
             {sessions.map((b, i) => row(b, 'session', String(i + 1)))}
             {loose !== undefined && row(loose, 'loose', '–')}
           </ul>
-          {boards.length > 0 && (
-            <Link
-              to="/boards"
-              aria-current={allBoards ? 'page' : undefined}
-              className={cn(
-                'mt-0.5 grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-x-4 rounded-sm border px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)]',
-                allBoards
-                  ? 'border-foreground bg-lcd text-lcd-foreground'
-                  : 'border-transparent text-muted-foreground hover:border-border hover:bg-muted',
-              )}
-              data-testid="all-boards"
-            >
-              <LayoutGrid className="h-3.5 w-3.5 opacity-60" aria-hidden />
-              <span className="truncate text-sm">
-                All boards
-                {others > 0 && (
-                  <span className="ml-2 font-mono text-xs opacity-70">+{others} more</span>
-                )}
-              </span>
-            </Link>
-          )}
         </nav>
       </header>
     </>

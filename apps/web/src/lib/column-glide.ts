@@ -1,12 +1,12 @@
 import { useLayoutEffect, useRef } from 'react';
 import type { RefObject } from 'react';
-import { GLIDE_EASING, GLIDE_MS, reducedMotion } from './card-motion';
+import { reducedMotion, stepMotion } from './card-motion';
 
 const columns = (root: HTMLElement) => [...root.querySelectorAll<HTMLElement>('[data-testid^="list-"]')];
 
 /**
  * When `trigger` changes, the layout changes at once (a column hides or the board gets narrower) and each column that stayed
- * glides from its old place to its new one with a transform, like the cards' glide, so the board never animates its layout.
+ * steps from its old place to its new one with a transform, like the cards, so the board never animates its layout.
  */
 export const useColumnGlide = (container: RefObject<HTMLElement | null>, trigger: unknown) => {
   const lefts = useRef(new Map<string, number>());
@@ -25,7 +25,7 @@ export const useColumnGlide = (container: RefObject<HTMLElement | null>, trigger
       const was = before.get(el.dataset.testid ?? '');
       const now = next.get(el.dataset.testid ?? '');
       if (was === undefined || now === undefined || was === now) continue;
-      el.animate([{ transform: `translateX(${was - now}px)` }, { transform: 'none' }], { duration: GLIDE_MS, easing: GLIDE_EASING });
+      el.animate([{ transform: `translateX(${was - now}px)` }, { transform: 'none' }], stepMotion(was - now));
     }
   });
 };
