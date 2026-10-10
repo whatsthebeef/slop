@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CodeHost } from '../src/codehost.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
+import { REQUIRED_APP_EVENTS } from '../src/github/setup.js';
 import type { Env } from '../src/http/app.js';
 import { mountReadiness } from '../src/http/readiness.js';
 import { createTestDatabase } from './support/database.js';
@@ -116,6 +117,35 @@ describe('GET /api/boards/:b/readiness: Claude workflow', () => {
     expect(denied?.detail).toContain('allowed_bots: "slop[bot]"');
     const allowed = await claudeItem(withApp({ '.github/workflows/claude.yml': workflow("      allowed_bots: 'slop[bot]'\n") }));
     expect(allowed).toMatchObject({ state: 'ok' });
+  });
+
+  it("warns when slop's App lacks a required event, and passes once it has them all", async () => {
+    const eventsItem = async (events: string[]): Promise<ReadinessItem | undefined> => {
+      const host = hostWith({});
+      host.appSettings = () => Promise.resolve({ slug: 'slop', events, owner: { login: 'acme', type: 'Organization' } });
+      const app = new Hono<Env>();
+      app.use('/api/*', async (c, next) => {
+        c.set('email', ADMIN);
+        await next();
+      });
+      mountReadiness(app, {
+        boards: new BoardService(deps),
+        globs: new GlobService({ ...deps, ids: { runId: () => crypto.randomUUID() }, routines: { hasRoutine: () => Promise.resolve(true) } }),
+        store,
+        notifications: new NotificationService(deps),
+        host,
+        log: () => undefined,
+      });
+      const response = await app.request(`/api/boards/${String(boardId)}/readiness`);
+      return ((await response.json()) as { items: ReadinessItem[] }).items.find((i) => i.key === 'app_events');
+    };
+    const missing = await eventsItem(['push', 'pull_request', 'issue_comment', 'check_run', 'check_suite']);
+    expect(missing).toMatchObject({
+      state: 'missing',
+      fix: { kind: 'link', href: 'https://github.com/organizations/acme/settings/apps/slop/permissions' },
+    });
+    expect(missing?.detail).toContain('pull_request_review, pull_request_review_comment');
+    expect(await eventsItem([...REQUIRED_APP_EVENTS])).toMatchObject({ state: 'ok' });
   });
 
   it('reading the checklist raises the board setup line on the bar for each member, and dismissing is personal', async () => {
