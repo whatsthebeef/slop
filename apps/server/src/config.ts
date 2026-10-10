@@ -150,8 +150,20 @@ const schema = z.object({
 
 export type Config = z.infer<typeof schema>;
 
+const isLocalUrl = (url: string): boolean => {
+  try {
+    const host = new URL(url).hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+};
+
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
   const config = schema.parse(env);
+  if (config.AUTH_MODE === 'dev' && !isLocalUrl(config.PUBLIC_URL)) {
+    throw new Error(`AUTH_MODE=dev is only allowed when PUBLIC_URL is local (got ${config.PUBLIC_URL}); set AUTH_MODE=cognito`);
+  }
   if (config.AUTH_MODE === 'cognito') {
     for (const key of ['COGNITO_USER_POOL_ID', 'COGNITO_REGION', 'COGNITO_DOMAIN', 'COGNITO_CLIENT_IDS'] as const) {
       if (config[key] === undefined) throw new Error(`${key} is required when AUTH_MODE=cognito`);
