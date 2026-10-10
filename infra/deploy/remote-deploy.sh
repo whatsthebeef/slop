@@ -82,8 +82,9 @@ compose() { SLOP_IMAGE="$1" POSTGRES_PASSWORD="$POSTGRES_PASSWORD" docker compos
 
 wait_healthy() {
   # /auth/config needs no sign-in; the server answers only after its migrations have run.
+  # Each attempt is bounded, so an app that accepts the connection but never answers still ends the wait and rolls back.
   for _ in $(seq 1 60); do
-    if curl -fsS -o /dev/null http://localhost:3000/auth/config; then return 0; fi
+    if curl -fsS --connect-timeout 2 --max-time 5 -o /dev/null http://localhost:3000/auth/config; then return 0; fi
     sleep 3
   done
   return 1
