@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useLocation, useParams } from 'react-router';
 import { ChatDock } from '@/components/chat-dock';
 import { NotificationBar } from '@/components/notification-bar';
-import { BoardBar, useOpenBoard } from '@/components/board-bar';
+import { AppSettings, BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
 import { usePresence } from '@/lib/chat-width';
 import { hideSignedOff, isChatShortcut, WIDE_QUERY } from '@/lib/chat';
@@ -21,7 +21,7 @@ export interface BoardShellContext {
   hideSignedOff: boolean;
 }
 
-/** Board, Inbox, Signed off, Knowledge and Settings as tabs on a thin line; the active one is underlined on it. The chat and ＋ icons sit at its right. */
+/** Board, Inbox, Signed off, Knowledge and Settings as tabs on a thin line; the active one is underlined on it. The ＋, chat and settings icons sit at its right. */
 const BoardTabs = ({
   boardId,
   onActions,
@@ -36,7 +36,7 @@ const BoardTabs = ({
   const inbox = useQuery({ queryKey: inboxKey(boardId), queryFn: () => api.inbox(boardId), refetchInterval: pollInterval(false) });
   const waiting = newCount(inbox.data ?? []);
   return (
-    <header className='mx-5 mt-4 flex flex-wrap items-end gap-x-6 border-b border-edge/50 text-sm'>
+    <header className='mx-5 mt-1.5 flex flex-wrap items-end gap-x-6 border-b border-edge/50 text-sm'>
       <nav className='flex gap-6' aria-label='Board sections'>
         {BOARD_TABS.map(({ tab, label, path }) => (
           <Link
@@ -62,6 +62,8 @@ const BoardTabs = ({
         >
           <MessageCircle className='h-4 w-4' aria-hidden />
         </button>
+        <span className='mx-1 h-4 w-px bg-edge/50' aria-hidden />
+        <AppSettings />
       </div>
     </header>
   );

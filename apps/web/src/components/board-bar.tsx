@@ -96,10 +96,10 @@ const MENU_ITEM =
   'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted';
 
 /**
- * App-wide settings and actions behind a floating button in the corner: the theme, all boards,
- * signing out. App-level config (seed agents and the like) goes here later.
+ * App-wide settings and actions behind a settings icon (at the right of the tab row, or of a page's header where
+ * there are no tabs): the theme, all boards, signing out. App-level config (seed agents and the like) goes here later.
  */
-const AppSettings = () => {
+export const AppSettings = () => {
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
   const client = useQueryClient();
@@ -108,13 +108,14 @@ const AppSettings = () => {
     <>
       <Popover open={menu} onOpenChange={setMenu}>
         <PopoverTrigger
-          className="press fixed right-4 bottom-4 z-30 inline-flex h-9 w-9 items-center justify-center rounded-md border border-foreground/70 bg-card text-foreground shadow-[2px_2px_0_var(--edge)] hover:bg-muted"
-          aria-label="App settings"
+          className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label="Settings"
+          title="Settings"
           data-testid="app-settings"
         >
-          <Settings2 className="h-4 w-4" />
+          <Settings2 className="h-4 w-4" aria-hidden />
         </PopoverTrigger>
-        <PopoverContent align="end" side="top" className="w-56 p-3">
+        <PopoverContent align="end" side="bottom" className="w-56 p-3">
           <div className="grid gap-2">
             <h2 className="text-xs font-semibold text-muted-foreground">App settings</h2>
             <div className="flex items-center justify-between gap-2 text-sm">
@@ -343,7 +344,6 @@ export const BoardBar = ({ current }: { current?: number }) => {
 
   return (
     <>
-      <AppSettings />
       <header className="flex items-stretch gap-3 px-3 pt-4 pb-2.5 sm:px-5">
         <nav className="min-w-0 flex-1" aria-label="Boards">
           <ul className="grid gap-0.5">
