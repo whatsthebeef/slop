@@ -355,7 +355,7 @@ export const codeHostExecutors = (
       return 'done';
     },
 
-    squash_merge: async (effect, glob, { globs }) => {
+    squash_merge: async (effect, glob, { globs }, attempt) => {
       if (effect.kind !== 'squash_merge' || glob?.pr == null) return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
@@ -374,6 +374,13 @@ export const codeHostExecutors = (
             const conflict = { base: repo.base, files: await host.conflictFiles(repo, prNumber) };
             await globs.applyEvent(glob.id, (g, ctx) => machine.mergeFailed(g, machine.conflictReason(conflict), ctx, conflict));
           }
+          break;
+        case 'undecided':
+          // Throwing makes the outbox retry with backoff (5 s, 10 s, 20 s…); once it runs out the glob fails.
+          if (attempt?.final !== true) throw new Error('GitHub has not decided whether the PR can merge yet');
+          await globs.applyEvent(glob.id, (g, ctx) =>
+            machine.mergeFailed(g, "GitHub hasn't decided whether the PR can merge; try again", ctx),
+          );
           break;
         case 'refused':
           await globs.applyEvent(glob.id, (g, ctx) => machine.mergeFailed(g, result.reason, ctx));

@@ -33,6 +33,8 @@ export type MergeResult =
   | { readonly outcome: 'merged'; readonly sha: string }
   | { readonly outcome: 'updating' }
   | { readonly outcome: 'conflict' }
+  /** GitHub hasn't decided whether the PR can merge (mergeable still null, or a 405 on a PR that looked clean): retry. */
+  | { readonly outcome: 'undecided' }
   | { readonly outcome: 'refused'; readonly reason: string };
 
 /**

@@ -383,6 +383,8 @@ export class GitHub implements CodeHost, CommitGraph {
     const r = { owner: repo.owner, repo: repo.name, pull_number: prNumber };
     const { state } = await this.mergeState(repo, prNumber);
     if (state === 'conflict') return { outcome: 'conflict' };
+    // Right after a push GitHub is still computing `mergeable`: merging now gets a 405, so wait and look again.
+    if (state === 'unknown') return { outcome: 'undecided' };
     if (state === 'behind') {
       try {
         await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', { ...r, expected_head_sha: sha });
@@ -402,6 +404,8 @@ export class GitHub implements CodeHost, CommitGraph {
       });
       return { outcome: 'merged', sha: data.sha };
     } catch (error) {
+      // A 405 on a PR that looked clean is GitHub still catching up; with a known reason (checks, blocked) it is final.
+      if (isStatus(error, 405) && state === 'passed') return { outcome: 'undecided' };
       if (isStatus(error, 405, 409)) {
         return { outcome: 'refused', reason: error instanceof Error ? error.message : 'GitHub refused the merge' };
       }

@@ -411,7 +411,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'merge',
     {
       description:
-        "Merge a same or super whose PR is ready and whose required checks passed on the current head, as the glob's Merge button does: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. With continue (supers, latest implementation record at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Pass the version you read.",
+        "Merge a same or super whose PR is ready and whose required checks passed on the current head, as the glob's Merge button does: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. With continue (supers, latest implementation record at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Also Retry merge: on a failed glob whose merge failed without a conflict (e.g. \"GitHub hasn't decided whether the PR can merge\"), it asks slop to merge again. Pass the version you read.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -419,7 +419,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       },
     },
     async ({ id, version, continue: continueAfter }) => {
-      const result = await globs.merge(email, id, version, continueAfter ?? false);
+      // A failed merge (GitHub hadn't decided mergeability) is retried by the same tool: Retry merge on the board.
+      const before = await globs.get(email, id);
+      const retry = before.ok && before.value.glob.status === 'failed' && before.value.glob.failure?.kind === 'merge';
+      const result = retry ? await globs.retryMerge(email, id, version) : await globs.merge(email, id, version, continueAfter ?? false);
       if (!result.ok) return reply(result);
       // Run the squash_merge job now and answer with the glob as it then is, as the REST action does.
       await deps.outbox.drain(id);
