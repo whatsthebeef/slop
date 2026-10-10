@@ -7,9 +7,9 @@
 set -euo pipefail
 : "${AWS_REGION:?}" "${STAGE:?}" "${INSTANCE_ID:?}" "${BACKUP_BUCKET:?}" "${IMAGE:?}" "${PUBLIC_URL:?}"
 
-# The instance's own commands; the values are ARNs, URLs and tags, with no characters the shell would treat specially.
+# The instance's own commands; executionTimeout (20 min) covers the pull and a health wait (up to 8 min) plus a rollback's, so a stuck command can't run for SSM's 1-hour default; the values are ARNs, URLs and tags, with no characters the shell would treat specially.
 cat > ssm-parameters.json <<JSON
-{"commands": [
+{"executionTimeout": ["1200"], "commands": [
   "set -euo pipefail",
   "mkdir -p /opt/slop",
   "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${IMAGE%%/*}",
@@ -27,7 +27,7 @@ COMMAND_ID="$(aws ssm send-command --region "$AWS_REGION" --instance-ids "$INSTA
 echo "SSM command ${COMMAND_ID}"
 
 STATUS=Pending
-for _ in $(seq 1 200); do
+for _ in $(seq 1 250); do
   sleep 5
   STATUS="$(aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
     --query Status --output text 2>/dev/null || echo Pending)"
