@@ -38,6 +38,10 @@ COGNITO_CLIENT_IDS=unset
 COGNITO_BOARD_CLIENT_ID=unset"
 fi
 
+# Production always signs in through Cognito: whatever the parameter says about AUTH_MODE is dropped, and the
+# server defaults to dev when it is absent, so it is set explicitly after the parameter's lines.
+EXTRA="$(printf '%s\n' "$EXTRA" | grep -v '^[[:space:]]*AUTH_MODE=' || true)"
+
 (umask 077 && {
   echo "PUBLIC_URL=${PUBLIC_URL}"
   echo "DATABASE_URL=postgres://slop:${POSTGRES_PASSWORD}@postgres:5432/slop"
@@ -47,6 +51,7 @@ fi
   echo "BEDROCK_REGION=${AWS_REGION}"
   echo "AWS_REGION=${AWS_REGION}"
   printf '%s\n' "$EXTRA"
+  echo "AUTH_MODE=cognito"
 } > app.env.new)
 mv app.env.new app.env
 

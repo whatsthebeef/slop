@@ -45,3 +45,21 @@ describe('SLOP_WORK_TIME_ZONE', () => {
     expect(() => loadConfig({ SLOP_WORK_TIME_ZONE: 'Mars/Base' })).toThrow('SLOP_WORK_TIME_ZONE');
   });
 });
+
+describe('AUTH_MODE', () => {
+  it('allows dev sign-in on a local PUBLIC_URL', () => {
+    expect(loadConfig({}).AUTH_MODE).toBe('dev');
+    expect(loadConfig({ AUTH_MODE: 'dev', PUBLIC_URL: 'http://127.0.0.1:3000' }).AUTH_MODE).toBe('dev');
+  });
+  it('refuses dev sign-in on a non-local PUBLIC_URL', () => {
+    expect(() => loadConfig({ PUBLIC_URL: 'https://abc.cloudfront.net' })).toThrow(/AUTH_MODE=dev/);
+    expect(() => loadConfig({ AUTH_MODE: 'dev', PUBLIC_URL: 'not a url' })).toThrow(/AUTH_MODE=dev/);
+  });
+  it('allows cognito on a public URL', () => {
+    const env = {
+      AUTH_MODE: 'cognito', PUBLIC_URL: 'https://abc.cloudfront.net', COGNITO_USER_POOL_ID: 'p',
+      COGNITO_REGION: 'r', COGNITO_DOMAIN: 'd', COGNITO_CLIENT_IDS: 'c',
+    };
+    expect(loadConfig(env).AUTH_MODE).toBe('cognito');
+  });
+});
