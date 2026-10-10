@@ -51,6 +51,10 @@ export interface ReadinessFacts {
   readonly subGateWorkflow: boolean | null;
   /** Whether a workflow on the base branch runs `anthropics/claude-code-action`; null when slop can't read the repo. */
   readonly claudeWorkflow: boolean | null;
+  /** slop's GitHub App bot name (`<slug>[bot]`); null before the app exists. */
+  readonly slopBot: string | null;
+  /** Whether the Claude workflow's `allowed_bots` lets `slopBot` trigger it; null when there is no workflow or no bot to check. */
+  readonly claudeAllowsSlop: boolean | null;
   /**
    * The agent-set version committed on the base branch (`.claude/slop-agent-set.json`): null when
    * the file is absent, 'unreadable' when it isn't valid, 'unknown' when slop couldn't read the repo.
@@ -69,6 +73,18 @@ export const CLAUDE_ACTION = 'anthropics/claude-code-action';
 
 /** Whether a workflow file's text runs the Claude Code action. */
 export const runsClaudeAction = (workflow: string): boolean => workflow.includes(CLAUDE_ACTION);
+
+/**
+ * Whether a workflow file's `allowed_bots` input lists `bot` (`slop[bot]`, with or without the suffix) or `*`.
+ * Reads the first `allowed_bots:` line only, as a comma-separated list on one line.
+ */
+export const allowsBot = (workflow: string, bot: string): boolean => {
+  const match = /^\s*allowed_bots\s*:\s*(.*)$/m.exec(workflow);
+  if (match === null) return false;
+  const value = (match[1] ?? '').replace(/\s+#.*$/, '').trim().replace(/^(['"])(.*)\1$/, '$2');
+  const bare = (name: string): string => name.trim().toLowerCase().replace(/\[bot\]$/, '');
+  return value.split(',').some((name) => name.trim() === '*' || (bare(name) !== '' && bare(name) === bare(bot)));
+};
 
 const claudeWorkflowFix = (repo: string | null): string =>
   `Add a Claude workflow: run /install-github-app in Claude Code for ${repo ?? 'the repo'}, or copy catalog/scripts/claude.yml to .github/workflows/ and add the CLAUDE_CODE_OAUTH_TOKEN secret`;
@@ -143,7 +159,9 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     facts.claudeWorkflow === null
       ? item('claude_workflow', claudeTitle, 'unknown', "slop can't read the repo yet", null)
       : facts.claudeWorkflow
-        ? item('claude_workflow', claudeTitle, 'ok', `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so @claude comments get a response (it also needs the Claude GitHub App)`, null)
+        ? facts.slopBot !== null && facts.claudeAllowsSlop === false
+          ? item('claude_workflow', claudeTitle, 'missing', `A workflow runs ${CLAUDE_ACTION}, but it ignores slop's @claude comments (merge-conflict requests) because slop's App is not allowed to trigger it. Add this under \`with:\`: allowed_bots: "${facts.slopBot}"`, null)
+          : item('claude_workflow', claudeTitle, 'ok', `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so @claude comments get a response (it also needs the Claude GitHub App)`, null)
         : item('claude_workflow', claudeTitle, 'missing', claudeWorkflowFix(repo), {
             kind: 'link',
             label: 'Add the workflow',

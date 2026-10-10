@@ -104,6 +104,20 @@ describe('GET /api/boards/:b/readiness: Claude workflow', () => {
     expect(item).toMatchObject({ state: 'ok' });
   });
 
+  it("warns when the workflow does not allow slop's App, and passes once it does", async () => {
+    const workflow = (extra: string): string => `steps:\n  - uses: anthropics/claude-code-action@v1\n    with:\n      x: y\n${extra}`;
+    const withApp = (files: Record<string, string>): CodeHost => {
+      const host = hostWith(files);
+      host.connection = () => Promise.resolve({ configured: true, connected: true, installUrl: null, appName: 'slop' });
+      return host;
+    };
+    const denied = await claudeItem(withApp({ '.github/workflows/claude.yml': workflow('') }));
+    expect(denied).toMatchObject({ state: 'missing' });
+    expect(denied?.detail).toContain('allowed_bots: "slop[bot]"');
+    const allowed = await claudeItem(withApp({ '.github/workflows/claude.yml': workflow("      allowed_bots: 'slop[bot]'\n") }));
+    expect(allowed).toMatchObject({ state: 'ok' });
+  });
+
   it('reading the checklist raises the board setup line on the bar for each member, and dismissing is personal', async () => {
     const notifications = new NotificationService(deps);
     const app = new Hono<Env>();

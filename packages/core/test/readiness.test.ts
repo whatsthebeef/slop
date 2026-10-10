@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { behindWarning, queuedRunNotice, readiness, runsClaudeAction, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
+import { behindWarning, queuedRunNotice, readiness, runsClaudeAction, allowsBot, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
 import type { ReadinessFacts } from '../src/domain/readiness.js';
 import { NOW, board, glob, run } from './fixtures.js';
 
@@ -16,6 +16,8 @@ const ready: ReadinessFacts = {
   installUrl: null,
   subGateWorkflow: true,
   claudeWorkflow: true,
+  slopBot: 'slop[bot]',
+  claudeAllowsSlop: true,
   committedAgentSetVersion: 3,
   hasBuildDoc: true,
   ticks: { routines: true, routine_repo: true, claude_app: true },
@@ -46,6 +48,26 @@ describe('Claude workflow readiness', () => {
   it('recognises only files that reference the action', () => {
     expect(runsClaudeAction('steps:\n  - uses: anthropics/claude-code-action@v1\n')).toBe(true);
     expect(runsClaudeAction('steps:\n  - uses: actions/checkout@v4\n')).toBe(false);
+  });
+
+  it("warns with the exact line when the workflow does not allow slop's App", () => {
+    const warned = readiness({ ...ready, claudeAllowsSlop: false }).find((i) => i.key === 'claude_workflow');
+    expect(warned).toMatchObject({ state: 'missing' });
+    expect(warned?.detail).toContain('allowed_bots: "slop[bot]"');
+    expect(readiness({ ...ready, claudeAllowsSlop: null }).find((i) => i.key === 'claude_workflow')).toMatchObject({ state: 'ok' });
+    expect(readiness({ ...ready, slopBot: null, claudeAllowsSlop: false }).find((i) => i.key === 'claude_workflow')).toMatchObject({ state: 'ok' });
+  });
+
+  it('reads allowed_bots from a workflow', () => {
+    const wf = (line: string) => `steps:\n  - uses: anthropics/claude-code-action@v1\n    with:\n      ${line}\n`;
+    expect(allowsBot(wf('allowed_bots: "slop[bot]"'), 'slop[bot]')).toBe(true);
+    expect(allowsBot(wf("allowed_bots: 'dependabot[bot], Slop[bot]' # slop"), 'slop[bot]')).toBe(true);
+    expect(allowsBot(wf('allowed_bots: slop'), 'slop[bot]')).toBe(true);
+    expect(allowsBot(wf('allowed_bots: "*"'), 'slop[bot]')).toBe(true);
+    expect(allowsBot(wf('allowed_bots: "other[bot]"'), 'slop[bot]')).toBe(false);
+    expect(allowsBot(wf('allowed_bots: ""'), 'slop[bot]')).toBe(false);
+    expect(allowsBot(wf('# allowed_bots: slop[bot]'), 'slop[bot]')).toBe(false);
+    expect(allowsBot('steps: []', 'slop[bot]')).toBe(false);
   });
 
   it('names the missing workflow when checks failed and the run has not reacted', () => {

@@ -1,14 +1,13 @@
 # Runs Claude on `@claude` mentions in PR and issue comments and in PR reviews, through the Claude GitHub App.
 # Slop posts such comments itself (for example to resolve a merge conflict), and supers rely on them for fixes.
-# Copy to .github/workflows/claude.yml, or run /install-github-app in Claude Code, which also stores the secret.
+# From catalog/scripts/claude.yml. Needs the repo secret CLAUDE_CODE_OAUTH_TOKEN and the Claude GitHub App on the repo.
 #
 # Authentication: add a repo secret named CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`). To use an API
 # key instead, store it as ANTHROPIC_API_KEY and swap the `claude_code_oauth_token` input for `anthropic_api_key`.
 #
 # allowed_bots: slop's @claude comments come from slop's GitHub App, so their author is a bot (`<slug>[bot]`), and
-# claude-code-action ignores bots that aren't listed in `allowed_bots`. Replace SLOP-APP-SLUG[bot] below with your
-# slop App's slug followed by `[bot]` (the slug is on slop's GitHub App setup page, /setup/github-app). Board readiness
-# warns when it is missing. List specific bots only, never "*".
+# claude-code-action ignores bots that aren't listed in `allowed_bots`. Slop's App is `slop[bot]`; keep it
+# listed below. List specific bots only, never "*".
 name: claude
 
 on:
@@ -40,4 +39,4 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: 'SLOP-APP-SLUG[bot]'
+          allowed_bots: 'slop[bot]'
