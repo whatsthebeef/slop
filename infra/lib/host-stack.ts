@@ -59,6 +59,11 @@ export interface HostStackProps extends StackProps {
   readonly cloudFrontPrefixListId: string;
   /** Where the missing-backup alarm emails; without it the alarm still exists (and shows in the console) but tells nobody. */
   readonly alertEmail?: string;
+  /**
+   * CodeBuild projects in this account and region that boards deploy branches with (`boards.deploy`, provider
+   * `codebuild`); the server starts their builds with the instance role. None: boards can't deploy with CodeBuild.
+   */
+  readonly deployProjects?: readonly string[];
 }
 
 const APP_PORT = 3000;
@@ -122,6 +127,17 @@ export class HostStack extends Stack {
         resources: ['arn:aws:bedrock:*::foundation-model/*', `arn:aws:bedrock:*:${this.account}:inference-profile/*`],
       }),
     );
+
+    // Boards' branch deploys (apps/server/src/deployer.ts): StartBuild on the named projects only.
+    const deployProjects = props.deployProjects ?? [];
+    if (deployProjects.length > 0) {
+      role.addToPolicy(
+        new PolicyStatement({
+          actions: ['codebuild:StartBuild'],
+          resources: deployProjects.map((name) => this.formatArn({ service: 'codebuild', resource: 'project', resourceName: name })),
+        }),
+      );
+    }
 
     // Backups: the nightly pg_dump (infra/deploy/backup.sh, a systemd timer installed by each deploy) goes to this bucket.
     // Objects and old versions expire after 30 days; the instance may write and read dumps but not delete them.

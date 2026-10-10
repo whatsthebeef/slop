@@ -63,6 +63,7 @@ new AuthStack(app, `slop-${stage}-auth`, {
  * Other stacks (`slop-prod-auth`) synth without it.
  *   cdk deploy slop-prod-secrets -c secrets=true -c stage=prod                the secrets alone
  *   cdk deploy slop-prod-host -c stage=prod -c deployConnectionArn=arn:...    the host, CloudFront and the deploy project
+ *     [-c deployProjects=<project>,<project>]                                 boards' CodeBuild deploy projects the server may start
  */
 const flag = (key: string): boolean => app.node.tryGetContext(key) === 'true' || app.node.tryGetContext(key) === true;
 const wantsHost = flag('host') || app.node.tryGetContext('deployConnectionArn') !== undefined;
@@ -86,6 +87,8 @@ if (flag('secrets') || wantsHost) {
       cloudFrontPrefixListId: (app.node.tryGetContext('cloudFrontPrefixListId') as string | undefined) ?? 'pl-3b927c52',
       // Where the missing-backup alarm emails (-c alertEmail=you@example.com); confirm the subscription from the first message.
       alertEmail: (app.node.tryGetContext('alertEmail') as string | undefined) || undefined,
+      // CodeBuild projects boards deploy with, in this account (-c deployProjects=<project>,<project>); names stay out of the repo.
+      deployProjects: csv('deployProjects', []),
       tags: { project: 'slop', stage },
     });
   }
