@@ -104,7 +104,7 @@ export const NotificationBar = ({ boardId }: { boardId: number }) => {
   const view = barView(items.data ?? []);
   if (view === null) return null;
   return (
-    <div className='mx-5 mt-3' data-testid='notification-bar'>
+    <div className='mx-5 mt-1.5' data-testid='notification-bar'>
       {/* One stack: the rows share the outer border and are split by hairlines. Keyed by id so a new arrival flashes once. */}
       <div className={cn('overflow-hidden rounded-md border', OUTLINE[view.lead.severity])}>
         {shownRows(view, expanded).map((item, i) => (
