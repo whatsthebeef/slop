@@ -171,7 +171,7 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 ### Phase 2: Investigation
 
-1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 5.
+1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 6.
 2. Invoke the **investigator** with:
    - plan.md (acceptance criteria, or the bug fields for bugs);
    - the `## Context` section, with the reminder: "Decisions in the context bundle are team decisions. If they settle an approach, recommend it rather than proposing alternatives";
@@ -180,15 +180,17 @@ When resuming from a phase, read the output files of the earlier phases. The dev
    - the learnings file path and the relevant board doc paths;
    - the current repo structure;
    - the output path `.reviews/<id>-plan.md`;
+   - the **plan hash** (`sha256sum` of plan.md's text as saved in `.reviews/<id>-context.md`'s plan section, hex) and the **base commit** (`git rev-parse origin/<base>`), for the investigation block;
    - whether Chrome MCP tools are available.
    - the reminder: "If your proposals show the glob is too big for one PR, say so under `## Size` in the plan file, with the parts you would cut." If it does, apply step 6 of Phase 1 before going on.
 3. The investigator writes its proposals to `.reviews/<id>-plan.md`.
-4. Choose a proposal:
+4. **Push the investigation:** check the plan file ends with an `investigation` block (the investigator's last section). Save the whole plan file's text as the glob's investigation: `put_artifact(id, kind: 'investigation', content: <plan file>, runId if unattended, agentSetVersion)`, or the upload route for a large file (see Uploading artifacts). If the reply has a `validation` note, the block was stored as plain text: ask the investigator to fix the block (once) and push again. The alternatives stay in the stored text; this is the only part of Phase 2 slop sees as data. When Phase 2 was skipped, push nothing.
+5. Choose a proposal:
    - **Interactive:** summarise each proposal (name, one-line summary, complexity, key trade-off), state the recommendation and ask the developer to choose or give further instructions.
    - **Unattended:** take the recommended proposal.
-5. Append `## Selected Proposal` to the plan file with the choice and any instructions. The investigator's alternatives stay in this local plan file; they are not pushed.
-6. **Start the record** in `.reviews/<id>-record.md` from the chosen proposal: `## Approach` (the choice and why), `## Decisions` (the choices already made, with rejected alternatives), the other sections empty, and push it: `put_artifact(id, kind: 'implementation_plan', content: <record file>)`, with the run ID if unattended. Do this as soon as the choice is made, so a restarted run or a person can resume from it.
-7. **Deviations:** whenever a later phase departs from the selected proposal or plan.md (a different approach, an extra change, something dropped), add a dated line to the record's `## Deviations` saying what changed and why, and push the record again with `put_artifact`.
+6. Append `## Selected Proposal` to the plan file with the choice and any instructions. The investigator's alternatives stay in this local plan file; they are not pushed.
+7. **Start the record** in `.reviews/<id>-record.md` from the chosen proposal: `## Approach` (the choice and why), `## Decisions` (the choices already made, with rejected alternatives), the other sections empty, and push it: `put_artifact(id, kind: 'implementation_plan', content: <record file>)`, with the run ID if unattended. Do this as soon as the choice is made, so a restarted run or a person can resume from it.
+8. **Deviations:** whenever a later phase departs from the selected proposal or plan.md (a different approach, an extra change, something dropped), add a dated line to the record's `## Deviations` saying what changed and why, and push the record again with `put_artifact`.
 
 ### Phase 3: Implementation
 
