@@ -18,6 +18,7 @@ import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
 import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdChange } from './domain/size-check.js';
+import type { EscalationRecord, NewEscalationRecord } from './domain/escalation-learning.js';
 import type { NewRiskAreaChange, RiskArea, RiskAreaChange } from './domain/risk-area.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
@@ -104,6 +105,10 @@ export interface Tx {
   insertRiskAreaChange(change: NewRiskAreaChange): Promise<boolean>;
   /** A board's risk-area history, newest first. */
   listRiskAreaChanges(boardId: number): Promise<RiskAreaChange[]>;
+  /** Records an escalation outcome; false when the board already has one for that glob and outcome (the learning is idempotent). */
+  insertEscalationRecord(record: NewEscalationRecord): Promise<boolean>;
+  /** A board's escalation history, newest first. */
+  listEscalationRecords(boardId: number): Promise<EscalationRecord[]>;
   /** The glob's size check (spec, Intake), or null when none was made. */
   getSizeCheck(globId: string): Promise<SizeCheck | null>;
   /** The board's size checks. */

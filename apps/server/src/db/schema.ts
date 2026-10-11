@@ -31,7 +31,7 @@ import type {
   InboxSuggestion,
   SignalFigures,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES } from '@slop/core';
+import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -617,6 +617,25 @@ export const riskAreaChanges = pgTable(
     // Idempotent per glob, cause and area; rows without a glob or an area (resets, unscoped corrections) repeat freely.
     uniqueIndex('risk_area_changes_outcome_idx').on(t.boardId, t.globId, t.cause, t.areaName),
   ],
+);
+
+/** Escalation outcomes (spec, Subs and escalation): each recorded once per board, glob and outcome, with the criterion it moved and why. */
+export const escalationRecords = pgTable(
+  'escalation_records',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    /** Null for a reset. */
+    globId: text('glob_id'),
+    criterion: text('criterion', { enum: ESCALATION_CRITERIA }).notNull(),
+    outcome: text('outcome', { enum: ESCALATION_OUTCOMES }).notNull(),
+    weight: integer('weight').notNull(),
+    cause: text('cause').notNull(),
+  },
+  (t) => [uniqueIndex('escalation_records_outcome_idx').on(t.boardId, t.globId, t.outcome)],
 );
 
 /** The size threshold's history: each outcome recorded once per board and glob, with the threshold before and after it. */

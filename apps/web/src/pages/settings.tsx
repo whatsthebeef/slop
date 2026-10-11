@@ -279,6 +279,7 @@ export const SettingsPage = () => {
         <SubLimit boardId={boardId} admin={admin} />
         <DependencyRules boardId={boardId} admin={admin} />
         <RiskAreas boardId={boardId} admin={admin} />
+        <Escalations boardId={boardId} admin={admin} />
         <SizeThreshold boardId={boardId} admin={admin} />
         <IntakeAccuracyView boardId={boardId} admin={admin} />
         <IntegrationToken boardId={boardId} admin={admin} />
@@ -1054,5 +1055,95 @@ export const SignedOffPage = () => {
         </Button>
       )}
     </main>
+  );
+};
+
+const STANCE_TEXT = { loosened: 'learned: loosened', default: 'default', strengthened: 'learned: strengthened' } as const;
+
+/**
+ * The board's escalation criteria and what slop learned from their outcomes: an escalation approved unchanged loosens
+ * its criterion, one that got changes (or a sub that merged and was reverted or blamed) strengthens it. Admins reset
+ * the criteria to the defaults; the history stays. Everything is rendered as text.
+ */
+const Escalations = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const client = useQueryClient();
+  const view = useQuery({ queryKey: ['escalations', boardId], queryFn: () => api.escalations(boardId) });
+  const reset = useMutation({
+    mutationFn: () => api.resetEscalations(boardId),
+    onSuccess: (data) => client.setQueryData(['escalations', boardId], data),
+  });
+  if (view.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load the escalation history.
+        <Button size='sm' variant='outline' onClick={() => void view.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (view.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the escalation history…</p>;
+  const { criteria, history } = view.data;
+  return (
+    <div className='grid gap-2' data-testid='escalations'>
+      <h3 className='text-sm font-medium'>Escalation criteria</h3>
+      <p className='text-xs text-muted-foreground'>
+        Agents escalate a sub to a same when a person should check it. Slop records each escalation and its outcome: approved
+        unchanged loosens its criterion; changes asked for, or a revert, strengthens it; a sub that merged unescalated and was
+        reverted or blamed by a bug counts against the criterion it should have met. A change of stance is proposed as a
+        learning for the agents' guidance.
+      </p>
+      <ul className='grid gap-1 text-xs'>
+        {criteria.map((c) => (
+          <li key={c.criterion}>
+            <span className='font-medium'>{c.text}</span>{' '}
+            <span className='text-muted-foreground'>
+              ({STANCE_TEXT[c.stance]}; score {c.score}; unnecessary {c.unnecessary}, justified {c.justified}, missed {c.missed})
+            </span>
+          </li>
+        ))}
+      </ul>
+      {admin && (
+        <div>
+          <Button size='sm' variant='outline' disabled={reset.isPending} onClick={() => reset.mutate()}>
+            Reset to defaults
+          </Button>
+          {reset.isError && <span className='ml-2 text-xs text-red'>Could not reset the escalation criteria.</span>}
+        </div>
+      )}
+      {history.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No escalation outcomes recorded yet.</p>
+      ) : (
+        <table className='text-xs'>
+          <thead className='text-left text-muted-foreground'>
+            <tr>
+              <th className='pr-3 font-normal'>Date</th>
+              <th className='pr-3 font-normal'>Criterion</th>
+              <th className='pr-3 font-normal'>Outcome</th>
+              <th className='font-normal'>Why</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((r) => (
+              <tr key={r.id} className='align-top'>
+                <td className='pr-3 whitespace-nowrap'>{new Date(r.at).toLocaleDateString()}</td>
+                <td className='pr-3'>{r.outcome === 'reset' ? '' : r.criterion}</td>
+                <td className='pr-3 whitespace-nowrap'>{r.outcome}</td>
+                <td>
+                  {r.cause}
+                  {r.globId !== null && (
+                    <>
+                      {' '}
+                      <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(r.globId)}`}>
+                        {r.globId}
+                      </Link>
+                    </>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 };
