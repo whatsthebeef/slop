@@ -145,7 +145,7 @@ export interface ArtifactView {
   readonly link: string | null;
   readonly commitSha: string | null;
   readonly createdAt: string;
-  readonly provenance: { readonly by: string; readonly actor: string };
+  readonly provenance: { readonly by: string; readonly actor: string; readonly validation?: string };
 }
 
 export interface ApiError {
