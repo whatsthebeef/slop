@@ -54,6 +54,35 @@ describe('create (rows 1–4)', () => {
     expect(t.glob.implementer).toBe(dev.email);
   });
 
+  it('a super created with start: false is parked in planning: no branch, run, implementer or active glob', () => {
+    const t = value(m.create(createInput({ type: 'super', category: 'feature', start: false }), board, ctx()));
+    expect(t.glob.status).toBe('planning');
+    expect(t.glob.implementer).toBeNull();
+    expect(t.glob.provisioning).toBe('none');
+    expect(t.glob.doingSince).toBeNull();
+    expect(t.glob.runs).toEqual([]);
+    expect(effectKinds(t)).toEqual([]);
+    const actions = m.allowedActions(t.glob, dev);
+    expect(actions).toContain('pick_up');
+    expect(actions).not.toContain('start');
+    expect(errorCode(m.start(t.glob, ctx()))).toBe('invalid_transition');
+  });
+
+  it('start: false changes nothing for a sub or a same', () => {
+    expect(value(m.create(createInput({ type: 'sub', start: false }), board, ctx())).glob.status).toBe('implementing');
+    expect(value(m.create(createInput({ type: 'same', start: false }), board, ctx())).glob.status).toBe('planning');
+  });
+
+  it('picking up a parked super provisions it and makes the person its implementer', () => {
+    const parked = value(m.create(createInput({ type: 'super', category: 'feature', start: false }), board, ctx())).glob;
+    const t = value(m.pickUp(parked, ctx(other), board, { takeOver: false }));
+    expect(t.glob.status).toBe('in_progress');
+    expect(t.glob.implementer).toBe(other.email);
+    expect(t.glob.provisioning).toBe('pending');
+    expect(effectKinds(t)).toEqual(['provision']);
+    expect(t.glob.doingSince).not.toBeNull();
+  });
+
   it('row 4: a same with an explicit auto-trigger starts implementing', () => {
     const t = value(m.create(createInput({ autoTrigger: true }), board, ctx()));
     expect(t.glob.status).toBe('implementing');
@@ -699,6 +728,35 @@ describe('field changes and type changes (row 26)', () => {
   });
 
   describe('in planning', () => {
+    it('a sub and a super swap while parked in planning with no run; a held sub stops waiting', () => {
+      const held = glob({ type: 'sub', status: 'planning', provisioning: 'none', pr: null, waiting: { since: NOW }, runs: [] });
+      const sup = value(m.changeFields(held, { type: 'super' }, board, ctx())).glob;
+      expect(sup).toMatchObject({ type: 'super', status: 'planning', waiting: null, implementer: null });
+      const sub = value(m.changeFields(sup, { type: 'sub' }, board, ctx()));
+      expect(sub.glob.type).toBe('sub');
+      expect(sub.glob.status).toBe('implementing');
+      expect(effectKinds(sub)).toContain('fire_routine');
+    });
+
+    it('a sub cannot become a super once running, and QA cannot make one', () => {
+      expect(errorCode(m.changeFields(glob({ type: 'sub', status: 'implementing', runs: [run()] }), { type: 'super' }, board, ctx()))).toBe(
+        'invalid_transition',
+      );
+      expect(errorCode(m.changeFields(glob({ type: 'sub', status: 'planning', runs: [] }), { type: 'super' }, board, ctx(po)))).toBe('forbidden');
+    });
+
+    it('sames and subs can always be picked up, in planning and in doing with a live run (take over)', () => {
+      for (const type of ['same', 'sub'] as const) {
+        const planning = glob({ type, status: 'planning', provisioning: 'none', pr: null, runs: [] });
+        expect(value(m.pickUp(planning, ctx(), board, { takeOver: false })).glob.implementer).toBe(dev.email);
+        const running = glob({ type, status: 'implementing', runs: [run({ state: 'active' })] });
+        expect(errorCode(m.pickUp(running, ctx(), board, { takeOver: false }))).toBe('run_active');
+        const taken = value(m.pickUp(running, ctx(), board, { takeOver: true }));
+        expect(taken.glob.implementer).toBe(dev.email);
+        expect(taken.glob.status).toBe('in_progress');
+      }
+    });
+
     const planned = (patch: Partial<Parameters<typeof glob>[0]> = {}) => glob({ status: 'planning', provisioning: 'none', pr: null, ...patch });
 
     it('same to super and back is allowed and does not move the glob', () => {
@@ -1557,5 +1615,73 @@ describe('escalation to a same', () => {
 
   it('only an escalated same can be made a sub again', () => {
     expect(errorCode(m.deescalate(glob({ type: 'same' }), ctx()))).toBe('invalid_transition');
+  });
+});
+
+describe('needs_pairing and Make it a super', () => {
+  const pairing = (patch: Partial<Glob> = {}) =>
+    value(
+      m.reportFailure(
+        glob({ type: 'sub', status: 'implementing', runs: [run()], implementer: null, ...patch }),
+        { reason: 'The storage design is open', runId: 'run-0', kind: 'needs_pairing', decision: ' Which store holds it? ' },
+        ctx(null),
+      ),
+    ).glob;
+
+  it('report_failure with kind needs_pairing records the kind and the decision on the failure', () => {
+    const failed = pairing();
+    expect(failed.status).toBe('failed');
+    expect(failed.failure).toMatchObject({ reason: 'The storage design is open', kind: 'needs_pairing', decision: 'Which store holds it?' });
+  });
+
+  it('a plain report has no kind, and a super never records one', () => {
+    const plain = value(m.reportFailure(glob({ status: 'implementing', runs: [run()] }), { reason: 'stuck', runId: 'run-0' }, ctx(null))).glob;
+    expect(plain.failure?.kind).toBeUndefined();
+    const superFailed = value(m.reportFailure(glob({ type: 'super', status: 'in_progress' }), { reason: 'x', runId: null, kind: 'needs_pairing' }, ctx())).glob;
+    expect(superFailed.failure?.kind).toBeUndefined();
+  });
+
+  it('a watcher that reports needs_pairing is never retried by slop, even with the give-up wording', () => {
+    const g = glob({ type: 'sub', status: 'pr_open', implementer: null, runs: [run({ state: 'watching' })] });
+    const t = value(m.reportFailure(g, { reason: "Auto-fix didn't respond to failed checks (build)", runId: 'run-0', kind: 'needs_pairing' }, ctx(null)));
+    expect(t.glob.runs.filter((r) => r.autoRetry === true)).toHaveLength(0);
+    expect(m.currentRun(t.glob)?.state).toBe('ended');
+    expect(t.glob.failure?.kind).toBe('needs_pairing');
+    expect(m.allowedActions(t.glob, dev)).not.toContain('retry_autofix');
+  });
+
+  it('is offered to a developer on a failed sub or same, not to QA or PO, not on other failures, supers or bugs', () => {
+    expect(m.allowedActions(pairing(), dev)).toContain('make_super');
+    expect(m.allowedActions(pairing({ type: 'same' }), dev)).toContain('make_super');
+    expect(m.allowedActions(pairing(), po)).not.toContain('make_super');
+    expect(m.allowedActions(pairing({ category: 'bug' }), dev)).not.toContain('make_super');
+    const plain = glob({ type: 'same', status: 'failed', failure: { reason: 'stuck', at: NOW } });
+    expect(m.allowedActions(plain, dev)).not.toContain('make_super');
+    // Sames and subs can always be picked up.
+    expect(m.allowedActions(pairing(), dev)).toContain('pick_up');
+    expect(m.allowedActions(pairing({ type: 'same' }), dev)).toContain('pick_up');
+  });
+
+  it('makes it a super in progress with the person implementing; branch, PR and provisioning stay', () => {
+    const failed = pairing({ type: 'same', pr: { number: 7, state: 'draft', headSha: 'aaa' }, provisioning: 'ok' });
+    const t = value(m.makeSuper(failed, ctx(other)));
+    expect(t.glob).toMatchObject({ type: 'super', status: 'in_progress', implementer: other.email, failure: null, provisioning: 'ok' });
+    expect(t.glob.pr).toEqual(failed.pr);
+    expect(t.events.map((e) => e.type)).toEqual(expect.arrayContaining(['FieldsChanged', 'PickedUp']));
+    expect(t.events.find((e) => e.type === 'FieldsChanged')?.data).toMatchObject({ type: { from: 'same', to: 'super' } });
+    expect(effectKinds(t)).toEqual(['sync_pr_labels']);
+  });
+
+  it('ends a run still queued as superseded with the cause make_super', () => {
+    const t = value(m.makeSuper({ ...pairing(), runs: [run({ state: 'queued' })] }, ctx()));
+    expect(m.currentRun(t.glob)?.outcome).toBe('superseded');
+    expect(t.events.find((e) => e.type === 'RunEnded')?.data).toMatchObject({ cause: 'make_super' });
+  });
+
+  it('is refused without the failure, for QA and PO, for supers and while a run is live', () => {
+    expect(errorCode(m.makeSuper(glob({ type: 'sub', status: 'failed', failure: { reason: 'x', at: NOW } }), ctx()))).toBe('invalid_transition');
+    expect(errorCode(m.makeSuper(pairing(), ctx(po)))).toBe('forbidden');
+    expect(errorCode(m.makeSuper({ ...pairing(), type: 'super' }, ctx()))).toBe('invalid_transition');
+    expect(errorCode(m.makeSuper({ ...pairing(), runs: [run({ state: 'active' })] }, ctx()))).toBe('run_active');
   });
 });

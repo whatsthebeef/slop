@@ -26,6 +26,7 @@ import type { EscalationRecord } from '../domain/escalation-learning.js';
 import type { RiskArea, RiskAreaChange } from '../domain/risk-area.js';
 import { SUB_LIMIT_STEP } from '../domain/sub-limit.js';
 import type { SubLimitChange } from '../domain/sub-limit.js';
+import type { TypeCorrection } from '../domain/type-learning.js';
 import type { DependencyRule, DependencyRuleChange } from '../domain/dependency-rules.js';
 import type { GlobOutcome, IntakeSnapshot } from '../domain/intake-learning.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
@@ -59,6 +60,7 @@ interface State {
   riskAreas: RiskArea[];
   riskAreaChanges: RiskAreaChange[];
   escalationRecords: EscalationRecord[];
+  typeCorrections: TypeCorrection[];
   sizeChecks: SizeCheck[];
   sizeThresholds: Map<number, SizeThreshold>;
   sizeThresholdChanges: SizeThresholdChange[];
@@ -147,6 +149,7 @@ const clone = (state: State): State => ({
   riskAreas: [...state.riskAreas],
   riskAreaChanges: [...state.riskAreaChanges],
   escalationRecords: [...state.escalationRecords],
+  typeCorrections: [...state.typeCorrections],
   sizeChecks: [...state.sizeChecks],
   sizeThresholds: new Map(state.sizeThresholds),
   sizeThresholdChanges: [...state.sizeThresholdChanges],
@@ -200,6 +203,7 @@ export class MemoryStore implements Store {
     riskAreas: [],
     riskAreaChanges: [],
     escalationRecords: [],
+    typeCorrections: [],
     sizeChecks: [],
     sizeThresholds: new Map(),
     sizeThresholdChanges: [],
@@ -394,6 +398,26 @@ export class MemoryStore implements Store {
       },
       listEscalationRecords: (boardId) =>
         Promise.resolve(s.escalationRecords.filter((r) => r.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      insertTypeCorrection: (correction) => {
+        s.typeCorrections.push({ ...correction, id: this.nextRowId++, resetAt: null });
+        return Promise.resolve();
+      },
+      listTypeCorrections: (boardId, options) =>
+        Promise.resolve(
+          s.typeCorrections
+            .filter((c) => c.boardId === boardId && (options?.all === true || c.resetAt === null))
+            .sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)
+            .slice(0, options?.limit),
+        ),
+      resetTypeCorrections: (boardId, at) => {
+        let reset = 0;
+        s.typeCorrections = s.typeCorrections.map((c) => {
+          if (c.boardId !== boardId || c.resetAt !== null) return c;
+          reset++;
+          return { ...c, resetAt: at };
+        });
+        return Promise.resolve(reset);
+      },
       getSizeCheck: (globId) => Promise.resolve(s.sizeChecks.find((c) => c.globId === globId) ?? null),
       listSizeChecks: (boardId) => Promise.resolve(s.sizeChecks.filter((c) => c.boardId === boardId)),
       upsertSizeCheck: (check) => {

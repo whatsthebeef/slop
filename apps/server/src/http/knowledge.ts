@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, WORK_CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -89,6 +89,8 @@ export const mountKnowledge = (
     /** The board's risk areas; absent: their routes aren't mounted. */
     riskAreas?: RiskAreaService;
     escalations?: EscalationLearningService;
+    /** What intake learned about types from people's retypes; absent: its routes aren't mounted. */
+    typeLearning?: TypeLearningService;
     /** The learned size threshold; absent: its route isn't mounted. */
     sizeCheck?: SizeCheckService;
     /** Intake's accuracy (System page); absent: its route isn't mounted. */
@@ -217,6 +219,12 @@ export const mountKnowledge = (
   if (escalations !== undefined) {
     app.get('/api/boards/:b/escalations', async (c) => send(c, await escalations.view(c.get('email'), Number(c.req.param('b')))));
     app.post('/api/boards/:b/escalations/reset', async (c) => send(c, await escalations.reset(c.get('email'), Number(c.req.param('b')))));
+  }
+  // What intake learned about types from people's retypes (learned or the catalog defaults), for members; admins reset it.
+  const { typeLearning } = deps;
+  if (typeLearning !== undefined) {
+    app.get('/api/boards/:b/type-learning', async (c) => send(c, await typeLearning.view(c.get('email'), Number(c.req.param('b')))));
+    app.post('/api/boards/:b/type-learning/reset', async (c) => send(c, await typeLearning.reset(c.get('email'), Number(c.req.param('b')))));
   }
   const { riskAreas } = deps;
   if (riskAreas !== undefined) {

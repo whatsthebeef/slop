@@ -55,7 +55,10 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
   const hint = stuckHint(glob, now);
   const checks = checksExplanation(glob);
   const failed = glob.status === 'failed' || glob.failure !== null;
-  const reason = glob.failure?.reason ?? 'Routine run failed';
+  const failure = glob.failure;
+  const decision = failure?.kind === 'needs_pairing' ? failure.decision?.trim() : undefined;
+  // The routine stopped for a decision only a person can make: say which, not just that it failed.
+  const reason = failure?.kind === 'needs_pairing' ? `Needs a person: ${decision === undefined || decision === '' ? failure.reason : decision}` : (failure?.reason ?? 'Routine run failed');
   const run = glob.currentRun ?? null;
   const session = run?.sessionUrl ?? null;
   const provisioningFailed = glob.provisioning === 'failed' && glob.failure?.kind === 'provisioning';

@@ -1,4 +1,4 @@
-import { ArtifactService, FakeEmbedder, GlobService, SearchService, vectorOf } from '@slop/core';
+import { ArtifactService, FakeEmbedder, GlobService, IntakeService, SearchService, vectorOf } from '@slop/core';
 import type { Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -31,6 +31,7 @@ describe('MCP get_context include and get_artifact', () => {
   let client: Client;
   let globId: string;
   let store: PgStore;
+  let boardId: number;
 
   beforeAll(async () => {
     ({ database, drop } = await createTestDatabase('mcp_context'));
@@ -47,7 +48,7 @@ describe('MCP get_context include and get_artifact', () => {
     });
     const search = new SearchService({ store, clock: deps.clock, embedder: new FakeEmbedder() });
     const artifacts = new ArtifactService({ ...deps, related: (tx, glob) => search.related(tx, glob) });
-    const boardId = await store.transaction(async (tx) => {
+    boardId = await store.transaction(async (tx) => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
       const board = await tx.insertBoard({
         name: 'test',
@@ -117,7 +118,12 @@ describe('MCP get_context include and get_artifact', () => {
       await tx.setEmbeddings(pending.map((c) => ({ id: c.id, embedding: vectorOf(c.text) })));
     });
 
-    const server = buildServer({ artifacts, globs } as unknown as McpDeps, DEV, 'http://localhost');
+    const intake = new IntakeService({
+      store,
+      llm: { complete: () => Promise.resolve(JSON.stringify({ title: 'Design it', summary: 'S', type: 'super', typeReason: 'Open design', category: 'feature' })) },
+    });
+    const outbox = { drain: () => Promise.resolve() };
+    const server = buildServer({ artifacts, globs, intake, outbox } as unknown as McpDeps, DEV, 'http://localhost');
     const [a, b] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test', version: '0' });
     await Promise.all([server.connect(a), client.connect(b)]);
@@ -216,5 +222,16 @@ describe('MCP get_context include and get_artifact', () => {
     expect(
       (await call('get_artifact', { id: globId, kind: 'attachment', label: 'Nope' })).isError,
     ).toBe(true);
+  });
+
+  it('create_glob parks a super that intake chose in Planning, but a super asked for by type starts in Doing', async () => {
+    const created = async (args: Record<string, unknown>) =>
+      (await call('create_glob', { board: boardId, ...args })).body as unknown as { status: string; type: string };
+    const chosen = await created({ input: 'Design the export format with the PO', idempotencyKey: 'intake-super' });
+    expect(chosen).toMatchObject({ type: 'super', status: 'planning' });
+    const asked = await created({ title: 'Pair on it', type: 'super', category: 'feature', idempotencyKey: 'typed-super' });
+    expect(asked).toMatchObject({ type: 'super', status: 'in_progress' });
+    const parked = await created({ title: 'Parked', type: 'super', category: 'feature', start: false, idempotencyKey: 'parked-super' });
+    expect(parked).toMatchObject({ status: 'planning' });
   });
 });

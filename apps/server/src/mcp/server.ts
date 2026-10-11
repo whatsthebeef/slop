@@ -125,6 +125,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
             "One of the board's environments that allows branch deploys. Without one, intake suggests an environment the request targets (\"deploy to staging\"), and a sub gets the board's default for subs",
           ),
         autoTrigger: z.boolean().optional().describe('Same only: start a routine run straight away'),
+        start: z
+          .boolean()
+          .optional()
+          .describe('Super only: false parks it in Planning (no branch, run or implementer) until a person picks it up to pair. Default: parked when intake chose super, else it starts in Doing with you'),
         needs: z
           .array(z.string().min(1))
           .max(20)
@@ -195,9 +199,12 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         files = proposal.value.files;
         suggestedAfter = proposal.value.suggestedAfter;
       }
+      // A super intake chose waits in Planning for a person; one asked for by type starts in Doing as before.
+      const start = input.start ?? (intakeRecord !== null && input.type === undefined && fields.type === 'super' ? false : undefined);
       const created = await globs.create(email, {
         boardId: input.board,
         ...fields,
+        ...(start === undefined ? {} : { start }),
         plan: input.plan ?? proposedPlan ?? input.summary ?? input.input ?? '',
         planBy: 'sessionator',
         source: 'mcp',
@@ -501,16 +508,21 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'report_failure',
     {
       description:
-        'Report that the glob cannot be finished. Routines pass their run ID; pass the agent-set version from .claude/slop-agent-set.json.',
+        "Report that the glob cannot be finished. Routines pass their run ID; pass the agent-set version from .claude/slop-agent-set.json. Pass kind: 'needs_pairing' (with the decision you would have had to guess) when the work needs a person's decision, not more effort: the card then offers Make it a super and slop does not retry the run.",
       inputSchema: {
         id: z.string(),
         reason: z.string().min(1),
         runId: z.string().optional(),
         agentSetVersion: z.number().int().nonnegative().optional(),
+        kind: z.enum(['needs_pairing']).optional().describe('needs_pairing: a person must decide something before this can be done'),
+        decision: z.string().optional().describe('needs_pairing: the decision you would have had to guess, in a sentence or two'),
       },
     },
-    async ({ id, reason, runId, agentSetVersion }) =>
-      reply(await globs.reportFailure(email, id, reason, runId ?? null, agentSetVersion ?? null), (g) => globView(g)),
+    async ({ id, reason, runId, agentSetVersion, kind, decision }) =>
+      reply(
+        await globs.reportFailure(email, id, reason, runId ?? null, agentSetVersion ?? null, kind === undefined ? undefined : { kind, decision: decision ?? null }),
+        (g) => globView(g),
+      ),
   );
 
   server.registerTool(

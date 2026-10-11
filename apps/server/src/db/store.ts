@@ -1,4 +1,4 @@
-import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -121,6 +121,18 @@ const toEscalationRecord = (row: typeof schema.escalationRecords.$inferSelect): 
   outcome: oneOf(ESCALATION_OUTCOMES, row.outcome),
   weight: row.weight,
   cause: row.cause,
+});
+
+const toTypeCorrection = (row: typeof schema.typeCorrections.$inferSelect): TypeCorrection => ({
+  id: row.id,
+  boardId: row.boardId,
+  globId: row.globId,
+  fromType: row.fromType,
+  toType: row.toType,
+  actor: row.actor,
+  at: row.at.toISOString(),
+  signals: row.signals,
+  resetAt: row.resetAt === null ? null : row.resetAt.toISOString(),
 });
 
 const toSizeCheck = (row: typeof schema.globSizeChecks.$inferSelect): SizeCheck => ({
@@ -829,6 +841,25 @@ export class PgStore implements Store {
             .where(eq(schema.escalationRecords.boardId, boardId))
             .orderBy(desc(schema.escalationRecords.at), desc(schema.escalationRecords.id))
         ).map(toEscalationRecord),
+      insertTypeCorrection: async (correction) => {
+        await t.insert(schema.typeCorrections).values({ ...correction, at: new Date(correction.at) });
+      },
+      listTypeCorrections: async (boardId, options) => {
+        const query = t
+          .select()
+          .from(schema.typeCorrections)
+          .where(options?.all === true ? eq(schema.typeCorrections.boardId, boardId) : and(eq(schema.typeCorrections.boardId, boardId), isNull(schema.typeCorrections.resetAt)))
+          .orderBy(desc(schema.typeCorrections.at), desc(schema.typeCorrections.id));
+        return (await (options?.limit === undefined ? query : query.limit(options.limit))).map(toTypeCorrection);
+      },
+      resetTypeCorrections: async (boardId, at) =>
+        (
+          await t
+            .update(schema.typeCorrections)
+            .set({ resetAt: new Date(at) })
+            .where(and(eq(schema.typeCorrections.boardId, boardId), isNull(schema.typeCorrections.resetAt)))
+            .returning({ id: schema.typeCorrections.id })
+        ).length,
       getSizeCheck: async (globId) => {
         const [row] = await t.select().from(schema.globSizeChecks).where(eq(schema.globSizeChecks.globId, globId));
         return row === undefined ? null : toSizeCheck(row);

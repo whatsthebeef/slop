@@ -35,6 +35,7 @@ import type {
   ProposedDocument,
   InboxSuggestion,
   SignalFigures,
+  TypeSignals,
 } from '@slop/core';
 import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES } from '@slop/core';
 import {
@@ -644,6 +645,27 @@ export const escalationRecords = pgTable(
     cause: text('cause').notNull(),
   },
   (t) => [uniqueIndex('escalation_records_outcome_idx').on(t.boardId, t.globId, t.outcome)],
+);
+
+/** A person's retype of a glob (spec, Intake): history for intake's type examples; a reset stamps `reset_at` and keeps the rows. */
+export const typeCorrections = pgTable(
+  'type_corrections',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    globId: text('glob_id').notNull(),
+    fromType: text('from_type', { enum: SLOP_TYPES }).notNull(),
+    toType: text('to_type', { enum: SLOP_TYPES }).notNull(),
+    /** The person's email. */
+    actor: text('actor').notNull(),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    /** The plan's signals, narrowed by core (`TypeSignals`). */
+    signals: jsonb('signals').$type<TypeSignals>().notNull(),
+    resetAt: timestamp('reset_at', { withTimezone: true }),
+  },
+  (t) => [index('type_corrections_board_idx').on(t.boardId, t.at)],
 );
 
 /** The size threshold's history: each outcome recorded once per board and glob, with the threshold before and after it. */

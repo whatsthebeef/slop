@@ -13,7 +13,7 @@ import type { Category, SlopType } from './types.js';
  */
 
 /** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples, v2 the prompt with them, v3 the broader sub definition, v4 optimistic: a sub unless a risk area or the board's learned sub size says otherwise. */
-export const INTAKE_PROMPT_VERSION = 4;
+export const INTAKE_PROMPT_VERSION = 5;
 
 /** Intake's own confidence in the category it chose. */
 export const CONFIDENCES = ['high', 'medium', 'low'] as const;

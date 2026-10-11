@@ -105,6 +105,8 @@ export const createGlobSchema = z.object({
   group: z.string().min(1).nullable().default(null),
   environment: z.string().min(1).nullable().default(null),
   autoTrigger: z.boolean().default(false),
+  /** Super only: false parks it in Planning (no branch, run or implementer) until a person picks it up to pair. */
+  start: z.boolean().optional(),
   idempotencyKey: z.string().min(1).nullable().default(null),
   plan: z.string().optional(),
   /** IDs of globs on the board this one needs: their code must be on main first, so the glob waits for them to merge. */
@@ -511,6 +513,7 @@ export const createApp = (deps: AppDeps) => {
     'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),
     merge: (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version),
     deescalate: (email: string, id: string, b: ActionBody) => globs.deescalate(email, id, b.version),
+    'make-super': (email: string, id: string, b: ActionBody) => globs.makeSuper(email, id, b.version),
     'retry-merge': (email: string, id: string, b: ActionBody) => globs.retryMerge(email, id, b.version),
     // Supers: row 31, and the board's Ready for review (both need the latest postplan at the head).
     'merge-continue': (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version, true),

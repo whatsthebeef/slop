@@ -20,6 +20,7 @@ import type { ScopedDecision } from '../domain/decision-glob.js';
 import { addArtifact } from './artifact-service.js';
 import { DECISION_SYSTEM_ACTOR } from './decision-glob.js';
 import { findHolds } from './hold-service.js';
+import { recordTypeCorrection } from './type-learning-service.js';
 import type { DependencyLearningService } from './dependency-learning-service.js';
 import { embedRequest, snapshotOf } from './intake-learning-service.js';
 import { checkFrom } from './size-check-service.js';
@@ -54,6 +55,8 @@ export interface CreateGlobInput {
   readonly group: string | null;
   readonly environment: string | null;
   readonly autoTrigger: boolean;
+  /** Super only: `false` parks it in Planning until a person picks it up to pair; otherwise it starts in Doing with its creator. */
+  readonly start?: boolean;
   readonly idempotencyKey: string | null;
   /**
    * plan.md v1, stored verbatim with the glob: the caller passes `plan`, else the summary as given, else the intake
@@ -608,18 +611,21 @@ export class GlobService {
     const holds = changes.type === 'sub' ? await this.holdsFor(id) : [];
     let checkedAfter: readonly string[] | undefined;
     let checkedOverlaps: readonly string[] | undefined;
-    return this.command(
+    const before: { type: SlopType | null } = { type: null };
+    const result = await this.command(
       email,
       id,
       version,
-      (glob, ctx, board, facts) =>
-        machine.changeFields(
+      (glob, ctx, board, facts) => {
+        before.type = glob.type;
+        return machine.changeFields(
           glob,
           { ...changes, ...(checkedAfter === undefined ? {} : { after: checkedAfter }), ...(checkedOverlaps === undefined ? {} : { overlaps: checkedOverlaps }), ...(holds.length === 0 ? {} : { impliedAfter: holds }) },
           board,
           ctx,
           facts.dependencies,
-        ),
+        );
+      },
       {
         applies: 'any',
         dependencies: true,
@@ -642,6 +648,13 @@ export class GlobService {
         }),
       },
     );
+    if (result.ok && before.type !== null && before.type !== result.value.type) await this.recordRetype(result.value, before.type, email);
+    return result;
+  }
+
+  /** A person's retype teaches the board's intake (spec, Intake); recording never fails the change. */
+  private recordRetype(glob: Glob, from: SlopType, actor: string): Promise<void> {
+    return recordTypeCorrection(this.deps.store, this.deps.clock, { boardId: glob.boardId, globId: glob.id, from, to: glob.type, actor }, this.deps.log);
   }
 
   async start(email: string, id: string, version: number) {
@@ -771,10 +784,28 @@ export class GlobService {
     return this.command(email, id, version, (glob, ctx) => machine.deescalate(glob, ctx));
   }
 
-  /** `report_failure` from a person's interactive session (no run ID). */
-  reportFailure(email: string, id: string, reason: string, runId: string | null, agentSetVersion: number | null = null) {
+  /** Make it a super: a person takes over a failed sub or same whose routine asked for pairing. Counts as a type correction. */
+  async makeSuper(email: string, id: string, version: number) {
+    const before: { type: SlopType | null } = { type: null };
+    const result = await this.command(email, id, version, (glob, ctx) => {
+      before.type = glob.type;
+      return machine.makeSuper(glob, ctx);
+    });
+    if (result.ok && before.type !== null && before.type !== result.value.type) await this.recordRetype(result.value, before.type, email);
+    return result;
+  }
+
+  /** `report_failure` from a person's interactive session (no run ID); `kind: 'needs_pairing'` says a person must decide something. */
+  reportFailure(
+    email: string,
+    id: string,
+    reason: string,
+    runId: string | null,
+    agentSetVersion: number | null = null,
+    pairing?: { readonly kind: 'needs_pairing'; readonly decision?: string | null },
+  ) {
     return this.command(email, id, null, (glob, ctx) =>
-      machine.reportFailure(glob, { reason, runId, agentSetVersion }, ctx),
+      machine.reportFailure(glob, { reason, runId, agentSetVersion, ...(pairing === undefined ? {} : pairing) }, ctx),
     ).then(async (result) => {
       // A run that failed for unmerged prerequisites teaches the board a need; the report itself never fails on it.
       if (result.ok) await this.deps.dependencyLearning?.onFailed(id, reason).catch((e: unknown) => this.deps.log?.('dependency learning', e instanceof Error ? e.message : String(e)));
