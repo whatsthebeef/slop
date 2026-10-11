@@ -356,6 +356,9 @@ const SIZE_OUTCOME_TEXT: Record<SizeOutcome, string> = {
   kept_whole_clean: 'Flagged, kept whole and merged cleanly: raised',
   unflagged_struggled: 'Not flagged, and it struggled: lowered',
   flag_confirmed: 'Flag confirmed: unchanged',
+  split_stalled: 'Split, but the parts ran one after another and stalled: raised (keep work whole)',
+  split_helped: 'Split, and it helped: unchanged',
+  reset: 'Reset to the defaults',
 };
 
 /**
@@ -364,6 +367,10 @@ const SIZE_OUTCOME_TEXT: Record<SizeOutcome, string> = {
 const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
   const client = useQueryClient();
   const threshold = useQuery({ queryKey: ['size-threshold', boardId], queryFn: () => api.sizeThreshold(boardId) });
+  const reset = useMutation({
+    mutationFn: () => api.resetSizeThreshold(boardId),
+    onSuccess: (view) => client.setQueryData(['size-threshold', boardId], view),
+  });
   const jobs = useQuery({ queryKey: ['kb-jobs', boardId], queryFn: () => api.boardJobs(boardId) });
   const lastRun = jobs.data === undefined ? undefined : (jobs.data.find((j) => j.job === 'size_threshold')?.lastRunAt ?? null);
   const seenRun = useRef<string | null | undefined>(undefined);
@@ -382,15 +389,28 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
       </p>
     );
   if (threshold.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the size threshold…</p>;
-  const { current, bounds, history } = threshold.data;
+  const { current, defaults, bounds, history } = threshold.data;
+  const learned = defaults.maxTasks !== current.maxTasks || defaults.maxParts !== current.maxParts;
   return (
     <div className='grid gap-2' data-testid='size-threshold'>
       <p className='text-sm'>
-        Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts (learned from outcomes)
+        Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts ({learned ? 'learned from outcomes' : 'the default'})
       </p>
+      <p className='text-xs text-muted-foreground' data-testid='size-threshold-defaults'>
+        Default: {defaults.maxTasks} tasks, {defaults.maxParts} independent parts. Learned: {current.maxTasks} tasks, {current.maxParts} independent parts.
+      </p>
+      {admin && learned && (
+        <div>
+          <Button size='sm' variant='outline' disabled={reset.isPending} onClick={() => reset.mutate()}>
+            Reset to defaults
+          </Button>
+          {reset.isError && <span className='ml-2 text-xs text-red'>Could not reset the size threshold.</span>}
+        </div>
+      )}
       <p className='text-xs text-muted-foreground'>
-        Intake flags a glob above it and proposes a split. A flagged glob kept whole that merges cleanly raises the threshold; an
-        unflagged glob that struggles (the most review rounds, a failed run, a very long PR, or a split after it started) lowers it.
+        Intake flags a glob above it, and only when at least two of its parts could be built at the same time (a long serial plan stays whole), and
+        proposes a split with its critical path. A flagged glob kept whole that merges cleanly raises the threshold; so does a split whose parts ended
+        up one after another and stalled (the cause is in the history). An unflagged glob that struggles (the most review rounds, a failed run, a very long PR, or a split after it started) lowers it.
         Tasks stay between {bounds.tasks.min} and {bounds.tasks.max}, parts between {bounds.parts.min} and {bounds.parts.max}, in steps of {bounds.step}.
       </p>
       <JobStatus boardId={boardId} admin={admin} job='size_threshold' />
@@ -418,9 +438,11 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
                   <span className='block text-muted-foreground'>{change.evidence}</span>
                 </td>
                 <td>
-                  <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
-                    {change.globId}
-                  </Link>
+                  {change.outcome === 'reset' ? null : (
+                    <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
+                      {change.globId}
+                    </Link>
+                  )}
                 </td>
               </tr>
             ))}

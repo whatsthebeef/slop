@@ -228,6 +228,8 @@ export const mountKnowledge = (
   const { sizeCheck } = deps;
   if (sizeCheck !== undefined) {
     app.get('/api/boards/:b/size-threshold', async (c) => send(c, await sizeCheck.view(c.get('email'), Number(c.req.param('b')))));
+    // Admins put the board back on the default threshold; the history keeps the reset.
+    app.post('/api/boards/:b/size-threshold/reset', async (c) => send(c, await sizeCheck.reset(c.get('email'), Number(c.req.param('b')))));
   }
 
   // How often intake's category and type survived to the merge, by month and prompt version, and typical effort by kind (System page), for members.
