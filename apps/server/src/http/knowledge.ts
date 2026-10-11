@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, SizeCheckService, SubLimitService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, SizeCheckService, SubLimitService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -85,6 +85,8 @@ export const mountKnowledge = (
     jobs: LearningJobService;
     /** The learned sub size limit; absent: its route isn't mounted. */
     subLimit?: SubLimitService;
+    /** The board's risk areas; absent: their routes aren't mounted. */
+    riskAreas?: RiskAreaService;
     /** The learned size threshold; absent: its route isn't mounted. */
     sizeCheck?: SizeCheckService;
     /** Intake's accuracy (System page); absent: its route isn't mounted. */
@@ -195,6 +197,13 @@ export const mountKnowledge = (
   const { subLimit } = deps;
   if (subLimit !== undefined) {
     app.get('/api/boards/:b/sub-limit', async (c) => send(c, await subLimit.view(c.get('email'), Number(c.req.param('b')))));
+  }
+
+  // The board's risk areas (learned and default) with their history, for members; admins reset them to the defaults.
+  const { riskAreas } = deps;
+  if (riskAreas !== undefined) {
+    app.get('/api/boards/:b/risk-areas', async (c) => send(c, await riskAreas.view(c.get('email'), Number(c.req.param('b')))));
+    app.post('/api/boards/:b/risk-areas/reset', async (c) => send(c, await riskAreas.reset(c.get('email'), Number(c.req.param('b')))));
   }
 
   // The board's learned size threshold (oversized flag), its bounds and its history, for members.

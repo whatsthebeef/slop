@@ -424,6 +424,7 @@ describe('Manifest changes and commit trailers', () => {
     runStartMinutes: 30,
     runRespondMinutes: 30,
     subMaxChangedLines: 2000,
+    subLimitStep: 500,
     effectCheckGlobs: 10,
     agentKbApproval: 'docs',
     version: 1,

@@ -6,9 +6,12 @@ import type { Category, Environment, SlopType } from '../domain/types.js';
 import type { Store } from '../ports.js';
 import { CONFIDENCES, INTAKE_PROMPT_VERSION, examplesBlock, needsConfirmation } from '../domain/intake-learning.js';
 import type { Confidence, IntakeExample } from '../domain/intake-learning.js';
+import { SUB_LIMIT_DEFAULT } from '../domain/sub-limit.js';
 import { estimateFromText, oversizedReasons } from '../domain/size-check.js';
 import type { SizeThreshold } from '../domain/size-check.js';
 import type { Embedder } from '../ports.js';
+import { defaultAreas, riskAreaLine } from '../domain/risk-area.js';
+import type { RiskArea } from '../domain/risk-area.js';
 import { memberOf } from './access.js';
 import { embedRequest, nearestExamples } from './intake-learning-service.js';
 import { field, parseJson, text } from './llm-json.js';
@@ -106,6 +109,16 @@ export interface IntakeProposal {
   readonly oversized: readonly string[];
 }
 
+/** What the board has learned, for the prompt: its risk areas (path patterns and why) and its sub size. */
+export const boardContextBlock = (areas: readonly RiskArea[], subMaxChangedLines: number): string =>
+  [
+    'Risk areas of this board (work in one needs a person to review it, so type "same"; match your "files" against the path patterns):',
+    ...(areas.length === 0 ? ['(none)'] : areas.map(riskAreaLine)),
+    `Learned sub size of this board: about ${String(subMaxChangedLines)} changed lines. "same" only when the work is clearly beyond it.`,
+  ].join('\n');
+
+const EPOCH = '1970-01-01T00:00:00.000Z';
+
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
 
 Respond with one JSON object and nothing else:
@@ -114,12 +127,12 @@ Respond with one JSON object and nothing else:
 - title: a short imperative title, at most 70 characters.
 - summary: one or two plain sentences saying what is wanted, for a card on the board. Not the spec.
 - plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
-- type: "sub" for any self-contained change that one routine can implement and merge in one PR without a human design decision: bug fixes, UI or UX tweaks, follow-ups to merged work, small features confined to one area, and test or doc changes. "same" for large or multi-area work, changes that need a human review (agent instructions, auth, migrations of existing data), and work that overlaps an open glob. "super" only when the request says the work is done by a developer pairing with the product owner.
+- type: be optimistic. "sub" is the default: a change one routine can implement and merge in one PR, whatever its area and whether or not it overlaps work in progress (merge order is handled elsewhere). Choose "same" only when there is clear evidence a person must review it: the work matches one of the board's risk areas (listed after the request; the path patterns are matched against your "files"), or it is clearly beyond the board's sub size (also listed). When unsure, choose "sub". "super" only when the request says the work is done by a developer pairing with the product owner.
 - category: "feature" for new capability, "bug" for something broken, "task" for other maintenance.
 - categoryConfidence: how sure you are of the category: "low" when the request could reasonably be a different category. categoryReason: one short sentence saying why.
 - Examples from the board's history may follow the request. Examples marked as changed show what the team wanted after a person corrected the first choice: follow them over your own reading when the request is similar.
 - group: reuse an existing group (its exact name) only when the work clearly belongs to that same area; otherwise a new short group name if the request names an area of work, otherwise null. Never pick an existing group just because it is the only one.
-- files: repo paths the work most likely changes, only ones the request names or clearly implies (a migration directory for a schema change, a named file); an empty list when unknown. Never invent paths.
+- files: repo paths the work most likely changes, only ones the request names or clearly implies (a migration directory for a schema change, a named file); an empty list when unknown. Never invent paths. List every one you expect: the board's risk-area path patterns are matched against them.
 - autoTrigger: true only if the request explicitly says to start the work immediately or to let an agent implement it now. Then autoTriggerQuote is the exact words from the request that say so; otherwise null.`;
 
 const normalise = (s: string) => s.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
@@ -198,15 +211,21 @@ export class IntakeService {
       if (!actor.ok) return actor;
       const globs = await tx.listGlobs(boardId, {});
       const board = await tx.getBoard(boardId);
+      const riskAreasOf = async () => {
+        const stored = await tx.listRiskAreas(boardId);
+        return stored.length > 0 ? stored : defaultAreas(boardId, EPOCH);
+      };
       return ok({
         groups: [...new Set(globs.flatMap((g) => (g.group === null ? [] : [g.group])))],
         environments: board?.environments ?? [],
         threshold: await tx.getSizeThreshold(boardId),
+        subMaxChangedLines: board?.subMaxChangedLines ?? SUB_LIMIT_DEFAULT,
+        areas: await riskAreasOf(),
         open: new Set(globs.filter((g) => g.status !== 'reviewing' && g.status !== 'signed_off').map((g) => g.id)),
       });
     });
     if (!known.ok) return known;
-    const { groups, environments, open, threshold } = known.value;
+    const { groups, environments, open, threshold, areas, subMaxChangedLines } = known.value;
 
     const examples = await this.examplesFor(boardId, input.text);
     const block = examplesBlock(examples);
@@ -215,6 +234,8 @@ export class IntakeService {
       '',
       'Request:',
       input.text.trim(),
+      '',
+      boardContextBlock(areas, subMaxChangedLines),
       ...(block === '' ? [] : ['', block]),
     ].join('\n');
     let completion: string;
@@ -253,13 +274,14 @@ export class IntakeService {
     const summary = input.explicit.summary ?? text(field(answer, 'summary')) ?? plan.split('\n')[0]?.slice(0, 300) ?? request;
 
     let category = input.explicit.category ?? oneOf(CATEGORIES, field(answer, 'category')) ?? 'task';
-    let type = input.explicit.type ?? oneOf(SLOP_TYPES, field(answer, 'type')) ?? 'same';
+    // Optimistic: an unclear type is a sub.
+    let type = input.explicit.type ?? oneOf(SLOP_TYPES, field(answer, 'type')) ?? 'sub';
     if (!isValidCombination(type, category)) {
       // Keep whatever the person set explicitly and repair the other field.
       if (input.explicit.type !== undefined && input.explicit.category === undefined) {
         category = 'feature';
       } else {
-        type = 'same';
+        type = isValidCombination('sub', category) ? 'sub' : 'same';
       }
     }
 
