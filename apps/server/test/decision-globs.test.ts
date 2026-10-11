@@ -47,7 +47,7 @@ interface View {
   allowedActions?: string[];
 }
 
-/** Decision globs on real Postgres: the store, migration 0042, the routes with their role gates, the board list and the MCP surface. */
+/** Decision globs on real Postgres: the store, migration 0045, the routes with their role gates, the board list and the MCP surface. */
 describe('decision globs', () => {
   let database: Database;
   let drop: () => Promise<void>;
@@ -126,13 +126,13 @@ describe('decision globs', () => {
   const decide = async (id: string, body: Record<string, unknown>, email = ADMIN) =>
     call(email, 'POST', `/api/globs/${id}/decision`, { version: (await view(id)).version, ...body });
 
-  describe('migration 0042 and the store', () => {
+  describe('migration 0045 and the store', () => {
     it('adds the column and index, runs twice, and its journal entry is the newest', async () => {
       const columns = await database.db.execute(sql`select column_name from information_schema.columns where table_name = 'kb_proposals' and column_name = 'decision_glob_id'`);
       expect(columns).toHaveLength(1);
       const indexes = await database.db.execute(sql`select indexname from pg_indexes where indexname = 'kb_proposals_decision_glob_idx'`);
       expect(indexes).toHaveLength(1);
-      const migration = await readFile(new URL('../drizzle/0042_decision_globs.sql', import.meta.url), 'utf8');
+      const migration = await readFile(new URL('../drizzle/0045_decision_globs.sql', import.meta.url), 'utf8');
       for (const statement of migration.split('--> statement-breakpoint')) await database.db.execute(sql.raw(statement));
       const journal = JSON.parse(await readFile(new URL('../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: { idx: number; when: number; tag: string }[] };
       const whens = journal.entries.map((e) => e.when);

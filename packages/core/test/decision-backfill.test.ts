@@ -133,6 +133,20 @@ describe('decision backfill', () => {
     expect((await store.transaction((tx) => tx.listGlobs(boardId, {}))).map((g) => g.id)).toEqual([workId]);
   });
 
+  it('does not bring back a glob that was deleted: its item keeps the link and is skipped', async () => {
+    const open = await insert(kbItem({}));
+    await backfillBoard(store, clock, boardId);
+    const made = need(await byKey(`kb:${open.id}`));
+    await store.transaction(async (tx) => {
+      await tx.deleteEvents(made.id);
+      await tx.deleteGlob(made.id);
+    });
+    const again = await backfillBoard(store, clock, boardId);
+    expect(again).toEqual({ open: 0, decided: 0, extracted: 0, skipped: 1 });
+    expect(await byKey(`kb:${open.id}`)).toBeNull();
+    expect(await decisionsOf()).toEqual([]);
+  });
+
   it('keeps the original dates on the events, so reports and aging are not skewed', async () => {
     const approved = await insert(kbItem({ status: 'approved', decidedBy: 'admin@example.com', decidedAt: day(NOW, -3), outcome: { kind: 'learning' } }));
     await backfillBoard(store, clock, boardId);

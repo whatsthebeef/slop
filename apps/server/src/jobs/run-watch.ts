@@ -28,7 +28,7 @@ export class RunWatch {
     const due = await this.store.transaction(async (tx) => {
       const found: { id: string; runId: string; reason: string }[] = [];
       for (const board of await tx.listAllBoards()) {
-        for (const glob of await tx.listGlobs(board.id, { status: ['implementing', 'pr_open'] })) {
+        for (const glob of await tx.listGlobs(board.id, { status: ['planning', 'implementing', 'pr_open'] })) {
           const reason = machine.runTimeoutReason(glob, board, now);
           const run = machine.currentRun(glob);
           if (reason !== null && run !== null) found.push({ id: glob.id, runId: run.id, reason });

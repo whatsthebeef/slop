@@ -78,6 +78,7 @@ const settingsSchema = z.object({
   // Core checks the range (3 to 50).
   effectCheckGlobs: z.number().int().optional(),
   agentKbApproval: z.enum(AGENT_KB_APPROVALS).optional(),
+  autoInvestigate: z.boolean().optional(),
   deploy: z
     .discriminatedUnion('provider', [
       z.object({
@@ -139,6 +140,7 @@ export const splitGlobSchema = z.object({
         category: z.enum(WORK_CATEGORIES).optional(),
         type: z.enum(SLOP_TYPES).optional(),
         after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
+        overlaps: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
         attachments: z.array(z.string().min(1)).optional(),
       }),
     )
@@ -159,6 +161,7 @@ const updateGlobSchema = z.object({
   overlaps: z.array(z.string().min(1)).max(20).optional(),
   /** A decision's scope, the only attribute a client edits; core validates it (kind, ref, glob on the board). */
   attributes: z.object({ scope: z.object({ kind: z.string(), ref: z.string().nullable() }).strict() }).strict().optional(),
+  autoStart: z.boolean().optional(),
 });
 
 /** A glob that came from a split says where: `split: { source, part, parts }`. */
@@ -454,11 +457,12 @@ export const createApp = (deps: AppDeps) => {
     const email = c.get('email');
     const split = await globs.split(email, c.req.param('id'), body.version, {
       idempotencyKey: body.idempotencyKey,
-      parts: body.parts.map(({ category, type, after, attachments, ...rest }) => ({
+      parts: body.parts.map(({ category, type, after, overlaps, attachments, ...rest }) => ({
         ...rest,
         ...(category === undefined ? {} : { category }),
         ...(type === undefined ? {} : { type }),
         ...(after === undefined ? {} : { after }),
+        ...(overlaps === undefined ? {} : { overlaps }),
         ...(attachments === undefined ? {} : { attachments }),
       })),
     });
@@ -495,6 +499,7 @@ export const createApp = (deps: AppDeps) => {
       await deps.sizeCheck?.keepWhole(email, id);
       return globs.startAnyway(email, id, b.version);
     },
+    investigate: (email: string, id: string, b: ActionBody) => globs.investigate(email, id, b.version),
     retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version, b.anyway === true),
     'retry-autofix': (email: string, id: string, b: ActionBody) => globs.retryAutofix(email, id, b.version),
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),

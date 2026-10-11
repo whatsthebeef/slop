@@ -1,13 +1,16 @@
 import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import { decisionOf } from '../domain/decision-glob.js';
 import { validateScopeEdit } from '../domain/attributes.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
+import { listOf } from '../domain/matrix.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import type { Actor, Board, Category, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
+import { recheckOverlapsEffect } from '../domain/events.js';
 import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
 import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
@@ -21,7 +24,7 @@ import type { DependencyLearningService } from './dependency-learning-service.js
 import { embedRequest, snapshotOf } from './intake-learning-service.js';
 import { checkFrom } from './size-check-service.js';
 import type { SizeAssessor } from './size-check-service.js';
-import { unresolved } from '../domain/size-check.js';
+import { needsInvestigation, unresolved } from '../domain/size-check.js';
 import type { SizeCheck } from '../domain/size-check.js';
 
 export interface GlobServiceDeps {
@@ -83,6 +86,8 @@ export interface SplitPart {
   readonly type?: SlopType;
   /** Indexes of earlier parts this one starts after; none means it runs in parallel. Part 0 has none. */
   readonly after?: readonly number[];
+  /** Indexes of earlier parts that may change the same files: recorded as overlaps, which order merges but never block a start. */
+  readonly overlaps?: readonly number[];
   /** Labels of the original's text attachments to copy to this part (link attachments always are). New parts only. */
   readonly attachments?: readonly string[];
 }
@@ -369,8 +374,36 @@ export class GlobService {
       return ok({ ...transition.value, glob, changed: true });
     });
     if (!result.ok) return result;
-    if (result.value.changed) this.publish(result.value.glob);
+    if (result.value.changed) {
+      this.publish(result.value.glob);
+      // The forecast from the code and history is made in the background: creating a glob never waits on it.
+      if (result.value.glob.status === 'planning') this.refreshSizeInBackground(result.value.glob.id);
+      // The caller's first write carries the version it got back, so it must be the one after the automatic run.
+      return ok((await this.autoInvestigate(result.value.glob.id)) ?? result.value.glob);
+    }
     return ok(result.value.glob);
+  }
+
+  /**
+   * A glob in Planning that intake flagged big (or whose size estimate is a guess) gets one investigate-only run, when the
+   * board allows it (`autoInvestigate`). Once per glob: a person's Investigate or an earlier automatic run counts. Best
+   * effort: it never fails the write that prompted it.
+   */
+  async autoInvestigate(id: string): Promise<Glob | null> {
+    try {
+      const wanted = await this.deps.store.transaction(async (tx) => {
+        const glob = await tx.getGlob(id);
+        if (glob === null || !machine.canInvestigate(glob) || glob.runs.some((r) => r.purpose === 'investigate')) return false;
+        const board = await tx.getBoard(glob.boardId);
+        return board !== null && board.autoInvestigate && needsInvestigation(await tx.getSizeCheck(id));
+      });
+      if (!wanted) return null;
+      const result = await this.command(null, id, null, (glob, ctx) => machine.investigate(glob, ctx, true));
+      return result.ok ? result.value : null;
+    } catch (e) {
+      this.deps.log?.('auto investigate', e instanceof Error ? e.message : String(e));
+      return null;
+    }
   }
 
   /**
@@ -388,6 +421,9 @@ export class GlobService {
       if (part.plan.trim() === '') return invalidInput(`Part ${index} needs a plan`);
       for (const n of part.after ?? []) {
         if (!Number.isInteger(n) || n < 0 || n >= index) return invalidInput(`Part ${index} can only start after earlier parts, not ${n}`);
+      }
+      for (const n of part.overlaps ?? []) {
+        if (!Number.isInteger(n) || n < 0 || n >= index) return invalidInput(`Part ${index} can only overlap earlier parts, not ${n}`);
       }
       if (index === 0 && (part.after ?? []).length > 0) return invalidInput('Part 0 is the original glob and starts after nothing new');
     }
@@ -411,7 +447,7 @@ export class GlobService {
       if (original.version !== version) {
         return err({ code: 'version_conflict', message: 'The glob has changed', current: original });
       }
-      if (original.status !== 'planning' || original.provisioning !== 'none' || original.runs.length > 0 || original.pr !== null) {
+      if (original.status !== 'planning' || original.provisioning !== 'none' || original.runs.some((r) => r.purpose !== 'investigate') || original.pr !== null) {
         return invalidInput(`${id} has started, so it can no longer be split: finish it and create the rest as follow-ups`);
       }
       const board = await tx.getBoard(original.boardId);
@@ -466,6 +502,11 @@ export class GlobService {
         const checked = checkAfter(null, awaitedIds, board.id, (gid) => found.get(gid));
         if (!checked.ok) return checked;
         if (checked.value.length > MAX_AFTER) return invalidInput(`Part ${index} would wait for more than ${MAX_AFTER} globs`);
+        // Overlaps are never needs: a part that also needs the glob keeps only the need.
+        const overlapIds = [...new Set((part.overlaps ?? []).map((n) => ids[n] ?? ''))].filter((o) => !checked.value.includes(o));
+        const foundOverlaps = await this.closure(tx, overlapIds);
+        const checkedOverlaps = checkOverlaps(null, overlapIds, board.id, (gid) => foundOverlaps.get(gid));
+        if (!checkedOverlaps.ok) return checkedOverlaps;
         const created = machine.create(
           {
             id: partId,
@@ -478,6 +519,9 @@ export class GlobService {
             environment: original.environment,
             autoTrigger: false,
             after: checked.value,
+            ...(checkedOverlaps.value.length === 0 ? {} : { impliedAfter: explicitOverlaps(checkedOverlaps.value) }),
+            // A same part that waits for others starts by itself when they merge (a person can turn that off).
+            autoStart: true,
           },
           board,
           ctx,
@@ -644,6 +688,11 @@ export class GlobService {
     return result.ok ? ok({ glob: result.value, warning }) : result;
   }
 
+  /** Investigate: an investigate-only routine run on a glob in Planning (refused while any run is live). */
+  investigate(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.investigate(glob, ctx));
+  }
+
   retryAutofix(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx) => machine.retryAutofix(glob, ctx));
   }
@@ -713,7 +762,7 @@ export class GlobService {
   }
 
   /** `escalate_to_same`: a routine run (with its run ID) or a person flags a running sub as needing a human. */
-  escalateToSame(email: string, id: string, input: { reason: string; evidence?: string | null; runId?: string | null }) {
+  escalateToSame(email: string, id: string, input: { reason: string; evidence?: string | null; criterion?: string | null; runId?: string | null }) {
     return this.command(email, id, null, (glob, ctx) => machine.escalateToSame(glob, input, ctx));
   }
 
@@ -746,10 +795,18 @@ export class GlobService {
       if (board === null) return notFound(`No board ${glob.boardId}`);
       const transition = machine.remove(glob, await this.context(actor.value, board));
       if (!transition.ok) return transition;
+      // A decision fronting a knowledge item that is still open or approved can't go (the item would only bring it back,
+      // and an accepted one governs work): reject the item to remove the decision. A rejected item keeps its link, so a
+      // backfill sees the glob is gone and leaves it that way.
+      const itemId = glob.category === 'decision' ? decisionOf(glob)?.kbItemId ?? null : null;
+      const item = itemId === null ? null : await tx.getKbItem(itemId);
+      if (item !== null && (item.status === 'open' || item.status === 'approved')) {
+        return invalidInput(`This decision belongs to a ${item.status} knowledge item; reject the item to remove it`);
+      }
       await tx.deleteEvents(glob.id);
       await tx.deleteGlob(glob.id);
       // The deletion itself is logged without a glob, so reports lose the glob's time.
-      await tx.enqueueEffects(transition.value.effects);
+      await tx.enqueueEffects([...transition.value.effects, recheckOverlapsEffect(glob.boardId)]);
       return ok(glob);
     });
     if (!result.ok) return result;
@@ -787,6 +844,15 @@ export class GlobService {
     return released;
   }
 
+  /** The background size refresh: never awaited, and a rejection (or a throw) is logged, never unhandled. */
+  private refreshSizeInBackground(id: string): void {
+    const check = this.deps.sizeCheck;
+    if (check === undefined) return;
+    void Promise.resolve()
+      .then(() => check.refresh(id))
+      .catch((e: unknown) => this.deps.log?.('size check refresh', e instanceof Error ? e.message : String(e)));
+  }
+
   /**
    * After a size check was re-judged (its plan was saved): a sub held in Planning for the flag starts once the check no
    * longer holds it. A newly flagged sub needs nothing here: `release` refuses an unanswered flag, and a sub in Planning
@@ -798,6 +864,82 @@ export class GlobService {
       return glob !== null && glob.status === 'planning' && glob.type === 'sub' && glob.waiting != null && !unresolved(await tx.getSizeCheck(id));
     });
     if (lift) await this.release(id);
+    // The plan was re-judged: a glob that now looks big is investigated (a no-op when it already was).
+    await this.autoInvestigate(id);
+  }
+
+  /**
+   * Recomputes the predicted overlap edges of every open glob (Planning or Doing) on the board and replaces the stale
+   * ones (`recheck_overlaps`). An edge to a glob that went back to Planning, failed without a branch, was deleted, merged
+   * or no longer changes an exclusive path drops off; a new one is added when a branch or plan now shows it. Explicit
+   * edges, learned ones and ones a person overrode are kept. Each glob is its own version-checked write and a no-op when
+   * its edges are unchanged, so a repeat changes nothing. Returns the IDs whose edges changed.
+   */
+  async recheckOverlaps(boardId: number): Promise<string[]> {
+    const branchFiles = this.deps.branchFiles;
+    if (branchFiles === undefined) return [];
+    const read = await this.deps.store.transaction(async (tx) => {
+      const board = await tx.getBoard(boardId);
+      if (board === null) return null;
+      const globs = await tx.listGlobs(boardId, {});
+      const plans = new Map<string, string>();
+      for (const glob of globs) plans.set(glob.id, (await tx.listArtifacts(glob.id, 'plan'))[0]?.content ?? glob.summary);
+      return { board, globs, plans };
+    });
+    if (read === null) return [];
+    // One read of each branch per recheck, whoever asks: keyed by glob and head.
+    const cache = new Map<string, Promise<readonly string[] | null>>();
+    const cached: BranchFiles = {
+      filesOf: (board, glob) => {
+        const key = `${glob.id}@${glob.pr?.headSha ?? ''}`;
+        const found = cache.get(key) ?? branchFiles.filesOf(board, glob);
+        cache.set(key, found);
+        return found;
+      },
+    };
+    const prediction = await this.deps.dependencyLearning?.prediction(read.board.id);
+    const byId = new Map(read.globs.map((g) => [g.id, g]));
+    const changed: string[] = [];
+    for (const glob of read.globs) {
+      const open = listOf(glob.status) === 'planning' || listOf(glob.status) === 'doing';
+      if (!open || glob.type === 'super') continue;
+      const mine = glob.impliedAfter ?? [];
+      // Edges nobody may replace are not looked for again.
+      const skip = new Set([...(glob.after ?? []), ...mine.filter((i) => !machine.isReplaceableOverlap(i)).map((i) => i.id)]);
+      // An overlap is recorded on the later glob (it is the one that rebases), as at start: a newer glob adds none here.
+      for (const other of read.globs) {
+        if (other.id !== glob.id && !mine.some((i) => i.id === other.id) && (other.createdAt > glob.createdAt || (other.createdAt === glob.createdAt && other.id > glob.id))) skip.add(other.id);
+      }
+      const files = glob.provisioning === 'none' ? undefined : ((await cached.filesOf(read.board, glob)) ?? undefined);
+      const found = await findHolds(
+        this.deps.store,
+        cached,
+        read.board,
+        { id: glob.id, plan: read.plans.get(glob.id) ?? glob.summary, ...(files === undefined ? {} : { files }) },
+        skip,
+        prediction,
+      );
+      const dropReasons = new Map<string, string>();
+      for (const edge of mine.filter(machine.isReplaceableOverlap)) {
+        const other = byId.get(edge.id);
+        const state = other === undefined ? 'missing' : dependencyState(other);
+        dropReasons.set(
+          edge.id,
+          other === undefined
+            ? `${edge.id} was deleted`
+            : state === 'merged'
+              ? `${edge.id} merged`
+              : state === 'planning'
+                ? `${edge.id} is back in Planning`
+                : other.status === 'failed'
+                  ? `${edge.id} failed`
+                  : `${edge.id} no longer changes ${edge.paths.slice(0, 3).join(', ')}`,
+        );
+      }
+      const result = await this.command(null, glob.id, null, (g, ctx) => machine.overlapsRechecked(g, { edges: found, dropReasons }, ctx));
+      if (result.ok && result.value.version !== glob.version) changed.push(glob.id);
+    }
+    return changed;
   }
 
   /** Starts one held glob if everything it waits for has merged and the merge policy still lets it. */
@@ -923,7 +1065,11 @@ export class GlobService {
         const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);
         const transition = step(glob, ctx, board, facts);
         if (!transition.ok) return transition;
-        const { changed, events, effects } = transition.value;
+        const { changed, events } = transition.value;
+        // A status change, a push or a merge may change which open globs overlap: queue the board's recheck (coalesced).
+        const moved =
+          changed && (transition.value.glob.status !== glob.status || events.some((e) => e.type === 'CommitPushed' || e.type === 'Merged'));
+        const effects = moved ? [...transition.value.effects, recheckOverlapsEffect(glob.boardId)] : transition.value.effects;
         if (!changed) {
           await tx.appendEvents(events);
           await tx.enqueueEffects(effects);

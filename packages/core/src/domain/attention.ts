@@ -12,7 +12,7 @@ export const needsHuman = (glob: Glob): boolean => {
   if (glob.status === 'failed' || glob.failure !== null) return true;
   if (glob.status === 'pr_open' && glob.type !== 'sub' && glob.pr?.state === 'ready') return true;
   // An agent flagged a running sub: a person should look before it merges.
-  if (glob.escalation != null && ['implementing', 'in_progress', 'pr_open'].includes(glob.status)) return true;
+  if (glob.escalation != null && ['planning', 'implementing', 'in_progress', 'pr_open'].includes(glob.status)) return true;
   if (glob.status === 'reviewing') {
     return Object.values(glob.labels).some((state) => state === 'required' || state === 'added');
   }

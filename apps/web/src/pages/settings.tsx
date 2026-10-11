@@ -36,6 +36,7 @@ export const SettingsPage = () => {
   const [deploy, setDeploy] = useState<DeployIntegration | null>(null);
   const [effectCheckGlobs, setEffectCheckGlobs] = useState('');
   const [agentKbApproval, setAgentKbApproval] = useState<AgentKbApproval>('docs');
+  const [autoInvestigate, setAutoInvestigate] = useState(true);
 
   useEffect(() => {
     if (board.data === undefined) return;
@@ -46,6 +47,7 @@ export const SettingsPage = () => {
     setDeploy(board.data.deploy);
     setEffectCheckGlobs(String(board.data.effectCheckGlobs));
     setAgentKbApproval(board.data.agentKbApproval);
+    setAutoInvestigate(board.data.autoInvestigate);
   }, [board.data]);
 
   const save = useMutation({
@@ -58,6 +60,7 @@ export const SettingsPage = () => {
         repo: repo.trim() === '' ? null : repo.trim(),
         deploy,
         agentKbApproval,
+        autoInvestigate,
         // Checked by the server (3 to 50); a blank field leaves it as it is.
         ...(effectCheckGlobs.trim() === '' ? {} : { effectCheckGlobs: Number(effectCheckGlobs) }),
       });
@@ -252,6 +255,16 @@ export const SettingsPage = () => {
             data-testid='effect-check-globs'
           />
         </Label>
+        <label className='flex items-center gap-2 text-sm' title='A glob in Planning that intake flags as big gets a routine run that investigates it (no branch, no commits)'>
+          <input
+            type='checkbox'
+            disabled={!admin}
+            checked={autoInvestigate}
+            onChange={(e) => setAutoInvestigate(e.target.checked)}
+            data-testid='auto-investigate'
+          />
+          Investigate big globs in Planning automatically
+        </label>
         <h3 className='text-xs font-semibold text-muted-foreground'>Knowledge</h3>
         <label className='flex items-center gap-2 text-sm' title='Local-run spec, merge policy and whole documents always need a person'>
           <input
@@ -266,7 +279,9 @@ export const SettingsPage = () => {
         <SubLimit boardId={boardId} admin={admin} />
         <DependencyRules boardId={boardId} admin={admin} />
         <RiskAreas boardId={boardId} admin={admin} />
+        <Escalations boardId={boardId} admin={admin} />
         <SizeThreshold boardId={boardId} admin={admin} />
+        <SizeCalibrationView boardId={boardId} />
         <IntakeAccuracyView boardId={boardId} admin={admin} />
         <IntegrationToken boardId={boardId} admin={admin} />
         <DeploySettings
@@ -355,6 +370,9 @@ const SIZE_OUTCOME_TEXT: Record<SizeOutcome, string> = {
   kept_whole_clean: 'Flagged, kept whole and merged cleanly: raised',
   unflagged_struggled: 'Not flagged, and it struggled: lowered',
   flag_confirmed: 'Flag confirmed: unchanged',
+  split_stalled: 'Split, but the parts ran one after another and stalled: raised (keep work whole)',
+  split_helped: 'Split, and it helped: unchanged',
+  reset: 'Reset to the defaults',
 };
 
 /**
@@ -363,6 +381,10 @@ const SIZE_OUTCOME_TEXT: Record<SizeOutcome, string> = {
 const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
   const client = useQueryClient();
   const threshold = useQuery({ queryKey: ['size-threshold', boardId], queryFn: () => api.sizeThreshold(boardId) });
+  const reset = useMutation({
+    mutationFn: () => api.resetSizeThreshold(boardId),
+    onSuccess: (view) => client.setQueryData(['size-threshold', boardId], view),
+  });
   const jobs = useQuery({ queryKey: ['kb-jobs', boardId], queryFn: () => api.boardJobs(boardId) });
   const lastRun = jobs.data === undefined ? undefined : (jobs.data.find((j) => j.job === 'size_threshold')?.lastRunAt ?? null);
   const seenRun = useRef<string | null | undefined>(undefined);
@@ -381,15 +403,31 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
       </p>
     );
   if (threshold.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the size threshold…</p>;
-  const { current, bounds, history } = threshold.data;
+  const { current, defaults, bounds, history } = threshold.data;
+  const learned = defaults.maxTasks !== current.maxTasks || defaults.maxParts !== current.maxParts;
   return (
     <div className='grid gap-2' data-testid='size-threshold'>
       <p className='text-sm'>
-        Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts (learned from outcomes)
+        Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts ({learned ? 'learned from outcomes' : 'the default'})
       </p>
+      <p className='text-xs text-muted-foreground' data-testid='size-threshold-forecast'>
+        Judged from the code (the forecast), the part limit is {Math.max(current.maxParts, 3)} or more separate modules, and only when at least 2 of them can be built at the same time.
+      </p>
+      <p className='text-xs text-muted-foreground' data-testid='size-threshold-defaults'>
+        Default: {defaults.maxTasks} tasks, {defaults.maxParts} independent parts. Learned: {current.maxTasks} tasks, {current.maxParts} independent parts.
+      </p>
+      {admin && learned && (
+        <div>
+          <Button size='sm' variant='outline' disabled={reset.isPending} onClick={() => reset.mutate()}>
+            Reset to defaults
+          </Button>
+          {reset.isError && <span className='ml-2 text-xs text-red'>Could not reset the size threshold.</span>}
+        </div>
+      )}
       <p className='text-xs text-muted-foreground'>
-        Intake flags a glob above it and proposes a split. A flagged glob kept whole that merges cleanly raises the threshold; an
-        unflagged glob that struggles (the most review rounds, a failed run, a very long PR, or a split after it started) lowers it.
+        Intake flags a glob above it, and only when at least two of its parts could be built at the same time (a long serial plan stays whole), and
+        proposes a split with its critical path. A flagged glob kept whole that merges cleanly raises the threshold; so does a split whose parts ended
+        up one after another and stalled (the cause is in the history). An unflagged glob that struggles (the most review rounds, a failed run, a very long PR, or a split after it started) lowers it.
         Tasks stay between {bounds.tasks.min} and {bounds.tasks.max}, parts between {bounds.parts.min} and {bounds.parts.max}, in steps of {bounds.step}.
       </p>
       <JobStatus boardId={boardId} admin={admin} job='size_threshold' />
@@ -416,6 +454,84 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
                   {SIZE_OUTCOME_TEXT[change.outcome]}
                   <span className='block text-muted-foreground'>{change.evidence}</span>
                 </td>
+                <td>
+                  {change.outcome === 'reset' ? null : (
+                    <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
+                      {change.globId}
+                    </Link>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
+
+/** The size forecast's calibration: read-only, learned values against the defaults, with the history and its causes as text. */
+const SizeCalibrationView = ({ boardId }: { boardId: number }) => {
+  const calibration = useQuery({ queryKey: ['size-calibration', boardId], queryFn: () => api.sizeCalibration(boardId) });
+  if (calibration.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load the size calibration.
+        <Button size='sm' variant='outline' onClick={() => void calibration.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (calibration.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the size calibration…</p>;
+  const { current, defaults, history } = calibration.data;
+  const areas = Object.entries(current.areaFactors);
+  const defaultFactor = (area: string): number => Object.entries(defaults.areaFactors).find(([name]) => name === area)?.[1] ?? 1;
+  const learned = (now: number, start: number) => (now === start ? 'default' : `learned, default ${start}`);
+  return (
+    <div className='grid gap-2' data-testid='size-calibration'>
+      <p className='text-sm'>Size forecast calibration ({current.samples} merged globs learned from)</p>
+      <p className='text-xs text-muted-foreground'>
+        The forecast blends three signals: the code, similar past globs and the plan text. Merged globs move the weights toward the signal that was closest
+        and each area's factor toward the lines the area really took.
+      </p>
+      <ul className='text-xs'>
+        <li>
+          Code weight {current.weights.code} ({learned(current.weights.code, defaults.weights.code)})
+        </li>
+        <li>
+          Similar globs weight {current.weights.reference} ({learned(current.weights.reference, defaults.weights.reference)})
+        </li>
+        <li>
+          Text weight {current.weights.text} ({learned(current.weights.text, defaults.weights.text)})
+        </li>
+        {areas.length === 0 ? (
+          <li className='text-muted-foreground'>No area corrections yet.</li>
+        ) : (
+          areas.map(([area, factor]) => (
+            <li key={area}>
+              {area} lines x{factor} ({learned(factor, defaultFactor(area))})
+            </li>
+          ))
+        )}
+      </ul>
+      {history.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No calibration moves recorded yet.</p>
+      ) : (
+        <table className='text-xs'>
+          <thead className='text-left text-muted-foreground'>
+            <tr>
+              <th className='pr-3 font-normal'>Date</th>
+              <th className='pr-3 font-normal'>What</th>
+              <th className='pr-3 font-normal'>Why</th>
+              <th className='font-normal'>Glob</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((change) => (
+              <tr key={change.id} className='align-top'>
+                <td className='pr-3 whitespace-nowrap'>{new Date(change.at).toLocaleDateString()}</td>
+                <td className='pr-3 whitespace-nowrap'>{change.kind === 'weights' ? 'weights' : `${change.area ?? 'area'} factor`}</td>
+                <td className='pr-3'>{change.cause}</td>
                 <td>
                   <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
                     {change.globId}
@@ -1019,5 +1135,95 @@ export const SignedOffPage = () => {
         </Button>
       )}
     </main>
+  );
+};
+
+const STANCE_TEXT = { loosened: 'learned: loosened', default: 'default', strengthened: 'learned: strengthened' } as const;
+
+/**
+ * The board's escalation criteria and what slop learned from their outcomes: an escalation approved unchanged loosens
+ * its criterion, one that got changes (or a sub that merged and was reverted or blamed) strengthens it. Admins reset
+ * the criteria to the defaults; the history stays. Everything is rendered as text.
+ */
+const Escalations = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const client = useQueryClient();
+  const view = useQuery({ queryKey: ['escalations', boardId], queryFn: () => api.escalations(boardId) });
+  const reset = useMutation({
+    mutationFn: () => api.resetEscalations(boardId),
+    onSuccess: (data) => client.setQueryData(['escalations', boardId], data),
+  });
+  if (view.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load the escalation history.
+        <Button size='sm' variant='outline' onClick={() => void view.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (view.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the escalation history…</p>;
+  const { criteria, history } = view.data;
+  return (
+    <div className='grid gap-2' data-testid='escalations'>
+      <h3 className='text-sm font-medium'>Escalation criteria</h3>
+      <p className='text-xs text-muted-foreground'>
+        Agents escalate a sub to a same when a person should check it. Slop records each escalation and its outcome: approved
+        unchanged loosens its criterion; changes asked for, or a revert, strengthens it; a sub that merged unescalated and was
+        reverted or blamed by a bug counts against the criterion it should have met. A change of stance is proposed as a
+        learning for the agents' guidance.
+      </p>
+      <ul className='grid gap-1 text-xs'>
+        {criteria.map((c) => (
+          <li key={c.criterion}>
+            <span className='font-medium'>{c.text}</span>{' '}
+            <span className='text-muted-foreground'>
+              ({STANCE_TEXT[c.stance]}; score {c.score}; unnecessary {c.unnecessary}, justified {c.justified}, missed {c.missed})
+            </span>
+          </li>
+        ))}
+      </ul>
+      {admin && (
+        <div>
+          <Button size='sm' variant='outline' disabled={reset.isPending} onClick={() => reset.mutate()}>
+            Reset to defaults
+          </Button>
+          {reset.isError && <span className='ml-2 text-xs text-red'>Could not reset the escalation criteria.</span>}
+        </div>
+      )}
+      {history.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No escalation outcomes recorded yet.</p>
+      ) : (
+        <table className='text-xs'>
+          <thead className='text-left text-muted-foreground'>
+            <tr>
+              <th className='pr-3 font-normal'>Date</th>
+              <th className='pr-3 font-normal'>Criterion</th>
+              <th className='pr-3 font-normal'>Outcome</th>
+              <th className='font-normal'>Why</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((r) => (
+              <tr key={r.id} className='align-top'>
+                <td className='pr-3 whitespace-nowrap'>{new Date(r.at).toLocaleDateString()}</td>
+                <td className='pr-3'>{r.outcome === 'reset' ? '' : r.criterion}</td>
+                <td className='pr-3 whitespace-nowrap'>{r.outcome}</td>
+                <td>
+                  {r.cause}
+                  {r.globId !== null && (
+                    <>
+                      {' '}
+                      <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(r.globId)}`}>
+                        {r.globId}
+                      </Link>
+                    </>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 };

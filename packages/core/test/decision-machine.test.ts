@@ -256,7 +256,7 @@ describe('allowed actions', () => {
   it('offers only pick up, decide, sign off, reopen and delete, by role and status', () => {
     const actions = (g: Glob, actor: Actor) => machine.allowedActions(g, actor);
     expect(actions(decision(), admin)).toEqual(['pick_up', 'delete']);
-    expect(actions(decision(), dev)).toEqual(['delete']);
+    expect(actions(decision(), dev)).toEqual([]);
     expect(actions(decision({ status: 'in_progress', implementer: admin.email }), admin)).toEqual(['decide', 'delete']);
     expect(actions(decision({ status: 'in_progress', implementer: admin.email }), po)).toEqual(['pick_up', 'decide', 'delete']);
     expect(actions(decision({ status: 'reviewing' }), po)).toEqual(['sign_off', 'reopen', 'delete']);
@@ -267,6 +267,6 @@ describe('allowed actions', () => {
 
   it('leaves work globs unchanged', () => {
     const actions = machine.allowedActions(glob({ status: 'planning', pr: null, provisioning: 'none' }), dev);
-    expect(actions).toEqual(['start', 'pick_up', 'start_again', 'delete']);
+    expect(actions).toEqual(['start', 'investigate', 'pick_up', 'start_again', 'delete']);
   });
 });

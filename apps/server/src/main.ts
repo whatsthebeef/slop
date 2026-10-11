@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, DecisionGlobService, backfillDecisionGlobs } from '@slop/core';
+import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, DecisionGlobService, backfillDecisionGlobs } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -220,8 +220,17 @@ const intakeLlm = trackLlm(
   new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, logUsage),
   config.INTAKE_MODEL,
 );
+// The code view: a clone per board on the data disk, an index of its base branch in Postgres, one read-only port over both.
+const codeClones = new CodeClones({
+  dir: config.CODE_DIR,
+  host: github,
+  capBytes: config.CODE_CAP_MB * 1024 * 1024 || DEFAULT_CAP_BYTES,
+  warn: (message) => console.warn(`[code] ${message}`),
+});
+const codeIndex = new CodeIndex(db);
+const codeView = new GitCodeView({ clones: codeClones, index: codeIndex, board: boardOf, host: github });
 // The size check: the intake model judges a plan's independent parts and proposes a split; a failing model leaves the text estimate.
-const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, onRechecked: (id): Promise<void> => globs.reconcileSizeHold(id) });
+const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, codeView, embedder, onRechecked: (id): Promise<void> => globs.reconcileSizeHold(id) });
 const intake = new IntakeService({
   store,
   llm: intakeLlm,
@@ -242,18 +251,10 @@ const searchIndexer = new SearchIndexer({
   llm: searchLlm,
 });
 const search = new SearchService({ store, clock, embedder });
-// The code view: a clone per board on the data disk, an index of its base branch in Postgres, one read-only port over both.
-const codeClones = new CodeClones({
-  dir: config.CODE_DIR,
-  host: github,
-  capBytes: config.CODE_CAP_MB * 1024 * 1024 || DEFAULT_CAP_BYTES,
-  warn: (message) => console.warn(`[code] ${message}`),
-});
-const codeIndex = new CodeIndex(db);
 const codeIndexer = new CodeIndexer({ store, clones: codeClones, index: codeIndex });
 const code = new CodeViewService({
   boards,
-  view: new GitCodeView({ clones: codeClones, index: codeIndex, board: boardOf, host: github }),
+  view: codeView,
   usage: codeIndex,
   warn: (message) => console.warn(`[code] ${message}`),
 });
@@ -273,7 +274,9 @@ const chat = new ChatService({
   // Save to knowledge goes to the proposal queue, like an agent's learning.
   submitLearning: (email, board, learning) => knowledge.submitLearning(email, board, learning),
 });
-const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck });
+// An arriving investigation escalates a sub that needs a human and raises the oversize flag with a fan-out proposal.
+const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input) });
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, investigation });
 const searchSync = new SearchSync(searchIndexer, logError);
 // Decisions (spec, Decisions and supersession): extracted from the board's plans and records with the search model,
 // checked against earlier decisions for a replacement; the people on the board confirm or undo a replacement.
@@ -320,7 +323,8 @@ const subLimit = new SubLimitService({
   log: logError,
 });
 // Hourly: intake snapshots are embedded or rebuilt for older globs, and merged globs' outcomes recorded and refreshed at 14 days.
-const intakeLearning = new IntakeLearningService({ store, clock, embedder, riskAreas });
+const escalations = new EscalationLearningService({ store, clock, riskAreas });
+const intakeLearning = new IntakeLearningService({ store, clock, embedder, riskAreas, escalations });
 const learningJobs = new LearningJobService({
   store,
   clock,
@@ -356,7 +360,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
-mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, intakeLearning, sizeCheck, logError });
+mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, intakeLearning, sizeCheck, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
 const awsSignIn =

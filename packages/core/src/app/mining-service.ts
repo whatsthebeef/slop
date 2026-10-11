@@ -17,7 +17,7 @@ import type {
   Measurement,
   MergedCommit,
 } from '../domain/signals.js';
-import type { Notifier, Store, Tx } from '../ports.js';
+import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { newKbItemId } from './knowledge-service.js';
 import { createDecisionForItem } from './decision-glob.js';
 
@@ -97,7 +97,10 @@ export class MiningService {
    * New dependencies are raised together, once per name.
    */
   async mine(boardId: number, now: string, options: MineOptions = {}): Promise<MiningResult> {
+    // The new decision globs' hints, published once the run commits.
+    const hints: Hint[] = [];
     const result = await this.deps.store.transaction(async (tx): Promise<MiningResult> => {
+      hints.length = 0;
       // The lease keeps runs apart only while it lasts: a second run waits here and then reads the first's rows.
       await tx.lockBoardJob(boardId, 'mining');
       const board = await tx.getBoard(boardId);
@@ -110,7 +113,7 @@ export class MiningService {
       const signalOf = (m: Measurement): KbSignal => signalFrom(m, activity, now);
 
       const raise = async (m: Measurement): Promise<string> => {
-        const id = await this.insertItem(tx, board.id, board.agentSetVersion, m, signalOf(m), now);
+        const id = await this.insertItem(tx, board.id, board.agentSetVersion, m, signalOf(m), now, hints);
         raised.push(id);
         return id;
       };
@@ -188,6 +191,8 @@ export class MiningService {
         refreshed,
       };
     });
+    for (const hint of hints) this.deps.notifier.publish(hint);
+    for (const hint of hints) this.deps.notifier.publish(hint);
     if (result.raised.length > 0 || result.refreshed.length > 0) this.deps.notifier.publish({ kind: 'board.kb', boardId });
     return result;
   }
@@ -201,7 +206,7 @@ export class MiningService {
     return measureSignals(activity).map((m) => signalFrom(m, activity, now));
   }
 
-  private async insertItem(tx: Tx, boardId: number, agentSetVersion: number, m: Measurement, signal: KbSignal, now: string): Promise<string> {
+  private async insertItem(tx: Tx, boardId: number, agentSetVersion: number, m: Measurement, signal: KbSignal, now: string, hints: Hint[]): Promise<string> {
     const definition = signalDefinition(m.key);
     const id = await newKbItemId(tx, boardId);
     const item: KbItem = {
@@ -233,6 +238,7 @@ export class MiningService {
     const inserted = await tx.insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
     // The counter is atomic, so a clash means the counter and the table disagree.
     if (!inserted) throw new Error(`KB item ${id} already exists`);
+    hints.push(...decision.value.hints);
     return id;
   }
 

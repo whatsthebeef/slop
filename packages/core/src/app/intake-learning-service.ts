@@ -16,6 +16,7 @@ import type { RiskOutcome } from '../domain/risk-area.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Embedder, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
+import type { EscalationLearningService } from './escalation-learning-service.js';
 import type { RiskAreaService } from './risk-area-service.js';
 
 export type IntakeOutcomeResult = Extract<BoardJobResult, { kind: 'intake_outcome' }>;
@@ -110,6 +111,8 @@ export class IntakeLearningService {
       embedder?: Embedder;
       /** Absent: a person's change of type isn't passed to the board's risk areas. */
       riskAreas?: RiskAreaService;
+      /** Absent: escalation outcomes aren't learned from. */
+      escalations?: EscalationLearningService;
     },
   ) {}
 
@@ -121,6 +124,7 @@ export class IntakeLearningService {
     // A person's change of type (sub to same, same to sub) is a heavy signal for the paths the plan named.
     for (const c of corrections) await this.deps.riskAreas?.record(boardId, c);
     await this.deps.riskAreas?.learn(boardId, now);
+    await this.deps.escalations?.learn(boardId, now);
     return { kind: 'intake_outcome', backfilled, embedded, recorded, refreshed };
   }
 

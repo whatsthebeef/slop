@@ -52,3 +52,45 @@ test('a glob created and moved on one board shows up live on another', async ({ 
   await expect(b.getByTestId('glob-page')).toContainText('In progress');
   await expect(b.getByRole('button', { name: 'Pick up' })).toBeVisible();
 });
+
+test('the filter pane narrows the cards by category and glob ID, and Clear restores them', async ({
+  browser,
+}) => {
+  const page = await signIn(browser, `filter-${unique}@example.com`);
+  await page.getByLabel('Name', { exact: true }).fill(`Filter ${unique}`);
+  await page.getByRole('button', { name: 'Create board' }).click();
+  await expect(page.getByRole('heading', { name: `Filter ${unique}` })).toBeVisible();
+
+  const create = async (title: string) => {
+    await page.getByRole('button', { name: 'New glob' }).click();
+    await page.getByLabel('Title').fill(title);
+    await page.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(page.getByTestId('list-planning').getByText(title)).toBeVisible();
+  };
+  await create('Alpha glob');
+  await create('Beta glob');
+
+  // The filter button sits immediately left of the chat button.
+  const filter = page.getByTestId('filter-toggle');
+  const chat = page.getByTestId('chat-toggle');
+  const [f, c] = await Promise.all([filter.boundingBox(), chat.boundingBox()]);
+  expect(f !== null && c !== null && f.x < c.x && c.x - (f.x + f.width) < 12).toBe(true);
+
+  const planning = page.getByTestId('list-planning');
+  await filter.click();
+  await expect(page.getByTestId('filter-pane')).toHaveAttribute('data-open', 'true');
+  await page.getByTestId('filter-category-bug').click();
+  await expect(page).toHaveURL(/category=bug/);
+  await expect(planning.getByText('Alpha glob')).toHaveCount(0);
+  await expect(planning.getByTestId('no-match')).toBeVisible();
+  await expect(filter.getByTestId('filter-active')).toBeVisible();
+
+  await page.getByTestId('filter-category-bug').click();
+  await page.getByTestId('filter-id').fill('zzz');
+  await expect(planning.getByText('Alpha glob')).toHaveCount(0);
+
+  await page.getByTestId('filter-clear').click();
+  await expect(planning.getByText('Alpha glob')).toBeVisible();
+  await expect(planning.getByText('Beta glob')).toBeVisible();
+  await expect(page).not.toHaveURL(/category=|id=/);
+});

@@ -112,6 +112,7 @@ export class OutboxRunner {
       effect.kind !== 'delete_glob_data' &&
       effect.kind !== 'start_deploy' &&
       effect.kind !== 'refresh_base_checks' &&
+      effect.kind !== 'recheck_overlaps' &&
       effect.kind !== 'check_environment' &&
       (glob === null || ('generation' in effect && effect.generation < glob.generation));
 

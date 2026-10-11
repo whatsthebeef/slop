@@ -1,5 +1,5 @@
 import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
-import { fireRoutine, runInstructions } from './routines.js';
+import { fireRoutine, investigateInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
 import { isRepoAccessFailure, isSetupFailure, chainRefusal, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
@@ -452,8 +452,9 @@ export const codeHostExecutors = (
           return 'done';
         }
       }
-      // A routine works on the glob's branch, so it is only fired once that exists.
-      if (glob.provisioning !== 'ok') throw new Error(`${glob.id} is not provisioned yet`);
+      // A routine works on the glob's branch, so it is only fired once that exists. An investigate-only run works on the
+      // base branch of a glob in Planning, which has no branch yet.
+      if (effect.purpose !== 'investigate' && glob.provisioning !== 'ok') throw new Error(`${glob.id} is not provisioned yet`);
       const secret = await routines.secretFor(effect.routineOwner, glob.boardId);
       if (secret === null) {
         await globs.applyEvent(glob.id, (g, ctx) =>
@@ -462,7 +463,13 @@ export const codeHostExecutors = (
         return 'done';
       }
       const repo = await repoFor(glob.boardId);
-      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`, glob.status === 'pr_open', effect.failureSummary ?? null), health);
+      const repoName = repo === null ? null : `${repo.owner}/${repo.name}`;
+      const board = await boardOf(glob.boardId);
+      const text =
+        effect.purpose === 'investigate'
+          ? investigateInstructions(glob, effect.runId, repoName, board?.baseBranch ?? null)
+          : runInstructions(glob, effect.runId, repoName, glob.status === 'pr_open', effect.failureSummary ?? null);
+      const result = await fireRoutine(secret, text, health);
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));

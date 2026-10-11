@@ -91,6 +91,12 @@ export class DecisionGlobService {
       if (decisionOf(glob) === null) return invalidInput(`${id} is not a decision glob`);
       const actor = await roleOf(tx, email, glob.boardId, DECIDERS);
       if (!actor.ok) return actor;
+      // Needs work without a glob to link makes one below: check the request would be accepted first, so a refusal leaves no stray glob.
+      if (input.outcome === 'needs_work' && input.linkedGlobId === undefined) {
+        if (glob.version !== version) return err({ code: 'version_conflict', message: 'The glob has changed', current: glob });
+        const check = machine.decideDecision(glob, { outcome: 'needs_work', ...(input.reason === undefined ? {} : { reason: input.reason }), linkedGlobId: glob.id }, this.context(actor.value));
+        if (!check.ok) return check;
+      }
       const plan = (await tx.listArtifacts(id, 'plan'))[0]?.content ?? glob.summary;
       return ok({ glob, plan });
     });
@@ -141,12 +147,21 @@ export class DecisionGlobService {
         }
         const written = await this.writeItem(tx, email, glob, actor.value.role, input);
         if (!written.ok) return written;
-        const { changed, events, effects } = transition.value;
-        let current = glob;
+        // Writing the item can rewrite this very glob (a retarget refreshes its conflicts), so the step is applied to the glob as it is now.
+        const fresh = await tx.getGlob(id);
+        if (fresh === null) throw new StaleDecisionGlob(id);
+        let step = transition.value;
+        if (fresh.version !== glob.version) {
+          const again = machine.decideDecision(fresh, machineInput, this.context(actor.value));
+          if (!again.ok) throw new StaleDecisionGlob(id);
+          step = again.value;
+        }
+        const { changed, events, effects } = step;
+        let current = fresh;
         if (changed) {
-          current = { ...transition.value.glob, version: glob.version + 1 };
+          current = { ...step.glob, version: fresh.version + 1 };
           // The KB writes above are in this transaction: a lost race must roll them back, not return a result.
-          if (!(await tx.updateGlob(current, glob.version))) throw new StaleDecisionGlob(glob.id);
+          if (!(await tx.updateGlob(current, fresh.version))) throw new StaleDecisionGlob(glob.id);
           hints = [{ kind: 'glob.changed', boardId: current.boardId, globId: current.id, version: current.version }];
         }
         await tx.appendEvents(events);

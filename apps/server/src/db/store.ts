@@ -1,5 +1,5 @@
-import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, TEST_RUN_KINDS } from '@slop/core';
+import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -52,6 +52,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   subLimitStep: row.subLimitStep,
   effectCheckGlobs: row.effectCheckGlobs,
   agentKbApproval: row.agentKbApproval,
+  autoInvestigate: row.autoInvestigate,
   deploy: row.deploy,
   readinessTicks: row.readinessTicks,
   baseChecks: row.baseChecks,
@@ -111,6 +112,17 @@ const toRiskAreaChange = (row: typeof schema.riskAreaChanges.$inferSelect): Risk
   cause: oneOf(RISK_AREA_CAUSES, row.cause),
 });
 
+const toEscalationRecord = (row: typeof schema.escalationRecords.$inferSelect): EscalationRecord => ({
+  id: row.id,
+  boardId: row.boardId,
+  at: row.at.toISOString(),
+  globId: row.globId,
+  criterion: oneOf(ESCALATION_CRITERIA, row.criterion),
+  outcome: oneOf(ESCALATION_OUTCOMES, row.outcome),
+  weight: row.weight,
+  cause: row.cause,
+});
+
 const toSizeCheck = (row: typeof schema.globSizeChecks.$inferSelect): SizeCheck => ({
   globId: row.globId,
   boardId: row.boardId,
@@ -137,6 +149,27 @@ const toSizeThresholdChange = (row: typeof schema.sizeThresholdChanges.$inferSel
   outcome: oneOf(SIZE_OUTCOMES, row.outcome),
   globId: row.globId,
   evidence: row.evidence,
+});
+
+const toSizeCalibrationChange = (row: typeof schema.sizeCalibrationChanges.$inferSelect): SizeCalibrationChange => ({
+  id: row.id,
+  boardId: row.boardId,
+  at: row.at.toISOString(),
+  globId: row.globId,
+  kind: oneOf(['area_factor', 'weights'] as const, row.kind),
+  area: row.area === null ? null : oneOf(AREAS, row.area),
+  from: row.from,
+  to: row.to,
+  cause: row.cause,
+});
+
+const toSizeRecord = (row: typeof schema.globSizeRecords.$inferSelect): SizeRecord => ({
+  globId: row.globId,
+  boardId: row.boardId,
+  recordedAt: row.recordedAt.toISOString(),
+  estimate: row.estimate,
+  investigation: row.investigation,
+  actual: row.actual,
 });
 
 const toIntakeSnapshot = (row: typeof schema.intakeSnapshots.$inferSelect): IntakeSnapshot => ({
@@ -515,6 +548,9 @@ const keywordMatch = (query: string) => {
 const vectorText = (embedding: readonly number[]): string => `[${embedding.join(',')}]`;
 
 /** Postgres implementation of the core Store port. */
+/** How long a board's overlap recheck waits, so the pushes and merges of a burst share one run. */
+const RECHECK_DELAY_MS = 5000;
+
 export class PgStore implements Store {
   constructor(private readonly db: Db) {}
 
@@ -677,6 +713,7 @@ export class PgStore implements Store {
             // Not the learned sub limit: `setSubLimit` writes it, so a settings save doesn't undo a learned move.
             effectCheckGlobs: board.effectCheckGlobs,
             agentKbApproval: board.agentKbApproval,
+            autoInvestigate: board.autoInvestigate,
             version: board.version,
           })
           .where(and(eq(schema.boards.id, board.id), eq(schema.boards.version, expectedVersion)))
@@ -776,6 +813,22 @@ export class PgStore implements Store {
             .where(eq(schema.riskAreaChanges.boardId, boardId))
             .orderBy(desc(schema.riskAreaChanges.at), desc(schema.riskAreaChanges.id))
         ).map(toRiskAreaChange),
+      insertEscalationRecord: async (record) => {
+        const rows = await t
+          .insert(schema.escalationRecords)
+          .values({ ...record, at: new Date(record.at) })
+          .onConflictDoNothing()
+          .returning({ id: schema.escalationRecords.id });
+        return rows.length === 1;
+      },
+      listEscalationRecords: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.escalationRecords)
+            .where(eq(schema.escalationRecords.boardId, boardId))
+            .orderBy(desc(schema.escalationRecords.at), desc(schema.escalationRecords.id))
+        ).map(toEscalationRecord),
       getSizeCheck: async (globId) => {
         const [row] = await t.select().from(schema.globSizeChecks).where(eq(schema.globSizeChecks.globId, globId));
         return row === undefined ? null : toSizeCheck(row);
@@ -833,6 +886,42 @@ export class PgStore implements Store {
             .where(eq(schema.sizeThresholdChanges.boardId, boardId))
             .orderBy(desc(schema.sizeThresholdChanges.at), desc(schema.sizeThresholdChanges.id))
         ).map(toSizeThresholdChange),
+      getSizeCalibration: async (boardId) => {
+        const [row] = await t.select().from(schema.sizeCalibrations).where(eq(schema.sizeCalibrations.boardId, boardId));
+        return row === undefined ? DEFAULT_SIZE_CALIBRATION : row.state;
+      },
+      setSizeCalibration: async (boardId, calibration) => {
+        const c = schema.sizeCalibrations;
+        await t.insert(c).values({ boardId, state: calibration }).onConflictDoUpdate({ target: c.boardId, set: { state: calibration } });
+      },
+      insertSizeCalibrationChange: async (change) => {
+        const rows = await t
+          .insert(schema.sizeCalibrationChanges)
+          .values({ ...change, at: new Date(change.at) })
+          .onConflictDoNothing()
+          .returning({ id: schema.sizeCalibrationChanges.id });
+        return rows.length === 1;
+      },
+      listSizeCalibrationChanges: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.sizeCalibrationChanges)
+            .where(eq(schema.sizeCalibrationChanges.boardId, boardId))
+            .orderBy(desc(schema.sizeCalibrationChanges.at), desc(schema.sizeCalibrationChanges.id))
+        ).map(toSizeCalibrationChange),
+      getSizeRecord: async (globId) => {
+        const [row] = await t.select().from(schema.globSizeRecords).where(eq(schema.globSizeRecords.globId, globId));
+        return row === undefined ? null : toSizeRecord(row);
+      },
+      upsertSizeRecord: async (record) => {
+        const r = schema.globSizeRecords;
+        const { globId, recordedAt, ...rest } = record;
+        const values = { ...rest, recordedAt: new Date(recordedAt) };
+        await t.insert(r).values({ globId, ...values }).onConflictDoUpdate({ target: r.globId, set: values });
+      },
+      listSizeRecords: async (boardId) =>
+        (await t.select().from(schema.globSizeRecords).where(eq(schema.globSizeRecords.boardId, boardId))).map(toSizeRecord),
       setBaseChecks: async (boardId, baseChecks) => {
         await t.update(schema.boards).set({ baseChecks }).where(eq(schema.boards.id, boardId));
       },
@@ -1363,12 +1452,16 @@ export class PgStore implements Store {
         return rows.map((row) => toFinding(row.finding));
       },
 
-      listBoardEvents: async (boardId, since, types) => {
+      listBoardEvents: async (boardId, since, types, globIds) => {
         const e = schema.events;
         const conditions = [eq(schema.globs.boardId, boardId), gte(e.at, new Date(since))];
         if (types !== undefined) {
           if (types.length === 0) return [];
           conditions.push(inArray(e.type, [...types]));
+        }
+        if (globIds !== undefined) {
+          if (globIds.length === 0) return [];
+          conditions.push(inArray(e.globId, [...globIds]));
         }
         const rows = await t
           .select({ globId: e.globId, type: e.type, actor: e.actor, at: e.at, data: e.data })
@@ -1693,8 +1786,13 @@ export class PgStore implements Store {
         };
         await t.insert(o).values({ globId: outcome.globId, ...values }).onConflictDoUpdate({ target: o.globId, set: values });
       },
-      listGlobOutcomes: async (boardId) => {
-        const rows = await t.select({ outcome: schema.globOutcomes.outcome }).from(schema.globOutcomes).where(eq(schema.globOutcomes.boardId, boardId));
+      listGlobOutcomes: async (boardId, globIds) => {
+        if (globIds?.length === 0) return [];
+        const o = schema.globOutcomes;
+        const rows = await t
+          .select({ outcome: o.outcome })
+          .from(o)
+          .where(globIds === undefined ? eq(o.boardId, boardId) : and(eq(o.boardId, boardId), inArray(o.globId, [...globIds])));
         return rows.map((r) => r.outcome);
       },
       listDecisions: async (boardId) => {
@@ -2009,7 +2107,42 @@ export class PgStore implements Store {
       },
       enqueueEffects: async (effects) => {
         if (effects.length === 0) return;
-        await t.insert(schema.outbox).values(effects.map((effect) => ({ kind: effect.kind, globId: effect.globId, effect })));
+        const rows: (typeof schema.outbox.$inferInsert)[] = [];
+        for (const effect of effects) {
+          if (effect.kind === 'recheck_overlaps') {
+            // One pending recheck per board (not yet claimed) is enough: it reads the board when it runs. A burst of
+            // merges and pushes is delayed a few seconds so it runs once.
+            const [pending] = await t
+              .select({ id: schema.outbox.id })
+              .from(schema.outbox)
+              .where(sql`${schema.outbox.kind} = 'recheck_overlaps' and ${schema.outbox.globId} = ${effect.globId} and ${schema.outbox.state} = 'pending' and ${schema.outbox.attempts} = 0`)
+              .limit(1);
+            if (pending !== undefined || rows.some((r) => r.kind === 'recheck_overlaps' && r.globId === effect.globId)) continue;
+            rows.push({ kind: effect.kind, globId: effect.globId, effect, runAfter: new Date(Date.now() + RECHECK_DELAY_MS) });
+            continue;
+          }
+          if (effect.kind === 'review_change') {
+            // One review job per glob, stage and reviewed commit (a repeated webhook or reconcile queues none). A newer
+            // pre-merge head cancels the jobs for older ones that haven't finished.
+            const jobs = schema.outbox;
+            const same = sql`${jobs.kind} = 'review_change' and ${jobs.globId} = ${effect.globId} and ${jobs.effect}->>'stage' = ${effect.stage}`;
+            const [existing] = await t
+              .select({ id: jobs.id })
+              .from(jobs)
+              .where(sql`${same} and ${jobs.effect}->>'sha' = ${effect.sha} and ${jobs.state} in ('pending', 'done')`)
+              .limit(1);
+            if (existing !== undefined || rows.some((r) => r.effect.kind === 'review_change' && r.globId === effect.globId && r.effect.stage === effect.stage && r.effect.sha === effect.sha)) continue;
+            if (effect.stage === 'pre_merge') {
+              await t
+                .update(jobs)
+                .set({ state: 'dropped', lastError: 'A newer commit replaced the reviewed head' })
+                .where(sql`${same} and ${jobs.effect}->>'sha' <> ${effect.sha} and ${jobs.state} = 'pending'`);
+            }
+          }
+          rows.push({ kind: effect.kind, globId: effect.globId, effect });
+        }
+        if (rows.length === 0) return;
+        await t.insert(schema.outbox).values(rows);
         // Wake the job runner after commit.
         await t.execute(sql`select pg_notify('slop_outbox', '')`);
       },

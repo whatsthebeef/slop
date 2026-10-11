@@ -1,6 +1,6 @@
 import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
-import { ARTIFACT_KINDS, WORK_CATEGORIES, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
+import { ARTIFACT_KINDS, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -236,7 +236,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'split_glob',
     {
       description:
-        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title, summary and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` chain between them. Write `{part:N}` in a plan or summary for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel.",
+        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title, summary and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` (needs) between them. Write `{part:N}` in a plan or summary for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel. Name only direct prerequisites in `after` (a shared schema or contract as part 0, each consumer needing just part 0); parts that touch the same files go in `overlaps`, which orders merges and never blocks a start. A same part that needs another starts its routine by itself when its last need merges (`autoStart`; turn it off with update_glob).",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -249,7 +249,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
               plan: z.string().min(1).describe("This part's share of plan.md (Markdown); {part:N} stands for part N's glob ID"),
               category: z.enum(WORK_CATEGORIES).optional(),
               type: z.enum(SLOP_TYPES).optional(),
-              after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part waits for to merge'),
+              after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part needs merged before it starts'),
+              overlaps: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts that may change the same files; never blocks a start'),
               attachments: z.array(z.string().min(1)).optional().describe("Labels of the original's text attachments to copy (new parts only; link attachments are always copied)"),
             }),
           )
@@ -261,10 +262,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       const split = await globs.split(email, id, version, {
         idempotencyKey,
         planBy: 'sessionator',
-        parts: parts.map(({ attachments, after, category, type, ...rest }) => ({
+        parts: parts.map(({ attachments, after, overlaps, category, type, ...rest }) => ({
           ...rest,
           ...(attachments === undefined ? {} : { attachments }),
           ...(after === undefined ? {} : { after }),
+          ...(overlaps === undefined ? {} : { overlaps }),
           ...(category === undefined ? {} : { category }),
           ...(type === undefined ? {} : { type }),
         })),
@@ -281,6 +283,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           status: glob.status,
           ...(glob.after === undefined || glob.after.length === 0 ? {} : { after: glob.after }),
           ...(glob.waiting == null ? {} : { waiting: true }),
+          ...(glob.autoStart === true ? { autoStart: true } : {}),
         })),
       }));
     },
@@ -360,6 +363,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged before it starts (alias: `after`)'),
         after: z.array(z.string().min(1)).max(20).optional().describe('Alias of `needs`'),
         overlaps: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs that may change the same files; never blocks a start'),
+        autoStart: z.boolean().optional().describe("false: a same from a split stops waiting to start by itself when its needs merge (it keeps them); start it with start_glob"),
       },
     },
     async ({ id, version, needs, ...changes }) => {
@@ -379,6 +383,20 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     async ({ id, version, anyway }) => {
       if (anyway === true) await deps.sizeCheck?.keepWhole(email, id);
       const result = anyway === true ? await globs.startAnyway(email, id, version) : await globs.start(email, id, version);
+      if (result.ok) await deps.outbox.drain(id);
+      return reply(result, (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
+    'investigate_glob',
+    {
+      description:
+        "Investigate a sub or same in Planning: fires a routine run that does the orchestrator's Phases 1–2 only (investigator, no implementation) and pushes the investigation artifact, without a branch or commits. The glob stays in Planning. When the glob later starts, the orchestrator reuses the investigation if its plan hash matches and the base has moved little in its relevant files, otherwise it re-investigates and supersedes it. Refused with run_active while a run is live.",
+      inputSchema: { id: z.string(), version: z.number().int() },
+    },
+    async ({ id, version }) => {
+      const result = await globs.investigate(email, id, version);
       if (result.ok) await deps.outbox.drain(id);
       return reply(result, (g) => globView(g));
     },
@@ -503,12 +521,19 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       inputSchema: {
         id: z.string(),
         reason: z.string().min(1).describe('What a human should check, in one or two sentences'),
+        criterion: z
+          .enum(ESCALATION_CRITERIA)
+          .optional()
+          .describe('Which criterion it is for, so slop can learn from the outcome; `other` when none fits'),
         evidence: z.string().optional().describe('What showed it: files, review findings, the unsettled choice'),
         runId: z.string().optional(),
       },
     },
-    async ({ id, reason, evidence, runId }) =>
-      reply(await globs.escalateToSame(email, id, { reason, evidence: evidence ?? null, runId: runId ?? null }), (g) => globView(g)),
+    async ({ id, reason, evidence, criterion, runId }) =>
+      reply(
+        await globs.escalateToSame(email, id, { reason, evidence: evidence ?? null, criterion: criterion ?? null, runId: runId ?? null }),
+        (g) => globView(g),
+      ),
   );
 
   // ---------------------------------------------------------------------------
@@ -678,7 +703,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
+        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {
@@ -928,13 +953,18 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         // A routine's slop call is progress for its run (and marks a queued run active).
         await deps.globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
       }
+      const stored = await artifacts.putArtifact(email, id, kind, content, {
+        commitSha: commitSha ?? null,
+        runId: runId ?? null,
+        agentSetVersion: agentSetVersion ?? null,
+        reviewStats: reviewStats ?? null,
+      });
+      // An investigate-only run ends with its investigation; one whose block didn't validate stays open for the fix.
+      if (stored.ok && !('ignored' in stored.value) && kind === 'investigation' && runId !== undefined && stored.value.provenance.validation === undefined) {
+        await globs.applyEvent(id, (g, ctx) => machine.investigationPushed(g, runId, ctx));
+      }
       return reply(
-        await artifacts.putArtifact(email, id, kind, content, {
-          commitSha: commitSha ?? null,
-          runId: runId ?? null,
-          agentSetVersion: agentSetVersion ?? null,
-          reviewStats: reviewStats ?? null,
-        }),
+        stored,
         (a) =>
           'ignored' in a
             ? a

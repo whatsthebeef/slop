@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
+import { backfillBoard } from '../src/app/decision-backfill.js';
 import { BoardService } from '../src/app/board-service.js';
 import { createDecisionInTx } from '../src/app/decision-glob.js';
 import { DecisionGlobService } from '../src/app/decision-glob-service.js';
@@ -685,17 +686,40 @@ describe('decision globs', () => {
       expect(errorCode(await globs.update(ADMIN, id, 3, { category: 'task' }))).toBe('invalid_combination');
     });
 
-    it('shows a decision glob’s allowed actions and artifacts in its view, and deletes it', async () => {
+    it('shows a decision glob’s allowed actions and artifacts in its view', async () => {
       const made = await submit();
       const view = unwrap(await globs.get(ADMIN, made.globId));
       expect(view.allowedActions).toEqual(['pick_up', 'delete']);
       expect(view.artifacts.map((a) => a.kind)).toEqual(['plan', 'assessment']);
-      expect(unwrap(await globs.get(DEV, made.globId)).allowedActions).toEqual(['delete']);
-      unwrap(await globs.delete(ADMIN, made.globId, view.glob.version));
+      expect(unwrap(await globs.get(DEV, made.globId)).allowedActions).toEqual([]);
+    });
+
+    it('lets only an admin or PO delete a decision, and refuses while its item is open or approved', async () => {
+      const made = await submit();
+      const version = (await glob(made.globId)).version;
+      expect(errorCode(await globs.delete(DEV, made.globId, version))).toBe('forbidden');
+      expect(errorCode(await globs.delete(ADMIN, made.globId, version))).toBe('invalid_input');
+      expect(await glob(made.globId)).toBeDefined();
+      // Rejecting the item is the way to remove its decision; the item keeps its link so a backfill leaves it gone.
+      await inDoing(made);
+      unwrap(await decide(made.globId, { outcome: 'reject', reason: 'No' }));
+      unwrap(await globs.delete(PO, made.globId, (await glob(made.globId)).version));
       expect(await store.transaction((tx) => tx.getGlob(made.globId))).toBeNull();
-      // The item stays and no longer has a face; syncing it is a no-op.
-      await decisions.syncFromItem(made.id);
-      expect(await item(made.id)).toMatchObject({ status: 'open' });
+      expect(await item(made.id)).toMatchObject({ status: 'rejected', decisionGlobId: made.globId });
+      const counts = await backfillBoard(store, clock, boardId);
+      expect(counts.skipped).toBeGreaterThan(0);
+      expect(await store.transaction((tx) => tx.getGlob(made.globId))).toBeNull();
+      expect(await store.transaction((tx) => tx.listGlobs(boardId, { include: 'decisions' }))).toEqual([]);
+    });
+
+    it('does not create the needs-work glob when the decision would be refused', async () => {
+      const made = await submit();
+      await inDoing(made);
+      const before = (await store.transaction((tx) => tx.listGlobs(boardId, {}))).length;
+      // A dev may not decide.
+      expect(errorCode(await decide(made.globId, { outcome: 'needs_work', reason: 'x' }, DEV))).toBe('forbidden');
+      expect(errorCode(await decisions.decide(ADMIN, made.globId, 999, { outcome: 'needs_work', reason: 'x' }))).toBe('version_conflict');
+      expect((await store.transaction((tx) => tx.listGlobs(boardId, {}))).length).toBe(before);
     });
   });
 

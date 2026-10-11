@@ -147,7 +147,8 @@ describe('Mining: mined KB items and the re-raise rules', () => {
       raisedAt: START,
       belowThresholdRuns: 0,
     });
-    expect(notifier.hints).toEqual([{ kind: 'board.kb', boardId: board.id }]);
+    expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId: board.id });
+    expect(notifier.hints).toContainEqual({ kind: 'glob.changed', boardId: board.id, globId: 's1d1', version: 1 });
   });
 
   it('raises nothing below the threshold, and keeps nothing for a signal it never raised', async () => {

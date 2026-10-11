@@ -19,7 +19,10 @@ import { GLOB_OWNED_SOURCES, matchesFilters } from '../domain/search.js';
 import type { Candidate, KnowledgeItem } from '../domain/search.js';
 import { DEFAULT_SIZE_THRESHOLD } from '../domain/size-check.js';
 import type { SizeCheck, SizeThreshold, SizeThresholdChange } from '../domain/size-check.js';
+import { DEFAULT_SIZE_CALIBRATION } from '../domain/size-forecast.js';
+import type { SizeCalibration, SizeCalibrationChange, SizeRecord } from '../domain/size-forecast.js';
 import { riskChangeKey } from '../domain/risk-area.js';
+import type { EscalationRecord } from '../domain/escalation-learning.js';
 import type { RiskArea, RiskAreaChange } from '../domain/risk-area.js';
 import { SUB_LIMIT_STEP } from '../domain/sub-limit.js';
 import type { SubLimitChange } from '../domain/sub-limit.js';
@@ -55,9 +58,13 @@ interface State {
   dependencyRuleChanges: DependencyRuleChange[];
   riskAreas: RiskArea[];
   riskAreaChanges: RiskAreaChange[];
+  escalationRecords: EscalationRecord[];
   sizeChecks: SizeCheck[];
   sizeThresholds: Map<number, SizeThreshold>;
   sizeThresholdChanges: SizeThresholdChange[];
+  sizeCalibrations: Map<number, SizeCalibration>;
+  sizeCalibrationChanges: SizeCalibrationChange[];
+  sizeRecords: SizeRecord[];
   intakeSnapshots: { snapshot: IntakeSnapshot; embedding: readonly number[] | null }[];
   globOutcomes: GlobOutcome[];
   environmentDeploys: EnvironmentDeploy[];
@@ -139,9 +146,13 @@ const clone = (state: State): State => ({
   dependencyRuleChanges: [...state.dependencyRuleChanges],
   riskAreas: [...state.riskAreas],
   riskAreaChanges: [...state.riskAreaChanges],
+  escalationRecords: [...state.escalationRecords],
   sizeChecks: [...state.sizeChecks],
   sizeThresholds: new Map(state.sizeThresholds),
   sizeThresholdChanges: [...state.sizeThresholdChanges],
+  sizeCalibrations: new Map(state.sizeCalibrations),
+  sizeCalibrationChanges: [...state.sizeCalibrationChanges],
+  sizeRecords: [...state.sizeRecords],
   intakeSnapshots: [...state.intakeSnapshots],
   globOutcomes: [...state.globOutcomes],
   environmentDeploys: [...state.environmentDeploys],
@@ -188,9 +199,13 @@ export class MemoryStore implements Store {
     dependencyRuleChanges: [],
     riskAreas: [],
     riskAreaChanges: [],
+    escalationRecords: [],
     sizeChecks: [],
     sizeThresholds: new Map(),
     sizeThresholdChanges: [],
+    sizeCalibrations: new Map(),
+    sizeCalibrationChanges: [],
+    sizeRecords: [],
     intakeSnapshots: [],
     globOutcomes: [],
     environmentDeploys: [],
@@ -307,7 +322,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, subLimitStep: SUB_LIMIT_STEP, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs' };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, subLimitStep: SUB_LIMIT_STEP, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs', autoInvestigate: true };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -370,6 +385,15 @@ export class MemoryStore implements Store {
       },
       listRiskAreaChanges: (boardId) =>
         Promise.resolve(s.riskAreaChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      insertEscalationRecord: (record) => {
+        if (record.globId !== null && s.escalationRecords.some((r) => r.boardId === record.boardId && r.globId === record.globId && r.outcome === record.outcome)) {
+          return Promise.resolve(false);
+        }
+        s.escalationRecords.push({ ...record, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listEscalationRecords: (boardId) =>
+        Promise.resolve(s.escalationRecords.filter((r) => r.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
       getSizeCheck: (globId) => Promise.resolve(s.sizeChecks.find((c) => c.globId === globId) ?? null),
       listSizeChecks: (boardId) => Promise.resolve(s.sizeChecks.filter((c) => c.boardId === boardId)),
       upsertSizeCheck: (check) => {
@@ -396,6 +420,24 @@ export class MemoryStore implements Store {
       },
       listSizeThresholdChanges: (boardId) =>
         Promise.resolve(s.sizeThresholdChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      getSizeCalibration: (boardId) => Promise.resolve(s.sizeCalibrations.get(boardId) ?? DEFAULT_SIZE_CALIBRATION),
+      setSizeCalibration: (boardId, calibration) => {
+        s.sizeCalibrations.set(boardId, calibration);
+        return Promise.resolve();
+      },
+      insertSizeCalibrationChange: (change) => {
+        if (s.sizeCalibrationChanges.some((c) => c.boardId === change.boardId && c.globId === change.globId && c.cause === change.cause)) return Promise.resolve(false);
+        s.sizeCalibrationChanges.push({ ...change, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listSizeCalibrationChanges: (boardId) =>
+        Promise.resolve(s.sizeCalibrationChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      getSizeRecord: (globId) => Promise.resolve(s.sizeRecords.find((r) => r.globId === globId) ?? null),
+      upsertSizeRecord: (record) => {
+        s.sizeRecords = [...s.sizeRecords.filter((r) => r.globId !== record.globId), record];
+        return Promise.resolve();
+      },
+      listSizeRecords: (boardId) => Promise.resolve(s.sizeRecords.filter((r) => r.boardId === boardId)),
       setBaseChecks: (boardId, baseChecks) => {
         const current = s.boards.get(boardId);
         if (current !== undefined) s.boards.set(boardId, { ...current, baseChecks });
@@ -699,7 +741,7 @@ export class MemoryStore implements Store {
             .sort((a, b) => (written.get(a.sourceId) ?? '').localeCompare(written.get(b.sourceId) ?? '') || a.id - b.id),
         );
       },
-      listBoardEvents: (boardId, since, types) =>
+      listBoardEvents: (boardId, since, types, globIds) =>
         Promise.resolve(
           s.events
             .map((event, index) => ({ event, index }))
@@ -707,7 +749,8 @@ export class MemoryStore implements Store {
               ({ event }) =>
                 s.globs.get(event.globId)?.glob.boardId === boardId &&
                 event.at >= since &&
-                (types === undefined || types.includes(event.type)),
+                (types === undefined || types.includes(event.type)) &&
+                (globIds === undefined || globIds.includes(event.globId)),
             )
             .sort((a, b) => a.event.at.localeCompare(b.event.at) || a.index - b.index)
             .map(({ event }) => event),
@@ -873,7 +916,8 @@ export class MemoryStore implements Store {
         s.globOutcomes = [...s.globOutcomes.filter((o) => o.globId !== outcome.globId), outcome];
         return Promise.resolve();
       },
-      listGlobOutcomes: (boardId) => Promise.resolve(s.globOutcomes.filter((o) => o.boardId === boardId)),
+      listGlobOutcomes: (boardId, globIds) =>
+        Promise.resolve(s.globOutcomes.filter((o) => o.boardId === boardId && (globIds === undefined || globIds.includes(o.globId)))),
       listDecisions: (boardId) =>
         Promise.resolve(s.decisions.filter((d) => d.boardId === boardId).sort((a, b) => a.decidedAt.localeCompare(b.decidedAt) || a.id - b.id)),
       getDecision: (id) => Promise.resolve(s.decisions.find((d) => d.id === id) ?? null),
@@ -1062,7 +1106,17 @@ export class MemoryStore implements Store {
         return Promise.resolve();
       },
       enqueueEffects: (effects) => {
-        s.outbox.push(...effects);
+        for (const effect of effects) {
+          // One pending recheck per board is enough: it reads the board as it is when it runs.
+          if (effect.kind === 'recheck_overlaps' && s.outbox.some((e) => e.kind === 'recheck_overlaps' && e.globId === effect.globId)) continue;
+          if (effect.kind === 'review_change') {
+            const same = (e: Effect) => e.kind === 'review_change' && e.globId === effect.globId && e.stage === effect.stage;
+            if (s.outbox.some((e) => same(e) && e.kind === 'review_change' && e.sha === effect.sha)) continue;
+            // A newer pre-merge head cancels the older head's pending job.
+            if (effect.stage === 'pre_merge') s.outbox = s.outbox.filter((e) => !same(e));
+          }
+          s.outbox.push(effect);
+        }
         return Promise.resolve();
       },
     };

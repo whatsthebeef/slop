@@ -47,8 +47,10 @@ import type {
   SearchHit,
   SizeCheck,
   SizeThresholdView,
+  SizeCalibrationView,
   SlopType,
   RiskAreaView,
+  EscalationView,
   SubLimitChange,
   SubLimitView,
   DependencyRulesView,
@@ -346,6 +348,8 @@ export interface SplitPartInput {
   type?: SlopType;
   /** Indexes of earlier parts this one starts after. */
   after?: number[];
+  /** Indexes of earlier parts that may change the same files (merge order only). */
+  overlaps?: number[];
 }
 
 export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'after'>> & {
@@ -364,6 +368,7 @@ export interface DecideInput {
 
 export type ActionPath =
   | 'start'
+  | 'investigate'
   | 'start-anyway'
   | 'retrigger'
   | 'retry-autofix'
@@ -557,8 +562,16 @@ export const api = {
   riskAreas: (boardId: number) => request<RiskAreaView>('GET', `/api/boards/${boardId}/risk-areas`),
   /** Drops the learned risk areas and restores the defaults (admins). */
   resetRiskAreas: (boardId: number) => request<RiskAreaView>('POST', `/api/boards/${boardId}/risk-areas/reset`, {}),
+  /** The board's escalation criteria (learned vs default) and the outcome history (members). */
+  escalations: (boardId: number) => request<EscalationView>('GET', `/api/boards/${boardId}/escalations`),
+  /** Puts the escalation criteria back to the defaults, keeping the history (admins). */
+  resetEscalations: (boardId: number) => request<EscalationView>('POST', `/api/boards/${boardId}/escalations/reset`, {}),
   /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
   sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
+  /** The size forecast's calibration: weights, per-area factors against the defaults, and the history with causes (members). */
+  sizeCalibration: (boardId: number) => request<SizeCalibrationView>('GET', `/api/boards/${boardId}/size-calibration`),
+  /** Admins: puts the size threshold back on the defaults (the history keeps the reset). */
+  resetSizeThreshold: (boardId: number) => request<SizeThresholdView>('POST', `/api/boards/${boardId}/size-threshold/reset`, {}),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */
   keepWhole: (id: string) => request<GlobView>('POST', `/api/globs/${id}/keep-whole`, {}),
   /** Whether the board has an active integration token (members); the secret is never returned here. */
@@ -619,6 +632,7 @@ export const api = {
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   start: 'start',
+  investigate: 'investigate',
   start_anyway: 'start-anyway',
   pick_up: 'pick-up',
   take_over: 'take-over',
@@ -640,6 +654,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
 
 export const ACTION_LABELS: Record<Action, string> = {
   start: 'Start',
+  investigate: 'Investigate',
   start_anyway: 'Start anyway',
   pick_up: "Pick up (I'll do it)",
   take_over: 'Take over',

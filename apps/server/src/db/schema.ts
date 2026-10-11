@@ -1,6 +1,11 @@
 import type {
   GlobOutcome,
   SizeEstimate,
+  SizeCalibration,
+  CalibrationValue,
+  SizeForecast,
+  SizeRecord,
+  Investigation,
   SizeProposal,
   SizeThreshold,
   PlanFeatures,
@@ -31,7 +36,7 @@ import type {
   InboxSuggestion,
   SignalFigures,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES } from '@slop/core';
+import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -84,6 +89,8 @@ export const boards = pgTable('boards', {
   effectCheckGlobs: integer('effect_check_globs').notNull().default(EFFECT_CHECK_GLOBS_DEFAULT),
   /** Which KB items an admin's agent may approve: 'docs' or 'docs_and_agent_files'. */
   agentKbApproval: text('agent_kb_approval', { enum: AGENT_KB_APPROVALS }).notNull().default('docs'),
+  /** Slop starts an investigate-only run by itself on a Planning glob intake flagged as big. */
+  autoInvestigate: boolean('auto_investigate').notNull().default(true),
   /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
   deploy: jsonb('deploy').$type<DeployIntegration>(),
   /** The latest check result on the base branch head; written by check events, not by settings changes. */
@@ -620,6 +627,25 @@ export const riskAreaChanges = pgTable(
   ],
 );
 
+/** Escalation outcomes (spec, Subs and escalation): each recorded once per board, glob and outcome, with the criterion it moved and why. */
+export const escalationRecords = pgTable(
+  'escalation_records',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    /** Null for a reset. */
+    globId: text('glob_id'),
+    criterion: text('criterion', { enum: ESCALATION_CRITERIA }).notNull(),
+    outcome: text('outcome', { enum: ESCALATION_OUTCOMES }).notNull(),
+    weight: integer('weight').notNull(),
+    cause: text('cause').notNull(),
+  },
+  (t) => [uniqueIndex('escalation_records_outcome_idx').on(t.boardId, t.globId, t.outcome)],
+);
+
 /** The size threshold's history: each outcome recorded once per board and glob, with the threshold before and after it. */
 export const sizeThresholdChanges = pgTable(
   'size_threshold_changes',
@@ -638,6 +664,52 @@ export const sizeThresholdChanges = pgTable(
     evidence: text('evidence').notNull(),
   },
   (t) => [uniqueIndex('size_threshold_changes_glob_idx').on(t.boardId, t.globId)],
+);
+
+/** The board's learned size calibration (weights, per-area factors, samples); no row means the defaults. */
+export const sizeCalibrations = pgTable('size_calibrations', {
+  boardId: integer('board_id')
+    .primaryKey()
+    .references(() => boards.id, { onDelete: 'cascade' }),
+  state: jsonb('state').$type<SizeCalibration>().notNull(),
+});
+
+/** The calibration's history: each move with its cause as text, once per board, glob and cause. */
+export const sizeCalibrationChanges = pgTable(
+  'size_calibration_changes',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    globId: text('glob_id').notNull(),
+    kind: text('kind').notNull(),
+    /** The area of an area factor, else null. */
+    area: text('area'),
+    from: jsonb('from').$type<CalibrationValue>().notNull(),
+    to: jsonb('to').$type<CalibrationValue>().notNull(),
+    cause: text('cause').notNull(),
+  },
+  (t) => [uniqueIndex('size_calibration_changes_outcome_idx').on(t.boardId, t.globId, t.cause)],
+);
+
+/** A glob's three size points (the forecast, the investigation's correction, the actual outcome), kept for calibration. */
+export const globSizeRecords = pgTable(
+  'glob_size_records',
+  {
+    globId: text('glob_id')
+      .primaryKey()
+      .references(() => globs.id, { onDelete: 'cascade' }),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
+    estimate: jsonb('estimate').$type<SizeForecast>().notNull(),
+    investigation: jsonb('investigation').$type<Investigation>(),
+    actual: jsonb('actual').$type<SizeRecord['actual']>().notNull(),
+  },
+  (t) => [index('glob_size_records_board_idx').on(t.boardId)],
 );
 
 /**

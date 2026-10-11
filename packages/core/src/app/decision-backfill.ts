@@ -31,6 +31,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * written on demand, to avoid a burst of writes); a decided item's ends Signed off with the item's outcome (a rejection archived).
  */
 const itemGlob = async (tx: Tx, clock: Clock, item: KbItem): Promise<'created' | 'skipped'> => {
+  // The item was linked to a glob that has since been deleted: the deletion sticks, the glob is not made again.
+  if (item.decisionGlobId !== undefined && item.decisionGlobId !== null && (await tx.getGlob(item.decisionGlobId)) === null) {
+    return 'skipped';
+  }
   const created = await createDecisionInTx(tx, { clock }, {
     boardId: item.boardId,
     actor: SYSTEM,

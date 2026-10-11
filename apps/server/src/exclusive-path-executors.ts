@@ -19,4 +19,11 @@ export const exclusivePathExecutors = (
     await globs.applyEvent(glob.id, (g, ctx) => machine.clashChanged(g, clash, ctx));
     return 'done';
   },
+
+  // Board-wide: the effect has no glob; it reads every open glob's predicted overlaps again.
+  recheck_overlaps: async (effect, _glob, { globs }) => {
+    if (effect.kind !== 'recheck_overlaps') return 'dropped';
+    await globs.recheckOverlaps(effect.boardId);
+    return 'done';
+  },
 });

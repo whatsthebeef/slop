@@ -77,7 +77,15 @@ export interface Run {
   readonly sessionUrl: string | null;
   /** Set on the run slop queued by itself after a watching run gave up: the one automatic retry. */
   readonly autoRetry?: true;
+  /**
+   * `investigate`: an investigate-only run on a glob in Planning (orchestrator Phases 1–2, no branch, no commits). It ends
+   * when its investigation is pushed; absent on every implementing run.
+   */
+  readonly purpose?: RunPurpose;
 }
+
+export const RUN_PURPOSES = ['investigate'] as const;
+export type RunPurpose = (typeof RUN_PURPOSES)[number];
 
 export type PrState = 'draft' | 'ready' | 'closed' | 'merged';
 
@@ -146,6 +154,8 @@ export type ProvisioningState = 'none' | 'pending' | 'ok' | 'failed';
 /** A running sub an agent (or a person) flagged as needing a human, which made it a same; cleared when it is made a sub again. */
 export interface Escalation {
   readonly reason: string;
+  /** Which of the board's escalation criteria it was for (`ESCALATION_CRITERIA`); the outcome learning moves that criterion. */
+  readonly criterion?: string;
   /** What showed it: files, findings, the unsettled choice. */
   readonly evidence?: string;
   /** Who escalated: the person's email, or the routine owner for a run. */
@@ -259,6 +269,11 @@ export interface Glob {
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Set while the glob is held in Planning for its `after`; cleared when released, started anyway or picked up. */
   readonly waiting?: { readonly since: string } | null;
+  /**
+   * A same that starts its routine by itself when what it waits for merges (set on the parts of a split that need another
+   * part; subs always do). A person turns it off, which ends the wait and leaves the needs in place.
+   */
+  readonly autoStart?: boolean;
   /** Set while another open glob changes the same exclusive paths; cleared when it no longer does. */
   readonly clash?: PathClash | null;
   readonly provisioning: ProvisioningState;
@@ -344,6 +359,8 @@ export interface Board {
   readonly effectCheckGlobs: number;
   /** Which KB items an admin's agent may approve (`decide_kb_item`); admins set it. */
   readonly agentKbApproval: AgentKbApproval;
+  /** Slop starts an investigate-only run by itself on a glob in Planning that intake flagged as big (on by default). */
+  readonly autoInvestigate: boolean;
   readonly version: number;
 }
 

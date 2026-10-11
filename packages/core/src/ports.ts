@@ -17,7 +17,9 @@ import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
+import type { NewSizeCalibrationChange, SizeCalibration, SizeCalibrationChange, SizeRecord } from './domain/size-forecast.js';
 import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdChange } from './domain/size-check.js';
+import type { EscalationRecord, NewEscalationRecord } from './domain/escalation-learning.js';
 import type { NewRiskAreaChange, RiskArea, RiskAreaChange } from './domain/risk-area.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
@@ -83,7 +85,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'subLimitStep' | 'effectCheckGlobs' | 'agentKbApproval' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'subLimitStep' | 'effectCheckGlobs' | 'agentKbApproval' | 'autoInvestigate' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   /**
    * Sets the board's learned sub size limit to `to` if it is still `from`; returns false otherwise. It has no board
@@ -111,6 +113,10 @@ export interface Tx {
   insertRiskAreaChange(change: NewRiskAreaChange): Promise<boolean>;
   /** A board's risk-area history, newest first. */
   listRiskAreaChanges(boardId: number): Promise<RiskAreaChange[]>;
+  /** Records an escalation outcome; false when the board already has one for that glob and outcome (the learning is idempotent). */
+  insertEscalationRecord(record: NewEscalationRecord): Promise<boolean>;
+  /** A board's escalation history, newest first. */
+  listEscalationRecords(boardId: number): Promise<EscalationRecord[]>;
   /** The glob's size check (spec, Intake), or null when none was made. */
   getSizeCheck(globId: string): Promise<SizeCheck | null>;
   /** The board's size checks. */
@@ -127,6 +133,20 @@ export interface Tx {
   insertSizeThresholdChange(change: NewSizeThresholdChange): Promise<boolean>;
   /** A board's recorded size-threshold outcomes, newest first. */
   listSizeThresholdChanges(boardId: number): Promise<SizeThresholdChange[]>;
+  /** The board's size calibration (the defaults until it has moved). */
+  getSizeCalibration(boardId: number): Promise<SizeCalibration>;
+  /** Replaces the board's size calibration. */
+  setSizeCalibration(boardId: number, calibration: SizeCalibration): Promise<void>;
+  /** Records a calibration move; false when the board already has one for that glob with that cause (idempotent). */
+  insertSizeCalibrationChange(change: NewSizeCalibrationChange): Promise<boolean>;
+  /** A board's calibration moves, newest first. */
+  listSizeCalibrationChanges(boardId: number): Promise<SizeCalibrationChange[]>;
+  /** The glob's three-point size record, or null when none was made. */
+  getSizeRecord(globId: string): Promise<SizeRecord | null>;
+  /** Writes the glob's size record (one per glob). */
+  upsertSizeRecord(record: SizeRecord): Promise<void>;
+  /** The board's size records. */
+  listSizeRecords(boardId: number): Promise<SizeRecord[]>;
   /** Records the base branch's latest check result. It has no board version: check results arrive on their own. */
   setBaseChecks(boardId: number, baseChecks: BaseChecks): Promise<void>;
   /** Board notifications have no version: sources raise and clear them on their own. */
@@ -256,8 +276,8 @@ export interface Tx {
    */
   listBoardFindings(boardId: number, since: string, until: string): Promise<ReviewFinding[]>;
 
-  /** A board's events at or after `since` (of `types`, when given), oldest first (events carry no board: joined through globs). */
-  listBoardEvents(boardId: number, since: string, types?: readonly DomainEventType[]): Promise<DomainEvent[]>;
+  /** A board's events at or after `since` (of `types` and of `globIds`, when given), oldest first (events carry no board: joined through globs). */
+  listBoardEvents(boardId: number, since: string, types?: readonly DomainEventType[], globIds?: readonly string[]): Promise<DomainEvent[]>;
   /**
    * Every board's events of `types` before `until`, oldest first, in log order (time tracking replays them whole). Each
    * event's `data` keeps only the top-level `dataKeys` it has, so the replay doesn't load whole payloads.
@@ -408,7 +428,8 @@ export interface Tx {
   nearestIntakeSnapshots(boardId: number, embedding: readonly number[], limit: number): Promise<{ globId: string; version: number; distance: number }[]>;
   /** Inserts or replaces a merged glob's outcome. */
   upsertGlobOutcome(outcome: GlobOutcome): Promise<void>;
-  listGlobOutcomes(boardId: number): Promise<GlobOutcome[]>;
+  /** A board's merged-glob outcomes (only those of `globIds`, when given). */
+  listGlobOutcomes(boardId: number, globIds?: readonly string[]): Promise<GlobOutcome[]>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;

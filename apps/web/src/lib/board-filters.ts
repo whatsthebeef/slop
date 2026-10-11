@@ -1,74 +1,98 @@
-import { decisionOf, isMine } from '@slop/core';
-import type { Glob, Role } from '@slop/core';
+import type { Category } from '@slop/core';
+import type { GlobView } from './api';
 
-/** The board's filter chips: Work and Decisions pick the kinds of glob shown, Mine narrows to the signed-in person's. */
-export const BOARD_FILTERS = ['work', 'decisions', 'mine'] as const;
-export type BoardFilter = (typeof BOARD_FILTERS)[number];
+/** A filter's value is always its URL text, so reading, writing and matching share one form (chips hold comma-joined options). */
+export type FilterValues = Readonly<Record<string, string>>;
 
-/** What each role sees first: developers and QA the work, POs the decisions, admins both. */
-export const defaultFilters = (role: Role): readonly BoardFilter[] => {
-  switch (role) {
-    case 'po':
-      return ['decisions'];
-    case 'admin':
-      return ['work', 'decisions'];
-    case 'dev':
-    case 'qa':
-      return ['work'];
+interface FilterBase {
+  /** The URL query parameter. */
+  key: string;
+  label: string;
+  /** Cleans a raw value (from the URL or the control); empty means the filter is off. */
+  normalize: (raw: string) => string;
+  /** True when the glob passes, given a non-empty normalised value. */
+  matches: (glob: GlobView, value: string) => boolean;
+}
+
+/** Toggle chips; none selected means all. */
+interface ChipsFilter extends FilterBase {
+  control: 'chips';
+  options: { value: string; label: string }[];
+}
+
+interface TextFilter extends FilterBase {
+  control: 'text';
+  placeholder: string;
+}
+
+export type BoardFilter = ChipsFilter | TextFilter;
+
+/** Splits a comma or space separated list, dropping empties. */
+const tokens = (raw: string): string[] => raw.split(/[\s,]+/).filter((t) => t !== '');
+
+const CATEGORIES: Category[] = ['feature', 'task', 'bug', 'decision'];
+
+/** The board's filters. Adding one is one entry here: the pane renders this list and the board applies it. */
+export const BOARD_FILTERS: BoardFilter[] = [
+  {
+    key: 'category',
+    label: 'Category',
+    control: 'chips',
+    options: CATEGORIES.map((value) => ({ value, label: value })),
+    // Kept in the options' order and without repeats, so equal selections give equal URLs.
+    normalize: (raw) => CATEGORIES.filter((c) => tokens(raw.toLowerCase()).includes(c)).join(','),
+    matches: (glob, value) => tokens(value).includes(glob.category),
+  },
+  {
+    key: 'id',
+    label: 'Glob ID',
+    control: 'text',
+    placeholder: 'e.g. f4, s15t2',
+    // Kept as typed (a trailing space is the next ID being started), and off when blank.
+    normalize: (raw) => (tokens(raw).length === 0 ? '' : raw),
+    // Case-insensitive substring of the ID; several IDs match any of them.
+    matches: (glob, value) =>
+      tokens(value.toLowerCase()).some((t) => glob.id.toLowerCase().includes(t)),
+  },
+];
+
+/** The active filters in a URL query. */
+export const parseFilters = (params: URLSearchParams): FilterValues =>
+  Object.fromEntries(
+    BOARD_FILTERS.flatMap((f) => {
+      const value = f.normalize(params.get(f.key) ?? '');
+      return value === '' ? [] : [[f.key, value] as const];
+    }),
+  );
+
+/** The query with the filters' parameters replaced by these values; other parameters stay. */
+export const writeFilters = (params: URLSearchParams, values: FilterValues): URLSearchParams => {
+  const next = new URLSearchParams(params);
+  for (const f of BOARD_FILTERS) {
+    const value = f.normalize(values[f.key] ?? '');
+    if (value === '') next.delete(f.key);
+    else next.set(f.key, value);
   }
+  return next;
 };
 
-/**
- * The globs a set of chips shows. A rejected or closed decision (archived) never shows. With neither Work nor Decisions
- * on, every kind shows, so a lone Mine chip, or no chip, hides nothing it should not.
- */
-export const filterGlobs = <T extends Glob>(globs: readonly T[], filters: readonly BoardFilter[], email: string): T[] => {
-  const work = filters.includes('work');
-  const decisions = filters.includes('decisions');
-  const everything = !work && !decisions;
-  return globs.filter((glob) => {
-    const attributes = decisionOf(glob);
-    if (attributes?.archived === true) return false;
-    if (filters.includes('mine') && !isMine(glob, email)) return false;
-    return everything || (attributes === null ? work : decisions);
+/** How many filters are on. */
+export const activeCount = (values: FilterValues): number =>
+  BOARD_FILTERS.filter((f) => f.normalize(values[f.key] ?? '') !== '').length;
+
+/** True when the glob passes every active filter; with none active, every glob does. */
+export const matchesFilters = (glob: GlobView, values: FilterValues): boolean =>
+  BOARD_FILTERS.every((f) => {
+    const value = f.normalize(values[f.key] ?? '');
+    return value === '' || f.matches(glob, value);
   });
+
+/** A chips value with the option switched on or off. */
+export const toggleOption = (filter: BoardFilter, raw: string, option: string): string => {
+  const on = tokens(raw);
+  return filter.normalize(
+    (on.includes(option) ? on.filter((o) => o !== option) : [...on, option]).join(','),
+  );
 };
 
-/** Toggles one chip. */
-export const toggleFilter = (filters: readonly BoardFilter[], chip: BoardFilter): BoardFilter[] =>
-  filters.includes(chip) ? filters.filter((f) => f !== chip) : [...filters, chip];
-
-type Store = Pick<Storage, 'getItem' | 'setItem'>;
-
-const keyOf = (boardId: number) => `slop.board-filters.${String(boardId)}`;
-
-/** The browser's store, or null where it can't be used (blocked, or a private window). */
-const browserStore = (): Store | null => {
-  try {
-    return typeof localStorage === 'undefined' ? null : localStorage;
-  } catch {
-    return null;
-  }
-};
-
-/** The chips saved for the board, else the role's defaults. Anything unreadable falls back to the defaults. */
-export const loadFilters = (boardId: number, role: Role, store: Store | null = browserStore()): readonly BoardFilter[] => {
-  try {
-    const raw = store?.getItem(keyOf(boardId)) ?? null;
-    if (raw === null) return defaultFilters(role);
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return defaultFilters(role);
-    return BOARD_FILTERS.filter((chip) => parsed.includes(chip));
-  } catch {
-    return defaultFilters(role);
-  }
-};
-
-/** Remembers the chips for the board; a store that can't be written to changes nothing. */
-export const saveFilters = (boardId: number, filters: readonly BoardFilter[], store: Store | null = browserStore()): void => {
-  try {
-    store?.setItem(keyOf(boardId), JSON.stringify(filters));
-  } catch {
-    // The chips just won't be remembered.
-  }
-};
+export const selectedOptions = (raw: string): string[] => tokens(raw);
