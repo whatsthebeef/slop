@@ -20,6 +20,7 @@ import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChang
 import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdChange } from './domain/size-check.js';
 import type { NewRiskAreaChange, RiskArea, RiskAreaChange } from './domain/risk-area.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
+import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
 import type { BaseChecks, Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
 export interface GlobFilter {
@@ -84,6 +85,14 @@ export interface Tx {
   setSubLimit(boardId: number, from: number, to: number, step?: number): Promise<boolean>;
   /** Records a sub-limit outcome; false when the board already has that glob's outcome (the learning is idempotent). */
   insertSubLimitChange(change: NewSubLimitChange): Promise<boolean>;
+  /** The board's learned dependency rules (path patterns whose overlap weight moved), and their history, newest first. */
+  listDependencyRules(boardId: number): Promise<DependencyRule[]>;
+  upsertDependencyRule(rule: DependencyRule): Promise<void>;
+  /** Drops one learned rule (or all of the board's with no pattern): the catalog default applies again. */
+  deleteDependencyRules(boardId: number, pattern?: string): Promise<void>;
+  /** False when the board already recorded this glob's outcome for the pattern and cause. */
+  insertDependencyRuleChange(change: NewDependencyRuleChange): Promise<boolean>;
+  listDependencyRuleChanges(boardId: number): Promise<DependencyRuleChange[]>;
   /** A board's recorded sub-limit outcomes, newest first. */
   listSubLimitChanges(boardId: number): Promise<SubLimitChange[]>;
   /** The board's risk areas (empty until `RiskAreaService` seeds the defaults). */
@@ -445,6 +454,8 @@ export interface CatalogAgentSet {
 export interface Catalog {
   kbEntries(): Promise<{ id: string; version: number; fileName: string; content: string }[]>;
   agentSet(): Promise<CatalogAgentSet>;
+  /** The starting path patterns and rules for dependency edges; absent: none (nothing is predicted from the catalog). */
+  dependencyDefaults?(): Promise<DependencyDefaults>;
 }
 
 /**

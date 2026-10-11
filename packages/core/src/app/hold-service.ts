@@ -2,7 +2,23 @@ import { exclusiveFiles, MAX_HOLD_PATHS, namesExclusivePath } from '../domain/ex
 import type { Board, Glob, ImpliedAfter } from '../domain/types.js';
 import { reaches } from '../domain/waiting.js';
 import type { BranchFiles, Store } from '../ports.js';
+import { PREDICT_MIN, predictedFiles } from '../domain/dependency-rules.js';
+import type { MergePolicy } from '../domain/merge-policy.js';
+import type { DependencyPrediction } from './dependency-learning-service.js';
 import { readMergePolicy } from './knowledge-service.js';
+
+/**
+ * The patterns the board still predicts overlaps from, as a merge policy, and a reader of the files they cover. Without a
+ * prediction (no learning wired) it is the merge policy as it is.
+ */
+const effective = (policy: MergePolicy, prediction: DependencyPrediction | undefined) => {
+  if (prediction === undefined) return { policy, hits: (files: readonly string[]) => exclusiveFiles(policy, files) };
+  const trusted = prediction.patterns.filter((p) => !prediction.defaults.neverOverlap.includes(p) && (prediction.weights.get(p) ?? 1) >= PREDICT_MIN);
+  return {
+    policy: { ...policy, exclusivePaths: trusted },
+    hits: (files: readonly string[]) => predictedFiles(files, prediction.patterns, prediction.weights, prediction.defaults),
+  };
+};
 
 /** What is about to start: its plan, and the files intake guessed it changes (advisory). */
 export interface HoldCandidate {
@@ -32,11 +48,12 @@ export const findHolds = async (
   board: Board,
   candidate: HoldCandidate,
   skip: ReadonlySet<string>,
+  prediction?: DependencyPrediction,
 ): Promise<ImpliedAfter[]> => {
   const read = await store.transaction(async (tx) => {
-    const policy = await readMergePolicy(tx, board.id);
+    const { policy, hits } = effective(await readMergePolicy(tx, board.id), prediction);
     if ((policy.exclusivePaths ?? []).length === 0) return null;
-    const guess = exclusiveFiles(policy, candidate.files ?? []).length > 0;
+    const guess = hits(candidate.files ?? []).length > 0;
     if (!guess && !namesExclusivePath(policy, candidate.plan)) return null;
     const globs = await tx.listGlobs(board.id, {});
     const byId = new Map(globs.map((g) => [g.id, g]));
@@ -53,16 +70,16 @@ export const findHolds = async (
       const plan = (await tx.listArtifacts(other.id, 'plan'))[0];
       if (plan !== undefined) plans.set(other.id, plan.content);
     }
-    return { policy, others, plans };
+    return { policy, hits, others, plans };
   });
   if (read === null) return [];
 
   const holds: ImpliedAfter[] = [];
   for (const other of read.others) {
     const files = await branchFiles.filesOf(board, other);
-    const hits = exclusiveFiles(read.policy, files ?? []);
-    if (hits.length > 0) {
-      holds.push({ id: other.id, paths: hits.slice(0, MAX_HOLD_PATHS) });
+    const found = read.hits(files ?? []);
+    if (found.length > 0) {
+      holds.push({ id: other.id, paths: found.slice(0, MAX_HOLD_PATHS) });
     } else if ((files ?? []).length === 0 && other.status !== 'failed' && namesExclusivePath(read.policy, read.plans.get(other.id) ?? '')) {
       holds.push({ id: other.id, paths: (read.policy.exclusivePaths ?? []).slice(0, MAX_HOLD_PATHS) });
     }

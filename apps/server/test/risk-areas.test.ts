@@ -82,6 +82,8 @@ describe('Risk areas and the adaptive sub step in Postgres', () => {
     });
     boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
+    // These tests walk the limit up from 2000; a new board starts at the backstop default.
+    await store.transaction((tx) => tx.setSubLimit(boardId, 5000, 2000));
   });
 
   afterAll(async () => {

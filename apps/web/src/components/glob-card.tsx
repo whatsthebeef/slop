@@ -293,10 +293,11 @@ export const AfterChip = ({ glob }: { glob: GlobView }) => {
     );
   }
   if (glob.status !== 'planning') return null;
-  const implied = (glob.impliedAfter ?? []).filter((i) => i.overridden !== true);
-  const ids = [...new Set([...(glob.after ?? []), ...implied.map((i) => i.id)])];
+  // Only needs hold a glob: explicit `after` and needs slop learned from a failed run. Overlaps show in OverlapChip.
+  const learned = (glob.impliedAfter ?? []).filter((i) => i.overridden !== true && i.kind === 'needs');
+  const ids = [...new Set([...(glob.after ?? []), ...learned.map((i) => i.id)])];
   if (ids.length === 0) return null;
-  const reason = implied.map((i) => `${i.id}: both may change ${i.paths.join(', ')}`).join('; ');
+  const reason = learned.map((i) => `${i.id}: ${i.evidence ?? 'a run failed without it'}`).join('; ');
   return (
     <Tip text={reason === '' ? `Waits for ${ids.join(', ')} to merge` : `Waits for ${reason}`}>
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
@@ -311,6 +312,36 @@ export const AfterChip = ({ glob }: { glob: GlobView }) => {
               onKeyDown={(e) => e.stopPropagation()}
             >
               {id}
+            </Link>
+          </span>
+        ))}
+      </span>
+    </Tip>
+  );
+};
+
+/**
+ * Globs that may change the same files as this one (predicted from the board's merge policy, or set by a person): a note
+ * that the later merge rebases, never a hold. Each ID opens that glob on the board.
+ */
+export const OverlapChip = ({ glob }: { glob: GlobView }) => {
+  const overlaps = (glob.impliedAfter ?? []).filter((i) => (i.kind ?? 'overlaps') === 'overlaps' && i.overridden !== true);
+  if (overlaps.length === 0 || glob.status === 'reviewing' || glob.status === 'signed_off') return null;
+  const reason = overlaps.map((i) => (i.paths.length === 0 ? i.id : `${i.id}: both may change ${i.paths.join(', ')}`)).join('; ');
+  return (
+    <Tip text={`Overlaps ${reason}. Only the merge order matters: the later one rebases on main`}>
+      <span className='font-mono text-[11px] text-muted-foreground' data-testid='overlap-chip'>
+        overlaps{' '}
+        {overlaps.map((o, i) => (
+          <span key={o.id}>
+            {i > 0 && ', '}
+            <Link
+              to={`/boards/${glob.boardId}?glob=${encodeURIComponent(o.id)}`}
+              className='underline-offset-2 hover:underline'
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              {o.id}
             </Link>
           </span>
         ))}
@@ -456,8 +487,16 @@ export const GlobCard = ({
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         <AfterChip glob={glob} />
+        <OverlapChip glob={glob} />
         <SplitChip glob={glob} />
         <OversizedChip glob={glob} />
+        {glob.escalation != null && (
+          <Tip text={`Needs a human: ${glob.escalation.reason}`}>
+            <span className='font-mono text-[11px] text-required' data-testid='escalation-chip'>
+              needs a human
+            </span>
+          </Tip>
+        )}
         {glob.clash != null && (
           <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict`}>
             <span className='font-mono text-[11px] text-required' data-testid='clash-chip'>

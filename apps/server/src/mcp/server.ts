@@ -103,7 +103,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work) on a board. Pass the request as `input` and slop proposes the title, summary, type, category and group (intake); explicit fields win. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work) on a board. Pass the request as `input` and slop proposes the title, summary, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (a person can split it); an explicit `type` always wins. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -125,12 +125,24 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
             "One of the board's environments that allows branch deploys. Without one, intake suggests an environment the request targets (\"deploy to staging\"), and a sub gets the board's default for subs",
           ),
         autoTrigger: z.boolean().optional().describe('Same only: start a routine run straight away'),
+        needs: z
+          .array(z.string().min(1))
+          .max(20)
+          .optional()
+          .describe(
+            'IDs of globs on this board whose code this glob needs (it uses what they add). It cannot start until they have merged: a sub waits in Planning, a same is refused Start until then. Alias: `after`. Add one only when the code really is missing without it; a glob that merely touches the same files is an overlap.',
+          ),
+        overlaps: z
+          .array(z.string().min(1))
+          .max(20)
+          .optional()
+          .describe('IDs of globs on this board that may change the same files. Never blocks a start; it only orders the merges (the later one rebases on main as usual).'),
         after: z
           .array(z.string().min(1))
           .max(20)
           .optional()
           .describe(
-            'IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
+            'Alias of `needs`: IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
           ),
       },
     },
@@ -138,7 +150,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       let fields = {
         title: input.title ?? '',
         summary: input.summary ?? '',
-        type: input.type ?? ('same' as const),
+        type: input.type ?? ('sub' as const),
         category: input.category ?? ('task' as const),
         group: input.group ?? null,
         autoTrigger: input.autoTrigger ?? false,
@@ -192,7 +204,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         ...(intakeRecord === null ? {} : { intake: intakeRecord }),
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
-        ...(input.after === undefined ? {} : { after: input.after }),
+        ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
+        ...(input.overlaps === undefined ? {} : { overlaps: input.overlaps }),
         ...(files.length === 0 ? {} : { files }),
       });
       if (!created.ok) return reply(created);
@@ -344,11 +357,14 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         category: z.enum(CATEGORIES).optional(),
         group: z.string().nullable().optional(),
         environment: z.string().nullable().optional(),
-        after: z.array(z.string().min(1)).max(20).optional(),
+        needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged before it starts (alias: `after`)'),
+        after: z.array(z.string().min(1)).max(20).optional().describe('Alias of `needs`'),
+        overlaps: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs that may change the same files; never blocks a start'),
       },
     },
-    async ({ id, version, ...changes }) => {
-      const clean = Object.fromEntries(Object.entries(changes).filter(([, v]) => v !== undefined));
+    async ({ id, version, needs, ...changes }) => {
+      const merged = needs === undefined && changes.after === undefined ? changes : { ...changes, after: [...new Set([...(needs ?? []), ...(changes.after ?? [])])] };
+      const clean = Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined));
       return reply(await globs.update(email, id, version, clean), (g) => globView(g));
     },
   );
@@ -477,6 +493,22 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     },
     async ({ id, reason, runId, agentSetVersion }) =>
       reply(await globs.reportFailure(email, id, reason, runId ?? null, agentSetVersion ?? null), (g) => globView(g)),
+  );
+
+  server.registerTool(
+    'escalate_to_same',
+    {
+      description:
+        "Flag a running sub as needing a human: it becomes a same in place (same branch and PR, no auto-merge) with the reason shown on its card, and the owner is told. Only for a concrete reason: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth/permissions/secrets changes, weakened or deleted tests, changed agent instructions, scope well beyond the plan, or in-scope review findings still open after the allowed rounds. Otherwise let the sub merge. Routines pass their run ID (a superseded run's call is ignored). A person can make it a sub again.",
+      inputSchema: {
+        id: z.string(),
+        reason: z.string().min(1).describe('What a human should check, in one or two sentences'),
+        evidence: z.string().optional().describe('What showed it: files, review findings, the unsettled choice'),
+        runId: z.string().optional(),
+      },
+    },
+    async ({ id, reason, evidence, runId }) =>
+      reply(await globs.escalateToSame(email, id, { reason, evidence: evidence ?? null, runId: runId ?? null }), (g) => globView(g)),
   );
 
   // ---------------------------------------------------------------------------

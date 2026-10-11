@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, SizeCheckService, SubLimitService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -85,6 +85,7 @@ export const mountKnowledge = (
     jobs: LearningJobService;
     /** The learned sub size limit; absent: its route isn't mounted. */
     subLimit?: SubLimitService;
+    dependencyLearning?: DependencyLearningService;
     /** The board's risk areas; absent: their routes aren't mounted. */
     riskAreas?: RiskAreaService;
     /** The learned size threshold; absent: its route isn't mounted. */
@@ -197,6 +198,17 @@ export const mountKnowledge = (
   const { subLimit } = deps;
   if (subLimit !== undefined) {
     app.get('/api/boards/:b/sub-limit', async (c) => send(c, await subLimit.view(c.get('email'), Number(c.req.param('b')))));
+  }
+
+  // The board's dependency rules (learned and default) with their history, for members; admins reset them to the catalog defaults.
+  const { dependencyLearning } = deps;
+  if (dependencyLearning !== undefined) {
+    app.get('/api/boards/:b/dependency-rules', async (c) => send(c, await dependencyLearning.view(c.get('email'), Number(c.req.param('b')))));
+    app.post('/api/boards/:b/dependency-rules/reset', async (c) => {
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const pattern = typeof body === 'object' && body !== null && 'pattern' in body && typeof body.pattern === 'string' ? body.pattern : undefined;
+      return send(c, await dependencyLearning.reset(c.get('email'), Number(c.req.param('b')), pattern));
+    });
   }
 
   // The board's risk areas (learned and default) with their history, for members; admins reset them to the defaults.

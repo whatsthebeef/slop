@@ -31,12 +31,13 @@ import type {
   InboxSuggestion,
   SignalFigures,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES } from '@slop/core';
+import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES } from '@slop/core';
 import {
   bigint,
   bigserial,
   boolean,
   customType,
+  doublePrecision,
   foreignKey,
   index,
   integer,
@@ -76,7 +77,7 @@ export const boards = pgTable('boards', {
   runStartMinutes: integer('run_start_minutes').notNull().default(30),
   runRespondMinutes: integer('run_respond_minutes').notNull().default(30),
   /** The learned sub size limit (`sub_limit_changes` holds its history); not an admin setting. */
-  subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
+  subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(5000),
   /** The step the learned limit moves by now (see `sub-limit.ts`); starts at 500. */
   subLimitStep: integer('sub_limit_step').notNull().default(SUB_LIMIT_STEP),
   /** Effect checks: globs compared on each side of an approved change. */
@@ -505,6 +506,41 @@ export const subLimitChanges = pgTable(
     step: integer('step').notNull().default(250),
   },
   (t) => [uniqueIndex('sub_limit_changes_outcome_idx').on(t.boardId, t.globId, t.outcome)],
+);
+
+/** The dependency path patterns a board learned a weight for (spec, Dependencies); a pattern without a row has the catalog default. */
+export const dependencyRules = pgTable(
+  'dependency_rules',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    pattern: text('pattern').notNull(),
+    weight: doublePrecision('weight').notNull(),
+    cleanCount: integer('clean_count').notNull().default(0),
+    conflictCount: integer('conflict_count').notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.pattern] })],
+);
+
+/** Each move of a dependency rule, once per board, glob, pattern and cause (resets have no glob, so repeat). */
+export const dependencyRuleChanges = pgTable(
+  'dependency_rule_changes',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    pattern: text('pattern').notNull(),
+    fromWeight: doublePrecision('from_weight').notNull(),
+    toWeight: doublePrecision('to_weight').notNull(),
+    cause: text('cause', { enum: DEPENDENCY_CAUSES }).notNull(),
+    globId: text('glob_id'),
+    evidence: text('evidence').notNull(),
+  },
+  (t) => [uniqueIndex('dependency_rule_changes_outcome_idx').on(t.boardId, t.globId, t.pattern, t.cause)],
 );
 
 /** What the size check judged about a glob (spec, Intake): the estimate with its evidence, the flag and the proposed split. */
