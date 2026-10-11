@@ -4,7 +4,6 @@ import { LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
 import { LearningJobService, SUB_LIMIT_INTERVAL_MS } from '../src/app/learning-jobs.js';
 import { MiningService } from '../src/app/mining-service.js';
-import { RiskAreaService } from '../src/app/risk-area-service.js';
 import { SubLimitService } from '../src/app/sub-limit-service.js';
 import type { Result } from '../src/domain/errors.js';
 import type { DomainEvent, DomainEventType, JsonValue } from '../src/domain/events.js';
@@ -18,10 +17,9 @@ import {
   namesGlob,
   raisedLimit,
   subLimitCandidates,
-  subLimitMove,
 } from '../src/domain/sub-limit.js';
 import type { Glob } from '../src/domain/types.js';
-import type { ChangeSource, SubDiffSource } from '../src/ports.js';
+import type { SubDiffSource } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { glob } from './fixtures.js';
 
@@ -78,22 +76,20 @@ class FakeDiffs implements SubDiffSource {
 }
 
 describe('the sub-limit rule', () => {
-  it('raises by the step, to exactly 10000 at most', () => {
-    expect(SUB_LIMIT_STEP).toBe(500);
-    expect(raisedLimit(2000)).toBe(2500);
-    expect(raisedLimit(2000, 750)).toBe(2750);
-    expect(raisedLimit(9750)).toBe(SUB_LIMIT_MAX);
+  it('raises by a fixed step of 250, to exactly 5000 at most', () => {
+    expect(SUB_LIMIT_STEP).toBe(250);
+    expect(raisedLimit(2000)).toBe(2250);
+    expect(raisedLimit(4750)).toBe(SUB_LIMIT_MAX);
     // Capped at the bound rather than stepping past it.
-    expect(raisedLimit(9900)).toBe(SUB_LIMIT_MAX);
+    expect(raisedLimit(4900)).toBe(SUB_LIMIT_MAX);
     expect(raisedLimit(SUB_LIMIT_MAX)).toBe(SUB_LIMIT_MAX);
     // Never lowers one set above the bounds before the limit was learned.
-    expect(raisedLimit(12_000)).toBe(12_000);
+    expect(raisedLimit(8000)).toBe(8000);
   });
 
-  it('lowers by the step, to exactly 200 at least', () => {
-    expect(loweredLimit(2000)).toBe(1500);
-    expect(loweredLimit(2000, 750)).toBe(1250);
-    expect(loweredLimit(700)).toBe(SUB_LIMIT_MIN);
+  it('lowers by a fixed step of 250, to exactly 200 at least', () => {
+    expect(loweredLimit(2000)).toBe(1750);
+    expect(loweredLimit(450)).toBe(SUB_LIMIT_MIN);
     // Floored at the bound rather than stepping past it.
     expect(loweredLimit(300)).toBe(SUB_LIMIT_MIN);
     expect(loweredLimit(SUB_LIMIT_MIN)).toBe(SUB_LIMIT_MIN);
@@ -101,16 +97,16 @@ describe('the sub-limit rule', () => {
     expect(loweredLimit(150)).toBe(150);
   });
 
-  it('moves by the default step with the plain helper', () => {
-    expect(nextLimit('merged_unchanged', 2000, 10)).toBe(2500);
-    expect(nextLimit('needed_fixes', 2000, 1000)).toBe(1500);
+  it('moves by the step whatever the sub changed', () => {
+    expect(nextLimit('merged_unchanged', 2000, 10)).toBe(2250);
+    expect(nextLimit('needed_fixes', 2000, 1000)).toBe(1750);
   });
 
   it('lowers only for a sub that changed at least half the limit', () => {
     expect(nextLimit('needed_fixes', 2000, 999)).toBe(2000);
-    expect(nextLimit('needed_fixes', 2000, 1000)).toBe(1500);
+    expect(nextLimit('needed_fixes', 2000, 1000)).toBe(1750);
     expect(nextLimit('needed_fixes', 2000, null)).toBe(2000);
-    expect(nextLimit('merged_unchanged', 2000, null)).toBe(2500);
+    expect(nextLimit('merged_unchanged', 2000, null)).toBe(2250);
   });
 
   it('reads gate verdicts recorded before line counts from their reason', () => {
@@ -268,24 +264,24 @@ describe('SubLimitService', () => {
       const result = await service().learn(boardId, NOW, null);
       expect(result).toEqual({
         kind: 'sub_limit',
-        limit: 2700,
-        changes: [{ globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2700 }],
+        limit: 2250,
+        changes: [{ globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2250 }],
         asked: 0,
         waiting: 0,
       });
-      expect(await limit()).toBe(2700);
+      expect(await limit()).toBe(2250);
       const [row] = await history();
       expect(row).toMatchObject({
         globId: 's1t1',
         outcome: 'merged_unchanged',
         fromLines: 2000,
-        toLines: 2700,
+        toLines: 2250,
         changedLines: 2898,
       });
       expect(row?.evidence).toMatch(/Converted at c1 for changing 2898 lines \(limit 2000\)/);
       // Idempotent: the outcome is recorded once, and the limit doesn't move again.
       expect((await service().learn(boardId, at(3 * HOUR), NOW)).changes).toEqual([]);
-      expect(await limit()).toBe(2700);
+      expect(await limit()).toBe(2250);
       expect(await history()).toHaveLength(1);
     });
 
@@ -310,7 +306,7 @@ describe('SubLimitService', () => {
       );
       const result = await service().learn(boardId, NOW, null);
       expect(result.changes).toEqual([
-        { globId: 's1t2', outcome: 'merged_unchanged', from: 2000, to: 2550 },
+        { globId: 's1t2', outcome: 'merged_unchanged', from: 2000, to: 2250 },
       ]);
     });
 
@@ -350,7 +346,7 @@ describe('SubLimitService', () => {
       // The run after the window ends still reads the merge, and nobody asked for changes: it counts.
       expect(
         (await service().learn(boardId, at(14 * DAY + 30 * 60 * 1000), before)).changes,
-      ).toEqual([{ globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2700 }]);
+      ).toEqual([{ globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2250 }]);
       expect(await history()).toHaveLength(1);
     });
   });
@@ -369,7 +365,7 @@ describe('SubLimitService', () => {
       );
       const result = await service().learn(boardId, NOW, null);
       expect(result.changes).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
       expect((await history())[0]?.evidence).toBe(
         'QA review asked for changes: "The cards overflow again"',
@@ -389,7 +385,7 @@ describe('SubLimitService', () => {
       );
       const diffs = new FakeDiffs(NEAR);
       expect((await service(undefined, diffs).learn(boardId, NOW, null)).changes).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
       expect(diffs.asked).toEqual(['m-s1t1']);
       expect((await history())[0]).toMatchObject({
@@ -408,7 +404,7 @@ describe('SubLimitService', () => {
         }),
       );
       expect(await service(undefined, null).learn(boardId, NOW, null)).toMatchObject({
-        changes: [{ globId: 's1t2', outcome: 'needed_fixes', from: 1250, to: 1250 }],
+        changes: [{ globId: 's1t2', outcome: 'needed_fixes', from: 1750, to: 1750 }],
         waiting: 0,
       });
       expect((await history())[0]).toMatchObject({ globId: 's1t2', changedLines: null });
@@ -424,9 +420,9 @@ describe('SubLimitService', () => {
       const result = await service().learn(boardId, NOW, null);
       expect(result.changes).toEqual([
         { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 2000 },
-        { globId: 's1t2', outcome: 'needed_fixes', from: 2000, to: 1500 },
+        { globId: 's1t2', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
-      expect(await limit()).toBe(1500);
+      expect(await limit()).toBe(1750);
       const rows = await history();
       expect(rows.find((r) => r.globId === 's1t1')).toMatchObject({ fromLines: 2000, toLines: 2000, changedLines: 2 });
       expect(rows.find((r) => r.globId === 's1t1')?.evidence).toContain('Too small to say anything about the limit');
@@ -476,7 +472,7 @@ describe('SubLimitService', () => {
       addEvents(...passed('s1t1', NEAR));
       const result = await service(llm).learn(boardId, NOW, null);
       expect(result).toMatchObject({
-        changes: [{ globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 }],
+        changes: [{ globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 }],
         asked: 1,
       });
       expect((await history())[0]?.evidence).toBe(
@@ -579,7 +575,7 @@ describe('SubLimitService', () => {
       llm.down = false;
       const back = await service(llm).learn(boardId, at(3 * HOUR), NOW);
       expect(back.changes).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
     });
 
@@ -599,7 +595,7 @@ describe('SubLimitService', () => {
       }
       llm.down = false;
       expect((await service(llm).learn(boardId, at(16 * DAY + HOUR), last)).changes).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
     });
 
@@ -671,7 +667,7 @@ describe('SubLimitService', () => {
       const before = (await state()) as { attempts: Record<string, number> };
       expect(Object.entries(before.attempts)).toEqual([[expect.stringMatching(/^s1t1:s1b2:/), 1]]);
       expect((await service(llm).learn(boardId, at(3 * HOUR), NOW)).changes).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
       expect(await state()).toMatchObject({ attempts: {} });
     });
@@ -735,10 +731,10 @@ describe('SubLimitService', () => {
       );
       const result = await service().learn(boardId, NOW, null);
       expect(result.changes).toEqual([
-        { globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2700 },
-        { globId: 's1t2', outcome: 'needed_fixes', from: 2700, to: 2400 },
+        { globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2250 },
+        { globId: 's1t2', outcome: 'needed_fixes', from: 2250, to: 2000 },
       ]);
-      expect(result.limit).toBe(2400);
+      expect(result.limit).toBe(2000);
       // Newest first.
       expect((await history()).map((c) => c.globId)).toEqual(['s1t2', 's1t1']);
     });
@@ -776,7 +772,7 @@ describe('SubLimitService', () => {
     addEvents(...converted('s1t1'));
     await service().learn(boardId, NOW, null);
     const view = unwrap(await service().view(ADMIN, boardId));
-    expect(view).toMatchObject({ current: 2700, bounds: { min: 200, max: 10000, step: 500 } });
+    expect(view).toMatchObject({ current: 2250, bounds: { min: 200, max: 5000, step: 250 } });
     expect(view.history).toHaveLength(1);
     const refused = await service().view(OUTSIDER, boardId);
     expect(refused.ok ? null : refused.error.code).toBe('forbidden');
@@ -791,7 +787,7 @@ describe('SubLimitService', () => {
     // The admin's form was loaded before the move; its save carries the old board.
     const settings = { name: 'renamed', subMaxChangedLines: 100 };
     unwrap(await boards.updateSettings(ADMIN, boardId, before.version, settings));
-    expect(await limit()).toBe(2700);
+    expect(await limit()).toBe(2250);
   });
 
   it('runs hourly as a board job, and admins can run it now', async () => {
@@ -810,7 +806,7 @@ describe('SubLimitService', () => {
     const ran = await jobs.runDue();
     expect(ran.find((r) => r.job === 'sub_limit')?.result).toMatchObject({
       kind: 'sub_limit',
-      limit: 2700,
+      limit: 2250,
     });
     now = new Date(Date.parse(NOW) + SUB_LIMIT_INTERVAL_MS - 1000).toISOString();
     expect((await jobs.runDue()).some((r) => r.job === 'sub_limit')).toBe(false);
@@ -850,60 +846,6 @@ describe('SubLimitService', () => {
     expect(calls).toEqual([null, NOW, NOW]);
   });
 
-  describe('adaptive step and risk signals', () => {
-    const board = () => store.transaction((tx) => tx.getBoard(boardId));
-    const qaAdded = (globId: string, when: string) =>
-      event(globId, 'LabelChanged', when, { label: 'QA', from: 'required', to: 'added', items: ['Fix it'] });
-
-    it('grows the step while outcomes agree: two raises move more than two fixed steps', async () => {
-      addGlobs(sub('s1t1', { type: 'same', status: 'signed_off' }), sub('s1t2', { type: 'same', status: 'signed_off' }));
-      addEvents(...converted('s1t1'), ...converted('s1t2'));
-      await service().learn(boardId, NOW, null);
-      expect((await limit()) ?? 0).toBeGreaterThan(2000 + 2 * SUB_LIMIT_STEP);
-      const rows = (await history()).map((r) => r.step);
-      // The second raise used the step grown x1.5.
-      expect(rows).toEqual([750, 500]);
-      expect((await board())?.subLimitStep).toBe(750);
-    });
-
-    it('shrinks the step on a reversal, and records the step used', async () => {
-      addGlobs(sub('s1t1', { type: 'same', status: 'signed_off' }), sub('s1t2'));
-      addEvents(...converted('s1t1'), ...passed('s1t2', NEAR), qaAdded('s1t2', at(HOUR)));
-      await service().learn(boardId, NOW, null);
-      const rows = await history();
-      expect(rows.map((r) => [r.globId, r.step])).toEqual([['s1t2', 250], ['s1t1', 500]]);
-      expect((await board())?.subLimitStep).toBe(250);
-    });
-
-    it('counts an outcome older than the window for less', () => {
-      const base = { outcome: 'merged_unchanged' as const, limit: 2000, changedLines: 2000, boardStep: 500, history: [], now: MERGED };
-      const fresh = subLimitMove({ ...base, outcomeAt: MERGED });
-      const stale = subLimitMove({ ...base, outcomeAt: new Date(Date.parse(MERGED) - 28 * DAY).toISOString() });
-      expect(fresh.to - fresh.from).toBe(500);
-      expect(stale.to - stale.from).toBe(250);
-    });
-
-    it('lowers a limit by the weighted step but never by more than half of it', () => {
-      const move = subLimitMove({ outcome: 'needed_fixes', limit: 400, changedLines: 400, boardStep: 2000, history: [], outcomeAt: MERGED, now: MERGED });
-      expect(move.to).toBe(200);
-    });
-
-    it('leaves the limit alone for a small sub that needed fixes, and signals the risk areas instead', async () => {
-      const changes: ChangeSource = { mergedDiff: () => Promise.resolve({ changedLines: 10, files: ['apps/billing/src/charge.ts'] }) };
-      const riskAreas = new RiskAreaService({ store, clock: { now: () => NOW }, changes });
-      const learner = new SubLimitService({ store, notifier: new RecordingNotifier(), diffs: new FakeDiffs(null), riskAreas });
-      addGlobs(sub('s1t1'));
-      addEvents(...passed('s1t1', 20), qaAdded('s1t1', at(HOUR)));
-      const result = await learner.learn(boardId, NOW, null);
-      expect(result.changes).toEqual([{ globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 2000 }]);
-      expect(await limit()).toBe(2000);
-      const areas = await store.transaction((tx) => tx.listRiskAreas(boardId));
-      expect(areas.find((a) => a.source === 'learned')).toMatchObject({ name: 'Learned: apps/billing/src', pathPatterns: ['apps/billing/src/**'], strength: 1 });
-      const changesMade = await store.transaction((tx) => tx.listRiskAreaChanges(boardId));
-      expect(changesMade).toEqual([expect.objectContaining({ kind: 'added', cause: 'small_fix', globId: 's1t1' })]);
-    });
-  });
-
   describe('edge cases (tester, s15f8 strand 5)', () => {
     const qaAdded = (globId: string, when: string) =>
       event(globId, 'LabelChanged', when, {
@@ -924,7 +866,7 @@ describe('SubLimitService', () => {
       // The job last ran just before the merges, so both subs are in reach although the window has passed.
       const result = await service().learn(boardId, at(15 * DAY), at(-HOUR));
       expect(result.changes).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
     });
 
@@ -942,8 +884,8 @@ describe('SubLimitService', () => {
       expect(
         (await service(llm).learn(boardId, at(14 * DAY + 30 * 60 * 1000), before)).changes,
       ).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
-        { globId: 's1t2', outcome: 'needed_fixes', from: 1250, to: 650 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
+        { globId: 's1t2', outcome: 'needed_fixes', from: 1750, to: 1500 },
       ]);
     });
 
@@ -981,7 +923,7 @@ describe('SubLimitService', () => {
         }),
       );
       expect((await service().learn(boardId, NOW, null)).changes).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
       expect((await history())[0]?.evidence).toBe('CR review asked for changes: "Rename it"');
     });
@@ -1007,7 +949,7 @@ describe('SubLimitService', () => {
         }),
       );
       expect((await service().learn(boardId, at(14 * DAY + 1), at(-HOUR))).changes).toEqual([
-        { globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2500 },
+        { globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2250 },
       ]);
     });
 
@@ -1032,7 +974,7 @@ describe('SubLimitService', () => {
         }),
       );
       expect((await service().learn(boardId, NOW, null)).changes).toEqual([
-        { globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2550 },
+        { globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2250 },
       ]);
     });
 
@@ -1062,7 +1004,7 @@ describe('SubLimitService', () => {
         event('s1t2', 'Merged', MERGED, { sha: 'm2' }),
       );
       expect((await service().learn(boardId, NOW, null)).changes).toEqual([
-        { globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2550 },
+        { globId: 's1t1', outcome: 'merged_unchanged', from: 2000, to: 2250 },
       ]);
     });
 
@@ -1080,7 +1022,7 @@ describe('SubLimitService', () => {
       addEvents(...passed('s1t1', NEAR), ...passed('s1t2', NEAR));
       const result = await service(llm).learn(boardId, at(15 * DAY), at(-HOUR));
       expect(result.changes).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
       expect(llm.requests).toHaveLength(1);
     });
@@ -1100,7 +1042,7 @@ describe('SubLimitService', () => {
       );
       addEvents(...passed('s1t1', NEAR));
       expect((await service(llm).learn(boardId, NOW, null)).changes).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
     });
 
@@ -1134,7 +1076,7 @@ describe('SubLimitService', () => {
         waiting: 1,
       });
       expect((await service(llm).learn(boardId, at(3 * HOUR), NOW)).changes).toEqual([
-        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1250 },
+        { globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 1750 },
       ]);
     });
 
@@ -1154,7 +1096,7 @@ describe('SubLimitService', () => {
       addGlobs(sub('s1t1', { type: 'same', status: 'signed_off' }));
       addEvents(...converted('s1t1', 6000));
       expect((await service().learn(boardId, NOW, null)).changes).toEqual([
-        { globId: 's1t1', outcome: 'merged_unchanged', from: 10000, to: 10000 },
+        { globId: 's1t1', outcome: 'merged_unchanged', from: 5000, to: 5000 },
       ]);
       expect(await history()).toHaveLength(1);
       expect((await service().learn(boardId, at(3 * HOUR), NOW)).changes).toEqual([]);
@@ -1164,7 +1106,7 @@ describe('SubLimitService', () => {
 
 describe('the sub-limit rule at the edges (tester, s15f8 strand 5)', () => {
   it('keeps both bounds', () => {
-    expect(raisedLimit(9999)).toBe(SUB_LIMIT_MAX);
+    expect(raisedLimit(4999)).toBe(SUB_LIMIT_MAX);
     expect(loweredLimit(201)).toBe(SUB_LIMIT_MIN);
   });
 

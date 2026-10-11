@@ -8,9 +8,10 @@ import {
   SUB_LIMIT_STEP,
   SUB_LIMIT_WINDOW_DAYS,
   bugText,
+  nearLimit,
+  nextLimit,
   outcomeKey,
   subLimitCandidates,
-  subLimitMove,
 } from '../domain/sub-limit.js';
 import type { SubLimitCandidate, SubLimitOutcome, SubLimitView } from '../domain/sub-limit.js';
 import type { Board } from '../domain/types.js';
@@ -18,7 +19,6 @@ import type { Notifier, Store, SubDiffSource } from '../ports.js';
 import { sizeIgnoredPathsOf } from '../domain/sub-gate.js';
 import { memberOf } from './access.js';
 import { readMergePolicy } from './knowledge-service.js';
-import type { RiskAreaService } from './risk-area-service.js';
 import { LlmUnavailable } from './intake-service.js';
 import type { Llm } from './intake-service.js';
 import { longEnoughQuote, verifiedQuote } from './kb-dedupe.js';
@@ -42,11 +42,11 @@ export const SUB_LIMIT_LLM_TIMEOUT_MS = 30_000;
 /** The most bug references whose answers the job remembers (the newest), so it doesn't ask again hourly. */
 export const MAX_REMEMBERED_ANSWERS = 500;
 
-/** Why a sub that needed fixes left the limit alone: it is a risk-area signal instead. */
+/** Why a sub that needed fixes left the limit alone. */
 const tooSmall = (changedLines: number | null, limit: number): string =>
   changedLines === null
     ? `Its size is unknown, so it says nothing about the limit (${limit})`
-    : `Too small to say anything about the limit: ${changedLines} lines, under half of ${limit}. Counted for risk areas instead`;
+    : `Too small to say anything about the limit: ${changedLines} lines, under half of ${limit}`;
 /** Asks about one bug reference that end without a usable answer (unusable JSON, a timeout) before it is skipped. */
 export const MAX_ANSWER_ATTEMPTS = 3;
 
@@ -128,10 +128,6 @@ export class SubLimitService {
       /** Null without a code host: a passed sub recorded without a line count is recorded with none. */
       diffs: SubDiffSource | null;
       llmTimeoutMs?: number;
-      /** Absent: a small sub that needed fixes, or a bug blaming a sub, isn't passed to risk areas. */
-      riskAreas?: RiskAreaService;
-      /** Where a failed risk signal is reported (the server's error log). */
-      log?: (task: string, message: string) => void;
     },
   ) {}
 
@@ -253,27 +249,12 @@ export class SubLimitService {
         candidate.globId,
         changedLines,
         evidence,
-        candidate.at,
         now,
       );
       if (outcome === 'needed_fixes') blamed.add(candidate.globId);
       if (change === null) continue;
-      if (candidate.kind !== 'merged_unchanged' && (candidate.kind === 'bug_reference' || change.riskSignal)) {
-        try {
-          await this.deps.riskAreas?.recordFor(
-            board,
-            candidate.kind === 'bug_reference' ? 'bug' : 'small_fix',
-            candidate.globId,
-            candidate.mergeSha,
-            candidate.at,
-          );
-        } catch (error) {
-          // The risk-area learning derives the signal again from the recorded outcome.
-          this.deps.log?.('sub-limit', `Risk signal for ${candidate.globId} failed: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
       recorded.add(outcomeKey(candidate.globId, outcome));
-      changes.push({ globId: change.globId, outcome: change.outcome, from: change.from, to: change.to });
+      changes.push(change);
       limit = change.to;
     }
     const settled = (key: string) => blamed.has(key.slice(0, key.indexOf(':')));
@@ -319,7 +300,7 @@ export class SubLimitService {
       if (board === null) return notFound(`No board ${boardId}`);
       return ok({
         current: board.subMaxChangedLines,
-        bounds: { min: SUB_LIMIT_MIN, max: SUB_LIMIT_MAX, step: board.subLimitStep, startStep: SUB_LIMIT_STEP },
+        bounds: { min: SUB_LIMIT_MIN, max: SUB_LIMIT_MAX, step: SUB_LIMIT_STEP },
         history: await tx.listSubLimitChanges(boardId),
       });
     });
@@ -346,18 +327,17 @@ export class SubLimitService {
     globId: string,
     changedLines: number | null,
     evidence: string,
-    outcomeAt: string,
     now: string,
-  ): Promise<(SubLimitResult['changes'][number] & { riskSignal: boolean }) | null> {
+  ): Promise<SubLimitResult['changes'][number] | null> {
     try {
       return await this.deps.store.transaction(async (tx) => {
         await tx.lockBoardJob(boardId, 'sub_limit');
         const board = await tx.getBoard(boardId);
         if (board === null) return null;
-        const history = await tx.listSubLimitChanges(boardId);
-        const move = subLimitMove({ outcome, limit: board.subMaxChangedLines, changedLines, boardStep: board.subLimitStep, history, outcomeAt, now });
-        const { from, to } = move;
+        const from = board.subMaxChangedLines;
+        const to = nextLimit(outcome, from, changedLines);
         // A sub that needed fixes without being near the limit is recorded as such, and the limit stays.
+        const unmoved = outcome === 'needed_fixes' && to === from && !nearLimit(changedLines, from);
         const inserted = await tx.insertSubLimitChange({
           boardId,
           at: now,
@@ -366,13 +346,12 @@ export class SubLimitService {
           outcome,
           globId,
           changedLines,
-          evidence: move.direction === null ? `${evidence}. ${tooSmall(changedLines, from)}` : evidence,
-          step: move.step,
+          evidence: unmoved ? `${evidence}. ${tooSmall(changedLines, from)}` : evidence,
         });
         if (!inserted) return null;
-        if (move.direction !== null && !(await tx.setSubLimit(boardId, from, to, move.step)))
+        if (to !== from && !(await tx.setSubLimit(boardId, from, to)))
           throw new SubLimitConflict(boardId);
-        return { globId, outcome, from, to, riskSignal: move.riskSignal };
+        return { globId, outcome, from, to };
       });
     } catch (error) {
       if (error instanceof SubLimitConflict) return null;

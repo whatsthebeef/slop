@@ -216,7 +216,6 @@ describe('The learned sub limit in Postgres', () => {
       globId: 's1t1',
       changedLines: 2,
       evidence: 'QA review asked for changes',
-      step: 500,
     };
     expect(await store.transaction((tx) => tx.insertSubLimitChange(change))).toBe(true);
     // Unique per board, glob and outcome: the job is idempotent.
@@ -301,18 +300,18 @@ describe('The learned sub limit in Postgres', () => {
       null,
     );
     expect(result.changes).toEqual([
-      { globId: 's9t1', outcome: 'merged_unchanged', from: 2000, to: 2700 },
+      { globId: 's9t1', outcome: 'merged_unchanged', from: 2000, to: 2250 },
     ]);
     const view = await request('GET', `/api/boards/${String(boardId)}/sub-limit`, undefined, DEV);
     expect(view.status).toBe(200);
     const body = (await view.json()) as {
       current: number;
-      bounds: { min: number; max: number; step: number; startStep: number };
+      bounds: { min: number; max: number; step: number };
       history: { globId: string; fromLines: number; toLines: number; evidence: string }[];
     };
-    expect(body).toMatchObject({ current: 2700, bounds: { min: 200, max: 10000, step: 500, startStep: 500 } });
+    expect(body).toMatchObject({ current: 2250, bounds: { min: 200, max: 5000, step: 250 } });
     expect(body.history).toEqual([
-      expect.objectContaining({ globId: 's9t1', fromLines: 2000, toLines: 2700, step: 500 }),
+      expect.objectContaining({ globId: 's9t1', fromLines: 2000, toLines: 2250 }),
     ]);
     expect(
       (await request('GET', `/api/boards/${String(boardId)}/sub-limit`, undefined, OUTSIDER))
@@ -356,7 +355,7 @@ describe('The learned sub limit in Postgres', () => {
           passed: true,
           reason: null,
           cause: null,
-          changedLines: 1500,
+          changedLines: 1200,
           limit: 2000,
         }),
         event('s8t2', 'Merged', MERGED, { sha: 'm2' }),
@@ -371,20 +370,20 @@ describe('The learned sub limit in Postgres', () => {
     const learn = () =>
       new SubLimitService({ store, notifier, diffs: null }).learn(other, NOW, null);
     const runs = await Promise.all([learn(), learn(), learn()]);
-    // s8t2 changed 1,500 lines, over half of the 2,700 the limit has become, so it lowers it (a reversal: the step halves).
+    // s8t2 changed 1,200 lines, over half of the 2,250 it merged under, so it lowers the limit.
     // Every run reads the same candidates; under the lock each outcome is recorded by exactly one of them, and each
     // move starts from the limit the one before left.
     expect(runs.flatMap((r) => r.changes).sort((x, y) => x.from - y.from)).toEqual([
-      { globId: 's8t1', outcome: 'merged_unchanged', from: 2000, to: 2700 },
-      { globId: 's8t2', outcome: 'needed_fixes', from: 2700, to: 2400 },
+      { globId: 's8t1', outcome: 'merged_unchanged', from: 2000, to: 2250 },
+      { globId: 's8t2', outcome: 'needed_fixes', from: 2250, to: 2000 },
     ]);
     const recorded = await store.transaction((tx) => tx.listSubLimitChanges(other));
     expect(recorded.map((c) => [c.globId, c.fromLines, c.toLines])).toEqual([
-      ['s8t2', 2700, 2400],
-      ['s8t1', 2000, 2700],
+      ['s8t2', 2250, 2000],
+      ['s8t1', 2000, 2250],
     ]);
     const limitNow = await store.transaction((tx) => tx.getBoard(other));
-    expect(limitNow?.subMaxChangedLines).toBe(2400);
+    expect(limitNow?.subMaxChangedLines).toBe(2000);
   });
 
   it("reads a merged sub's size from its merge commit through the code host", async () => {

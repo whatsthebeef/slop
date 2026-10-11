@@ -18,7 +18,6 @@ import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
 import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdChange } from './domain/size-check.js';
-import type { NewRiskAreaChange, RiskArea, RiskAreaChange } from './domain/risk-area.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { BaseChecks, Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
@@ -75,26 +74,17 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'subLimitStep' | 'effectCheckGlobs' | 'agentKbApproval' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'effectCheckGlobs' | 'agentKbApproval' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   /**
    * Sets the board's learned sub size limit to `to` if it is still `from`; returns false otherwise. It has no board
    * version, and `updateBoard` doesn't write it: settings saves don't overwrite a learned move.
    */
-  setSubLimit(boardId: number, from: number, to: number, step?: number): Promise<boolean>;
+  setSubLimit(boardId: number, from: number, to: number): Promise<boolean>;
   /** Records a sub-limit outcome; false when the board already has that glob's outcome (the learning is idempotent). */
   insertSubLimitChange(change: NewSubLimitChange): Promise<boolean>;
   /** A board's recorded sub-limit outcomes, newest first. */
   listSubLimitChanges(boardId: number): Promise<SubLimitChange[]>;
-  /** The board's risk areas (empty until `RiskAreaService` seeds the defaults). */
-  listRiskAreas(boardId: number): Promise<RiskArea[]>;
-  /** Writes a risk area, replacing the board's one of the same name. */
-  putRiskArea(area: RiskArea): Promise<void>;
-  deleteRiskArea(boardId: number, name: string): Promise<void>;
-  /** Records a risk-area change; false when the board already has one for that glob, cause and area (the learning is idempotent). */
-  insertRiskAreaChange(change: NewRiskAreaChange): Promise<boolean>;
-  /** A board's risk-area history, newest first. */
-  listRiskAreaChanges(boardId: number): Promise<RiskAreaChange[]>;
   /** The glob's size check (spec, Intake), or null when none was made. */
   getSizeCheck(globId: string): Promise<SizeCheck | null>;
   /** The board's size checks. */
