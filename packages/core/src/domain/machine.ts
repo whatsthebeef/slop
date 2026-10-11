@@ -306,6 +306,8 @@ export interface CreateInput {
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Set when the size check flagged the glob oversized: a sub or auto-triggered same waits in Planning, with this as the reason, until a person splits or keeps it whole. */
   readonly sizeHold?: string;
+  /** Same only: wait in Planning for `after` and start by itself when it merges (a split's part that needs another part). */
+  readonly autoStart?: boolean;
 }
 
 export const create = (
@@ -331,7 +333,8 @@ export const create = (
   const after = input.after ?? [];
   const impliedAfter = input.impliedAfter ?? [];
   const awaited = waitingFor({ after, impliedAfter }, dependencies);
-  const wantsStart = input.type === 'sub' || (input.type === 'same' && input.autoTrigger);
+  const startsBySelf = input.type === 'same' && input.autoStart === true && awaited.length > 0;
+  const wantsStart = input.type === 'sub' || (input.type === 'same' && input.autoTrigger) || startsBySelf;
   // A sub (or auto-started same) with something unmerged to wait for sits in Planning, with no branch, until released.
   const sizeHeld = wantsStart && input.sizeHold !== undefined;
   const held = wantsStart && (awaited.length > 0 || sizeHeld);
@@ -368,6 +371,7 @@ export const create = (
     ...(after.length > 0 && { after }),
     ...(impliedAfter.length > 0 && { impliedAfter }),
     ...(held && { waiting: { since: ctx.now } }),
+    ...(startsBySelf && { autoStart: true }),
   };
   const b = new Builder(glob, ctx).event('GlobCreated', {
     type: glob.type,
@@ -961,6 +965,8 @@ export interface FieldChanges {
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Globs this one overlaps, already checked (`checkOverlaps`): replaces the overlaps a person set, at any time (they never block). */
   readonly overlaps?: readonly string[];
+  /** Turn a same's start-when-unblocked off (or back on): off ends its wait and keeps what it needs. */
+  readonly autoStart?: boolean;
 }
 
 /** Changing fields is not a transition, except same → sub from planning (row 26). */
@@ -1013,6 +1019,14 @@ export const changeFields = (
       diff['overlaps'] = { from: before, to: [...changes.overlaps] };
     }
   }
+  // Only a same waiting in Planning has a start of its own to switch; the flag changes nothing for any other glob.
+  const switchable = glob.type === 'same' && glob.status === 'planning';
+  const autoStartOff = switchable && changes.autoStart === false && glob.autoStart === true;
+  if (autoStartOff) {
+    Object.assign(patch, { autoStart: false });
+    diff['autoStart'] = { from: true, to: false };
+    if (glob.waiting != null) Object.assign(patch, { waiting: null });
+  }
   if (Object.keys(diff).length === 0) return unchanged(glob);
 
   const b = new Builder(glob, ctx).set(patch).event('FieldsChanged', diff);
@@ -1022,7 +1036,7 @@ export const changeFields = (
   // A same becoming a sub starts, unless something it starts after hasn't merged; a held glob whose waiting list was
   // edited down to nothing starts too. A held sub turned into a same is no longer asked to start by itself.
   const becomesSub = glob.type === 'same' && type === 'sub';
-  const wasHeld = glob.waiting != null && glob.status === 'planning' && glob.type !== 'super';
+  const wasHeld = glob.waiting != null && glob.status === 'planning' && glob.type !== 'super' && !autoStartOff;
   if (wasHeld && glob.type === 'sub' && type === 'same') b.set({ waiting: null });
   else if (becomesSub || wasHeld) {
     const impliedAfter = becomesSub ? mergeImplied(glob.impliedAfter, changes.impliedAfter ?? []) : glob.impliedAfter;
@@ -1546,7 +1560,7 @@ export const subGateCheckCompleted = (
 };
 
 /**
- * A running sub is flagged as needing a human (the implementer or change_reviewer, with the reason; or a person): it
+ * A sub is flagged as needing a human (the investigator's findings in Planning, the implementer or change_reviewer, with the reason; or a person): it
  * becomes a same in place, keeping its branch and PR, so the sub gate no longer merges it. A run that is no longer
  * current is ignored. Escalating a same is a no-op.
  */
@@ -1561,7 +1575,7 @@ export const escalateToSame = (
     if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
   }
   if (glob.type !== 'sub') return unchanged(glob);
-  if (glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') {
+  if (glob.status !== 'planning' && glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') {
     return invalidTransition(glob, ctx.actor, 'A sub can only be escalated before it merges');
   }
   const reason = input.reason.trim();

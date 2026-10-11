@@ -44,8 +44,8 @@ describe('The learned size check in Postgres', () => {
       if (down) return Promise.reject(new Error('model failed'));
       return Promise.resolve(
         system.startsWith('You judge')
-          ? '{"independentParts": 4, "reason": "four pieces"}'
-          : '{"parts":[{"title":"Data","summary":"a","plan":"## Tasks\\n1. migration","after":[]},{"title":"Web","summary":"b","plan":"## Tasks\\n3. card","after":[0]}]}',
+          ? '{"independentParts": 4, "parallelParts": 3, "reason": "four pieces"}'
+          : '{"parts":[{"title":"Data","summary":"a","plan":"## Tasks\\n1. migration","after":[]},{"title":"Web","summary":"b","plan":"## Tasks\\n3. card","after":[0]},{"title":"CLI","summary":"c","plan":"## Tasks\\n4. cli","after":[0]}]}',
       );
     },
   };
@@ -86,7 +86,8 @@ describe('The learned size check in Postgres', () => {
     const check = await store.transaction((tx) => tx.getSizeCheck(sub.id));
     expect(check).toMatchObject({ flagged: true, decision: null, threshold: { maxTasks: 5, maxParts: 3 } });
     expect(check?.estimate).toMatchObject({ tasks: 6, independentParts: 4, partsSource: 'model' });
-    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['Data', 'Web']);
+    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['Data', 'Web', 'CLI']);
+    expect(check?.proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
     expect(unwrap(await globs.get(DEV, sub.id)).sizeCheck?.flagged).toBe(true);
     expect([...(await globs.oversizedOf(boardId))]).toContain(sub.id);
     unwrap(await size.keepWhole(DEV, sub.id));
@@ -99,7 +100,8 @@ describe('The learned size check in Postgres', () => {
     try {
       const glob = await create('same', BIG);
       const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-      expect(check).toMatchObject({ flagged: true, proposal: null, estimate: { partsSource: 'text' } });
+      // Text alone cannot tell that parts run in parallel, so it never flags.
+      expect(check).toMatchObject({ flagged: false, proposal: null, estimate: { partsSource: 'text' } });
     } finally {
       down = false;
     }
