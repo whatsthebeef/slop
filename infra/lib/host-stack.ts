@@ -285,6 +285,9 @@ export class HostStack extends Stack {
     cfnProject.addPropertyOverride('Source.Auth', { Type: 'CODECONNECTIONS', Resource: props.connectionArn });
     // Pull requests never build (push to the branch only), but CodeBuild's default comment-approval gate still posts a
     // "Build not triggered: Pull request approval required" status on every PR, which reads as a failed check.
+    // DISABLED is safe only while the webhook filter is push-only: with the gate off, that filter is all that stops a
+    // PR from starting a build, and the build can run ssm:SendCommand on the production instance. If pull-request
+    // events are ever added to the filter groups, set this back to FORK_PULL_REQUESTS or ALL_PULL_REQUESTS.
     cfnProject.addPropertyOverride('Triggers.PullRequestBuildPolicy', { RequiresCommentApproval: 'DISABLED' });
 
     // Weekly EBS snapshots of the data disk (the boot disk is rebuilt from the AMI), the newest four kept: Sundays 04:00 UTC.
