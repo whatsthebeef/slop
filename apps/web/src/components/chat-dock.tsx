@@ -5,6 +5,9 @@ import { ChatPanel } from '@/components/chat-panel';
 import { reducedMotion, stepMotion } from '@/lib/card-motion';
 import { clampChatWidth, DEFAULT_CHAT_WIDTH, readChatWidth, writeChatWidth } from '@/lib/chat-width';
 
+/** The dock steps open and shut this much slower than the cards' own motion (same steps and easing, each one longer). */
+const DOCK_SLOWDOWN = 1.5;
+
 /**
  * Where the chat sits beside the board. The dock's own width steps open and shut in the cards' motion, so the panel's edge and the board's
  * right edge move together (no blank strip, no jump): the board reflows only at each step, not every frame, and the panel keeps its
@@ -47,7 +50,7 @@ export const ChatDock = ({ open, wide, onExited, ...panel }: { open: boolean; wi
       return;
     }
     const motion = el.animate([{ flexBasis: `${from}px` }, { flexBasis: `${target}px` }], {
-      ...stepMotion(target - from),
+      ...stepMotion(target - from, Math.round(stepMotion(target - from).duration * DOCK_SLOWDOWN)),
       fill: open ? 'backwards' : 'forwards',
     });
     running.current = motion;
