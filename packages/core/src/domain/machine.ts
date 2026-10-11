@@ -1215,6 +1215,37 @@ export const clashChanged = (
     .done();
 };
 
+/** Whether an edge is a prediction a recheck may replace: implied, not learned or explicit, not blocking, not overridden. */
+export const isReplaceableOverlap = (edge: ImpliedAfter): boolean =>
+  (edge.source ?? 'implied') === 'implied' && (edge.kind ?? 'overlaps') === 'overlaps' && edge.overridden !== true;
+
+/**
+ * A recheck of a glob's predicted overlaps: the replaceable ones become `edges` (the others are kept as they are), with an
+ * event for each edge added or dropped and its reason. Nothing changes when the lists agree, so a repeat is a no-op.
+ */
+export const overlapsRechecked = (
+  glob: Glob,
+  result: { readonly edges: readonly ImpliedAfter[]; readonly dropReasons: ReadonlyMap<string, string> },
+  ctx: Context,
+): Result<Transition> => {
+  if (listOf(glob.status) !== 'planning' && listOf(glob.status) !== 'doing') return unchanged(glob);
+  const existing = glob.impliedAfter ?? [];
+  const before = existing.filter(isReplaceableOverlap);
+  const kept = existing.filter((e) => !isReplaceableOverlap(e));
+  const edges = result.edges.filter((e) => !kept.some((k) => k.id === e.id) && !(glob.after ?? []).includes(e.id));
+  const same = (a: ImpliedAfter, b: ImpliedAfter) => a.id === b.id && a.paths.join('\n') === b.paths.join('\n');
+  const dropped = before.filter((b) => !edges.some((e) => e.id === b.id));
+  const added = edges.filter((e) => !before.some((b) => b.id === e.id));
+  const moved = edges.filter((e) => before.some((b) => b.id === e.id && !same(b, e)));
+  if (dropped.length === 0 && added.length === 0 && moved.length === 0) return unchanged(glob);
+  const b = new Builder(glob, ctx);
+  const next = [...kept, ...edges];
+  b.set({ impliedAfter: next });
+  for (const edge of dropped) b.event('OverlapDropped', { with: edge.id, reason: result.dropReasons.get(edge.id) ?? 'it no longer changes an exclusive path' });
+  for (const edge of added) b.event('OverlapAdded', { with: edge.id, paths: [...edge.paths] });
+  return b.done();
+};
+
 /** The routine was fired: records its cloud session (if the fire response returned one). */
 export const runFired = (
   glob: Glob,

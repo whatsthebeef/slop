@@ -19,18 +19,47 @@ const literalDirectory = (glob: string): string => {
 
 const SCHEMA_WORDS = /\b(migrations?|schema|drizzle)\b/i;
 
+/** Headings whose section lists what the glob changes (a mention elsewhere, in prose, predicts nothing). */
+const CHANGE_HEADING = /^#{1,6}\s*(tasks?|files?|files to change|changes?)\b/i;
+
 /**
- * Whether a glob's plan says it will change an exclusive path: it names one (the literal directory of an exclusive
- * glob) or a migration ("migration", "schema", "drizzle"). Slop can't know before the work is done, so this is the
- * hint for holding a glob that hasn't started.
+ * The parts of a plan that name changes: the sections under a Tasks or Files heading, up to the next heading of the same
+ * or a higher level. A plan with no headings at all (a one-line summary or a short request) is all of it one statement
+ * of what changes, so it counts whole; a structured plan with no such section names none.
+ */
+const changeSections = (plan: string): string => {
+  if (!/^#{1,6}\s/m.test(plan)) return plan;
+  const kept: string[] = [];
+  let level = 0;
+  for (const line of plan.split('\n')) {
+    const heading = /^(#{1,6})\s/.exec(line);
+    if (heading !== null) {
+      const depth = (heading[1] ?? '').length;
+      if (CHANGE_HEADING.test(line)) {
+        level = depth;
+        continue;
+      }
+      if (level > 0 && depth <= level) level = 0;
+    }
+    if (level > 0) kept.push(line);
+  }
+  return kept.join('\n');
+};
+
+/**
+ * Whether a glob's plan says it will change an exclusive path: inside a Tasks or Files section it names one (the literal
+ * directory of an exclusive glob) or a migration ("migration", "schema", "drizzle"). Prose elsewhere in the plan doesn't
+ * count, as a plan that only talks about a path isn't going to change it. Slop can't know before the work is done, so
+ * this is the hint for holding a glob that hasn't started.
  */
 export const namesExclusivePath = (policy: MergePolicy, plan: string): boolean => {
   const globs = policy.exclusivePaths ?? [];
   if (globs.length === 0) return false;
-  if (SCHEMA_WORDS.test(plan)) return true;
+  const named = changeSections(plan);
+  if (SCHEMA_WORDS.test(named)) return true;
   return globs.some((glob) => {
     const directory = literalDirectory(glob);
-    return directory.length >= 3 && plan.includes(directory);
+    return directory.length >= 3 && named.includes(directory);
   });
 };
 
