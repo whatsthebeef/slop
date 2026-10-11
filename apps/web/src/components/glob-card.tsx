@@ -14,7 +14,7 @@ import { LabelPopover } from './labels';
 import type { ReviewLabel } from './labels';
 
 /** The glob's category as a small icon in the card's corner. */
-const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> = {
+export const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> = {
   bug: { icon: Bug, className: 'text-red' },
   feature: { icon: Sparkles, className: 'text-muted-foreground' },
   task: { icon: ListChecks, className: 'text-muted-foreground' },
