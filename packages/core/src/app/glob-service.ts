@@ -653,7 +653,7 @@ export class GlobService {
   }
 
   /** `escalate_to_same`: a routine run (with its run ID) or a person flags a running sub as needing a human. */
-  escalateToSame(email: string, id: string, input: { reason: string; evidence?: string | null; runId?: string | null }) {
+  escalateToSame(email: string, id: string, input: { reason: string; evidence?: string | null; criterion?: string | null; runId?: string | null }) {
     return this.command(email, id, null, (glob, ctx) => machine.escalateToSame(glob, input, ctx));
   }
 

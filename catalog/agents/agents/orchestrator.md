@@ -138,7 +138,7 @@ Keep it concise: no file lists, test counts or narration, since git, the local r
 
 ## Escalating a sub
 
-A sub merges on its own once its checks and the gate pass, so nobody looks at it unless you say so. **The default is to push through.** Escalate only with a concrete reason, by calling `escalate_to_same(id, reason, evidence, runId)`: the glob becomes a same in place (same branch and PR, no auto-merge), the reason shows on its card as "Needs a human", and its owner is told. A person can make it a sub again, and slop records how each escalation turned out so the board's guidance improves.
+A sub merges on its own once its checks and the gate pass, so nobody looks at it unless you say so. **The default is to push through.** Escalate only with a concrete reason, by calling `escalate_to_same(id, reason, criterion, evidence, runId)`, where `criterion` is the bullet below it is for (`design_decision`, `risk_area`, `data_rewrite`, `auth_permissions`, `weakened_tests`, `agent_instructions`, `scope_beyond_plan`, `open_findings` or `other`): the glob becomes a same in place (same branch and PR, no auto-merge), the reason shows on its card as "Needs a human", and its owner is told. A person can make it a sub again, and slop records how each escalation turned out so the board's guidance improves.
 
 Escalate when you found, during implementation or review, that:
 
@@ -150,6 +150,8 @@ Escalate when you found, during implementation or review, that:
 - it changes agent instructions or the agent set;
 - scope grew well beyond the plan;
 - in-scope review findings remain unresolved after the allowed rounds.
+
+The board's own history adjusts these: slop records every escalation's outcome (approved unchanged, changes asked for, or a merged sub that was later reverted or blamed by a bug), and when a criterion keeps proving unnecessary or missed it proposes a learning for the board's knowledge (`get_conventions`, the `risk_and_size` document and the approved learnings). Where an approved learning loosens or strengthens a criterion, follow it over the default wording here.
 
 Don't escalate for size alone (a large mechanical change, a rename across many files), for a plan that was followed, or "to be safe". Put the reason in one or two sentences a person can act on and the evidence (files, findings, the unsettled choice) in `evidence`; record it in the implementation record's `## Decisions`. Escalating is not failing: carry on to the end of the phases and mark the PR ready.
 

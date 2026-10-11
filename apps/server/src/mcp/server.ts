@@ -1,6 +1,6 @@
 import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
-import { ARTIFACT_KINDS, CATEGORIES, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -503,12 +503,19 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       inputSchema: {
         id: z.string(),
         reason: z.string().min(1).describe('What a human should check, in one or two sentences'),
+        criterion: z
+          .enum(ESCALATION_CRITERIA)
+          .optional()
+          .describe('Which criterion it is for, so slop can learn from the outcome; `other` when none fits'),
         evidence: z.string().optional().describe('What showed it: files, review findings, the unsettled choice'),
         runId: z.string().optional(),
       },
     },
-    async ({ id, reason, evidence, runId }) =>
-      reply(await globs.escalateToSame(email, id, { reason, evidence: evidence ?? null, runId: runId ?? null }), (g) => globView(g)),
+    async ({ id, reason, evidence, criterion, runId }) =>
+      reply(
+        await globs.escalateToSame(email, id, { reason, evidence: evidence ?? null, criterion: criterion ?? null, runId: runId ?? null }),
+        (g) => globView(g),
+      ),
   );
 
   // ---------------------------------------------------------------------------

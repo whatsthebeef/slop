@@ -46,6 +46,7 @@ import type {
   SizeThresholdView,
   SlopType,
   RiskAreaView,
+  EscalationView,
   SubLimitChange,
   SubLimitView,
   DependencyRulesView,
@@ -540,6 +541,10 @@ export const api = {
   riskAreas: (boardId: number) => request<RiskAreaView>('GET', `/api/boards/${boardId}/risk-areas`),
   /** Drops the learned risk areas and restores the defaults (admins). */
   resetRiskAreas: (boardId: number) => request<RiskAreaView>('POST', `/api/boards/${boardId}/risk-areas/reset`, {}),
+  /** The board's escalation criteria (learned vs default) and the outcome history (members). */
+  escalations: (boardId: number) => request<EscalationView>('GET', `/api/boards/${boardId}/escalations`),
+  /** Puts the escalation criteria back to the defaults, keeping the history (admins). */
+  resetEscalations: (boardId: number) => request<EscalationView>('POST', `/api/boards/${boardId}/escalations/reset`, {}),
   /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
   sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */

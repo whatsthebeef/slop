@@ -141,6 +141,8 @@ export type ProvisioningState = 'none' | 'pending' | 'ok' | 'failed';
 /** A running sub an agent (or a person) flagged as needing a human, which made it a same; cleared when it is made a sub again. */
 export interface Escalation {
   readonly reason: string;
+  /** Which of the board's escalation criteria it was for (`ESCALATION_CRITERIA`); the outcome learning moves that criterion. */
+  readonly criterion?: string;
   /** What showed it: files, findings, the unsettled choice. */
   readonly evidence?: string;
   /** Who escalated: the person's email, or the routine owner for a run. */
