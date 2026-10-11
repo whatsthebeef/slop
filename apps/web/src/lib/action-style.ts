@@ -15,6 +15,7 @@ const PRIMARY_ORDER: readonly Action[] = [
   'resolve_conflict',
   'retry_autofix',
   'start',
+  'make_super',
   'pick_up',
   'retrigger',
 ];

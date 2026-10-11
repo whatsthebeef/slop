@@ -21,6 +21,7 @@ import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdCha
 import type { EscalationRecord, NewEscalationRecord } from './domain/escalation-learning.js';
 import type { NewRiskAreaChange, RiskArea, RiskAreaChange } from './domain/risk-area.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
+import type { NewTypeCorrection, TypeCorrection } from './domain/type-learning.js';
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
 import type { BaseChecks, Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
@@ -109,6 +110,12 @@ export interface Tx {
   insertEscalationRecord(record: NewEscalationRecord): Promise<boolean>;
   /** A board's escalation history, newest first. */
   listEscalationRecords(boardId: number): Promise<EscalationRecord[]>;
+  /** Records a person's retype with the plan's signals (history: the same glob can be retyped again). */
+  insertTypeCorrection(correction: NewTypeCorrection): Promise<void>;
+  /** A board's type corrections, newest first: only those not reset unless `all`; at most `limit`. */
+  listTypeCorrections(boardId: number, options?: { readonly limit?: number; readonly all?: boolean }): Promise<TypeCorrection[]>;
+  /** Stamps the board's live corrections as reset at `at` (they stay as history); returns how many. */
+  resetTypeCorrections(boardId: number, at: string): Promise<number>;
   /** The glob's size check (spec, Intake), or null when none was made. */
   getSizeCheck(globId: string): Promise<SizeCheck | null>;
   /** The board's size checks. */

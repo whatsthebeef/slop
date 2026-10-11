@@ -160,7 +160,9 @@ export interface Failure {
   /** Set when slop's merge failed on a conflict with the base branch (`files`: those both sides changed, when known). */
   readonly conflict?: MergeConflict;
   /** Set when slop's own merge attempt failed: a later push to the branch recovers the glob (row 16a). */
-  readonly kind?: 'merge' | 'reverted' | 'provisioning';
+  readonly kind?: 'merge' | 'reverted' | 'provisioning' | 'needs_pairing';
+  /** `needs_pairing`: the decision the routine would have had to guess, for the person who takes it over as a super. */
+  readonly decision?: string;
 }
 
 export interface MergeConflict {

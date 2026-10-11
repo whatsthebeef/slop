@@ -266,6 +266,7 @@ export const SettingsPage = () => {
         <SubLimit boardId={boardId} admin={admin} />
         <DependencyRules boardId={boardId} admin={admin} />
         <RiskAreas boardId={boardId} admin={admin} />
+        <TypeLearning boardId={boardId} admin={admin} />
         <Escalations boardId={boardId} admin={admin} />
         <SizeThreshold boardId={boardId} admin={admin} />
         <IntakeAccuracyView boardId={boardId} admin={admin} />
@@ -918,6 +919,79 @@ const RiskAreas = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+};
+
+/**
+ * What intake learned about types from people's retypes (sub, same, super): the board's recent corrections, or the
+ * catalog defaults while it has none. Admins reset it; the corrections stay as history. Everything is rendered as text.
+ */
+const TypeLearning = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const client = useQueryClient();
+  const learning = useQuery({ queryKey: ['type-learning', boardId], queryFn: () => api.typeLearning(boardId) });
+  const reset = useMutation({
+    mutationFn: () => api.resetTypeLearning(boardId),
+    onSuccess: (view) => client.setQueryData(['type-learning', boardId], view),
+  });
+  if (learning.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load what intake learned about types.
+        <Button size='sm' variant='outline' onClick={() => void learning.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (learning.data === undefined) return <p className='text-sm text-muted-foreground'>Loading what intake learned about types…</p>;
+  const learned = learning.data.learned === true;
+  const corrections = learning.data.corrections ?? [];
+  const defaults = learning.data.defaults ?? [];
+  return (
+    <div className='grid gap-2' data-testid='type-learning'>
+      <h3 className='text-xs font-semibold text-muted-foreground'>Types intake learned</h3>
+      <p className='text-xs text-muted-foreground'>
+        {learned
+          ? "Intake is shown the latest changes people made to a type, with what the plan looked like, and follows them for similar requests."
+          : 'No one has changed a type yet, so intake uses the defaults.'}
+      </p>
+      {learned ? (
+        <ul className='grid gap-1 text-xs' data-testid='type-corrections'>
+          {corrections.map((c) => (
+            <li key={c.id}>
+              <span className='font-medium'>
+                {c.fromType} to {c.toType}
+              </span>{' '}
+              <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(c.globId)}`}>
+                {c.globId}
+              </Link>{' '}
+              <span className='text-muted-foreground'>
+                by {c.actor}, {new Date(c.at).toLocaleDateString()}
+              </span>
+              <span className='block text-muted-foreground'>
+                {c.signals.openQuestions} open questions, {c.signals.decisionWording ? 'decision wording' : 'no decision wording'},{' '}
+                {c.signals.riskAreaFiles.length} risk-area files, {c.signals.sizeTasks ?? 'no'} tasks
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <ul className='grid gap-1 text-xs' data-testid='type-defaults'>
+          {defaults.map((d) => (
+            <li key={d.when}>
+              <span className='font-medium'>{d.type}</span> <span className='text-muted-foreground'>for {d.when}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {admin && learned && (
+        <div>
+          <Button size='sm' variant='outline' disabled={reset.isPending} onClick={() => reset.mutate()}>
+            Reset to defaults
+          </Button>
+          {reset.isError && <span className='ml-2 text-xs text-red'>Could not reset what intake learned.</span>}
+        </div>
       )}
     </div>
   );

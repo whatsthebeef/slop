@@ -12,7 +12,9 @@ import type { SizeThreshold } from '../domain/size-check.js';
 import type { Embedder } from '../ports.js';
 import { defaultAreas, riskAreaLine } from '../domain/risk-area.js';
 import type { RiskArea } from '../domain/risk-area.js';
+import { typeLearningBlock } from '../domain/type-learning.js';
 import { memberOf } from './access.js';
+import { recentTypeCorrections } from './type-learning-service.js';
 import { embedRequest, nearestExamples } from './intake-learning-service.js';
 import { field, parseJson, text } from './llm-json.js';
 
@@ -83,6 +85,8 @@ export interface IntakeProposal {
   /** The full write-up, with "Done when:" lines: stored as plan.md v1. */
   readonly plan: string;
   readonly type: SlopType;
+  /** The model's one-line reason for the type (when a person is needed); null when none or the type was explicit. */
+  readonly typeReason: string | null;
   readonly category: Category;
   readonly group: string | null;
   /** An environment the request names (one that allows branch deploys); null when it names none. */
@@ -112,9 +116,9 @@ export interface IntakeProposal {
 /** What the board has learned, for the prompt: its risk areas (path patterns and why) and its sub size. */
 export const boardContextBlock = (areas: readonly RiskArea[], subMaxChangedLines: number): string =>
   [
-    'Risk areas of this board (work in one needs a person to review it, so type "same"; match your "files" against the path patterns):',
+    'Risk areas of this board (work in one needs a person to review it afterwards, so type "same"; match your "files" against the path patterns):',
     ...(areas.length === 0 ? ['(none)'] : areas.map(riskAreaLine)),
-    `Learned sub size of this board: about ${String(subMaxChangedLines)} changed lines. "same" only when the work is clearly beyond it.`,
+    `Learned sub size of this board: about ${String(subMaxChangedLines)} changed lines. Work beyond it that is settled is split into parts, not typed "same" for its size alone.`,
   ].join('\n');
 
 const EPOCH = '1970-01-01T00:00:00.000Z';
@@ -122,12 +126,18 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
 
 Respond with one JSON object and nothing else:
-{"title": string, "summary": string, "plan": string, "type": "sub" | "same" | "super", "category": "feature" | "task" | "bug", "group": string | null, "categoryConfidence": "high" | "medium" | "low", "categoryReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
+{"title": string, "summary": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "category": "feature" | "task" | "bug", "group": string | null, "categoryConfidence": "high" | "medium" | "low", "categoryReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
 
 - title: a short imperative title, at most 70 characters.
 - summary: one or two plain sentences saying what is wanted, for a card on the board. Not the spec.
 - plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
-- type: be optimistic. "sub" is the default: a change one routine can implement and merge in one PR, whatever its area and whether or not it overlaps work in progress (merge order is handled elsewhere). Choose "same" only when there is clear evidence a person must review it: the work matches one of the board's risk areas (listed after the request; the path patterns are matched against your "files"), or it is clearly beyond the board's sub size (also listed). When unsure, choose "sub". "super" only when the request says the work is done by a developer pairing with the product owner.
+- type: choose by WHEN A PERSON IS NEEDED, not by how big the work is.
+  - "sub" (the default; be optimistic): the plan is settled and has no open questions. One routine can implement it and merge it; a person at most spot-checks it afterwards. Whatever its area, and whether or not it overlaps work in progress (merge order is handled elsewhere).
+  - "same": the plan is settled, but a person must review the result afterwards: the work matches one of the board's risk areas (listed after the request; the path patterns are matched against your "files"), it is user-facing or sensitive, or the request asks for a review.
+  - "super": the plan still has decisions only a person can make during the work: a design to agree, options to choose between, "discuss with…", open questions, or a decisions section with no tasks. Claude would otherwise have to guess. Do not choose "super" just because the work is big or the request says "design" about something already decided.
+  - Size is separate: big settled work is split later into subs and sames. Big unsettled work is a "super" whose first output is the split.
+  - When unsure, choose "sub" rather than "same". Choose "super" only on real evidence of an open decision.
+- typeReason: one short sentence saying when a person is needed (or that none is), e.g. "Settled plan, no open questions" or "The plan leaves the storage design open".
 - category: "feature" for new capability, "bug" for something broken, "task" for other maintenance.
 - categoryConfidence: how sure you are of the category: "low" when the request could reasonably be a different category. categoryReason: one short sentence saying why.
 - Examples from the board's history may follow the request. Examples marked as changed show what the team wanted after a person corrected the first choice: follow them over your own reading when the request is similar.
@@ -221,11 +231,12 @@ export class IntakeService {
         threshold: await tx.getSizeThreshold(boardId),
         subMaxChangedLines: board?.subMaxChangedLines ?? SUB_LIMIT_DEFAULT,
         areas: await riskAreasOf(),
+        corrections: await recentTypeCorrections(tx, boardId),
         open: new Set(globs.filter((g) => g.status !== 'reviewing' && g.status !== 'signed_off').map((g) => g.id)),
       });
     });
     if (!known.ok) return known;
-    const { groups, environments, open, threshold, areas, subMaxChangedLines } = known.value;
+    const { groups, environments, open, threshold, areas, subMaxChangedLines, corrections } = known.value;
 
     const examples = await this.examplesFor(boardId, input.text);
     const block = examplesBlock(examples);
@@ -236,6 +247,8 @@ export class IntakeService {
       input.text.trim(),
       '',
       boardContextBlock(areas, subMaxChangedLines),
+      '',
+      typeLearningBlock(corrections),
       ...(block === '' ? [] : ['', block]),
     ].join('\n');
     let completion: string;
@@ -301,6 +314,7 @@ export class IntakeService {
 
     const explicitCategory = input.explicit.category !== undefined;
     const confidence = explicitCategory ? 'high' : (oneOf(CONFIDENCES, field(answer, 'categoryConfidence')));
+    const typeReason = input.explicit.type !== undefined ? null : (text(field(answer, 'typeReason'))?.trim().slice(0, 300) || null);
     const reason = explicitCategory ? null : text(field(answer, 'categoryReason'))?.trim().slice(0, 300) || null;
 
     return {
@@ -308,6 +322,7 @@ export class IntakeService {
       summary,
       plan,
       type,
+      typeReason,
       category,
       group,
       environment: input.explicit.environment ?? environmentNamedIn(request, environments),

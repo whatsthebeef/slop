@@ -20,6 +20,12 @@ describe('Start again labels', () => {
     expect(actionLabel('start_again', 'sub', ACTION_LABELS, 'planning')).toBe('Start over (new run)');
   });
 
+  it('names Pick up for a parked super "Pick up to pair", and only there', () => {
+    expect(actionLabel('pick_up', 'super', ACTION_LABELS, 'planning')).toBe('Pick up to pair');
+    expect(actionLabel('pick_up', 'super', ACTION_LABELS, 'in_progress')).toBe(ACTION_LABELS.pick_up);
+    expect(actionLabel('pick_up', 'same', ACTION_LABELS, 'planning')).toBe(ACTION_LABELS.pick_up);
+  });
+
   it('leaves other actions alone', () => {
     expect(actionLabel('merge', 'sub', ACTION_LABELS)).toBe('Merge');
   });

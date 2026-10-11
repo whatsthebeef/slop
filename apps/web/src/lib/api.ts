@@ -47,6 +47,7 @@ import type {
   SlopType,
   RiskAreaView,
   EscalationView,
+  TypeLearningView,
   SubLimitChange,
   SubLimitView,
   DependencyRulesView,
@@ -171,6 +172,9 @@ export type SubLimitResponse = Omit<SubLimitView, 'bounds' | 'history'> & {
   readonly bounds: Omit<SubLimitView['bounds'], 'startStep'> & { readonly startStep?: number };
   readonly history: readonly (Omit<SubLimitChange, 'step'> & { readonly step?: number })[];
 };
+
+/** What intake learned about types; every field is optional so an older server's answer still renders. */
+export type TypeLearningResponse = Partial<TypeLearningView>;
 
 export type AtfRun = Omit<AtfIndicator, 'id'> & { readonly id?: number };
 
@@ -308,6 +312,8 @@ export interface NewGlob {
   group: string | null;
   environment: string | null;
   autoTrigger: boolean;
+  /** Super only: false parks it in Planning until a person picks it up to pair. */
+  start?: boolean;
   /** IDs of globs on the board to start after. */
   after?: string[];
   /** Files intake guessed the work changes (sent back as given). */
@@ -330,6 +336,8 @@ export type IntakeProposalView = NewGlob & {
   suggestedAfter: string[];
   categoryConfidence: Confidence | null;
   categoryReason: string | null;
+  /** Why intake chose the type: when a person is needed. Optional: an older API sends none. */
+  typeReason?: string | null;
   examples: IntakeExample[];
   needsConfirmation: boolean;
   model: string | null;
@@ -362,6 +370,7 @@ export type ActionPath =
   | 'merge'
   | 'retry-merge'
   | 'deescalate'
+  | 'make-super'
   | 'merge-continue'
   | 'mark-ready';
 
@@ -543,6 +552,10 @@ export const api = {
   riskAreas: (boardId: number) => request<RiskAreaView>('GET', `/api/boards/${boardId}/risk-areas`),
   /** Drops the learned risk areas and restores the defaults (admins). */
   resetRiskAreas: (boardId: number) => request<RiskAreaView>('POST', `/api/boards/${boardId}/risk-areas/reset`, {}),
+  /** What intake learned from people's retypes, or the catalog defaults (members). */
+  typeLearning: (boardId: number) => request<TypeLearningResponse>('GET', `/api/boards/${boardId}/type-learning`),
+  /** Forgets the board's type corrections: intake goes back to the defaults; the history stays (admins). */
+  resetTypeLearning: (boardId: number) => request<TypeLearningResponse>('POST', `/api/boards/${boardId}/type-learning/reset`, {}),
   /** The board's escalation criteria (learned vs default) and the outcome history (members). */
   escalations: (boardId: number) => request<EscalationView>('GET', `/api/boards/${boardId}/escalations`),
   /** Puts the escalation criteria back to the defaults, keeping the history (admins). */
@@ -610,6 +623,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   merge: 'merge',
   retry_merge: 'retry-merge',
   deescalate: 'deescalate',
+  make_super: 'make-super',
   merge_continue: 'merge-continue',
   mark_ready: 'mark-ready',
   delete: null,
@@ -627,6 +641,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   merge: 'Merge',
   retry_merge: 'Retry merge',
   deescalate: 'Make it a sub again',
+  make_super: 'Make it a super',
   merge_continue: 'Merge and continue',
   mark_ready: 'Ready for review',
   delete: 'Delete',
