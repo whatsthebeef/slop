@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService } from '@slop/core';
+import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
 import { ARTIFACT_KINDS, CATEGORIES, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -33,6 +33,8 @@ export interface McpDeps {
   readonly chat: Pick<ChatService, 'answer'>;
   readonly intake: IntakeService;
   readonly inbox: InboxService;
+  /** Answers a glob's oversized flag: starting a held glob anyway keeps it whole. */
+  readonly sizeCheck?: Pick<SizeCheckService, 'keepWhole'>;
   /** Refuses `mark_ready` for a branch that conflicts with its base. */
   readonly readyGate: ReadyGate;
   readonly publicUrl: string;
@@ -355,10 +357,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'start_glob',
     {
       description:
-        "Start a same's routine run (planning → implementing). Refused while the glob waits for globs named in `after` or a merge-policy hold; pass `anyway` to start it before they merge (a sub held in Planning can only be started this way).",
+        "Start a same's routine run (planning → implementing). Refused while the glob waits for globs named in `after` or a merge-policy hold; pass `anyway` to start it before they merge (a sub held in Planning can only be started this way, and starting one held for its oversized flag keeps it whole). Also hands a glob a person picked up, with no routine run, to a routine.",
       inputSchema: { id: z.string(), version: z.number().int(), anyway: z.boolean().optional() },
     },
     async ({ id, version, anyway }) => {
+      if (anyway === true) await deps.sizeCheck?.keepWhole(email, id);
       const result = anyway === true ? await globs.startAnyway(email, id, version) : await globs.start(email, id, version);
       if (result.ok) await deps.outbox.drain(id);
       return reply(result, (g) => globView(g));
