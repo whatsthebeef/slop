@@ -1,5 +1,5 @@
-import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
+import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -49,6 +49,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   runStartMinutes: row.runStartMinutes,
   runRespondMinutes: row.runRespondMinutes,
   subMaxChangedLines: row.subMaxChangedLines,
+  subLimitStep: row.subLimitStep,
   effectCheckGlobs: row.effectCheckGlobs,
   agentKbApproval: row.agentKbApproval,
   deploy: row.deploy,
@@ -74,6 +75,28 @@ const toSubLimitChange = (row: typeof schema.subLimitChanges.$inferSelect): SubL
   globId: row.globId,
   changedLines: row.changedLines,
   evidence: row.evidence,
+  step: row.step,
+});
+
+const toRiskArea = (row: typeof schema.boardRiskAreas.$inferSelect): RiskArea => ({
+  boardId: row.boardId,
+  name: row.name,
+  pathPatterns: row.pathPatterns,
+  why: row.why,
+  source: oneOf(RISK_AREA_SOURCES, row.source),
+  strength: row.strength,
+  cleanCount: row.cleanCount,
+  updatedAt: row.updatedAt.toISOString(),
+});
+
+const toRiskAreaChange = (row: typeof schema.riskAreaChanges.$inferSelect): RiskAreaChange => ({
+  id: row.id,
+  boardId: row.boardId,
+  at: row.at.toISOString(),
+  areaName: row.areaName,
+  kind: oneOf(RISK_AREA_CHANGE_KINDS, row.kind),
+  globId: row.globId,
+  cause: oneOf(RISK_AREA_CAUSES, row.cause),
 });
 
 const toSizeCheck = (row: typeof schema.globSizeChecks.$inferSelect): SizeCheck => ({
@@ -640,10 +663,10 @@ export class PgStore implements Store {
           .returning({ id: schema.boards.id });
         return rows.length === 1;
       },
-      setSubLimit: async (boardId, from, to) => {
+      setSubLimit: async (boardId, from, to, step) => {
         const rows = await t
           .update(schema.boards)
-          .set({ subMaxChangedLines: to })
+          .set(step === undefined ? { subMaxChangedLines: to } : { subMaxChangedLines: to, subLimitStep: step })
           .where(and(eq(schema.boards.id, boardId), eq(schema.boards.subMaxChangedLines, from)))
           .returning({ id: schema.boards.id });
         return rows.length === 1;
@@ -664,6 +687,34 @@ export class PgStore implements Store {
             .where(eq(schema.subLimitChanges.boardId, boardId))
             .orderBy(desc(schema.subLimitChanges.at), desc(schema.subLimitChanges.id))
         ).map(toSubLimitChange),
+      listRiskAreas: async (boardId) =>
+        (await t.select().from(schema.boardRiskAreas).where(eq(schema.boardRiskAreas.boardId, boardId)).orderBy(schema.boardRiskAreas.name)).map(toRiskArea),
+      putRiskArea: async (area) => {
+        const values = { ...area, pathPatterns: [...area.pathPatterns], updatedAt: new Date(area.updatedAt) };
+        await t
+          .insert(schema.boardRiskAreas)
+          .values(values)
+          .onConflictDoUpdate({ target: [schema.boardRiskAreas.boardId, schema.boardRiskAreas.name], set: values });
+      },
+      deleteRiskArea: async (boardId, name) => {
+        await t.delete(schema.boardRiskAreas).where(and(eq(schema.boardRiskAreas.boardId, boardId), eq(schema.boardRiskAreas.name, name)));
+      },
+      insertRiskAreaChange: async (change) => {
+        const rows = await t
+          .insert(schema.riskAreaChanges)
+          .values({ ...change, at: new Date(change.at) })
+          .onConflictDoNothing()
+          .returning({ id: schema.riskAreaChanges.id });
+        return rows.length === 1;
+      },
+      listRiskAreaChanges: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.riskAreaChanges)
+            .where(eq(schema.riskAreaChanges.boardId, boardId))
+            .orderBy(desc(schema.riskAreaChanges.at), desc(schema.riskAreaChanges.id))
+        ).map(toRiskAreaChange),
       getSizeCheck: async (globId) => {
         const [row] = await t.select().from(schema.globSizeChecks).where(eq(schema.globSizeChecks.globId, globId));
         return row === undefined ? null : toSizeCheck(row);
