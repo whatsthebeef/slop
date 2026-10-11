@@ -275,7 +275,7 @@ export class GitHub implements CodeHost, CommitGraph {
       pull_number: prNumber,
     });
     let runs: { status: string; conclusion: string | null }[] = [];
-    if (data.mergeable_state === 'unstable' || data.mergeable_state === 'blocked') {
+    if (['unstable', 'blocked', 'clean', 'has_hooks'].includes(data.mergeable_state)) {
       const checks = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
         owner: repo.owner,
         repo: repo.name,
