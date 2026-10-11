@@ -1,5 +1,5 @@
-import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, TEST_RUN_KINDS } from '@slop/core';
+import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -64,6 +64,18 @@ const oneOf = <T extends string>(values: readonly T[], value: string): T => {
   if (found === undefined) throw new Error(`Unexpected stored value: ${value}`);
   return found;
 };
+
+const toDependencyChange = (row: typeof schema.dependencyRuleChanges.$inferSelect): DependencyRuleChange => ({
+  id: row.id,
+  boardId: row.boardId,
+  at: row.at.toISOString(),
+  pattern: row.pattern,
+  from: row.fromWeight,
+  to: row.toWeight,
+  cause: oneOf(DEPENDENCY_CAUSES, row.cause),
+  globId: row.globId,
+  evidence: row.evidence,
+});
 
 const toSubLimitChange = (row: typeof schema.subLimitChanges.$inferSelect): SubLimitChange => ({
   id: row.id,
@@ -687,6 +699,47 @@ export class PgStore implements Store {
             .where(eq(schema.subLimitChanges.boardId, boardId))
             .orderBy(desc(schema.subLimitChanges.at), desc(schema.subLimitChanges.id))
         ).map(toSubLimitChange),
+      listDependencyRules: async (boardId) =>
+        (await t.select().from(schema.dependencyRules).where(eq(schema.dependencyRules.boardId, boardId))).map((r) => ({
+          boardId: r.boardId,
+          pattern: r.pattern,
+          weight: r.weight,
+          cleanCount: r.cleanCount,
+          conflictCount: r.conflictCount,
+          updatedAt: r.updatedAt.toISOString(),
+        })),
+      upsertDependencyRule: async (rule) => {
+        const values = { ...rule, updatedAt: new Date(rule.updatedAt) };
+        await t
+          .insert(schema.dependencyRules)
+          .values(values)
+          .onConflictDoUpdate({ target: [schema.dependencyRules.boardId, schema.dependencyRules.pattern], set: values });
+      },
+      deleteDependencyRules: async (boardId, pattern) => {
+        await t
+          .delete(schema.dependencyRules)
+          .where(
+            pattern === undefined
+              ? eq(schema.dependencyRules.boardId, boardId)
+              : and(eq(schema.dependencyRules.boardId, boardId), eq(schema.dependencyRules.pattern, pattern)),
+          );
+      },
+      insertDependencyRuleChange: async (change) => {
+        const rows = await t
+          .insert(schema.dependencyRuleChanges)
+          .values({ boardId: change.boardId, at: new Date(change.at), pattern: change.pattern, fromWeight: change.from, toWeight: change.to, cause: change.cause, globId: change.globId, evidence: change.evidence })
+          .onConflictDoNothing()
+          .returning({ id: schema.dependencyRuleChanges.id });
+        return rows.length === 1;
+      },
+      listDependencyRuleChanges: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.dependencyRuleChanges)
+            .where(eq(schema.dependencyRuleChanges.boardId, boardId))
+            .orderBy(desc(schema.dependencyRuleChanges.at), desc(schema.dependencyRuleChanges.id))
+        ).map(toDependencyChange),
       listRiskAreas: async (boardId) =>
         (await t.select().from(schema.boardRiskAreas).where(eq(schema.boardRiskAreas.boardId, boardId)).orderBy(schema.boardRiskAreas.name)).map(toRiskArea),
       putRiskArea: async (area) => {

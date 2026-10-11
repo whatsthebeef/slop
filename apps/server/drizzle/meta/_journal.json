@@ -281,6 +281,13 @@
       "when": 1791732803200,
       "tag": "0039_sub_limit_backstop",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1791733027845,
+      "tag": "0040_dependency_rules",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,5 @@
 import type { Action, ArtifactSummary, AwaitedDependency, BlockingChain, DependencyState, DomainError, Glob, Role, SizeCheck } from '@slop/core';
-import { checksExplanation, listOf, machine, unresolved } from '@slop/core';
+import { checksExplanation, edgesOf, listOf, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /**
@@ -16,6 +16,8 @@ export const globView = (
   chain: BlockingChain | null = null,
 ) => ({
   ...glob,
+  // Every dependency edge with its kind (needs block the start, overlaps only order merges), source and evidence.
+  ...(edgesOf(glob).length === 0 ? {} : { edges: edgesOf(glob) }),
   list: listOf(glob.status),
   branch: glob.id,
   currentRun: machine.currentRun(glob),

@@ -1,5 +1,5 @@
 import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, recentPeriods, ROLES } from '@slop/core';
-import type { AgentKbApproval, DeployIntegration, Environment, RiskAreaCause, Role, SizeOutcome, SubLimitChange } from '@slop/core';
+import type { AgentKbApproval, DependencyCause, DeployIntegration, Environment, RiskAreaCause, Role, SizeOutcome, SubLimitChange } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -264,6 +264,7 @@ export const SettingsPage = () => {
           Agents may approve agent-file and contradicting items
         </label>
         <SubLimit boardId={boardId} admin={admin} />
+        <DependencyRules boardId={boardId} admin={admin} />
         <RiskAreas boardId={boardId} admin={admin} />
         <SizeThreshold boardId={boardId} admin={admin} />
         <IntakeAccuracyView boardId={boardId} admin={admin} />
@@ -689,6 +690,106 @@ const SubLimit = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
                   <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
                     {change.globId}
                   </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
+
+const DEPENDENCY_CAUSE_TEXT: Record<DependencyCause, string> = {
+  clean_overlap: 'An overlap merged with no conflict or rework',
+  conflicted_overlap: 'An overlap conflicted or needed a rebase',
+  unmerged_prerequisite: 'A run failed because a prerequisite was not merged',
+  start_anyway_succeeded: 'A need was started anyway and merged without it',
+  reset: 'An admin reset the rule',
+};
+
+/**
+ * The path patterns the board predicts overlaps from (overlaps order merges, they never hold a start), each with the
+ * catalog default and what the board learned from outcomes. Admins reset a rule to its default. Everything is rendered as text.
+ */
+const DependencyRules = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const client = useQueryClient();
+  const rules = useQuery({ queryKey: ['dependency-rules', boardId], queryFn: () => api.dependencyRules(boardId) });
+  const reset = useMutation({
+    mutationFn: (pattern: string | undefined) => api.resetDependencyRules(boardId, pattern),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['dependency-rules', boardId] }),
+  });
+  if (rules.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load the dependency rules.
+        <Button size='sm' variant='outline' onClick={() => void rules.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (rules.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the dependency rules…</p>;
+  const { rules: list, history, predictMin } = rules.data;
+  return (
+    <div className='grid gap-2' data-testid='dependency-rules'>
+      <p className='text-xs text-muted-foreground'>
+        A glob that needs another cannot start until it merges. Globs that only may change the same files overlap: they start
+        at once and the later merge rebases. Slop predicts overlaps from these path patterns. A pattern whose overlaps merged
+        cleanly is weakened and stops being predicted below {predictMin}; one that conflicted is strengthened. A run that failed
+        for unmerged prerequisites teaches the board a need.
+      </p>
+      {list.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No patterns yet: set exclusive paths in the merge policy.</p>
+      ) : (
+        <ul className='grid gap-1 text-xs'>
+          {list.map((rule) => (
+            <li key={rule.pattern}>
+              <span className='font-mono'>{rule.pattern}</span>{' '}
+              <span className='text-muted-foreground'>
+                weight {rule.weight} ({rule.state === 'learned' ? `learned, default ${rule.defaultWeight}` : 'default'};{' '}
+                {rule.predicted ? 'predicted' : 'not predicted'}; clean {rule.cleanCount}, conflicts {rule.conflictCount})
+              </span>
+              {admin && rule.state === 'learned' && (
+                <Button size='sm' variant='outline' className='ml-2' disabled={reset.isPending} onClick={() => reset.mutate(rule.pattern)}>
+                  Reset
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {reset.isError && <span className='text-xs text-red'>Could not reset the rule.</span>}
+      {history.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No changes recorded yet.</p>
+      ) : (
+        <table className='text-xs'>
+          <thead className='text-left text-muted-foreground'>
+            <tr>
+              <th className='pr-3 font-normal'>Date</th>
+              <th className='pr-3 font-normal'>Pattern</th>
+              <th className='pr-3 font-normal'>Weight</th>
+              <th className='font-normal'>Why</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((change) => (
+              <tr key={change.id} className='align-top'>
+                <td className='pr-3 whitespace-nowrap'>{new Date(change.at).toLocaleDateString()}</td>
+                <td className='pr-3 font-mono'>{change.pattern}</td>
+                <td className='pr-3 whitespace-nowrap'>
+                  {change.from} → {change.to}
+                </td>
+                <td>
+                  {DEPENDENCY_CAUSE_TEXT[change.cause]}
+                  {change.globId !== null && (
+                    <>
+                      {' '}
+                      <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
+                        {change.globId}
+                      </Link>
+                    </>
+                  )}
+                  <span className='block text-muted-foreground'>{change.evidence}</span>
                 </td>
               </tr>
             ))}

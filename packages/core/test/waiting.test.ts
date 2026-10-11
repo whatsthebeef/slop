@@ -5,7 +5,7 @@ import type { CreateGlobInput } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
 import * as machine from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
-import { blockingChain, chainRefusal, checkAfter, dependencyState, waitingFor } from '../src/domain/waiting.js';
+import { blockingChain, chainRefusal, checkAfter, dependencyState, edgesOf, overlapIds, waitingFor } from '../src/domain/waiting.js';
 import type { DependencyState } from '../src/domain/waiting.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { ctx, dev, glob as fixture } from './fixtures.js';
@@ -334,10 +334,31 @@ describe('waiting (pure)', () => {
     ]);
   });
 
-  it('words an implied hold with its paths', () => {
+  it('an implied overlap never waits; a learned need does, worded with its evidence', () => {
     const states = new Map<string, DependencyState>([['s1t2', 'open']]);
-    const [first] = waitingFor({ impliedAfter: [{ id: 's1t2', paths: ['apps/server/drizzle/0001.sql'] }] }, states);
-    expect(first?.why).toBe('Waits for s1t2: both may change apps/server/drizzle/0001.sql');
+    const overlap = { id: 's1t2', paths: ['apps/server/drizzle/0001.sql'] };
+    expect(waitingFor({ impliedAfter: [overlap] }, states)).toEqual([]);
+    expect(waitingFor({ impliedAfter: [{ ...overlap, kind: 'overlaps' }] }, states)).toEqual([]);
+    const learned = { id: 's1t2', paths: [], kind: 'needs' as const, source: 'learned' as const, evidence: 'run r1 failed: s1t2 not merged' };
+    expect(waitingFor({ impliedAfter: [learned] }, states).map((a) => a.why)).toEqual(['Waits for s1t2: run r1 failed: s1t2 not merged']);
+    expect(waitingFor({ impliedAfter: [{ ...learned, overridden: true }] }, states)).toEqual([]);
+  });
+
+  it('lists every edge with its kind and source; an explicit need wins over a recorded edge', () => {
+    const edges = edgesOf({
+      after: ['s1t1'],
+      impliedAfter: [
+        { id: 's1t1', paths: ['a'] },
+        { id: 's1t2', paths: ['b'] },
+        { id: 's1t3', paths: [], kind: 'needs', source: 'learned', evidence: 'run r1' },
+      ],
+    });
+    expect(edges.map((e) => [e.id, e.kind, e.source])).toEqual([
+      ['s1t1', 'needs', 'explicit'],
+      ['s1t2', 'overlaps', 'implied'],
+      ['s1t3', 'needs', 'learned'],
+    ]);
+    expect(overlapIds({ after: ['s1t1'], impliedAfter: [{ id: 's1t2', paths: ['b'] }] })).toEqual(['s1t2']);
   });
 
   it('checkAfter drops merged ids, de-duplicates and caps the list', () => {
