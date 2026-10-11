@@ -25,6 +25,8 @@ export class FakeCodeHost implements CodeHost {
   listDir: CodeHost['listDir'] = () => Promise.resolve(null);
   readToken: CodeHost['readToken'] = () => Promise.resolve('fake-token');
   commitFiles: CodeHost['commitFiles'] = () => Promise.resolve({ parent: null, files: [] });
+  testMergeTarget: CodeHost['testMergeTarget'] = () => Promise.resolve({ outcome: 'undecided' });
+  mergedTarget: CodeHost['mergedTarget'] = (repo, sha) => Promise.resolve({ ref: repo.base, sha, baseSha: null, diff: '' });
   markReady: CodeHost['markReady'] = () => Promise.resolve({ wasDraft: true, sha: 'abcdef0123456789' });
   conflictState: CodeHost['conflictState'] = () => Promise.resolve('clean');
   conflictFiles: CodeHost['conflictFiles'] = () => Promise.resolve([]);
