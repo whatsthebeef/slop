@@ -131,10 +131,8 @@ const deploys = new DeployService({
 const environments = new EnvironmentService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 
-const outbox = new OutboxRunner(
-  db,
-  { globs },
-  {
+// One executor table; each runner drains only its own lane (`laneOf(kind)`).
+const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
     ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths, logError),
     ...deployExecutors(
       deploys,
@@ -172,9 +170,10 @@ const outbox = new OutboxRunner(
       })(glob, resolved),
       async (boardId) => (await boardOf(boardId))?.review.enabled !== false,
     ),
-  },
-  logError,
-);
+};
+// `default` carries every effect today; `llm` is for slow model calls so they never hold up the others.
+const outbox = new OutboxRunner(db, { globs }, outboxExecutors, logError, 'default');
+const llmOutbox = new OutboxRunner(db, { globs }, outboxExecutors, logError, 'llm');
 
 const clock = { now: () => new Date().toISOString() };
 const spend = new SpendService({ store, clock });
@@ -513,7 +512,10 @@ if (runs('catalog')) {
   }
 }
 
-if (runs('outbox')) outbox.start();
+if (runs('outbox')) {
+  outbox.start();
+  llmOutbox.start();
+}
 const runWatch = new RunWatch(store, globs, logError);
 if (runs('runs')) runWatch.start();
 const deployWatch = new DeployWatch(deploys, logError);
@@ -566,6 +568,7 @@ const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
 
 const shutdown = () => {
   outbox.stop();
+  llmOutbox.stop();
   runWatch.stop();
   reconcileWatch.stop();
   deployWatch.stop();

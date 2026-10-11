@@ -1,7 +1,7 @@
 import type { Board, Containment, EffectKind, EnvironmentService } from '@slop/core';
 import type { CommitGraph } from './codehost.js';
 import { repoOf } from './codehost.js';
-import type { Executor } from './jobs/outbox.js';
+import type { SettledExecutor } from './jobs/outbox.js';
 
 /** How many compare calls one containment check makes at once. */
 const CONCURRENCY = 4;
@@ -18,7 +18,7 @@ export const environmentExecutors = (
   configured: () => boolean,
   boardOf: (id: number) => Promise<Board | null>,
   log: (task: string, message: string) => void,
-): Partial<Record<EffectKind, Executor>> => ({
+): Partial<Record<EffectKind, SettledExecutor>> => ({
   check_environment: async (effect) => {
     if (effect.kind !== 'check_environment') return 'dropped';
     const board = await boardOf(effect.boardId);
