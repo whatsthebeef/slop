@@ -70,6 +70,25 @@ export interface AppSettings {
   readonly owner: { readonly login: string; readonly type: string };
 }
 
+/** What an independent review reads: a git ref to read files from, and the change as a unified diff against it. */
+export interface ReviewDiff {
+  /** Where the reviewer reads files and greps: the PR's test-merge ref before merge, the base branch after. */
+  readonly ref: string;
+  /** The commit under review: the test-merge commit, or the squash commit. Reviews are deduplicated by it. */
+  readonly sha: string;
+  /** The base-branch commit the change applies to (the test merge's first parent, the squash commit's parent). */
+  readonly baseSha: string | null;
+  readonly diff: string;
+}
+
+/** The PR as it would land on the latest base branch, or why that can't be known yet. */
+export type TestMergeTarget =
+  | ({ readonly outcome: 'ready' } & ReviewDiff)
+  | { readonly outcome: 'conflict' }
+  /** The host hasn't built (or has outdated) the test merge; ask again shortly. */
+  | { readonly outcome: 'undecided' }
+  | { readonly outcome: 'not_open' };
+
 export interface CodeHost {
   /** True once the host integration is configured (e.g. the GitHub App exists). */
   readonly configured: boolean;
@@ -103,6 +122,14 @@ export interface CodeHost {
   readToken(repo: Repo): Promise<string>;
   /** The files commit `sha` changed against its first parent (mined signals read its dependency manifests). */
   commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles>;
+  /**
+   * The open PR merged into the latest base branch, from the host's test-merge ref (`refs/pull/<n>/merge`): its diff is
+   * the first parent (the base head) to the merge commit. `undecided` while the host is still computing the merge or
+   * its merge commit isn't on the current base head and PR head, so a review never reads a stale merge.
+   */
+  testMergeTarget(repo: Repo, prNumber: number, signal?: AbortSignal): Promise<TestMergeTarget>;
+  /** A merged change: the squash commit's diff against its parent, with files read from the current base branch. */
+  mergedTarget(repo: Repo, sha: string, signal?: AbortSignal): Promise<ReviewDiff>;
   /** Marks a draft PR ready for review. */
   markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }>;
   /** Whether the PR's branch merges cleanly into its base, in the host's own view; `unknown` while the host is still working it out. */

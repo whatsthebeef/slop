@@ -533,6 +533,9 @@ const keywordMatch = (query: string) => {
 const vectorText = (embedding: readonly number[]): string => `[${embedding.join(',')}]`;
 
 /** Postgres implementation of the core Store port. */
+/** How long a board's overlap recheck waits, so the pushes and merges of a burst share one run. */
+const RECHECK_DELAY_MS = 5000;
+
 export class PgStore implements Store {
   constructor(private readonly db: Db) {}
 
@@ -1412,12 +1415,16 @@ export class PgStore implements Store {
         return rows.map((row) => toFinding(row.finding));
       },
 
-      listBoardEvents: async (boardId, since, types) => {
+      listBoardEvents: async (boardId, since, types, globIds) => {
         const e = schema.events;
         const conditions = [eq(schema.globs.boardId, boardId), gte(e.at, new Date(since))];
         if (types !== undefined) {
           if (types.length === 0) return [];
           conditions.push(inArray(e.type, [...types]));
+        }
+        if (globIds !== undefined) {
+          if (globIds.length === 0) return [];
+          conditions.push(inArray(e.globId, [...globIds]));
         }
         const rows = await t
           .select({ globId: e.globId, type: e.type, actor: e.actor, at: e.at, data: e.data })
@@ -1742,8 +1749,13 @@ export class PgStore implements Store {
         };
         await t.insert(o).values({ globId: outcome.globId, ...values }).onConflictDoUpdate({ target: o.globId, set: values });
       },
-      listGlobOutcomes: async (boardId) => {
-        const rows = await t.select({ outcome: schema.globOutcomes.outcome }).from(schema.globOutcomes).where(eq(schema.globOutcomes.boardId, boardId));
+      listGlobOutcomes: async (boardId, globIds) => {
+        if (globIds?.length === 0) return [];
+        const o = schema.globOutcomes;
+        const rows = await t
+          .select({ outcome: o.outcome })
+          .from(o)
+          .where(globIds === undefined ? eq(o.boardId, boardId) : and(eq(o.boardId, boardId), inArray(o.globId, [...globIds])));
         return rows.map((r) => r.outcome);
       },
       listDecisions: async (boardId) => {
@@ -2058,7 +2070,24 @@ export class PgStore implements Store {
       },
       enqueueEffects: async (effects) => {
         if (effects.length === 0) return;
-        await t.insert(schema.outbox).values(effects.map((effect) => ({ kind: effect.kind, globId: effect.globId, effect })));
+        const rows: (typeof schema.outbox.$inferInsert)[] = [];
+        for (const effect of effects) {
+          if (effect.kind === 'recheck_overlaps') {
+            // One pending recheck per board (not yet claimed) is enough: it reads the board when it runs. A burst of
+            // merges and pushes is delayed a few seconds so it runs once.
+            const [pending] = await t
+              .select({ id: schema.outbox.id })
+              .from(schema.outbox)
+              .where(sql`${schema.outbox.kind} = 'recheck_overlaps' and ${schema.outbox.globId} = ${effect.globId} and ${schema.outbox.state} = 'pending' and ${schema.outbox.attempts} = 0`)
+              .limit(1);
+            if (pending !== undefined || rows.some((r) => r.kind === 'recheck_overlaps' && r.globId === effect.globId)) continue;
+            rows.push({ kind: effect.kind, globId: effect.globId, effect, runAfter: new Date(Date.now() + RECHECK_DELAY_MS) });
+            continue;
+          }
+          rows.push({ kind: effect.kind, globId: effect.globId, effect });
+        }
+        if (rows.length === 0) return;
+        await t.insert(schema.outbox).values(rows);
         // Wake the job runner after commit.
         await t.execute(sql`select pg_notify('slop_outbox', '')`);
       },

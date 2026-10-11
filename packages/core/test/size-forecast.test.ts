@@ -15,6 +15,8 @@ import {
   FOOTPRINT_MAX_CALLS,
   footprintOf,
   forecastFrom,
+  forecastReasons,
+  forecastShape,
   parseFilesLine,
   proposalFromForecast,
 } from '../src/domain/size-forecast.js';
@@ -59,6 +61,9 @@ describe('size forecast', () => {
   let llmDown: boolean;
   let viewDown: boolean;
   let touched: CodeTouchedModule[];
+  /** What the text judge answers; by default one part. */
+  let judged: string;
+  const MANY = '{"independentParts": 5, "parallelParts": 2, "reason": "many"}';
 
   const llm: Llm = {
     complete: (request: LlmRequest) => {
@@ -67,7 +72,7 @@ describe('size forecast', () => {
         const step = script[Math.min(turns++, script.length - 1)];
         return Promise.resolve(JSON.stringify(step));
       }
-      return Promise.resolve(request.system.startsWith('You judge') ? '{"independentParts": 1, "reason": "one"}' : 'no json');
+      return Promise.resolve(request.system.startsWith('You judge') ? judged : 'no json');
     },
   };
   const unsupported = (): never => {
@@ -109,7 +114,11 @@ describe('size forecast', () => {
       }),
     );
   const check = (id: string) => store.transaction((tx) => tx.getSizeCheck(id));
-  const done = (...files: string[]): Step[] => [{ action: 'done', files }];
+  /** The model looks in each file's directory first (a path the looks cannot place does not count), then answers. */
+  const done = (...files: string[]): Step[] => [
+    ...[...new Set(files.map((f) => f.slice(0, Math.max(0, f.lastIndexOf('/')))))].slice(0, 4).map((path): Step => ({ action: 'tree', path })),
+    { action: 'done', files },
+  ];
 
   const seedChange = async (globId: string, files: string, title = `Change ${globId}`): Promise<void> => {
     await store.transaction(async (tx) => {
@@ -199,6 +208,7 @@ describe('size forecast', () => {
     llmDown = false;
     viewDown = false;
     touched = [];
+    judged = '{"independentParts": 1, "reason": "one"}';
     const notifier = new RecordingNotifier();
     const clock = { now: () => NOW };
     // Glob creation uses a service with no code view, so the background refresh never races the explicit forecast.
@@ -236,10 +246,19 @@ describe('size forecast', () => {
       expect(viewCalls.length).toBeLessThanOrEqual(FOOTPRINT_MAX_CALLS);
       viewCalls = [];
       turns = 0;
-      script = [{ action: 'tree', path: '' }, { action: 'tree', path: 'a' }, { action: 'tree', path: 'b' }, { action: 'tree', path: 'c' }, { action: 'tree', path: 'd' }, ...done('apps/web/src/x.ts')];
+      script = [{ action: 'tree', path: '' }, { action: 'tree', path: 'a' }, { action: 'tree', path: 'b' }, { action: 'tree', path: 'c' }, { action: 'tree', path: 'apps/web/src' }, ...done('apps/web/src/x.ts').slice(1)];
       const footprint = await forecaster.footprint(boardId, THREE);
       expect(viewCalls.length).toBeLessThanOrEqual(FOOTPRINT_MAX_CALLS);
       expect(footprint?.files).toEqual(['apps/web/src/x.ts']);
+    });
+
+    it('drops predicted paths the looks cannot place, and gives no footprint when none can be', async () => {
+      // The tree of apps/web/src was listed: its new file stands; the invented one in a directory never looked at does not.
+      script = [{ action: 'tree', path: 'apps/web/src' }, { action: 'done', files: ['apps/web/src/new.tsx', 'apps/ghost/x.ts'] }];
+      expect((await forecaster.footprint(boardId, THREE))?.files).toEqual(['apps/web/src/new.tsx']);
+      turns = 0;
+      script = [{ action: 'done', files: ['apps/ghost/x.ts', 'apps/ghost/y.ts'] }];
+      expect(await forecaster.footprint(boardId, THREE)).toBeNull();
     });
 
     it('reports migrations, public API paths, risk areas, fan-in and the parts that need others', async () => {
@@ -269,6 +288,10 @@ describe('size forecast', () => {
       const reference = await forecaster.referenceClass(boardId, THREE);
       expect(reference?.samples.map((s) => s.globId).sort()).toEqual(['s1f1', 's1f2', 's1f3']);
       expect(reference?.samples.find((s) => s.globId === 's1f2')).toMatchObject({ files: 6, lines: 300, reworkRuns: 1, followUpBugs: 1, cleanSub: false });
+      // The store reads are bounded by glob ids, so the reference class never needs the board's whole history.
+      expect((await store.transaction((tx) => tx.listGlobOutcomes(boardId, ['s1f1']))).map((o) => o.globId)).toEqual(['s1f1']);
+      expect(new Set((await store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', undefined, ['s1f2']))).map((e) => e.globId))).toEqual(new Set(['s1f2']));
+      expect(await store.transaction((tx) => tx.listGlobOutcomes(boardId, []))).toEqual([]);
       expect(reference?.summary).toContain('3 similar merged globs');
       expect(reference?.summary).toContain('median 80 lines');
       // The forecast carries it as evidence.
@@ -282,6 +305,7 @@ describe('size forecast', () => {
 
   describe('the combined estimate', () => {
     it('does not flag a ten-checkbox plan that touches one module', async () => {
+      judged = MANY;
       const glob = await create(checklist(10));
       // By its text alone it looks oversized.
       expect((await check(glob.id))?.flagged).toBe(true);
@@ -313,23 +337,57 @@ describe('size forecast', () => {
       expect(unwrap(await forecaster.keepWhole(DEV, glob.id)).decision).toBe('kept_whole');
     });
 
-    it('makes parts start after the parts they need and after earlier migrations', () => {
+    it('makes parts start after the parts they need, and lets two migrations overlap without blocking', () => {
       const forecast = forecastFrom(
-        footprintOf(['apps/server/drizzle/1.sql', 'apps/web/a.ts', 'infra/x.ts'], { importers: { 'apps/server': ['apps/web/b.ts'] } }),
+        footprintOf(['apps/server/drizzle/1.sql', 'apps/web/a.ts', 'infra/x.ts', 'infra/drizzle/2.sql'], { importers: { 'apps/server': ['apps/web/b.ts'] } }),
         null,
         estimateFromText(THREE),
         DEFAULT_SIZE_CALIBRATION,
       );
-      const parts = proposalFromForecast(THREE, forecast) ?? [];
-      expect(parts.map((p) => p.title.split(' ')[0])).toEqual(['apps/server', 'apps/web', 'infra']);
-      expect(parts[1]?.after).toEqual([0]);
-      expect(parts[2]?.after).toEqual([]);
+      const proposal = proposalFromForecast(THREE, forecast);
+      const parts = proposal?.parts ?? [];
+      expect(parts.map((p) => p.title.split(' ')[0])).toEqual(['infra', 'apps/server', 'apps/web']);
+      expect(parts[2]?.after).toEqual([1]);
+      expect(parts[1]?.after).toEqual([]);
+      expect(parts[1]?.overlaps).toEqual([0]);
+      expect(proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
+    });
+
+    it('does not flag a core -> server -> web chain, and offers no split for it', () => {
+      const chain = forecastFrom(
+        footprintOf(['packages/core/a.ts', 'apps/server/b.ts', 'apps/web/c.ts'], {
+          importers: { 'packages/core': ['apps/server/x.ts'], 'apps/server': ['apps/web/y.ts'] },
+        }),
+        null,
+        estimateFromText(THREE),
+        DEFAULT_SIZE_CALIBRATION,
+      );
+      expect(forecastShape(chain)).toEqual({ criticalPath: 3, maxParallel: 1 });
+      expect(forecastReasons(chain, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
+      expect(oversizedReasons({ ...estimateFromText(THREE), forecast: chain }, { maxTasks: 2, maxParts: 2 })).toEqual([]);
+      expect(proposalFromForecast(THREE, chain)).toBeNull();
+    });
+
+    it('flags three unrelated modules at the default, with a fan-out proposal from their file sets', () => {
+      const unrelated = forecastFrom(footprintOf(['apps/server/a.ts', 'apps/web/b.ts', 'infra/c.ts']), null, estimateFromText(THREE), DEFAULT_SIZE_CALIBRATION);
+      expect(forecastShape(unrelated)).toEqual({ criticalPath: 1, maxParallel: 3 });
+      expect(forecastReasons(unrelated, DEFAULT_SIZE_THRESHOLD)).toEqual([
+        expect.stringContaining('3 parts in separate modules'),
+        '3 parts could be built at the same time',
+      ]);
+      expect(proposalFromForecast(THREE, unrelated)).toMatchObject({ criticalPath: 1, maxParallel: 3 });
+    });
+
+    it('flags two modules only when they are many for the board, never at the learned floor of 2', () => {
+      const two = forecastFrom(footprintOf(['apps/server/a.ts', 'apps/web/b.ts']), null, estimateFromText(THREE), DEFAULT_SIZE_CALIBRATION);
+      expect(forecastReasons(two, { maxTasks: 5, maxParts: 2 })).toEqual([]);
+      expect(forecastReasons(two, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
     });
 
     it('uses the board threshold: a learned higher part limit stops the flag', () => {
       const forecast = forecastFrom(footprintOf(['apps/server/a.ts', 'apps/web/b.ts', 'infra/c.ts']), null, estimateFromText(THREE), DEFAULT_SIZE_CALIBRATION);
       const estimate = { ...estimateFromText(THREE), forecast };
-      expect(oversizedReasons(estimate, DEFAULT_SIZE_THRESHOLD)).toHaveLength(1);
+      expect(oversizedReasons(estimate, DEFAULT_SIZE_THRESHOLD)).toHaveLength(2);
       expect(oversizedReasons(estimate, { maxTasks: 6, maxParts: 4 })).toEqual([]);
     });
 
@@ -353,8 +411,104 @@ describe('size forecast', () => {
       expect(viewCalls.length).toBe(before);
       unwrap(await artifacts.putPlan(DEV, glob.id, THREE));
       script = done('apps/web/src/card.tsx');
+      turns = 0;
       await forecaster.refresh(glob.id);
       expect((await check(glob.id))?.estimate.forecast?.files.paths).toEqual(['apps/web/src/card.tsx']);
+    });
+  });
+
+  describe('the background forecast of a created glob and the hold', () => {
+    const createSub = async (plan: string): Promise<Glob> =>
+      unwrap(
+        await globs.create(DEV, { boardId, title: 'T', summary: 's', type: 'sub', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan }),
+      );
+    const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    it('creating a glob neither waits for a slow size refresh nor fails when it rejects', async () => {
+      const logged: string[] = [];
+      let refreshes = 0;
+      const sizeCheck = { assess: base.assess.bind(base), refresh: () => (++refreshes, new Promise<void>(() => undefined)) };
+      const slow = new GlobService({ store, notifier: new RecordingNotifier(), clock: { now: () => NOW }, ids: { runId: () => 'run-x' }, routines: { hasRoutine: () => Promise.resolve(true) }, sizeCheck, log: (_t, m) => void logged.push(m) });
+      const created = unwrap(
+        await slow.create(DEV, { boardId, title: 'T', summary: 's', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: checklist(2) }),
+      );
+      expect(created.status).toBe('planning');
+      expect(refreshes).toBe(1);
+
+      const failing = new GlobService({
+        store,
+        notifier: new RecordingNotifier(),
+        clock: { now: () => NOW },
+        ids: { runId: () => 'run-y' },
+        routines: { hasRoutine: () => Promise.resolve(true) },
+        sizeCheck: { assess: base.assess.bind(base), refresh: () => Promise.reject(new Error('model exploded')) },
+        log: (_t, m) => void logged.push(m),
+      });
+      const again = unwrap(
+        await failing.create(DEV, { boardId, title: 'T2', summary: 's', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: checklist(2) }),
+      );
+      expect(again.status).toBe('planning');
+      await settle();
+      expect(logged).toEqual(['model exploded']);
+      // A refresh that throws synchronously is contained too.
+      const throwing = new GlobService({
+        store,
+        notifier: new RecordingNotifier(),
+        clock: { now: () => NOW },
+        ids: { runId: () => 'run-z' },
+        routines: { hasRoutine: () => Promise.resolve(true) },
+        sizeCheck: {
+          assess: base.assess.bind(base),
+          refresh: () => {
+            throw new Error('sync boom');
+          },
+        },
+        log: (_t, m) => void logged.push(m),
+      });
+      unwrap(await throwing.create(DEV, { boardId, title: 'T3', summary: 's', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: checklist(2) }));
+      await settle();
+      expect(logged).toEqual(['model exploded', 'sync boom']);
+    });
+
+    it('calls onRechecked once when the forecast changes the flag, and not when nothing was written', async () => {
+      const rechecked: string[] = [];
+      const hooked = new SizeCheckService({ store, clock: { now: () => NOW }, notifier: new RecordingNotifier(), llm, codeView, embedder, onRechecked: (id) => (rechecked.push(id), Promise.resolve()) });
+      const glob = await create(THREE);
+      expect((await check(glob.id))?.flagged).toBe(false);
+      script = done('apps/server/src/http/app.ts', 'apps/web/src/card.tsx', 'infra/stack.ts');
+      await hooked.forecast(glob.id);
+      expect((await check(glob.id))?.flagged).toBe(true);
+      expect(rechecked).toEqual([glob.id]);
+      // The model failing writes nothing: no hook.
+      llmDown = true;
+      const other = await create(THREE);
+      await hooked.forecast(other.id);
+      llmDown = false;
+      expect(rechecked).toEqual([glob.id]);
+    });
+
+    it('lifts the hold of a text-flagged sub once the forecast clears the flag', async () => {
+      judged = MANY;
+      const released = new SizeCheckService({ store, clock: { now: () => NOW }, notifier: new RecordingNotifier(), llm, codeView, embedder, onRechecked: (id) => globs.reconcileSizeHold(id) });
+      const sub = await createSub(checklist(10));
+      expect(sub.status).toBe('planning');
+      expect(sub.waiting).not.toBeNull();
+      expect((await check(sub.id))?.flagged).toBe(true);
+      await released.forecast(sub.id);
+      expect((await check(sub.id))?.flagged).toBe(false);
+      expect(unwrap(await globs.get(DEV, sub.id)).glob.status).toBe('implementing');
+    });
+
+    it('runs one forecast per glob at a time, with one more pass for a call that arrived meanwhile', async () => {
+      const glob = await create(THREE);
+      const files = ['apps/server/src/http/app.ts', 'apps/web/src/card.tsx', 'infra/stack.ts'];
+      script = [...done(...files), ...done(...files)];
+      const first = forecaster.forecast(glob.id);
+      const second = forecaster.forecast(glob.id);
+      await Promise.all([first, second]);
+      // Two passes in sequence (never two loops at once): each makes its tree looks and the module read.
+      expect(viewCalls.filter((c) => c === 'touchedModules')).toHaveLength(2);
+      expect((await check(glob.id))?.estimate.forecast).toBeDefined();
     });
   });
 
@@ -464,6 +618,7 @@ describe('size forecast', () => {
     });
 
     it('is idempotent per glob and cause, and leaves the threshold learning working', async () => {
+      judged = MANY;
       const glob = await create(checklist(10));
       await withForecast(glob.id, webForecast());
       await merge(glob.id, 500);

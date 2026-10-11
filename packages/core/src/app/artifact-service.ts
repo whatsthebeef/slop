@@ -5,11 +5,13 @@ import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { INBOX_CONTEXT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
 import type { Artifact, ArtifactKind, Provenance, ReviewStats } from '../domain/knowledge.js';
+import { recheckOverlapsEffect } from '../domain/events.js';
 import { currentRun } from '../domain/machine.js';
 import type { SearchHit } from '../domain/search.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
+import type { InvestigationReactor } from './investigation-service.js';
 import type { SizeAssessor } from './size-check-service.js';
 import type { SizeCheck } from '../domain/size-check.js';
 import type { SizeForecast } from '../domain/size-forecast.js';
@@ -249,6 +251,8 @@ export class ArtifactService {
       related?: (tx: Tx, glob: Glob) => Promise<readonly SearchHit[]>;
       /** Re-judges a glob's size when its plan.md is saved in Planning. */
       sizeCheck?: SizeAssessor;
+      /** Acts on a stored investigation (escalate, oversize flag) before the save returns. */
+      investigation?: InvestigationReactor;
     },
   ) {}
 
@@ -473,6 +477,8 @@ export class ArtifactService {
         agentSetVersion: options.agentSetVersion,
         reviewStats: options.reviewStats ?? null,
       });
+      // A plan that now names (or stops naming) an exclusive path changes which globs overlap.
+      if (kind === 'plan') await tx.enqueueEffects([recheckOverlapsEffect(glob.boardId)]);
       return ok({ artifact, boardId: glob.boardId });
     });
     if (!result.ok) return result;
@@ -484,6 +490,8 @@ export class ArtifactService {
       if (kind === 'plan') void this.deps.sizeCheck?.refresh(globId);
       // A queued review shows as being read in an open glob view straight away.
       if (kind === 'local_review') this.deps.notifier.publish({ kind: 'glob.findings', boardId, globId });
+      // Awaited: slop flags the glob before the run goes on to implement.
+      if (kind === 'investigation') await this.deps.investigation?.react(email, globId, options.runId, content);
     }
     return ok(artifact);
   }

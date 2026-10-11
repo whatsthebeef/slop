@@ -264,8 +264,8 @@ export interface Tx {
    */
   listBoardFindings(boardId: number, since: string, until: string): Promise<ReviewFinding[]>;
 
-  /** A board's events at or after `since` (of `types`, when given), oldest first (events carry no board: joined through globs). */
-  listBoardEvents(boardId: number, since: string, types?: readonly DomainEventType[]): Promise<DomainEvent[]>;
+  /** A board's events at or after `since` (of `types` and of `globIds`, when given), oldest first (events carry no board: joined through globs). */
+  listBoardEvents(boardId: number, since: string, types?: readonly DomainEventType[], globIds?: readonly string[]): Promise<DomainEvent[]>;
   /**
    * Every board's events of `types` before `until`, oldest first, in log order (time tracking replays them whole). Each
    * event's `data` keeps only the top-level `dataKeys` it has, so the replay doesn't load whole payloads.
@@ -416,7 +416,8 @@ export interface Tx {
   nearestIntakeSnapshots(boardId: number, embedding: readonly number[], limit: number): Promise<{ globId: string; version: number; distance: number }[]>;
   /** Inserts or replaces a merged glob's outcome. */
   upsertGlobOutcome(outcome: GlobOutcome): Promise<void>;
-  listGlobOutcomes(boardId: number): Promise<GlobOutcome[]>;
+  /** A board's merged-glob outcomes (only those of `globIds`, when given). */
+  listGlobOutcomes(boardId: number, globIds?: readonly string[]): Promise<GlobOutcome[]>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;

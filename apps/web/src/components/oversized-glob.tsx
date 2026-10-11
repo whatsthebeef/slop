@@ -104,6 +104,9 @@ export const OversizedGlob = ({
         summary: p.summary,
         plan: p.plan,
         ...(index > 0 && p.after.length > 0 ? { after: [...p.after] } : {}),
+        // Absent in proposals stored before overlaps and low-risk subs existed.
+        ...(index > 0 && (p.overlaps?.length ?? 0) > 0 ? { overlaps: [...(p.overlaps ?? [])] } : {}),
+        ...(index > 0 && p.type !== undefined ? { type: p.type } : {}),
       }));
       return api.splitGlob(glob.id, glob.version, parts, key);
     });
@@ -124,13 +127,22 @@ export const OversizedGlob = ({
           ))}
         </ul>
       )}
+      {proposal?.criticalPath !== undefined && (
+        <p className='text-muted-foreground' data-testid='oversized-shape'>
+          Critical path: {proposal.criticalPath} of {proposal.parts.length} parts in a row; up to {proposal.maxParallel ?? 1} at the same time.
+        </p>
+      )}
       {proposal !== null && (
         <ol className='grid gap-1 pl-4' data-testid='oversized-parts'>
           {proposal.parts.map((p, index) => (
             <li key={index} className='list-decimal'>
               <span className='font-semibold'>{p.title}</span>
               {index === 0 ? ` (stays ${glob.id})` : ''}
-              {p.after.length > 0 && <span className='text-muted-foreground'>, after {p.after.map((n) => `part ${n + 1}`).join(', ')}</span>}
+              {p.type === 'sub' && <span className='text-muted-foreground'> (sub)</span>}
+              {p.after.length > 0 && <span className='text-muted-foreground'>, needs {p.after.map((n) => `part ${n + 1}`).join(', ')}</span>}
+              {(p.overlaps?.length ?? 0) > 0 && (
+                <span className='text-muted-foreground'>, may overlap {(p.overlaps ?? []).map((n) => `part ${n + 1}`).join(', ')}</span>
+              )}
               {p.summary !== '' && <span className='block text-muted-foreground'>{p.summary}</span>}
             </li>
           ))}

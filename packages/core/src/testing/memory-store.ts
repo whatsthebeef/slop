@@ -727,7 +727,7 @@ export class MemoryStore implements Store {
             .sort((a, b) => (written.get(a.sourceId) ?? '').localeCompare(written.get(b.sourceId) ?? '') || a.id - b.id),
         );
       },
-      listBoardEvents: (boardId, since, types) =>
+      listBoardEvents: (boardId, since, types, globIds) =>
         Promise.resolve(
           s.events
             .map((event, index) => ({ event, index }))
@@ -735,7 +735,8 @@ export class MemoryStore implements Store {
               ({ event }) =>
                 s.globs.get(event.globId)?.glob.boardId === boardId &&
                 event.at >= since &&
-                (types === undefined || types.includes(event.type)),
+                (types === undefined || types.includes(event.type)) &&
+                (globIds === undefined || globIds.includes(event.globId)),
             )
             .sort((a, b) => a.event.at.localeCompare(b.event.at) || a.index - b.index)
             .map(({ event }) => event),
@@ -901,7 +902,8 @@ export class MemoryStore implements Store {
         s.globOutcomes = [...s.globOutcomes.filter((o) => o.globId !== outcome.globId), outcome];
         return Promise.resolve();
       },
-      listGlobOutcomes: (boardId) => Promise.resolve(s.globOutcomes.filter((o) => o.boardId === boardId)),
+      listGlobOutcomes: (boardId, globIds) =>
+        Promise.resolve(s.globOutcomes.filter((o) => o.boardId === boardId && (globIds === undefined || globIds.includes(o.globId)))),
       listDecisions: (boardId) =>
         Promise.resolve(s.decisions.filter((d) => d.boardId === boardId).sort((a, b) => a.decidedAt.localeCompare(b.decidedAt) || a.id - b.id)),
       getDecision: (id) => Promise.resolve(s.decisions.find((d) => d.id === id) ?? null),
@@ -1090,7 +1092,11 @@ export class MemoryStore implements Store {
         return Promise.resolve();
       },
       enqueueEffects: (effects) => {
-        s.outbox.push(...effects);
+        for (const effect of effects) {
+          // One pending recheck per board is enough: it reads the board as it is when it runs.
+          if (effect.kind === 'recheck_overlaps' && s.outbox.some((e) => e.kind === 'recheck_overlaps' && e.globId === effect.globId)) continue;
+          s.outbox.push(effect);
+        }
         return Promise.resolve();
       },
     };

@@ -139,6 +139,7 @@ export const splitGlobSchema = z.object({
         category: z.enum(CATEGORIES).optional(),
         type: z.enum(SLOP_TYPES).optional(),
         after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
+        overlaps: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
         attachments: z.array(z.string().min(1)).optional(),
       }),
     )
@@ -157,6 +158,7 @@ const updateGlobSchema = z.object({
   needs: z.array(z.string().min(1)).max(20).optional(),
   after: z.array(z.string().min(1)).max(20).optional(),
   overlaps: z.array(z.string().min(1)).max(20).optional(),
+  autoStart: z.boolean().optional(),
 });
 
 /** A glob that came from a split says where: `split: { source, part, parts }`. */
@@ -448,11 +450,12 @@ export const createApp = (deps: AppDeps) => {
     const email = c.get('email');
     const split = await globs.split(email, c.req.param('id'), body.version, {
       idempotencyKey: body.idempotencyKey,
-      parts: body.parts.map(({ category, type, after, attachments, ...rest }) => ({
+      parts: body.parts.map(({ category, type, after, overlaps, attachments, ...rest }) => ({
         ...rest,
         ...(category === undefined ? {} : { category }),
         ...(type === undefined ? {} : { type }),
         ...(after === undefined ? {} : { after }),
+        ...(overlaps === undefined ? {} : { overlaps }),
         ...(attachments === undefined ? {} : { attachments }),
       })),
     });

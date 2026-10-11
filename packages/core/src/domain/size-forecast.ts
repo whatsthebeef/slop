@@ -3,8 +3,8 @@ import { contextSectionList, planTaskLines } from './intake-learning.js';
 import type { Area, GlobOutcome } from './intake-learning.js';
 import type { Investigation } from './investigation.js';
 import type { RiskTier } from './knowledge.js';
-import type { ProposedPart, SizeEstimate, SizeThreshold } from './size-check.js';
-import { MAX_PROPOSED_PARTS } from './size-check.js';
+import type { ProposedPart, SizeEstimate, SizeProposal, SizeThreshold } from './size-check.js';
+import { MAX_PROPOSED_PARTS, isChain, splitShape } from './size-check.js';
 
 /**
  * The size forecast (spec, Intake): what a plan will touch, read from the code and from similar merged globs rather than
@@ -433,17 +433,57 @@ export const forecastFrom = (
 export const forecastUnits = (forecast: SizeForecast): number => Math.ceil(forecast.files.count / FILES_PER_UNIT);
 
 /**
- * Why the forecast says the work is more than one PR's: its parts reach the threshold's part limit (each part is a
- * module, so each is already a split point), or its calibrated file count makes more units than the task limit.
+ * The forecast's part count that is "many": the board's part limit, but never fewer than this, so the learned floor of
+ * 2 cannot flag every two-module change.
+ */
+export const FORECAST_MIN_PARTS = 3;
+
+/** The forecast's parts in build order, with each one's direct needs and overlaps as indexes of earlier parts. */
+const arranged = (
+  forecast: SizeForecast,
+): { readonly ordered: readonly ForecastPart[]; readonly after: readonly (readonly number[])[]; readonly overlaps: readonly (readonly number[])[] } => {
+  const ordered = orderParts(forecast.parts).slice(0, MAX_PROPOSED_PARTS);
+  const reach: Set<number>[] = [];
+  const after: number[][] = [];
+  const overlaps: number[][] = [];
+  for (const [index, part] of ordered.entries()) {
+    const wanted = ordered.flatMap((other, earlier) => (earlier < index && part.needs.includes(other.name) ? [earlier] : []));
+    // Direct needs only: a part that needs another through a third does not name it as well.
+    const direct = wanted.filter((n) => !wanted.some((m) => m !== n && reach[m]?.has(n) === true));
+    reach[index] = new Set(direct.flatMap((n) => [n, ...(reach[n] ?? [])]));
+    after.push(direct);
+    // Both change a migration: they order the merges but neither blocks the other's start.
+    overlaps.push(
+      ordered.flatMap((other, earlier) =>
+        earlier < index && !reach[index]?.has(earlier) && part.files.some(isMigrationPath) && other.files.some(isMigrationPath) ? [earlier] : [],
+      ),
+    );
+  }
+  return { ordered, after, overlaps };
+};
+
+/** The shape of the forecast's parts (the longest chain of needs, the most that can run at once). */
+export const forecastShape = (forecast: SizeForecast): { criticalPath: number; maxParallel: number } =>
+  splitShape(arranged(forecast).after.map((after) => ({ after })));
+
+/**
+ * Why the forecast says the work is more than one PR's. Like the text rule, size alone never flags: at least 2 parts must
+ * be buildable at the same time (a core -> server -> web chain stays whole). Then it flags when the parts number
+ * `maxParts` or more (never fewer than `FORECAST_MIN_PARTS`: each part is a module, so each is already a split point) or
+ * the calibrated file count makes more units of work than the task limit.
  */
 export const forecastReasons = (forecast: SizeForecast, threshold: SizeThreshold): string[] => {
+  const { maxParallel } = forecastShape(forecast);
+  if (maxParallel < 2) return [];
+  const limit = Math.max(threshold.maxParts, FORECAST_MIN_PARTS);
   const units = forecastUnits(forecast);
-  return [
-    ...(forecast.parts.length >= threshold.maxParts
-      ? [`${String(forecast.parts.length)} parts in separate modules (${forecast.parts.map((p) => p.name).join(', ')}); the limit is fewer than ${String(threshold.maxParts)}`]
+  const big = [
+    ...(forecast.parts.length >= limit
+      ? [`${String(forecast.parts.length)} parts in separate modules (${forecast.parts.map((p) => p.name).join(', ')}); the limit is ${String(limit - 1)}`]
       : []),
     ...(units > threshold.maxTasks ? [`about ${String(forecast.files.count)} files, ${String(units)} units of work (more than ${String(threshold.maxTasks)})`] : []),
   ];
+  return big.length === 0 ? [] : [...big, `${String(maxParallel)} parts could be built at the same time`];
 };
 
 export const forecastFlag = (forecast: SizeForecast, threshold: SizeThreshold): boolean => forecastReasons(forecast, threshold).length > 0;
@@ -457,10 +497,11 @@ export const forecastEvidence = (forecast: SizeForecast): string[] => [
 /**
  * The fan-out proposal from the forecast's part file sets (pure): one part per forecast part, part 0 stays the original
  * glob. Plan tasks that name a part's files or module go to it (the rest to part 0), context sections go to every part.
- * A part starts after the parts it `needs`, and after an earlier part when both change a migration. Null below 2 parts.
+ * A part starts after the parts it `needs` (direct needs only); two parts that both change a migration `overlap`. Null
+ * below 2 parts, and for a chain (parts waiting on each other in one line gain nothing from a split).
  */
-export const proposalFromForecast = (plan: string, forecast: SizeForecast): readonly ProposedPart[] | null => {
-  const ordered = orderParts(forecast.parts).slice(0, MAX_PROPOSED_PARTS);
+export const proposalFromForecast = (plan: string, forecast: SizeForecast): SizeProposal | null => {
+  const { ordered, after, overlaps } = arranged(forecast);
   if (ordered.length < 2) return null;
   const tasks = planTaskLines(plan);
   const owner = (task: string): number => {
@@ -469,14 +510,8 @@ export const proposalFromForecast = (plan: string, forecast: SizeForecast): read
   };
   const context = contextSectionList(plan);
   const goal = plan.split(/\r?\n/).find((l) => l.trim() !== '' && !l.startsWith('#'))?.trim() ?? '';
-  return ordered.map((part, index) => {
+  const parts: ProposedPart[] = ordered.map((part, index) => {
     const own = tasks.filter((t) => owner(t) === index);
-    const after = new Set<number>();
-    for (let earlier = 0; earlier < index; earlier++) {
-      const other = ordered[earlier];
-      if (other === undefined) continue;
-      if (part.needs.includes(other.name) || (part.files.some(isMigrationPath) && other.files.some(isMigrationPath))) after.add(earlier);
-    }
     const body = [
       `# ${part.name}`,
       ...(goal === '' ? [] : [goal]),
@@ -490,9 +525,12 @@ export const proposalFromForecast = (plan: string, forecast: SizeForecast): read
       title: `${part.name} (${String(part.files.length)} file${part.files.length === 1 ? '' : 's'})`.slice(0, 120),
       summary: `The change in ${part.name}: ${part.files.slice(0, 3).join(', ')}${part.files.length > 3 ? ', ...' : ''}`,
       plan: body.join('\n\n'),
-      after: [...after].sort((a, b) => a - b),
+      after: after[index] ?? [],
+      overlaps: overlaps[index] ?? [],
     };
   });
+  const proposal: SizeProposal = { parts, ...splitShape(parts) };
+  return isChain(proposal) ? null : proposal;
 };
 
 /** Parts in an order that builds what others need first (stable otherwise). */
