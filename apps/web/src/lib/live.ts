@@ -13,7 +13,6 @@ interface Hint {
     | 'glob.deploys'
     | 'glob.findings'
     | 'glob.decisions'
-    | 'glob.reviews'
     | 'board.changed'
     | 'board.kb'
     | 'board.tests'
@@ -40,12 +39,6 @@ export const globEnvironmentsKey = (globId: string) => ['glob-environments', glo
 
 /** One glob's ATF runs in the glob view; invalidated by `glob.deploys` and `board.tests` hints and on reconnect. */
 export const globTestsKey = (globId: string) => ['glob-tests', globId] as const;
-
-/** The cards' CodeRabbit badges; invalidated by `glob.reviews` hints and on reconnect. */
-export const codeReviewsKey = (boardId: number) => ['code-reviews', boardId] as const;
-
-/** One glob's stored CodeRabbit review in the glob view; invalidated by `glob.reviews` hints and on reconnect. */
-export const globCodeReviewKey = (globId: string) => ['glob-code-review', globId] as const;
 
 /** One glob's review findings in the glob view; invalidated by `glob.findings` hints and on reconnect. */
 export const findingsKey = (globId: string) => ['findings', globId] as const;
@@ -298,12 +291,6 @@ export const useLiveBoard = (boardId: number): LiveState => {
       void client.invalidateQueries({ queryKey: globTestsKey(id) });
       return;
     }
-    if (hint.kind === 'glob.reviews') {
-      // CodeRabbit's stored review lives beside the glob: refresh the cards' badges and the glob view.
-      void client.invalidateQueries({ queryKey: codeReviewsKey(boardId) });
-      void client.invalidateQueries({ queryKey: globCodeReviewKey(id) });
-      return;
-    }
     if (hint.kind === 'glob.findings') {
       // Findings live beside the glob too; only the glob view reads them.
       void client.invalidateQueries({ queryKey: findingsKey(id) });
@@ -348,8 +335,6 @@ export const useLiveBoard = (boardId: number): LiveState => {
     void client.invalidateQueries({ queryKey: inboxKey(boardId) });
     void client.invalidateQueries({ queryKey: ['findings'] });
     void client.invalidateQueries({ queryKey: ['glob-decisions'] });
-    void client.invalidateQueries({ queryKey: codeReviewsKey(boardId) });
-    void client.invalidateQueries({ queryKey: ['glob-code-review'] });
   };
 
   return useBoardEvents(boardId, { onHint, onReconnect });

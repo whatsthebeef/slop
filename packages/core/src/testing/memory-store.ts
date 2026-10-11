@@ -7,7 +7,6 @@ import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js'
 import type { DomainEvent, Effect } from '../domain/events.js';
 import { sameCommit } from '../domain/signals.js';
 import type { TestRun } from '../domain/test-runs.js';
-import type { CodeReviewComment } from '../domain/code-review.js';
 import type { BoardNotification } from '../domain/notifications.js';
 import type { ChatMessage, ChatThread } from '../domain/chat.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
@@ -57,10 +56,6 @@ interface State {
   /** Keyed by glob and environment. */
   globPresence: Map<string, GlobPresence>;
   testRuns: TestRun[];
-  codeReviews: CodeReviewComment[];
-  /** External IDs of CodeRabbit items deleted on the code host (tombstones). */
-  /** Tombstones: external ID and when it was deleted, as Postgres keeps `deleted_at`. */
-  deletedCodeReviews: { externalId: string; at: string }[];
   notifications: Map<string, BoardNotification>;
   /** Search store: items keyed by board and external ref, and their chunks. */
   searchItems: Map<string, KnowledgeItem>;
@@ -140,8 +135,6 @@ const clone = (state: State): State => ({
   environmentDeploys: [...state.environmentDeploys],
   globPresence: new Map(state.globPresence),
   testRuns: [...state.testRuns],
-  codeReviews: [...state.codeReviews],
-  deletedCodeReviews: [...state.deletedCodeReviews],
   notifications: new Map(state.notifications),
   searchItems: new Map(state.searchItems),
   searchChunks: [...state.searchChunks],
@@ -187,8 +180,6 @@ export class MemoryStore implements Store {
     environmentDeploys: [],
     globPresence: new Map(),
     testRuns: [],
-    codeReviews: [],
-    deletedCodeReviews: [],
     notifications: new Map(),
     searchItems: new Map(),
     searchChunks: [],
@@ -242,7 +233,6 @@ export class MemoryStore implements Store {
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
         s.testRuns = s.testRuns.filter((r) => r.globId !== id);
-        s.codeReviews = s.codeReviews.filter((c) => c.globId !== id);
         // A glob's own items go with it; a learning or document it fed only loses the link.
         const gone = new Set<number>();
         const goneDecisions = new Set(s.decisions.filter((d) => d.globId === id).map((d) => d.id));
@@ -579,32 +569,6 @@ export class MemoryStore implements Store {
                   (filter.commits?.some((c) => c.environment === r.environment && sameCommit(c.sha, r.sha)) ?? false))),
           ),
         ),
-      upsertCodeReviewComment: (comment) => {
-        if (s.deletedCodeReviews.some((d) => d.externalId === comment.externalId)) return Promise.resolve(false);
-        const stored = s.codeReviews.find((c) => c.externalId === comment.externalId);
-        if (stored === undefined) {
-          s.codeReviews.push({ ...comment, id: this.nextRowId++ });
-          return Promise.resolve(true);
-        }
-        if (stored.updatedAt > comment.updatedAt) return Promise.resolve(false);
-        const next = { ...stored, kind: comment.kind, body: comment.body, url: comment.url, commitSha: comment.commitSha, path: comment.path, line: comment.line, updatedAt: comment.updatedAt };
-        const changed = JSON.stringify(next) !== JSON.stringify(stored);
-        s.codeReviews = s.codeReviews.map((c) => (c === stored ? next : c));
-        return Promise.resolve(changed);
-      },
-      deleteCodeReviewComment: (externalId, at) => {
-        const stored = s.codeReviews.find((c) => c.externalId === externalId) ?? null;
-        if (stored === null) return Promise.resolve(null);
-        s.codeReviews = s.codeReviews.filter((c) => c.externalId !== externalId);
-        s.deletedCodeReviews.push({ externalId, at });
-        return Promise.resolve(stored);
-      },
-      listCodeReviewComments: (boardId, globIds) =>
-        Promise.resolve(
-          s.codeReviews
-            .filter((c) => c.boardId === boardId && globIds.includes(c.globId))
-            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id),
-        ),
       insertReviewSource: (input) => {
         const taken = s.reviewSources.some(
           (r) =>
@@ -635,7 +599,7 @@ export class MemoryStore implements Store {
         let inserted = 0;
         for (const input of findings) {
           const exists = s.findings.some(
-            (f) => f.globId === input.globId && f.source === input.source && f.fingerprint === input.fingerprint,
+            (f) => f.globId === input.globId && f.fingerprint === input.fingerprint,
           );
           if (exists) continue;
           s.findings.push({

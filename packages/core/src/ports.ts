@@ -3,7 +3,6 @@ import type { Deploy, DeployState } from './domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
 import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
-import type { CodeReviewComment, NewCodeReviewComment } from './domain/code-review.js';
 import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, ChatThread, NewChatMessage, NewChatThread } from './domain/chat.js';
 import type { Decision, DecisionPatch, DecisionSource, NewDecision } from './domain/decisions.js';
@@ -63,8 +62,8 @@ export interface Tx {
   /** Writes `glob` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateGlob(glob: Glob, expectedVersion: number): Promise<boolean>;
   /**
-   * Deletes the glob with its artifacts, review sources, findings, environment presence, branch test runs and stored
-   * CodeRabbit items, and its items in the search store (an item shared with other globs, a learning, only loses the link).
+   * Deletes the glob with its artifacts, review sources, findings, environment presence, branch test runs and its items
+   * in the search store (an item shared with other globs, a learning, only loses the link).
    * Its decisions go with it; decisions it took that older ones point at are released (their `replacedBy` cleared and
    * the item active again). Inbox items attached to it only lose the link (and become `kept` with their last one).
    */
@@ -204,19 +203,6 @@ export interface Tx {
   insertTestRun(run: NewTestRun): Promise<boolean>;
   /** The board's test runs matching the filter (branch runs of its globs, or environment runs at its commits). */
   listTestRuns(boardId: number, filter: TestRunFilter): Promise<TestRun[]>;
-
-  /**
-   * Stores a CodeRabbit item verbatim, or replaces a stored one with the same external ID (an edit) unless the stored
-   * copy is newer. Returns whether anything changed.
-   */
-  upsertCodeReviewComment(comment: NewCodeReviewComment): Promise<boolean>;
-  /**
-   * Marks a stored CodeRabbit item deleted at `at` (a tombstone: it is no longer listed, and a later upsert of the
-   * same external ID changes nothing). Returns it, or null when none was stored or it was already deleted.
-   */
-  deleteCodeReviewComment(externalId: string, at: string): Promise<CodeReviewComment | null>;
-  /** The board's stored CodeRabbit items on these globs, oldest first. */
-  listCodeReviewComments(boardId: number, globIds: readonly string[]): Promise<CodeReviewComment[]>;
 
   /** Records a review to split into findings; null when its artifact or external ID is already recorded. */
   insertReviewSource(source: NewReviewSource): Promise<ReviewSource | null>;
@@ -419,8 +405,6 @@ export type Hint =
   | { readonly kind: 'glob.findings'; readonly boardId: number; readonly globId: string }
   /** A glob's decisions (or what replaced them) changed: clients refetch the glob's decision list. */
   | { readonly kind: 'glob.decisions'; readonly boardId: number; readonly globId: string }
-  /** CodeRabbit's stored summary, reviews or comments on a glob's PR changed (beside the glob, no version bump). */
-  | { readonly kind: 'glob.reviews'; readonly boardId: number; readonly globId: string }
   /**
    * A test run against a release or integration environment arrived: every glob that environment holds may show it, so
    * clients refetch the board's deploy state (one hint rather than one per held glob).

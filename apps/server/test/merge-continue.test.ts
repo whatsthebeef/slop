@@ -82,9 +82,7 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
       store.transaction((tx) => tx.getBoard(boardId));
     host = new FakeHost();
     // These deliveries never carry review comments.
-    const findings = { recordCodeRabbitComment: () => Promise.reject(new Error('not used here')) };
-    const codeReviews = { record: () => Promise.reject(new Error('not used here')), remove: () => Promise.reject(new Error('not used here')) };
-    handle = githubDeliveryHandler({ db: database.db, globs, findings, codeReviews, boardOf, github: host });
+    handle = githubDeliveryHandler({ db: database.db, globs, boardOf, github: host });
     executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), new BoardService({ store, notifier: { publish: () => undefined } }));
   });
 

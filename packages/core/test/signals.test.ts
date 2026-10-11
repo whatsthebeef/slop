@@ -99,19 +99,6 @@ const measured = (a: BoardActivity, key: string): Measurement | undefined => mea
 const globs = (n: number, prefix = 's1t') => Array.from({ length: n }, (_, i) => `${prefix}${String(i + 1)}`);
 
 describe('mined signals: recurring finding classes', () => {
-  it('names the reviews that found the class in the statement (s15f8)', () => {
-    const reviews = globs(3).map((g) => artifact(g, 'local_review'));
-    const statement = (findings: ReviewFinding[]) => {
-      const m = measured(activity({ artifacts: reviews, findings }), 'finding:edge-case');
-      return m === undefined ? undefined : SIGNALS.find((s) => s.kind === 'finding')?.statement(m);
-    };
-    const local = globs(3).map((g) => finding(g, 'edge-case'));
-    const rabbit = globs(3).map((g) => finding(g, 'edge-case', { source: 'coderabbit' }));
-    expect(statement(local)).toMatch(/^Local reviews keep finding /);
-    expect(statement(rabbit)).toMatch(/^CodeRabbit keeps finding /);
-    expect(statement([...local.slice(0, 2), ...rabbit.slice(2)])).toMatch(/^Local reviews and CodeRabbit keep finding /);
-  });
-
   it('counts globs with an IN-SCOPE finding of a class against reviewed globs, and crosses at 3 globs and 25%', () => {
     const reviewed = globs(12);
     const reviews = reviewed.map((g) => artifact(g, 'local_review'));
@@ -146,46 +133,6 @@ describe('mined signals: recurring finding classes', () => {
     expect(perGlob(a, 's1t2', 'finding:security')).toEqual({ eligible: true, affected: false });
     expect(perGlob(a, 's1t9', 'finding:security')).toEqual({ eligible: false, affected: false });
     expect(perGlob(a, 's1t1', 'nonsense:key')).toEqual({ eligible: false, affected: false });
-  });
-});
-
-describe('mined signals: CodeRabbit blind spots', () => {
-  it('counts CodeRabbit findings of a class the local review of the same commit missed, at 3 findings on 2 globs', () => {
-    const coderabbit = (g: string, cls: FindingClass, sha: string) => finding(g, cls, { source: 'coderabbit', commitSha: sha });
-    const a = activity({
-      artifacts: ['s1t1', 's1t2', 's1t3'].map((g) => artifact(g, 'local_review')),
-      findings: [
-        // s1t1: the local review of a later commit found it; this commit's review didn't.
-        finding('s1t1', 'concurrency', { commitSha: 'bbbbbbb' }),
-        finding('s1t1', 'logic-error', { commitSha: 'aaaaaaa' }),
-        coderabbit('s1t1', 'concurrency', 'aaaaaaa1234'),
-        coderabbit('s1t1', 'concurrency', 'aaaaaaa1234'),
-        // s1t2: no local finding on this commit, so all its local findings are compared: none is concurrency.
-        finding('s1t2', 'missing-test'),
-        coderabbit('s1t2', 'concurrency', 'ccccccc'),
-        // s1t3: the local review caught it.
-        finding('s1t3', 'concurrency'),
-        coderabbit('s1t3', 'concurrency', 'ddddddd'),
-        // Nitpicks don't count; a glob without a local review isn't eligible.
-        finding('s1t2', 'concurrency', { source: 'coderabbit', severity: 'suggestion' }),
-        coderabbit('s1t9', 'concurrency', 'eeeeeee'),
-      ],
-    });
-    expect(measured(a, 'blind_spot:concurrency')).toMatchObject({
-      figures: { affected: 2, eligible: 3, count: 3 },
-      globIds: ['s1t1', 's1t2'],
-      crosses: true,
-    });
-    expect(perGlob(a, 's1t3', 'blind_spot:concurrency')).toEqual({ eligible: true, affected: false });
-    expect(perGlob(a, 's1t9', 'blind_spot:concurrency')).toEqual({ eligible: false, affected: false });
-  });
-
-  it('stays under the threshold on one glob', () => {
-    const a = activity({
-      artifacts: [artifact('s1t1', 'local_review')],
-      findings: [1, 2, 3].map(() => finding('s1t1', 'security', { source: 'coderabbit' })),
-    });
-    expect(measured(a, 'blind_spot:security')).toMatchObject({ figures: { affected: 1, count: 3 }, crosses: false });
   });
 });
 
@@ -460,7 +407,6 @@ describe('mined signals: a glob\'s agent-set version', () => {
   it('lists every signal with an agent, a type and a threshold', () => {
     expect(SIGNALS.map((s) => [s.kind, s.agent])).toEqual([
       ['finding', 'implementer'],
-      ['blind_spot', 'change_reviewer'],
       ['plan_amended', 'investigator'],
       ['plan_edited_rerun', 'investigator'],
       ['review_cap', 'implementer'],
@@ -571,14 +517,6 @@ describe('mined signals: threshold edges (s15f8)', () => {
     expect(measured(activity({ events: [...two, ...green(18)] }), 'ci_after_local')).toMatchObject({ figures: { affected: 2, eligible: 20 }, crosses: true });
     expect(measured(activity({ events: [...two, ...green(19)] }), 'ci_after_local')).toMatchObject({ figures: { affected: 2, eligible: 21 }, crosses: false });
   });
-
-  it('blind_spot needs 3 findings: 2 findings on 2 globs is below', () => {
-    const a = activity({
-      artifacts: ['s1t1', 's1t2'].map((g) => artifact(g, 'local_review')),
-      findings: ['s1t1', 's1t2'].map((g) => finding(g, 'security', { source: 'coderabbit' })),
-    });
-    expect(measured(a, 'blind_spot:security')).toMatchObject({ figures: { affected: 2, count: 2 }, crosses: false });
-  });
 });
 
 describe('mined signals: perGlob for every signal (s15f8)', () => {
@@ -594,7 +532,6 @@ describe('mined signals: perGlob for every signal (s15f8)', () => {
           artifact('s1t3', 'implementation_plan', { content: '## Deviations\n- a\n- b\n- c' }),
           artifact('s1t4', 'implementation_plan', { content: 'same' }),
         ],
-        findings: [finding('s1t2', 'security', { source: 'coderabbit' })],
         events: [
           event('s1t1', 'BuildCompleted', { sha: 'aaaaaaa1111', passed: false }),
           event('s1t2', 'BuildCompleted', { sha: 'bbbbbbb', passed: false }),
@@ -615,7 +552,6 @@ describe('mined signals: perGlob for every signal (s15f8)', () => {
       {},
     );
     const cases: [string, string, { eligible: boolean; affected: boolean }][] = [
-      ['blind_spot:security', 's1t2', { eligible: true, affected: true }],
       ['plan_amended', 's1t3', { eligible: true, affected: true }],
       ['plan_amended', 's1t4', { eligible: true, affected: false }],
       ['plan_edited_rerun', 's1t5', { eligible: true, affected: true }],

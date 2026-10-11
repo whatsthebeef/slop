@@ -242,9 +242,7 @@ describe('PR and merge events (rows 11–16)', () => {
     expect(t.glob.pr).toEqual({ number: 7, state: 'ready', headSha: 'bbb' });
   });
 
-  it('row 11: PR ready asks the executor to request a CodeRabbit review (it decides whether to post, R3)', () => {
-    const t = value(m.prReadyForReview(glob({ status: 'implementing', generation: 3 }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(t.effects).toContainEqual({ kind: 'request_code_review', globId: 's1t1', generation: 3 });
+  it('row 11: PR ready is only valid while implementing or in progress', () => {
     expect(errorCode(m.prReadyForReview(glob({ status: 'reviewing' }), { number: 7, headSha: 'bbb' }, ctx(null)))).toBe('invalid_transition');
   });
 
@@ -738,7 +736,7 @@ describe('checks and merging (slice 2)', () => {
 
   it('PR ready and pushes to an open PR refresh the head checks', () => {
     const t = value(m.prReadyForReview(glob({ status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(t)).toEqual(['refresh_checks', 'request_code_review']);
+    expect(effectKinds(t)).toEqual(['refresh_checks']);
     const pushed = value(m.commitPushed({ ...ready, headChecks: { sha: 'bbb', state: 'passed' } }, { sha: 'ccc', runId: null }, ctx(null)));
     expect(pushed.glob.headChecks).toBeNull();
     expect(effectKinds(pushed)).toEqual(['refresh_checks']);
@@ -748,13 +746,12 @@ describe('checks and merging (slice 2)', () => {
     const sub = value(m.prReadyForReview(glob({ type: 'sub', status: 'implementing' }), { number: 7, headSha: 'bbb' }, ctx(null)));
     expect(sub.effects).toEqual([
       { kind: 'refresh_checks', globId: 's1t1', generation: 1 },
-      { kind: 'request_code_review', globId: 's1t1', generation: 1 },
       { kind: 'evaluate_sub_gate', globId: 's1t1', generation: 1, sha: 'bbb' },
     ]);
     const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(same)).toEqual(['refresh_checks', 'request_code_review']);
+    expect(effectKinds(same)).toEqual(['refresh_checks']);
     const superGlob = value(m.prReadyForReview(glob({ type: 'super', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(superGlob)).toEqual(['refresh_checks', 'request_code_review']);
+    expect(effectKinds(superGlob)).toEqual(['refresh_checks']);
   });
 
   it('red checks on a sub\'s merge commit revert it and fail the sub; sames and supers are left alone', () => {

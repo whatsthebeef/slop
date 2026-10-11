@@ -372,7 +372,7 @@ export const deploys = pgTable(
   ],
 );
 
-/** Reviews queued for splitting into findings: a local review artifact, or one CodeRabbit inline comment. */
+/** Reviews queued for splitting into findings: a local review artifact. */
 export const reviewSources = pgTable(
   'review_sources',
   {
@@ -386,7 +386,7 @@ export const reviewSources = pgTable(
     externalId: text('external_id'),
     commitSha: text('commit_sha'),
     agentSetVersion: integer('agent_set_version'),
-    /** CodeRabbit comments only; local reviews are read from their artifact. */
+    /** The source's own text; local reviews are read from their artifact. */
     content: text('content'),
     path: text('path'),
     line: text('line'),
@@ -689,36 +689,6 @@ export const testRuns = pgTable(
     uniqueIndex('test_runs_event_idx').on(t.boardId, t.eventId),
     index('test_runs_board_env_sha_idx').on(t.boardId, t.environment, t.sha),
     index('test_runs_glob_idx').on(t.globId),
-  ],
-);
-
-/** CodeRabbit's summary, reviews and comments on a glob's PR, stored verbatim (R3); not the classification queue. */
-export const codeReviewComments = pgTable(
-  'code_review_comments',
-  {
-    id: bigserial('id', { mode: 'number' }).primaryKey(),
-    boardId: integer('board_id')
-      .notNull()
-      .references(() => boards.id, { onDelete: 'cascade' }),
-    globId: text('glob_id').notNull(),
-    prNumber: integer('pr_number').notNull(),
-    externalId: text('external_id').notNull(),
-    kind: text('kind').notNull(),
-    author: text('author').notNull(),
-    commitSha: text('commit_sha'),
-    path: text('path'),
-    line: text('line'),
-    body: text('body').notNull(),
-    url: text('url'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
-    /** Set when the code host deleted it: the row stays as a tombstone so a late redelivery can't bring it back. */
-    deletedAt: timestamp('deleted_at', { withTimezone: true }),
-  },
-  (t) => [
-    uniqueIndex('code_review_comments_external_idx').on(t.externalId),
-    index('code_review_comments_glob_idx').on(t.globId),
-    index('code_review_comments_board_glob_idx').on(t.boardId, t.globId),
   ],
 );
 

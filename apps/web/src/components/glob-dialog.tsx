@@ -20,7 +20,6 @@ import {
 } from '@/lib/type-change';
 import type { TypeAction } from '@/lib/type-change';
 import { ArtifactsSection } from './artifacts';
-import { CodeReviewSection } from './code-review';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
 import type { ArtifactRef } from './artifacts';
 import { ActivityLabel, GroupChip } from './glob-card';
@@ -586,8 +585,6 @@ export const GlobDetail = ({
           <TestsSection glob={glob} />
 
           <ArtifactsSection globId={glob.id} artifacts={glob.artifacts ?? []} selected={artifact} onSelect={setArtifact} />
-
-          <CodeReviewSection globId={glob.id} />
 
           <GlobDecisions boardId={glob.boardId} globId={glob.id} />
 

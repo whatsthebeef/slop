@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
 import { BoardService } from '../src/app/board-service.js';
 import { CLASSIFY_SYSTEM, FindingsPipeline, MAX_FINDINGS_PER_SOURCE, SPLIT_INPUT_LIMIT, SPLIT_SYSTEM } from '../src/app/findings-pipeline.js';
-import { CODERABBIT_BODY_LIMIT } from '../src/app/findings-service.js';
 import { FindingsService } from '../src/app/findings-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import { LlmUnavailable } from '../src/app/intake-service.js';
@@ -401,32 +400,6 @@ describe('Findings pipeline', () => {
     expect(unwrap(await findings.forGlob(DEV, globId))).toMatchObject({ pending: 1, waiting: 'No model access' });
   });
 
-  it('turns a CodeRabbit comment into one finding without the model, once per comment', async () => {
-    const comment = {
-      externalId: 'coderabbit:991',
-      body: '_⚠️ Potential issue_\n\n**Unchecked null** on `user`.\n\n<details>\n<summary>Prompt for AI agents</summary>\nx\n</details>',
-      path: 'src/user.ts',
-      line: '42',
-      commitSha: 'feed123',
-    };
-    const recorded = unwrap(await findings.recordCodeRabbitComment(globId, comment));
-    expect(recorded).toMatchObject({ kind: 'coderabbit_comment', externalId: 'coderabbit:991', artifactId: null });
-    expect(unwrap(await findings.recordCodeRabbitComment(globId, comment))).toBeNull();
-    expect(await findings.recordCodeRabbitComment('s9t9', comment)).toMatchObject({ ok: false, error: { code: 'not_found' } });
-    await pipeline.processNext();
-    expect(llm.calls).toHaveLength(0);
-    expect(await stored()).toEqual([
-      expect.objectContaining({
-        source: 'coderabbit',
-        severity: 'in_scope',
-        path: 'src/user.ts',
-        line: '42',
-        commitSha: 'feed123',
-        text: '_⚠️ Potential issue_\n\n**Unchecked null** on `user`.',
-      }),
-    ]);
-  });
-
   it("shows members a glob's findings with counts per class, and refuses others", async () => {
     await putReview(STRUCTURED);
     await drain();
@@ -596,39 +569,5 @@ describe('Findings pipeline', () => {
     llm.answer('missing-test');
     await pipeline.processNext();
     expect((await stored())[0]).toMatchObject({ state: 'pending', attempts: 1, error: 'The class answer was not usable JSON', class: null });
-  });
-
-  it('publishes a hint when a CodeRabbit comment is queued, caps its body, and splits an empty comment into nothing (s15f8)', async () => {
-    const recorded = unwrap(
-      await findings.recordCodeRabbitComment(globId, {
-        externalId: 'coderabbit:1',
-        body: 'w'.repeat(CODERABBIT_BODY_LIMIT + 500),
-        path: null,
-        line: null,
-        commitSha: null,
-      }),
-    );
-    expect(recorded?.content).toHaveLength(CODERABBIT_BODY_LIMIT);
-    expect(notifier.hints).toEqual([{ kind: 'glob.findings', boardId, globId }]);
-    // A repeat is not queued and not hinted.
-    notifier.hints.length = 0;
-    unwrap(await findings.recordCodeRabbitComment(globId, { externalId: 'coderabbit:1', body: 'x', path: null, line: null, commitSha: null }));
-    expect(notifier.hints).toEqual([]);
-
-    unwrap(
-      await findings.recordCodeRabbitComment(globId, {
-        externalId: 'coderabbit:2',
-        body: '<details>\n<summary>Committable suggestion</summary>\nx\n</details>',
-        path: 'a.ts',
-        line: '1',
-        commitSha: null,
-      }),
-    );
-    await pipeline.processNext();
-    await pipeline.processNext();
-    expect(llm.calls).toHaveLength(0);
-    expect((await sources()).map((s) => s.state)).toEqual(['split', 'split']);
-    // The long comment is one finding, cut to the finding text limit; the empty one none.
-    expect((await stored()).map((f) => f.text.length)).toEqual([4000]);
   });
 });
