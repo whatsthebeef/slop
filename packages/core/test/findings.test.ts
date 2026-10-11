@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coderabbitSeverity, coderabbitText, fingerprint, globFindings, splitReview } from '../src/domain/findings.js';
+import { fingerprint, globFindings, splitReview } from '../src/domain/findings.js';
 import type { ReviewFinding, ReviewSource } from '../src/domain/findings.js';
 import { LLM_WAITING_PREFIX } from '../src/domain/kb.js';
 
@@ -222,39 +222,6 @@ describe('fingerprint', () => {
 
   it('keeps the first 300 characters', () => {
     expect(fingerprint('x'.repeat(500))).toHaveLength(300);
-  });
-});
-
-describe('CodeRabbit comments', () => {
-  it('reads the severity from the label', () => {
-    expect(coderabbitSeverity('_⚠️ Potential issue_\n\n**Unchecked null**')).toBe('in_scope');
-    expect(coderabbitSeverity('_🔴 Critical_\n\nSQL injection')).toBe('in_scope');
-    expect(coderabbitSeverity('_🛠️ Refactor suggestion_\n\nExtract a helper')).toBe('suggestion');
-    expect(coderabbitSeverity('**Nitpick:** rename')).toBe('suggestion');
-    expect(coderabbitSeverity('🧹 tidy')).toBe('suggestion');
-    expect(coderabbitSeverity('Looks odd')).toBe('unknown');
-  });
-
-  it('ignores severity words outside the label line, in the text and the details blocks (s15f8)', () => {
-    const body = [
-      '_🛠️ Refactor suggestion_',
-      '',
-      'Hold the lock for the whole critical section; a Potential issue otherwise.',
-      '',
-      '<details>',
-      '<summary>Committable suggestion</summary>',
-      'const critical_path = true; // critical',
-      '</details>',
-    ].join('\n');
-    expect(coderabbitSeverity(body)).toBe('suggestion');
-    expect(coderabbitSeverity('<details>critical</details>')).toBe('unknown');
-  });
-
-  it('cuts the text at the first details block and caps it', () => {
-    expect(coderabbitText('  Missing await on save.\n\n<details>\n<summary>🤖 Prompt for AI Agents</summary>\nFix it\n</details>')).toBe(
-      'Missing await on save.',
-    );
-    expect(coderabbitText('y'.repeat(5000))).toHaveLength(4000);
   });
 });
 

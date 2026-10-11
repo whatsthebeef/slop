@@ -136,6 +136,23 @@ Keep it in `.reviews/<id>-record.md` and use this format:
 
 Keep it concise: no file lists, test counts or narration, since git, the local review and the code hold those. Only what they don't already say. About 3–15 KB depending on the size of the glob. Rewrite sections rather than appending to them. `.reviews/<id>-implementation.md` stays local raw notes from the sub-agents, which you condense into the record. Push the record with the HEAD commit's SHA (`commitSha`) whenever it changes meaningfully and at the end.
 
+## Escalating a sub
+
+A sub merges on its own once its checks and the gate pass, so nobody looks at it unless you say so. **The default is to push through.** Escalate only with a concrete reason, by calling `escalate_to_same(id, reason, evidence, runId)`: the glob becomes a same in place (same branch and PR, no auto-merge), the reason shows on its card as "Needs a human", and its owner is told. A person can make it a sub again, and slop records how each escalation turned out so the board's guidance improves.
+
+Escalate when you found, during implementation or review, that:
+
+- the change makes a product or design decision the plan didn't settle;
+- it touches one of the board's risk areas (`get_conventions`);
+- it rewrites existing data (migrations, backfills, deletes);
+- it changes auth, permissions or secrets handling;
+- you had to weaken or delete a test to get green;
+- it changes agent instructions or the agent set;
+- scope grew well beyond the plan;
+- in-scope review findings remain unresolved after the allowed rounds.
+
+Don't escalate for size alone (a large mechanical change, a rename across many files), for a plan that was followed, or "to be safe". Put the reason in one or two sentences a person can act on and the evidence (files, findings, the unsettled choice) in `evidence`; record it in the implementation record's `## Decisions`. Escalating is not failing: carry on to the end of the phases and mark the PR ready.
+
 ## Workflow
 
 Run all phases sequentially without pausing, except where a phase says to ask the developer. Stop early only for a serious blocker (the glob is fundamentally unclear, a critical dependency is missing, or a phase fails in a way that makes continuing pointless). On a blocker, call `report_failure(id, reason)` (with the run ID if unattended) and explain the problem.
@@ -171,7 +188,7 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 ### Phase 2: Investigation
 
-1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 5.
+1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 6.
 2. Invoke the **investigator** with:
    - plan.md (acceptance criteria, or the bug fields for bugs);
    - the `## Context` section, with the reminder: "Decisions in the context bundle are team decisions. If they settle an approach, recommend it rather than proposing alternatives";
@@ -180,15 +197,17 @@ When resuming from a phase, read the output files of the earlier phases. The dev
    - the learnings file path and the relevant board doc paths;
    - the current repo structure;
    - the output path `.reviews/<id>-plan.md`;
+   - the **plan hash** (`sha256sum` of plan.md's text as saved in `.reviews/<id>-context.md`'s plan section, hex) and the **base commit** (`git rev-parse origin/<base>`), for the investigation block;
    - whether Chrome MCP tools are available.
    - the reminder: "If your proposals show the glob is too big for one PR, say so under `## Size` in the plan file, with the parts you would cut." If it does, apply step 6 of Phase 1 before going on.
 3. The investigator writes its proposals to `.reviews/<id>-plan.md`.
-4. Choose a proposal:
+4. **Push the investigation:** check the plan file ends with an `investigation` block (the investigator's last section). Save the whole plan file's text as the glob's investigation: `put_artifact(id, kind: 'investigation', content: <plan file>, runId if unattended, agentSetVersion)`, or the upload route for a large file (see Uploading artifacts). If the reply has a `validation` note, the block was stored as plain text: ask the investigator to fix the block (once) and push again. The alternatives stay in the stored text; this is the only part of Phase 2 slop sees as data. When Phase 2 was skipped, push nothing.
+5. Choose a proposal:
    - **Interactive:** summarise each proposal (name, one-line summary, complexity, key trade-off), state the recommendation and ask the developer to choose or give further instructions.
    - **Unattended:** take the recommended proposal.
-5. Append `## Selected Proposal` to the plan file with the choice and any instructions. The investigator's alternatives stay in this local plan file; they are not pushed.
-6. **Start the record** in `.reviews/<id>-record.md` from the chosen proposal: `## Approach` (the choice and why), `## Decisions` (the choices already made, with rejected alternatives), the other sections empty, and push it: `put_artifact(id, kind: 'implementation_plan', content: <record file>)`, with the run ID if unattended. Do this as soon as the choice is made, so a restarted run or a person can resume from it.
-7. **Deviations:** whenever a later phase departs from the selected proposal or plan.md (a different approach, an extra change, something dropped), add a dated line to the record's `## Deviations` saying what changed and why, and push the record again with `put_artifact`.
+6. Append `## Selected Proposal` to the plan file with the choice and any instructions. The investigator's alternatives stay in this local plan file; they are not pushed.
+7. **Start the record** in `.reviews/<id>-record.md` from the chosen proposal: `## Approach` (the choice and why), `## Decisions` (the choices already made, with rejected alternatives), the other sections empty, and push it: `put_artifact(id, kind: 'implementation_plan', content: <record file>)`, with the run ID if unattended. Do this as soon as the choice is made, so a restarted run or a person can resume from it.
+8. **Deviations:** whenever a later phase departs from the selected proposal or plan.md (a different approach, an extra change, something dropped), add a dated line to the record's `## Deviations` saying what changed and why, and push the record again with `put_artifact`.
 
 ### Phase 3: Implementation
 
@@ -213,7 +232,7 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
 
 1. Invoke the **change_reviewer** in standard mode with: plan.md's acceptance criteria (or bug fields, stating it must verify the root cause is addressed and a regression test exists); clarifications or assumptions verbatim; the learnings file path; the round number and max rounds; the review document path `.reviews/<id>-review.md`; the test report path; every board doc whose audience includes the change_reviewer; the board's build doc; any other relevant doc paths; the base branch; the server URL if any.
 2. The reviewer reviews all changes on the branch against `origin/<base>` (after `git fetch origin <base>`), classifies each finding as `IN-SCOPE` or `SUGGESTION`, appends to the review document and returns its verdict.
-3. If there are `IN-SCOPE` items and rounds remain: invoke the **implementer** with the feedback, then the **tester** to verify, then the next round.
+3. If the reviewer's verdict names an escalation, or in-scope items are still open after the last round, call `escalate_to_same` (see Escalating a sub). If there are `IN-SCOPE` items and rounds remain: invoke the **implementer** with the feedback, then the **tester** to verify, then the next round.
 4. Otherwise the cycle ends.
 5. After each round, fold in what the reviewer's findings and the implementer's fixes changed: a decision the review overturned goes in `## Decisions` or `## Deviations`, a surprise in `## Traps`.
 

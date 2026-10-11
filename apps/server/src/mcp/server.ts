@@ -1,6 +1,6 @@
-import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService } from '@slop/core';
+import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
-import { ARTIFACT_KINDS, CATEGORIES, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -28,9 +28,13 @@ export interface McpDeps {
   readonly knowledge: KnowledgeService;
   readonly artifacts: ArtifactService;
   readonly search: SearchService;
+  /** The read-only code view of each board's repository (membership-scoped). */
+  readonly code: CodeViewService;
   readonly chat: Pick<ChatService, 'answer'>;
   readonly intake: IntakeService;
   readonly inbox: InboxService;
+  /** Answers a glob's oversized flag: starting a held glob anyway keeps it whole. */
+  readonly sizeCheck?: Pick<SizeCheckService, 'keepWhole'>;
   /** Refuses `mark_ready` for a branch that conflicts with its base. */
   readonly readyGate: ReadyGate;
   readonly publicUrl: string;
@@ -99,7 +103,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work) on a board. Pass the request as `input` and slop proposes the title, summary, type, category and group (intake); explicit fields win. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work) on a board. Pass the request as `input` and slop proposes the title, summary, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (a person can split it); an explicit `type` always wins. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -121,12 +125,24 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
             "One of the board's environments that allows branch deploys. Without one, intake suggests an environment the request targets (\"deploy to staging\"), and a sub gets the board's default for subs",
           ),
         autoTrigger: z.boolean().optional().describe('Same only: start a routine run straight away'),
+        needs: z
+          .array(z.string().min(1))
+          .max(20)
+          .optional()
+          .describe(
+            'IDs of globs on this board whose code this glob needs (it uses what they add). It cannot start until they have merged: a sub waits in Planning, a same is refused Start until then. Alias: `after`. Add one only when the code really is missing without it; a glob that merely touches the same files is an overlap.',
+          ),
+        overlaps: z
+          .array(z.string().min(1))
+          .max(20)
+          .optional()
+          .describe('IDs of globs on this board that may change the same files. Never blocks a start; it only orders the merges (the later one rebases on main as usual).'),
         after: z
           .array(z.string().min(1))
           .max(20)
           .optional()
           .describe(
-            'IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
+            'Alias of `needs`: IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
           ),
       },
     },
@@ -134,7 +150,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       let fields = {
         title: input.title ?? '',
         summary: input.summary ?? '',
-        type: input.type ?? ('same' as const),
+        type: input.type ?? ('sub' as const),
         category: input.category ?? ('task' as const),
         group: input.group ?? null,
         autoTrigger: input.autoTrigger ?? false,
@@ -188,7 +204,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         ...(intakeRecord === null ? {} : { intake: intakeRecord }),
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
-        ...(input.after === undefined ? {} : { after: input.after }),
+        ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
+        ...(input.overlaps === undefined ? {} : { overlaps: input.overlaps }),
         ...(files.length === 0 ? {} : { files }),
       });
       if (!created.ok) return reply(created);
@@ -219,7 +236,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'split_glob',
     {
       description:
-        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title, summary and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` chain between them. Write `{part:N}` in a plan or summary for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel.",
+        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title, summary and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` (needs) between them. Write `{part:N}` in a plan or summary for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel. Name only direct prerequisites in `after` (a shared schema or contract as part 0, each consumer needing just part 0); parts that touch the same files go in `overlaps`, which orders merges and never blocks a start. A same part that needs another starts its routine by itself when its last need merges (`autoStart`; turn it off with update_glob).",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -232,7 +249,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
               plan: z.string().min(1).describe("This part's share of plan.md (Markdown); {part:N} stands for part N's glob ID"),
               category: z.enum(CATEGORIES).optional(),
               type: z.enum(SLOP_TYPES).optional(),
-              after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part waits for to merge'),
+              after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part needs merged before it starts'),
+              overlaps: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts that may change the same files; never blocks a start'),
               attachments: z.array(z.string().min(1)).optional().describe("Labels of the original's text attachments to copy (new parts only; link attachments are always copied)"),
             }),
           )
@@ -244,10 +262,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       const split = await globs.split(email, id, version, {
         idempotencyKey,
         planBy: 'sessionator',
-        parts: parts.map(({ attachments, after, category, type, ...rest }) => ({
+        parts: parts.map(({ attachments, after, overlaps, category, type, ...rest }) => ({
           ...rest,
           ...(attachments === undefined ? {} : { attachments }),
           ...(after === undefined ? {} : { after }),
+          ...(overlaps === undefined ? {} : { overlaps }),
           ...(category === undefined ? {} : { category }),
           ...(type === undefined ? {} : { type }),
         })),
@@ -264,6 +283,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           status: glob.status,
           ...(glob.after === undefined || glob.after.length === 0 ? {} : { after: glob.after }),
           ...(glob.waiting == null ? {} : { waiting: true }),
+          ...(glob.autoStart === true ? { autoStart: true } : {}),
         })),
       }));
     },
@@ -340,11 +360,15 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         category: z.enum(CATEGORIES).optional(),
         group: z.string().nullable().optional(),
         environment: z.string().nullable().optional(),
-        after: z.array(z.string().min(1)).max(20).optional(),
+        needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged before it starts (alias: `after`)'),
+        after: z.array(z.string().min(1)).max(20).optional().describe('Alias of `needs`'),
+        overlaps: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs that may change the same files; never blocks a start'),
+        autoStart: z.boolean().optional().describe("false: a same from a split stops waiting to start by itself when its needs merge (it keeps them); start it with start_glob"),
       },
     },
-    async ({ id, version, ...changes }) => {
-      const clean = Object.fromEntries(Object.entries(changes).filter(([, v]) => v !== undefined));
+    async ({ id, version, needs, ...changes }) => {
+      const merged = needs === undefined && changes.after === undefined ? changes : { ...changes, after: [...new Set([...(needs ?? []), ...(changes.after ?? [])])] };
+      const clean = Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined));
       return reply(await globs.update(email, id, version, clean), (g) => globView(g));
     },
   );
@@ -353,11 +377,26 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'start_glob',
     {
       description:
-        "Start a same's routine run (planning → implementing). Refused while the glob waits for globs named in `after` or a merge-policy hold; pass `anyway` to start it before they merge (a sub held in Planning can only be started this way).",
+        "Start a same's routine run (planning → implementing). Refused while the glob waits for globs named in `after` or a merge-policy hold; pass `anyway` to start it before they merge (a sub held in Planning can only be started this way, and starting one held for its oversized flag keeps it whole). Also hands a glob a person picked up, with no routine run, to a routine.",
       inputSchema: { id: z.string(), version: z.number().int(), anyway: z.boolean().optional() },
     },
     async ({ id, version, anyway }) => {
+      if (anyway === true) await deps.sizeCheck?.keepWhole(email, id);
       const result = anyway === true ? await globs.startAnyway(email, id, version) : await globs.start(email, id, version);
+      if (result.ok) await deps.outbox.drain(id);
+      return reply(result, (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
+    'investigate_glob',
+    {
+      description:
+        "Investigate a sub or same in Planning: fires a routine run that does the orchestrator's Phases 1–2 only (investigator, no implementation) and pushes the investigation artifact, without a branch or commits. The glob stays in Planning. When the glob later starts, the orchestrator reuses the investigation if its plan hash matches and the base has moved little in its relevant files, otherwise it re-investigates and supersedes it. Refused with run_active while a run is live.",
+      inputSchema: { id: z.string(), version: z.number().int() },
+    },
+    async ({ id, version }) => {
+      const result = await globs.investigate(email, id, version);
       if (result.ok) await deps.outbox.drain(id);
       return reply(result, (g) => globView(g));
     },
@@ -474,6 +513,29 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       reply(await globs.reportFailure(email, id, reason, runId ?? null, agentSetVersion ?? null), (g) => globView(g)),
   );
 
+  server.registerTool(
+    'escalate_to_same',
+    {
+      description:
+        "Flag a running sub as needing a human: it becomes a same in place (same branch and PR, no auto-merge) with the reason shown on its card, and the owner is told. Only for a concrete reason: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth/permissions/secrets changes, weakened or deleted tests, changed agent instructions, scope well beyond the plan, or in-scope review findings still open after the allowed rounds. Otherwise let the sub merge. Routines pass their run ID (a superseded run's call is ignored). A person can make it a sub again.",
+      inputSchema: {
+        id: z.string(),
+        reason: z.string().min(1).describe('What a human should check, in one or two sentences'),
+        criterion: z
+          .enum(ESCALATION_CRITERIA)
+          .optional()
+          .describe('Which criterion it is for, so slop can learn from the outcome; `other` when none fits'),
+        evidence: z.string().optional().describe('What showed it: files, review findings, the unsettled choice'),
+        runId: z.string().optional(),
+      },
+    },
+    async ({ id, reason, evidence, criterion, runId }) =>
+      reply(
+        await globs.escalateToSame(email, id, { reason, evidence: evidence ?? null, criterion: criterion ?? null, runId: runId ?? null }),
+        (g) => globView(g),
+      ),
+  );
+
   // ---------------------------------------------------------------------------
   // Knowledge and context (slice 3)
 
@@ -528,7 +590,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_review_guide',
     {
       description:
-        "The review guide for a repo: the documents with area `review_guide` on each slop board for that repo you are a member of, in full. CodeRabbit (or any reviewer) reads it before reviewing a PR. An empty list means the repo's boards have no review guide.",
+        "The review guide for a repo: the documents with area `review_guide` on each slop board for that repo you are a member of, in full. A reviewer reads it before reviewing a PR. An empty list means the repo's boards have no review guide.",
       inputSchema: { repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('owner/name') },
     },
     async ({ repo }) =>
@@ -641,7 +703,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields, plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). Pass `include` to get more in full: 'local_review', 'attachment:<label>', 'code_review' (CodeRabbit's summary, reviews and inline comments on the PR, verbatim), or 'all'.",
+        "The glob's context bundle: its fields, plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {
@@ -664,13 +726,13 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   const sourceTypes = z
     .array(z.enum(SOURCE_TYPES))
     .optional()
-    .describe('Only these kinds of source (glob_plan, implementation_plan, local_review, code_review, kb_doc, learning, decision, ...)');
+    .describe('Only these kinds of source (glob_plan, implementation_plan, local_review, kb_doc, learning, decision, ...)');
 
   server.registerTool(
     'search_text',
     {
       description:
-        "Keyword search over the board's plans, implementation records, reviews, CodeRabbit comments, knowledge, learnings and decisions: exact words, names, identifiers and file paths. Returns at most 10 cited chunks (source, date, title, link, glob), best first, a current decision ahead of the older ones it replaced; superseded or legacy items are labelled (`superseded by \"<title>\" on <date>`). In current mode superseded decisions rank last; all_time mode shows both. The board's search index; member of the board required.",
+        "Keyword search over the board's plans, implementation records, reviews, knowledge, learnings and decisions: exact words, names, identifiers and file paths. Returns at most 10 cited chunks (source, date, title, link, glob), best first, a current decision ahead of the older ones it replaced; superseded or legacy items are labelled (`superseded by \"<title>\" on <date>`). In current mode superseded decisions rank last; all_time mode shows both. The board's search index; member of the board required.",
       inputSchema: { ...searchFields, query: z.string().min(1).max(MAX_QUERY_LENGTH), sourceTypes },
     },
     async (p) => reply(await deps.search.text(email, toRequest(p))),
@@ -721,6 +783,83 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       if (text === undefined) return reply(invalidInput('Give query or path'));
       return reply(await deps.search.changes(email, toRequest({ ...rest, query: text })));
     },
+  );
+
+  const codeBoard = z.number().int().describe('Board ID (the number in a glob ID: s1t4 is on board 1)');
+  const codeRef = z
+    .string()
+    .optional()
+    .describe("A branch, tag, commit or pull request ref (e.g. a glob's branch, or refs/pull/190/head); default: the board's base branch");
+
+  server.registerTool(
+    'search_code',
+    {
+      description:
+        "Search the board's repository with a regular expression (git grep -E), on the base branch or any ref, optionally under some paths: path, line and text of each match, at most `limit` (default 50, max 200). Read-only: nothing is run. Member of the board required.",
+      inputSchema: {
+        board: codeBoard,
+        pattern: z.string().min(1).max(200),
+        ref: codeRef,
+        paths: z.array(z.string()).max(20).optional().describe('Only under these files or folders (repo-relative)'),
+        limit: z.number().int().min(1).max(200).optional(),
+      },
+    },
+    async (p) => reply(await deps.code.grep(email, { ...p, consumer: 'mcp' })),
+  );
+
+  server.registerTool(
+    'read_file',
+    {
+      description:
+        "A file of the board's repository on the base branch or any ref, with line numbers by `start`/`end` (at most 2000 lines and 100,000 characters per call; `truncated` says it was cut). Read-only. Member of the board required.",
+      inputSchema: {
+        board: codeBoard,
+        path: z.string().min(1).describe('Repo-relative file path'),
+        ref: codeRef,
+        start: z.number().int().min(1).optional().describe('First line (1-based)'),
+        end: z.number().int().min(1).optional().describe('Last line'),
+      },
+    },
+    async (p) => reply(await deps.code.read(email, { ...p, consumer: 'mcp' })),
+  );
+
+  server.registerTool(
+    'list_dir',
+    {
+      description: "The files and folders directly in a directory of the board's repository ('' or omitted is the root) on the base branch or any ref. Read-only. Member of the board required.",
+      inputSchema: { board: codeBoard, path: z.string().optional().describe('Repo-relative folder; empty for the root'), ref: codeRef },
+    },
+    async (p) => reply(await deps.code.tree(email, { ...p, consumer: 'mcp' })),
+  );
+
+  server.registerTool(
+    'path_history',
+    {
+      description:
+        "The newest commits on the base branch that changed a file or anything under a folder (sha, subject, date, the glob it came from, and that merged change's summary title and link when slop has one). Member of the board required.",
+      inputSchema: { board: codeBoard, path: z.string().min(1), limit: z.number().int().min(1).max(50).optional() },
+    },
+    async (p) => reply(await deps.code.history(email, { ...p, consumer: 'mcp' })),
+  );
+
+  server.registerTool(
+    'imports',
+    {
+      description:
+        "The import graph of the board's base branch: the files `path` imports (direction 'imports', the default) or the files that import it ('importedBy'), each with its module. Covers relative TypeScript/JavaScript imports and Python imports that resolve inside the repository. Member of the board required.",
+      inputSchema: { board: codeBoard, path: z.string().min(1), direction: z.enum(['imports', 'importedBy']).optional() },
+    },
+    async (p) => reply(await deps.code.imports(email, { ...p, consumer: 'mcp' })),
+  );
+
+  server.registerTool(
+    'touched_modules',
+    {
+      description:
+        "For a set of paths (e.g. the files a change touches): the modules they belong to, and for each the files outside the set that import it (importers, fanIn), on the base branch's import graph. Member of the board required.",
+      inputSchema: { board: codeBoard, paths: z.array(z.string().min(1)).min(1).max(100) },
+    },
+    async (p) => reply(await deps.code.touchedModules(email, { ...p, consumer: 'mcp' })),
   );
 
   server.registerTool(
@@ -791,10 +930,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'put_artifact',
     {
       description:
-        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it) or a local review as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
+        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it), a local review or an investigation (the investigator\'s output ending in a fenced ```investigation JSON block; a block that does not validate is stored as text and the reply carries `validation`) as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
       inputSchema: {
         id: z.string(),
-        kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
         content: z.string().min(1),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
@@ -814,14 +953,22 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         // A routine's slop call is progress for its run (and marks a queued run active).
         await deps.globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
       }
+      const stored = await artifacts.putArtifact(email, id, kind, content, {
+        commitSha: commitSha ?? null,
+        runId: runId ?? null,
+        agentSetVersion: agentSetVersion ?? null,
+        reviewStats: reviewStats ?? null,
+      });
+      // An investigate-only run ends with its investigation; one whose block didn't validate stays open for the fix.
+      if (stored.ok && !('ignored' in stored.value) && kind === 'investigation' && runId !== undefined && stored.value.provenance.validation === undefined) {
+        await globs.applyEvent(id, (g, ctx) => machine.investigationPushed(g, runId, ctx));
+      }
       return reply(
-        await artifacts.putArtifact(email, id, kind, content, {
-          commitSha: commitSha ?? null,
-          runId: runId ?? null,
-          agentSetVersion: agentSetVersion ?? null,
-          reviewStats: reviewStats ?? null,
-        }),
-        (a) => ('ignored' in a ? a : { id: a.id, kind: a.kind, version: a.version }),
+        stored,
+        (a) =>
+          'ignored' in a
+            ? a
+            : { id: a.id, kind: a.kind, version: a.version, ...(a.provenance.validation === undefined ? {} : { validation: a.provenance.validation }) },
       );
     },
   );
@@ -830,10 +977,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'artifact_upload_url',
     {
       description:
-        "A URL for uploading the implementation record (implementation_plan; postplan is an alias) or a local review from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
+        "A URL for uploading the implementation record (implementation_plan; postplan is an alias), a local review or an investigation from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
       inputSchema: {
         id: z.string(),
-        kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
         agentSetVersion: z.number().int().nonnegative().optional(),

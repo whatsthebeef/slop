@@ -28,7 +28,7 @@ Call `get_glob(id)` before anything else. It returns the status, version, genera
 - **Slop type** sets the mode:
   - `sub` or `same`: the full phase pipeline below.
   - `super`: do not run the phases. Follow **Super mode** instead.
-- The glob's branch is the glob ID itself (e.g. `s1t4`). sstor (or the routine's checkout) has already put you on it. **Do not create branches.** Never commit to or push `<base>`.
+- The glob's branch is the glob ID itself (e.g. `s1t4`). sstor (or the routine's checkout) has already put you on it. **Do not create branches.** Never commit to or push `<base>`. The one exception is an **investigate-only run** on a glob in Planning, which has no branch yet: see Investigate-only runs.
 
 **Uploading artifacts:** the implementation record and local review are files, so upload them from the file instead of typing their text into a tool call. Anything over a few KB: in a local session run `slop put-artifact <id> --kind <kind> --file <path> [--commit <sha>] [--agent-set <n>] [--review-stats '<json>'] [--run <runId>]`; in a routine (or wherever the `slop` CLI isn't installed) call `artifact_upload_url(id, kind, commitSha, agentSetVersion, reviewStats, runId)` with the same fields and then `curl --data-binary @<path> '<url>'` (the link is single use and lasts 5 minutes; if curl can't reach slop, fall back to `put_artifact`). Keep inline `put_artifact` for small ones. Wherever this file says `put_artifact(id, kind, content, …)` for a file, this is how to send it.
 
@@ -42,6 +42,7 @@ When a run ID is given:
 
 - Never call `AskUserQuestion` and never wait for a person. Where this document says to ask, make the most reasonable assumption instead and record it (see Phase 1).
 - **Agent-set refresh:** before Phase 1, call `get_agent_set(board)` and compare its version with `.claude/slop-agent-set.json`. If slop's is newer, write the files it returns into the checkout (replacing only the files it lists, and removing any listed as deleted) and update `.claude/slop-agent-set.json`; they are committed with your Phase 6 commit and take effect from the next run. Carry on with the instructions already loaded. **Only on the glob's branch:** if `git branch --show-current` is `<base>` (a session started in the main checkout), do not write any files: say that a newer agent set exists and that it arrives with the next glob's commit, or `sstor init` on a branch. Uncommitted agent-set files on `<base>` make `dev.sh follow` hold.
+- If the fire text says **INVESTIGATE-ONLY**, follow **Investigate-only runs** instead of the rest of this section and of the Workflow: no agent-set refresh, no branch checkout, no commits.
 - Do **not** call `pick_up`: routines never record a human implementer.
 - Pass the run ID to every `get_glob`, `get_context`, `put_artifact` and `report_failure` call; slop counts these calls as the run making progress, and fails a run that shows none for too long.
 - Every commit carries the trailer `Slop-Run: <runId>`.
@@ -109,10 +110,7 @@ Also tell each sub-agent:
 
 Spend agent effort where it finds problems: reading the change. Don't repeat work another agent already did.
 
-- **Risk tier.** Set it in Phase 2 and record it in the plan file:
-  - **high**: auth, tokens or secrets, permissions, data and migrations, money, concurrency, public endpoints;
-  - **normal**: everything else that changes behaviour;
-  - **low**: docs, copy, styling, config-only, tests-only, or a small isolated change.
+- **Risk tier.** Set it in Phase 2 and record it in the plan file. The tiers, the risk areas and what makes a change **high**, **normal** or **low** come from the board's `risk_and_size` document (area `risk_and_size`; fetch it with the other board docs and give it to the investigator and change_reviewer). Don't use a copy of your own. If the board has no such document, use: **high** for auth, tokens or secrets, permissions, data and migrations, money, concurrency, public endpoints; **low** for docs, copy, styling, config-only, tests-only or a small isolated change; **normal** for everything else, and submit a `gotcha` learning proposing the document.
 - **Checks.** If the board's build doc separates fast and full checks, sub-agents run the fast checks on every round, and the full checks run once, before the Phase 6 commit (or are left to CI where the build doc says so). Without that split, treat the targeted tests for the changed code plus lint and type checks as fast. Every agent records the exact commands it ran and the pass counts, not logs, and uses quiet reporters, reading output only on failure.
 - **No re-running.** The tester and change_reviewer rely on the results the implementer (and tester) recorded. They re-run a check only when a result looks wrong or a finding depends on it.
 - **No new end-to-end or browser tests** unless the board's docs or the developer ask for one. Cover behaviour with unit and integration tests.
@@ -135,6 +133,26 @@ Keep it in `.reviews/<id>-record.md` and use this format:
 ```
 
 Keep it concise: no file lists, test counts or narration, since git, the local review and the code hold those. Only what they don't already say. About 3–15 KB depending on the size of the glob. Rewrite sections rather than appending to them. `.reviews/<id>-implementation.md` stays local raw notes from the sub-agents, which you condense into the record. Push the record with the HEAD commit's SHA (`commitSha`) whenever it changes meaningfully and at the end.
+
+## Escalating a sub
+
+A sub merges on its own once its checks and the gate pass, so nobody looks at it unless you say so. **The default is to push through.** Escalate only with a concrete reason, by calling `escalate_to_same(id, reason, criterion, evidence, runId)`, where `criterion` is the bullet below it is for (`design_decision`, `risk_area`, `data_rewrite`, `auth_permissions`, `weakened_tests`, `agent_instructions`, `scope_beyond_plan`, `open_findings` or `other`): the glob becomes a same in place (same branch and PR, no auto-merge), the reason shows on its card as "Needs a human", and its owner is told. A person can make it a sub again, and slop records how each escalation turned out so the board's guidance improves.
+
+Escalate when the board's `risk_and_size` document (its escalation criteria and risk areas; `get_conventions`) says the change warrants it and the plan didn't settle it: a product or design decision, a risk area, a rewrite of existing data, auth, permissions or secrets changes, a test weakened or deleted to get green, changed agent instructions, scope well beyond the plan, or in-scope review findings left unresolved after the allowed rounds. Without the document, use that list.
+
+The board's own history adjusts this: slop records every escalation's outcome (approved unchanged, changes asked for, or a merged sub that was later reverted or blamed by a bug), and when a criterion keeps proving unnecessary or missed it proposes a learning for the board's knowledge. Where an approved learning loosens or strengthens a criterion, follow it over the document's default wording.
+
+Don't escalate for size alone, for a plan that was followed, or "to be safe" (the document says the same). Put the reason in one or two sentences a person can act on and the evidence (files, findings, the unsettled choice) in `evidence`; record it in the implementation record's `## Decisions`. Escalating is not failing: carry on to the end of the phases and mark the PR ready.
+
+## Investigate-only runs
+
+An *Investigate* action (or slop itself, for a glob intake flagged big) fires a routine run on a glob that is still in **Planning**. It has no branch and no PR. The run does Phases 1–2 and nothing else, so a person (or the later implementing run) has the investigation before work starts.
+
+1. Stay on `<base>` (`git fetch origin <base>`; the checkout may start there). **Never** create a branch, commit, push, write agent-set files, open a PR, call `pick_up` or call `mark_ready`.
+2. Call `get_glob(id, runId)` and `get_context(id, runId)`, and fetch the board knowledge as in Phase 1 steps 1–4. Write the context file as there. Ambiguities become `## Assumptions` in the context file (and an `Assumptions` attachment); don't ask. Skip the size check's split step: if the work is too big, say so under `## Size` in the plan file with the parts you would cut.
+3. Run Phase 2 steps 1–4: the investigator writes `.reviews/<id>-plan.md` ending with the `investigation` block (plan hash and base commit as in step 2), and you push it with `put_artifact(id, kind: 'investigation', …, runId, agentSetVersion)`. **Do not skip the investigator**, even when plan.md looks settled: the investigation is the product of this run. If the glob already has an investigation that is still current (Phase 2, *Reuse or refresh*), push nothing and say so.
+4. A reply without a `validation` note ends the run: slop closes it when the investigation is stored, and the glob stays in Planning. If the block did not validate, have it fixed once and push again; if it still does not validate, call `report_failure(id, reason, runId)`.
+5. Skip Phases 3–6, the record (nothing was built) and the Auto-fix section. Finish with a short summary: the investigation's risk tier, files, parts and whether it needs a human.
 
 ## Workflow
 
@@ -160,10 +178,10 @@ When resuming from a phase, read the output files of the earlier phases. The dev
    - Append the Q&A (or the assumptions) under `## Clarifications` or `## Assumptions` in the context file, and record them on the glob with `attach(id, version, text, label: 'Clarifications')` (or `'Assumptions'`). These carry intent and **must be passed verbatim** to every sub-agent later.
 
 6. **Check the size.** Do this after the context is written and before Phase 2.
-   - If `get_glob` or `get_context` flags the glob as oversized (`oversized` is true; `sizeCheck` / `size` carry the reasons and the proposed split), use slop's proposed split. Also use your own judgement when slop hasn't flagged it but plan.md clearly holds parts that could each ship and be reviewed on their own: several migrations, server, web and LLM work together, large sections with no "Done when", many separate tasks.
+   - If `get_glob` or `get_context` flags the glob as oversized (`oversized` is true; `sizeCheck` / `size` carry the reasons and the proposed split), use slop's proposed split. Also use your own judgement when slop hasn't flagged it but plan.md clearly holds more separate parts than the board's `risk_and_size` document allows for one PR (see "What counts as a separate part").
    - **Don't split** a glob that has already started work (commits beyond the start commit). Finish part 1's scope and create the rest as follow-ups with `create_glob`, each with `after: [<id>]`, and record that.
    - **Split** with `split_glob(id, version, idempotencyKey, parts)`, never by hand-assembling `create_glob` calls. Use the version you most recently read and a stable key (e.g. `<id>-<runId or date>`). Part 0 is this glob: it keeps its ID and the run carries on with it, with the new, smaller plan. Give every other part its share of plan.md (`{part:N}` stands for part N's glob ID), the attachments it needs, and the same category unless the cut says otherwise. Untasked sections become their own part, with a note in its plan to trim them before starting.
-   - **Chain** parts with `after` where they share files or one builds on another (apply the overlap rules under Board rules, if the board has them); parts that don't touch the same code run in parallel. Parts are sames unless the proposal says sub and the part is small and independent.
+   - **Needs and overlaps:** put in `after` only the earlier parts whose code a part needs on main before it can start, as direct prerequisites: a shared schema or contract is part 0 and each consumer needs just part 0. Parts that touch the same files go in `overlaps` (they order merges and never block a start; apply the overlap rules under Board rules, if the board has them). Parts that don't need each other run in parallel; don't chain them. A split whose parts would all wait on each other gains nothing: keep the glob whole. A same part that needs another starts its routine by itself when its last need merges; a person can turn that off with `update_glob` `autoStart: false`. Parts are sames unless the proposal says sub and the part is small and independent.
    - **Only split, never drop scope:** every "Done when" line and section of the original plan must end up in exactly one part.
    - **Record** the split: as an `Assumptions` attachment (unattended) or, interactively, show the developer the proposed parts and ask once with `AskUserQuestion` before splitting, then record the answer as `Clarifications`. Add it to the context file and, once the record exists, to its `## Decisions`. Re-read the glob afterwards and rewrite `.reviews/<id>-context.md` with the new plan.md.
    - **Unattended, the cut isn't clear** (the parts can't be separated without guessing, or `split_glob` is refused): don't guess. Call `report_failure` with the proposed split.
@@ -171,7 +189,16 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 ### Phase 2: Investigation
 
-1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 5.
+**Reuse or refresh.** If `get_context` returned an `investigation` (the glob was investigated earlier, usually by an investigate-only run), decide first whether it still holds, unless this run is investigate-only (it investigates anyway, unless the investigation is still current: then push nothing). Reuse it only when **all** of these hold:
+
+- `validation` is null (the block parsed);
+- `planHash` equals the `sha256sum` of the plan text in `.reviews/<id>-context.md`'s plan section (computed as in step 2) — a changed plan means a different task;
+- the base moved little in the investigation's relevant files: after `git fetch origin <base>`, `git diff --stat <investigation.baseCommit> origin/<base> -- <files from investigation.files>` shows none of those files deleted or renamed and fewer than about 30 changed lines in total (a commit that is not in the base's history counts as moved a lot);
+- its `needsHuman` is not `true` unless a person has since answered it (an Assumptions or Clarifications attachment, or a decision, that addresses its reason).
+
+*Reuse:* fetch the investigation text (`get_artifact(id, 'investigation')`), write it to `.reviews/<id>-plan.md`, skip the investigator and the push (step 4), go to step 5 with the investigation's recommended proposal and note "investigation reused (version N)" in the plan file. *Refresh:* run the investigator as below, giving it the earlier investigation as a starting point (it must still read the code), and push the new one in step 4: it becomes the latest version and supersedes the old. Either way, say which and why (plan hash changed / these files changed by N lines / reused with no relevant change) in the plan file and, when you start the record in step 7, in its `## Decisions` ("Investigation reused" or "Investigation refreshed: …"), so reuse vs refresh is recorded.
+
+1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 6.
 2. Invoke the **investigator** with:
    - plan.md (acceptance criteria, or the bug fields for bugs);
    - the `## Context` section, with the reminder: "Decisions in the context bundle are team decisions. If they settle an approach, recommend it rather than proposing alternatives";
@@ -180,15 +207,17 @@ When resuming from a phase, read the output files of the earlier phases. The dev
    - the learnings file path and the relevant board doc paths;
    - the current repo structure;
    - the output path `.reviews/<id>-plan.md`;
+   - the **plan hash** (`sha256sum` of plan.md's text as saved in `.reviews/<id>-context.md`'s plan section, hex) and the **base commit** (`git rev-parse origin/<base>`), for the investigation block;
    - whether Chrome MCP tools are available.
    - the reminder: "If your proposals show the glob is too big for one PR, say so under `## Size` in the plan file, with the parts you would cut." If it does, apply step 6 of Phase 1 before going on.
 3. The investigator writes its proposals to `.reviews/<id>-plan.md`.
-4. Choose a proposal:
+4. **Push the investigation:** check the plan file ends with an `investigation` block (the investigator's last section). Save the whole plan file's text as the glob's investigation: `put_artifact(id, kind: 'investigation', content: <plan file>, runId if unattended, agentSetVersion)`, or the upload route for a large file (see Uploading artifacts). If the reply has a `validation` note, the block was stored as plain text: ask the investigator to fix the block (once) and push again. The alternatives stay in the stored text; this is the only part of Phase 2 slop sees as data. When Phase 2 was skipped, push nothing.
+5. Choose a proposal:
    - **Interactive:** summarise each proposal (name, one-line summary, complexity, key trade-off), state the recommendation and ask the developer to choose or give further instructions.
    - **Unattended:** take the recommended proposal.
-5. Append `## Selected Proposal` to the plan file with the choice and any instructions. The investigator's alternatives stay in this local plan file; they are not pushed.
-6. **Start the record** in `.reviews/<id>-record.md` from the chosen proposal: `## Approach` (the choice and why), `## Decisions` (the choices already made, with rejected alternatives), the other sections empty, and push it: `put_artifact(id, kind: 'implementation_plan', content: <record file>)`, with the run ID if unattended. Do this as soon as the choice is made, so a restarted run or a person can resume from it.
-7. **Deviations:** whenever a later phase departs from the selected proposal or plan.md (a different approach, an extra change, something dropped), add a dated line to the record's `## Deviations` saying what changed and why, and push the record again with `put_artifact`.
+6. Append `## Selected Proposal` to the plan file with the choice and any instructions. The investigator's alternatives stay in this local plan file; they are not pushed.
+7. **Start the record** in `.reviews/<id>-record.md` from the chosen proposal: `## Approach` (the choice and why), `## Decisions` (the choices already made, with rejected alternatives), the other sections empty, and push it: `put_artifact(id, kind: 'implementation_plan', content: <record file>)`, with the run ID if unattended. Do this as soon as the choice is made, so a restarted run or a person can resume from it.
+8. **Deviations:** whenever a later phase departs from the selected proposal or plan.md (a different approach, an extra change, something dropped), add a dated line to the record's `## Deviations` saying what changed and why, and push the record again with `put_artifact`.
 
 ### Phase 3: Implementation
 
@@ -213,7 +242,7 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
 
 1. Invoke the **change_reviewer** in standard mode with: plan.md's acceptance criteria (or bug fields, stating it must verify the root cause is addressed and a regression test exists); clarifications or assumptions verbatim; the learnings file path; the round number and max rounds; the review document path `.reviews/<id>-review.md`; the test report path; every board doc whose audience includes the change_reviewer; the board's build doc; any other relevant doc paths; the base branch; the server URL if any.
 2. The reviewer reviews all changes on the branch against `origin/<base>` (after `git fetch origin <base>`), classifies each finding as `IN-SCOPE` or `SUGGESTION`, appends to the review document and returns its verdict.
-3. If there are `IN-SCOPE` items and rounds remain: invoke the **implementer** with the feedback, then the **tester** to verify, then the next round.
+3. If the reviewer's verdict names an escalation, or in-scope items are still open after the last round, call `escalate_to_same` (see Escalating a sub). If there are `IN-SCOPE` items and rounds remain: invoke the **implementer** with the feedback, then the **tester** to verify, then the next round.
 4. Otherwise the cycle ends.
 5. After each round, fold in what the reviewer's findings and the implementer's fixes changed: a decision the review overturned goes in `## Decisions` or `## Deviations`, a surprise in `## Traps`.
 

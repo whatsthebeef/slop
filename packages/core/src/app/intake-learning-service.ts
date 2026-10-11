@@ -12,9 +12,12 @@ import {
 import type { ExampleCandidate, IntakeAccuracy, IntakeExample, IntakeRecord, IntakeSnapshot, SnapshotSource } from '../domain/intake-learning.js';
 import type { ReviewStats } from '../domain/knowledge.js';
 import type { BoardJobResult } from '../domain/signals.js';
+import type { RiskOutcome } from '../domain/risk-area.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Embedder, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
+import type { EscalationLearningService } from './escalation-learning-service.js';
+import type { RiskAreaService } from './risk-area-service.js';
 
 export type IntakeOutcomeResult = Extract<BoardJobResult, { kind: 'intake_outcome' }>;
 
@@ -106,13 +109,22 @@ export class IntakeLearningService {
       clock: Clock;
       /** Absent: snapshots stay unembedded and intake shows no examples. */
       embedder?: Embedder;
+      /** Absent: a person's change of type isn't passed to the board's risk areas. */
+      riskAreas?: RiskAreaService;
+      /** Absent: escalation outcomes aren't learned from. */
+      escalations?: EscalationLearningService;
     },
   ) {}
 
   async run(boardId: number, now: string): Promise<IntakeOutcomeResult> {
     const backfilled = await this.backfill(boardId);
     const embedded = await this.embedMissing(boardId);
-    const { recorded, refreshed } = await this.recordOutcomes(boardId, now);
+    const corrections: RiskOutcome[] = [];
+    const { recorded, refreshed } = await this.recordOutcomes(boardId, now, corrections);
+    // A person's change of type (sub to same, same to sub) is a heavy signal for the paths the plan named.
+    for (const c of corrections) await this.deps.riskAreas?.record(boardId, c);
+    await this.deps.riskAreas?.learn(boardId, now);
+    await this.deps.escalations?.learn(boardId, now);
     return { kind: 'intake_outcome', backfilled, embedded, recorded, refreshed };
   }
 
@@ -186,7 +198,7 @@ export class IntakeLearningService {
     return done;
   }
 
-  private async recordOutcomes(boardId: number, now: string): Promise<{ recorded: number; refreshed: number }> {
+  private async recordOutcomes(boardId: number, now: string, corrections: RiskOutcome[]): Promise<{ recorded: number; refreshed: number }> {
     return this.deps.store.transaction(async (tx) => {
       const merges = new Map<string, string>();
       for (const e of await tx.listBoardEvents(boardId, EPOCH, ['Merged'])) merges.set(e.globId, e.at);
@@ -230,6 +242,9 @@ export class IntakeLearningService {
           bugs: bugs.map((b) => ({ id: b.id, title: b.title, summary: b.summary, createdAt: b.createdAt })),
         });
         await tx.upsertGlobOutcome(outcome);
+        const type = outcome.corrections.type;
+        if (type !== null && type.to !== type.from && (type.to === 'same' || type.to === 'sub'))
+          corrections.push({ kind: type.to === 'same' ? 'type_to_same' : 'type_to_sub', globId, paths: snapshot.features.filePaths, at: type.at });
         if (outcomeOf.has(globId)) refreshed++;
         else recorded++;
       }

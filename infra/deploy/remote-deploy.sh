@@ -24,6 +24,10 @@ if [ ! -s "$PASSWORD_FILE" ]; then
 fi
 POSTGRES_PASSWORD="$(cat "$PASSWORD_FILE")"
 
+# The code view's clones live on the data disk; the image runs as `node` (uid 1000).
+mkdir -p /var/lib/slop/code
+chown 1000:1000 /var/lib/slop/code
+
 # Settings that aren't secrets and change by hand: s15f34 puts the Cognito pool and clients here.
 # One KEY=VALUE per line in the SSM parameter /slop/<stage>/server-env; without it the server's sign-in is
 # configured with placeholders and nobody can sign in (it never falls back to the dev sign-in).

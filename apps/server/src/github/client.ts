@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
-import type { AppSettings, BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PrSnapshot, Repo, RepoConnection } from '../codehost.js';
+import type { AppSettings, BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PrSnapshot, Repo, RepoConnection, ReviewDiff, TestMergeTarget } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -275,7 +275,7 @@ export class GitHub implements CodeHost, CommitGraph {
       pull_number: prNumber,
     });
     let runs: { status: string; conclusion: string | null }[] = [];
-    if (data.mergeable_state === 'unstable' || data.mergeable_state === 'blocked') {
+    if (['unstable', 'blocked', 'clean', 'has_hooks'].includes(data.mergeable_state)) {
       const checks = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
         owner: repo.owner,
         repo: repo.name,
@@ -453,6 +453,53 @@ export class GitHub implements CodeHost, CommitGraph {
     return { wasDraft: true, sha: data.head.sha };
   }
 
+  async testMergeTarget(repo: Repo, prNumber: number, signal?: AbortSignal): Promise<TestMergeTarget> {
+    const gh = await this.octokit(repo);
+    const { data: pr } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner: repo.owner,
+      repo: repo.name,
+      pull_number: prNumber,
+      request: { signal },
+    });
+    if (pr.state !== 'open') return { outcome: 'not_open' };
+    if (pr.mergeable === false || pr.mergeable_state === 'dirty') return { outcome: 'conflict' };
+    if (pr.mergeable === null || pr.merge_commit_sha === null) return { outcome: 'undecided' };
+    const sha = pr.merge_commit_sha;
+    const [{ data: commit }, base] = await Promise.all([
+      gh.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner: repo.owner, repo: repo.name, ref: sha, request: { signal } }),
+      this.branchHead(repo, repo.base),
+    ]);
+    // The merge commit's parents are the base head it was made on and the PR head. Either one moved: GitHub is still
+    // recomputing, and reviewing this commit would not be the change as it will land.
+    const [baseSha, headSha] = commit.parents.map((p) => p.sha);
+    if (commit.parents.length !== 2 || baseSha === undefined || headSha !== pr.head.sha || base === null || baseSha !== base) return { outcome: 'undecided' };
+    return { outcome: 'ready', ref: `refs/pull/${String(prNumber)}/merge`, sha, baseSha, diff: await this.unifiedDiff(repo, `${baseSha}...${sha}`, signal) };
+  }
+
+  async mergedTarget(repo: Repo, sha: string, signal?: AbortSignal): Promise<ReviewDiff> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner: repo.owner, repo: repo.name, ref: sha, request: { signal } });
+    // Squash merges have one parent; a true merge commit's first parent is the base, so its diff is the whole PR too.
+    const parent = data.parents[0]?.sha ?? null;
+    if (parent === null) throw new Error(`Commit ${sha} has no parent to diff against`);
+    return { ref: repo.base, sha, baseSha: parent, diff: await this.unifiedDiff(repo, `${parent}...${sha}`, signal) };
+  }
+
+  /** `basehead` as one git unified diff (the compare API's diff media type, not its paged file list). */
+  private async unifiedDiff(repo: Repo, basehead: string, signal?: AbortSignal): Promise<string> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+      owner: repo.owner,
+      repo: repo.name,
+      basehead,
+      mediaType: { format: 'diff' },
+      request: { signal },
+    });
+    // With the diff media type the body is the diff text itself.
+    if (typeof data !== 'string') throw new Error('GitHub did not return a diff');
+    return data;
+  }
+
   async conflictState(repo: Repo, prNumber: number): Promise<'clean' | 'conflict' | 'unknown'> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
@@ -620,6 +667,34 @@ export class GitHub implements CodeHost, CommitGraph {
       if (isStatus(error, 404)) return [];
       throw error;
     }
+  }
+
+  async listDir(repo: Repo, ref: string, dir: string, signal?: AbortSignal): Promise<{ name: string; type: 'file' | 'dir' }[] | null> {
+    const gh = await this.octokit(repo);
+    try {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: repo.owner,
+        repo: repo.name,
+        path: dir,
+        ref,
+        request: { signal },
+      });
+      if (!Array.isArray(data)) return null;
+      const entries: { name: string; type: 'file' | 'dir' }[] = [];
+      for (const e of data) if (e.type === 'dir' || e.type === 'file') entries.push({ name: e.name, type: e.type });
+      return entries;
+    } catch (error) {
+      if (isStatus(error, 404)) return null;
+      throw error;
+    }
+  }
+
+  async readToken(repo: Repo): Promise<string> {
+    const gh = await this.octokit(repo);
+    const auth: unknown = await gh.auth({ type: 'installation' });
+    const token = typeof auth === 'object' && auth !== null && 'token' in auth ? auth.token : null;
+    if (typeof token !== 'string' || token === '') throw new Error('GitHub gave no installation token');
+    return token;
   }
 
   async commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles> {

@@ -1,0 +1,1 @@
+ALTER TABLE "boards" ALTER COLUMN "sub_max_changed_lines" SET DEFAULT 5000;

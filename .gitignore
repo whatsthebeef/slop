@@ -13,6 +13,7 @@ cdk.out/
 .routines.json
 .slop-dev
 .slop-dev-snapshots/
+.slop-code/
 .donotcommit.txt
 .claude/settings.local.json
 .sstor/.finalised

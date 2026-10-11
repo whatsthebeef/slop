@@ -108,7 +108,7 @@ describe('answers', () => {
 
   it('colours chips by source type', () => {
     expect(sourceTone('decision')).not.toBe(sourceTone('glob_plan'));
-    expect(sourceTone('local_review')).toBe(sourceTone('code_review'));
+    expect(sourceTone('local_review')).toBe(sourceTone('change_summary'));
     expect(sourceTone('board_state')).toContain('muted');
   });
 

@@ -86,6 +86,7 @@ const artifactSource = (kind: ArtifactKind): SourceType => {
       return 'postplan';
     case 'local_review':
       return 'local_review';
+    case 'investigation':
     case 'attachment':
       return 'attachment';
   }
@@ -99,7 +100,6 @@ const authorityOf = (source: SourceType): AuthorityTier => {
       return 'merged_code';
     case 'local_review':
     case 'attachment':
-    case 'code_review':
     case 'meeting':
     case 'thread':
     case 'doc':
@@ -134,7 +134,7 @@ const filesLine = (files: readonly string[]): string => {
 
 /**
  * The search index builder (spec, Knowledge and context). The index is derived: `syncBoard` reads the board's
- * existing material (glob summaries and plans, artifacts, CodeRabbit items, KB documents, approved learnings, merged
+ * existing material (glob summaries and plans, artifacts, KB documents, approved learnings, merged
  * changes), writes one item per source with a content hash, and re-chunks only what changed, so the first run is the
  * backfill and every later run is cheap and idempotent. Chunks are keyword-searchable the moment they are written;
  * `processNext` then writes each merged change's "why" (one cheap model call) and embeds chunks for semantic search.
@@ -267,21 +267,6 @@ export class SearchIndexer {
       const glob = byId.get(artifact.globId);
       if (glob === undefined) continue;
       push(this.artifactItem(board.id, glob, artifact));
-    }
-    const comments = globs.length === 0 ? [] : await tx.listCodeReviewComments(board.id, globs.map((g) => g.id));
-    for (const c of comments) {
-      const glob = byId.get(c.globId);
-      push({
-        sourceType: 'code_review',
-        externalRef: `review:${c.externalId}`,
-        title: `${c.globId} ${c.kind}${c.path === null ? '' : ` on ${c.path}`}`,
-        occurredAt: c.createdAt,
-        authority: authorityOf('code_review'),
-        globIds: [c.globId],
-        globGroup: glob?.group ?? null,
-        externalUrl: c.url ?? globLink(board.id, c.globId),
-        text: c.body,
-      });
     }
     for (const doc of await tx.listKnowledge(board.id, ['doc'])) {
       push({
