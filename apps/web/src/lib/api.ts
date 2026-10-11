@@ -354,6 +354,7 @@ export type ActionPath =
   | 'start-again'
   | 'merge'
   | 'retry-merge'
+  | 'deescalate'
   | 'merge-continue'
   | 'mark-ready';
 
@@ -590,6 +591,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   start_again: 'start-again',
   merge: 'merge',
   retry_merge: 'retry-merge',
+  deescalate: 'deescalate',
   merge_continue: 'merge-continue',
   mark_ready: 'mark-ready',
   delete: null,
@@ -606,6 +608,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   start_again: 'Start again',
   merge: 'Merge',
   retry_merge: 'Retry merge',
+  deescalate: 'Make it a sub again',
   merge_continue: 'Merge and continue',
   mark_ready: 'Ready for review',
   delete: 'Delete',

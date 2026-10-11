@@ -628,6 +628,16 @@ export class GlobService {
     );
   }
 
+  /** `escalate_to_same`: a routine run (with its run ID) or a person flags a running sub as needing a human. */
+  escalateToSame(email: string, id: string, input: { reason: string; evidence?: string | null; runId?: string | null }) {
+    return this.command(email, id, null, (glob, ctx) => machine.escalateToSame(glob, input, ctx));
+  }
+
+  /** A person makes an escalated glob a sub again. */
+  deescalate(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.deescalate(glob, ctx));
+  }
+
   /** `report_failure` from a person's interactive session (no run ID). */
   reportFailure(email: string, id: string, reason: string, runId: string | null, agentSetVersion: number | null = null) {
     return this.command(email, id, null, (glob, ctx) =>

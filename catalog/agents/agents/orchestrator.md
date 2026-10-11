@@ -136,6 +136,23 @@ Keep it in `.reviews/<id>-record.md` and use this format:
 
 Keep it concise: no file lists, test counts or narration, since git, the local review and the code hold those. Only what they don't already say. About 3–15 KB depending on the size of the glob. Rewrite sections rather than appending to them. `.reviews/<id>-implementation.md` stays local raw notes from the sub-agents, which you condense into the record. Push the record with the HEAD commit's SHA (`commitSha`) whenever it changes meaningfully and at the end.
 
+## Escalating a sub
+
+A sub merges on its own once its checks and the gate pass, so nobody looks at it unless you say so. **The default is to push through.** Escalate only with a concrete reason, by calling `escalate_to_same(id, reason, evidence, runId)`: the glob becomes a same in place (same branch and PR, no auto-merge), the reason shows on its card as "Needs a human", and its owner is told. A person can make it a sub again, and slop records how each escalation turned out so the board's guidance improves.
+
+Escalate when you found, during implementation or review, that:
+
+- the change makes a product or design decision the plan didn't settle;
+- it touches one of the board's risk areas (`get_conventions`);
+- it rewrites existing data (migrations, backfills, deletes);
+- it changes auth, permissions or secrets handling;
+- you had to weaken or delete a test to get green;
+- it changes agent instructions or the agent set;
+- scope grew well beyond the plan;
+- in-scope review findings remain unresolved after the allowed rounds.
+
+Don't escalate for size alone (a large mechanical change, a rename across many files), for a plan that was followed, or "to be safe". Put the reason in one or two sentences a person can act on and the evidence (files, findings, the unsettled choice) in `evidence`; record it in the implementation record's `## Decisions`. Escalating is not failing: carry on to the end of the phases and mark the PR ready.
+
 ## Workflow
 
 Run all phases sequentially without pausing, except where a phase says to ask the developer. Stop early only for a serious blocker (the glob is fundamentally unclear, a critical dependency is missing, or a phase fails in a way that makes continuing pointless). On a blocker, call `report_failure(id, reason)` (with the run ID if unattended) and explain the problem.
@@ -213,7 +230,7 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
 
 1. Invoke the **change_reviewer** in standard mode with: plan.md's acceptance criteria (or bug fields, stating it must verify the root cause is addressed and a regression test exists); clarifications or assumptions verbatim; the learnings file path; the round number and max rounds; the review document path `.reviews/<id>-review.md`; the test report path; every board doc whose audience includes the change_reviewer; the board's build doc; any other relevant doc paths; the base branch; the server URL if any.
 2. The reviewer reviews all changes on the branch against `origin/<base>` (after `git fetch origin <base>`), classifies each finding as `IN-SCOPE` or `SUGGESTION`, appends to the review document and returns its verdict.
-3. If there are `IN-SCOPE` items and rounds remain: invoke the **implementer** with the feedback, then the **tester** to verify, then the next round.
+3. If the reviewer's verdict names an escalation, or in-scope items are still open after the last round, call `escalate_to_same` (see Escalating a sub). If there are `IN-SCOPE` items and rounds remain: invoke the **implementer** with the feedback, then the **tester** to verify, then the next round.
 4. Otherwise the cycle ends.
 5. After each round, fold in what the reviewer's findings and the implementer's fixes changed: a decision the review overturned goes in `## Decisions` or `## Deviations`, a surprise in `## Traps`.
 
