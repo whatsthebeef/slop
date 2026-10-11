@@ -121,3 +121,65 @@ export const reaches = (from: string, target: string, lookup: (id: string) => Gl
 
 /** Whether `glob` waits for `id` (explicitly or by an implied hold). */
 export const waitsFor = (glob: Dependent, id: string): boolean => dependencyIds(glob).includes(id);
+
+/**
+ * Whether the dependency `dependencyId` of `glob` blocks it from starting. Every `after` edge does for now; when edges
+ * are split into needs and overlaps (s15f44) only needs edges block, and this is the one place that changes.
+ */
+export const blocksStart = (glob: Dependent, dependencyId: string): boolean => dependencyIds(glob).includes(dependencyId);
+
+/** One unmerged glob a glob is blocked by, `depth` links away (1 is a direct prerequisite). */
+export interface BlockedBy {
+  readonly id: string;
+  readonly state: Exclude<DependencyState, 'merged'>;
+  /** The glob's own status (planning, implementing, failed, pr_open, ...); null when it was deleted. */
+  readonly status: Glob['status'] | null;
+  readonly depth: number;
+}
+
+/** Everything unmerged ahead of a glob, nearest first, and which of it can be started now. */
+export interface BlockingChain {
+  readonly blockedBy: readonly BlockedBy[];
+  /** The deepest glob in the chain that is in Planning with nothing unmerged ahead of it: what to start next. */
+  readonly nextStartable: string | null;
+}
+
+export const NO_CHAIN: BlockingChain = { blockedBy: [], nextStartable: null };
+
+/**
+ * The glob's whole blocking chain: its unmerged prerequisites, what they wait for in turn, and so on. Merged globs are
+ * skipped (and not walked past), a cycle is walked once, and `lookup` answers undefined for a deleted glob.
+ */
+export const blockingChain = (rootId: string, root: Dependent, lookup: (id: string) => Glob | undefined): BlockingChain => {
+  const seen = new Set<string>([rootId]);
+  const blockedBy: BlockedBy[] = [];
+  const hasUnmergedAhead = new Set<string>();
+  let level: { readonly id: string; readonly glob: Dependent }[] = [{ id: rootId, glob: root }];
+  for (let depth = 1; level.length > 0; depth++) {
+    const next: { id: string; glob: Dependent }[] = [];
+    for (const parent of level) {
+      for (const id of dependencyIds(parent.glob).filter((d) => blocksStart(parent.glob, d))) {
+        const glob = lookup(id);
+        const state = dependencyState(glob);
+        if (state === 'merged') continue;
+        hasUnmergedAhead.add(parent.id);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        blockedBy.push({ id, state, status: glob?.status ?? null, depth });
+        if (glob !== undefined) next.push({ id, glob });
+      }
+    }
+    level = next;
+  }
+  const startable = blockedBy.filter((b) => b.state === 'planning' && !hasUnmergedAhead.has(b.id));
+  const deepest = Math.max(0, ...startable.map((b) => b.depth));
+  return { blockedBy, nextStartable: startable.find((b) => b.depth === deepest)?.id ?? null };
+};
+
+/** "Blocked: 3 ahead, next: s15f38". */
+export const chainSummary = (chain: BlockingChain): string =>
+  `Blocked: ${chain.blockedBy.length} ahead${chain.nextStartable === null ? '' : `, next: ${chain.nextStartable}`}`;
+
+/** The refusal for starting a glob with a chain ahead of it: the whole chain with each glob's state. */
+export const chainRefusal = (chain: BlockingChain): string =>
+  `${chainSummary(chain)} (${chain.blockedBy.map((b) => `${b.id} ${b.status ?? 'deleted'}`).join(', ')}; use Start anyway)`;

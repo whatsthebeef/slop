@@ -6,8 +6,8 @@ import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Tra
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import type { Actor, Board, Category, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
-import { MAX_AFTER, checkAfter, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
-import type { AwaitedDependency, DependencyState } from '../domain/waiting.js';
+import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
+import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { findHolds } from './hold-service.js';
@@ -103,6 +103,8 @@ export interface GlobView {
   readonly waitingFor: readonly AwaitedDependency[];
   /** Globs in Planning that wait for this one. */
   readonly waitedOnBy: readonly string[];
+  /** Everything unmerged ahead of the glob, transitively, and which of it can start now. */
+  readonly chain: BlockingChain;
   /** The size check (flag, estimate, proposed split); null when none was made. */
   readonly sizeCheck: SizeCheck | null;
 }
@@ -118,6 +120,8 @@ interface CommandOptions {
   readonly facts?: boolean;
   /** Read the state of the globs this one waits for into `facts.dependencies`. */
   readonly dependencies?: boolean;
+  /** Read the glob's whole blocking chain into `facts.chain`. */
+  readonly chain?: boolean;
   /** Runs before the step: checks input against the store, and returns more glob IDs whose state the step needs. */
   readonly prepare?: (tx: Tx, glob: Glob) => Promise<Result<readonly string[]>>;
   /** A system step that starts a run on someone's behalf: the glob's creator triggers it. */
@@ -156,6 +160,7 @@ export class GlobService {
         artifacts,
         waitingFor: waitingFor(glob, dependencies),
         waitedOnBy: waiting.filter((g) => waitsFor(g, glob.id)).map((g) => g.id),
+        chain: await this.chainOf(tx, glob),
         sizeCheck: await tx.getSizeCheck(glob.id),
       });
     });
@@ -207,7 +212,7 @@ export class GlobService {
     boardId: number,
     filter: GlobFilter,
     shown: (glob: Glob) => boolean = () => true,
-  ): Promise<Result<{ glob: Glob; artifacts: ArtifactSummary[]; dependencies: ReadonlyMap<string, DependencyState> }[]>> {
+  ): Promise<Result<{ glob: Glob; artifacts: ArtifactSummary[]; dependencies: ReadonlyMap<string, DependencyState>; chain: BlockingChain }[]>> {
     return this.deps.store.transaction(async (tx) => {
       const actor = await this.actorFor(tx, email, boardId);
       if (!actor.ok) return actor;
@@ -223,7 +228,18 @@ export class GlobService {
       const dependencies = await this.dependencyStates(tx, [
         ...new Set(globs.filter((g) => g.status === 'planning').flatMap((g) => dependencyIds(g))),
       ]);
-      return ok(globs.map((glob) => ({ glob, artifacts: (byGlob.get(glob.id) ?? []).sort(byKind), dependencies })));
+      // The chain only matters where a run could be started (Planning) or started again (failed).
+      const blocked = globs.filter((g) => (g.status === 'planning' || g.status === 'failed') && g.type !== 'super' && dependencyIds(g).length > 0);
+      const reach = blocked.length === 0 ? new Map<string, Glob>() : await this.closure(tx, blocked.flatMap((g) => dependencyIds(g)));
+      const chains = new Map(blocked.map((g) => [g.id, blockingChain(g.id, g, (gid) => reach.get(gid))]));
+      return ok(
+        globs.map((glob) => ({
+          glob,
+          artifacts: (byGlob.get(glob.id) ?? []).sort(byKind),
+          dependencies,
+          chain: chains.get(glob.id) ?? NO_CHAIN,
+        })),
+      );
     });
   }
 
@@ -510,8 +526,9 @@ export class GlobService {
 
   async start(email: string, id: string, version: number) {
     const holds = await this.holdsFor(id);
-    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.start(glob, ctx, facts.dependencies, holds), {
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.start(glob, ctx, facts.dependencies, holds, facts.chain), {
       dependencies: true,
+      chain: true,
       ...(holds.length > 0 && { prepare: () => Promise.resolve(ok(holds.map((h) => h.id))) }),
     });
   }
@@ -555,8 +572,11 @@ export class GlobService {
     return this.command(email, id, version, (glob, ctx) => machine.retryAutofix(glob, ctx));
   }
 
-  retrigger(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx) => machine.retrigger(glob, ctx));
+  /** Refused while prerequisites are unmerged, unless `anyway` (a person's choice). */
+  retrigger(email: string, id: string, version: number, anyway = false) {
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.retrigger(glob, ctx, facts.chain, anyway), {
+      chain: true,
+    });
   }
 
   resolveConflict(email: string, id: string, version: number) {
@@ -724,6 +744,21 @@ export class GlobService {
     return new Map(ids.map((id) => [id, dependencyState(byId.get(id))]));
   }
 
+  /** What the glob is blocked by: its unmerged prerequisites and theirs in turn. */
+  private async chainOf(tx: Tx, glob: Glob): Promise<BlockingChain> {
+    if (glob.type === 'super') return NO_CHAIN;
+    const reach = await this.closure(tx, dependencyIds(glob));
+    return blockingChain(glob.id, glob, (id) => reach.get(id));
+  }
+
+  /** The chain of a glob by ID, for the routine executor's last check before a session is spent. */
+  async blockingChainOf(id: string): Promise<BlockingChain> {
+    return this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      return glob === null ? NO_CHAIN : this.chainOf(tx, glob);
+    });
+  }
+
   /** The globs with these IDs and everything they wait for in turn (bounded), for the cycle check. */
   private async closure(tx: Tx, ids: readonly string[]): Promise<Map<string, Glob>> {
     const found = new Map<string, Glob>();
@@ -771,7 +806,8 @@ export class GlobService {
           options.dependencies === true
             ? { dependencies: await this.dependencyStates(tx, [...new Set([...dependencyIds(glob), ...extraIds])]) }
             : {};
-        const facts: ActionFacts = { ...record, ...dependencies };
+        const chain = options.chain === true ? { chain: await this.chainOf(tx, glob) } : {};
+        const facts: ActionFacts = { ...record, ...dependencies, ...chain };
         const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);
         const transition = step(glob, ctx, board, facts);
         if (!transition.ok) return transition;

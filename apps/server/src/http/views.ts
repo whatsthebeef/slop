@@ -1,4 +1,4 @@
-import type { Action, ArtifactSummary, AwaitedDependency, DependencyState, DomainError, Glob, Role, SizeCheck } from '@slop/core';
+import type { Action, ArtifactSummary, AwaitedDependency, BlockingChain, DependencyState, DomainError, Glob, Role, SizeCheck } from '@slop/core';
 import { checksExplanation, listOf, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -12,6 +12,8 @@ export const globView = (
   artifacts: readonly ArtifactSummary[] | null = null,
   /** What the glob waits for and what waits for it, where the caller read them (one glob's view, not the list). */
   waits: { readonly waitingFor: readonly AwaitedDependency[]; readonly waitedOnBy: readonly string[] } | null = null,
+  /** The chain of unmerged prerequisites ahead of the glob; nothing is added while it is empty. */
+  chain: BlockingChain | null = null,
 ) => ({
   ...glob,
   list: listOf(glob.status),
@@ -22,12 +24,13 @@ export const globView = (
   ...(allowedActions === null ? {} : { allowedActions }),
   ...(artifacts === null ? {} : { artifacts: artifacts.map(artifactView) }),
   ...(waits === null ? {} : { waitingFor: waits.waitingFor, waitedOnBy: waits.waitedOnBy }),
+  ...(chain === null || chain.blockedBy.length === 0 ? {} : { blockedBy: chain.blockedBy, nextStartable: chain.nextStartable }),
 });
 
 /** A glob read through the service: its view with the actions open to the caller and what it waits for. */
-export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; sizeCheck?: SizeCheck | null }) =>
+export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; chain: BlockingChain; sizeCheck?: SizeCheck | null }) =>
   ({
-    ...globView(v.glob, v.allowedActions, v.artifacts, v),
+    ...globView(v.glob, v.allowedActions, v.artifacts, v, v.chain),
     waitingFor: v.waitingFor,
     waitedOnBy: v.waitedOnBy,
     // The size check: the flag, why, the estimate's evidence and the proposed split (get_glob carries it to routines).
@@ -53,6 +56,7 @@ export const globViewFor = (
   artifacts: readonly ArtifactSummary[] | null = null,
   /** The state of the globs this one waits for, so a held glob's actions don't rest on its `waiting` mark. */
   dependencies?: ReadonlyMap<string, DependencyState>,
+  chain: BlockingChain | null = null,
 ) =>
   globView(
     glob,
@@ -62,6 +66,8 @@ export const globViewFor = (
       { recordSha: machine.recordShaOf(artifacts ?? []), ...(dependencies === undefined ? {} : { dependencies }) },
     ),
     artifacts,
+    null,
+    chain,
   );
 
 export const statusOf = (error: DomainError): ContentfulStatusCode => {

@@ -2,6 +2,7 @@ import {
   behindAdvice,
   behindWarning,
   checksExplanation,
+  chainSummary,
   machine,
   readyStatus,
   stuckHint,
@@ -356,4 +357,35 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     ].join('\n'),
     spinning: false,
   };
+};
+
+/** "Blocked: 3 ahead, next: s15f38" for a glob with unmerged prerequisites; null when none. */
+export const blockedLine = (glob: GlobView): string | null => {
+  const ahead = glob.blockedBy ?? [];
+  if (ahead.length === 0) return null;
+  return chainSummary({ blockedBy: ahead, nextStartable: glob.nextStartable ?? null });
+};
+
+/** The chain for a tip, nearest first, each with its state: "s15f41 (Planning), s15f40 (Planning, 2 links away)". */
+export const chainTip = (glob: GlobView): string =>
+  (glob.blockedBy ?? [])
+    .map((b) => `${b.id} (${statusWords(b.status)}${b.depth > 1 ? `, ${String(b.depth)} links away` : ''})`)
+    .join(', ');
+
+const statusWords = (status: GlobView['status'] | null): string => {
+  switch (status) {
+    case null:
+      return 'deleted';
+    case 'planning':
+      return 'Planning';
+    case 'implementing':
+    case 'in_progress':
+      return 'Doing';
+    case 'failed':
+      return 'failed';
+    case 'pr_open':
+      return 'PR open';
+    default:
+      return status;
+  }
 };

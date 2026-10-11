@@ -1,6 +1,7 @@
 import type {
   Action,
   AwaitedDependency,
+  BlockedBy,
   AgentSetEntry,
   AgentSetFileView,
   Approval,
@@ -60,6 +61,9 @@ export interface GlobView extends Glob {
   /** What the glob still waits for, and the globs in Planning that wait for it (single-glob reads only). */
   readonly waitingFor?: readonly AwaitedDependency[];
   readonly waitedOnBy?: readonly string[];
+  /** Everything unmerged ahead of the glob, transitively (absent when nothing is), and the one to start next. */
+  readonly blockedBy?: readonly BlockedBy[];
+  readonly nextStartable?: string | null;
   /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
   readonly split?: { readonly source: string; readonly part: number; readonly parts: readonly string[] };
   /** True while the size check flagged the glob oversized and nobody has split it or kept it whole (the card's chip). */
@@ -475,8 +479,8 @@ export const api = {
   updateGlob: (id: string, version: number, changes: GlobChanges) =>
     request<GlobView>('PATCH', `/api/globs/${id}`, { ...changes, version }),
   deleteGlob: (id: string, version: number) => request<object>('DELETE', `/api/globs/${id}`, { version }),
-  action: (id: string, action: ActionPath, version: number) =>
-    request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, { version }),
+  action: (id: string, action: ActionPath, version: number, anyway?: boolean) =>
+    request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, anyway === true ? { version, anyway } : { version }),
   intake: (boardId: number, text: string) =>
     request<IntakeProposalView>('POST', `/api/boards/${boardId}/intake`, { text }),
   intakeAccuracy: (boardId: number) => request<IntakeAccuracy>('GET', `/api/boards/${boardId}/intake-accuracy`),

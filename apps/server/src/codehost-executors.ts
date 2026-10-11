@@ -1,7 +1,7 @@
 import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { fireRoutine, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
-import { isRepoAccessFailure, isSetupFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
+import { isRepoAccessFailure, isSetupFailure, chainRefusal, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -440,6 +440,16 @@ export const codeHostExecutors = (
       if (effect.kind !== 'fire_routine' || glob === null) return 'dropped';
       const run = machine.currentRun(glob);
       if (run?.id !== effect.runId || run.state !== 'queued') return 'dropped';
+      // Don't spend a session to find out in Phase 1 that prerequisites haven't merged (unless a person said to go ahead).
+      if (effect.checkPrerequisites === true) {
+        const chain = await globs.blockingChainOf(glob.id);
+        if (chain.blockedBy.length > 0) {
+          await globs.applyEvent(glob.id, (g, ctx) =>
+            machine.reportFailure(g, { reason: `Not fired: ${chainRefusal(chain)}`, runId: effect.runId }, ctx),
+          );
+          return 'done';
+        }
+      }
       // A routine works on the glob's branch, so it is only fired once that exists.
       if (glob.provisioning !== 'ok') throw new Error(`${glob.id} is not provisioned yet`);
       const secret = await routines.secretFor(effect.routineOwner, glob.boardId);

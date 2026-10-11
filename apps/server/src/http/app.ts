@@ -159,7 +159,7 @@ const splitField = (split: SplitInfo | undefined) => (split === undefined ? {} :
 const versionSchema = z.object({ version: z.number().int() });
 
 /** Glob actions carry the version read; pick-up and take-over may also choose the environment. */
-const actionSchema = versionSchema.extend({ environment: z.string().min(1).optional() });
+const actionSchema = versionSchema.extend({ environment: z.string().min(1).optional(), anyway: z.boolean().optional() });
 type ActionBody = z.infer<typeof actionSchema>;
 
 const send = <T>(c: Context<Env>, result: Result<T>, map: (value: T) => unknown = (v) => v) =>
@@ -372,8 +372,8 @@ export const createApp = (deps: AppDeps) => {
     const splits = await globs.splitsOf(boardId);
     const oversized = await globs.oversizedOf(boardId);
     return send(c, result, (list) =>
-      list.map(({ glob, artifacts, dependencies }) => ({
-        ...globViewFor(glob, email, membership.value.role, artifacts, dependencies),
+      list.map(({ glob, artifacts, dependencies, chain }) => ({
+        ...globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain),
         ...splitField(splits.get(glob.id)),
         ...(oversized.has(glob.id) ? { oversized: true } : {}),
       })),
@@ -477,7 +477,7 @@ export const createApp = (deps: AppDeps) => {
   const actions = {
     start: (email: string, id: string, b: ActionBody) => globs.start(email, id, b.version),
     'start-anyway': (email: string, id: string, b: ActionBody) => globs.startAnyway(email, id, b.version),
-    retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version),
+    retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version, b.anyway === true),
     'retry-autofix': (email: string, id: string, b: ActionBody) => globs.retryAutofix(email, id, b.version),
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),
     'pick-up': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, false, b.environment),

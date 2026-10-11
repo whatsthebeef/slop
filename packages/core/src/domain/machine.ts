@@ -12,7 +12,8 @@ import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
 import { SLOP_TYPES } from './types.js';
 import { mergeImplied } from './exclusive-paths.js';
-import { dependencyIds, refusalText, waitingFor, waitSummary } from './waiting.js';
+import { chainRefusal, dependencyIds, NO_CHAIN, refusalText, waitingFor, waitSummary } from './waiting.js';
+import type { BlockingChain } from './waiting.js';
 import type { DependencyState } from './waiting.js';
 import type {
   Actor,
@@ -83,6 +84,8 @@ export interface ActionFacts {
   readonly recordSha?: string | null;
   /** The state of every glob this one waits for (a missing entry reads as deleted); absent when not loaded. */
   readonly dependencies?: ReadonlyMap<string, DependencyState>;
+  /** Everything unmerged ahead of the glob, where loaded (Start and Retrigger refuse while it isn't empty). */
+  readonly chain?: BlockingChain;
 }
 
 const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
@@ -219,7 +222,7 @@ class Builder {
   }
 
   /** Queues a new routine run for whoever triggered it. */
-  queueRun(triggeredBy: string, retry?: { readonly failureSummary: string | null }): this {
+  queueRun(triggeredBy: string, retry?: { readonly failureSummary: string | null }, checkPrerequisites = false): this {
     const run: Run = {
       id: this.ctx.newRunId(),
       state: 'queued',
@@ -250,6 +253,7 @@ class Builder {
       runId: run.id,
       routineOwner: run.routineOwner,
       ...(retry?.failureSummary == null ? {} : { failureSummary: retry.failureSummary }),
+      ...(checkPrerequisites ? { checkPrerequisites: true as const } : {}),
     });
   }
 
@@ -399,11 +403,13 @@ export const start = (
   dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
   /** Holds the board's merge policy found for this start (another open glob may change the same exclusive paths). */
   newHolds: readonly ImpliedAfter[] = [],
+  chain: BlockingChain = NO_CHAIN,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status !== 'planning' || glob.type !== 'same') {
     return invalidTransition(glob, actor, 'Only a same in planning can be started');
   }
+  if (chain.blockedBy.length > 0) return invalidTransition(glob, actor, chainRefusal(chain));
   const awaited = waitingFor(glob, dependencies);
   if (awaited.length > 0) return invalidTransition(glob, actor, refusalText(awaited));
   // A merge-policy hold keeps the request: the same waits in Planning and starts when the other glob merges.
@@ -414,7 +420,7 @@ export const start = (
       .event('Waiting', { for: holding.map((a) => a.id), note: waitSummary(holding) })
       .done();
   }
-  return new Builder(glob, ctx).set({ waiting: null }).status('implementing').queueRun(actor.email).done();
+  return new Builder(glob, ctx).set({ waiting: null }).status('implementing').queueRun(actor.email, undefined, true).done();
 };
 
 /** Row 34: Start anyway. A sub or same in planning that waits for unmerged globs starts now; the hold is recorded as overridden. */
@@ -584,18 +590,19 @@ export const retryAutofix = (glob: Glob, ctx: Context): Result<Transition> => {
 };
 
 /** Row 20: re-trigger a failed sub or same on its existing branch. */
-export const retrigger = (glob: Glob, ctx: Context): Result<Transition> => {
+export const retrigger = (glob: Glob, ctx: Context, chain: BlockingChain = NO_CHAIN, anyway = false): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status !== 'failed' || glob.type === 'super') {
     return invalidTransition(glob, actor, 'Only a failed sub or same can be re-triggered');
   }
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+  if (chain.blockedBy.length > 0 && !anyway) return invalidTransition(glob, actor, chainRefusal(chain));
   return new Builder(glob, ctx)
     .bumpGeneration()
     .set({ implementer: null, failure: null })
     .effect({ kind: 'reopen_pr', globId: glob.id, generation: glob.generation + 1 })
     .status('implementing')
-    .queueRun(actor.email)
+    .queueRun(actor.email, undefined, !anyway)
     .done();
 };
 
