@@ -45,8 +45,6 @@ import type {
   SizeCheck,
   SizeThresholdView,
   SlopType,
-  RiskAreaView,
-  SubLimitChange,
   SubLimitView,
   TargetChange,
 } from '@slop/core';
@@ -161,12 +159,6 @@ export interface ApiError {
 }
 
 /** An ATF run as the API sends it; `id` is optional because an older server doesn't send it. */
-/** The sub-limit view; the step fields are optional so an older server's answer still renders. */
-export type SubLimitResponse = Omit<SubLimitView, 'bounds' | 'history'> & {
-  readonly bounds: Omit<SubLimitView['bounds'], 'startStep'> & { readonly startStep?: number };
-  readonly history: readonly (Omit<SubLimitChange, 'step'> & { readonly step?: number })[];
-};
-
 export type AtfRun = Omit<AtfIndicator, 'id'> & { readonly id?: number };
 
 export interface BoardDeploys {
@@ -525,11 +517,7 @@ export const api = {
   /** The board's signals as measured now: what an approval of a submitted item can watch (admins). */
   boardSignals: (boardId: number) => request<KbSignal[]>('GET', `/api/boards/${boardId}/kb/signals`),
   /** The board's learned sub size limit, its bounds and its history (members). */
-  subLimit: (boardId: number) => request<SubLimitResponse>('GET', `/api/boards/${boardId}/sub-limit`),
-  /** The board's risk areas (learned and default) and their history (members). */
-  riskAreas: (boardId: number) => request<RiskAreaView>('GET', `/api/boards/${boardId}/risk-areas`),
-  /** Drops the learned risk areas and restores the defaults (admins). */
-  resetRiskAreas: (boardId: number) => request<RiskAreaView>('POST', `/api/boards/${boardId}/risk-areas/reset`, {}),
+  subLimit: (boardId: number) => request<SubLimitView>('GET', `/api/boards/${boardId}/sub-limit`),
   /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
   sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */

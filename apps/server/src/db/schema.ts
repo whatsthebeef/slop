@@ -31,7 +31,7 @@ import type {
   InboxSuggestion,
   SignalFigures,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES } from '@slop/core';
+import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -77,8 +77,6 @@ export const boards = pgTable('boards', {
   runRespondMinutes: integer('run_respond_minutes').notNull().default(30),
   /** The learned sub size limit (`sub_limit_changes` holds its history); not an admin setting. */
   subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
-  /** The step the learned limit moves by now (see `sub-limit.ts`); starts at 500. */
-  subLimitStep: integer('sub_limit_step').notNull().default(SUB_LIMIT_STEP),
   /** Effect checks: globs compared on each side of an approved change. */
   effectCheckGlobs: integer('effect_check_globs').notNull().default(EFFECT_CHECK_GLOBS_DEFAULT),
   /** Which KB items an admin's agent may approve: 'docs' or 'docs_and_agent_files'. */
@@ -501,8 +499,6 @@ export const subLimitChanges = pgTable(
     /** Null when neither the gate verdict nor the merge commit gave a count (it is evidence only). */
     changedLines: integer('changed_lines'),
     evidence: text('evidence').notNull(),
-    /** The step the move used before weighting; rows from before steps were learned were fixed at 250. */
-    step: integer('step').notNull().default(250),
   },
   (t) => [uniqueIndex('sub_limit_changes_outcome_idx').on(t.boardId, t.globId, t.outcome)],
 );
@@ -541,45 +537,6 @@ export const sizeThresholds = pgTable('size_thresholds', {
   maxTasks: integer('max_tasks').notNull(),
   maxParts: integer('max_parts').notNull(),
 });
-
-/** A board's risk areas (spec, Intake): kinds of work that need a review; defaults are seeded lazily, learned ones come from outcomes. */
-export const boardRiskAreas = pgTable(
-  'board_risk_areas',
-  {
-    boardId: integer('board_id')
-      .notNull()
-      .references(() => boards.id, { onDelete: 'cascade' }),
-    name: text('name').notNull(),
-    pathPatterns: jsonb('path_patterns').$type<string[]>().notNull(),
-    why: text('why').notNull(),
-    source: text('source', { enum: RISK_AREA_SOURCES }).notNull(),
-    strength: integer('strength').notNull().default(0),
-    cleanCount: integer('clean_count').notNull().default(0),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
-  },
-  (t) => [primaryKey({ columns: [t.boardId, t.name] })],
-);
-
-/** The risk areas' history: each change with the glob and outcome that caused it (a reset has no glob). */
-export const riskAreaChanges = pgTable(
-  'risk_area_changes',
-  {
-    id: bigserial('id', { mode: 'number' }).primaryKey(),
-    boardId: integer('board_id')
-      .notNull()
-      .references(() => boards.id, { onDelete: 'cascade' }),
-    at: timestamp('at', { withTimezone: true }).notNull(),
-    /** Null for a reset, or a change whose paths no area covers. */
-    areaName: text('area_name'),
-    kind: text('kind', { enum: RISK_AREA_CHANGE_KINDS }).notNull(),
-    globId: text('glob_id'),
-    cause: text('cause', { enum: RISK_AREA_CAUSES }).notNull(),
-  },
-  (t) => [
-    // Idempotent per glob, cause and area; rows without a glob or an area (resets, unscoped corrections) repeat freely.
-    uniqueIndex('risk_area_changes_outcome_idx').on(t.boardId, t.globId, t.cause, t.areaName),
-  ],
-);
 
 /** The size threshold's history: each outcome recorded once per board and glob, with the threshold before and after it. */
 export const sizeThresholdChanges = pgTable(

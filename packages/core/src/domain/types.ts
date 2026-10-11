@@ -303,8 +303,6 @@ export interface Board {
   readonly runReadyHours: number;
   /** Sub gate: subs changing more lines than this convert to sames. */
   readonly subMaxChangedLines: number;
-  /** The step the learned sub limit moves by now: grows while outcomes agree, shrinks on a reversal (`sub-limit.ts`). */
-  readonly subLimitStep: number;
   /** Effect checks: how many globs each side of an approved change is compared over (admins set 3 to 50). */
   readonly effectCheckGlobs: number;
   /** Which KB items an admin's agent may approve (`decide_kb_item`); admins set it. */
