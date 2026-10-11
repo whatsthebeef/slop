@@ -1,3 +1,4 @@
+import { isInvestigateEvent } from './events.js';
 import type { DomainEvent } from './events.js';
 import { contextSectionList, planTaskLines } from './intake-learning.js';
 import type { Area, GlobOutcome } from './intake-learning.js';
@@ -307,7 +308,7 @@ export const sampleOf = (input: {
   readonly events: readonly DomainEvent[];
 }): ReferenceSample => {
   const { outcome } = input;
-  const reworkRuns = input.events.filter((e) => e.type === 'RunFailed').length;
+  const reworkRuns = input.events.filter((e) => e.type === 'RunFailed' && !isInvestigateEvent(e)).length;
   const escalated = input.events.some((e) => e.type === 'Escalated');
   const followUpBugs = outcome?.postMerge.fixGlobs.length ?? 0;
   const rounds = outcome?.review.rounds ?? null;
@@ -585,7 +586,7 @@ export const sizeRecordOf = (input: {
     files: input.files?.count ?? null,
     lines: input.outcome.size.changedLines,
     rounds: input.outcome.review.rounds,
-    reworkRuns: input.events.filter((e) => e.type === 'RunFailed').length,
+    reworkRuns: input.events.filter((e) => e.type === 'RunFailed' && !isInvestigateEvent(e)).length,
     escalated: input.events.some((e) => e.type === 'Escalated'),
     followUpBugs: input.outcome.postMerge.fixGlobs.length,
     hoursOpen: input.hoursOpen,

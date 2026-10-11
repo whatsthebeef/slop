@@ -1,5 +1,6 @@
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import { isInvestigateEvent } from '../domain/events.js';
 import type { GlobOutcome } from '../domain/intake-learning.js';
 import type { DomainEvent } from '../domain/events.js';
 import { parseInvestigation } from '../domain/investigation.js';
@@ -557,7 +558,7 @@ export class SizeCheckService implements SizeAssessor {
           {
             parts: splitIds.length,
             criticalPath: shape.criticalPath,
-            failedRuns: partEvents.filter((e) => e.type === 'RunFailed').length,
+            failedRuns: partEvents.filter((e) => e.type === 'RunFailed' && !isInvestigateEvent(e)).length,
             missing: partGlobs.filter((g) => g === undefined).length,
             conflicts: partGlobs.filter((g) => g?.conflict != null).length,
             hours: Number.isFinite(ms) && ms >= 0 ? ms / 3_600_000 : null,
@@ -573,7 +574,7 @@ export class SizeCheckService implements SizeAssessor {
           globId: outcome.globId,
           flagged: checks.get(outcome.globId)?.flagged === true,
           outcome,
-          failedRuns: events.filter((e) => e.type === 'RunFailed').length,
+          failedRuns: events.filter((e) => e.type === 'RunFailed' && !isInvestigateEvent(e)).length,
           prHours: prHoursOf(events),
           split: events.some((e) => e.type === 'GlobSplit'),
           splitAfterStart: splitAfterStartOf(events),

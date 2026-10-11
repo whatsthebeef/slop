@@ -309,6 +309,13 @@
       "when": 1791738167878,
       "tag": "0043_size_forecast",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1791738168878,
+      "tag": "0044_auto_investigate",
+      "breakpoints": true
     }
   ]
 }

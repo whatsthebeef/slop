@@ -20,6 +20,7 @@ You will receive:
 - **Clarifications or Assumptions** (optional): authoritative answers (interactive) or recorded assumptions (unattended). They override conflicting assumptions from the description or codebase defaults.
 - **Risk and size document** (`risk_and_size`, from the board's knowledge base): the board's risk tiers, risk areas, escalation criteria and what counts as a separate part. It is the only definition; don't use a copy of your own.
 - **Learnings file** (optional): approved decisions, gotchas and patterns from earlier globs, fetched from slop. Factor relevant entries into your proposals and flag known risks.
+- **Earlier investigation** (optional): the glob's previous investigation, when the orchestrator is refreshing one that no longer holds (the plan or its relevant files changed). Use it as a starting point and for what it already established, but read the code again: it is stale where the plan or those files changed.
 - **Unattended flag**: if set, there is no user. Never call `AskUserQuestion`.
 - **Base branch**, **repo context**, **board doc paths**, **output path**.
 

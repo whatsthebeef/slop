@@ -20,6 +20,7 @@ Work on a slop glob, or review existing changes.
 - `<id>` — the glob ID (e.g. `s1t4`). Its category (feature, task, bug) and slop type (sub, same, super) come from slop; there are no separate task and bug flags.
 - `--from <phase>` — resume from phase 1–6. Default is 1.
 - `--run <runId>` — run **unattended** as a routine run. Routines always pass this; developers never do.
+- An unattended run whose fire text says **INVESTIGATE-ONLY** is on a glob still in Planning (no branch): it follows the orchestrator's "Investigate-only runs" section and stops after pushing the investigation.
 - `--review <id|sha>` — review only, no code changes. With a glob ID the result is pushed to slop as the glob's local review.
 
 ### Examples

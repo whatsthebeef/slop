@@ -353,6 +353,7 @@ export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'cat
 
 export type ActionPath =
   | 'start'
+  | 'investigate'
   | 'start-anyway'
   | 'retrigger'
   | 'retry-autofix'
@@ -603,6 +604,7 @@ export const api = {
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   start: 'start',
+  investigate: 'investigate',
   start_anyway: 'start-anyway',
   pick_up: 'pick-up',
   take_over: 'take-over',
@@ -620,6 +622,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
 
 export const ACTION_LABELS: Record<Action, string> = {
   start: 'Start',
+  investigate: 'Investigate',
   start_anyway: 'Start anyway',
   pick_up: "Pick up (I'll do it)",
   take_over: 'Take over',

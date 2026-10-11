@@ -112,6 +112,74 @@ describe('start (row 5)', () => {
   });
 });
 
+describe('investigate (row 5a)', () => {
+  it('queues an investigate-only run on a glob in planning, with no status change or provisioning', () => {
+    const t = value(m.investigate(glob(), ctx()));
+    expect(t.glob.status).toBe('planning');
+    expect(t.effects.map((e) => e.kind)).not.toContain('provision');
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'queued', purpose: 'investigate', triggeredBy: dev.email });
+    expect(t.effects).toEqual([expect.objectContaining({ kind: 'fire_routine', purpose: 'investigate' })]);
+    expect(t.events.map((e) => e.type)).toEqual(['RunTriggered']);
+    expect(m.allowedActions(glob(), dev)).toContain('investigate');
+  });
+
+  it('works on a held sub too, and for slop itself it is the glob creator who triggers it', () => {
+    const t = value(m.investigate(glob({ type: 'sub', waiting: { since: NOW } }), ctx(null), true));
+    expect(m.currentRun(t.glob)).toMatchObject({ purpose: 'investigate', triggeredBy: dev.email });
+  });
+
+  it('refuses a live run, a started glob, a super and QA or PO on a same', () => {
+    expect(errorCode(m.investigate(glob({ runs: [run({ state: 'queued' })] }), ctx()))).toBe('run_active');
+    expect(errorCode(m.investigate(glob({ status: 'in_progress' }), ctx()))).toBe('invalid_transition');
+    expect(errorCode(m.investigate(glob({ type: 'super' }), ctx()))).toBe('invalid_transition');
+    expect(errorCode(m.investigate(glob(), ctx(po)))).toBe('forbidden');
+    expect(m.allowedActions(glob(), po)).not.toContain('investigate');
+    expect(m.allowedActions(glob({ runs: [run({ state: 'active', purpose: 'investigate' })] }), dev)).not.toContain('investigate');
+  });
+
+  it('ends completed when its investigation is pushed; other runs and stale run IDs are untouched', () => {
+    const investigating = glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] });
+    const t = value(m.investigationPushed(investigating, 'run-9', ctx()));
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'completed' });
+    expect(t.glob.status).toBe('planning');
+    expect(value(m.investigationPushed(investigating, 'run-old', ctx())).changed).toBe(false);
+    expect(value(m.investigationPushed(glob({ status: 'implementing', runs: [run({ id: 'run-9' })] }), 'run-9', ctx())).changed).toBe(false);
+  });
+
+  it('a failure report ends the run and leaves the glob in planning', () => {
+    const investigating = glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] });
+    const t = value(m.reportFailure(investigating, { reason: 'no routine', runId: 'run-9' }, ctx(null)));
+    expect(t.glob.status).toBe('planning');
+    expect(t.glob.failure).toBeNull();
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'failed', failureReason: 'no routine' });
+  });
+
+  it('starting the glob supersedes an investigation still running', () => {
+    const t = value(m.start(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx()));
+    expect(t.glob.status).toBe('implementing');
+    expect(t.glob.runs.map((r) => [r.id, r.state, r.outcome, r.purpose])).toEqual([
+      ['run-9', 'ended', 'superseded', 'investigate'],
+      ['run-1', 'queued', null, undefined],
+    ]);
+  });
+
+  it('picking the glob up supersedes an active investigation instead of being refused', () => {
+    const t = value(m.pickUp(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx(), board, { takeOver: false }));
+    expect(t.glob.status).toBe('in_progress');
+    expect(m.currentRun(t.glob)).toMatchObject({ id: 'run-9', state: 'ended', outcome: 'superseded' });
+  });
+
+  it('times out on no progress but never for an unmarked PR', () => {
+    const later = '2026-10-05T21:00:00.000Z';
+    const investigating = glob({ runs: [run({ purpose: 'investigate' })] });
+    expect(m.runTimeoutReason(investigating, board, '2026-10-05T13:00:00.000Z')).toBeNull();
+    expect(m.runTimeoutReason(investigating, board, '2026-10-05T14:30:00.000Z')).toMatch(/No progress/);
+    const progressing = glob({ runs: [run({ purpose: 'investigate', lastProgressAt: '2026-10-05T20:30:00.000Z' })] });
+    expect(m.runTimeoutReason(progressing, board, later)).toBeNull();
+    expect(m.runTimeoutReason(glob({ status: 'implementing', runs: [run({ lastProgressAt: '2026-10-05T20:30:00.000Z' })] }), board, later)).toMatch(/PR not marked ready/);
+  });
+});
+
 describe('pick up (rows 6–10)', () => {
   it('row 6: from planning, the picker becomes implementer and a queued run is cancelled', () => {
     const t = value(

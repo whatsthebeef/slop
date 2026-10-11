@@ -149,14 +149,16 @@ describe('learned size check', () => {
   it('holds a flagged sub in Planning, not queuing a run, until it is kept whole', async () => {
     const sub = await create('sub', BIG);
     expect(sub.status).toBe('planning');
-    expect(sub.runs).toHaveLength(0);
+    // Only the automatic investigate-only run: nothing implements it.
+    expect(sub.runs.map((r) => r.purpose)).toEqual(['investigate']);
     expect(sub.waiting).not.toBeNull();
     // Nothing waited for merging starts it.
     expect((unwrap(await globs.release(sub.id))).status).toBe('planning');
     unwrap(await service.keepWhole(DEV, sub.id));
     const released = unwrap(await globs.release(sub.id));
     expect(released.status).toBe('implementing');
-    expect(released.runs).toHaveLength(1);
+    // The queued investigation is superseded by the run that implements it.
+    expect(released.runs.map((r) => [r.purpose, r.outcome ?? r.state])).toEqual([['investigate', 'superseded'], [undefined, 'queued']]);
     expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.decision).toBe('kept_whole');
   });
 
@@ -168,19 +170,38 @@ describe('learned size check', () => {
     const started = unwrap(await globs.startAnyway(DEV, sub.id, sub.version));
     expect(started.status).toBe('implementing');
     expect(started.implementer).toBeNull();
-    expect(started.runs).toHaveLength(1);
+    expect(started.runs.filter((r) => r.purpose === undefined)).toHaveLength(1);
     expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.decision).toBe('kept_whole');
   });
 
   it('does not auto-trigger a flagged same, and leaves one without auto-trigger alone', async () => {
     const auto = await create('same', BIG, true);
     expect(auto.status).toBe('planning');
-    expect(auto.runs).toHaveLength(0);
+    expect(auto.runs.map((r) => r.purpose)).toEqual(['investigate']);
     const plain = await create('same', BIG);
     expect(plain.status).toBe('planning');
     expect(plain.waiting ?? null).toBeNull();
     // A small auto-triggered same still starts.
     expect((await create('same', SMALL, true)).status).toBe('implementing');
+  });
+
+  it('investigates a flagged glob once by itself, unless the board turns it off', async () => {
+    const flagged = await create('same', BIG);
+    expect(flagged.runs).toHaveLength(1);
+    expect(flagged.runs[0]).toMatchObject({ purpose: 'investigate', state: 'queued', triggeredBy: DEV });
+    expect(flagged.status).toBe('planning');
+    // Saving the plan again does not start a second one: one automatic run per glob.
+    await globs.autoInvestigate(flagged.id);
+    expect((await get(flagged.id)).runs).toHaveLength(1);
+    // A small, model-judged plan is not investigated; a text-only multi-task estimate is (low confidence).
+    expect((await create('same', SMALL)).runs).toHaveLength(0);
+    llmMode = 'unavailable';
+    const guessed = await create('same', '## Tasks\n- [ ] One thing\n- [ ] Another thing\n');
+    expect(guessed.runs.map((r) => r.purpose)).toEqual(['investigate']);
+    const board = await store.transaction((tx) => tx.getBoard(boardId));
+    expect(board?.autoInvestigate).toBe(true);
+    unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).updateSettings(ADMIN, boardId, board?.version ?? 1, { autoInvestigate: false }));
+    expect((await create('same', BIG)).runs).toHaveLength(0);
   });
 
   it('keep whole is refused for a glob that is not flagged', async () => {
@@ -231,7 +252,7 @@ describe('learned size check', () => {
     expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.flagged).toBe(false);
     const started = await get(sub.id);
     expect(started.status).toBe('implementing');
-    expect(started.runs).toHaveLength(1);
+    expect(started.runs.map((r) => [r.purpose, r.outcome ?? r.state])).toEqual([['investigate', 'superseded'], [undefined, 'queued']]);
   });
 
   it('reports oversized only while the glob is in Planning, and skips the model for an unchanged plan', async () => {

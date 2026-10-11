@@ -172,3 +172,28 @@ export const runInstructions = (
           `When the work is pushed, call slop's mark_ready for ${glob.id} with the run ID (do not use gh). If you cannot finish, call report_failure with the run ID.`,
         ]),
   ].join('\n');
+
+/**
+ * The text of an investigate-only run: the glob is still in Planning, so there is no branch or PR. The run does the
+ * orchestrator's Phases 1–2 on the base branch, pushes the investigation and stops.
+ */
+export const investigateInstructions = (
+  glob: { id: string; title: string },
+  runId: string,
+  repo: string | null,
+  baseBranch: string | null,
+): string =>
+  [
+    `Slop glob ${glob.id}: ${glob.title}`,
+    `Run ID: ${runId}`,
+    ...(repo === null
+      ? []
+      : [
+          `Repository: ${repo}. Work in that repository's checkout. If this session doesn't have it, call slop's report_failure with the run ID saying so (the routine's environment needs ${repo} and the Claude GitHub App installed on it); don't work in another repository.`,
+        ]),
+    '',
+    `This is an INVESTIGATE-ONLY run. Glob ${glob.id} is still in Planning: it has no branch and no PR yet. Stay on ${baseBranch ?? "the repository's base branch"} (run \`git fetch origin${baseBranch === null ? '' : ` ${baseBranch}`}\` first); do not create or push any branch, commit anything or open a PR, and do not call mark_ready.`,
+    `Read .claude/agents/orchestrator.md and follow its "Investigate-only runs" section for glob ${glob.id} in unattended mode with run ID ${runId}: Phases 1–2 only, then push the investigation with put_artifact (kind investigation, with the run ID).`,
+    "Start by calling slop's get_glob and get_context for the glob, passing the run ID.",
+    'If you cannot finish, call report_failure with the run ID.',
+  ].join('\n');

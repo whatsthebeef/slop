@@ -118,6 +118,11 @@ export const mountArtifactUploads = (app: Hono<Env>, deps: ArtifactUploadDeps) =
       return c.json(errorBody(result.error), statusOf(result.error));
     }
     const a = result.value;
+    // An investigate-only run ends with its investigation; one whose block didn't validate stays open for the fix.
+    if (!('ignored' in a) && parsed.kind === 'investigation' && parsed.runId !== null && a.provenance.validation === undefined) {
+      const runId = parsed.runId;
+      await deps.globs.applyEvent(parsed.id, (g, ctx) => machine.investigationPushed(g, runId, ctx));
+    }
     return c.json(
       'ignored' in a
         ? a
