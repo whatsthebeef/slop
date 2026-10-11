@@ -1012,3 +1012,77 @@ export const inboxLinks = pgTable(
   },
   (t) => [primaryKey({ columns: [t.inboxId, t.globId] }), index('inbox_links_glob_idx').on(t.globId)],
 );
+
+/**
+ * The code view's index of a board's base branch, rebuilt whenever the clone's base moves: one row per board naming the
+ * indexed commit, then the tree, the import graph and the path history at that commit. Symbols (definitions and
+ * references) will be another table keyed the same way, `(board_id, path, …)`, written in the same replace.
+ */
+export const codeIndex = pgTable('code_index', {
+  boardId: integer('board_id')
+    .primaryKey()
+    .references(() => boards.id, { onDelete: 'cascade' }),
+  commitSha: text('commit_sha').notNull(),
+  fileCount: integer('file_count').notNull(),
+  indexedAt: timestamp('indexed_at', { withTimezone: true }).notNull(),
+});
+
+export const codeFiles = pgTable(
+  'code_files',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    size: integer('size').notNull(),
+    language: text('language'),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.path] })],
+);
+
+/** `from_path` imports `to_path`, both files of the indexed commit. */
+export const codeImports = pgTable(
+  'code_imports',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    fromPath: text('from_path').notNull(),
+    toPath: text('to_path').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.fromPath, t.toPath] }), index('code_imports_to_idx').on(t.boardId, t.toPath)],
+);
+
+/** The newest commits that changed each path of the indexed commit (`glob_id` read from the subject). */
+export const codePathCommits = pgTable(
+  'code_path_commits',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    sha: text('sha').notNull(),
+    subject: text('subject').notNull(),
+    committedAt: timestamp('committed_at', { withTimezone: true }).notNull(),
+    /** Position in the base branch's log, 0 the newest: commits made in the same second still sort. */
+    seq: integer('seq').notNull(),
+    globId: text('glob_id'),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.path, t.sha] }), index('code_path_commits_path_idx').on(t.boardId, t.path, t.seq)],
+);
+
+/** Which code view operations each consumer calls (`mcp`, `chat`, and later the size check, reviewer and split), and how often they find nothing. */
+export const codeViewUsage = pgTable(
+  'code_view_usage',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    consumer: text('consumer').notNull(),
+    op: text('op').notNull(),
+    calls: integer('calls').notNull().default(0),
+    emptyResults: integer('empty_results').notNull().default(0),
+    lastAt: timestamp('last_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.consumer, t.op] })],
+);

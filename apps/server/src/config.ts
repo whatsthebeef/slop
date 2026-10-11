@@ -2,7 +2,7 @@ import { isValidTimeZone } from '@slop/core';
 import { z } from 'zod';
 
 /** The background jobs a server starts; `SLOP_JOBS` picks them. */
-export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'findings', 'search', 'decisions', 'inbox', 'learning', 'tunnel', 'follow', 'readiness', 'reconcile'] as const;
+export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'findings', 'search', 'decisions', 'inbox', 'learning', 'tunnel', 'follow', 'readiness', 'reconcile', 'code'] as const;
 export type Job = (typeof JOBS)[number];
 const isJob = (name: string): name is Job => JOBS.some((job) => job === name);
 
@@ -125,6 +125,10 @@ const schema = z.object({
       }
       return map;
     }),
+  /** Where the code view keeps one bare clone per board (`<dir>/<boardId>.git`); a folder on the data disk in production (e.g. /var/lib/slop/code). */
+  CODE_DIR: z.string().default('.slop-code'),
+  /** How many MB one board's clone may use before its on-demand refs are dropped and its history is cut back. */
+  CODE_CAP_MB: z.coerce.number().int().min(1).default(2048),
   BEDROCK_REGION: z.string().default('us-east-1'),
   /** Haiku 4.5 for intake and classification. */
   INTAKE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),

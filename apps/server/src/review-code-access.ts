@@ -13,17 +13,26 @@ const run = promisify(execFile);
 const GIT_TIMEOUT_MS = 90_000;
 const GREP_OUTPUT_LIMIT = 1_000_000;
 
-/** git's own settings are ignored: no hooks, no system or user config, no prompts, and the token goes in an env header, not argv or `.git/config`. */
-const gitEnv = (token: string): NodeJS.ProcessEnv => ({
-  PATH: process.env['PATH'] ?? '',
-  HOME: tmpdir(),
-  GIT_TERMINAL_PROMPT: '0',
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: '/dev/null',
-  GIT_CONFIG_COUNT: '1',
-  GIT_CONFIG_KEY_0: 'http.extraHeader',
-  GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
-});
+/**
+ * git's own settings are ignored: no hooks, no system or user config, no prompts, and the token goes in an env header, not
+ * argv or `.git/config`. `extra` adds more `-c` style settings (the code view's clones turn hooks off by path too).
+ */
+export const gitEnv = (token: string, extra: readonly (readonly [string, string])[] = []): NodeJS.ProcessEnv => {
+  const settings: (readonly [string, string])[] = [['http.extraHeader', `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`], ...extra];
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env['PATH'] ?? '',
+    HOME: tmpdir(),
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_COUNT: String(settings.length),
+  };
+  settings.forEach(([key, value], i) => {
+    env[`GIT_CONFIG_KEY_${String(i)}`] = key;
+    env[`GIT_CONFIG_VALUE_${String(i)}`] = value;
+  });
+  return env;
+};
 
 /**
  * Read-only code access for one review: `read_file` and `list_dir` through the code host's API, `grep` over a shallow,

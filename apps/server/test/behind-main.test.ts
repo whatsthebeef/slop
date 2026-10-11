@@ -32,6 +32,7 @@ describe('the behind-main warning', () => {
   let globs: GlobService;
   let host: FakeHost;
   let executors: ReturnType<typeof codeHostExecutors>;
+  const basePushes: number[] = [];
   let handle: ReturnType<typeof githubDeliveryHandler>;
   let n = 0;
   let globId = '';
@@ -66,6 +67,7 @@ describe('the behind-main warning', () => {
       globs,
       boardOf,
       github: host,
+      onBasePush: (boardId) => basePushes.push(boardId),
     });
     executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), new BoardService({ store, notifier: { publish: () => undefined } }));
     // A same starts in planning; this one is in Doing with its draft PR.
@@ -129,5 +131,14 @@ describe('the behind-main warning', () => {
     // A push to some other branch changes nothing.
     await handle(delivery('unrelated'));
     expect(await pending('check_behind')).toHaveLength(0);
+  });
+
+  it('tells the code view when the base branch (and only the base branch) received a push', async () => {
+    basePushes.length = 0;
+    await handle(delivery('unrelated'));
+    await handle(delivery(globId));
+    expect(basePushes).toEqual([]);
+    await handle(delivery('main'));
+    expect(basePushes).toEqual([1]);
   });
 });

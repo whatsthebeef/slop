@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService } from '@slop/core';
+import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
 import { ARTIFACT_KINDS, CATEGORIES, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -28,6 +28,8 @@ export interface McpDeps {
   readonly knowledge: KnowledgeService;
   readonly artifacts: ArtifactService;
   readonly search: SearchService;
+  /** The read-only code view of each board's repository (membership-scoped). */
+  readonly code: CodeViewService;
   readonly chat: Pick<ChatService, 'answer'>;
   readonly intake: IntakeService;
   readonly inbox: InboxService;
@@ -721,6 +723,83 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       if (text === undefined) return reply(invalidInput('Give query or path'));
       return reply(await deps.search.changes(email, toRequest({ ...rest, query: text })));
     },
+  );
+
+  const codeBoard = z.number().int().describe('Board ID (the number in a glob ID: s1t4 is on board 1)');
+  const codeRef = z
+    .string()
+    .optional()
+    .describe("A branch, tag, commit or pull request ref (e.g. a glob's branch, or refs/pull/190/head); default: the board's base branch");
+
+  server.registerTool(
+    'search_code',
+    {
+      description:
+        "Search the board's repository with a regular expression (git grep -E), on the base branch or any ref, optionally under some paths: path, line and text of each match, at most `limit` (default 50, max 200). Read-only: nothing is run. Member of the board required.",
+      inputSchema: {
+        board: codeBoard,
+        pattern: z.string().min(1).max(200),
+        ref: codeRef,
+        paths: z.array(z.string()).max(20).optional().describe('Only under these files or folders (repo-relative)'),
+        limit: z.number().int().min(1).max(200).optional(),
+      },
+    },
+    async (p) => reply(await deps.code.grep(email, { ...p, consumer: 'mcp' })),
+  );
+
+  server.registerTool(
+    'read_file',
+    {
+      description:
+        "A file of the board's repository on the base branch or any ref, with line numbers by `start`/`end` (at most 2000 lines and 100,000 characters per call; `truncated` says it was cut). Read-only. Member of the board required.",
+      inputSchema: {
+        board: codeBoard,
+        path: z.string().min(1).describe('Repo-relative file path'),
+        ref: codeRef,
+        start: z.number().int().min(1).optional().describe('First line (1-based)'),
+        end: z.number().int().min(1).optional().describe('Last line'),
+      },
+    },
+    async (p) => reply(await deps.code.read(email, { ...p, consumer: 'mcp' })),
+  );
+
+  server.registerTool(
+    'list_dir',
+    {
+      description: "The files and folders directly in a directory of the board's repository ('' or omitted is the root) on the base branch or any ref. Read-only. Member of the board required.",
+      inputSchema: { board: codeBoard, path: z.string().optional().describe('Repo-relative folder; empty for the root'), ref: codeRef },
+    },
+    async (p) => reply(await deps.code.tree(email, { ...p, consumer: 'mcp' })),
+  );
+
+  server.registerTool(
+    'path_history',
+    {
+      description:
+        "The newest commits on the base branch that changed a file or anything under a folder (sha, subject, date, the glob it came from, and that merged change's summary title and link when slop has one). Member of the board required.",
+      inputSchema: { board: codeBoard, path: z.string().min(1), limit: z.number().int().min(1).max(50).optional() },
+    },
+    async (p) => reply(await deps.code.history(email, { ...p, consumer: 'mcp' })),
+  );
+
+  server.registerTool(
+    'imports',
+    {
+      description:
+        "The import graph of the board's base branch: the files `path` imports (direction 'imports', the default) or the files that import it ('importedBy'), each with its module. Covers relative TypeScript/JavaScript imports and Python imports that resolve inside the repository. Member of the board required.",
+      inputSchema: { board: codeBoard, path: z.string().min(1), direction: z.enum(['imports', 'importedBy']).optional() },
+    },
+    async (p) => reply(await deps.code.imports(email, { ...p, consumer: 'mcp' })),
+  );
+
+  server.registerTool(
+    'touched_modules',
+    {
+      description:
+        "For a set of paths (e.g. the files a change touches): the modules they belong to, and for each the files outside the set that import it (importers, fanIn), on the base branch's import graph. Member of the board required.",
+      inputSchema: { board: codeBoard, paths: z.array(z.string().min(1)).min(1).max(100) },
+    },
+    async (p) => reply(await deps.code.touchedModules(email, { ...p, consumer: 'mcp' })),
   );
 
   server.registerTool(

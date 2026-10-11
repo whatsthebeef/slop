@@ -26,6 +26,11 @@ services:
     image: ${SLOP_IMAGE:?set in .env}
     restart: unless-stopped
     env_file: app.env
+    environment:
+      # The code view's clones, one bare repository per board, on the data disk (remote-deploy.sh makes the folder writable for `node`).
+      CODE_DIR: /var/lib/slop/code
+    volumes:
+      - /var/lib/slop/code:/var/lib/slop/code
     # Reached by CloudFront over HTTP; the security group only admits CloudFront's origin-facing addresses.
     ports:
       - '3000:3000'

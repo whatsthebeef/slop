@@ -59,6 +59,8 @@ export const githubDeliveryHandler =
     globs: GlobService;
     github: Pick<CodeHost, 'deleteBranch'>;
     boardOf: (id: number) => Promise<Board | null>;
+    /** The base branch of a board received a push (the code view fetches it). */
+    onBasePush?: (boardId: number) => void;
   }) =>
   async (delivery: Delivery): Promise<boolean> => {
     const inserted = await deps.db
@@ -82,6 +84,7 @@ const handle = async (
     globs: GlobService;
     github: Pick<CodeHost, 'deleteBranch'>;
     boardOf: (id: number) => Promise<Board | null>;
+    onBasePush?: (boardId: number) => void;
   },
   delivery: Delivery,
 ): Promise<boolean> => {
@@ -124,6 +127,7 @@ const handle = async (
   const queueBehind = async (branch: string, repo: string): Promise<void> => {
     const rows = await deps.db.select().from(schema.boards).where(eq(schema.boards.baseBranch, branch));
     for (const board of rows.filter((b) => b.repo?.toLowerCase() === repo.toLowerCase())) {
+      deps.onBasePush?.(board.id);
       for (const glob of await deps.globs.peekAll(board.id, { status: ['in_progress'] })) {
         await deps.globs.applyEvent(glob.id, (g, ctx) => machine.behindCheckRequested(g, ctx));
       }
