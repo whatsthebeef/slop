@@ -622,6 +622,34 @@ export class GitHub implements CodeHost, CommitGraph {
     }
   }
 
+  async listDir(repo: Repo, ref: string, dir: string, signal?: AbortSignal): Promise<{ name: string; type: 'file' | 'dir' }[] | null> {
+    const gh = await this.octokit(repo);
+    try {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: repo.owner,
+        repo: repo.name,
+        path: dir,
+        ref,
+        request: { signal },
+      });
+      if (!Array.isArray(data)) return null;
+      const entries: { name: string; type: 'file' | 'dir' }[] = [];
+      for (const e of data) if (e.type === 'dir' || e.type === 'file') entries.push({ name: e.name, type: e.type });
+      return entries;
+    } catch (error) {
+      if (isStatus(error, 404)) return null;
+      throw error;
+    }
+  }
+
+  async readToken(repo: Repo): Promise<string> {
+    const gh = await this.octokit(repo);
+    const auth: unknown = await gh.auth({ type: 'installation' });
+    const token = typeof auth === 'object' && auth !== null && 'token' in auth ? auth.token : null;
+    if (typeof token !== 'string' || token === '') throw new Error('GitHub gave no installation token');
+    return token;
+  }
+
   async commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner: repo.owner, repo: repo.name, ref: sha, request: { signal } });
