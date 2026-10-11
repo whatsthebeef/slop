@@ -168,7 +168,15 @@ export type Effect =
    */
   | { readonly kind: 'recheck_overlaps'; readonly globId: string; readonly boardId: number }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
-  | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number };
+  | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number }
+  /**
+   * Independent review of the change (spec, "When it runs"). `sha` is the reviewed target: the PR head for a pre-merge
+   * review of a same or super, the squash commit for a sub's post-merge review. The outbox keeps one job per glob, stage
+   * and sha, and cancels a pre-merge job whose head a newer push replaced; the executor drops one that is no longer current.
+   */
+  | { readonly kind: 'review_change'; readonly globId: string; readonly generation: number; readonly stage: ReviewStage; readonly sha: string };
+
+export type ReviewStage = 'pre_merge' | 'post_merge';
 
 export type EffectKind = Effect['kind'];
 

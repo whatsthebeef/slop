@@ -44,6 +44,7 @@ import type {
   SearchHit,
   SizeCheck,
   SizeThresholdView,
+  SizeCalibrationView,
   SlopType,
   RiskAreaView,
   EscalationView,
@@ -550,6 +551,8 @@ export const api = {
   resetEscalations: (boardId: number) => request<EscalationView>('POST', `/api/boards/${boardId}/escalations/reset`, {}),
   /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
   sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
+  /** The size forecast's calibration: weights, per-area factors against the defaults, and the history with causes (members). */
+  sizeCalibration: (boardId: number) => request<SizeCalibrationView>('GET', `/api/boards/${boardId}/size-calibration`),
   /** Admins: puts the size threshold back on the defaults (the history keeps the reset). */
   resetSizeThreshold: (boardId: number) => request<SizeThresholdView>('POST', `/api/boards/${boardId}/size-threshold/reset`, {}),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */

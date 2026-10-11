@@ -281,6 +281,7 @@ export const SettingsPage = () => {
         <RiskAreas boardId={boardId} admin={admin} />
         <Escalations boardId={boardId} admin={admin} />
         <SizeThreshold boardId={boardId} admin={admin} />
+        <SizeCalibrationView boardId={boardId} />
         <IntakeAccuracyView boardId={boardId} admin={admin} />
         <IntegrationToken boardId={boardId} admin={admin} />
         <DeploySettings
@@ -409,6 +410,9 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
       <p className='text-sm'>
         Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts ({learned ? 'learned from outcomes' : 'the default'})
       </p>
+      <p className='text-xs text-muted-foreground' data-testid='size-threshold-forecast'>
+        Judged from the code (the forecast), the part limit is {Math.max(current.maxParts, 3)} or more separate modules, and only when at least 2 of them can be built at the same time.
+      </p>
       <p className='text-xs text-muted-foreground' data-testid='size-threshold-defaults'>
         Default: {defaults.maxTasks} tasks, {defaults.maxParts} independent parts. Learned: {current.maxTasks} tasks, {current.maxParts} independent parts.
       </p>
@@ -456,6 +460,82 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
                       {change.globId}
                     </Link>
                   )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
+
+/** The size forecast's calibration: read-only, learned values against the defaults, with the history and its causes as text. */
+const SizeCalibrationView = ({ boardId }: { boardId: number }) => {
+  const calibration = useQuery({ queryKey: ['size-calibration', boardId], queryFn: () => api.sizeCalibration(boardId) });
+  if (calibration.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load the size calibration.
+        <Button size='sm' variant='outline' onClick={() => void calibration.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (calibration.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the size calibration…</p>;
+  const { current, defaults, history } = calibration.data;
+  const areas = Object.entries(current.areaFactors);
+  const defaultFactor = (area: string): number => Object.entries(defaults.areaFactors).find(([name]) => name === area)?.[1] ?? 1;
+  const learned = (now: number, start: number) => (now === start ? 'default' : `learned, default ${start}`);
+  return (
+    <div className='grid gap-2' data-testid='size-calibration'>
+      <p className='text-sm'>Size forecast calibration ({current.samples} merged globs learned from)</p>
+      <p className='text-xs text-muted-foreground'>
+        The forecast blends three signals: the code, similar past globs and the plan text. Merged globs move the weights toward the signal that was closest
+        and each area's factor toward the lines the area really took.
+      </p>
+      <ul className='text-xs'>
+        <li>
+          Code weight {current.weights.code} ({learned(current.weights.code, defaults.weights.code)})
+        </li>
+        <li>
+          Similar globs weight {current.weights.reference} ({learned(current.weights.reference, defaults.weights.reference)})
+        </li>
+        <li>
+          Text weight {current.weights.text} ({learned(current.weights.text, defaults.weights.text)})
+        </li>
+        {areas.length === 0 ? (
+          <li className='text-muted-foreground'>No area corrections yet.</li>
+        ) : (
+          areas.map(([area, factor]) => (
+            <li key={area}>
+              {area} lines x{factor} ({learned(factor, defaultFactor(area))})
+            </li>
+          ))
+        )}
+      </ul>
+      {history.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No calibration moves recorded yet.</p>
+      ) : (
+        <table className='text-xs'>
+          <thead className='text-left text-muted-foreground'>
+            <tr>
+              <th className='pr-3 font-normal'>Date</th>
+              <th className='pr-3 font-normal'>What</th>
+              <th className='pr-3 font-normal'>Why</th>
+              <th className='font-normal'>Glob</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((change) => (
+              <tr key={change.id} className='align-top'>
+                <td className='pr-3 whitespace-nowrap'>{new Date(change.at).toLocaleDateString()}</td>
+                <td className='pr-3 whitespace-nowrap'>{change.kind === 'weights' ? 'weights' : `${change.area ?? 'area'} factor`}</td>
+                <td className='pr-3'>{change.cause}</td>
+                <td>
+                  <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
+                    {change.globId}
+                  </Link>
                 </td>
               </tr>
             ))}

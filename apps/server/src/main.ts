@@ -217,8 +217,17 @@ const intakeLlm = trackLlm(
   new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, logUsage),
   config.INTAKE_MODEL,
 );
+// The code view: a clone per board on the data disk, an index of its base branch in Postgres, one read-only port over both.
+const codeClones = new CodeClones({
+  dir: config.CODE_DIR,
+  host: github,
+  capBytes: config.CODE_CAP_MB * 1024 * 1024 || DEFAULT_CAP_BYTES,
+  warn: (message) => console.warn(`[code] ${message}`),
+});
+const codeIndex = new CodeIndex(db);
+const codeView = new GitCodeView({ clones: codeClones, index: codeIndex, board: boardOf, host: github });
 // The size check: the intake model judges a plan's independent parts and proposes a split; a failing model leaves the text estimate.
-const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, onRechecked: (id): Promise<void> => globs.reconcileSizeHold(id) });
+const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, codeView, embedder, onRechecked: (id): Promise<void> => globs.reconcileSizeHold(id) });
 const intake = new IntakeService({
   store,
   llm: intakeLlm,
@@ -239,18 +248,10 @@ const searchIndexer = new SearchIndexer({
   llm: searchLlm,
 });
 const search = new SearchService({ store, clock, embedder });
-// The code view: a clone per board on the data disk, an index of its base branch in Postgres, one read-only port over both.
-const codeClones = new CodeClones({
-  dir: config.CODE_DIR,
-  host: github,
-  capBytes: config.CODE_CAP_MB * 1024 * 1024 || DEFAULT_CAP_BYTES,
-  warn: (message) => console.warn(`[code] ${message}`),
-});
-const codeIndex = new CodeIndex(db);
 const codeIndexer = new CodeIndexer({ store, clones: codeClones, index: codeIndex });
 const code = new CodeViewService({
   boards,
-  view: new GitCodeView({ clones: codeClones, index: codeIndex, board: boardOf, host: github }),
+  view: codeView,
   usage: codeIndex,
   warn: (message) => console.warn(`[code] ${message}`),
 });

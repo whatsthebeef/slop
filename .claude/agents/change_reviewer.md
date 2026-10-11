@@ -120,7 +120,11 @@ Standalone mode has no rounds: produce one comprehensive review.
 
 Standard mode: if this is the **final round**, or there are **no in-scope items**, set the verdict to `APPROVED` and add a `## Potential Adjustments` section compiling outstanding suggestions (and, on the final round, any in-scope items still open, clearly marked as unresolved).
 
-### 9. Return decision
+### 9. Flag what needs a human
+
+Besides the findings, say under `### Needs a human` (in the Summary) when the change meets one of the orchestrator's escalation criteria and the plan didn't settle it: a product or design decision, a board risk area, a rewrite of existing data, auth, permissions or secrets changes, weakened or deleted tests, changed agent instructions, or scope well beyond the plan. Give the reason and the files. The orchestrator escalates the sub from it. Say nothing when none applies: size alone is not a reason, and the default is to let a sub merge.
+
+### 10. Return decision
 
 - `CHANGES_REQUIRED`: `IN-SCOPE` items remain and rounds remain (standard mode).
 - `APPROVED`: no `IN-SCOPE` items, or final round, or a standalone review without blockers.

@@ -1193,6 +1193,8 @@ export const provisioningFailed = (glob: Glob, reason: string, ctx: Context, fin
   return b.done();
 };
 
+const isStartPush = (glob: Glob, push: { message?: string | null }): boolean => push.message?.trim() === `${glob.id}: start`;
+
 /** A push to the glob branch: records the new head; results for older commits stop counting. */
 export const commitPushed = (
   glob: Glob,
@@ -1223,6 +1225,10 @@ export const commitPushed = (
   if (!recovers && (glob.status === 'pr_open' || glob.status === 'merging')) {
     b.set({ headChecks: null }).effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
   }
+  // A push while the PR is ready (before the developer merges) is reviewed again; the older commit's review is cancelled.
+  if (glob.type !== 'sub' && glob.pr?.state === 'ready' && (glob.status === 'pr_open' || recovers) && !superseded && !isStartPush(glob, push)) {
+    b.effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage: 'pre_merge', sha: push.sha });
+  }
   // A push may have fixed a flagged conflict (or not): look again.
   if (glob.conflict != null && glob.pr !== null) {
     b.effect({ kind: 'check_conflict', globId: glob.id, generation: glob.generation, since: null });
@@ -1238,7 +1244,7 @@ export const commitPushed = (
   }
   // Each push deploys exactly that commit to the glob's environment; not a superseded run's push,
   // nor the empty `<id>: start` commit slop creates the branch with.
-  const isStart = push.message?.trim() === `${glob.id}: start`;
+  const isStart = isStartPush(glob, push);
   if (glob.environment !== null && !superseded && !isStart && listOf(glob.status) === 'doing') {
     b.effect({ kind: 'request_deploy', globId: glob.id, generation: glob.generation, sha: push.sha });
   }
@@ -1432,6 +1438,8 @@ export const prReadyForReview = (
   b.status('pr_open').effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
   // A sub doesn't wait for the PR's checks: the board's policy decides at once, and the checks run on the base after it merges.
   if (glob.type === 'sub') b.effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha: pr.headSha });
+  // A same or super is reviewed as it would apply to the latest main; a sub is reviewed after it merges.
+  else b.effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage: 'pre_merge', sha: pr.headSha });
   return b.done();
 };
 
@@ -1734,7 +1742,7 @@ export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx:
       .effect({ kind: 'flag_conflicts', globId: glob.id, generation: glob.generation })
       .done();
   }
-  return new Builder(glob, ctx)
+  const b = new Builder(glob, ctx)
     .endRun('completed')
     .set({
       labels: requiredLabels(glob.type),
@@ -1748,8 +1756,10 @@ export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx:
     .status('reviewing')
     .effect({ kind: 'flag_conflicts', globId: glob.id, generation: glob.generation })
     // Only the final merge releases the globs waiting for this one (a Merge and continue leaves it open).
-    .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation })
-    .done();
+    .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation });
+  // A sub merges without human review, so its one review runs after the merge (a same or super was reviewed before it).
+  if (glob.type === 'sub') b.effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage: 'post_merge', sha: merge.sha });
+  return b.done();
 };
 
 /** Row 16: slop's own merge failed (conflict, or checks failed after updating the branch). */

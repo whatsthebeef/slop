@@ -915,6 +915,8 @@ export type BoardJobResult =
       readonly threshold: SizeThreshold;
       /** Outcomes recorded this run, each with the threshold before and after it. */
       readonly changes: readonly { readonly globId: string; readonly outcome: SizeOutcome; readonly from: SizeThreshold; readonly to: SizeThreshold }[];
+      /** Size records written this run and the calibration moves they made (absent when none). */
+      readonly calibration?: { readonly records: number; readonly moves: readonly { readonly globId: string; readonly cause: string }[] };
     }
   /**
    * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.

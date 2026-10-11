@@ -14,6 +14,7 @@ import { memberOf } from './access.js';
 import type { InvestigationReactor } from './investigation-service.js';
 import type { SizeAssessor } from './size-check-service.js';
 import type { SizeCheck } from '../domain/size-check.js';
+import type { SizeForecast } from '../domain/size-forecast.js';
 
 export interface GlobContext {
   readonly glob: Pick<Glob, 'id' | 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'status'>;
@@ -62,7 +63,26 @@ export interface SizeContext {
   readonly decision: SizeCheck['decision'];
   /** Parts in the shape split_glob takes (part 0 is this glob; `after` holds earlier part indexes). */
   readonly proposal: SizeCheck['proposal'];
+  /** Present once the code forecast was made: predicted files and parts; confirm or correct. */
+  readonly forecast?: SizeForecastContext;
 }
+
+/** The forecast as the investigator receives it: its starting point, to confirm or correct in the investigation. */
+export interface SizeForecastContext {
+  readonly note: string;
+  readonly files: readonly string[];
+  readonly modules: readonly string[];
+  readonly parts: SizeForecast['parts'];
+  readonly expectedLines: SizeForecast['lines'];
+  readonly riskTier: SizeForecast['riskTier'];
+  readonly riskAreas: readonly string[];
+  readonly migration: boolean;
+  readonly publicApi: boolean;
+  readonly confidence: SizeForecast['confidence'];
+  readonly history: string | null;
+}
+
+export const FORECAST_NOTE = 'predicted files and parts; confirm or correct';
 
 const sizeContext = (check: SizeCheck): SizeContext => ({
   oversized: check.flagged,
@@ -70,6 +90,21 @@ const sizeContext = (check: SizeCheck): SizeContext => ({
   evidence: check.evidence,
   decision: check.decision,
   proposal: check.proposal,
+  ...(check.estimate.forecast === undefined ? {} : { forecast: forecastContext(check.estimate.forecast) }),
+});
+
+const forecastContext = (f: SizeForecast): SizeForecastContext => ({
+  note: FORECAST_NOTE,
+  files: f.files.paths,
+  modules: f.modules,
+  parts: f.parts,
+  expectedLines: f.lines,
+  riskTier: f.riskTier,
+  riskAreas: f.riskAreas,
+  migration: f.migration,
+  publicApi: f.publicApi,
+  confidence: f.confidence,
+  history: f.reference?.summary ?? null,
 });
 
 export interface InvestigationSummary {
