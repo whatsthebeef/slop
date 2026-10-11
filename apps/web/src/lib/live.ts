@@ -72,14 +72,115 @@ export const invalidateKnowledge = (client: QueryClient, boardId: number) => {
 /** Delay before reopening a stream the browser closed for good: 1s, doubling to a 30s ceiling. */
 export const reconnectDelay = (attempt: number): number => Math.min(1000 * 2 ** attempt, 30_000);
 
+/** How long an open stream may stay silent before it is treated as dead. The server pings every 25 s. */
+export const SILENCE_MS = 60_000;
+
+interface StreamHandlers {
+  readonly onHint: (hint: Hint) => void;
+  readonly onReconnect: () => void;
+  readonly onState: (state: LiveState) => void;
+}
+
 /**
- * The board's event stream: `onHint` for each hint, `onReconnect` each time it is ready again after
- * the first time (hints may have been missed meanwhile). The stream is closed while the tab is
- * hidden, so background tabs don't hold one of the browser's few connections to the server
- * (over HTTP/1.1, Chrome allows six per host and long-lived streams count against them).
- * The browser retries a dropped connection itself, but closes the stream for good on a non-200 reply
- * (e.g. while the server restarts), so a closed stream is reopened here with backoff.
+ * Opens the board's event stream and keeps it open until the returned function is called.
+ *
+ * - The stream is closed while the tab is hidden, so background tabs don't hold one of the browser's few
+ *   connections to the server (over HTTP/1.1, Chrome allows six per host and long-lived streams count against them).
+ * - The browser retries a dropped connection itself, but closes the stream for good on a non-200 reply
+ *   (e.g. while the server restarts), so a closed stream is reopened here with backoff.
+ * - A stream can also stay open while nothing arrives (after a server restart behind a proxy), so it is closed and
+ *   reopened when no `ready`, `hint` or `ping` has arrived for `SILENCE_MS`.
+ * - `onReconnect` runs on each `ready` after the first, and on the first one when the page's data may be stale:
+ *   the page loaded hidden, or the stream was closed (hidden or silent) since it last was ready.
  */
+export const connectBoardStream = (boardId: number, handlers: StreamHandlers): (() => void) => {
+  let source: EventSource | null = null;
+  let connectedBefore = false;
+  let stale = false;
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  let silence: ReturnType<typeof setTimeout> | null = null;
+  let attempt = 0;
+
+  const stopSilence = () => {
+    if (silence !== null) clearTimeout(silence);
+    silence = null;
+  };
+
+  /** Restarts the silence clock; every sign of life from the server calls it. */
+  const heard = () => {
+    stopSilence();
+    silence = setTimeout(() => {
+      silence = null;
+      source?.close();
+      source = null;
+      stale = true;
+      handlers.onState('reconnecting');
+      open();
+    }, SILENCE_MS);
+  };
+
+  const open = () => {
+    if (source !== null) return;
+    const next = new EventSource(`/api/boards/${boardId}/events`);
+    next.addEventListener('ready', () => {
+      heard();
+      handlers.onState('live');
+      attempt = 0;
+      if (connectedBefore || stale) handlers.onReconnect();
+      connectedBefore = true;
+      stale = false;
+    });
+    next.addEventListener('hint', (event: MessageEvent<string>) => {
+      heard();
+      handlers.onHint(JSON.parse(event.data) as Hint);
+    });
+    next.addEventListener('ping', heard);
+    next.onerror = () => {
+      handlers.onState('reconnecting');
+      if (next.readyState !== EventSource.CLOSED || retry !== null) return;
+      next.close();
+      source = null;
+      stopSilence();
+      retry = setTimeout(() => {
+        retry = null;
+        open();
+      }, reconnectDelay(attempt));
+      attempt += 1;
+    };
+    source = next;
+    heard();
+  };
+
+  const close = () => {
+    if (retry !== null) clearTimeout(retry);
+    retry = null;
+    stopSilence();
+    source?.close();
+    source = null;
+  };
+
+  const onVisibility = () => {
+    if (document.visibilityState === 'hidden') {
+      close();
+      stale = true;
+      handlers.onState('paused');
+    } else {
+      open();
+    }
+  };
+
+  if (document.visibilityState === 'hidden') {
+    stale = true;
+    handlers.onState('paused');
+  } else open();
+  document.addEventListener('visibilitychange', onVisibility);
+  return () => {
+    document.removeEventListener('visibilitychange', onVisibility);
+    close();
+  };
+};
+
+/** The board's event stream as a hook: `onHint` for each hint, `onReconnect` when hints may have been missed. */
 const useBoardEvents = (
   boardId: number,
   handlers: { onHint: (hint: Hint) => void; onReconnect: () => void },
@@ -91,60 +192,15 @@ const useBoardEvents = (
     latest.current = handlers;
   });
 
-  useEffect(() => {
-    let source: EventSource | null = null;
-    let connectedBefore = false;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-    let attempt = 0;
-
-    const open = () => {
-      if (source !== null) return;
-      const next = new EventSource(`/api/boards/${boardId}/events`);
-      next.addEventListener('ready', () => {
-        setState('live');
-        attempt = 0;
-        if (connectedBefore) latest.current.onReconnect();
-        connectedBefore = true;
-      });
-      next.addEventListener('hint', (event: MessageEvent<string>) => latest.current.onHint(JSON.parse(event.data) as Hint));
-      next.onerror = () => {
-        setState('reconnecting');
-        if (next.readyState !== EventSource.CLOSED || retry !== null) return;
-        next.close();
-        source = null;
-        retry = setTimeout(() => {
-          retry = null;
-          open();
-        }, reconnectDelay(attempt));
-        attempt += 1;
-      };
-      source = next;
-    };
-
-    const close = () => {
-      if (retry !== null) clearTimeout(retry);
-      retry = null;
-      source?.close();
-      source = null;
-    };
-
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') {
-        close();
-        setState('paused');
-      } else {
-        open();
-      }
-    };
-
-    if (document.visibilityState === 'hidden') setState('paused');
-    else open();
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility);
-      close();
-    };
-  }, [boardId]);
+  useEffect(
+    () =>
+      connectBoardStream(boardId, {
+        onHint: (hint) => latest.current.onHint(hint),
+        onReconnect: () => latest.current.onReconnect(),
+        onState: setState,
+      }),
+    [boardId],
+  );
 
   return state;
 };
