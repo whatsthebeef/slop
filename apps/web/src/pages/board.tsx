@@ -51,14 +51,16 @@ const MOVE_DESCRIPTIONS: Partial<Record<Action, string>> = {
 const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
   const allowed = glob.allowedActions ?? [];
   const make = (action: Action, direction: Direction, target: List) => {
-    const name = actionLabel(action, glob.type, ACTION_LABELS);
+    const name = actionLabel(action, glob.type, ACTION_LABELS, glob.status);
     return {
       target,
       move: {
         action,
         direction,
         label: direction === 'right' ? `${name} ▸` : `◂ ${name}`,
-        description: `${name} ${glob.id}: ${MOVE_DESCRIPTIONS[action] ?? LIST_TITLES[target]}`,
+        description: `${name} ${glob.id}: ${
+          action === 'pick_up' && glob.type === 'super' ? 'you pair on it with the product owner' : (MOVE_DESCRIPTIONS[action] ?? LIST_TITLES[target])
+        }`,
       },
     };
   };

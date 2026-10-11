@@ -138,10 +138,10 @@ export const FilterPane = ({
     data-open={open}
   >
     <div className="overflow-hidden">
-      <div className="mx-5 mt-1.5 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-edge bg-muted px-3 py-2">
+      <div className="mx-5 mt-1.5 flex flex-wrap items-center gap-x-6 gap-y-2 py-2">
         {BOARD_FILTERS.map((filter) => (
           <div key={filter.key} className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{filter.label}</span>
+            {!filter.hideLabel && <span>{filter.label}</span>}
             <Control
               filter={filter}
               value={values[filter.key] ?? ''}
