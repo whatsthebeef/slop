@@ -19,7 +19,6 @@ import type {
   Approval,
   BoardJobResult,
   BoardJobStatus,
-  ContextDiffLine,
   DraftPreview,
   EffectCheck,
   EffectFigures,
@@ -37,6 +36,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
+import { DiffView } from '@/components/diff-view';
 import { MarkdownView } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -357,60 +357,23 @@ const ProcessingState = ({ item, admin, onRetry, retrying }: { item: KbItem; adm
   );
 };
 
-/** Diffs longer than this start collapsed. */
-const LONG_DIFF = 40;
-
-const DiffLines = ({ lines }: { lines: readonly ContextDiffLine[] }) =>
-  lines.map((line, index) =>
-    line.op === 'skipped' ? (
-      <div key={index} className='text-muted-foreground'>
-        … {line.count} unchanged line{line.count === 1 ? '' : 's'}
-      </div>
-    ) : (
-      <div
-        key={index}
-        className={
-          line.op === 'removed'
-            ? 'bg-red-500/10 text-red-700 dark:text-red-300'
-            : line.op === 'added'
-              ? 'bg-green-500/10 text-green-700 dark:text-green-300'
-              : 'text-muted-foreground'
-        }
-      >
-        {line.op === 'added' ? '+ ' : line.op === 'removed' ? '- ' : '  '}
-        {line.text}
-      </div>
-    ),
-  );
-
 /** A drafted change: its rationale and the diff approving it would make to the target as it is now. */
-const DraftView = ({ rationale, preview }: { rationale: string | null; preview: DraftPreview }) => {
-  const [expanded, setExpanded] = useState(false);
-  const long = preview.diff.length > LONG_DIFF;
-  return (
-    <div className='grid gap-1 text-xs' data-testid='draft'>
-      {rationale !== null && (
-        <span>
-          <span className='font-medium'>Why: </span>
-          {rationale}
-        </span>
-      )}
-      {preview.stale && (
-        <span className='w-fit rounded bg-amber-500/15 px-1.5 text-amber-800 dark:text-amber-200'>
-          Stale draft: the target changed since it was drafted; it is being drafted again
-        </span>
-      )}
-      <pre className='max-h-[32rem] overflow-auto rounded-md border text-xs' data-testid='draft-diff'>
-        <DiffLines lines={long && !expanded ? preview.diff.slice(0, LONG_DIFF) : preview.diff} />
-      </pre>
-      {long && (
-        <button type='button' className='w-fit text-muted-foreground hover:underline' onClick={() => setExpanded(!expanded)}>
-          {expanded ? 'Show less' : `Show all ${preview.diff.length} lines`}
-        </button>
-      )}
-    </div>
-  );
-};
+const DraftView = ({ rationale, preview }: { rationale: string | null; preview: DraftPreview }) => (
+  <div className='grid gap-1 text-xs' data-testid='draft'>
+    {rationale !== null && (
+      <span>
+        <span className='font-medium'>Why: </span>
+        {rationale}
+      </span>
+    )}
+    {preview.stale && (
+      <span className='w-fit rounded bg-amber-500/15 px-1.5 text-amber-800 dark:text-amber-200'>
+        Stale draft: the target changed since it was drafted; it is being drafted again
+      </span>
+    )}
+    <DiffView lines={preview.diff} />
+  </div>
+);
 
 /** The original evidence and what near-duplicates added, each with links to the globs it came from. */
 const Evidence = ({ boardId, item }: { boardId: number; item: KbItem }) => (

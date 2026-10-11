@@ -58,6 +58,12 @@ export const DOMAIN_EVENT_TYPES = [
   /** A person made an escalated glob a sub again. */
   'Deescalated',
   'GlobDeleted',
+  /** A person chose an outcome for a decision glob (accept, retarget, needs work, reject), or the pipeline closed it. */
+  'DecisionDecided',
+  /** The work glob a decision waited on merged. */
+  'DecisionWorkLanded',
+  /** A glob's attributes changed (a decision's scope, or its conflict flags). */
+  'AttributesChanged',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 

@@ -18,7 +18,7 @@ Slop replaces a team's separate planning tool and issue tracker: it owns plannin
 
 A glob is one unit of work on a board. It has a slop type (how the work flows) and a category (what the work is, for time tracking).
 
-**IDs** are `s<board><type><n>`: `s1f1` feature, `s1t1` task, `s1b1` bug, `s1h1` hotfix, `s1k1` knowledge-base item. Each board has an atomic counter per type; creation is a conditional write, so a collision errors instead of overwriting. IDs are immutable: the letter reflects the category at creation, even if the category later changes. Hotfixes are deferred; the h type is reserved only.
+**IDs** are `s<board><type><n>`: `s1f1` feature, `s1t1` task, `s1b1` bug, `s1h1` hotfix, `s1k1` knowledge-base item, `s1d1` decision glob (see Decision globs and the knowledge page). Each board has an atomic counter per type; creation is a conditional write, so a collision errors instead of overwriting. IDs are immutable: the letter reflects the category at creation, even if the category later changes. Hotfixes are deferred; the h type is reserved only.
 
 **Slop types**
 
@@ -63,6 +63,8 @@ Globs move through four lists: Planning, Doing, Reviewing, Signed Off. Reviewing
 | Sub | Skipped | Automatic on creation; routine starts | Automatic when sub review passes and it merges; QA Required | Automatic when all labels are Approved |
 | Same | Starts here | Start button or pick-up (glob view or sstor); a routine runs if chosen | Automatic when the developer merges the PR; FR, CR, QA Required | Automatic when all labels are Approved |
 | Super | Skipped | On creation | Automatic when the developer merges the PR; FR, CR, QA Required. Merge and continue lands work mid-way and keeps the glob in Doing | Automatic when all labels are Approved |
+
+**Decision globs** share the four lists but not the work pipelines: a decision is decided in Doing and signed off after (see Decision globs and the knowledge page). The board shows them under the Decisions chip, hides archived ones from the lists and the signed-off counts, and the work lists (`listGlobs` without `include`) never contain them.
 
 **Moves** happen through buttons in the glob view, enabled only where a manual move makes sense. **Type changes** are buttons in the same row, shown only for the changes `changeFields` would accept now (`allowedTypeChanges`): *Make it a sub* (a routine run starts now, or after what it waits for, and it merges itself; it confirms first), *Make it a same* (a person merges it) and *Pair on it* (a super; no routine run). The type is a label beside the status, with the reason no change is possible as its tooltip. Category stays a select offering only what the type allows; it saves on change, shows *Saved* with Undo, and a refused save keeps the old value and shows the reason. Everything else is driven by events, including human events outside slop (a developer merging a PR in GitHub). Manual and automated moves go through the same core transitions.
 
@@ -191,7 +193,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `create_glob` | board, input, idempotencyKey; optional title, summary, plan, type, category, group, environment, links, autoTrigger, after (glob IDs to start after; row 32) | `{ id, version, branch, provisioning: none \| ok \| failed, status, type, category, group, environment, summary, after?, waiting?, impliedAfter?, suggestedAfter? }` (`suggestedAfter`: globs the request said to wait for, from intake; never applied) (same glob returned for a repeated key) | All |
 | `split_glob` | id, version, idempotencyKey, parts (title, summary, plan, optional category, type, `after` as indexes of earlier parts, `attachments` labels) | `{ parts: [{ part, id, version, title, type, category, status, after?, waiting? }] }`, part 0 being the original (same parts returned for a repeated key) | Agents, board |
 | `get_glob` | id | full glob: status, version, generation, fields, labels, PR, PRs merged with Merge and continue, current run (state, runId, owner, triggeredBy, started, last progress, cloud session ID and URL), run history, flags, artifact list, latest deploys (environment, commit, state, error, log link; super mode reports them after each push) | All |
-| `get_context` | id; optional include | assembled context bundle with citations: the plan in full, other artifacts listed (see Context assembly) | Routines, sessionator |
+| `get_context` | id; optional include | assembled context bundle with citations: the plan in full (also as `payload`), other artifacts listed, and for a decision glob its `attributes`; `scopedDecisions` lists the accepted decisions that govern the glob (see Context assembly and Decision globs) | Routines, sessionator |
 | `get_artifact` | id, kind, optional label | one artifact's latest version in full | Agents |
 | `list_globs` | board; optional status, type, group, person | glob summaries | Claude app |
 | `update_glob` | id, version; optional title, summary, type, category, group, environment, after (only while the glob has no branch) | updated glob | All |
@@ -220,7 +222,7 @@ Slop has four kinds of interface: MCP tools for agents and the Claude app, REST 
 | `get_build_results` | glob, commit or environment | build failures | Agents, chat |
 | `get_test_results` | glob, commit or environment | test runs and failures | Agents, chat |
 | `import_knowledge` | board, documents (name, content, optional frontmatter) | imported document ids; admins only | Claude in a session |
-| `submit_learning` | board, source glob id, type (decision, gotcha, pattern, agent-behaviour), statement, evidence; optional suggested target, agentSetVersion, runId, and `document` (name, area, audience, description, content: a whole new-document proposal from `/kb-bootstrap`, for which the source glob is optional) | KB item id (`s1k3`) | Agents |
+| `submit_learning` | board, source glob id, type (decision, gotcha, pattern, agent-behaviour), statement, evidence; optional suggested target, agentSetVersion, runId, and `document` (name, area, audience, description, content: a whole new-document proposal from `/kb-bootstrap`, for which the source glob is optional) | KB item id (`s1k3`) and `globId` (`s1d3`, the decision glob that shows it on the board) | Agents |
 | `list_kb_items` | board, optional status (open by default) | the board's KB items: id, version, type, statement, evidence, target, draft and its preview, processing state and error, flags (contradicts, possibly covered, stale, duplicate of), and for decided ones who decided and `outcome.via` | Admins |
 | `decide_kb_item` | id, version, decision (`approve` or `reject`), reason (required to reject, and to approve a contradicting item), editedDraft (approve only: the full section or value in place of the draft) | the decided item | Admins |
 | `get_review_guide` | repo | the board's review guide: its documents with area `review_guide`, for each board on that repo the caller is a member of (as built) | review agents |
@@ -793,6 +795,43 @@ Slop is a context manager: it holds what is known about the work, decides what i
 - **Backfill (slice 9, part 4):** `slop import jira --board <n> --project <KEY> [--jql ...] [--since <date>] [--docs]` reads a Jira Cloud project in the CLI (the site, email and API token come from `JIRA_SITE_URL`, `JIRA_EMAIL` and `JIRA_API_TOKEN`; with `--docs` a Google bearer token from `GOOGLE_ACCESS_TOKEN`; nothing is stored on the server) and delivers batches of up to 50 to `POST /api/boards/:b/inbox/import` (`InboxService.importItems`). Each issue becomes one item with source `jira`, type `thread` and its key as `source_ref` (from `0031_integration_tokens`; unique per board and source); each Google Doc linked in an issue's text or web links becomes a `gdoc` item of type `doc`, keyed by its document id. Imported items are `archived` (indexed for text and meaning search and attachable, but out of the default inbox list; `?status=archived` lists them) and start already summarised, so a backfill spends no model calls. A re-run skips an unchanged item (same key and content hash), updates a changed one in place and re-indexes it, and leaves one a person discarded alone; text over 100,000 characters is cut. The command prints counts of added, updated, skipped and failed, and lists Docs it could not fetch without failing on them. Ongoing sync, attachments and mapping issues to globs are not built.
 
 - **Not yet:** detach, a re-run of a failed summary, and create-glob from an item.
+
+## Decision globs and the knowledge page
+
+A **decision glob** (category `decision`, ID `s<board>d<n>`) is the board's face for a proposed change to what the project knows or decides: a KB item, an inbox candidate or an extracted decision. It is not work. It never has a branch, PR, routine run, time report, size check, intake snapshot or merge-policy hold, and its type is always `same` (no type change applies). The KB item stays the engine (routing, dedupe, contradiction flags, drafting, the preview diff, approval, the agent-set version bump); the glob is a board-facing wrapper that maps people's outcomes onto it, and the two are kept in step in one transaction.
+
+**Data.** No new table. The glob's jsonb document gains `attributes` (absent on older globs; `{}` reserved for work): `scope`, `source`, `channel`, `kbItemId`, `outcome`, `conflictsWith` and `archived`. Hand validation in core rejects unknown keys; only `scope` is client-editable (admins and POs, `PATCH /api/globs/:id`). `kb_proposals.decision_glob_id` (migration 0042, nullable, indexed) links the item to its glob; the glob's `creation_key` (`kb:<item>`, `inbox:<id>`, `decision:<id>`) makes every creation and the backfill idempotent. The proposal text is the glob's `plan` artifact, so `get_plan`, `save_plan` and the plan editor work unchanged (`payload` in `get_context` is that text). A new artifact kind `assessment` is a special artifact: listed, never inlined.
+
+**States.** Statuses reuse the lists: Planning, Doing (`in_progress`), Reviewing, Signed Off.
+
+| From | Who and what | To |
+| --- | --- | --- |
+| Planning | admin or PO picks up (no provisioning, no run) | Doing |
+| Doing | admin or PO takes over | Doing |
+| Doing | Accept, Accept with edits (the KB change is applied in the same transaction) | Reviewing |
+| Doing | Retarget (the item is drafted again against the new target) | Doing |
+| Doing | Needs work (a work glob is linked, or created as a task; the decision waits) | Doing, then Reviewing when that glob merges (`release_waiting`) |
+| Doing | Reject with a reason (the item is rejected) | Signed Off, archived |
+| Reviewing | admin or PO signs off | Signed Off |
+| Reviewing | admin or PO reopens (outcome cleared, to choose again) | Doing |
+| any open state | the pipeline closes the item (merged into another, suppressed, covered) | Signed Off, archived, outcome `closed` |
+| Reviewing or Signed Off | the item was approved or rejected on the Knowledge page | synced to the matching row above |
+
+**Outcomes** go through `POST /api/globs/:id/decision` (`outcome`, `reason`, `editedDraft`, `target`, `linkedGlobId`, `version`). Admins and POs may decide; a PO may not decide an item that changes an agent-set file, the local-run spec or the merge policy (an admin does), except to reject it. A decision with no KB item (an inbox or extracted candidate) records the outcome only; Accept with edits and Retarget are not offered for it. Work commands (start, retrigger, merge, labels and the rest) are refused on a decision, and decision commands on a work glob.
+
+**Scope** says what a decision governs: `glob` (one glob), `future_work` (globs created after it, optionally in one group), `area_group` (a group; risk-area names are deferred) or `project`. Defaults: `project` for a learning of type decision, otherwise `future_work`. Only accepted decisions apply (Reviewing or Signed Off with an accept outcome, not archived). They reach work two ways: a new glob (and each new part of a split) gets one `Decisions` attachment listing the governing decisions (IDs, scope and a one-line statement, not inline), and `get_context` computes `scopedDecisions` live, so a decision accepted after the glob was created still reaches it. When a decision's KB item contradicts another decision with a broader scope, the narrower glob shows a "Conflicts with" chip (`conflictsWith`; structural, no model).
+
+**Channels** create decision globs in one transaction with their source: `agent` (`submit_learning`, which now also returns `globId`), `mined` (mining and effect checks), `inbox` (`POST /api/boards/:b/inbox/:id/promote`, which also attaches the item as the source), `human` (an extracted decision, `POST /api/boards/:b/decisions/:id/promote`) and `migration` (the backfill). `create_glob` and the REST create refuse category `decision`; intake never proposes it.
+
+**Assessment.** A deterministic markdown template (no model): what is proposed, scope, target, diff size, evidence count, flags (contradicts, possibly covered, catalog candidate, stale draft, scope conflicts) and a suggested outcome by fixed rules (covered: reject; contradicts: needs work; drafted with no flags: accept). Written when a glob is created by the agent, mined and migration channels and again when the pipeline drafts; for people's channels on demand (`POST /api/globs/:id/assessment`, the Assess button). It shows beside the review section of the glob view. LLM-written assessments are deferred.
+
+**Diff.** `GET /api/globs/:id/diff` returns the item's target, the target's current version, the `DraftPreview` (the same line diff the Knowledge page shows, computed by `KnowledgeService.previewFor`) and the draft text; the glob view shows it with the shared collapsible diff component and the Knowledge page uses the same one.
+
+**Board.** Decision cards have an accent edge, a scope chip, the outcome and the conflict chip, no labels. The board's chips Work, Decisions and Mine start from the role (developers and QA: Work; POs: Decisions; admins: Work and Decisions) and are remembered per board in the browser. Archived decisions never show. Mined and pipeline-created decisions reach open boards through the `board.kb` hint, which refetches the list.
+
+**Migration (backfill).** At server start (job `kb`), per board and idempotent by creation key: open KB items get Planning globs (no assessment until asked); items decided in the last 30 days and extracted decisions of the last 30 days that are not KB-item decisions get Signed Off globs (rejected ones archived, scope `glob` when the decision names one, else `project`). Events are dated as the originals and have no actor, so reports and aging are not skewed. Older rows are not migrated. Run the new server before relying on the backfill: an older server would list decision globs as work.
+
+**Deferred.** Swimlanes on the board; LLM-written assessments and LLM contradiction detection; area scope by risk-area name and automatic scope inference; migrating items older than 30 days; a decisions list page and `list_decisions`; recovery when a work glob linked by a Needs work decision is deleted; rewriting the payload header when a target changes.
 
 ## Build plan
 

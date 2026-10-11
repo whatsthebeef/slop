@@ -1,5 +1,6 @@
+import { decisionOf, scopeLabel } from '@slop/core';
 import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
-import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
+import { Bot, Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
@@ -8,6 +9,7 @@ import type { MoveTag } from '@/lib/board-motion';
 import { activityLabel, blockedLine, chainTip, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
+import { OUTCOME_TEXT } from './decision-section';
 import { actionTiers } from '@/lib/action-style';
 import { Tip } from './ui/tip';
 import { LabelPopover } from './labels';
@@ -18,6 +20,7 @@ const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> =
   bug: { icon: Bug, className: 'text-red' },
   feature: { icon: Sparkles, className: 'text-muted-foreground' },
   task: { icon: ListChecks, className: 'text-muted-foreground' },
+  decision: { icon: Scale, className: 'text-muted-foreground' },
 };
 
 const CategoryIcon = ({ category }: { category: Category }) => {
@@ -387,6 +390,40 @@ export const SplitChip = ({ glob }: { glob: GlobView }) => {
   );
 };
 
+/**
+ * A decision glob's chips: what it applies to, what was decided (the outcome so far) and, when it contradicts a decision of
+ * broader scope, which one. Nothing for a work glob.
+ */
+export const DecisionChips = ({ glob }: { glob: GlobView }) => {
+  const attributes = decisionOf(glob);
+  if (attributes === null) return null;
+  const { outcome } = attributes;
+  const conflicts = attributes.conflictsWith ?? [];
+  return (
+    <>
+      <Tip text={`Applies to ${scopeLabel(attributes.scope)}`}>
+        <span className='rounded-sm border px-1.5 font-mono text-[10px] text-muted-foreground' data-testid='scope-chip'>
+          {attributes.scope.kind === 'glob' ? attributes.scope.ref : attributes.scope.kind.replace('_', ' ')}
+        </span>
+      </Tip>
+      {outcome !== null && (
+        <Tip text={`${OUTCOME_TEXT[outcome.kind]} by ${outcome.by}${outcome.reason === undefined ? '' : `: ${outcome.reason}`}`}>
+          <span className='font-mono text-[11px] text-signal-strong' data-testid='outcome-chip'>
+            {OUTCOME_TEXT[outcome.kind].toLowerCase()}
+          </span>
+        </Tip>
+      )}
+      {conflicts.length > 0 && (
+        <Tip text={`Contradicts ${conflicts.join(', ')}, which apply more broadly and win where they disagree`}>
+          <span className='font-mono text-[11px] text-required' data-testid='conflict-chip'>
+            conflicts with {conflicts.join(', ')}
+          </span>
+        </Tip>
+      )}
+    </>
+  );
+};
+
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -437,6 +474,8 @@ export const GlobCard = ({
   const age = aging(glob);
   const status = statusLine(glob, new Date().toISOString());
   const preview = moves.find((m) => m.action === previewing);
+  // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status.
+  const decision = decisionOf(glob) !== null;
 
   return (
     <div
@@ -464,6 +503,7 @@ export const GlobCard = ({
         'card-edge relative cursor-pointer rounded-md border px-3 py-2.5 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
         AGING_STYLE[age],
         failed && 'border-red-soft',
+        decision && 'border-l-4 border-l-primary',
         lock === 'local' && 'lock-local',
         lock === 'remote' && 'lock-remote',
         bump !== undefined && 'wall-bump',
@@ -474,7 +514,7 @@ export const GlobCard = ({
     >
       <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground'>
         <span>
-          {glob.id} · {glob.type}
+          {glob.id} · {decision ? 'decision' : glob.type}
         </span>
         <span className='inline-flex items-center gap-1.5'>
           <ActivityLabel glob={glob} />
@@ -484,7 +524,7 @@ export const GlobCard = ({
       <div className='mt-1 leading-snug font-medium'>{glob.title}</div>
       <div className='mt-2 flex flex-wrap items-center gap-1.5'>
         {glob.group !== null && <GroupChip name={glob.group} />}
-        <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
+        {decision ? <DecisionChips glob={glob} /> : <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />}
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         <AfterChip glob={glob} />
         <OverlapChip glob={glob} />
@@ -507,7 +547,7 @@ export const GlobCard = ({
         {deploy !== undefined && <DeployChip deploy={deploy} />}
         {environments !== undefined && <EnvironmentChips environments={environments} />}
         {atf !== undefined && <AtfChip runs={atf} />}
-        {status !== null && (
+        {status !== null && !decision && (
           <Tip text={status.tip}>
             <span className={cn('font-mono text-[11px]', status.tone)} data-testid='status-line' data-kind={status.kind}>
               {status.text}

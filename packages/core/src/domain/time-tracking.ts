@@ -107,6 +107,8 @@ export const deriveSegments = (
       const type = typeOf(e.type === 'GlobCreated' ? e.data.type : undefined) ?? facts?.type;
       // A glob with no planner known (no creation event and no row) can't be attributed to anyone.
       if (planner === null || category === undefined || type === undefined) continue;
+      // Decisions are board knowledge, not work: no segment is ever opened for one.
+      if (category === 'decision') continue;
       g = { status: null, category, type, planner, implementer: null };
       state.set(e.globId, g);
     }

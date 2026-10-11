@@ -232,6 +232,8 @@ export interface KbItem {
   readonly mergeNote: KbMergeNote | null;
   /** `approved` with a signal: whether the change worked (`EffectCheck`), refreshed daily while watching. */
   readonly effectCheck: EffectCheck | null;
+  /** The decision glob that is this item's face on the board; absent or null before one exists (older items, backfill pending). */
+  readonly decisionGlobId?: string | null;
   /** For conditional writes (approve, reject). */
   readonly version: number;
 }

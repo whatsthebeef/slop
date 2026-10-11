@@ -17,10 +17,11 @@ import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/know
 import { checkLocalRun, LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
 import { checkMergePolicy, MERGE_POLICY_NAME, parseMergePolicy, renderMergePolicy } from '../domain/merge-policy.js';
 import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
-import type { Catalog, Clock, Notifier, Store, Tx } from '../ports.js';
+import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
-import { documentTarget, targetState } from './knowledge-service.js';
+import { draftPreview, documentTarget, targetState } from './knowledge-service.js';
+import { syncDecisionFromItem } from './decision-glob.js';
 import type { TargetState } from './knowledge-service.js';
 import { addEvidenceTo, keptApart, longEnoughQuote, normalised, verifiedQuote } from './kb-dedupe.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
@@ -346,6 +347,7 @@ export class KbPipeline {
       return;
     }
     const { draft, rationale } = drafted;
+    // The decision glob in front of the item gets its assessment refreshed with the new draft's diff.
     const wrote = await this.write(item, async (current, tx) => {
       const now = await targetState(tx, catalog, item.boardId, target);
       // The target moved during the call: release the item to be drafted against the new text.
@@ -361,17 +363,26 @@ export class KbPipeline {
         processingAttempts: 0,
         processAfter: null,
       };
-    });
+    }, catalog);
     if (wrote) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
   }
 
-  /** A conditional write of the claimed item; false when it changed meanwhile (decided, retargeted). */
-  private async write(item: KbItem, next: (current: KbItem, tx: Tx) => KbItem | Promise<KbItem>): Promise<boolean> {
-    return this.deps.store.transaction(async (tx) => {
+  /**
+   * A conditional write of the claimed item; false when it changed meanwhile (decided, retargeted). With `catalog`, the
+   * decision glob in front of the item is synced with the written item (and its draft's preview) in the same transaction.
+   */
+  private async write(item: KbItem, next: (current: KbItem, tx: Tx) => KbItem | Promise<KbItem>, catalog?: CatalogAgentSet): Promise<boolean> {
+    let hints: readonly Hint[] = [];
+    const wrote = await this.deps.store.transaction(async (tx) => {
       const current = await tx.getKbItem(item.id);
       if (current?.version !== item.version) return false;
-      return tx.updateKbItem({ ...(await next(current, tx)), version: current.version + 1 }, current.version);
+      const written: KbItem = { ...(await next(current, tx)), version: current.version + 1 };
+      if (!(await tx.updateKbItem(written, current.version))) return false;
+      if (catalog !== undefined) hints = await syncDecisionFromItem(tx, this.deps.clock, written, await draftPreview(tx, catalog, written));
+      return true;
     });
+    for (const hint of hints) this.deps.notifier.publish(hint);
+    return wrote;
   }
 
   /**
@@ -459,6 +470,7 @@ export class KbPipeline {
 
   /** Writes the outcome in one transaction, conditional on the item (and any item it adds evidence to). */
   private async finish(item: KbItem, decide: (tx: Tx) => Promise<{ routing: Routing; dedupe: Dedupe }>): Promise<void> {
+    let hints: readonly Hint[] = [];
     try {
       await this.deps.store.transaction(async (tx) => {
         const current = await tx.getKbItem(item.id);
@@ -548,6 +560,8 @@ export class KbPipeline {
           next = { ...next, possiblyCoveredBy: await shownHint(dedupe.possiblyCoveredBy), contradicts: dedupe.contradicts };
         }
         if (!(await tx.updateKbItem(next, current.version))) throw new StaleItem(item.id);
+        // Closed by the pipeline (merged, suppressed, covered), or flagged as contradicting: the decision glob follows.
+        hints = await syncDecisionFromItem(tx, this.deps.clock, next);
       });
     } catch (error) {
       // Decided or merged into meanwhile: a still-pending item is retried when its lease ends.
@@ -555,6 +569,7 @@ export class KbPipeline {
       throw error;
     }
     this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
+    for (const hint of hints) this.deps.notifier.publish(hint);
   }
 
   /**

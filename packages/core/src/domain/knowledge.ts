@@ -174,8 +174,25 @@ export const agentSetKind = (path: string): KnowledgeKind | null => {
   return null;
 };
 
-export const ARTIFACT_KINDS = ['plan', 'implementation_plan', 'postplan', 'local_review', 'investigation', 'attachment'] as const;
+export const ARTIFACT_KINDS = ['plan', 'implementation_plan', 'postplan', 'local_review', 'investigation', 'assessment', 'attachment'] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+
+/**
+ * What an artifact kind is for: the `payload` is what the glob is about (plan.md; a decision's proposal), a `record` is
+ * what was done (served in full by `get_context`), a `special` artifact has its own place in the view and is only listed,
+ * and an `attachment` is free-form material.
+ */
+export type ArtifactRole = 'payload' | 'record' | 'special' | 'attachment';
+export const ARTIFACT_ROLE: Record<ArtifactKind, ArtifactRole> = {
+  plan: 'payload',
+  implementation_plan: 'record',
+  postplan: 'record',
+  local_review: 'special',
+  investigation: 'special',
+  assessment: 'special',
+  attachment: 'attachment',
+};
+export const isSpecialKind = (kind: ArtifactKind): boolean => ARTIFACT_ROLE[kind] === 'special';
 
 export const RISK_TIERS = ['low', 'normal', 'high'] as const;
 export type RiskTier = (typeof RISK_TIERS)[number];

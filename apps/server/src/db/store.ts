@@ -251,8 +251,10 @@ const toFinding = (row: typeof schema.reviewFindings.$inferSelect): ReviewFindin
   classifiedAt: row.classifiedAt?.toISOString() ?? null,
 });
 
-const toKbItem = (row: typeof schema.kbProposals.$inferSelect): KbItem => ({
+const toKbItem = ({ decisionGlobId, ...row }: typeof schema.kbProposals.$inferSelect): KbItem => ({
   ...row,
+  // Absent until a decision glob exists (the memory store omits it too).
+  ...(decisionGlobId === null ? {} : { decisionGlobId }),
   status: oneOf(KB_ITEM_STATUSES, row.status),
   type: oneOf(LEARNING_TYPES, row.type),
   source: oneOf(KB_ITEM_SOURCES, row.source),
@@ -315,6 +317,7 @@ const kbItemColumns = (item: KbItem) => ({
   keptApartFrom: [...item.keptApartFrom],
   mergeNote: item.mergeNote,
   effectCheck: item.effectCheck,
+  decisionGlobId: item.decisionGlobId ?? null,
   version: item.version,
 });
 
@@ -608,6 +611,11 @@ export class PgStore implements Store {
       },
       listGlobs: async (boardId, filter: GlobFilter) => {
         const conditions = [eq(schema.globs.boardId, boardId)];
+        // Work by default: decision globs are listed only when asked for. Category lives in the document, not a column.
+        if (filter.include !== 'all') {
+          const decision = sql`${schema.globs.data}->>'category' = 'decision'`;
+          conditions.push(filter.include === 'decisions' ? decision : sql`${schema.globs.data}->>'category' is distinct from 'decision'`);
+        }
         if (filter.status !== undefined) conditions.push(inArray(schema.globs.status, [...filter.status]));
         if (filter.type !== undefined) conditions.push(eq(schema.globs.type, filter.type));
         if (filter.group !== undefined) conditions.push(eq(schema.globs.groupName, filter.group));

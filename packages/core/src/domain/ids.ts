@@ -1,15 +1,15 @@
 import type { Category } from './types.js';
 
-/** ID letters. `h` (hotfix) is reserved and `k` is used by KB items. */
-export type IdLetter = 'f' | 't' | 'b' | 'h' | 'k';
+/** ID letters. `h` (hotfix) is reserved, `k` is used by KB items and `d` by decision globs. */
+export type IdLetter = 'f' | 't' | 'b' | 'h' | 'k' | 'd';
 
 export const letterOf = (category: Category): IdLetter =>
-  category === 'feature' ? 'f' : category === 'task' ? 't' : 'b';
+  category === 'feature' ? 'f' : category === 'task' ? 't' : category === 'decision' ? 'd' : 'b';
 
 export const formatId = (boardId: number, letter: IdLetter, n: number): string =>
   `s${boardId}${letter}${n}`;
 
-const ID_PATTERN = /^s([1-9]\d*)([ftbhk])([1-9]\d*)$/;
+const ID_PATTERN = /^s([1-9]\d*)([ftbhkd])([1-9]\d*)$/;
 
 export interface ParsedId {
   readonly boardId: number;
@@ -17,7 +17,7 @@ export interface ParsedId {
   readonly n: number;
 }
 
-const isIdLetter = (value: string): value is IdLetter => 'ftbhk'.includes(value);
+const isIdLetter = (value: string): value is IdLetter => 'ftbhkd'.includes(value);
 
 export const parseId = (id: string): ParsedId | null => {
   const match = ID_PATTERN.exec(id);

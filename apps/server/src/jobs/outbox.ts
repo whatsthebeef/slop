@@ -1,4 +1,4 @@
-import type { Effect, EffectKind, Glob, GlobService } from '@slop/core';
+import type { DecisionGlobService, Effect, EffectKind, Glob, GlobService } from '@slop/core';
 import { and, asc, eq, lte, sql } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/store.js';
@@ -8,6 +8,8 @@ export type Outcome = 'done' | 'dropped';
 
 export interface ExecutorDeps {
   readonly globs: GlobService;
+  /** Moves the decision globs waiting on a merged work glob to Reviewing (absent: none are moved). */
+  readonly decisions?: Pick<DecisionGlobService, 'linkedMerged'>;
 }
 
 /** `final`: this attempt is the last, so a failure that is thrown will not be retried. */

@@ -3,7 +3,7 @@ import type { ReviewStats } from './knowledge.js';
 import { markdownHeadings } from './sections.js';
 import { gateVerdictOf, namesGlob } from './sub-limit.js';
 import { inheritedFromBase } from './signals.js';
-import { CATEGORIES, SLOP_TYPES } from './types.js';
+import { SLOP_TYPES, WORK_CATEGORIES } from './types.js';
 import type { Category, SlopType } from './types.js';
 
 /**
@@ -281,7 +281,7 @@ export const collectOutcome = (input: OutcomeInput): GlobOutcome => {
     if (e.type !== 'FieldsChanged' || e.at < snapshot.createdAt) continue;
     const c = changeOf(e.data.category);
     const t = changeOf(e.data.type);
-    const toCategory = CATEGORIES.find((x) => x === c?.to);
+    const toCategory = WORK_CATEGORIES.find((x) => x === c?.to);
     const toType = SLOP_TYPES.find((x) => x === t?.to);
     if (category === null && toCategory !== undefined && e.actor !== null)
       category = { from: snapshot.decisions.category, to: toCategory, by: e.actor, at: e.at };

@@ -25,9 +25,12 @@ import type {
 import { IMPORT_SOURCES } from '../domain/inbox.js';
 import type { ImportSource } from '../domain/inbox.js';
 import type { Glob } from '../domain/types.js';
-import type { Clock, Notifier, Store, Tx } from '../ports.js';
+import { validateScope } from '../domain/attributes.js';
+import type { DecisionScope } from '../domain/attributes.js';
+import type { Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
 import { addAttachment } from './artifact-service.js';
+import { createDecisionForInbox } from './decision-glob.js';
 
 /** A source label is a short note ("Tuesday standup"). */
 const SOURCE_LABEL_LIMIT = 100;
@@ -387,7 +390,7 @@ export class InboxService {
       if (!actor.ok) return actor;
       const items = await tx.listInboxItems(boardId, statuses ?? DEFAULT_LIST);
       const links = await tx.listInboxLinks(boardId);
-      const globs = new Map((await tx.listGlobs(boardId, {})).map((g) => [g.id, g]));
+      const globs = new Map((await tx.listGlobs(boardId, { include: 'all' })).map((g) => [g.id, g]));
       return ok(items.map((i) => inboxView(i, links, globs)));
     });
   }
@@ -399,7 +402,7 @@ export class InboxService {
       const item = await tx.getInboxItem(boardId, id);
       if (item === null) return notFound(`No inbox item ${String(id)}`);
       const links = await tx.listInboxLinks(boardId);
-      const globs = new Map((await tx.listGlobs(boardId, {})).map((g) => [g.id, g]));
+      const globs = new Map((await tx.listGlobs(boardId, { include: 'all' })).map((g) => [g.id, g]));
       return ok({ ...inboxView(item, links, globs), text: item.text });
     });
   }
@@ -435,44 +438,9 @@ export class InboxService {
               return notFound(`No glob ${globId} on board ${String(boardId)}`);
             globs.push(glob);
           }
-          const existing = await tx.listInboxLinks(boardId);
-          const linkedBefore = new Set(
-            existing.filter((l) => l.inboxId === id).map((l) => l.globId),
-          );
-          const now = this.deps.clock.now();
-          const linked: string[] = [];
-          for (const glob of globs) {
-            if (linkedBefore.has(glob.id)) continue;
-            const artifact = await addAttachment(tx, this.deps.clock, glob, email, {
-              label: await labelFor(tx, glob.id, item),
-              content: '',
-              link: inboxLink(boardId, id),
-            });
-            // A racing attach got there first: roll everything back rather than leave a second attachment.
-            if (
-              !(await tx.insertInboxLink({
-                inboxId: id,
-                globId: glob.id,
-                artifactId: artifact.id,
-                linkedBy: email,
-                linkedAt: now,
-              }))
-            )
-              throw new AttachConflict();
-            linked.push(glob.id);
-          }
-          let current = item;
-          if (linked.length > 0) {
-            const all = [...linkedBefore, ...linked];
-            // Metadata only: the item's content hash doesn't cover its links, so nothing is chunked again.
-            if (item.itemId !== null)
-              await tx.setItemLinks(item.itemId, all, await groupOf(tx, all));
-            current = { ...item, status: 'attached', updatedAt: now };
-            // Throws so the attachments and links written above roll back with it.
-            if (!(await tx.updateInboxItem(current, item.version))) throw new AttachConflict();
-          }
+          const { linked, current } = await this.link(tx, email, boardId, item, globs);
           const links = await tx.listInboxLinks(boardId);
-          const known = new Map((await tx.listGlobs(boardId, {})).map((g) => [g.id, g]));
+          const known = new Map((await tx.listGlobs(boardId, { include: 'all' })).map((g) => [g.id, g]));
           return ok({ view: inboxView(current, links, known), linked });
         },
       );
@@ -486,6 +454,83 @@ export class InboxService {
     if (result.value.linked.length > 0)
       this.deps.notifier.publish({ kind: 'board.inbox', boardId });
     return ok(result.value.view);
+  }
+
+  /**
+   * Links `item` to each of `globs` in the caller's transaction: a link attachment on the glob, a link row, the search item's
+   * globs, and the item `attached`. A glob already linked is skipped. Throws `AttachConflict` on a racing write so
+   * everything written rolls back.
+   */
+  private async link(tx: Tx, email: string, boardId: number, item: InboxItem, globs: readonly Glob[]): Promise<{ linked: string[]; current: InboxItem }> {
+    const id = item.id;
+    const existing = await tx.listInboxLinks(boardId);
+    const linkedBefore = new Set(existing.filter((l) => l.inboxId === id).map((l) => l.globId));
+    const now = this.deps.clock.now();
+    const linked: string[] = [];
+    for (const glob of globs) {
+      if (linkedBefore.has(glob.id)) continue;
+      const artifact = await addAttachment(tx, this.deps.clock, glob, email, {
+        label: await labelFor(tx, glob.id, item),
+        content: '',
+        link: inboxLink(boardId, id),
+      });
+      // A racing attach got there first: roll everything back rather than leave a second attachment.
+      if (!(await tx.insertInboxLink({ inboxId: id, globId: glob.id, artifactId: artifact.id, linkedBy: email, linkedAt: now }))) throw new AttachConflict();
+      linked.push(glob.id);
+    }
+    let current = item;
+    if (linked.length > 0) {
+      const all = [...linkedBefore, ...linked];
+      // Metadata only: the item's content hash doesn't cover its links, so nothing is chunked again.
+      if (item.itemId !== null) await tx.setItemLinks(item.itemId, all, await groupOf(tx, all));
+      current = { ...item, status: 'attached', updatedAt: now };
+      // Throws so the attachments and links written above roll back with it.
+      if (!(await tx.updateInboxItem(current, item.version))) throw new AttachConflict();
+    }
+    return { linked, current };
+  }
+
+  /**
+   * Promotes an inbox item to a decision glob in Planning (the board's face for a proposed decision) and attaches the item
+   * to it as its source. The glob has no knowledge item (accepting it records the outcome only). Idempotent: promoting
+   * again returns the same glob. `scope` defaults to future work.
+   */
+  async promote(
+    email: string,
+    boardId: number,
+    id: number,
+    input: { readonly title?: string | undefined; readonly statement?: string | undefined; readonly scope?: unknown } = {},
+  ): Promise<Result<{ glob: Glob; view: InboxView }>> {
+    let scope: DecisionScope | undefined;
+    if (input.scope !== undefined) {
+      const checked = validateScope(input.scope);
+      if (!checked.ok) return checked;
+      scope = checked.value;
+    }
+    let result: Result<{ glob: Glob; view: InboxView; created: boolean; hints: readonly Hint[] }>;
+    try {
+      result = await this.deps.store.transaction(async (tx): Promise<Result<{ glob: Glob; view: InboxView; created: boolean; hints: readonly Hint[] }>> => {
+        const actor = await memberOf(tx, email, boardId);
+        if (!actor.ok) return actor;
+        const item = await tx.getInboxItem(boardId, id);
+        if (item === null) return notFound(`No inbox item ${String(id)}`);
+        if (item.status === 'discarded') return invalidInput('A discarded item cannot be promoted');
+        const created = await createDecisionForInbox(tx, { clock: this.deps.clock }, item, actor.value, { title: input.title, statement: input.statement, scope });
+        if (!created.ok) return created;
+        const { linked, current } = await this.link(tx, email, boardId, item, [created.value.glob]);
+        const links = await tx.listInboxLinks(boardId);
+        const known = new Map((await tx.listGlobs(boardId, { include: 'all' })).map((g) => [g.id, g]));
+        const hints: Hint[] = [...created.value.hints, ...linked.map((globId): Hint => ({ kind: 'glob.artifacts', boardId, globId }))];
+        return ok({ glob: created.value.glob, view: inboxView(current, links, known), created: created.value.created, hints });
+      });
+    } catch (error) {
+      if (error instanceof AttachConflict) return invalidInput('The item changed: try again');
+      throw error;
+    }
+    if (!result.ok) return result;
+    for (const hint of result.value.hints) this.deps.notifier.publish(hint);
+    if (result.value.created) this.deps.notifier.publish({ kind: 'board.inbox', boardId });
+    return ok({ glob: result.value.glob, view: result.value.view });
   }
 
   /** Keeps a new item: it stays indexed and findable, on no glob. */
@@ -540,7 +585,7 @@ export class InboxService {
 
   private async viewOf(tx: Tx, item: InboxItem): Promise<InboxView> {
     const links = await tx.listInboxLinks(item.boardId);
-    const globs = new Map((await tx.listGlobs(item.boardId, {})).map((g) => [g.id, g]));
+    const globs = new Map((await tx.listGlobs(item.boardId, { include: 'all' })).map((g) => [g.id, g]));
     return inboxView(item, links, globs);
   }
 }

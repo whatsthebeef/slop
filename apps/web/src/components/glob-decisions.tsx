@@ -30,6 +30,15 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
     onSuccess: () => void client.invalidateQueries({ queryKey: globDecisionsKey(globId) }),
     onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not save'),
   });
+  // A decision a person may want decided on the board: it becomes a decision glob in Planning (the same one if asked again).
+  const promote = useMutation({
+    mutationFn: (id: number) => api.promoteDecision(boardId, id),
+    onSuccess: ({ glob }) => {
+      void client.invalidateQueries({ queryKey: ['globs', boardId] });
+      toast(`Promoted to decision ${glob.id}`);
+    },
+    onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not promote it'),
+  });
   const decisions = query.data?.decisions ?? [];
   if (decisions.length === 0) return null;
 
@@ -56,6 +65,11 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
           {d.decidedBy !== null && <span>{d.decidedBy}</span>}
           <span>{day(d.decidedAt)}</span>
           <Source label={d.sourceLabel} url={d.sourceUrl} />
+          {!replaced && d.sourceKind !== 'kb_item' && (
+            <button type='button' className='underline' disabled={promote.isPending} onClick={() => promote.mutate(d.id)}>
+              Promote to decision
+            </button>
+          )}
         </div>
         {newer?.state === 'hint' && (
           <p className='flex flex-wrap items-center gap-2 text-[11px]' data-testid='decision-proposed'>

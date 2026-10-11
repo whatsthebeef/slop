@@ -1,7 +1,7 @@
 import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
-import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
+import { ARTIFACT_KINDS, WORK_CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
 import { parseFrontmatter } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -329,7 +329,7 @@ export const mountKnowledge = (
             title: z.string().min(1).optional(),
             summary: z.string().optional(),
             type: z.enum(SLOP_TYPES).optional(),
-            category: z.enum(CATEGORIES).optional(),
+            category: z.enum(WORK_CATEGORIES).optional(),
             group: z.string().min(1).optional(),
             environment: z.string().min(1).optional(),
           })

@@ -1,3 +1,5 @@
+import type { GlobAttributes } from './attributes.js';
+
 /** What an admin's agent may approve through `decide_kb_item`: documentation items only, or agent-set files and contradicting items too. */
 export const AGENT_KB_APPROVALS = ['docs', 'docs_and_agent_files'] as const;
 export type AgentKbApproval = (typeof AGENT_KB_APPROVALS)[number];
@@ -6,7 +8,10 @@ export const AGENT_KB_APPROVAL_DEFAULT: AgentKbApproval = 'docs';
 export const SLOP_TYPES = ['sub', 'same', 'super'] as const;
 export type SlopType = (typeof SLOP_TYPES)[number];
 
-export const CATEGORIES = ['feature', 'task', 'bug'] as const;
+/** What a person or intake may create through the work form; `decision` globs come from KB items, the inbox and the backfill only. */
+export const WORK_CATEGORIES = ['feature', 'task', 'bug'] as const;
+export type WorkCategory = (typeof WORK_CATEGORIES)[number];
+export const CATEGORIES = [...WORK_CATEGORIES, 'decision'] as const;
 export type Category = (typeof CATEGORIES)[number];
 
 export const STATUSES = [
@@ -220,6 +225,8 @@ export interface Glob {
   readonly summary: string;
   readonly type: SlopType;
   readonly category: Category;
+  /** Per-category fields (a decision's scope and outcome); absent on legacy globs. */
+  readonly attributes?: GlobAttributes;
   readonly group: string | null;
   readonly environment: string | null;
   readonly status: Status;

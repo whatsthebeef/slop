@@ -126,6 +126,8 @@ describe('submit_learning', () => {
       document: null,
       outcome: null,
       ...UNPROCESSED,
+      // Its face on the board: the decision glob made with it.
+      decisionGlobId: 's1d1',
       version: 1,
     });
     const open = await store.transaction((tx) => tx.listKbItems(boardId, 'open'));
@@ -280,24 +282,26 @@ describe('KB review', () => {
 
   it('hints the Knowledge page on submits and decisions, and the board only when its agent-set version moves', async () => {
     const kb = { kind: 'board.kb', boardId };
+    // Decision globs raise their own glob hints; this test is about the board's.
+    const boardHints = () => notifier.hints.filter((h) => h.kind.startsWith('board.'));
     notifier.hints.length = 0;
     const first = await submit();
-    expect(notifier.hints).toEqual([kb]);
+    expect(boardHints()).toEqual([kb]);
 
     notifier.hints.length = 0;
     expect(errorCode(await knowledge.reject(ADMIN, first, 7, 'Stale'))).toBe('version_conflict');
     const empty = { sourceGlobId: globId, type: 'gotcha', statement: '', evidence: 'x' };
     expect(errorCode(await knowledge.submitLearning(DEV, boardId, empty))).toBe('invalid_input');
-    expect(notifier.hints).toEqual([]);
+    expect(boardHints()).toEqual([]);
     unwrap(await knowledge.reject(ADMIN, first, 1, 'Already known'));
-    expect(notifier.hints).toEqual([kb]);
+    expect(boardHints()).toEqual([kb]);
 
     // A document edit changes only knowledge; an agent file also moves the board's agent-set version.
     const second = await submit();
     notifier.hints.length = 0;
     const docEdit = { as: 'edit', target: { kind: 'doc', name: 'build' }, content: 'Run pnpm -r build.\n' } as const;
     unwrap(await knowledge.approve(ADMIN, second, 1, docEdit));
-    expect(notifier.hints).toEqual([kb]);
+    expect(boardHints()).toEqual([kb]);
     const third = await submit({ type: 'agent-behaviour' });
     notifier.hints.length = 0;
     unwrap(
@@ -307,16 +311,16 @@ describe('KB review', () => {
         content: 'Implement the plan.\nTest first.\n',
       }),
     );
-    expect(notifier.hints).toEqual(expect.arrayContaining([kb, { kind: 'board.changed', boardId }]));
-    expect(notifier.hints).toHaveLength(2);
+    expect(boardHints()).toEqual(expect.arrayContaining([kb, { kind: 'board.changed', boardId }]));
+    expect(boardHints()).toHaveLength(2);
 
     notifier.hints.length = 0;
     unwrap(await knowledge.importDocuments(ADMIN, boardId, [{ fileName: 'notes.md', content: 'Notes.\n' }], 'upload'));
-    expect(notifier.hints).toEqual([kb]);
+    expect(boardHints()).toEqual([kb]);
     // Re-importing the same content changes nothing, so it hints nothing.
     notifier.hints.length = 0;
     unwrap(await knowledge.importDocuments(ADMIN, boardId, [{ fileName: 'notes.md', content: 'Notes.\n' }], 'upload'));
-    expect(notifier.hints).toEqual([]);
+    expect(boardHints()).toEqual([]);
   });
 
   it('publishes KB hints only after the write has committed', async () => {
@@ -326,8 +330,9 @@ describe('KB review', () => {
       clock: { now: () => later },
       catalog,
       notifier: {
-        publish: () => {
+        publish: (hint) => {
           // A client refetching on the hint must find the change.
+          if (hint.kind !== 'board.kb') return;
           reads.push(store.transaction(async (tx) => (await tx.listKbItems(boardId)).at(-1)?.status));
         },
       },

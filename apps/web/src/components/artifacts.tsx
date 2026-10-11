@@ -22,6 +22,7 @@ export const ARTIFACT_META: Record<
   postplan: { title: 'Postplan (old)', icon: FileCheck },
   local_review: { title: 'Local review', icon: ClipboardCheck },
   investigation: { title: 'Investigation', icon: Microscope },
+  assessment: { title: 'Assessment', icon: ClipboardCheck },
   attachment: { title: 'Attachment', icon: Paperclip },
 };
 
@@ -30,6 +31,7 @@ export const CARD_ARTIFACT_KINDS = [
   'plan',
   'implementation_plan',
   'local_review',
+  'assessment',
 ] as const;
 
 export interface ArtifactRef {

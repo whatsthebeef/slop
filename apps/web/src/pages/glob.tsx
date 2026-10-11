@@ -82,6 +82,7 @@ export const GlobPage = () => {
         return path === null ? Promise.resolve(false) : change(() => api.action(open.id, path, open.version, anyway));
       }}
       onReviewLabel={(label: LabelName, command: LabelCommand) => change(() => api.reviewLabel(open.id, label, command, open.version))}
+      onDecide={(input) => change(() => api.decide(open.id, open.version, input))}
       onUpdate={async (changes: GlobChanges) => {
         try {
           store(await api.updateGlob(open.id, open.version, changes));

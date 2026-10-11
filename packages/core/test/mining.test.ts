@@ -96,6 +96,17 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     });
   });
 
+  it('gives a mined item its decision glob (channel mined, in Planning, assessed), linked both ways', async () => {
+    await runs(10, 3, later(-2 * DAY));
+    const result = await mining.mine(board.id, START);
+    const mined = await item(result.raised[0] ?? '');
+    expect(mined.decisionGlobId).toBe('s1d1');
+    const decision = await store.transaction((tx) => tx.getGlob('s1d1'));
+    expect(decision).toMatchObject({ category: 'decision', status: 'planning', planner: MINED_BY, createdAt: mined.createdAt });
+    expect(decision?.attributes).toMatchObject({ channel: 'mined', kbItemId: mined.id, scope: { kind: 'future_work', ref: null }, source: { kind: 'kb_item', id: mined.id } });
+    expect(await store.transaction((tx) => tx.artifactVersions('s1d1', 'assessment', ''))).toHaveLength(1);
+  });
+
   it('raises a crossed signal as an open, unprocessed mined item with its signal and figures as evidence', async () => {
     await runs(10, 3, later(-2 * DAY));
     const result = await mining.mine(board.id, START);

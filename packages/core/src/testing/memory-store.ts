@@ -290,6 +290,7 @@ export class MemoryStore implements Store {
             .filter(
               (g) =>
                 g.boardId === boardId &&
+                (filter.include === 'all' || (filter.include === 'decisions') === (g.category === 'decision')) &&
                 (filter.status === undefined || filter.status.includes(g.status)) &&
                 (filter.type === undefined || g.type === filter.type) &&
                 (filter.group === undefined || g.group === filter.group) &&

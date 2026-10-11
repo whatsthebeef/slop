@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, DecisionGlobService, backfillDecisionGlobs } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -44,6 +44,7 @@ import { CodeIndex } from './code-index.js';
 import { CodeIndexer } from './code-indexer.js';
 import { GitCodeView } from './code-view.js';
 import { mountDecisions } from './http/decisions.js';
+import { mountDecisionGlobs } from './http/decision-globs.js';
 import { mountInbox } from './http/inbox.js';
 import { mountSlack } from './http/slack.js';
 import { slackApi } from './slack.js';
@@ -130,7 +131,8 @@ const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => 
 
 const outbox = new OutboxRunner(
   db,
-  { globs },
+  // `decisionGlobs` is built below, after the knowledge service it needs; it is only called once an effect runs.
+  { globs, decisions: { linkedMerged: (mergedId, boardId) => decisionGlobs.linkedMerged(mergedId, boardId) } },
   {
     ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths, logError),
     ...deployExecutors(
@@ -150,6 +152,7 @@ const clock = { now: () => new Date().toISOString() };
 // Mining measures the board's signals: the weekly job, and the signal an admin picks to watch when approving.
 const mining = new MiningService({ store, notifier: hub });
 const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub, signals: mining });
+const decisionGlobs = new DecisionGlobService({ store, clock, notifier: hub, knowledge, globs });
 const findings = new FindingsService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
@@ -379,7 +382,8 @@ mountSearch(app, { search });
 mountCode(app, { code });
 mountChat(app, { chat });
 mountDecisions(app, { decisions });
-mountInbox(app, { inbox });
+mountInbox(app, { inbox, decisionGlobs });
+mountDecisionGlobs(app, { decisions: decisionGlobs, globs });
 if (config.SLACK_SIGNING_SECRET !== undefined && config.SLACK_BOT_TOKEN !== undefined) {
   mountSlack(app, {
     signingSecret: config.SLACK_SIGNING_SECRET,
@@ -468,6 +472,16 @@ if (runs('catalog')) {
     }
   } catch (error) {
     logError('agent set sync', error instanceof Error ? (error.stack ?? error.message) : String(error));
+  }
+}
+
+// Decision globs for the KB items and extracted decisions that exist already; idempotent, so every start may run it.
+if (runs('kb')) {
+  try {
+    const counts = await backfillDecisionGlobs(store, clock);
+    console.log(`[decisions] backfill over ${String(counts.boards)} board(s): ${String(counts.open)} open, ${String(counts.decided)} decided, ${String(counts.extracted)} extracted created, ${String(counts.skipped)} skipped`);
+  } catch (error) {
+    logError('decision backfill', error instanceof Error ? (error.stack ?? error.message) : String(error));
   }
 }
 

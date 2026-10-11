@@ -335,10 +335,13 @@ export const kbProposals = pgTable(
     mergeNote: jsonb('merge_note').$type<KbMergeNote>(),
     /** Approved with a signal: whether the change worked, refreshed daily while watching. */
     effectCheck: jsonb('effect_check').$type<EffectCheck>(),
+    /** The decision glob that is this item's face on the board (`attributes.kbItemId` is the reverse link). */
+    decisionGlobId: text('decision_glob_id'),
     version: integer('version').notNull(),
   },
   (t) => [
     index('kb_proposals_board_status_idx').on(t.boardId, t.status),
+    index('kb_proposals_decision_glob_idx').on(t.decisionGlobId),
     index('kb_proposals_processing_idx').on(t.processing, t.createdAt),
   ],
 );

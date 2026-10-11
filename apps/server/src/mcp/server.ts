@@ -1,6 +1,6 @@
 import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService } from '@slop/core';
 import { invalidInput, machine } from '@slop/core';
-import { ARTIFACT_KINDS, CATEGORIES, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
+import { ARTIFACT_KINDS, WORK_CATEGORIES, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -103,7 +103,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work) on a board. Pass the request as `input` and slop proposes the title, summary, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (a person can split it); an explicit `type` always wins. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work: a feature, task or bug) on a board; decision globs are created by slop from learnings, never here. Pass the request as `input` and slop proposes the title, summary, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (a person can split it); an explicit `type` always wins. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -115,7 +115,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .optional()
           .describe('The full spec, stored verbatim as plan.md v1; without it plan.md v1 is the write-up intake makes of the input, else the summary as given'),
         type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing)'),
-        category: z.enum(CATEGORIES).optional(),
+        category: z.enum(WORK_CATEGORIES).optional(),
         group: z.string().optional(),
         environment: z
           .string()
@@ -247,7 +247,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
               title: z.string().min(1),
               summary: z.string(),
               plan: z.string().min(1).describe("This part's share of plan.md (Markdown); {part:N} stands for part N's glob ID"),
-              category: z.enum(CATEGORIES).optional(),
+              category: z.enum(WORK_CATEGORIES).optional(),
               type: z.enum(SLOP_TYPES).optional(),
               after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part waits for to merge'),
               attachments: z.array(z.string().min(1)).optional().describe("Labels of the original's text attachments to copy (new parts only; link attachments are always copied)"),
@@ -290,7 +290,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_glob',
     {
       description:
-        "Everything about a glob: status, version, fields, labels, PR, runs, flags, its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, the decision taken (kept_whole or split) and the proposed split (parts in split_glob's shape); a flagged sub or auto-triggered same is held in Planning until a person splits it or keeps it whole, so do not start it.",
+        "Everything about a glob (a decision glob carries `attributes`: scope, source, channel, outcome, and its proposal as plan.md): status, version, fields, labels, PR, runs, flags, its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, the decision taken (kept_whole or split) and the proposed split (parts in split_glob's shape); a flagged sub or auto-triggered same is held in Planning until a person splits it or keeps it whole, so do not start it.",
       inputSchema: { id: z.string(), runId: z.string().optional() },
     },
     async ({ id, runId }) => {
@@ -354,7 +354,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         title: z.string().optional(),
         summary: z.string().optional(),
         type: z.enum(SLOP_TYPES).optional(),
-        category: z.enum(CATEGORIES).optional(),
+        category: z.enum(WORK_CATEGORIES).optional(),
         group: z.string().nullable().optional(),
         environment: z.string().nullable().optional(),
         needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged before it starts (alias: `after`)'),
@@ -625,7 +625,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'submit_learning',
     {
       description:
-        "Submit one learning from a run (orchestrator phase 6, /finalise) as a KB item for the board's admins to review; nothing changes the knowledge base until it is approved. Returns its ID (s1k3) straight away; slop then routes it to a document or agent file, deduplicates it against other items and drafts the change in the background. Pass the agent-set version from .claude/slop-agent-set.json; routines pass their run ID. /kb-bootstrap proposes a whole new document with `document`; approving it creates or updates that document.",
+        "Submit one learning from a run (orchestrator phase 6, /finalise) as a KB item for the board's admins to review; nothing changes the knowledge base until it is approved. Returns its ID (s1k3) and `globId` (s1d3, the decision glob that shows it on the board) straight away; slop then routes it to a document or agent file, deduplicates it against other items and drafts the change in the background. Pass the agent-set version from .claude/slop-agent-set.json; routines pass their run ID. /kb-bootstrap proposes a whole new document with `document`; approving it creates or updates that document.",
       inputSchema: {
         board: z.number().int(),
         sourceGlobId: z
@@ -678,7 +678,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields, plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
+        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {

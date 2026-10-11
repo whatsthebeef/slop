@@ -24,6 +24,7 @@ import type { Notifier, Store, Tx } from '../ports.js';
 import { newKbItemId } from './knowledge-service.js';
 import { MINED_BY } from './mining-service.js';
 import type { MiningService } from './mining-service.js';
+import { createDecisionForItem } from './decision-glob.js';
 
 export type EffectCheckResult = Extract<BoardJobResult, { kind: 'effect_check' }>;
 
@@ -170,7 +171,7 @@ export class EffectCheckService {
       examples: [],
       measuredAt: now,
     };
-    const inserted = await tx.insertKbItem({
+    const item: KbItem = {
       id,
       boardId: board.id,
       status: 'open',
@@ -197,7 +198,10 @@ export class EffectCheckService {
       // Unprocessed: the KB pipeline routes, dedupes and drafts it like any mined item; humans decide.
       ...UNPROCESSED,
       version: 1,
-    });
+    };
+    const decision = await createDecisionForItem(tx, { clock: { now: () => now } }, item, { email: MINED_BY, role: 'dev' }, 'mined');
+    if (!decision.ok) throw new Error(decision.error.message);
+    const inserted = await tx.insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
     if (!inserted) throw new Error(`KB item ${id} already exists`);
     return id;
   }

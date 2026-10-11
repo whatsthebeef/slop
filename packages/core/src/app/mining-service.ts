@@ -19,6 +19,7 @@ import type {
 } from '../domain/signals.js';
 import type { Notifier, Store, Tx } from '../ports.js';
 import { newKbItemId } from './knowledge-service.js';
+import { createDecisionForItem } from './decision-glob.js';
 
 export type MiningResult = Extract<BoardJobResult, { kind: 'mining' }>;
 
@@ -203,7 +204,7 @@ export class MiningService {
   private async insertItem(tx: Tx, boardId: number, agentSetVersion: number, m: Measurement, signal: KbSignal, now: string): Promise<string> {
     const definition = signalDefinition(m.key);
     const id = await newKbItemId(tx, boardId);
-    const inserted = await tx.insertKbItem({
+    const item: KbItem = {
       id,
       boardId,
       status: 'open',
@@ -225,7 +226,11 @@ export class MiningService {
       // Unprocessed, like a submitted item: the KB pipeline routes, dedupes and drafts it.
       ...UNPROCESSED,
       version: 1,
-    });
+    };
+    // Its face on the board: a decision glob, so mined proposals are decided where the board looks.
+    const decision = await createDecisionForItem(tx, { clock: { now: () => now } }, item, { email: MINED_BY, role: 'dev' }, 'mined');
+    if (!decision.ok) throw new Error(decision.error.message);
+    const inserted = await tx.insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
     // The counter is atomic, so a clash means the counter and the table disagree.
     if (!inserted) throw new Error(`KB item ${id} already exists`);
     return id;
