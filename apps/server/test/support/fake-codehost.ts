@@ -32,6 +32,10 @@ export class FakeCodeHost implements CodeHost {
   conflictFiles: CodeHost['conflictFiles'] = () => Promise.resolve([]);
   behindBase: CodeHost['behindBase'] = () => Promise.resolve({ behindBy: 0, files: [] });
   commentOnce: CodeHost['commentOnce'] = () => Promise.resolve('posted');
+  prDiff: CodeHost['prDiff'] = () => Promise.resolve('');
+  submitReview: CodeHost['submitReview'] = (_repo, _pr, review) => Promise.resolve({ id: 1, inline: review.comments.length });
+  outdateReviews: CodeHost['outdateReviews'] = () => Promise.resolve(0);
+  reportCheck: CodeHost['reportCheck'] = () => Promise.resolve('created');
   diffSummary: CodeHost['diffSummary'] = () => Promise.resolve({ changedLines: 0, files: [] });
   commitDiffSummary: CodeHost['commitDiffSummary'] = () => Promise.resolve({ changedLines: 0, files: [] });
   headOf: CodeHost['headOf'] = () => Promise.resolve(null);

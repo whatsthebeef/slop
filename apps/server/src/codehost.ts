@@ -17,6 +17,12 @@ export const repoOf = (board: Board): Repo | null => {
 /** The check run the sub gate's GitHub Action reports as; slop applies its policy once it passes (rows 12–13). */
 export const SUB_GATE_CHECK = 'sub-gate';
 
+/**
+ * The neutral check run slop reports "N findings" under. It is informational, so every reading of a head's checks
+ * leaves it out (a repo with no other CI would otherwise never look passed).
+ */
+export const REVIEW_CHECK = 'slop-review';
+
 /** Whether a review's head can merge, in the host's own view (required checks, conflicts, up to date). */
 export type MergeState = 'passed' | 'pending' | 'failed' | 'behind' | 'conflict' | 'unknown';
 
@@ -89,6 +95,21 @@ export type TestMergeTarget =
   | { readonly outcome: 'undecided' }
   | { readonly outcome: 'not_open' };
 
+/** One review submission on a PR: a summary and inline comments, all on one commit. */
+export interface PostedReview {
+  /** The commit the review is attached to (the PR head); inline comments are anchored in its diff. */
+  readonly commitSha: string;
+  readonly body: string;
+  readonly comments: readonly { readonly path: string; readonly line: number; readonly body: string }[];
+}
+
+/** A check run slop reports (not a gate: its conclusion is neutral). */
+export interface ReportedCheck {
+  readonly name: string;
+  readonly title: string;
+  readonly summary: string;
+}
+
 export interface CodeHost {
   /** True once the host integration is configured (e.g. the GitHub App exists). */
   readonly configured: boolean;
@@ -143,6 +164,22 @@ export interface CodeHost {
   behindBase(repo: Repo, prNumber: number): Promise<BehindBase | null>;
   /** Posts a PR comment containing `marker` unless one with it exists already (so a retried effect comments once). */
   commentOnce(repo: Repo, prNumber: number, marker: string, body: string): Promise<'posted' | 'exists'>;
+  /** The PR's own diff (its merge-base with the base branch to `headSha`), as the host shows it for inline comments. */
+  prDiff(repo: Repo, headSha: string, signal?: AbortSignal): Promise<string>;
+  /**
+   * Submits one review (event COMMENT, so it never blocks or approves) with its inline comments. When the host rejects the
+   * inline comments (a line that isn't in the PR's own diff), the review is posted again with them folded into its body, so
+   * a finding is never lost. Returns the review's ID and how many comments were placed inline.
+   */
+  submitReview(repo: Repo, prNumber: number, review: PostedReview): Promise<{ id: number; inline: number }>;
+  /**
+   * Marks slop's earlier reviews on the PR outdated: those whose body starts with `markerPrefix`, other than `exceptId`.
+   * Each review's body is rewritten with `rewrite` (an update the host allows on a submitted review) and its inline comments
+   * are minimized as outdated. Best effort; returns how many reviews it changed.
+   */
+  outdateReviews(repo: Repo, prNumber: number, markerPrefix: string, exceptId: number | null, rewrite: (body: string) => string): Promise<number>;
+  /** Reports a completed, neutral check run on `sha`; `unavailable` when the integration lacks the checks permission. */
+  reportCheck(repo: Repo, sha: string, check: ReportedCheck): Promise<'created' | 'unavailable'>;
   /** Lines changed and files touched between the base branch and `sha`. */
   diffSummary(repo: Repo, sha: string): Promise<DiffSummary>;
   /** Lines changed (the commit's stats) and files touched by commit `sha` against its first parent: a merged sub's size. */

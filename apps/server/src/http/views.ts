@@ -40,7 +40,7 @@ export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; a
   });
 
 /** An artifact summary on a glob view (the glob ID is implied). */
-const artifactView = ({ kind, label, version, versions, commitSha, createdAt, by, actor }: ArtifactSummary) => ({
+const artifactView = ({ kind, label, version, versions, commitSha, createdAt, by, actor, review }: ArtifactSummary) => ({
   kind,
   label,
   version,
@@ -49,6 +49,7 @@ const artifactView = ({ kind, label, version, versions, commitSha, createdAt, by
   createdAt,
   by,
   actor,
+  ...(review === undefined ? {} : { review }),
 });
 
 export const globViewFor = (

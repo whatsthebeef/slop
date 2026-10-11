@@ -9,9 +9,11 @@ import type { ResolvedReview } from './review-target.js';
 export type RunReview = (glob: Glob, resolved: Extract<ResolvedReview, { outcome: 'ready' }>) => Promise<void>;
 
 /**
- * Outbox executor for `review_change`. The job is dropped when its target is no longer current: a pre-merge review needs
- * the PR still ready with the queued commit as its head (a newer push queued its own job), a post-merge review needs the
- * PR merged. A test merge the host hasn't computed yet is retried; a conflicting PR has no merged result and is dropped.
+ * Outbox executor for `review_change`. An automatic job is dropped when its target is no longer current: a pre-merge review
+ * needs the PR still ready with the queued commit as its head (a newer push queued its own job), a post-merge review needs
+ * the PR merged. An on-demand job (Review now, it has a `requestId`) reviews the PR as it is when it runs, at whichever
+ * stage that is: an open PR (draft or ready) before merge, a merged one after; only a PR closed without merging drops it.
+ * A test merge the host hasn't computed yet is retried; a conflicting PR has no merged result and is dropped.
  */
 export const reviewExecutors = (
   host: CodeHost,
@@ -20,14 +22,19 @@ export const reviewExecutors = (
 ): Partial<Record<EffectKind, Executor>> => ({
   review_change: async (effect, glob) => {
     if (effect.kind !== 'review_change' || glob === null || glob.pr === null) return 'dropped';
-    if (effect.stage === 'pre_merge' && (glob.status !== 'pr_open' || glob.pr.state !== 'ready' || glob.pr.headSha !== effect.sha)) return 'dropped';
-    if (effect.stage === 'post_merge' && glob.pr.state !== 'merged') return 'dropped';
+    const onDemand = effect.requestId !== undefined;
+    if (onDemand) {
+      if (glob.pr.state === 'closed') return 'dropped';
+    } else {
+      if (effect.stage === 'pre_merge' && (glob.status !== 'pr_open' || glob.pr.state !== 'ready' || glob.pr.headSha !== effect.sha)) return 'dropped';
+      if (effect.stage === 'post_merge' && glob.pr.state !== 'merged') return 'dropped';
+    }
     const board = await boardOf(glob.boardId);
     const repo = board === null ? null : repoOf(board);
     if (repo === null) return 'dropped';
     const resolved = await resolveReviewTarget(host, repo, glob);
     if (resolved.outcome === 'undecided') throw new Error('The host has not computed the test merge yet');
-    if (resolved.outcome !== 'ready' || resolved.stage !== effect.stage) return 'dropped';
+    if (resolved.outcome !== 'ready' || (!onDemand && resolved.stage !== effect.stage)) return 'dropped';
     await run(glob, resolved);
     return 'done';
   },

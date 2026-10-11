@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, TypeLearningService } from '@slop/core';
+import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_MIN_SEVERITY, sizeIgnoredPathsOf, TypeLearningService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -23,6 +23,8 @@ import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { environmentExecutors } from './environment-executors.js';
 import { exclusivePathExecutors } from './exclusive-path-executors.js';
+import { reviewExecutors } from './review-executors.js';
+import { makeRunReview } from './review-runner.js';
 import { mountArtifactUploads } from './http/artifact-upload.js';
 import { mountDeploys } from './http/deploys.js';
 import { mountWeb } from './http/web.js';
@@ -30,7 +32,7 @@ import { LocalFollowWatch } from './local-follow.js';
 import { mountReadiness } from './http/readiness.js';
 import { ReadinessWatch } from './readiness-watch.js';
 import { HintHub } from './notifier.js';
-import { BedrockLlm, shownModelId } from './llm.js';
+import { BedrockLlm, reviewerLlm, shownModelId } from './llm.js';
 import { BedrockEmbedder } from './embedder.js';
 import { CodeHostChanges } from './code-host-changes.js';
 import { marksBoardDirty, SearchSync } from './jobs/search-sync.js';
@@ -142,6 +144,25 @@ const outbox = new OutboxRunner(
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
     ...exclusivePathExecutors(store, branchFiles, boardOf),
+    // The independent reviewer: `artifacts`, `trackLlm` and the config exist by the time the first job runs.
+    ...reviewExecutors(github, boardOf, (glob, resolved) =>
+      makeRunReview({
+        host: github,
+        inputs: new ReviewInputService({ store }),
+        artifacts,
+        boardOf,
+        log: (message) => logError('review', message),
+        // Per-board review settings aren't built yet: every board gets the defaults (its ignored paths are the merge policy's).
+        settings: async (boardId) => ({
+          model: config.REVIEW_MODEL,
+          minSeverity: DEFAULT_REVIEW_MIN_SEVERITY,
+          ignoredPaths: sizeIgnoredPathsOf(await store.transaction((tx) => readMergePolicy(tx, boardId))),
+          toolCap: null,
+        }),
+        // Per review (the model is a board setting); health tracking marks the model down on credential failures like the others.
+        llmFor: (model) => trackLlm(reviewerLlm(model, config.BEDROCK_REGION, logUsage), model),
+      })(glob, resolved),
+    ),
   },
   logError,
 );

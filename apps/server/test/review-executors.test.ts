@@ -2,6 +2,7 @@ import type { Board, Effect, Glob } from '@slop/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { GlobService } from '@slop/core';
 import { reviewExecutors } from '../src/review-executors.js';
+import type { RunReview } from '../src/review-executors.js';
 import { FakeCodeHost } from './support/fake-codehost.js';
 
 const NOW = '2026-10-11T00:00:00.000Z';
@@ -46,7 +47,7 @@ const setup = () => {
   const host = new FakeCodeHost();
   host.testMergeTarget = () => Promise.resolve({ outcome: 'ready', ref: 'refs/pull/7/merge', sha: 'm1', baseSha: 'b1', diff: 'd' });
   host.mergedTarget = (r, sha) => Promise.resolve({ ref: r.base, sha, baseSha: 'p1', diff: 'squash' });
-  const run = vi.fn(() => Promise.resolve());
+  const run = vi.fn<RunReview>(() => Promise.resolve());
   const execute = reviewExecutors(host, () => Promise.resolve(board), run).review_change;
   if (execute === undefined) throw new Error('missing executor');
   return { host, run, execute };
@@ -72,6 +73,29 @@ describe('review_change executor', () => {
     host.prState = () => Promise.resolve({ state: 'merged', draft: false, headSha: 'aaa', mergeSha: 'sq1' });
     expect(await execute(post, glob({ type: 'sub', status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'aaa' } }), deps)).toBe('done');
     expect(run).toHaveBeenCalledOnce();
+  });
+
+  it('an on-demand review runs on a draft PR and on a head that moved, at the stage the PR is in', async () => {
+    const { host, run, execute } = setup();
+    const asked: Effect = { ...pre, requestId: 'r1' };
+    const draft = glob({ status: 'in_progress', pr: { number: 7, state: 'draft', headSha: 'zzz' } });
+    expect(await execute(asked, draft, deps)).toBe('done');
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]?.[1]).toMatchObject({ stage: 'pre_merge' });
+    // Asked before the merge, run after it: the merged change is reviewed at the post-merge stage.
+    host.prState = () => Promise.resolve({ state: 'merged', draft: false, headSha: 'aaa', mergeSha: 'sq1' });
+    const merged = glob({ status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'aaa' } });
+    expect(await execute(asked, merged, deps)).toBe('done');
+    expect(run.mock.calls[1]?.[1]).toMatchObject({ stage: 'post_merge', diff: { sha: 'sq1' } });
+  });
+
+  it('an on-demand review is dropped for a PR closed without merging, and still retried while the test merge is undecided', async () => {
+    const { host, run, execute } = setup();
+    const asked: Effect = { ...pre, requestId: 'r1' };
+    expect(await execute(asked, glob({ status: 'failed', pr: { number: 7, state: 'closed', headSha: 'aaa' } }), deps)).toBe('dropped');
+    host.testMergeTarget = () => Promise.resolve({ outcome: 'not_open' });
+    await expect(execute(asked, glob(), deps)).rejects.toThrow('test merge');
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('retries while the test merge is undecided and drops a conflicting PR', async () => {

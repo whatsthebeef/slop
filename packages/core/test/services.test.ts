@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { ArtifactService } from '../src/app/artifact-service.js';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import type { CreateGlobInput } from '../src/app/glob-service.js';
@@ -140,6 +141,47 @@ describe('services', () => {
     expect(!stale.ok && stale.error.code).toBe('version_conflict');
     expect(unwrap(await globs.merge(DEV, passing.id, passing.version)).status).toBe('merging');
     expect(store.state.outbox.at(-1)).toMatchObject({ kind: 'squash_merge', globId: glob.id, sha: 'abc' });
+  });
+
+  it('review now queues a fresh review every time, beside the automatic one for the same commit', async () => {
+    const glob = unwrap(await globs.create(DEV, input()));
+    const picked = unwrap(await globs.pickUp(DEV, glob.id, glob.version, false));
+    unwrap(await globs.applyEvent(picked.id, (g, ctx) => machine.prReadyForReview(g, { number: 7, headSha: 'abc' }, ctx)));
+    const reviews = () => store.state.outbox.flatMap((e) => (e.kind === 'review_change' ? [e] : []));
+    expect(reviews()).toHaveLength(1);
+    // The same commit again: the automatic review is deduplicated, the on-demand ones are not.
+    await store.transaction((tx) => tx.enqueueEffects([{ kind: 'review_change', globId: glob.id, generation: 1, stage: 'pre_merge', sha: 'abc' }]));
+    expect(reviews()).toHaveLength(1);
+    unwrap(await globs.reviewNow(PO, glob.id));
+    unwrap(await globs.reviewNow(PO, glob.id));
+    const queued = reviews();
+    expect(queued).toHaveLength(3);
+    expect(queued.filter((e) => e.requestId !== undefined)).toHaveLength(2);
+    expect(new Set(queued.map((e) => e.requestId)).size).toBe(3);
+    // A later automatic review for a newer head cancels only the automatic one.
+    unwrap(await globs.applyEvent(glob.id, (g, ctx) => machine.commitPushed(g, { sha: 'def', runId: null }, ctx)));
+    expect(reviews().map((e) => `${e.sha}:${e.requestId === undefined ? 'auto' : 'asked'}`).sort()).toEqual(['abc:asked', 'abc:asked', 'def:auto']);
+  });
+
+  it('stores independent reviews as versioned artifacts tied to the commit, and the summary carries the finding count', async () => {
+    const glob = unwrap(await globs.create(DEV, input()));
+    const artifacts = new ArtifactService({ store, notifier, clock: { now: () => '2026-10-05T12:00:00.000Z' } });
+    const meta = { stage: 'pre_merge' as const, headSha: 'abc', findings: 3, high: 1, medium: 1, low: 1 };
+    const first = unwrap(await artifacts.addIndependentReview(glob.id, { content: '# review', commitSha: 'm1', meta, model: 'gpt-oss' }));
+    const second = unwrap(await artifacts.addIndependentReview(glob.id, { content: '# again', commitSha: 'm2', meta: { ...meta, findings: 0, high: 0, medium: 0, low: 0 }, model: 'gpt-oss' }));
+    expect([first.version, second.version]).toEqual([1, 2]);
+    expect(second).toMatchObject({ kind: 'independent_review', commitSha: 'm2', provenance: { by: 'reviewer', actor: 'gpt-oss' } });
+    const [summary] = await store.transaction((tx) => tx.listArtifactSummaries(boardId, [glob.id]));
+    expect(summary).toMatchObject({ kind: 'independent_review', version: 2, versions: 2, commitSha: 'm2', review: { findings: 0, stage: 'pre_merge' } });
+    expect(notifier.hints.some((h) => h.kind === 'glob.artifacts' && h.globId === glob.id)).toBe(true);
+    const missing = await artifacts.addIndependentReview('nope', { content: 'x', commitSha: 'm', meta, model: 'm' });
+    expect(!missing.ok && missing.error.code).toBe('not_found');
+  });
+
+  it('review now is refused for a glob still in Planning', async () => {
+    const glob = unwrap(await globs.create(DEV, input()));
+    const result = await globs.reviewNow(DEV, glob.id);
+    expect(!result.ok && result.error.code).toBe('invalid_transition');
   });
 
   const putRecord = (globId: string, commitSha: string) =>
