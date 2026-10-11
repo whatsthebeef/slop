@@ -5,6 +5,7 @@ import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { INBOX_CONTEXT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
 import type { Artifact, ArtifactKind, Provenance, ReviewStats } from '../domain/knowledge.js';
+import { recheckOverlapsEffect } from '../domain/events.js';
 import { currentRun } from '../domain/machine.js';
 import type { SearchHit } from '../domain/search.js';
 import type { Glob } from '../domain/types.js';
@@ -441,6 +442,8 @@ export class ArtifactService {
         agentSetVersion: options.agentSetVersion,
         reviewStats: options.reviewStats ?? null,
       });
+      // A plan that now names (or stops naming) an exclusive path changes which globs overlap.
+      if (kind === 'plan') await tx.enqueueEffects([recheckOverlapsEffect(glob.boardId)]);
       return ok({ artifact, boardId: glob.boardId });
     });
     if (!result.ok) return result;
