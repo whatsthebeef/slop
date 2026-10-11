@@ -671,6 +671,29 @@ describe('field changes and type changes (row 26)', () => {
       expect(m.allowedActions(held, dev, { dependencies: new Map([['s1t9', 'merged' as const]]) })).toContain('start');
     });
 
+    it('a glob held only for its oversized flag offers Start anyway with the dependencies loaded', () => {
+      const held = glob({ type: 'sub', status: 'planning', waiting: { since: NOW } });
+      expect(m.allowedActions(held, dev, { dependencies: new Map() })).not.toContain('start_anyway');
+      expect(m.allowedActions(held, dev, { dependencies: new Map(), sizeHeld: true })).toContain('start_anyway');
+      const t = value(m.startAnyway(held, ctx()));
+      expect(t.glob.status).toBe('implementing');
+      expect(t.glob.waiting).toBeNull();
+      expect(t.glob.runs.at(-1)?.state).toBe('queued');
+    });
+
+    it('a picked-up glob with no run can be handed to a routine; with a live run it cannot', () => {
+      const picked = glob({ type: 'sub', status: 'in_progress', implementer: dev.email, runs: [] });
+      expect(m.allowedActions(picked, dev)).toContain('start_anyway');
+      const t = value(m.startAnyway(picked, ctx()));
+      expect(t.glob.status).toBe('implementing');
+      expect(t.glob.implementer).toBeNull();
+      expect(t.glob.generation).toBe(picked.generation + 1);
+      expect(t.glob.runs.at(-1)?.state).toBe('queued');
+      const sup = glob({ type: 'super', status: 'in_progress', implementer: dev.email, runs: [] });
+      expect(m.allowedActions(sup, dev)).not.toContain('start_anyway');
+      expect(errorCode(m.startAnyway(sup, ctx()))).toBe('invalid_transition');
+    });
+
     it('a planned super offers Pick up but not Start; back to same offers both', () => {
       const sup = value(m.changeFields(planned(), { type: 'super' }, board, ctx())).glob;
       const actions = m.allowedActions(sup, dev);

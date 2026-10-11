@@ -152,7 +152,9 @@ export class GlobService {
       if (!actor.ok) return actor;
       const artifacts = (await tx.listArtifactSummaries(glob.boardId, [glob.id])).sort(byKind);
       const dependencies = await this.dependencyStates(tx, dependencyIds(glob));
-      const facts = { recordSha: machine.recordShaOf(artifacts), dependencies };
+      const sizeCheck = await tx.getSizeCheck(glob.id);
+      const sizeHeld = glob.status === 'planning' && glob.waiting != null && unresolved(sizeCheck);
+      const facts = { recordSha: machine.recordShaOf(artifacts), dependencies, sizeHeld };
       const waiting = await tx.listGlobs(glob.boardId, { status: ['planning'] });
       return ok({
         glob,
@@ -161,7 +163,7 @@ export class GlobService {
         waitingFor: waitingFor(glob, dependencies),
         waitedOnBy: waiting.filter((g) => waitsFor(g, glob.id)).map((g) => g.id),
         chain: await this.chainOf(tx, glob),
-        sizeCheck: await tx.getSizeCheck(glob.id),
+        sizeCheck,
       });
     });
   }

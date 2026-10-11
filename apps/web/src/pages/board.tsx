@@ -34,7 +34,8 @@ type Direction = 'left' | 'right';
 
 const MOVE_DESCRIPTIONS: Partial<Record<Action, string>> = {
   start: 'a routine implements it',
-  pick_up: 'you implement it',
+  start_anyway: 'a routine implements it, ahead of what holds it',
+  pick_up: 'you implement it in your own session',
   take_over: 'you take it over from the routine',
   retrigger: 'a routine runs it again',
 };

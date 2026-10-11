@@ -373,7 +373,7 @@ export const createApp = (deps: AppDeps) => {
     const oversized = await globs.oversizedOf(boardId);
     return send(c, result, (list) =>
       list.map(({ glob, artifacts, dependencies, chain }) => ({
-        ...globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain),
+        ...globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain, glob.waiting != null && oversized.has(glob.id)),
         ...splitField(splits.get(glob.id)),
         ...(oversized.has(glob.id) ? { oversized: true } : {}),
       })),
@@ -476,7 +476,11 @@ export const createApp = (deps: AppDeps) => {
 
   const actions = {
     start: (email: string, id: string, b: ActionBody) => globs.start(email, id, b.version),
-    'start-anyway': (email: string, id: string, b: ActionBody) => globs.startAnyway(email, id, b.version),
+    // Starting a glob held for its oversized flag keeps it whole (recorded for the size learning); a glob not flagged is unaffected.
+    'start-anyway': async (email: string, id: string, b: ActionBody) => {
+      await deps.sizeCheck?.keepWhole(email, id);
+      return globs.startAnyway(email, id, b.version);
+    },
     retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version, b.anyway === true),
     'retry-autofix': (email: string, id: string, b: ActionBody) => globs.retryAutofix(email, id, b.version),
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),
