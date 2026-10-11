@@ -109,10 +109,7 @@ Also tell each sub-agent:
 
 Spend agent effort where it finds problems: reading the change. Don't repeat work another agent already did.
 
-- **Risk tier.** Set it in Phase 2 and record it in the plan file:
-  - **high**: auth, tokens or secrets, permissions, data and migrations, money, concurrency, public endpoints;
-  - **normal**: everything else that changes behaviour;
-  - **low**: docs, copy, styling, config-only, tests-only, or a small isolated change.
+- **Risk tier.** Set it in Phase 2 and record it in the plan file. The tiers, the risk areas and what makes a change **high**, **normal** or **low** come from the board's `risk_and_size` document (area `risk_and_size`; fetch it with the other board docs and give it to the investigator and change_reviewer). Don't use a copy of your own. If the board has no such document, use: **high** for auth, tokens or secrets, permissions, data and migrations, money, concurrency, public endpoints; **low** for docs, copy, styling, config-only, tests-only or a small isolated change; **normal** for everything else, and submit a `gotcha` learning proposing the document.
 - **Checks.** If the board's build doc separates fast and full checks, sub-agents run the fast checks on every round, and the full checks run once, before the Phase 6 commit (or are left to CI where the build doc says so). Without that split, treat the targeted tests for the changed code plus lint and type checks as fast. Every agent records the exact commands it ran and the pass counts, not logs, and uses quiet reporters, reading output only on failure.
 - **No re-running.** The tester and change_reviewer rely on the results the implementer (and tester) recorded. They re-run a check only when a result looks wrong or a finding depends on it.
 - **No new end-to-end or browser tests** unless the board's docs or the developer ask for one. Cover behaviour with unit and integration tests.
@@ -140,20 +137,11 @@ Keep it concise: no file lists, test counts or narration, since git, the local r
 
 A sub merges on its own once its checks and the gate pass, so nobody looks at it unless you say so. **The default is to push through.** Escalate only with a concrete reason, by calling `escalate_to_same(id, reason, criterion, evidence, runId)`, where `criterion` is the bullet below it is for (`design_decision`, `risk_area`, `data_rewrite`, `auth_permissions`, `weakened_tests`, `agent_instructions`, `scope_beyond_plan`, `open_findings` or `other`): the glob becomes a same in place (same branch and PR, no auto-merge), the reason shows on its card as "Needs a human", and its owner is told. A person can make it a sub again, and slop records how each escalation turned out so the board's guidance improves.
 
-Escalate when you found, during implementation or review, that:
+Escalate when the board's `risk_and_size` document (its escalation criteria and risk areas; `get_conventions`) says the change warrants it and the plan didn't settle it: a product or design decision, a risk area, a rewrite of existing data, auth, permissions or secrets changes, a test weakened or deleted to get green, changed agent instructions, scope well beyond the plan, or in-scope review findings left unresolved after the allowed rounds. Without the document, use that list.
 
-- the change makes a product or design decision the plan didn't settle;
-- it touches one of the board's risk areas (`get_conventions`);
-- it rewrites existing data (migrations, backfills, deletes);
-- it changes auth, permissions or secrets handling;
-- you had to weaken or delete a test to get green;
-- it changes agent instructions or the agent set;
-- scope grew well beyond the plan;
-- in-scope review findings remain unresolved after the allowed rounds.
+The board's own history adjusts this: slop records every escalation's outcome (approved unchanged, changes asked for, or a merged sub that was later reverted or blamed by a bug), and when a criterion keeps proving unnecessary or missed it proposes a learning for the board's knowledge. Where an approved learning loosens or strengthens a criterion, follow it over the document's default wording.
 
-The board's own history adjusts these: slop records every escalation's outcome (approved unchanged, changes asked for, or a merged sub that was later reverted or blamed by a bug), and when a criterion keeps proving unnecessary or missed it proposes a learning for the board's knowledge (`get_conventions`, the `risk_and_size` document and the approved learnings). Where an approved learning loosens or strengthens a criterion, follow it over the default wording here.
-
-Don't escalate for size alone (a large mechanical change, a rename across many files), for a plan that was followed, or "to be safe". Put the reason in one or two sentences a person can act on and the evidence (files, findings, the unsettled choice) in `evidence`; record it in the implementation record's `## Decisions`. Escalating is not failing: carry on to the end of the phases and mark the PR ready.
+Don't escalate for size alone, for a plan that was followed, or "to be safe" (the document says the same). Put the reason in one or two sentences a person can act on and the evidence (files, findings, the unsettled choice) in `evidence`; record it in the implementation record's `## Decisions`. Escalating is not failing: carry on to the end of the phases and mark the PR ready.
 
 ## Workflow
 
@@ -179,7 +167,7 @@ When resuming from a phase, read the output files of the earlier phases. The dev
    - Append the Q&A (or the assumptions) under `## Clarifications` or `## Assumptions` in the context file, and record them on the glob with `attach(id, version, text, label: 'Clarifications')` (or `'Assumptions'`). These carry intent and **must be passed verbatim** to every sub-agent later.
 
 6. **Check the size.** Do this after the context is written and before Phase 2.
-   - If `get_glob` or `get_context` flags the glob as oversized (`oversized` is true; `sizeCheck` / `size` carry the reasons and the proposed split), use slop's proposed split. Also use your own judgement when slop hasn't flagged it but plan.md clearly holds parts that could each ship and be reviewed on their own: several migrations, server, web and LLM work together, large sections with no "Done when", many separate tasks.
+   - If `get_glob` or `get_context` flags the glob as oversized (`oversized` is true; `sizeCheck` / `size` carry the reasons and the proposed split), use slop's proposed split. Also use your own judgement when slop hasn't flagged it but plan.md clearly holds more separate parts than the board's `risk_and_size` document allows for one PR (see "What counts as a separate part").
    - **Don't split** a glob that has already started work (commits beyond the start commit). Finish part 1's scope and create the rest as follow-ups with `create_glob`, each with `after: [<id>]`, and record that.
    - **Split** with `split_glob(id, version, idempotencyKey, parts)`, never by hand-assembling `create_glob` calls. Use the version you most recently read and a stable key (e.g. `<id>-<runId or date>`). Part 0 is this glob: it keeps its ID and the run carries on with it, with the new, smaller plan. Give every other part its share of plan.md (`{part:N}` stands for part N's glob ID), the attachments it needs, and the same category unless the cut says otherwise. Untasked sections become their own part, with a note in its plan to trim them before starting.
    - **Chain** parts with `after` where they share files or one builds on another (apply the overlap rules under Board rules, if the board has them); parts that don't touch the same code run in parallel. Parts are sames unless the proposal says sub and the part is small and independent.

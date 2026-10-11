@@ -50,6 +50,7 @@ export * from './domain/notifications.js';
 export * from './domain/provisioning.js';
 export * from './app/knowledge-service.js';
 export * from './app/artifact-service.js';
+export * from './app/investigation-service.js';
 export * from './app/intake-service.js';
 export * from './app/kb-pipeline.js';
 export * from './app/kb-consolidation.js';

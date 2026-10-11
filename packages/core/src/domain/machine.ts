@@ -1547,7 +1547,7 @@ export const subGateCheckCompleted = (
 };
 
 /**
- * A running sub is flagged as needing a human (the implementer or change_reviewer, with the reason; or a person): it
+ * A sub is flagged as needing a human (the investigator's findings in Planning, the implementer or change_reviewer, with the reason; or a person): it
  * becomes a same in place, keeping its branch and PR, so the sub gate no longer merges it. A run that is no longer
  * current is ignored. Escalating a same is a no-op.
  */
@@ -1562,7 +1562,7 @@ export const escalateToSame = (
     if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
   }
   if (glob.type !== 'sub') return unchanged(glob);
-  if (glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') {
+  if (glob.status !== 'planning' && glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') {
     return invalidTransition(glob, ctx.actor, 'A sub can only be escalated before it merges');
   }
   const reason = input.reason.trim();
