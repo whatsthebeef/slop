@@ -283,6 +283,9 @@ export class HostStack extends Stack {
     const cfnProject = project.node.defaultChild;
     if (!(cfnProject instanceof CfnProject)) throw new Error('Expected the CodeBuild project resource');
     cfnProject.addPropertyOverride('Source.Auth', { Type: 'CODECONNECTIONS', Resource: props.connectionArn });
+    // Pull requests never build (push to the branch only), but CodeBuild's default comment-approval gate still posts a
+    // "Build not triggered: Pull request approval required" status on every PR, which reads as a failed check.
+    cfnProject.addPropertyOverride('Triggers.PullRequestBuildPolicy', { RequiresCommentApproval: 'DISABLED' });
 
     // Weekly EBS snapshots of the data disk (the boot disk is rebuilt from the AMI), the newest four kept: Sundays 04:00 UTC.
     const dlmRole = new Role(this, 'SnapshotRole', {
