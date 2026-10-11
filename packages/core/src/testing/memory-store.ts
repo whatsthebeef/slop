@@ -19,6 +19,9 @@ import { GLOB_OWNED_SOURCES, matchesFilters } from '../domain/search.js';
 import type { Candidate, KnowledgeItem } from '../domain/search.js';
 import { DEFAULT_SIZE_THRESHOLD } from '../domain/size-check.js';
 import type { SizeCheck, SizeThreshold, SizeThresholdChange } from '../domain/size-check.js';
+import { riskChangeKey } from '../domain/risk-area.js';
+import type { RiskArea, RiskAreaChange } from '../domain/risk-area.js';
+import { SUB_LIMIT_STEP } from '../domain/sub-limit.js';
 import type { SubLimitChange } from '../domain/sub-limit.js';
 import type { GlobOutcome, IntakeSnapshot } from '../domain/intake-learning.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
@@ -47,6 +50,8 @@ interface State {
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
+  riskAreas: RiskArea[];
+  riskAreaChanges: RiskAreaChange[];
   sizeChecks: SizeCheck[];
   sizeThresholds: Map<number, SizeThreshold>;
   sizeThresholdChanges: SizeThresholdChange[];
@@ -127,6 +132,8 @@ const clone = (state: State): State => ({
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
+  riskAreas: [...state.riskAreas],
+  riskAreaChanges: [...state.riskAreaChanges],
   sizeChecks: [...state.sizeChecks],
   sizeThresholds: new Map(state.sizeThresholds),
   sizeThresholdChanges: [...state.sizeThresholdChanges],
@@ -172,6 +179,8 @@ export class MemoryStore implements Store {
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
+    riskAreas: [],
+    riskAreaChanges: [],
     sizeChecks: [],
     sizeThresholds: new Map(),
     sizeThresholdChanges: [],
@@ -290,7 +299,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs' };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, subLimitStep: SUB_LIMIT_STEP, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs' };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -298,13 +307,13 @@ export class MemoryStore implements Store {
         const current = s.boards.get(board.id);
         if (current?.version !== expectedVersion) return Promise.resolve(false);
         // As in Postgres, the learned sub limit has its own write.
-        s.boards.set(board.id, { ...board, subMaxChangedLines: current.subMaxChangedLines });
+        s.boards.set(board.id, { ...board, subMaxChangedLines: current.subMaxChangedLines, subLimitStep: current.subLimitStep });
         return Promise.resolve(true);
       },
-      setSubLimit: (boardId, from, to) => {
+      setSubLimit: (boardId, from, to, step) => {
         const current = s.boards.get(boardId);
         if (current?.subMaxChangedLines !== from) return Promise.resolve(false);
-        s.boards.set(boardId, { ...current, subMaxChangedLines: to });
+        s.boards.set(boardId, { ...current, subMaxChangedLines: to, subLimitStep: step ?? current.subLimitStep });
         return Promise.resolve(true);
       },
       insertSubLimitChange: (change) => {
@@ -316,6 +325,25 @@ export class MemoryStore implements Store {
       },
       listSubLimitChanges: (boardId) =>
         Promise.resolve(s.subLimitChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      listRiskAreas: (boardId) => Promise.resolve(s.riskAreas.filter((a) => a.boardId === boardId)),
+      putRiskArea: (area) => {
+        s.riskAreas = [...s.riskAreas.filter((a) => !(a.boardId === area.boardId && a.name === area.name)), area];
+        return Promise.resolve();
+      },
+      deleteRiskArea: (boardId, name) => {
+        s.riskAreas = s.riskAreas.filter((a) => !(a.boardId === boardId && a.name === name));
+        return Promise.resolve();
+      },
+      insertRiskAreaChange: (change) => {
+        const key = riskChangeKey(change.globId, change.cause, change.areaName);
+        if (change.globId !== null && change.areaName !== null && s.riskAreaChanges.some((c) => c.boardId === change.boardId && riskChangeKey(c.globId, c.cause, c.areaName) === key)) {
+          return Promise.resolve(false);
+        }
+        s.riskAreaChanges.push({ ...change, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listRiskAreaChanges: (boardId) =>
+        Promise.resolve(s.riskAreaChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
       getSizeCheck: (globId) => Promise.resolve(s.sizeChecks.find((c) => c.globId === globId) ?? null),
       listSizeChecks: (boardId) => Promise.resolve(s.sizeChecks.filter((c) => c.boardId === boardId)),
       upsertSizeCheck: (check) => {

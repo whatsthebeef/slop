@@ -4,12 +4,32 @@ import type { Glob } from './types.js';
 /**
  * The learned sub size limit (spec, Sub review): subs changing more lines than the board's limit convert to sames,
  * and slop moves the limit with outcomes. A sub converted for its size that merged unchanged raises it; a sub that
- * passed the gate and needed fixes after merging lowers it. Each move is a fixed step of 250, within the bounds;
- * the sub's changed lines are recorded as evidence but don't size the step.
+ * passed the gate and needed fixes after merging lowers it. The move is a step (500 to start) that grows x1.5 while
+ * outcomes keep the same direction and halves on a reversal, scaled by how far the sub was from the limit and by how
+ * recent the outcome is, within the bounds. A small sub that needed fixes says nothing about the size: it is a signal
+ * for the board's risk areas instead.
  */
+/** A new board's limit, and the default of `boards.sub_max_changed_lines`. */
+export const SUB_LIMIT_DEFAULT = 2000;
 export const SUB_LIMIT_MIN = 200;
-export const SUB_LIMIT_MAX = 5000;
-export const SUB_LIMIT_STEP = 250;
+export const SUB_LIMIT_MAX = 10_000;
+/** The step a board starts with, and the default of `boards.sub_limit_step`. */
+export const SUB_LIMIT_STEP = 500;
+export const SUB_LIMIT_STEP_MIN = 100;
+export const SUB_LIMIT_STEP_MAX = 2000;
+/** The step grows by this factor after an outcome in the same direction as the last move, and shrinks by the other after a reversal. */
+export const SUB_LIMIT_STEP_GROWTH = 1.5;
+export const SUB_LIMIT_STEP_SHRINK = 0.5;
+/** A move is rounded to this many lines. */
+const MOVE_ROUNDING = 50;
+/** The most a move is scaled up by how far the sub was from the limit. */
+const MAX_DISTANCE_WEIGHT = 3;
+/** The most a lowering is scaled up by how large the sub was. */
+const MAX_LOWER_WEIGHT = 2;
+/** One lowering takes at most this share of the limit. */
+const MAX_LOWER_SHARE = 0.5;
+/** The least an outcome older than the window counts. */
+const MIN_RECENCY = 0.5;
 /** A sub that needed fixes lowers the limit only when it changed at least this share of it; a smaller one says nothing about it. */
 export const SUB_LIMIT_NEAR_SHARE = 0.5;
 /** How long after a sub's merge a needed fix (a sign-off label asking for changes, a bug blaming it) counts. */
@@ -35,6 +55,8 @@ export interface SubLimitChange {
   readonly changedLines: number | null;
   /** Why, as plain text: the conversion and merge, the label's checklist item, or the bug's verified quote. */
   readonly evidence: string;
+  /** The step the move used before weighting (`boards.sub_limit_step` after it); rows before steps were learned carry 250. */
+  readonly step: number;
 }
 
 export type NewSubLimitChange = Omit<SubLimitChange, 'id'>;
@@ -42,30 +64,112 @@ export type NewSubLimitChange = Omit<SubLimitChange, 'id'>;
 /** The board's limit, its bounds and its history (newest first), for board settings. */
 export interface SubLimitView {
   readonly current: number;
-  readonly bounds: { readonly min: number; readonly max: number; readonly step: number };
+  /** `step` is the board's current step; `startStep` the one a board starts with. */
+  readonly bounds: { readonly min: number; readonly max: number; readonly step: number; readonly startStep: number };
   readonly history: readonly SubLimitChange[];
 }
 
-/**
- * A sub converted for its size merged unchanged: `min(5000, L + 250)`. Never lowers a limit set above the bounds
- * before the limit was learned.
- */
-export const raisedLimit = (limit: number): number =>
-  Math.max(limit, Math.min(SUB_LIMIT_MAX, limit + SUB_LIMIT_STEP));
+const roundMove = (lines: number): number => Math.max(MOVE_ROUNDING, Math.round(lines / MOVE_ROUNDING) * MOVE_ROUNDING);
 
 /**
- * A sub that passed the gate needed fixes: `max(200, L − 250)`. Never raises a limit set below the bounds.
+ * A sub converted for its size merged unchanged: `min(10000, L + step)`. Never lowers a limit set above the bounds
+ * before the limit was learned.
  */
-export const loweredLimit = (limit: number): number =>
-  Math.min(limit, Math.max(SUB_LIMIT_MIN, limit - SUB_LIMIT_STEP));
+export const raisedLimit = (limit: number, step: number = SUB_LIMIT_STEP): number =>
+  Math.max(limit, Math.min(SUB_LIMIT_MAX, limit + step));
+
+/**
+ * A sub that passed the gate needed fixes: `max(200, L - step)`. Never raises a limit set below the bounds.
+ */
+export const loweredLimit = (limit: number, step: number = SUB_LIMIT_STEP): number =>
+  Math.min(limit, Math.max(SUB_LIMIT_MIN, limit - step));
 
 /** Whether a sub of `changedLines` was near `limit`: at least `SUB_LIMIT_NEAR_SHARE` of it. Unknown size isn't near. */
 export const nearLimit = (changedLines: number | null, limit: number): boolean =>
   changedLines !== null && changedLines >= limit * SUB_LIMIT_NEAR_SHARE;
 
-/** The limit after an outcome: a raise always, a lowering only for a sub near the limit. */
+/** The limit after an outcome with the default step: a raise always, a lowering only for a sub near the limit. */
 export const nextLimit = (outcome: SubLimitOutcome, limit: number, changedLines: number | null): number =>
   outcome === 'merged_unchanged' ? raisedLimit(limit) : nearLimit(changedLines, limit) ? loweredLimit(limit) : limit;
+
+export type SubLimitDirection = 'raise' | 'lower';
+
+/** A change row's direction: a recorded raise, or a lowering that moved the limit; null for a row that left it alone. */
+export const directionOf = (change: Pick<SubLimitChange, 'outcome' | 'fromLines' | 'toLines'>): SubLimitDirection | null =>
+  change.outcome === 'merged_unchanged' ? 'raise' : change.toLines < change.fromLines ? 'lower' : null;
+
+/**
+ * The step for the next move in `direction`: the board's step, grown x1.5 (cap 2000) when the last move had the same
+ * direction and halved (floor 100) when it was the opposite one. With no earlier move it is the board's step as it is.
+ * `history` is newest first.
+ */
+export const nextStep = (boardStep: number, history: readonly SubLimitChange[], direction: SubLimitDirection): number => {
+  const last = history.map(directionOf).find((d) => d !== null) ?? null;
+  if (last === null) return boardStep;
+  return last === direction
+    ? Math.min(SUB_LIMIT_STEP_MAX, Math.round(boardStep * SUB_LIMIT_STEP_GROWTH))
+    : Math.max(SUB_LIMIT_STEP_MIN, Math.round(boardStep * SUB_LIMIT_STEP_SHRINK));
+};
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/** How much an outcome of `outcomeAt` still counts at `now`: fully within the window, then linearly down to half. */
+export const recencyFactor = (outcomeAt: string, now: string): number => {
+  const late = (Date.parse(now) - Date.parse(outcomeAt)) / DAY - SUB_LIMIT_WINDOW_DAYS;
+  return Number.isFinite(late) && late > 0 ? Math.max(MIN_RECENCY, 1 - (late / SUB_LIMIT_WINDOW_DAYS) * (1 - MIN_RECENCY)) : 1;
+};
+
+/** How far off the sub was: a raise scales with its lines against the limit (up to 3), a lowering with its share of the limit (1 at the near share, up to 2 at the limit). */
+export const distanceWeight = (direction: SubLimitDirection, changedLines: number | null, limit: number): number => {
+  if (changedLines === null || limit <= 0) return 1;
+  const share = changedLines / limit;
+  return direction === 'raise'
+    ? Math.min(MAX_DISTANCE_WEIGHT, Math.max(1, share))
+    : Math.min(MAX_LOWER_WEIGHT, Math.max(1, share / SUB_LIMIT_NEAR_SHARE));
+};
+
+export interface SubLimitMove {
+  readonly from: number;
+  readonly to: number;
+  /** The step used before weighting: the board's step after the move. */
+  readonly step: number;
+  readonly direction: SubLimitDirection | null;
+  /** A sub that needed fixes while well under the limit: no size signal, a risk-area one. */
+  readonly riskSignal: boolean;
+}
+
+/**
+ * The move an outcome makes (pure). A raise for a sub merged unchanged, a lowering for a sub near the limit that needed
+ * fixes, otherwise none: a sub of known size under `SUB_LIMIT_NEAR_SHARE` of the limit gives a risk-area signal.
+ */
+export const subLimitMove = (input: {
+  readonly outcome: SubLimitOutcome;
+  readonly limit: number;
+  readonly changedLines: number | null;
+  readonly boardStep: number;
+  /** The board's recorded outcomes, newest first. */
+  readonly history: readonly SubLimitChange[];
+  /** When the outcome happened, and now. */
+  readonly outcomeAt: string;
+  readonly now: string;
+}): SubLimitMove => {
+  const { limit, changedLines } = input;
+  const direction: SubLimitDirection | null =
+    input.outcome === 'merged_unchanged' ? 'raise' : nearLimit(changedLines, limit) ? 'lower' : null;
+  if (direction === null)
+    return { from: limit, to: limit, step: input.boardStep, direction, riskSignal: changedLines !== null };
+  const step = nextStep(input.boardStep, input.history, direction);
+  const weighted = roundMove(step * distanceWeight(direction, changedLines, limit) * recencyFactor(input.outcomeAt, input.now));
+  // One outcome never takes more than half the limit away.
+  const move = direction === 'lower' ? Math.min(weighted, Math.max(MOVE_ROUNDING, Math.floor((limit * MAX_LOWER_SHARE) / MOVE_ROUNDING) * MOVE_ROUNDING)) : weighted;
+  return {
+    from: limit,
+    to: direction === 'raise' ? raisedLimit(limit, move) : loweredLimit(limit, move),
+    step,
+    direction,
+    riskSignal: false,
+  };
+};
 
 /** The gate's reason for a size conversion; events recorded before `changedLines` and `cause` carry only this. */
 const SIZE_REASON = /Changes (\d+) lines(?:, not counting [\d,]+ generated)? \(limit (\d+)\)/;
