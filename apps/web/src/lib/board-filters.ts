@@ -8,6 +8,8 @@ interface FilterBase {
   /** The URL query parameter. */
   key: string;
   label: string;
+  /** Hides the visible label (the control still carries it as its aria-label). */
+  hideLabel?: boolean;
   /** Cleans a raw value (from the URL or the control); empty means the filter is off. */
   normalize: (raw: string) => string;
   /** True when the glob passes, given a non-empty normalised value. */
@@ -37,6 +39,7 @@ export const BOARD_FILTERS: BoardFilter[] = [
   {
     key: 'category',
     label: 'Category',
+    hideLabel: true,
     control: 'chips',
     options: CATEGORIES.map((value) => ({ value, label: value })),
     // Kept in the options' order and without repeats, so equal selections give equal URLs.
