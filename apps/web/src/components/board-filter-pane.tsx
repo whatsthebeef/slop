@@ -1,4 +1,4 @@
-import { ListFilter } from 'lucide-react';
+import { ListFilter, X } from 'lucide-react';
 import { useState } from 'react';
 import { CATEGORY_ICON } from '@/components/glob-card';
 import { activeCount, BOARD_FILTERS, selectedOptions, toggleOption } from '@/lib/board-filters';
@@ -6,6 +6,7 @@ import type { BoardFilter, FilterValues } from '@/lib/board-filters';
 import { cn } from '@/lib/utils';
 
 const PANE_ID = 'board-filter-pane';
+export const FILTER_TOGGLE_ID = 'board-filter-toggle';
 const OPEN_KEY = 'slop.board-filter-open';
 
 /** Whether the pane is open is the viewer's own preference; storage can be missing or blocked, so it is only a convenience. */
@@ -40,7 +41,8 @@ export const FilterToggle = ({
 }) => (
   <button
     type="button"
-    className="relative rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+    id={FILTER_TOGGLE_ID}
+    className="relative rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:text-foreground"
     aria-label="Filter globs"
     aria-pressed={open}
     aria-expanded={open}
@@ -122,10 +124,12 @@ export const FilterPane = ({
   open,
   values,
   onChange,
+  onClose,
 }: {
   open: boolean;
   values: FilterValues;
   onChange: (values: FilterValues) => void;
+  onClose: () => void;
 }) => (
   <div
     id={PANE_ID}
@@ -136,9 +140,21 @@ export const FilterPane = ({
     inert={!open}
     data-testid="filter-pane"
     data-open={open}
+    onKeyDown={(e) => {
+      if (e.key === 'Escape') onClose();
+    }}
   >
     <div className="overflow-hidden">
-      <div className="mx-5 mt-1.5 flex flex-wrap items-center gap-x-6 gap-y-2 py-2">
+      <div className="mx-5 mt-1.5 flex flex-wrap items-center gap-x-6 gap-y-2 py-2 pr-8 relative">
+        <button
+          type="button"
+          className="absolute top-2 right-0 rounded p-1 hover:bg-muted"
+          aria-label="Close filters"
+          data-testid="filter-close"
+          onClick={onClose}
+        >
+          <X className="h-4 w-4" aria-hidden />
+        </button>
         {BOARD_FILTERS.map((filter) => (
           <div key={filter.key} className="flex items-center gap-2 text-xs text-muted-foreground">
             {!filter.hideLabel && <span>{filter.label}</span>}
