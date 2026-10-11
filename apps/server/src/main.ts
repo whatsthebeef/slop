@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, SubLimitService, IntakeLearningService, SizeCheckService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -280,15 +280,18 @@ hub.tap((hint) => {
 // consolidation then merges same-fact open items (verified quotes) and flags stale ones; it waits while its model is down.
 // Daily effect checks compare each approved change's signal before and after it. Hourly, the sub size limit learns
 // from merged subs' outcomes.
+const riskAreas = new RiskAreaService({ store, clock, changes: new CodeHostChanges(github, logError) });
 const subLimit = new SubLimitService({
   store,
   notifier: hub,
   llm: findingsLlm,
   findingsDown: () => llmHealth.isDown([config.FINDINGS_MODEL]),
   diffs: new CodeHostSubDiffs(github, logError),
+  riskAreas,
+  log: logError,
 });
 // Hourly: intake snapshots are embedded or rebuilt for older globs, and merged globs' outcomes recorded and refreshed at 14 days.
-const intakeLearning = new IntakeLearningService({ store, clock, embedder });
+const intakeLearning = new IntakeLearningService({ store, clock, embedder, riskAreas });
 const learningJobs = new LearningJobService({
   store,
   clock,
@@ -324,7 +327,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
-mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, intakeLearning, sizeCheck, logError });
+mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, intakeLearning, sizeCheck, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
 const awsSignIn =

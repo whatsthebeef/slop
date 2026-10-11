@@ -4,6 +4,9 @@ import { GlobService } from '../src/app/glob-service.js';
 import { IntakeService, LlmUnavailable, waitedForIn } from '../src/app/intake-service.js';
 import { INTAKE_PROMPT_VERSION } from '../src/domain/intake-learning.js';
 import type { Result } from '../src/domain/errors.js';
+import { DEFAULT_RISK_AREAS } from '../src/domain/risk-area.js';
+import { INTAKE_SYSTEM } from '../src/app/intake-service.js';
+import type { LlmRequest } from '../src/app/intake-service.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
 const unwrap = <T>(result: Result<T>): T => {
@@ -93,7 +96,8 @@ describe('intake', () => {
     expect([q.type, q.category]).toEqual(['sub', 'feature']);
     answer = '{"title":"T","summary":"S","type":"super","category":"bug","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
     const r = await propose('fix it');
-    expect([r.type, r.category]).toEqual(['same', 'bug']);
+    // An invalid combination is repaired optimistically: a bug can be a sub.
+    expect([r.type, r.category]).toEqual(['sub', 'bug']);
     const s = await propose('fix it', { type: 'super' });
     expect([s.type, s.category]).toEqual(['super', 'feature']);
   });
@@ -135,11 +139,48 @@ describe('intake', () => {
     answer = 'Sorry, I cannot help with that.';
     expect(await propose('Make the login page faster\nmore details')).toMatchObject({
       title: 'Make the login page faster',
-      type: 'same',
+      type: 'sub',
       category: 'task',
       autoTrigger: false,
     });
   });
+  it('is optimistic: the prompt names the risk areas and the sub size, and never the overlap clause', async () => {
+    const seen: LlmRequest[] = [];
+    const inspecting = new IntakeService({
+      store,
+      llm: {
+        complete: (request) => {
+          seen.push(request);
+          return Promise.resolve('{"title":"T","summary":"S","category":"task"}');
+        },
+      },
+    });
+    const p = unwrap(await inspecting.propose(DEV, boardId, { text: 'Tidy the settings page', explicit: {} }));
+    const [request] = seen;
+    const all = `${request?.system ?? ''}\n${request?.prompt ?? ''}`;
+    for (const area of DEFAULT_RISK_AREAS) expect(all).toContain(area.name);
+    expect(all).toContain('**/drizzle/**/*rewrite*');
+    expect(all).toContain('about 2000 changed lines');
+    expect(all).toMatch(/When unsure, choose "sub"/);
+    expect(all).toMatch(/matched against/);
+    expect(all).not.toMatch(/overlaps an open glob/);
+    expect(INTAKE_SYSTEM).not.toMatch(/large or multi-area/);
+    // No type in the answer: the optimistic default.
+    expect(p.type).toBe('sub');
+  });
+
+  it('shows the board\'s learned risk areas and sub size', async () => {
+    await store.transaction(async (tx) => {
+      await tx.putRiskArea({ boardId, name: 'Learned: apps/billing', pathPatterns: ['apps/billing/**'], why: 'A sub that changed it was reverted', source: 'learned', strength: 1, cleanCount: 0, updatedAt: '2026-10-05T12:00:00.000Z' });
+      await tx.setSubLimit(boardId, 2000, 3500);
+    });
+    const seen: string[] = [];
+    const inspecting = new IntakeService({ store, llm: { complete: (r) => { seen.push(r.prompt); return Promise.resolve('{}'); } } });
+    unwrap(await inspecting.propose(DEV, boardId, { text: 'x', explicit: {} }));
+    expect(seen[0]).toContain('apps/billing/**');
+    expect(seen[0]).toContain('about 3500 changed lines');
+  });
+
   it('answers llm_unavailable with the reason and fix when the model is unavailable', async () => {
     const down = new IntakeService({
       store,
