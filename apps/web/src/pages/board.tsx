@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
-import { FilterPane, FilterToggle, useFilterPaneOpen } from '@/components/board-filter-pane';
+import { FILTER_TOGGLE_ID, FilterPane, FilterToggle, useFilterPaneOpen } from '@/components/board-filter-pane';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
@@ -442,7 +442,15 @@ export const BoardPage = () => {
           </button>
         ))}
       </div>
-      <FilterPane open={filterOpen} values={filters} onChange={setFilters} />
+      <FilterPane
+        open={filterOpen}
+        values={filters}
+        onChange={setFilters}
+        onClose={() => {
+          setFilterOpen(false);
+          document.getElementById(FILTER_TOGGLE_ID)?.focus();
+        }}
+      />
 
       <main
         ref={(el) => {
