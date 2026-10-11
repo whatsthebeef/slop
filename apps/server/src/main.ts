@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, SubLimitService, IntakeLearningService, SizeCheckService } from '@slop/core';
+import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_MIN_SEVERITY, sizeIgnoredPathsOf, TypeLearningService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -23,7 +23,8 @@ import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { environmentExecutors } from './environment-executors.js';
 import { exclusivePathExecutors } from './exclusive-path-executors.js';
-import { codeReviewExecutors } from './code-review-executors.js';
+import { reviewExecutors } from './review-executors.js';
+import { makeRunReview } from './review-runner.js';
 import { mountArtifactUploads } from './http/artifact-upload.js';
 import { mountDeploys } from './http/deploys.js';
 import { mountWeb } from './http/web.js';
@@ -31,15 +32,19 @@ import { LocalFollowWatch } from './local-follow.js';
 import { mountReadiness } from './http/readiness.js';
 import { ReadinessWatch } from './readiness-watch.js';
 import { HintHub } from './notifier.js';
-import { BedrockLlm, shownModelId } from './llm.js';
+import { BedrockLlm, reviewerLlm, shownModelId } from './llm.js';
 import { BedrockEmbedder } from './embedder.js';
 import { CodeHostChanges } from './code-host-changes.js';
 import { marksBoardDirty, SearchSync } from './jobs/search-sync.js';
 import { LlmHealth } from './llm-health.js';
 import { mountHealth } from './http/health.js';
-import { mountCodeReviews } from './http/code-reviews.js';
 import { mountChat } from './http/chat.js';
 import { mountSearch } from './http/search.js';
+import { mountCode } from './http/code.js';
+import { CodeClones, DEFAULT_CAP_BYTES } from './code-clones.js';
+import { CodeIndex } from './code-index.js';
+import { CodeIndexer } from './code-indexer.js';
+import { GitCodeView } from './code-view.js';
 import { mountDecisions } from './http/decisions.js';
 import { mountInbox } from './http/inbox.js';
 import { mountSlack } from './http/slack.js';
@@ -85,8 +90,13 @@ const auth = new Auth(db, config);
 const boards = new BoardService({ store, notifier: hub });
 // The board's merge policy reads which files a branch changes; `github` exists by the time this is first called.
 const branchFiles = new HostBranchFiles(() => github, logError);
+const catalog = new FsCatalog(config.CATALOG_DIR);
+// Which dependency edges are real on each board: predicts overlaps from learned weights, learns needs from failed runs.
+const dependencyLearning = new DependencyLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, catalog });
 const globs = new GlobService({
   store,
+  dependencyLearning,
+  log: (task, message) => logError(task, message),
   notifier: hub,
   clock: { now: () => new Date().toISOString() },
   ids: { runId: () => randomUUID() },
@@ -119,7 +129,6 @@ const deploys = new DeployService({
 });
 const environments = new EnvironmentService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
-const codeReviews = new CodeReviewService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 
 const outbox = new OutboxRunner(
   db,
@@ -135,13 +144,29 @@ const outbox = new OutboxRunner(
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
     ...exclusivePathExecutors(store, branchFiles, boardOf),
-    // Runs only once the outbox starts, after `knowledge` below exists.
-    ...codeReviewExecutors(github, boardOf, (boardId) => knowledge.hasReviewGuide(boardId)),
+    // The independent reviewer: `artifacts`, `trackLlm` and the config exist by the time the first job runs.
+    ...reviewExecutors(github, boardOf, (glob, resolved) =>
+      makeRunReview({
+        host: github,
+        inputs: new ReviewInputService({ store }),
+        artifacts,
+        boardOf,
+        log: (message) => logError('review', message),
+        // Per-board review settings aren't built yet: every board gets the defaults (its ignored paths are the merge policy's).
+        settings: async (boardId) => ({
+          model: config.REVIEW_MODEL,
+          minSeverity: DEFAULT_REVIEW_MIN_SEVERITY,
+          ignoredPaths: sizeIgnoredPathsOf(await store.transaction((tx) => readMergePolicy(tx, boardId))),
+          toolCap: null,
+        }),
+        // Per review (the model is a board setting); health tracking marks the model down on credential failures like the others.
+        llmFor: (model) => trackLlm(reviewerLlm(model, config.BEDROCK_REGION, logUsage), model),
+      })(glob, resolved),
+    ),
   },
   logError,
 );
 
-const catalog = new FsCatalog(config.CATALOG_DIR);
 const clock = { now: () => new Date().toISOString() };
 // Mining measures the board's signals: the weekly job, and the signal an admin picks to watch when approving.
 const mining = new MiningService({ store, notifier: hub });
@@ -213,8 +238,17 @@ const intakeLlm = trackLlm(
   new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, logUsage),
   config.INTAKE_MODEL,
 );
+// The code view: a clone per board on the data disk, an index of its base branch in Postgres, one read-only port over both.
+const codeClones = new CodeClones({
+  dir: config.CODE_DIR,
+  host: github,
+  capBytes: config.CODE_CAP_MB * 1024 * 1024 || DEFAULT_CAP_BYTES,
+  warn: (message) => console.warn(`[code] ${message}`),
+});
+const codeIndex = new CodeIndex(db);
+const codeView = new GitCodeView({ clones: codeClones, index: codeIndex, board: boardOf, host: github });
 // The size check: the intake model judges a plan's independent parts and proposes a split; a failing model leaves the text estimate.
-const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, onRechecked: (id): Promise<void> => globs.reconcileSizeHold(id) });
+const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, codeView, embedder, onRechecked: (id): Promise<void> => globs.reconcileSizeHold(id) });
 const intake = new IntakeService({
   store,
   llm: intakeLlm,
@@ -235,6 +269,15 @@ const searchIndexer = new SearchIndexer({
   llm: searchLlm,
 });
 const search = new SearchService({ store, clock, embedder });
+const codeIndexer = new CodeIndexer({ store, clones: codeClones, index: codeIndex });
+const code = new CodeViewService({
+  boards,
+  view: codeView,
+  usage: codeIndex,
+  warn: (message) => console.warn(`[code] ${message}`),
+});
+// A push to a board's base branch marks it; the sync fetches and re-indexes within the debounce (10 s), and every 15 minutes anyway.
+const codeSync = new SearchSync(codeIndexer, logError, Date.now, 'code');
 // Sonnet answers board chat questions (one call per question); it takes no sampling parameters.
 const chat = new ChatService({
   store,
@@ -249,7 +292,9 @@ const chat = new ChatService({
   // Save to knowledge goes to the proposal queue, like an agent's learning.
   submitLearning: (email, board, learning) => knowledge.submitLearning(email, board, learning),
 });
-const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck });
+// An arriving investigation escalates a sub that needs a human and raises the oversize flag with a fan-out proposal.
+const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input) });
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, investigation });
 const searchSync = new SearchSync(searchIndexer, logError);
 // Decisions (spec, Decisions and supersession): extracted from the board's plans and records with the search model,
 // checked against earlier decisions for a replacement; the people on the board confirm or undo a replacement.
@@ -285,15 +330,20 @@ hub.tap((hint) => {
 // consolidation then merges same-fact open items (verified quotes) and flags stale ones; it waits while its model is down.
 // Daily effect checks compare each approved change's signal before and after it. Hourly, the sub size limit learns
 // from merged subs' outcomes.
+const riskAreas = new RiskAreaService({ store, clock, changes: new CodeHostChanges(github, logError) });
 const subLimit = new SubLimitService({
   store,
   notifier: hub,
   llm: findingsLlm,
   findingsDown: () => llmHealth.isDown([config.FINDINGS_MODEL]),
   diffs: new CodeHostSubDiffs(github, logError),
+  riskAreas,
+  log: logError,
 });
 // Hourly: intake snapshots are embedded or rebuilt for older globs, and merged globs' outcomes recorded and refreshed at 14 days.
-const intakeLearning = new IntakeLearningService({ store, clock, embedder });
+const escalations = new EscalationLearningService({ store, clock, riskAreas });
+const typeLearning = new TypeLearningService({ store, clock });
+const intakeLearning = new IntakeLearningService({ store, clock, embedder, riskAreas, escalations });
 const learningJobs = new LearningJobService({
   store,
   clock,
@@ -329,7 +379,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
-mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, intakeLearning, sizeCheck, logError });
+mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
 const awsSignIn =
@@ -351,8 +401,8 @@ awsSignInEnabled = awsSignIn !== null;
 for (const id of Object.keys(INTEGRATION_NAMES) as IntegrationId[]) await notifications.clear(null, integrationSource(id));
 await notifications.clear(null, 'integration:local'); // the retired fake integration of local follow
 mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
-mountCodeReviews(app, { codeReviews });
 mountSearch(app, { search });
+mountCode(app, { code });
 mountChat(app, { chat });
 mountDecisions(app, { decisions });
 mountInbox(app, { inbox });
@@ -399,9 +449,11 @@ mountMcp(app, {
   knowledge,
   artifacts,
   search,
+  code,
   chat,
   intake,
   inbox,
+  sizeCheck,
   publicUrl: config.PUBLIC_URL,
   agentSetValues,
   links,
@@ -417,7 +469,7 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, findings, codeReviews, github, boardOf }),
+  handle: githubDeliveryHandler({ db, globs, github, boardOf, onBasePush: (boardId) => codeSync.mark(boardId) }),
 });
 
 app.onError((error, c) => {
@@ -479,6 +531,7 @@ const inboxJob = new KbPipelineJob(inboxPipeline, logError, { isDown: () => llmH
 if (runs('inbox')) inboxJob.start();
 const learningJobsRunner = new LearningJobs(learningJobs, logError);
 if (runs('learning')) learningJobsRunner.start();
+if (runs('code')) codeSync.start();
 const tunnelWatch = config.SLOP_TUNNEL_DOMAIN === undefined ? null : new TunnelWatch(config.SLOP_TUNNEL_DOMAIN, integrations);
 if (runs('tunnel')) tunnelWatch?.start();
 const followWatch =
@@ -503,6 +556,7 @@ const shutdown = () => {
   kbPipelineJob.stop();
   findingsJob.stop();
   searchSync.stop();
+  codeSync.stop();
   searchJob.stop();
   decisionSync.stop();
   decisionJob.stop();

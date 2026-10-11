@@ -3,7 +3,6 @@ import type { Deploy, DeployState } from './domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
 import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
-import type { CodeReviewComment, NewCodeReviewComment } from './domain/code-review.js';
 import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, ChatThread, NewChatMessage, NewChatThread } from './domain/chat.js';
 import type { Decision, DecisionPatch, DecisionSource, NewDecision } from './domain/decisions.js';
@@ -18,8 +17,13 @@ import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
+import type { NewSizeCalibrationChange, SizeCalibration, SizeCalibrationChange, SizeRecord } from './domain/size-forecast.js';
 import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdChange } from './domain/size-check.js';
+import type { EscalationRecord, NewEscalationRecord } from './domain/escalation-learning.js';
+import type { NewRiskAreaChange, RiskArea, RiskAreaChange } from './domain/risk-area.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
+import type { NewTypeCorrection, TypeCorrection } from './domain/type-learning.js';
+import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
 import type { BaseChecks, Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
 export interface GlobFilter {
@@ -63,8 +67,8 @@ export interface Tx {
   /** Writes `glob` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateGlob(glob: Glob, expectedVersion: number): Promise<boolean>;
   /**
-   * Deletes the glob with its artifacts, review sources, findings, environment presence, branch test runs and stored
-   * CodeRabbit items, and its items in the search store (an item shared with other globs, a learning, only loses the link).
+   * Deletes the glob with its artifacts, review sources, findings, environment presence, branch test runs and its items
+   * in the search store (an item shared with other globs, a learning, only loses the link).
    * Its decisions go with it; decisions it took that older ones point at are released (their `replacedBy` cleared and
    * the item active again). Inbox items attached to it only lose the link (and become `kept` with their last one).
    */
@@ -75,17 +79,44 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'effectCheckGlobs' | 'agentKbApproval' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'subLimitStep' | 'effectCheckGlobs' | 'agentKbApproval' | 'autoInvestigate' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   /**
    * Sets the board's learned sub size limit to `to` if it is still `from`; returns false otherwise. It has no board
    * version, and `updateBoard` doesn't write it: settings saves don't overwrite a learned move.
    */
-  setSubLimit(boardId: number, from: number, to: number): Promise<boolean>;
+  setSubLimit(boardId: number, from: number, to: number, step?: number): Promise<boolean>;
   /** Records a sub-limit outcome; false when the board already has that glob's outcome (the learning is idempotent). */
   insertSubLimitChange(change: NewSubLimitChange): Promise<boolean>;
+  /** The board's learned dependency rules (path patterns whose overlap weight moved), and their history, newest first. */
+  listDependencyRules(boardId: number): Promise<DependencyRule[]>;
+  upsertDependencyRule(rule: DependencyRule): Promise<void>;
+  /** Drops one learned rule (or all of the board's with no pattern): the catalog default applies again. */
+  deleteDependencyRules(boardId: number, pattern?: string): Promise<void>;
+  /** False when the board already recorded this glob's outcome for the pattern and cause. */
+  insertDependencyRuleChange(change: NewDependencyRuleChange): Promise<boolean>;
+  listDependencyRuleChanges(boardId: number): Promise<DependencyRuleChange[]>;
   /** A board's recorded sub-limit outcomes, newest first. */
   listSubLimitChanges(boardId: number): Promise<SubLimitChange[]>;
+  /** The board's risk areas (empty until `RiskAreaService` seeds the defaults). */
+  listRiskAreas(boardId: number): Promise<RiskArea[]>;
+  /** Writes a risk area, replacing the board's one of the same name. */
+  putRiskArea(area: RiskArea): Promise<void>;
+  deleteRiskArea(boardId: number, name: string): Promise<void>;
+  /** Records a risk-area change; false when the board already has one for that glob, cause and area (the learning is idempotent). */
+  insertRiskAreaChange(change: NewRiskAreaChange): Promise<boolean>;
+  /** A board's risk-area history, newest first. */
+  listRiskAreaChanges(boardId: number): Promise<RiskAreaChange[]>;
+  /** Records an escalation outcome; false when the board already has one for that glob and outcome (the learning is idempotent). */
+  insertEscalationRecord(record: NewEscalationRecord): Promise<boolean>;
+  /** A board's escalation history, newest first. */
+  listEscalationRecords(boardId: number): Promise<EscalationRecord[]>;
+  /** Records a person's retype with the plan's signals (history: the same glob can be retyped again). */
+  insertTypeCorrection(correction: NewTypeCorrection): Promise<void>;
+  /** A board's type corrections, newest first: only those not reset unless `all`; at most `limit`. */
+  listTypeCorrections(boardId: number, options?: { readonly limit?: number; readonly all?: boolean }): Promise<TypeCorrection[]>;
+  /** Stamps the board's live corrections as reset at `at` (they stay as history); returns how many. */
+  resetTypeCorrections(boardId: number, at: string): Promise<number>;
   /** The glob's size check (spec, Intake), or null when none was made. */
   getSizeCheck(globId: string): Promise<SizeCheck | null>;
   /** The board's size checks. */
@@ -102,6 +133,20 @@ export interface Tx {
   insertSizeThresholdChange(change: NewSizeThresholdChange): Promise<boolean>;
   /** A board's recorded size-threshold outcomes, newest first. */
   listSizeThresholdChanges(boardId: number): Promise<SizeThresholdChange[]>;
+  /** The board's size calibration (the defaults until it has moved). */
+  getSizeCalibration(boardId: number): Promise<SizeCalibration>;
+  /** Replaces the board's size calibration. */
+  setSizeCalibration(boardId: number, calibration: SizeCalibration): Promise<void>;
+  /** Records a calibration move; false when the board already has one for that glob with that cause (idempotent). */
+  insertSizeCalibrationChange(change: NewSizeCalibrationChange): Promise<boolean>;
+  /** A board's calibration moves, newest first. */
+  listSizeCalibrationChanges(boardId: number): Promise<SizeCalibrationChange[]>;
+  /** The glob's three-point size record, or null when none was made. */
+  getSizeRecord(globId: string): Promise<SizeRecord | null>;
+  /** Writes the glob's size record (one per glob). */
+  upsertSizeRecord(record: SizeRecord): Promise<void>;
+  /** The board's size records. */
+  listSizeRecords(boardId: number): Promise<SizeRecord[]>;
   /** Records the base branch's latest check result. It has no board version: check results arrive on their own. */
   setBaseChecks(boardId: number, baseChecks: BaseChecks): Promise<void>;
   /** Board notifications have no version: sources raise and clear them on their own. */
@@ -205,19 +250,6 @@ export interface Tx {
   /** The board's test runs matching the filter (branch runs of its globs, or environment runs at its commits). */
   listTestRuns(boardId: number, filter: TestRunFilter): Promise<TestRun[]>;
 
-  /**
-   * Stores a CodeRabbit item verbatim, or replaces a stored one with the same external ID (an edit) unless the stored
-   * copy is newer. Returns whether anything changed.
-   */
-  upsertCodeReviewComment(comment: NewCodeReviewComment): Promise<boolean>;
-  /**
-   * Marks a stored CodeRabbit item deleted at `at` (a tombstone: it is no longer listed, and a later upsert of the
-   * same external ID changes nothing). Returns it, or null when none was stored or it was already deleted.
-   */
-  deleteCodeReviewComment(externalId: string, at: string): Promise<CodeReviewComment | null>;
-  /** The board's stored CodeRabbit items on these globs, oldest first. */
-  listCodeReviewComments(boardId: number, globIds: readonly string[]): Promise<CodeReviewComment[]>;
-
   /** Records a review to split into findings; null when its artifact or external ID is already recorded. */
   insertReviewSource(source: NewReviewSource): Promise<ReviewSource | null>;
   getReviewSource(id: number): Promise<ReviewSource | null>;
@@ -244,8 +276,8 @@ export interface Tx {
    */
   listBoardFindings(boardId: number, since: string, until: string): Promise<ReviewFinding[]>;
 
-  /** A board's events at or after `since` (of `types`, when given), oldest first (events carry no board: joined through globs). */
-  listBoardEvents(boardId: number, since: string, types?: readonly DomainEventType[]): Promise<DomainEvent[]>;
+  /** A board's events at or after `since` (of `types` and of `globIds`, when given), oldest first (events carry no board: joined through globs). */
+  listBoardEvents(boardId: number, since: string, types?: readonly DomainEventType[], globIds?: readonly string[]): Promise<DomainEvent[]>;
   /**
    * Every board's events of `types` before `until`, oldest first, in log order (time tracking replays them whole). Each
    * event's `data` keeps only the top-level `dataKeys` it has, so the replay doesn't load whole payloads.
@@ -396,7 +428,8 @@ export interface Tx {
   nearestIntakeSnapshots(boardId: number, embedding: readonly number[], limit: number): Promise<{ globId: string; version: number; distance: number }[]>;
   /** Inserts or replaces a merged glob's outcome. */
   upsertGlobOutcome(outcome: GlobOutcome): Promise<void>;
-  listGlobOutcomes(boardId: number): Promise<GlobOutcome[]>;
+  /** A board's merged-glob outcomes (only those of `globIds`, when given). */
+  listGlobOutcomes(boardId: number, globIds?: readonly string[]): Promise<GlobOutcome[]>;
 
   appendEvents(events: readonly DomainEvent[]): Promise<void>;
   deleteEvents(globId: string): Promise<void>;
@@ -419,8 +452,6 @@ export type Hint =
   | { readonly kind: 'glob.findings'; readonly boardId: number; readonly globId: string }
   /** A glob's decisions (or what replaced them) changed: clients refetch the glob's decision list. */
   | { readonly kind: 'glob.decisions'; readonly boardId: number; readonly globId: string }
-  /** CodeRabbit's stored summary, reviews or comments on a glob's PR changed (beside the glob, no version bump). */
-  | { readonly kind: 'glob.reviews'; readonly boardId: number; readonly globId: string }
   /**
    * A test run against a release or integration environment arrived: every glob that environment holds may show it, so
    * clients refetch the board's deploy state (one hint rather than one per held glob).
@@ -451,6 +482,8 @@ export interface CatalogAgentSet {
 export interface Catalog {
   kbEntries(): Promise<{ id: string; version: number; fileName: string; content: string }[]>;
   agentSet(): Promise<CatalogAgentSet>;
+  /** The starting path patterns and rules for dependency edges; absent: none (nothing is predicted from the catalog). */
+  dependencyDefaults?(): Promise<DependencyDefaults>;
 }
 
 /**

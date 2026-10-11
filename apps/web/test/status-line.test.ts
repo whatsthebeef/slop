@@ -22,6 +22,15 @@ const top = (g: GlobView, role: 'dev' | 'qa' = 'dev') => {
   return viewStatusLine(g, NOW, waitingFor(g, actions, role));
 };
 
+describe('needs_pairing failure', () => {
+  it('says which decision needs a person, and falls back to the reason', () => {
+    const failed = (decision?: string) =>
+      view({ status: 'failed', list: 'doing', failure: { reason: 'Gave up', at: NOW, kind: 'needs_pairing', ...(decision === undefined ? {} : { decision }) } });
+    expect(JSON.stringify(top(failed('Which storage to use?')))).toContain('Needs a person: Which storage to use?');
+    expect(JSON.stringify(top(failed()))).toContain('Needs a person: Gave up');
+  });
+});
+
 describe('shared status line', () => {
   it('shows checks failed on a sub in the card and the view alike, linking the run and the routine fixing it', () => {
     const g = prOpen({
@@ -140,6 +149,14 @@ describe('activity label', () => {
   it('is null when nothing runs on its own', () => {
     expect(activityLabel(view(), NOW)).toBeNull();
     expect(activityLabel(view({ currentRun: run({ state: 'ended' }) }), NOW)).toBeNull();
+  });
+
+  it('says a picked-up glob has no session once it has sat untouched, and not while a run is live', () => {
+    const later = new Date(Date.parse(NOW) + 30 * 60_000).toISOString();
+    const picked = view({ status: 'in_progress', implementer: 'dev@example.com', updatedAt: NOW, currentRun: null });
+    expect(activityLabel(picked, NOW)).toBeNull();
+    expect(activityLabel(picked, later)).toMatchObject({ kind: 'picked_up', text: 'Picked up, no session yet' });
+    expect(activityLabel({ ...picked, ...live('active') }, later)?.kind).toBe('working');
   });
 
   it('puts merging over checks over the run', () => {

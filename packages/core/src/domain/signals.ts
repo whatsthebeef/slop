@@ -1,4 +1,5 @@
 import type { EffectState } from './effect-check.js';
+import { isInvestigateEvent } from './events.js';
 import type { DomainEvent, JsonValue } from './events.js';
 import { FINDING_CLASS_DESCRIPTIONS } from './findings.js';
 import type { FindingClass, ReviewFinding } from './findings.js';
@@ -20,7 +21,6 @@ export const SIGNAL_WINDOW_DAYS = 28;
 
 export const SIGNAL_KINDS = [
   'finding',
-  'blind_spot',
   'plan_amended',
   'plan_edited_rerun',
   'review_cap',
@@ -383,20 +383,14 @@ class Tallies {
 const reviewedGlobs = (activity: BoardActivity): Set<string> =>
   new Set([
     ...activity.artifacts.filter((a) => a.kind === 'local_review').map((a) => a.globId),
-    ...activity.findings.filter((f) => f.source === 'local_review').map((f) => f.globId),
+    ...activity.findings.map((f) => f.globId),
   ]);
 
-/** Classified findings that count: IN-SCOPE (CodeRabbit: not a nitpick), with a class other than `other`. */
+/** Classified findings that count: IN-SCOPE, with a class other than `other`. */
 const counted = (f: ReviewFinding): f is ReviewFinding & { class: FindingClass } =>
-  f.state === 'classified' && f.class !== null && f.class !== 'other' && f.severity !== 'suggestion' && (f.source === 'coderabbit' || f.severity === 'in_scope');
+  f.state === 'classified' && f.class !== null && f.class !== 'other' && f.severity === 'in_scope';
 
 const classLabel = (c: FindingClass): string => FINDING_CLASS_DESCRIPTIONS[c];
-
-/** Who found a finding class, for its statement: "Local reviews", "CodeRabbit" or both. */
-const findingSources = (sources: ReadonlySet<ReviewFinding['source']>): string => {
-  const names = [...(sources.has('local_review') ? ['Local reviews'] : []), ...(sources.has('coderabbit') ? ['CodeRabbit'] : [])];
-  return names.length === 0 ? 'Reviews' : names.join(' and ');
-};
 
 const finding = define({
   kind: 'finding',
@@ -408,52 +402,16 @@ const finding = define({
   tallies: (activity) => {
     const eligible = new Set([...reviewedGlobs(activity), ...activity.findings.map((f) => f.globId)]);
     const tallies = new Tallies();
-    const sources = new Map<string, Set<ReviewFinding['source']>>();
     for (const f of activity.findings) {
       if (!counted(f)) continue;
       const key = `finding:${f.class}`;
       tallies.hit(key, classLabel(f.class), f.globId, `${f.globId}: ${cut(f.text, 160)}`);
-      sources.set(key, (sources.get(key) ?? new Set()).add(f.source));
-    }
-    // The statement names the reviews that found it.
-    return tallies.done(eligible.size).map((t) => ({ ...t, context: findingSources(sources.get(t.key) ?? new Set()) }));
-  },
-  crosses: (t) => t.affected >= 3 && rateOf(t.affected, t.eligible) >= 0.25,
-  statement: (m) =>
-    `${m.context ?? 'Reviews'} ${m.context === 'CodeRabbit' ? 'keeps' : 'keep'} finding ${m.label} in the implementer's changes: ${String(m.figures.affected)} of ${String(m.figures.eligible)} reviewed globs ${WINDOW_WORDS}.`,
-});
-
-/** Globs with both a local review and CodeRabbit findings: where a blind spot can show. */
-const bothReviewed = (activity: BoardActivity): Set<string> => {
-  const local = reviewedGlobs(activity);
-  return new Set(activity.findings.filter((f) => f.source === 'coderabbit' && local.has(f.globId)).map((f) => f.globId));
-};
-
-const blindSpot = define({
-  kind: 'blind_spot',
-  agent: 'change_reviewer',
-  type: 'agent-behaviour',
-  suggestedTarget: 'agents/change_reviewer.md',
-  threshold: 'at least 3 CodeRabbit findings across 2 globs',
-  eligibleGlobs: bothReviewed,
-  tallies: (activity) => {
-    const eligible = bothReviewed(activity);
-    const local = activity.findings.filter((f) => f.source === 'local_review' && f.state === 'classified');
-    const tallies = new Tallies();
-    for (const f of activity.findings) {
-      if (f.source !== 'coderabbit' || !counted(f) || !eligible.has(f.globId)) continue;
-      // The local review of the same commit when there is one, else any of the glob's local reviews.
-      const ofGlob = local.filter((l) => l.globId === f.globId);
-      const ofCommit = ofGlob.filter((l) => sameCommit(l.commitSha, f.commitSha));
-      const compared = ofCommit.length > 0 ? ofCommit : ofGlob;
-      if (compared.some((l) => l.class === f.class)) continue;
-      tallies.hit(`blind_spot:${f.class}`, classLabel(f.class), f.globId, `${f.globId}: ${cut(f.text, 160)}`);
     }
     return tallies.done(eligible.size);
   },
-  crosses: (t) => t.count >= 3 && t.affected >= 2,
+  crosses: (t) => t.affected >= 3 && rateOf(t.affected, t.eligible) >= 0.25,
   statement: (m) =>
-    `CodeRabbit keeps finding ${m.label} that the local review missed: ${String(m.figures.count)} findings on ${String(m.figures.affected)} globs ${WINDOW_WORDS}.`,
+    `Local reviews keep finding ${m.label} in the implementer's changes: ${String(m.figures.affected)} of ${String(m.figures.eligible)} reviewed globs ${WINDOW_WORDS}.`,
 });
 
 /** Globs with an implementation record in the window: the latest version of each. */
@@ -511,6 +469,8 @@ const reruns = (activity: BoardActivity): Map<string, { edited: boolean; example
     let ended = false;
     let edit: string | null = null;
     for (const e of events) {
+      // An investigate-only run is not an attempt at the glob.
+      if (isInvestigateEvent(e)) continue;
       const endsRun = (e.type === 'RunFailed' && field(e, 'ignored') !== true) || (e.type === 'RunEnded' && text(e, 'outcome') === 'superseded');
       if (endsRun) {
         ended = true;
@@ -621,7 +581,7 @@ const failures = (activity: BoardActivity): { globId: string; reason: string }[]
   activity.events.flatMap((e) => {
     const reason = text(e, 'reason');
     if (reason === null) return [];
-    if (e.type === 'RunFailed' && field(e, 'ignored') !== true) return [{ globId: e.globId, reason }];
+    if (e.type === 'RunFailed' && field(e, 'ignored') !== true && !isInvestigateEvent(e)) return [{ globId: e.globId, reason }];
     if (e.type === 'StatusChanged' && text(e, 'to') === 'failed') return [{ globId: e.globId, reason }];
     return [];
   });
@@ -676,6 +636,7 @@ const supersededDetail = (ended: DomainEvent, events: readonly DomainEvent[]): s
 /** Ended routine runs, and which of them someone superseded by taking over or starting again (with the example's detail). */
 const endedRuns = (activity: BoardActivity): { globId: string; stepIn: string | null; at: string; detail: string }[] =>
   activity.events.flatMap((e) => {
+    if (isInvestigateEvent(e)) return [];
     if (e.type === 'RunFailed' && field(e, 'ignored') !== true) return [{ globId: e.globId, stepIn: null, at: e.at, detail: '' }];
     if (e.type !== 'RunEnded') return [];
     const cause = text(e, 'outcome') === 'superseded' ? supersededCause(e, activity.events) : null;
@@ -829,7 +790,6 @@ const dependency = define({
 /** Every mined signal, in the order the spec lists them. */
 export const SIGNALS: readonly SignalDefinition[] = [
   finding,
-  blindSpot,
   planAmended,
   planEditedRerun,
   reviewCap,
@@ -955,6 +915,8 @@ export type BoardJobResult =
       readonly threshold: SizeThreshold;
       /** Outcomes recorded this run, each with the threshold before and after it. */
       readonly changes: readonly { readonly globId: string; readonly outcome: SizeOutcome; readonly from: SizeThreshold; readonly to: SizeThreshold }[];
+      /** Size records written this run and the calibration moves they made (absent when none). */
+      readonly calibration?: { readonly records: number; readonly moves: readonly { readonly globId: string; readonly cause: string }[] };
     }
   /**
    * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.

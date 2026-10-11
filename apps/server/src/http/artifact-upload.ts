@@ -14,7 +14,7 @@ const UPLOAD_PREFIX = '/uploads/artifact/';
 
 const payloadSchema = z.object({
   id: z.string(),
-  kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
+  kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
   email: z.string(),
   commitSha: z.string().nullable(),
   runId: z.string().nullable(),
@@ -118,6 +118,15 @@ export const mountArtifactUploads = (app: Hono<Env>, deps: ArtifactUploadDeps) =
       return c.json(errorBody(result.error), statusOf(result.error));
     }
     const a = result.value;
-    return c.json('ignored' in a ? a : { id: a.id, kind: a.kind, version: a.version });
+    // An investigate-only run ends with its investigation; one whose block didn't validate stays open for the fix.
+    if (!('ignored' in a) && parsed.kind === 'investigation' && parsed.runId !== null && a.provenance.validation === undefined) {
+      const runId = parsed.runId;
+      await deps.globs.applyEvent(parsed.id, (g, ctx) => machine.investigationPushed(g, runId, ctx));
+    }
+    return c.json(
+      'ignored' in a
+        ? a
+        : { id: a.id, kind: a.kind, version: a.version, ...(a.provenance.validation === undefined ? {} : { validation: a.provenance.validation }) },
+    );
   });
 };

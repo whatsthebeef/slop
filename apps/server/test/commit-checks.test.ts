@@ -36,6 +36,13 @@ const LOG = [
 ].join('\n');
 
 describe('reading why a commit failed', () => {
+  it('leaves slop\'s own neutral review check out: alone it is no sign of CI, beside a passing check it changes nothing', async () => {
+    const review = run({ id: 12, name: 'slop-review', conclusion: 'neutral' });
+    expect((await readCommitChecks(fakeGitHub({ runs: [review] }).request, repo, 'abc')).state).toBe('passed');
+    expect((await readCommitChecks(fakeGitHub({ runs: [review, run({})] }).request, repo, 'abc')).state).toBe('passed');
+    expect((await readCommitChecks(fakeGitHub({ runs: [review, run({ status: 'in_progress', conclusion: null })] }).request, repo, 'abc')).state).toBe('pending');
+  });
+
   it('names the failing check, its failed step and the first error lines of the log tail', async () => {
     const { request } = fakeGitHub({
       runs: [run({ conclusion: 'failure' })],

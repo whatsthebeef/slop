@@ -55,7 +55,7 @@ const BoardTabs = ({
         <div ref={onActions} className='flex items-center' data-testid='header-actions' />
         <button
           type='button'
-          className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground'
+          className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:text-foreground'
           aria-label='Ask the board chat'
           aria-pressed={chatOpen}
           title='Ask the board chat (/ or ⌘K)'

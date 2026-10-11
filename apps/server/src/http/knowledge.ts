@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, SizeCheckService, SubLimitService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -85,6 +85,12 @@ export const mountKnowledge = (
     jobs: LearningJobService;
     /** The learned sub size limit; absent: its route isn't mounted. */
     subLimit?: SubLimitService;
+    dependencyLearning?: DependencyLearningService;
+    /** The board's risk areas; absent: their routes aren't mounted. */
+    riskAreas?: RiskAreaService;
+    escalations?: EscalationLearningService;
+    /** What intake learned about types from people's retypes; absent: its routes aren't mounted. */
+    typeLearning?: TypeLearningService;
     /** The learned size threshold; absent: its route isn't mounted. */
     sizeCheck?: SizeCheckService;
     /** Intake's accuracy (System page); absent: its route isn't mounted. */
@@ -197,10 +203,43 @@ export const mountKnowledge = (
     app.get('/api/boards/:b/sub-limit', async (c) => send(c, await subLimit.view(c.get('email'), Number(c.req.param('b')))));
   }
 
+  // The board's dependency rules (learned and default) with their history, for members; admins reset them to the catalog defaults.
+  const { dependencyLearning } = deps;
+  if (dependencyLearning !== undefined) {
+    app.get('/api/boards/:b/dependency-rules', async (c) => send(c, await dependencyLearning.view(c.get('email'), Number(c.req.param('b')))));
+    app.post('/api/boards/:b/dependency-rules/reset', async (c) => {
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const pattern = typeof body === 'object' && body !== null && 'pattern' in body && typeof body.pattern === 'string' ? body.pattern : undefined;
+      return send(c, await dependencyLearning.reset(c.get('email'), Number(c.req.param('b')), pattern));
+    });
+  }
+
+  // The board's risk areas (learned and default) with their history, for members; admins reset them to the defaults.
+  const { escalations } = deps;
+  if (escalations !== undefined) {
+    app.get('/api/boards/:b/escalations', async (c) => send(c, await escalations.view(c.get('email'), Number(c.req.param('b')))));
+    app.post('/api/boards/:b/escalations/reset', async (c) => send(c, await escalations.reset(c.get('email'), Number(c.req.param('b')))));
+  }
+  // What intake learned about types from people's retypes (learned or the catalog defaults), for members; admins reset it.
+  const { typeLearning } = deps;
+  if (typeLearning !== undefined) {
+    app.get('/api/boards/:b/type-learning', async (c) => send(c, await typeLearning.view(c.get('email'), Number(c.req.param('b')))));
+    app.post('/api/boards/:b/type-learning/reset', async (c) => send(c, await typeLearning.reset(c.get('email'), Number(c.req.param('b')))));
+  }
+  const { riskAreas } = deps;
+  if (riskAreas !== undefined) {
+    app.get('/api/boards/:b/risk-areas', async (c) => send(c, await riskAreas.view(c.get('email'), Number(c.req.param('b')))));
+    app.post('/api/boards/:b/risk-areas/reset', async (c) => send(c, await riskAreas.reset(c.get('email'), Number(c.req.param('b')))));
+  }
+
   // The board's learned size threshold (oversized flag), its bounds and its history, for members.
   const { sizeCheck } = deps;
   if (sizeCheck !== undefined) {
     app.get('/api/boards/:b/size-threshold', async (c) => send(c, await sizeCheck.view(c.get('email'), Number(c.req.param('b')))));
+    // The size forecast's calibration: weights, per-area factors against the defaults, and the history with causes.
+    app.get('/api/boards/:b/size-calibration', async (c) => send(c, await sizeCheck.calibrationView(c.get('email'), Number(c.req.param('b')))));
+    // Admins put the board back on the default threshold; the history keeps the reset.
+    app.post('/api/boards/:b/size-threshold/reset', async (c) => send(c, await sizeCheck.reset(c.get('email'), Number(c.req.param('b')))));
   }
 
   // How often intake's category and type survived to the merge, by month and prompt version, and typical effort by kind (System page), for members.

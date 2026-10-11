@@ -12,8 +12,8 @@ import type { Category, SlopType } from './types.js';
  * store, the embedder and the jobs are in the services.
  */
 
-/** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples, v2 the prompt with them, v3 the broader sub definition. */
-export const INTAKE_PROMPT_VERSION = 3;
+/** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples, v2 the prompt with them, v3 the broader sub definition, v4 optimistic: a sub unless a risk area or the board's learned sub size says otherwise. */
+export const INTAKE_PROMPT_VERSION = 5;
 
 /** Intake's own confidence in the category it chose. */
 export const CONFIDENCES = ['high', 'medium', 'low'] as const;
@@ -97,6 +97,12 @@ const taskLineFlags = (plan: string): boolean[] => {
     if (!flags[i] && stack.some((h) => h.tasks) && LIST_LINE.test(lines[i] ?? '')) flags[i] = true;
   }
   return flags;
+};
+
+/** The plan's task lines (checkboxes anywhere, list lines under a Tasks heading), trimmed. */
+export const planTaskLines = (plan: string): string[] => {
+  const flags = taskLineFlags(plan);
+  return plan.split(/\r?\n/).flatMap((l, i) => (flags[i] === true ? [l.trim()] : []));
 };
 
 /**

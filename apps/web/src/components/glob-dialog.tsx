@@ -9,7 +9,7 @@ import { actionTiers, orderActions } from '@/lib/action-style';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
-import { viewStatusLine, waitingFor } from '@/lib/status-line';
+import { blockedLine, chainTip, viewStatusLine, waitingFor } from '@/lib/status-line';
 import {
   categoryOptions,
   saveCategory,
@@ -20,7 +20,6 @@ import {
 } from '@/lib/type-change';
 import type { TypeAction } from '@/lib/type-change';
 import { ArtifactsSection } from './artifacts';
-import { CodeReviewSection } from './code-review';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
 import type { ArtifactRef } from './artifacts';
 import { ActivityLabel, GroupChip } from './glob-card';
@@ -48,6 +47,8 @@ const STATUS_TEXT: Record<GlobView['status'], string> = {
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
 
 const ACTION_TIPS: Partial<Record<Action, string>> = {
+  investigate: 'Starts a routine run that investigates the plan (no branch, no commits) and attaches the result; starting later reuses it when the plan and files are unchanged',
+  review_now: 'Queues a fresh independent review of the change as it is now (an open PR as it would land on main, a merged one as its commit); it never blocks merging',
   start_anyway: 'Starts now, before what it waits for has merged; its branch will lack those changes',
   merge_continue: "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
   mark_ready: 'Marks the draft PR ready for review',
@@ -77,7 +78,8 @@ export const GlobDetail = ({
   /** Loads the glob's latest values into the view (after a version conflict). */
   onReload: () => Promise<void>;
   /** Resolves false when the action failed. */
-  onAction: (action: Action) => Promise<boolean>;
+  /** `anyway` goes ahead of unmerged prerequisites (Retrigger). */
+  onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
   onDelete: () => Promise<void>;
 }) => {
@@ -100,6 +102,7 @@ export const GlobDetail = ({
     setFailure(null);
   };
   // Type changes are actions that say what follows; a feature can only be a sub as a task, so that confirms first.
+  const [confirmingRetrigger, setConfirmingRetrigger] = useState(false);
   const [confirmingType, setConfirmingType] = useState<TypeAction | null>(null);
   const [typeFailure, setTypeFailure] = useState<EditFailure | null>(null);
   const typeButtons = typeActions(glob, board.role);
@@ -182,6 +185,10 @@ export const GlobDetail = ({
                         }
                         if (action === 'start_again') {
                           setConfirmingAgain(true);
+                          return;
+                        }
+                        if (action === 'retrigger' && (glob.blockedBy?.length ?? 0) > 0) {
+                          setConfirmingRetrigger(true);
                           return;
                         }
                         if (oversized && (action === 'start' || action === 'start_anyway' || action === 'pick_up' || action === 'take_over')) {
@@ -290,7 +297,32 @@ export const GlobDetail = ({
             </div>
           )}
 
+          {glob.escalation != null && (
+            <div className='grid gap-1 rounded border border-edge p-2 text-sm' data-testid='escalation-note'>
+              <span>Needs a human: {glob.escalation.reason}</span>
+              {glob.escalation.evidence !== undefined && <span className='text-xs text-muted-foreground'>{glob.escalation.evidence}</span>}
+              <span className='text-xs text-muted-foreground'>Escalated by {glob.escalation.by}</span>
+            </div>
+          )}
+
           <LabelReviews glob={glob} onReview={onReviewLabel} />
+
+          {(glob.blockedBy?.length ?? 0) > 0 && (
+            <div className='grid gap-1 rounded border p-2 text-sm' data-testid='prerequisites'>
+              <span className='font-medium'>Prerequisites</span>
+              <span className='text-xs text-muted-foreground'>{blockedLine(glob)}</span>
+              <ul className='ml-4 list-disc'>
+                {glob.blockedBy?.map((b) => (
+                  <li key={b.id} style={{ marginLeft: `${String((b.depth - 1) * 12)}px` }}>
+                    <Link to={`/boards/${glob.boardId}?glob=${encodeURIComponent(b.id)}`} className='font-mono underline'>
+                      {b.id}
+                    </Link>{' '}
+                    <span className='text-muted-foreground'>{chainTip({ ...glob, blockedBy: [b] }).replace(/^\S+ /, '')}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {((glob.waitingFor?.length ?? 0) > 0 || (glob.waitedOnBy?.length ?? 0) > 0 || canEditAfter) && (
             <div className='grid gap-2 rounded border p-2 text-sm' data-testid='waits'>
@@ -435,6 +467,29 @@ export const GlobDetail = ({
                     }
                   >
                     Start anyway
+                  </Button>
+                </div>
+              )}
+              {confirmingRetrigger && (
+                <div role='alert' className='flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs'>
+                  <span className='flex-1' data-testid='retrigger-says'>
+                    {blockedLine(glob)}: {chainTip(glob)}. A run now works without their changes.
+                  </span>
+                  <Button size='sm' variant='ghost' onClick={() => setConfirmingRetrigger(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size='sm'
+                    disabled={busy}
+                    data-testid='confirm-retrigger'
+                    onClick={() =>
+                      void run(async () => {
+                        setConfirmingRetrigger(false);
+                        await onAction('retrigger', true);
+                      })
+                    }
+                  >
+                    Retrigger anyway
                   </Button>
                 </div>
               )}
@@ -586,8 +641,6 @@ export const GlobDetail = ({
           <TestsSection glob={glob} />
 
           <ArtifactsSection globId={glob.id} artifacts={glob.artifacts ?? []} selected={artifact} onSelect={setArtifact} />
-
-          <CodeReviewSection globId={glob.id} />
 
           <GlobDecisions boardId={glob.boardId} globId={glob.id} />
 

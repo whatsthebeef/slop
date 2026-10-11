@@ -1,7 +1,7 @@
 import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
-import { fireRoutine, runInstructions } from './routines.js';
+import { fireRoutine, investigateInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
-import { isRepoAccessFailure, isSetupFailure, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
+import { isRepoAccessFailure, isSetupFailure, chainRefusal, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -440,8 +440,19 @@ export const codeHostExecutors = (
       if (effect.kind !== 'fire_routine' || glob === null) return 'dropped';
       const run = machine.currentRun(glob);
       if (run?.id !== effect.runId || run.state !== 'queued') return 'dropped';
-      // A routine works on the glob's branch, so it is only fired once that exists.
-      if (glob.provisioning !== 'ok') throw new Error(`${glob.id} is not provisioned yet`);
+      // Don't spend a session to find out in Phase 1 that prerequisites haven't merged (unless a person said to go ahead).
+      if (effect.checkPrerequisites === true) {
+        const chain = await globs.blockingChainOf(glob.id);
+        if (chain.blockedBy.length > 0) {
+          await globs.applyEvent(glob.id, (g, ctx) =>
+            machine.reportFailure(g, { reason: `Not fired: ${chainRefusal(chain)}`, runId: effect.runId }, ctx),
+          );
+          return 'done';
+        }
+      }
+      // A routine works on the glob's branch, so it is only fired once that exists. An investigate-only run works on the
+      // base branch of a glob in Planning, which has no branch yet.
+      if (effect.purpose !== 'investigate' && glob.provisioning !== 'ok') throw new Error(`${glob.id} is not provisioned yet`);
       const secret = await routines.secretFor(effect.routineOwner, glob.boardId);
       if (secret === null) {
         await globs.applyEvent(glob.id, (g, ctx) =>
@@ -450,7 +461,13 @@ export const codeHostExecutors = (
         return 'done';
       }
       const repo = await repoFor(glob.boardId);
-      const result = await fireRoutine(secret, runInstructions(glob, effect.runId, repo === null ? null : `${repo.owner}/${repo.name}`, glob.status === 'pr_open', effect.failureSummary ?? null), health);
+      const repoName = repo === null ? null : `${repo.owner}/${repo.name}`;
+      const board = await boardOf(glob.boardId);
+      const text =
+        effect.purpose === 'investigate'
+          ? investigateInstructions(glob, effect.runId, repoName, board?.baseBranch ?? null)
+          : runInstructions(glob, effect.runId, repoName, glob.status === 'pr_open', effect.failureSummary ?? null);
+      const result = await fireRoutine(secret, text, health);
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
         await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));

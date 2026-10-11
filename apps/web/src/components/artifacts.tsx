@@ -1,6 +1,7 @@
-import type { ArtifactKind } from '@slop/core';
+import { parseInvestigation } from '@slop/core';
+import type { ArtifactKind, Investigation } from '@slop/core';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardCheck, FileCheck, FileText, Paperclip } from 'lucide-react';
+import { ClipboardCheck, FileCheck, FileText, Microscope, Paperclip, SearchCheck } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
@@ -20,6 +21,8 @@ export const ARTIFACT_META: Record<
   // Legacy rows only: postplans were migrated into the record and writes to the kind land there.
   postplan: { title: 'Postplan (old)', icon: FileCheck },
   local_review: { title: 'Local review', icon: ClipboardCheck },
+  independent_review: { title: 'Independent review', icon: SearchCheck },
+  investigation: { title: 'Investigation', icon: Microscope },
   attachment: { title: 'Attachment', icon: Paperclip },
 };
 
@@ -28,6 +31,7 @@ export const CARD_ARTIFACT_KINDS = [
   'plan',
   'implementation_plan',
   'local_review',
+  'independent_review',
 ] as const;
 
 export interface ArtifactRef {
@@ -150,9 +154,49 @@ const ArtifactViewer = ({ globId, summary }: { globId: string; summary: Artifact
                 {shown.link}
               </a>
             ))}
+          {shown.kind === 'investigation' && (
+            <InvestigationFields content={shown.content} validation={shown.provenance.validation} />
+          )}
           <MarkdownView content={shown.content} />
         </>
       )}
     </div>
+  );
+};
+
+/** The investigation's parsed block as a summary, or the validation note when it could not be read. */
+const InvestigationFields = ({ content, validation }: { content: string; validation: string | undefined }) => {
+  const parsed = parseInvestigation(content);
+  if (!parsed.ok) {
+    return (
+      <p className="text-sm text-red" data-testid="investigation-invalid">
+        {validation ?? parsed.errors.join('; ')}
+      </p>
+    );
+  }
+  const i: Investigation = parsed.investigation;
+  const rows: [string, string][] = [
+    ['Risk', `${i.riskTier}${i.riskAreas.length > 0 ? ` (${i.riskAreas.join(', ')})` : ''}`],
+    ['Needs a human', i.needsHuman.needed ? `yes: ${i.needsHuman.reason ?? ''}` : 'no'],
+    ['Confidence', i.confidence],
+    ['Expected lines', `${String(i.expectedLines.min)}–${String(i.expectedLines.max)}`],
+    ['Modules', i.modules.join(', ') || 'none'],
+    ['Files', i.files.map((f) => `${f.change} ${f.path}`).join('\n') || 'none'],
+    [
+      'Parts',
+      i.parts.map((p) => `${p.name} (${String(p.files.length)} files${p.needs.length > 0 ? `, needs ${p.needs.join(', ')}` : ''})`).join('\n') ||
+        'one',
+    ],
+    ['Made against', `plan ${i.planHash.slice(0, 8)} · base ${i.baseCommit.slice(0, 7)}`],
+  ];
+  return (
+    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm" data-testid="investigation-fields">
+      {rows.map(([name, value]) => (
+        <div key={name} className="contents">
+          <dt className="text-muted-foreground">{name}</dt>
+          <dd className="whitespace-pre-wrap">{value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 };

@@ -72,7 +72,15 @@ export interface Run {
   readonly sessionUrl: string | null;
   /** Set on the run slop queued by itself after a watching run gave up: the one automatic retry. */
   readonly autoRetry?: true;
+  /**
+   * `investigate`: an investigate-only run on a glob in Planning (orchestrator Phases 1–2, no branch, no commits). It ends
+   * when its investigation is pushed; absent on every implementing run.
+   */
+  readonly purpose?: RunPurpose;
 }
+
+export const RUN_PURPOSES = ['investigate'] as const;
+export type RunPurpose = (typeof RUN_PURPOSES)[number];
 
 export type PrState = 'draft' | 'ready' | 'closed' | 'merged';
 
@@ -138,6 +146,20 @@ export interface BaseChecks {
 /** `none` until the glob first enters Doing: branches and draft PRs are created when work starts. */
 export type ProvisioningState = 'none' | 'pending' | 'ok' | 'failed';
 
+/** A running sub an agent (or a person) flagged as needing a human, which made it a same; cleared when it is made a sub again. */
+export interface Escalation {
+  readonly reason: string;
+  /** Which of the board's escalation criteria it was for (`ESCALATION_CRITERIA`); the outcome learning moves that criterion. */
+  readonly criterion?: string;
+  /** What showed it: files, findings, the unsettled choice. */
+  readonly evidence?: string;
+  /** Who escalated: the person's email, or the routine owner for a run. */
+  readonly by: string;
+  readonly at: string;
+  /** Set when a routine run escalated. */
+  readonly runId?: string;
+}
+
 export interface Failure {
   readonly reason: string;
   readonly at: string;
@@ -146,7 +168,9 @@ export interface Failure {
   /** Set when slop's merge failed on a conflict with the base branch (`files`: those both sides changed, when known). */
   readonly conflict?: MergeConflict;
   /** Set when slop's own merge attempt failed: a later push to the branch recovers the glob (row 16a). */
-  readonly kind?: 'merge' | 'reverted' | 'provisioning';
+  readonly kind?: 'merge' | 'reverted' | 'provisioning' | 'needs_pairing';
+  /** `needs_pairing`: the decision the routine would have had to guess, for the person who takes it over as a super. */
+  readonly decision?: string;
 }
 
 export interface MergeConflict {
@@ -173,10 +197,24 @@ export interface BehindBase {
   readonly at: string;
 }
 
-/** A hold the board's merge policy put on a glob: it waits for `id` because both may change `paths`. */
+/** What an edge between two globs means: `needs` (the code must be on main; blocks start) or `overlaps` (same files; orders merges only). */
+export type EdgeKind = 'needs' | 'overlaps';
+/** Who set an edge: a person or a split (`explicit`), path prediction (`implied`), or slop's learning from outcomes (`learned`). */
+export type EdgeSource = 'explicit' | 'implied' | 'learned';
+
+/**
+ * An edge slop recorded beside `after` (the explicit needs): the board's merge policy predicted that both globs may change
+ * `paths` (an overlap), or slop learned the glob needs `id` from a run that failed without it (a need).
+ */
 export interface ImpliedAfter {
   readonly id: string;
   readonly paths: readonly string[];
+  /** Absent means `overlaps`: predictions never block a start. Only a learned `needs` does. */
+  readonly kind?: EdgeKind;
+  /** Absent means `implied`. */
+  readonly source?: EdgeSource;
+  /** The run or event that set it, for learned edges. */
+  readonly evidence?: string;
   /** Set when a person chose Start anyway: kept for display, no longer holds. */
   readonly overridden?: true;
 }
@@ -214,6 +252,8 @@ export interface Glob {
   /** Every routine run, oldest first; the last one is the current run. */
   readonly runs: readonly Run[];
   readonly failure: Failure | null;
+  /** Why a human should check this glob, when a sub was escalated to a same during implementation or review. */
+  readonly escalation?: Escalation | null;
   /** Set while the open PR conflicts with the base branch; cleared when it merges cleanly again. */
   readonly conflict?: OpenConflict | null;
   /** Set while the branch of a glob in Doing lacks commits from the base branch; cleared when it is up to date. */
@@ -224,6 +264,11 @@ export interface Glob {
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Set while the glob is held in Planning for its `after`; cleared when released, started anyway or picked up. */
   readonly waiting?: { readonly since: string } | null;
+  /**
+   * A same that starts its routine by itself when what it waits for merges (set on the parts of a split that need another
+   * part; subs always do). A person turns it off, which ends the wait and leaves the needs in place.
+   */
+  readonly autoStart?: boolean;
   /** Set while another open glob changes the same exclusive paths; cleared when it no longer does. */
   readonly clash?: PathClash | null;
   readonly provisioning: ProvisioningState;
@@ -303,10 +348,14 @@ export interface Board {
   readonly runReadyHours: number;
   /** Sub gate: subs changing more lines than this convert to sames. */
   readonly subMaxChangedLines: number;
+  /** The step the learned sub limit moves by now: grows while outcomes agree, shrinks on a reversal (`sub-limit.ts`). */
+  readonly subLimitStep: number;
   /** Effect checks: how many globs each side of an approved change is compared over (admins set 3 to 50). */
   readonly effectCheckGlobs: number;
   /** Which KB items an admin's agent may approve (`decide_kb_item`); admins set it. */
   readonly agentKbApproval: AgentKbApproval;
+  /** Slop starts an investigate-only run by itself on a glob in Planning that intake flagged as big (on by default). */
+  readonly autoInvestigate: boolean;
   readonly version: number;
 }
 

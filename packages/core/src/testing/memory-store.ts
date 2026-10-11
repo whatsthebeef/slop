@@ -7,7 +7,6 @@ import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js'
 import type { DomainEvent, Effect } from '../domain/events.js';
 import { sameCommit } from '../domain/signals.js';
 import type { TestRun } from '../domain/test-runs.js';
-import type { CodeReviewComment } from '../domain/code-review.js';
 import type { BoardNotification } from '../domain/notifications.js';
 import type { ChatMessage, ChatThread } from '../domain/chat.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
@@ -20,7 +19,15 @@ import { GLOB_OWNED_SOURCES, matchesFilters } from '../domain/search.js';
 import type { Candidate, KnowledgeItem } from '../domain/search.js';
 import { DEFAULT_SIZE_THRESHOLD } from '../domain/size-check.js';
 import type { SizeCheck, SizeThreshold, SizeThresholdChange } from '../domain/size-check.js';
+import { DEFAULT_SIZE_CALIBRATION } from '../domain/size-forecast.js';
+import type { SizeCalibration, SizeCalibrationChange, SizeRecord } from '../domain/size-forecast.js';
+import { riskChangeKey } from '../domain/risk-area.js';
+import type { EscalationRecord } from '../domain/escalation-learning.js';
+import type { RiskArea, RiskAreaChange } from '../domain/risk-area.js';
+import { SUB_LIMIT_STEP } from '../domain/sub-limit.js';
 import type { SubLimitChange } from '../domain/sub-limit.js';
+import type { TypeCorrection } from '../domain/type-learning.js';
+import type { DependencyRule, DependencyRuleChange } from '../domain/dependency-rules.js';
 import type { GlobOutcome, IntakeSnapshot } from '../domain/intake-learning.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
@@ -48,19 +55,24 @@ interface State {
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
+  dependencyRules: DependencyRule[];
+  dependencyRuleChanges: DependencyRuleChange[];
+  riskAreas: RiskArea[];
+  riskAreaChanges: RiskAreaChange[];
+  escalationRecords: EscalationRecord[];
+  typeCorrections: TypeCorrection[];
   sizeChecks: SizeCheck[];
   sizeThresholds: Map<number, SizeThreshold>;
   sizeThresholdChanges: SizeThresholdChange[];
+  sizeCalibrations: Map<number, SizeCalibration>;
+  sizeCalibrationChanges: SizeCalibrationChange[];
+  sizeRecords: SizeRecord[];
   intakeSnapshots: { snapshot: IntakeSnapshot; embedding: readonly number[] | null }[];
   globOutcomes: GlobOutcome[];
   environmentDeploys: EnvironmentDeploy[];
   /** Keyed by glob and environment. */
   globPresence: Map<string, GlobPresence>;
   testRuns: TestRun[];
-  codeReviews: CodeReviewComment[];
-  /** External IDs of CodeRabbit items deleted on the code host (tombstones). */
-  /** Tombstones: external ID and when it was deleted, as Postgres keeps `deleted_at`. */
-  deletedCodeReviews: { externalId: string; at: string }[];
   notifications: Map<string, BoardNotification>;
   /** Search store: items keyed by board and external ref, and their chunks. */
   searchItems: Map<string, KnowledgeItem>;
@@ -132,16 +144,23 @@ const clone = (state: State): State => ({
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
+  dependencyRules: [...state.dependencyRules],
+  dependencyRuleChanges: [...state.dependencyRuleChanges],
+  riskAreas: [...state.riskAreas],
+  riskAreaChanges: [...state.riskAreaChanges],
+  escalationRecords: [...state.escalationRecords],
+  typeCorrections: [...state.typeCorrections],
   sizeChecks: [...state.sizeChecks],
   sizeThresholds: new Map(state.sizeThresholds),
   sizeThresholdChanges: [...state.sizeThresholdChanges],
+  sizeCalibrations: new Map(state.sizeCalibrations),
+  sizeCalibrationChanges: [...state.sizeCalibrationChanges],
+  sizeRecords: [...state.sizeRecords],
   intakeSnapshots: [...state.intakeSnapshots],
   globOutcomes: [...state.globOutcomes],
   environmentDeploys: [...state.environmentDeploys],
   globPresence: new Map(state.globPresence),
   testRuns: [...state.testRuns],
-  codeReviews: [...state.codeReviews],
-  deletedCodeReviews: [...state.deletedCodeReviews],
   notifications: new Map(state.notifications),
   searchItems: new Map(state.searchItems),
   searchChunks: [...state.searchChunks],
@@ -179,16 +198,23 @@ export class MemoryStore implements Store {
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
+    dependencyRules: [],
+    dependencyRuleChanges: [],
+    riskAreas: [],
+    riskAreaChanges: [],
+    escalationRecords: [],
+    typeCorrections: [],
     sizeChecks: [],
     sizeThresholds: new Map(),
     sizeThresholdChanges: [],
+    sizeCalibrations: new Map(),
+    sizeCalibrationChanges: [],
+    sizeRecords: [],
     intakeSnapshots: [],
     globOutcomes: [],
     environmentDeploys: [],
     globPresence: new Map(),
     testRuns: [],
-    codeReviews: [],
-    deletedCodeReviews: [],
     notifications: new Map(),
     searchItems: new Map(),
     searchChunks: [],
@@ -242,7 +268,6 @@ export class MemoryStore implements Store {
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
         s.testRuns = s.testRuns.filter((r) => r.globId !== id);
-        s.codeReviews = s.codeReviews.filter((c) => c.globId !== id);
         // A glob's own items go with it; a learning or document it fed only loses the link.
         const gone = new Set<number>();
         const goneDecisions = new Set(s.decisions.filter((d) => d.globId === id).map((d) => d.id));
@@ -300,7 +325,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs' };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, subLimitStep: SUB_LIMIT_STEP, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs', autoInvestigate: true };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -308,13 +333,13 @@ export class MemoryStore implements Store {
         const current = s.boards.get(board.id);
         if (current?.version !== expectedVersion) return Promise.resolve(false);
         // As in Postgres, the learned sub limit has its own write.
-        s.boards.set(board.id, { ...board, subMaxChangedLines: current.subMaxChangedLines });
+        s.boards.set(board.id, { ...board, subMaxChangedLines: current.subMaxChangedLines, subLimitStep: current.subLimitStep });
         return Promise.resolve(true);
       },
-      setSubLimit: (boardId, from, to) => {
+      setSubLimit: (boardId, from, to, step) => {
         const current = s.boards.get(boardId);
         if (current?.subMaxChangedLines !== from) return Promise.resolve(false);
-        s.boards.set(boardId, { ...current, subMaxChangedLines: to });
+        s.boards.set(boardId, { ...current, subMaxChangedLines: to, subLimitStep: step ?? current.subLimitStep });
         return Promise.resolve(true);
       },
       insertSubLimitChange: (change) => {
@@ -326,6 +351,72 @@ export class MemoryStore implements Store {
       },
       listSubLimitChanges: (boardId) =>
         Promise.resolve(s.subLimitChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      listDependencyRules: (boardId) => Promise.resolve(s.dependencyRules.filter((r) => r.boardId === boardId)),
+      upsertDependencyRule: (rule) => {
+        s.dependencyRules = [...s.dependencyRules.filter((r) => !(r.boardId === rule.boardId && r.pattern === rule.pattern)), rule];
+        return Promise.resolve();
+      },
+      deleteDependencyRules: (boardId, pattern) => {
+        s.dependencyRules = s.dependencyRules.filter((r) => r.boardId !== boardId || (pattern !== undefined && r.pattern !== pattern));
+        return Promise.resolve();
+      },
+      insertDependencyRuleChange: (change) => {
+        const same = (c: DependencyRuleChange): boolean =>
+          c.boardId === change.boardId && c.globId === change.globId && c.pattern === change.pattern && c.cause === change.cause;
+        if (change.globId !== null && s.dependencyRuleChanges.some(same)) return Promise.resolve(false);
+        s.dependencyRuleChanges.push({ ...change, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listDependencyRuleChanges: (boardId) =>
+        Promise.resolve(s.dependencyRuleChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      listRiskAreas: (boardId) => Promise.resolve(s.riskAreas.filter((a) => a.boardId === boardId)),
+      putRiskArea: (area) => {
+        s.riskAreas = [...s.riskAreas.filter((a) => !(a.boardId === area.boardId && a.name === area.name)), area];
+        return Promise.resolve();
+      },
+      deleteRiskArea: (boardId, name) => {
+        s.riskAreas = s.riskAreas.filter((a) => !(a.boardId === boardId && a.name === name));
+        return Promise.resolve();
+      },
+      insertRiskAreaChange: (change) => {
+        const key = riskChangeKey(change.globId, change.cause, change.areaName);
+        if (change.globId !== null && change.areaName !== null && s.riskAreaChanges.some((c) => c.boardId === change.boardId && riskChangeKey(c.globId, c.cause, c.areaName) === key)) {
+          return Promise.resolve(false);
+        }
+        s.riskAreaChanges.push({ ...change, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listRiskAreaChanges: (boardId) =>
+        Promise.resolve(s.riskAreaChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      insertEscalationRecord: (record) => {
+        if (record.globId !== null && s.escalationRecords.some((r) => r.boardId === record.boardId && r.globId === record.globId && r.outcome === record.outcome)) {
+          return Promise.resolve(false);
+        }
+        s.escalationRecords.push({ ...record, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listEscalationRecords: (boardId) =>
+        Promise.resolve(s.escalationRecords.filter((r) => r.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      insertTypeCorrection: (correction) => {
+        s.typeCorrections.push({ ...correction, id: this.nextRowId++, resetAt: null });
+        return Promise.resolve();
+      },
+      listTypeCorrections: (boardId, options) =>
+        Promise.resolve(
+          s.typeCorrections
+            .filter((c) => c.boardId === boardId && (options?.all === true || c.resetAt === null))
+            .sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)
+            .slice(0, options?.limit),
+        ),
+      resetTypeCorrections: (boardId, at) => {
+        let reset = 0;
+        s.typeCorrections = s.typeCorrections.map((c) => {
+          if (c.boardId !== boardId || c.resetAt !== null) return c;
+          reset++;
+          return { ...c, resetAt: at };
+        });
+        return Promise.resolve(reset);
+      },
       getSizeCheck: (globId) => Promise.resolve(s.sizeChecks.find((c) => c.globId === globId) ?? null),
       listSizeChecks: (boardId) => Promise.resolve(s.sizeChecks.filter((c) => c.boardId === boardId)),
       upsertSizeCheck: (check) => {
@@ -352,6 +443,24 @@ export class MemoryStore implements Store {
       },
       listSizeThresholdChanges: (boardId) =>
         Promise.resolve(s.sizeThresholdChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      getSizeCalibration: (boardId) => Promise.resolve(s.sizeCalibrations.get(boardId) ?? DEFAULT_SIZE_CALIBRATION),
+      setSizeCalibration: (boardId, calibration) => {
+        s.sizeCalibrations.set(boardId, calibration);
+        return Promise.resolve();
+      },
+      insertSizeCalibrationChange: (change) => {
+        if (s.sizeCalibrationChanges.some((c) => c.boardId === change.boardId && c.globId === change.globId && c.cause === change.cause)) return Promise.resolve(false);
+        s.sizeCalibrationChanges.push({ ...change, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listSizeCalibrationChanges: (boardId) =>
+        Promise.resolve(s.sizeCalibrationChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      getSizeRecord: (globId) => Promise.resolve(s.sizeRecords.find((r) => r.globId === globId) ?? null),
+      upsertSizeRecord: (record) => {
+        s.sizeRecords = [...s.sizeRecords.filter((r) => r.globId !== record.globId), record];
+        return Promise.resolve();
+      },
+      listSizeRecords: (boardId) => Promise.resolve(s.sizeRecords.filter((r) => r.boardId === boardId)),
       setBaseChecks: (boardId, baseChecks) => {
         const current = s.boards.get(boardId);
         if (current !== undefined) s.boards.set(boardId, { ...current, baseChecks });
@@ -465,6 +574,7 @@ export class MemoryStore implements Store {
             createdAt: a.createdAt,
             by: a.provenance.by,
             actor: a.provenance.actor,
+            ...(a.provenance.independentReview === undefined ? {} : { review: a.provenance.independentReview }),
           });
         }
         return Promise.resolve([...summaries.values()]);
@@ -579,32 +689,6 @@ export class MemoryStore implements Store {
                   (filter.commits?.some((c) => c.environment === r.environment && sameCommit(c.sha, r.sha)) ?? false))),
           ),
         ),
-      upsertCodeReviewComment: (comment) => {
-        if (s.deletedCodeReviews.some((d) => d.externalId === comment.externalId)) return Promise.resolve(false);
-        const stored = s.codeReviews.find((c) => c.externalId === comment.externalId);
-        if (stored === undefined) {
-          s.codeReviews.push({ ...comment, id: this.nextRowId++ });
-          return Promise.resolve(true);
-        }
-        if (stored.updatedAt > comment.updatedAt) return Promise.resolve(false);
-        const next = { ...stored, kind: comment.kind, body: comment.body, url: comment.url, commitSha: comment.commitSha, path: comment.path, line: comment.line, updatedAt: comment.updatedAt };
-        const changed = JSON.stringify(next) !== JSON.stringify(stored);
-        s.codeReviews = s.codeReviews.map((c) => (c === stored ? next : c));
-        return Promise.resolve(changed);
-      },
-      deleteCodeReviewComment: (externalId, at) => {
-        const stored = s.codeReviews.find((c) => c.externalId === externalId) ?? null;
-        if (stored === null) return Promise.resolve(null);
-        s.codeReviews = s.codeReviews.filter((c) => c.externalId !== externalId);
-        s.deletedCodeReviews.push({ externalId, at });
-        return Promise.resolve(stored);
-      },
-      listCodeReviewComments: (boardId, globIds) =>
-        Promise.resolve(
-          s.codeReviews
-            .filter((c) => c.boardId === boardId && globIds.includes(c.globId))
-            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id),
-        ),
       insertReviewSource: (input) => {
         const taken = s.reviewSources.some(
           (r) =>
@@ -635,7 +719,7 @@ export class MemoryStore implements Store {
         let inserted = 0;
         for (const input of findings) {
           const exists = s.findings.some(
-            (f) => f.globId === input.globId && f.source === input.source && f.fingerprint === input.fingerprint,
+            (f) => f.globId === input.globId && f.fingerprint === input.fingerprint,
           );
           if (exists) continue;
           s.findings.push({
@@ -681,7 +765,7 @@ export class MemoryStore implements Store {
             .sort((a, b) => (written.get(a.sourceId) ?? '').localeCompare(written.get(b.sourceId) ?? '') || a.id - b.id),
         );
       },
-      listBoardEvents: (boardId, since, types) =>
+      listBoardEvents: (boardId, since, types, globIds) =>
         Promise.resolve(
           s.events
             .map((event, index) => ({ event, index }))
@@ -689,7 +773,8 @@ export class MemoryStore implements Store {
               ({ event }) =>
                 s.globs.get(event.globId)?.glob.boardId === boardId &&
                 event.at >= since &&
-                (types === undefined || types.includes(event.type)),
+                (types === undefined || types.includes(event.type)) &&
+                (globIds === undefined || globIds.includes(event.globId)),
             )
             .sort((a, b) => a.event.at.localeCompare(b.event.at) || a.index - b.index)
             .map(({ event }) => event),
@@ -855,7 +940,8 @@ export class MemoryStore implements Store {
         s.globOutcomes = [...s.globOutcomes.filter((o) => o.globId !== outcome.globId), outcome];
         return Promise.resolve();
       },
-      listGlobOutcomes: (boardId) => Promise.resolve(s.globOutcomes.filter((o) => o.boardId === boardId)),
+      listGlobOutcomes: (boardId, globIds) =>
+        Promise.resolve(s.globOutcomes.filter((o) => o.boardId === boardId && (globIds === undefined || globIds.includes(o.globId)))),
       listDecisions: (boardId) =>
         Promise.resolve(s.decisions.filter((d) => d.boardId === boardId).sort((a, b) => a.decidedAt.localeCompare(b.decidedAt) || a.id - b.id)),
       getDecision: (id) => Promise.resolve(s.decisions.find((d) => d.id === id) ?? null),
@@ -1044,7 +1130,18 @@ export class MemoryStore implements Store {
         return Promise.resolve();
       },
       enqueueEffects: (effects) => {
-        s.outbox.push(...effects);
+        for (const effect of effects) {
+          // One pending recheck per board is enough: it reads the board as it is when it runs.
+          if (effect.kind === 'recheck_overlaps' && s.outbox.some((e) => e.kind === 'recheck_overlaps' && e.globId === effect.globId)) continue;
+          // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
+          if (effect.kind === 'review_change' && effect.requestId === undefined) {
+            const same = (e: Effect) => e.kind === 'review_change' && e.requestId === undefined && e.globId === effect.globId && e.stage === effect.stage;
+            if (s.outbox.some((e) => same(e) && e.kind === 'review_change' && e.sha === effect.sha)) continue;
+            // A newer pre-merge head cancels the older head's pending job.
+            if (effect.stage === 'pre_merge') s.outbox = s.outbox.filter((e) => !same(e));
+          }
+          s.outbox.push(effect);
+        }
         return Promise.resolve();
       },
     };

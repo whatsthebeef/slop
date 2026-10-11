@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
-import type { AppSettings, BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PrSnapshot, Repo, RepoConnection } from '../codehost.js';
+import { REVIEW_CHECK } from '../codehost.js';
+import type { AppSettings, BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PostedReview, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -275,7 +276,7 @@ export class GitHub implements CodeHost, CommitGraph {
       pull_number: prNumber,
     });
     let runs: { status: string; conclusion: string | null }[] = [];
-    if (data.mergeable_state === 'unstable' || data.mergeable_state === 'blocked') {
+    if (['unstable', 'blocked', 'clean', 'has_hooks'].includes(data.mergeable_state)) {
       const checks = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
         owner: repo.owner,
         repo: repo.name,
@@ -283,7 +284,7 @@ export class GitHub implements CodeHost, CommitGraph {
         filter: 'latest',
         per_page: 100,
       });
-      runs = checks.data.check_runs;
+      runs = checks.data.check_runs.filter((run) => run.name !== REVIEW_CHECK);
     }
     const state = classifyMergeState(data.mergeable_state, runs);
     return { sha: data.head.sha, state };
@@ -453,6 +454,53 @@ export class GitHub implements CodeHost, CommitGraph {
     return { wasDraft: true, sha: data.head.sha };
   }
 
+  async testMergeTarget(repo: Repo, prNumber: number, signal?: AbortSignal): Promise<TestMergeTarget> {
+    const gh = await this.octokit(repo);
+    const { data: pr } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner: repo.owner,
+      repo: repo.name,
+      pull_number: prNumber,
+      request: { signal },
+    });
+    if (pr.state !== 'open') return { outcome: 'not_open' };
+    if (pr.mergeable === false || pr.mergeable_state === 'dirty') return { outcome: 'conflict' };
+    if (pr.mergeable === null || pr.merge_commit_sha === null) return { outcome: 'undecided' };
+    const sha = pr.merge_commit_sha;
+    const [{ data: commit }, base] = await Promise.all([
+      gh.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner: repo.owner, repo: repo.name, ref: sha, request: { signal } }),
+      this.branchHead(repo, repo.base),
+    ]);
+    // The merge commit's parents are the base head it was made on and the PR head. Either one moved: GitHub is still
+    // recomputing, and reviewing this commit would not be the change as it will land.
+    const [baseSha, headSha] = commit.parents.map((p) => p.sha);
+    if (commit.parents.length !== 2 || baseSha === undefined || headSha !== pr.head.sha || base === null || baseSha !== base) return { outcome: 'undecided' };
+    return { outcome: 'ready', ref: `refs/pull/${String(prNumber)}/merge`, sha, baseSha, diff: await this.unifiedDiff(repo, `${baseSha}...${sha}`, signal) };
+  }
+
+  async mergedTarget(repo: Repo, sha: string, signal?: AbortSignal): Promise<ReviewDiff> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner: repo.owner, repo: repo.name, ref: sha, request: { signal } });
+    // Squash merges have one parent; a true merge commit's first parent is the base, so its diff is the whole PR too.
+    const parent = data.parents[0]?.sha ?? null;
+    if (parent === null) throw new Error(`Commit ${sha} has no parent to diff against`);
+    return { ref: repo.base, sha, baseSha: parent, diff: await this.unifiedDiff(repo, `${parent}...${sha}`, signal) };
+  }
+
+  /** `basehead` as one git unified diff (the compare API's diff media type, not its paged file list). */
+  private async unifiedDiff(repo: Repo, basehead: string, signal?: AbortSignal): Promise<string> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+      owner: repo.owner,
+      repo: repo.name,
+      basehead,
+      mediaType: { format: 'diff' },
+      request: { signal },
+    });
+    // With the diff media type the body is the diff text itself.
+    if (typeof data !== 'string') throw new Error('GitHub did not return a diff');
+    return data;
+  }
+
   async conflictState(repo: Repo, prNumber: number): Promise<'clean' | 'conflict' | 'unknown'> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
@@ -529,6 +577,79 @@ export class GitHub implements CodeHost, CommitGraph {
     }
     await gh.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', { ...r, body });
     return 'posted';
+  }
+
+  prDiff(repo: Repo, headSha: string, signal?: AbortSignal): Promise<string> {
+    return this.unifiedDiff(repo, `${repo.base}...${headSha}`, signal);
+  }
+
+  async submitReview(repo: Repo, prNumber: number, review: PostedReview): Promise<{ id: number; inline: number }> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name, pull_number: prNumber, commit_id: review.commitSha, event: 'COMMENT' as const };
+    try {
+      const { data } = await gh.request('POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
+        ...r,
+        body: review.body,
+        comments: review.comments.map((c) => ({ path: c.path, line: c.line, side: 'RIGHT' as const, body: c.body })),
+      });
+      return { id: Number(data.id), inline: review.comments.length };
+    } catch (error) {
+      // A comment whose line isn't in the PR's own diff (the reviewed change is the test merge, which can differ) fails the
+      // whole review with 422: post it again with the comments in the body, so no finding is lost.
+      if (review.comments.length === 0 || !isStatus(error, 422)) throw error;
+      const folded = [review.body, ...review.comments.map((c) => `**\`${c.path}:${String(c.line)}\`**\n\n${c.body}`)].join('\n\n');
+      const { data } = await gh.request('POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews', { ...r, body: folded.slice(0, 60_000) });
+      return { id: Number(data.id), inline: 0 };
+    }
+  }
+
+  async outdateReviews(repo: Repo, prNumber: number, markerPrefix: string, exceptId: number | null, rewrite: (body: string) => string): Promise<number> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name, pull_number: prNumber };
+    let changed = 0;
+    // Reviews come oldest first; slop's are looked for in the first five hundred.
+    for (let page = 1; page <= 5; page++) {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews', { ...r, per_page: 100, page });
+      for (const review of data) {
+        const body = review.body;
+        if (Number(review.id) === exceptId || !body.startsWith(markerPrefix)) continue;
+        const next = rewrite(body);
+        if (next === body) continue;
+        await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}', { ...r, review_id: Number(review.id), body: next });
+        // The inline comments can't be edited into "outdated", but GraphQL can fold them away as outdated. Best effort.
+        try {
+          const { data: comments } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments', { ...r, review_id: Number(review.id), per_page: 100 });
+          for (const comment of comments) {
+            await gh.graphql('mutation($id: ID!) { minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) { clientMutationId } }', { id: comment.node_id });
+          }
+        } catch {
+          // The body already says outdated; folding the comments away is a nicety.
+        }
+        changed += 1;
+      }
+      if (data.length < 100) break;
+    }
+    return changed;
+  }
+
+  async reportCheck(repo: Repo, sha: string, check: ReportedCheck): Promise<'created' | 'unavailable'> {
+    const gh = await this.octokit(repo);
+    try {
+      await gh.request('POST /repos/{owner}/{repo}/check-runs', {
+        owner: repo.owner,
+        repo: repo.name,
+        name: check.name,
+        head_sha: sha,
+        status: 'completed',
+        conclusion: 'neutral',
+        output: { title: check.title, summary: check.summary },
+      });
+      return 'created';
+    } catch (error) {
+      // An installation that hasn't accepted the Checks write permission yet gets 403 (or 404): the review is still posted.
+      if (isStatus(error, 403, 404)) return 'unavailable';
+      throw error;
+    }
   }
 
   async diffSummary(repo: Repo, sha: string): Promise<DiffSummary> {
@@ -620,6 +741,34 @@ export class GitHub implements CodeHost, CommitGraph {
       if (isStatus(error, 404)) return [];
       throw error;
     }
+  }
+
+  async listDir(repo: Repo, ref: string, dir: string, signal?: AbortSignal): Promise<{ name: string; type: 'file' | 'dir' }[] | null> {
+    const gh = await this.octokit(repo);
+    try {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: repo.owner,
+        repo: repo.name,
+        path: dir,
+        ref,
+        request: { signal },
+      });
+      if (!Array.isArray(data)) return null;
+      const entries: { name: string; type: 'file' | 'dir' }[] = [];
+      for (const e of data) if (e.type === 'dir' || e.type === 'file') entries.push({ name: e.name, type: e.type });
+      return entries;
+    } catch (error) {
+      if (isStatus(error, 404)) return null;
+      throw error;
+    }
+  }
+
+  async readToken(repo: Repo): Promise<string> {
+    const gh = await this.octokit(repo);
+    const auth: unknown = await gh.auth({ type: 'installation' });
+    const token = typeof auth === 'object' && auth !== null && 'token' in auth ? auth.token : null;
+    if (typeof token !== 'string' || token === '') throw new Error('GitHub gave no installation token');
+    return token;
   }
 
   async commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles> {

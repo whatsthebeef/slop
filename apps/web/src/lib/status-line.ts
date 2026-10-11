@@ -2,6 +2,7 @@ import {
   behindAdvice,
   behindWarning,
   checksExplanation,
+  chainSummary,
   machine,
   readyStatus,
   stuckHint,
@@ -54,7 +55,10 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
   const hint = stuckHint(glob, now);
   const checks = checksExplanation(glob);
   const failed = glob.status === 'failed' || glob.failure !== null;
-  const reason = glob.failure?.reason ?? 'Routine run failed';
+  const failure = glob.failure;
+  const decision = failure?.kind === 'needs_pairing' ? failure.decision?.trim() : undefined;
+  // The routine stopped for a decision only a person can make: say which, not just that it failed.
+  const reason = failure?.kind === 'needs_pairing' ? `Needs a person: ${decision === undefined || decision === '' ? failure.reason : decision}` : (failure?.reason ?? 'Routine run failed');
   const run = glob.currentRun ?? null;
   const session = run?.sessionUrl ?? null;
   const provisioningFailed = glob.provisioning === 'failed' && glob.failure?.kind === 'provisioning';
@@ -276,7 +280,7 @@ export const viewStatusLine = (
 
 /** What slop or a routine is doing on its own, in one label: the card's chip and the glob view's, from the same function. */
 export interface Activity {
-  readonly kind: 'merging' | 'checks' | 'working' | 'watching' | 'queued';
+  readonly kind: 'merging' | 'checks' | 'working' | 'watching' | 'queued' | 'picked_up';
   readonly text: string;
   /** The detail: session link, owner, who triggered it, the queued notice. */
   readonly tip: string;
@@ -285,6 +289,8 @@ export interface Activity {
 }
 
 const QUEUED_NOTICE_MINUTES = 10;
+/** How long a picked-up glob may sit untouched before the card says no session has started. */
+const PICKED_UP_IDLE_MINUTES = 10;
 
 /**
  * One activity label, by precedence: merging, then checks running or awaited on the PR head, then the routine run
@@ -331,7 +337,19 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
       spinning: running,
     };
   }
-  if (live === null) return null;
+  if (live === null) {
+    // Picked up, and nothing has touched the glob since: say so, with the way out.
+    const idle = Math.floor((Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000);
+    if (glob.status === 'in_progress' && glob.implementer !== null && glob.type !== 'super' && idle >= PICKED_UP_IDLE_MINUTES) {
+      return {
+        kind: 'picked_up',
+        text: 'Picked up, no session yet',
+        tip: `${glob.implementer} picked this up and no routine run is working on it. Hand to routine starts one.`,
+        spinning: false,
+      };
+    }
+    return null;
+  }
   if (live.state === 'active') {
     return { kind: 'working', text: 'Routine working', tip: runDetail.join('\n'), spinning: true };
   }
@@ -356,4 +374,35 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     ].join('\n'),
     spinning: false,
   };
+};
+
+/** "Blocked: 3 ahead, next: s15f38" for a glob with unmerged prerequisites; null when none. */
+export const blockedLine = (glob: GlobView): string | null => {
+  const ahead = glob.blockedBy ?? [];
+  if (ahead.length === 0) return null;
+  return chainSummary({ blockedBy: ahead, nextStartable: glob.nextStartable ?? null });
+};
+
+/** The chain for a tip, nearest first, each with its state: "s15f41 (Planning), s15f40 (Planning, 2 links away)". */
+export const chainTip = (glob: GlobView): string =>
+  (glob.blockedBy ?? [])
+    .map((b) => `${b.id} (${statusWords(b.status)}${b.depth > 1 ? `, ${String(b.depth)} links away` : ''})`)
+    .join(', ');
+
+const statusWords = (status: GlobView['status'] | null): string => {
+  switch (status) {
+    case null:
+      return 'deleted';
+    case 'planning':
+      return 'Planning';
+    case 'implementing':
+    case 'in_progress':
+      return 'Doing';
+    case 'failed':
+      return 'failed';
+    case 'pr_open':
+      return 'PR open';
+    default:
+      return status;
+  }
 };

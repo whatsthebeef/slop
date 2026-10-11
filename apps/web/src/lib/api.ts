@@ -1,6 +1,7 @@
 import type {
   Action,
   AwaitedDependency,
+  BlockedBy,
   AgentSetEntry,
   AgentSetFileView,
   Approval,
@@ -15,11 +16,9 @@ import type {
   Category,
   ChatCitation,
   ChatMessage,
-  CodeReviewBadge,
   Confidence,
   IntakeAccuracy,
   IntakeExample,
-  GlobCodeReview,
   DecisionView,
   Deploy,
   DeployIndicator,
@@ -45,8 +44,15 @@ import type {
   SearchHit,
   SizeCheck,
   SizeThresholdView,
+  SizeCalibrationView,
   SlopType,
+  RiskAreaView,
+  EscalationView,
+  TypeLearningView,
+  SubLimitChange,
   SubLimitView,
+  DependencyRulesView,
+  Edge,
   TargetChange,
 } from '@slop/core';
 import type { PageContext } from './page-context';
@@ -62,6 +68,11 @@ export interface GlobView extends Glob {
   /** What the glob still waits for, and the globs in Planning that wait for it (single-glob reads only). */
   readonly waitingFor?: readonly AwaitedDependency[];
   readonly waitedOnBy?: readonly string[];
+  /** Everything unmerged ahead of the glob, transitively (absent when nothing is), and the one to start next. */
+  /** Every dependency edge with its kind (needs block the start, overlaps only order merges), source and evidence; absent on an older server. */
+  readonly edges?: readonly Edge[];
+  readonly blockedBy?: readonly BlockedBy[];
+  readonly nextStartable?: string | null;
   /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
   readonly split?: { readonly source: string; readonly part: number; readonly parts: readonly string[] };
   /** True while the size check flagged the glob oversized and nobody has split it or kept it whole (the card's chip). */
@@ -141,7 +152,7 @@ export interface ArtifactView {
   readonly link: string | null;
   readonly commitSha: string | null;
   readonly createdAt: string;
-  readonly provenance: { readonly by: string; readonly actor: string };
+  readonly provenance: { readonly by: string; readonly actor: string; readonly validation?: string };
 }
 
 export interface ApiError {
@@ -157,6 +168,15 @@ export interface ApiError {
 }
 
 /** An ATF run as the API sends it; `id` is optional because an older server doesn't send it. */
+/** The sub-limit view; the step fields are optional so an older server's answer still renders. */
+export type SubLimitResponse = Omit<SubLimitView, 'bounds' | 'history'> & {
+  readonly bounds: Omit<SubLimitView['bounds'], 'startStep'> & { readonly startStep?: number };
+  readonly history: readonly (Omit<SubLimitChange, 'step'> & { readonly step?: number })[];
+};
+
+/** What intake learned about types; every field is optional so an older server's answer still renders. */
+export type TypeLearningResponse = Partial<TypeLearningView>;
+
 export type AtfRun = Omit<AtfIndicator, 'id'> & { readonly id?: number };
 
 export interface BoardDeploys {
@@ -293,6 +313,8 @@ export interface NewGlob {
   group: string | null;
   environment: string | null;
   autoTrigger: boolean;
+  /** Super only: false parks it in Planning until a person picks it up to pair. */
+  start?: boolean;
   /** IDs of globs on the board to start after. */
   after?: string[];
   /** Files intake guessed the work changes (sent back as given). */
@@ -315,6 +337,8 @@ export type IntakeProposalView = NewGlob & {
   suggestedAfter: string[];
   categoryConfidence: Confidence | null;
   categoryReason: string | null;
+  /** Why intake chose the type: when a person is needed. Optional: an older API sends none. */
+  typeReason?: string | null;
   examples: IntakeExample[];
   needsConfirmation: boolean;
   model: string | null;
@@ -329,12 +353,16 @@ export interface SplitPartInput {
   type?: SlopType;
   /** Indexes of earlier parts this one starts after. */
   after?: number[];
+  /** Indexes of earlier parts that may change the same files (merge order only). */
+  overlaps?: number[];
 }
 
 export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'after'>>;
 
 export type ActionPath =
   | 'start'
+  | 'investigate'
+  | 'review-now'
   | 'start-anyway'
   | 'retrigger'
   | 'retry-autofix'
@@ -344,6 +372,8 @@ export type ActionPath =
   | 'start-again'
   | 'merge'
   | 'retry-merge'
+  | 'deescalate'
+  | 'make-super'
   | 'merge-continue'
   | 'mark-ready';
 
@@ -458,12 +488,6 @@ export const api = {
   globEnvironments: (id: string) =>
     request<{ value: GlobEnvironment[] }>('GET', `/api/globs/${id}/environments`).then((r) => r.value),
   globTests: (id: string) => request<{ value: AtfRun[] }>('GET', `/api/globs/${id}/tests`).then((r) => r.value),
-  /** CodeRabbit's badge per glob (inline comment count and review link); globs with nothing stored are left out. */
-  boardCodeReviews: (boardId: number, globIds: readonly string[]) =>
-    request<{ value: Partial<Record<string, CodeReviewBadge>> }>(
-      'GET',
-      `/api/boards/${boardId}/code-reviews?globs=${globIds.map(encodeURIComponent).join(',')}`,
-    ).then((r) => r.value),
   searchBoard: (boardId: number, q: string, history: boolean) =>
     request<{ value: BoardSearchResult }>(
       'GET',
@@ -476,7 +500,6 @@ export const api = {
   saveChatAnswer: (boardId: number, chat: number, message: number, glob?: string) =>
     request<{ id: string }>('POST', `/api/boards/${boardId}/chats/${chat}/messages/${message}/save`, glob === undefined ? {} : { glob }),
   askChat: (boardId: number, input: ChatQuestion, stream?: ChatStream) => (stream === undefined ? request<ChatReply>('POST', `/api/boards/${boardId}/chat`, input) : askChatStream(boardId, input, stream)),
-  globCodeReview: (id: string) => request<{ value: GlobCodeReview }>('GET', `/api/globs/${id}/code-review`).then((r) => r.value),
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
   deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),
   createGlob: (boardId: number, input: NewGlob) =>
@@ -484,8 +507,8 @@ export const api = {
   updateGlob: (id: string, version: number, changes: GlobChanges) =>
     request<GlobView>('PATCH', `/api/globs/${id}`, { ...changes, version }),
   deleteGlob: (id: string, version: number) => request<object>('DELETE', `/api/globs/${id}`, { version }),
-  action: (id: string, action: ActionPath, version: number) =>
-    request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, { version }),
+  action: (id: string, action: ActionPath, version: number, anyway?: boolean) =>
+    request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, anyway === true ? { version, anyway } : { version }),
   intake: (boardId: number, text: string) =>
     request<IntakeProposalView>('POST', `/api/boards/${boardId}/intake`, { text }),
   intakeAccuracy: (boardId: number) => request<IntakeAccuracy>('GET', `/api/boards/${boardId}/intake-accuracy`),
@@ -522,9 +545,30 @@ export const api = {
   /** The board's signals as measured now: what an approval of a submitted item can watch (admins). */
   boardSignals: (boardId: number) => request<KbSignal[]>('GET', `/api/boards/${boardId}/kb/signals`),
   /** The board's learned sub size limit, its bounds and its history (members). */
-  subLimit: (boardId: number) => request<SubLimitView>('GET', `/api/boards/${boardId}/sub-limit`),
+  subLimit: (boardId: number) => request<SubLimitResponse>('GET', `/api/boards/${boardId}/sub-limit`),
+  /** The board's dependency rules (learned over catalog defaults) and their history (members). */
+  dependencyRules: (boardId: number) => request<DependencyRulesView>('GET', `/api/boards/${boardId}/dependency-rules`),
+  /** Drops what the board learned for one pattern, or for all of them (admins). */
+  resetDependencyRules: (boardId: number, pattern?: string) =>
+    request<null>('POST', `/api/boards/${boardId}/dependency-rules/reset`, pattern === undefined ? {} : { pattern }),
+  /** The board's risk areas (learned and default) and their history (members). */
+  riskAreas: (boardId: number) => request<RiskAreaView>('GET', `/api/boards/${boardId}/risk-areas`),
+  /** Drops the learned risk areas and restores the defaults (admins). */
+  resetRiskAreas: (boardId: number) => request<RiskAreaView>('POST', `/api/boards/${boardId}/risk-areas/reset`, {}),
+  /** What intake learned from people's retypes, or the catalog defaults (members). */
+  typeLearning: (boardId: number) => request<TypeLearningResponse>('GET', `/api/boards/${boardId}/type-learning`),
+  /** Forgets the board's type corrections: intake goes back to the defaults; the history stays (admins). */
+  resetTypeLearning: (boardId: number) => request<TypeLearningResponse>('POST', `/api/boards/${boardId}/type-learning/reset`, {}),
+  /** The board's escalation criteria (learned vs default) and the outcome history (members). */
+  escalations: (boardId: number) => request<EscalationView>('GET', `/api/boards/${boardId}/escalations`),
+  /** Puts the escalation criteria back to the defaults, keeping the history (admins). */
+  resetEscalations: (boardId: number) => request<EscalationView>('POST', `/api/boards/${boardId}/escalations/reset`, {}),
   /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
   sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
+  /** The size forecast's calibration: weights, per-area factors against the defaults, and the history with causes (members). */
+  sizeCalibration: (boardId: number) => request<SizeCalibrationView>('GET', `/api/boards/${boardId}/size-calibration`),
+  /** Admins: puts the size threshold back on the defaults (the history keeps the reset). */
+  resetSizeThreshold: (boardId: number) => request<SizeThresholdView>('POST', `/api/boards/${boardId}/size-threshold/reset`, {}),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */
   keepWhole: (id: string) => request<GlobView>('POST', `/api/globs/${id}/keep-whole`, {}),
   /** Whether the board has an active integration token (members); the secret is never returned here. */
@@ -574,6 +618,8 @@ export const api = {
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   start: 'start',
+  investigate: 'investigate',
+  review_now: 'review-now',
   start_anyway: 'start-anyway',
   pick_up: 'pick-up',
   take_over: 'take-over',
@@ -583,6 +629,8 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   start_again: 'start-again',
   merge: 'merge',
   retry_merge: 'retry-merge',
+  deescalate: 'deescalate',
+  make_super: 'make-super',
   merge_continue: 'merge-continue',
   mark_ready: 'mark-ready',
   delete: null,
@@ -590,8 +638,10 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
 
 export const ACTION_LABELS: Record<Action, string> = {
   start: 'Start',
+  investigate: 'Investigate',
+  review_now: 'Review now',
   start_anyway: 'Start anyway',
-  pick_up: 'Pick up',
+  pick_up: "Pick up (I'll do it)",
   take_over: 'Take over',
   retrigger: 'Re-trigger',
   retry_autofix: 'Retry auto-fix',
@@ -599,6 +649,8 @@ export const ACTION_LABELS: Record<Action, string> = {
   start_again: 'Start again',
   merge: 'Merge',
   retry_merge: 'Retry merge',
+  deescalate: 'Make it a sub again',
+  make_super: 'Make it a super',
   merge_continue: 'Merge and continue',
   mark_ready: 'Ready for review',
   delete: 'Delete',

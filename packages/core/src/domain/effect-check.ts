@@ -1,3 +1,4 @@
+import { isInvestigateEvent } from './events.js';
 import type { KbOutcome } from './kb.js';
 import { isAgentSetKind } from './knowledge.js';
 import {
@@ -158,7 +159,7 @@ export const effectGlobs = (activity: BoardActivity): EffectGlob[] => {
       merged.set(e.globId, later(merged.get(e.globId) ?? null, e.at));
       firstMerged.set(e.globId, earlier(firstMerged.get(e.globId) ?? null, e.at));
     }
-    if (e.type === 'RunTriggered' || e.type === 'PickedUp')
+    if ((e.type === 'RunTriggered' && !isInvestigateEvent(e)) || e.type === 'PickedUp')
       firstWork.set(e.globId, earlier(firstWork.get(e.globId) ?? null, e.at));
   }
   for (const a of activity.artifacts)

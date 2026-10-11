@@ -1,11 +1,12 @@
-import type { Action, ArtifactKind, Category, CodeReviewBadge, DeployIndicator, EnvironmentIndicator } from '@slop/core';
-import { Bot, Bug, ListChecks, Loader2, MessageSquareCode, Sparkles } from 'lucide-react';
+import { findingsLabel, reviewOutdated } from '@slop/core';
+import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
+import { Bot, Bug, ListChecks, Loader2, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
-import { activityLabel, statusLine } from '@/lib/status-line';
+import { activityLabel, blockedLine, chainTip, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { actionTiers } from '@/lib/action-style';
@@ -14,7 +15,7 @@ import { LabelPopover } from './labels';
 import type { ReviewLabel } from './labels';
 
 /** The glob's category as a small icon in the card's corner. */
-const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> = {
+export const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> = {
   bug: { icon: Bug, className: 'text-red' },
   feature: { icon: Sparkles, className: 'text-muted-foreground' },
   task: { icon: ListChecks, className: 'text-muted-foreground' },
@@ -112,11 +113,13 @@ const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (kind: Artifa
     <span className='inline-flex items-center gap-0.5'>
       {present.map((a) => {
         const { title, icon: Icon } = ARTIFACT_META[a.kind];
+        // An independent review shows its finding count, and says so when a later push left it behind.
+        const status = a.review === undefined ? null : `${findingsLabel(a.review.findings)}${reviewOutdated(a.review, glob.pr?.headSha ?? null) ? ' (outdated)' : ''}`;
         return (
-          <Tip key={a.kind} text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}`}>
+          <Tip key={a.kind} text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}${status === null ? '' : `: ${status}`}`}>
           <button
             type='button'
-            className='rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
+            className='inline-flex items-center rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
             aria-label={title}
             data-testid={`artifact-icon-${a.kind}`}
             onClick={(e) => {
@@ -126,6 +129,7 @@ const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (kind: Artifa
             onKeyDown={(e) => e.stopPropagation()}
           >
             <Icon className='h-3.5 w-3.5' />
+            {status !== null && <span className='ml-0.5 font-mono text-[10px]' data-testid='review-status'>{status}</span>}
           </button>
           </Tip>
         );
@@ -277,46 +281,27 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
   );
 };
 
-/** CodeRabbit's review of the PR: its inline comment count, opening the review on GitHub. */
-export const CodeReviewIcon = ({ badge }: { badge: CodeReviewBadge }) => {
-  const comments = `${badge.count} inline comment${badge.count === 1 ? '' : 's'}`;
-  const icon = (
-    <span className='inline-flex items-center gap-0.5 font-mono text-[11px] text-muted-foreground' data-testid='code-review-icon'>
-      <MessageSquareCode className='h-3.5 w-3.5' aria-hidden />
-      {badge.count}
-    </span>
-  );
-  return (
-    <Tip text={`CodeRabbit: ${comments}${badge.url === null ? '' : '; open the review on GitHub'}`}>
-      {badge.url === null ? (
-        icon
-      ) : (
-        <a
-          href={badge.url}
-          target='_blank'
-          rel='noreferrer'
-          aria-label={`CodeRabbit review: ${comments}`}
-          className='rounded-sm px-0.5 hover:bg-muted hover:text-foreground'
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          {icon}
-        </a>
-      )}
-    </Tip>
-  );
-};
-
 /**
  * A glob held for others to merge: "waits for s15t7", or the reason when the board's merge policy held it. Each ID opens
  * that glob on the board.
  */
 export const AfterChip = ({ glob }: { glob: GlobView }) => {
+  const blocked = blockedLine(glob);
+  if (blocked !== null) {
+    return (
+      <Tip text={`Waits for, in order: ${chainTip(glob)}`}>
+        <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
+          {blocked}
+        </span>
+      </Tip>
+    );
+  }
   if (glob.status !== 'planning') return null;
-  const implied = (glob.impliedAfter ?? []).filter((i) => i.overridden !== true);
-  const ids = [...new Set([...(glob.after ?? []), ...implied.map((i) => i.id)])];
+  // Only needs hold a glob: explicit `after` and needs slop learned from a failed run. Overlaps show in OverlapChip.
+  const learned = (glob.impliedAfter ?? []).filter((i) => i.overridden !== true && i.kind === 'needs');
+  const ids = [...new Set([...(glob.after ?? []), ...learned.map((i) => i.id)])];
   if (ids.length === 0) return null;
-  const reason = implied.map((i) => `${i.id}: both may change ${i.paths.join(', ')}`).join('; ');
+  const reason = learned.map((i) => `${i.id}: ${i.evidence ?? 'a run failed without it'}`).join('; ');
   return (
     <Tip text={reason === '' ? `Waits for ${ids.join(', ')} to merge` : `Waits for ${reason}`}>
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
@@ -331,6 +316,36 @@ export const AfterChip = ({ glob }: { glob: GlobView }) => {
               onKeyDown={(e) => e.stopPropagation()}
             >
               {id}
+            </Link>
+          </span>
+        ))}
+      </span>
+    </Tip>
+  );
+};
+
+/**
+ * Globs that may change the same files as this one (predicted from the board's merge policy, or set by a person): a note
+ * that the later merge rebases, never a hold. Each ID opens that glob on the board.
+ */
+export const OverlapChip = ({ glob }: { glob: GlobView }) => {
+  const overlaps = (glob.impliedAfter ?? []).filter((i) => (i.kind ?? 'overlaps') === 'overlaps' && i.overridden !== true);
+  if (overlaps.length === 0 || glob.status === 'reviewing' || glob.status === 'signed_off') return null;
+  const reason = overlaps.map((i) => (i.paths.length === 0 ? i.id : `${i.id}: both may change ${i.paths.join(', ')}`)).join('; ');
+  return (
+    <Tip text={`Overlaps ${reason}. Only the merge order matters: the later one rebases on main`}>
+      <span className='font-mono text-[11px] text-muted-foreground' data-testid='overlap-chip'>
+        overlaps{' '}
+        {overlaps.map((o, i) => (
+          <span key={o.id}>
+            {i > 0 && ', '}
+            <Link
+              to={`/boards/${glob.boardId}?glob=${encodeURIComponent(o.id)}`}
+              className='underline-offset-2 hover:underline'
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              {o.id}
             </Link>
           </span>
         ))}
@@ -396,7 +411,6 @@ export const GlobCard = ({
   deploy,
   environments,
   atf,
-  codeReview,
 }: {
   glob: GlobView;
   onOpen: () => void;
@@ -421,8 +435,6 @@ export const GlobCard = ({
   environments?: readonly EnvironmentIndicator[];
   /** Its ATF results (a flag only). */
   atf?: readonly AtfRun[];
-  /** CodeRabbit's review of its PR, when CodeRabbit has posted anything. */
-  codeReview?: CodeReviewBadge;
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
@@ -467,6 +479,7 @@ export const GlobCard = ({
       <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground'>
         <span>
           {glob.id} · {glob.type}
+          {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
         </span>
         <span className='inline-flex items-center gap-1.5'>
           <ActivityLabel glob={glob} />
@@ -479,8 +492,16 @@ export const GlobCard = ({
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />
         <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
         <AfterChip glob={glob} />
+        <OverlapChip glob={glob} />
         <SplitChip glob={glob} />
         <OversizedChip glob={glob} />
+        {glob.escalation != null && (
+          <Tip text={`Needs a human: ${glob.escalation.reason}`}>
+            <span className='font-mono text-[11px] text-required' data-testid='escalation-chip'>
+              needs a human
+            </span>
+          </Tip>
+        )}
         {glob.clash != null && (
           <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict`}>
             <span className='font-mono text-[11px] text-required' data-testid='clash-chip'>
@@ -488,7 +509,6 @@ export const GlobCard = ({
             </span>
           </Tip>
         )}
-        {codeReview !== undefined && <CodeReviewIcon badge={codeReview} />}
         {deploy !== undefined && <DeployChip deploy={deploy} />}
         {environments !== undefined && <EnvironmentChips environments={environments} />}
         {atf !== undefined && <AtfChip runs={atf} />}
