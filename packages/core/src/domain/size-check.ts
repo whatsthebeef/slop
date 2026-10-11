@@ -1,6 +1,9 @@
+import { isInvestigateEvent } from './events.js';
 import type { DomainEvent } from './events.js';
 import { contextSectionList, extractPlanFeatures } from './intake-learning.js';
 import type { Area, GlobOutcome } from './intake-learning.js';
+import { forecastEvidence, forecastReasons } from './size-forecast.js';
+import type { SizeForecast } from './size-forecast.js';
 
 /**
  * The learned size check (spec, Intake): intake judges whether a glob is one PR's worth of work. A glob whose estimate
@@ -113,6 +116,8 @@ export interface SizeEstimate {
   readonly parallelParts?: number | null;
   /** The model's one-line reason for its count; null for the text estimate. */
   readonly reasoning: string | null;
+  /** The forecast from the code and from similar merged globs, once made (it takes over the flag and the proposal). */
+  readonly forecast?: SizeForecast;
 }
 
 /** Without the model: about three tasks to a part. Sections with no task are context, never parts. */
@@ -146,6 +151,8 @@ export const withModelParts = (estimate: SizeEstimate, parts: number, reasoning:
  * least 2 parts that could be built at the same time does (a long serial plan stays whole), and only the model can tell.
  */
 export const oversizedReasons = (estimate: SizeEstimate, threshold: SizeThreshold): string[] => {
+  // The forecast (from the code) judges the parts and what can run at once itself.
+  if (estimate.forecast !== undefined) return forecastReasons(estimate.forecast, threshold);
   const parallel = estimate.parallelParts ?? null;
   if (parallel === null || parallel < 2) return [];
   const big = [
@@ -157,8 +164,16 @@ export const oversizedReasons = (estimate: SizeEstimate, threshold: SizeThreshol
   return big.length === 0 ? [] : [...big, `${parallel} parts could be built at the same time`];
 };
 
+/**
+ * Whether slop investigates a glob in Planning by itself: intake flagged it big, or its part count is a guess (the text
+ * estimate stands because the model didn't answer) for a plan with more than one task. A one-task plan is plainly small.
+ */
+export const needsInvestigation = (check: { readonly flagged: boolean; readonly estimate: SizeEstimate } | null): boolean =>
+  check !== null && (check.flagged || (check.estimate.partsSource === 'text' && check.estimate.tasks > 1));
+
 /** The evidence stored with an estimate. */
 export const evidenceOf = (estimate: SizeEstimate): string[] => [
+  ...(estimate.forecast === undefined ? [] : forecastEvidence(estimate.forecast)),
   `${estimate.tasks} tasks, ${estimate.doneWhenLines} "Done when" lines`,
   `Areas: ${estimate.areas.length === 0 ? 'none found' : estimate.areas.join(', ')}`,
   `${estimate.untaskedSections} sections with no task`,
@@ -449,7 +464,7 @@ export const prHoursOf = (events: readonly DomainEvent[]): number | null => {
 
 /** Whether a `GlobSplit` event came after the glob's first run (or pick-up). */
 export const splitAfterStartOf = (events: readonly DomainEvent[]): boolean => {
-  const started = events.find((e) => e.type === 'RunTriggered' || e.type === 'PickedUp');
+  const started = events.find((e) => (e.type === 'RunTriggered' && !isInvestigateEvent(e)) || e.type === 'PickedUp');
   return started !== undefined && events.some((e) => e.type === 'GlobSplit' && e.at > started.at);
 };
 

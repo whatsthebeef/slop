@@ -31,7 +31,7 @@ const ADMIN = 'admin@example.com';
 const DEV = 'dev@example.com';
 const OUTSIDER = 'outsider@example.com';
 const NOW = '2026-10-11T12:00:00.000Z';
-const MIGRATION = '0043_type_corrections';
+const MIGRATION = '0045_type_corrections';
 const PLAN =
   '## Open questions\n- Which store holds it?\n\nTouches apps/server/src/auth/session.ts.';
 

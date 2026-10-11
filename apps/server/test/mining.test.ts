@@ -427,6 +427,7 @@ describe('Manifest changes and commit trailers', () => {
     subLimitStep: 500,
     effectCheckGlobs: 10,
     agentKbApproval: 'docs',
+    autoInvestigate: true,
     version: 1,
   };
 

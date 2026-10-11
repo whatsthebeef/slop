@@ -19,7 +19,7 @@ import type { DependencyLearningService } from './dependency-learning-service.js
 import { embedRequest, snapshotOf } from './intake-learning-service.js';
 import { checkFrom } from './size-check-service.js';
 import type { SizeAssessor } from './size-check-service.js';
-import { unresolved } from '../domain/size-check.js';
+import { needsInvestigation, unresolved } from '../domain/size-check.js';
 import type { SizeCheck } from '../domain/size-check.js';
 
 export interface GlobServiceDeps {
@@ -346,8 +346,36 @@ export class GlobService {
       return ok({ ...transition.value, glob, changed: true });
     });
     if (!result.ok) return result;
-    if (result.value.changed) this.publish(result.value.glob);
+    if (result.value.changed) {
+      this.publish(result.value.glob);
+      // The forecast from the code and history is made in the background: creating a glob never waits on it.
+      if (result.value.glob.status === 'planning') this.refreshSizeInBackground(result.value.glob.id);
+      // The caller's first write carries the version it got back, so it must be the one after the automatic run.
+      return ok((await this.autoInvestigate(result.value.glob.id)) ?? result.value.glob);
+    }
     return ok(result.value.glob);
+  }
+
+  /**
+   * A glob in Planning that intake flagged big (or whose size estimate is a guess) gets one investigate-only run, when the
+   * board allows it (`autoInvestigate`). Once per glob: a person's Investigate or an earlier automatic run counts. Best
+   * effort: it never fails the write that prompted it.
+   */
+  async autoInvestigate(id: string): Promise<Glob | null> {
+    try {
+      const wanted = await this.deps.store.transaction(async (tx) => {
+        const glob = await tx.getGlob(id);
+        if (glob === null || !machine.canInvestigate(glob) || glob.runs.some((r) => r.purpose === 'investigate')) return false;
+        const board = await tx.getBoard(glob.boardId);
+        return board !== null && board.autoInvestigate && needsInvestigation(await tx.getSizeCheck(id));
+      });
+      if (!wanted) return null;
+      const result = await this.command(null, id, null, (glob, ctx) => machine.investigate(glob, ctx, true));
+      return result.ok ? result.value : null;
+    } catch (e) {
+      this.deps.log?.('auto investigate', e instanceof Error ? e.message : String(e));
+      return null;
+    }
   }
 
   /**
@@ -391,7 +419,7 @@ export class GlobService {
       if (original.version !== version) {
         return err({ code: 'version_conflict', message: 'The glob has changed', current: original });
       }
-      if (original.status !== 'planning' || original.provisioning !== 'none' || original.runs.length > 0 || original.pr !== null) {
+      if (original.status !== 'planning' || original.provisioning !== 'none' || original.runs.some((r) => r.purpose !== 'investigate') || original.pr !== null) {
         return invalidInput(`${id} has started, so it can no longer be split: finish it and create the rest as follow-ups`);
       }
       const board = await tx.getBoard(original.boardId);
@@ -622,6 +650,11 @@ export class GlobService {
     return result.ok ? ok({ glob: result.value, warning }) : result;
   }
 
+  /** Investigate: an investigate-only routine run on a glob in Planning (refused while any run is live). */
+  investigate(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.investigate(glob, ctx));
+  }
+
   retryAutofix(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx) => machine.retryAutofix(glob, ctx));
   }
@@ -773,6 +806,15 @@ export class GlobService {
     return released;
   }
 
+  /** The background size refresh: never awaited, and a rejection (or a throw) is logged, never unhandled. */
+  private refreshSizeInBackground(id: string): void {
+    const check = this.deps.sizeCheck;
+    if (check === undefined) return;
+    void Promise.resolve()
+      .then(() => check.refresh(id))
+      .catch((e: unknown) => this.deps.log?.('size check refresh', e instanceof Error ? e.message : String(e)));
+  }
+
   /**
    * After a size check was re-judged (its plan was saved): a sub held in Planning for the flag starts once the check no
    * longer holds it. A newly flagged sub needs nothing here: `release` refuses an unanswered flag, and a sub in Planning
@@ -784,6 +826,8 @@ export class GlobService {
       return glob !== null && glob.status === 'planning' && glob.type === 'sub' && glob.waiting != null && !unresolved(await tx.getSizeCheck(id));
     });
     if (lift) await this.release(id);
+    // The plan was re-judged: a glob that now looks big is investigated (a no-op when it already was).
+    await this.autoInvestigate(id);
   }
 
   /**

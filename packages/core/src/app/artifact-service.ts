@@ -14,6 +14,7 @@ import { memberOf } from './access.js';
 import type { InvestigationReactor } from './investigation-service.js';
 import type { SizeAssessor } from './size-check-service.js';
 import type { SizeCheck } from '../domain/size-check.js';
+import type { SizeForecast } from '../domain/size-forecast.js';
 
 export interface GlobContext {
   readonly glob: Pick<Glob, 'id' | 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'status'>;
@@ -41,6 +42,12 @@ export interface GlobContext {
    * `INBOX_CONTEXT_CHARS` (`truncated` beyond it; `search_text` finds the rest).
    */
   readonly inbox: readonly InboxContextItem[];
+  /**
+   * The glob's latest investigation, when it has one: what the orchestrator needs to decide reuse vs refresh without fetching
+   * it (the plan hash and base commit it was made against, and the files it expects to change). Fetch the text with
+   * `get_artifact(id, 'investigation')`.
+   */
+  readonly investigation?: InvestigationSummary;
   /** Which source wins when sources disagree (the spec's order of authority). */
   readonly authority: string;
   /** Present when intake judged the glob: the oversized flag, its reasons and the proposed split (apply it with split_glob). */
@@ -56,7 +63,26 @@ export interface SizeContext {
   readonly decision: SizeCheck['decision'];
   /** Parts in the shape split_glob takes (part 0 is this glob; `after` holds earlier part indexes). */
   readonly proposal: SizeCheck['proposal'];
+  /** Present once the code forecast was made: predicted files and parts; confirm or correct. */
+  readonly forecast?: SizeForecastContext;
 }
+
+/** The forecast as the investigator receives it: its starting point, to confirm or correct in the investigation. */
+export interface SizeForecastContext {
+  readonly note: string;
+  readonly files: readonly string[];
+  readonly modules: readonly string[];
+  readonly parts: SizeForecast['parts'];
+  readonly expectedLines: SizeForecast['lines'];
+  readonly riskTier: SizeForecast['riskTier'];
+  readonly riskAreas: readonly string[];
+  readonly migration: boolean;
+  readonly publicApi: boolean;
+  readonly confidence: SizeForecast['confidence'];
+  readonly history: string | null;
+}
+
+export const FORECAST_NOTE = 'predicted files and parts; confirm or correct';
 
 const sizeContext = (check: SizeCheck): SizeContext => ({
   oversized: check.flagged,
@@ -64,7 +90,54 @@ const sizeContext = (check: SizeCheck): SizeContext => ({
   evidence: check.evidence,
   decision: check.decision,
   proposal: check.proposal,
+  ...(check.estimate.forecast === undefined ? {} : { forecast: forecastContext(check.estimate.forecast) }),
 });
+
+const forecastContext = (f: SizeForecast): SizeForecastContext => ({
+  note: FORECAST_NOTE,
+  files: f.files.paths,
+  modules: f.modules,
+  parts: f.parts,
+  expectedLines: f.lines,
+  riskTier: f.riskTier,
+  riskAreas: f.riskAreas,
+  migration: f.migration,
+  publicApi: f.publicApi,
+  confidence: f.confidence,
+  history: f.reference?.summary ?? null,
+});
+
+export interface InvestigationSummary {
+  readonly version: number;
+  readonly createdAt: string;
+  /** The run that made it (null for a person's push). */
+  readonly runId: string | null;
+  /** Set when the block did not validate: the text is kept but there is nothing to compare, so refresh. */
+  readonly validation: string | null;
+  readonly planHash: string | null;
+  readonly baseCommit: string | null;
+  /** Paths the investigation expects to create, modify or delete (the relevant files to check the base for changes). */
+  readonly files: readonly string[];
+  readonly riskTier: string | null;
+  readonly confidence: string | null;
+  readonly needsHuman: boolean | null;
+}
+
+const investigationSummary = (a: Artifact): InvestigationSummary => {
+  const parsed = parseInvestigation(a.content);
+  return {
+    version: a.version,
+    createdAt: a.createdAt,
+    runId: a.provenance.runId,
+    validation: a.provenance.validation ?? null,
+    planHash: parsed.ok ? parsed.investigation.planHash : null,
+    baseCommit: parsed.ok ? parsed.investigation.baseCommit : null,
+    files: parsed.ok ? parsed.investigation.files.map((f) => f.path) : [],
+    riskTier: parsed.ok ? parsed.investigation.riskTier : null,
+    confidence: parsed.ok ? parsed.investigation.confidence : null,
+    needsHuman: parsed.ok ? parsed.investigation.needsHuman.needed : null,
+  };
+};
 
 export interface InboxContextItem {
   readonly id: number;
@@ -322,6 +395,7 @@ export class ArtifactService {
       const latest = (kind: ArtifactKind) => artifacts.find((a) => a.kind === kind) ?? null;
       const plan = latest('plan');
       const record = latest('implementation_plan');
+      const investigation = latest('investigation');
       // listArtifacts returns the latest version of each (kind, label).
       const full = (a: Artifact) =>
         (a.kind === 'attachment' && INLINE_LABELS.has(a.label.toLowerCase())) || wanted(include, a);
@@ -381,6 +455,7 @@ export class ArtifactService {
           })),
         ],
         ...(related === undefined ? {} : { related }),
+        ...(investigation === null ? {} : { investigation: investigationSummary(investigation) }),
         decisions,
         inbox,
         authority: AUTHORITY_STATEMENT,

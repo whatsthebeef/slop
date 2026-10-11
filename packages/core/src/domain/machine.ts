@@ -36,6 +36,7 @@ import type {
   Role,
   Run,
   RunOutcome,
+  RunPurpose,
   SlopType,
   Status,
 } from './types.js';
@@ -58,6 +59,8 @@ export interface Transition {
 
 export type Action =
   | 'start'
+  /** A glob in Planning: a routine run does the orchestrator's Phases 1–2 only and pushes the investigation; no branch, no commits. */
+  | 'investigate'
   /** A glob held for another glob to merge starts now, before it has. */
   | 'start_anyway'
   | 'pick_up'
@@ -133,10 +136,13 @@ export const squashTitle = (glob: Glob): string =>
 
 export const currentRun = (glob: Glob): Run | null => glob.runs.at(-1) ?? null;
 
-/** A run that has called slop and not ended: pick-up is refused while one exists. */
+/**
+ * A run that has called slop and not ended: pick-up is refused while one exists. An investigate-only run doesn't count:
+ * picking the glob up supersedes it.
+ */
 export const hasBusyRun = (glob: Glob): boolean => {
   const run = currentRun(glob);
-  return run !== null && (run.state === 'active' || run.state === 'watching');
+  return run !== null && run.purpose !== 'investigate' && (run.state === 'active' || run.state === 'watching');
 };
 
 /** Any run that has not ended, including one still queued. */
@@ -217,9 +223,10 @@ class Builder {
     if (run === null || run.state === 'ended') return this;
     const ended: Run = { ...run, state: 'ended', outcome, endedAt: this.ctx.now, failureReason };
     this.set({ runs: [...this.glob.runs.slice(0, -1), ended] });
+    const purpose: { readonly [key: string]: JsonValue } = run.purpose === undefined ? {} : { purpose: run.purpose };
     return outcome === 'failed'
-      ? this.event('RunFailed', { ...detail, runId: run.id, reason: failureReason })
-      : this.event('RunEnded', { ...detail, runId: run.id, outcome });
+      ? this.event('RunFailed', { ...detail, ...purpose, runId: run.id, reason: failureReason })
+      : this.event('RunEnded', { ...detail, ...purpose, runId: run.id, outcome });
   }
 
   updateRun(patch: Partial<Run>): this {
@@ -229,7 +236,15 @@ class Builder {
   }
 
   /** Queues a new routine run for whoever triggered it. */
-  queueRun(triggeredBy: string, retry?: { readonly failureSummary: string | null }, checkPrerequisites = false): this {
+  queueRun(
+    triggeredBy: string,
+    retry?: { readonly failureSummary: string | null },
+    checkPrerequisites = false,
+    purpose?: RunPurpose,
+  ): this {
+    // Starting the glob supersedes an investigation still in flight: its result would only duplicate Phase 2.
+    const live = currentRun(this.glob);
+    if (purpose === undefined && live?.purpose === 'investigate') this.endRun('superseded', null, { cause: 'started' });
     const run: Run = {
       id: this.ctx.newRunId(),
       state: 'queued',
@@ -245,6 +260,7 @@ class Builder {
       sessionId: null,
       sessionUrl: null,
       ...(retry === undefined ? {} : { autoRetry: true as const }),
+      ...(purpose === undefined ? {} : { purpose }),
     };
     this.set({ runs: [...this.glob.runs, run] });
     this.event('RunTriggered', {
@@ -252,6 +268,7 @@ class Builder {
       triggeredBy,
       routineOwner: run.routineOwner,
       ...(retry === undefined ? {} : { automatic: true }),
+      ...(purpose === undefined ? {} : { purpose }),
     });
     return this.effect({
       kind: 'fire_routine',
@@ -261,6 +278,7 @@ class Builder {
       routineOwner: run.routineOwner,
       ...(retry?.failureSummary == null ? {} : { failureSummary: retry.failureSummary }),
       ...(checkPrerequisites ? { checkPrerequisites: true as const } : {}),
+      ...(purpose === undefined ? {} : { purpose }),
     });
   }
 
@@ -438,6 +456,36 @@ export const start = (
   // Overlaps the policy predicted never hold the start; they stay on the glob as a note and order the merges.
   const overlaps = newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) };
   return new Builder(glob, ctx).set({ waiting: null, ...overlaps }).status('implementing').queueRun(actor.email, undefined, true).done();
+};
+
+/** Whether an investigate-only run can be started on the glob now: in Planning, not a super, nothing live. */
+export const canInvestigate = (glob: Glob): boolean => glob.status === 'planning' && glob.type !== 'super' && !hasLiveRun(glob);
+
+/**
+ * Row 5a: Investigate. A glob in Planning gets a routine run that does the orchestrator's Phases 1–2 only and pushes the
+ * investigation. The glob stays in Planning with no branch or PR (nothing is committed), and starting it later reuses the
+ * investigation when its plan hash and relevant files are unchanged. A person's choice, or slop's own when intake flagged the
+ * glob big (`automatic`: the triggering person is the glob's creator).
+ */
+export const investigate = (glob: Glob, ctx: Context, automatic = false): Result<Transition> => {
+  const actor = automatic ? null : requireActor(ctx);
+  if (glob.status !== 'planning' || glob.type === 'super') {
+    return invalidTransition(glob, actor, 'Only a sub or same in planning can be investigated');
+  }
+  if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+  if (actor !== null && restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot investigate ${glob.type}s`);
+  const triggeredBy = actor?.email ?? glob.creator;
+  return new Builder(glob, ctx).queueRun(triggeredBy, undefined, false, 'investigate').done();
+};
+
+/**
+ * A routine's investigation was stored (and its block validated): ends an investigate-only run. A run that implements the
+ * glob keeps going; so does a superseded one, which `runId` no longer matches.
+ */
+export const investigationPushed = (glob: Glob, runId: string, ctx: Context): Result<Transition> => {
+  const run = currentRun(glob);
+  if (run === null || run.id !== runId || run.state === 'ended' || run.purpose !== 'investigate') return unchanged(glob);
+  return new Builder(glob, ctx).endRun('completed').done();
 };
 
 /**
@@ -1164,6 +1212,8 @@ export const provisioningFailed = (glob: Glob, reason: string, ctx: Context, fin
   return b.done();
 };
 
+const isStartPush = (glob: Glob, push: { message?: string | null }): boolean => push.message?.trim() === `${glob.id}: start`;
+
 /** A push to the glob branch: records the new head; results for older commits stop counting. */
 export const commitPushed = (
   glob: Glob,
@@ -1194,6 +1244,10 @@ export const commitPushed = (
   if (!recovers && (glob.status === 'pr_open' || glob.status === 'merging')) {
     b.set({ headChecks: null }).effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
   }
+  // A push while the PR is ready (before the developer merges) is reviewed again; the older commit's review is cancelled.
+  if (glob.type !== 'sub' && glob.pr?.state === 'ready' && (glob.status === 'pr_open' || recovers) && !superseded && !isStartPush(glob, push)) {
+    b.effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage: 'pre_merge', sha: push.sha });
+  }
   // A push may have fixed a flagged conflict (or not): look again.
   if (glob.conflict != null && glob.pr !== null) {
     b.effect({ kind: 'check_conflict', globId: glob.id, generation: glob.generation, since: null });
@@ -1209,7 +1263,7 @@ export const commitPushed = (
   }
   // Each push deploys exactly that commit to the glob's environment; not a superseded run's push,
   // nor the empty `<id>: start` commit slop creates the branch with.
-  const isStart = push.message?.trim() === `${glob.id}: start`;
+  const isStart = isStartPush(glob, push);
   if (glob.environment !== null && !superseded && !isStart && listOf(glob.status) === 'doing') {
     b.effect({ kind: 'request_deploy', globId: glob.id, generation: glob.generation, sha: push.sha });
   }
@@ -1290,7 +1344,7 @@ export const runFired = (
   if (run === null || run.id !== fired.runId || run.state === 'ended') return unchanged(glob);
   return new Builder(glob, ctx)
     .updateRun({ sessionId: fired.sessionId ?? run.sessionId, sessionUrl: fired.sessionUrl ?? run.sessionUrl })
-    .event('RunTriggered', { runId: run.id, fired: true, sessionUrl: fired.sessionUrl })
+    .event('RunTriggered', { runId: run.id, fired: true, sessionUrl: fired.sessionUrl, ...(run.purpose === undefined ? {} : { purpose: run.purpose }) })
     .done();
 };
 
@@ -1362,6 +1416,8 @@ export const runTimeoutReason = (
   if (hours(lastProgress) >= board.runNoProgressHours) {
     return `No progress for ${String(board.runNoProgressHours)} hours`;
   }
+  // An investigate-only run never marks a PR ready.
+  if (run.purpose === 'investigate') return null;
   if (hours(run.startedAt ?? run.queuedAt) >= board.runReadyHours) {
     return `PR not marked ready within ${String(board.runReadyHours)} hours`;
   }
@@ -1401,6 +1457,8 @@ export const prReadyForReview = (
   b.status('pr_open').effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
   // A sub doesn't wait for the PR's checks: the board's policy decides at once, and the checks run on the base after it merges.
   if (glob.type === 'sub') b.effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha: pr.headSha });
+  // A same or super is reviewed as it would apply to the latest main; a sub is reviewed after it merges.
+  else b.effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage: 'pre_merge', sha: pr.headSha });
   return b.done();
 };
 
@@ -1726,7 +1784,7 @@ export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx:
       .effect({ kind: 'flag_conflicts', globId: glob.id, generation: glob.generation })
       .done();
   }
-  return new Builder(glob, ctx)
+  const b = new Builder(glob, ctx)
     .endRun('completed')
     .set({
       labels: requiredLabels(glob.type),
@@ -1740,8 +1798,10 @@ export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx:
     .status('reviewing')
     .effect({ kind: 'flag_conflicts', globId: glob.id, generation: glob.generation })
     // Only the final merge releases the globs waiting for this one (a Merge and continue leaves it open).
-    .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation })
-    .done();
+    .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation });
+  // A sub merges without human review, so its one review runs after the merge (a same or super was reviewed before it).
+  if (glob.type === 'sub') b.effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage: 'post_merge', sha: merge.sha });
+  return b.done();
 };
 
 /** Row 16: slop's own merge failed (conflict, or checks failed after updating the branch). */
@@ -1823,6 +1883,10 @@ export const reportFailure = (
       .event('RunFailed', { runId: report.runId, reason: report.reason, ignored: true, agentSetVersion })
       .done();
   }
+  if (glob.status === 'planning' && run.purpose === 'investigate') {
+    // An investigate-only run failed: the glob stays in Planning (nothing was started) and the run's history says why.
+    return new Builder(glob, ctx).endRun('failed', report.reason, { agentSetVersion }).done();
+  }
   if (glob.status === 'implementing') {
     // Row 17.
     return new Builder(glob, ctx)
@@ -1871,6 +1935,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     (facts.sizeHeld === true ||
       (facts.dependencies === undefined ? glob.waiting != null : waitingFor(glob, facts.dependencies).length > 0));
   if (glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
+  if (!restricted && canInvestigate(glob)) actions.push('investigate');
   if (held && !restricted) actions.push('start_anyway');
   // Hand to routine: picked up, but no session has started and no run is live.
   if (!restricted && glob.status === 'in_progress' && glob.type !== 'super' && glob.implementer !== null && !hasLiveRun(glob)) {

@@ -44,6 +44,7 @@ import type {
   SearchHit,
   SizeCheck,
   SizeThresholdView,
+  SizeCalibrationView,
   SlopType,
   RiskAreaView,
   EscalationView,
@@ -360,6 +361,7 @@ export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'cat
 
 export type ActionPath =
   | 'start'
+  | 'investigate'
   | 'start-anyway'
   | 'retrigger'
   | 'retry-autofix'
@@ -562,6 +564,8 @@ export const api = {
   resetEscalations: (boardId: number) => request<EscalationView>('POST', `/api/boards/${boardId}/escalations/reset`, {}),
   /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
   sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
+  /** The size forecast's calibration: weights, per-area factors against the defaults, and the history with causes (members). */
+  sizeCalibration: (boardId: number) => request<SizeCalibrationView>('GET', `/api/boards/${boardId}/size-calibration`),
   /** Admins: puts the size threshold back on the defaults (the history keeps the reset). */
   resetSizeThreshold: (boardId: number) => request<SizeThresholdView>('POST', `/api/boards/${boardId}/size-threshold/reset`, {}),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */
@@ -613,6 +617,7 @@ export const api = {
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   start: 'start',
+  investigate: 'investigate',
   start_anyway: 'start-anyway',
   pick_up: 'pick-up',
   take_over: 'take-over',
@@ -631,6 +636,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
 
 export const ACTION_LABELS: Record<Action, string> = {
   start: 'Start',
+  investigate: 'Investigate',
   start_anyway: 'Start anyway',
   pick_up: "Pick up (I'll do it)",
   take_over: 'Take over',

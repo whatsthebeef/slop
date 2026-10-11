@@ -99,6 +99,12 @@ const taskLineFlags = (plan: string): boolean[] => {
   return flags;
 };
 
+/** The plan's task lines (checkboxes anywhere, list lines under a Tasks heading), trimmed. */
+export const planTaskLines = (plan: string): string[] => {
+  const flags = taskLineFlags(plan);
+  return plan.split(/\r?\n/).flatMap((l, i) => (flags[i] === true ? [l.trim()] : []));
+};
+
 /**
  * The plan's sections (level 2 and below) with text and no task: context (Evidence, Why, Notes, an investigation list)
  * rather than work. A split carries them into its parts and never makes one a part of its own.

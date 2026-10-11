@@ -24,6 +24,7 @@ const board: Board = {
   subLimitStep: 500,
   effectCheckGlobs: 10,
   agentKbApproval: 'docs',
+  autoInvestigate: true,
   version: 1,
 };
 const glob = (patch: Partial<Glob> = {}): Glob => ({

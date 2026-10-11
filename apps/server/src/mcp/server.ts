@@ -396,6 +396,20 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   );
 
   server.registerTool(
+    'investigate_glob',
+    {
+      description:
+        "Investigate a sub or same in Planning: fires a routine run that does the orchestrator's Phases 1–2 only (investigator, no implementation) and pushes the investigation artifact, without a branch or commits. The glob stays in Planning. When the glob later starts, the orchestrator reuses the investigation if its plan hash matches and the base has moved little in its relevant files, otherwise it re-investigates and supersedes it. Refused with run_active while a run is live.",
+      inputSchema: { id: z.string(), version: z.number().int() },
+    },
+    async ({ id, version }) => {
+      const result = await globs.investigate(email, id, version);
+      if (result.ok) await deps.outbox.drain(id);
+      return reply(result, (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
     'pick_up',
     {
       description:
@@ -701,7 +715,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields, plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
+        "The glob's context bundle: its fields, plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {
@@ -951,13 +965,18 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         // A routine's slop call is progress for its run (and marks a queued run active).
         await deps.globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
       }
+      const stored = await artifacts.putArtifact(email, id, kind, content, {
+        commitSha: commitSha ?? null,
+        runId: runId ?? null,
+        agentSetVersion: agentSetVersion ?? null,
+        reviewStats: reviewStats ?? null,
+      });
+      // An investigate-only run ends with its investigation; one whose block didn't validate stays open for the fix.
+      if (stored.ok && !('ignored' in stored.value) && kind === 'investigation' && runId !== undefined && stored.value.provenance.validation === undefined) {
+        await globs.applyEvent(id, (g, ctx) => machine.investigationPushed(g, runId, ctx));
+      }
       return reply(
-        await artifacts.putArtifact(email, id, kind, content, {
-          commitSha: commitSha ?? null,
-          runId: runId ?? null,
-          agentSetVersion: agentSetVersion ?? null,
-          reviewStats: reviewStats ?? null,
-        }),
+        stored,
         (a) =>
           'ignored' in a
             ? a

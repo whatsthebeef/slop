@@ -141,6 +141,74 @@ describe('start (row 5)', () => {
   });
 });
 
+describe('investigate (row 5a)', () => {
+  it('queues an investigate-only run on a glob in planning, with no status change or provisioning', () => {
+    const t = value(m.investigate(glob(), ctx()));
+    expect(t.glob.status).toBe('planning');
+    expect(t.effects.map((e) => e.kind)).not.toContain('provision');
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'queued', purpose: 'investigate', triggeredBy: dev.email });
+    expect(t.effects).toEqual([expect.objectContaining({ kind: 'fire_routine', purpose: 'investigate' })]);
+    expect(t.events.map((e) => e.type)).toEqual(['RunTriggered']);
+    expect(m.allowedActions(glob(), dev)).toContain('investigate');
+  });
+
+  it('works on a held sub too, and for slop itself it is the glob creator who triggers it', () => {
+    const t = value(m.investigate(glob({ type: 'sub', waiting: { since: NOW } }), ctx(null), true));
+    expect(m.currentRun(t.glob)).toMatchObject({ purpose: 'investigate', triggeredBy: dev.email });
+  });
+
+  it('refuses a live run, a started glob, a super and QA or PO on a same', () => {
+    expect(errorCode(m.investigate(glob({ runs: [run({ state: 'queued' })] }), ctx()))).toBe('run_active');
+    expect(errorCode(m.investigate(glob({ status: 'in_progress' }), ctx()))).toBe('invalid_transition');
+    expect(errorCode(m.investigate(glob({ type: 'super' }), ctx()))).toBe('invalid_transition');
+    expect(errorCode(m.investigate(glob(), ctx(po)))).toBe('forbidden');
+    expect(m.allowedActions(glob(), po)).not.toContain('investigate');
+    expect(m.allowedActions(glob({ runs: [run({ state: 'active', purpose: 'investigate' })] }), dev)).not.toContain('investigate');
+  });
+
+  it('ends completed when its investigation is pushed; other runs and stale run IDs are untouched', () => {
+    const investigating = glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] });
+    const t = value(m.investigationPushed(investigating, 'run-9', ctx()));
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'completed' });
+    expect(t.glob.status).toBe('planning');
+    expect(value(m.investigationPushed(investigating, 'run-old', ctx())).changed).toBe(false);
+    expect(value(m.investigationPushed(glob({ status: 'implementing', runs: [run({ id: 'run-9' })] }), 'run-9', ctx())).changed).toBe(false);
+  });
+
+  it('a failure report ends the run and leaves the glob in planning', () => {
+    const investigating = glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] });
+    const t = value(m.reportFailure(investigating, { reason: 'no routine', runId: 'run-9' }, ctx(null)));
+    expect(t.glob.status).toBe('planning');
+    expect(t.glob.failure).toBeNull();
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'failed', failureReason: 'no routine' });
+  });
+
+  it('starting the glob supersedes an investigation still running', () => {
+    const t = value(m.start(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx()));
+    expect(t.glob.status).toBe('implementing');
+    expect(t.glob.runs.map((r) => [r.id, r.state, r.outcome, r.purpose])).toEqual([
+      ['run-9', 'ended', 'superseded', 'investigate'],
+      ['run-1', 'queued', null, undefined],
+    ]);
+  });
+
+  it('picking the glob up supersedes an active investigation instead of being refused', () => {
+    const t = value(m.pickUp(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx(), board, { takeOver: false }));
+    expect(t.glob.status).toBe('in_progress');
+    expect(m.currentRun(t.glob)).toMatchObject({ id: 'run-9', state: 'ended', outcome: 'superseded' });
+  });
+
+  it('times out on no progress but never for an unmarked PR', () => {
+    const later = '2026-10-05T21:00:00.000Z';
+    const investigating = glob({ runs: [run({ purpose: 'investigate' })] });
+    expect(m.runTimeoutReason(investigating, board, '2026-10-05T13:00:00.000Z')).toBeNull();
+    expect(m.runTimeoutReason(investigating, board, '2026-10-05T14:30:00.000Z')).toMatch(/No progress/);
+    const progressing = glob({ runs: [run({ purpose: 'investigate', lastProgressAt: '2026-10-05T20:30:00.000Z' })] });
+    expect(m.runTimeoutReason(progressing, board, later)).toBeNull();
+    expect(m.runTimeoutReason(glob({ status: 'implementing', runs: [run({ lastProgressAt: '2026-10-05T20:30:00.000Z' })] }), board, later)).toMatch(/PR not marked ready/);
+  });
+});
+
 describe('pick up (rows 6–10)', () => {
   it('row 6: from planning, the picker becomes implementer and a queued run is cancelled', () => {
     const t = value(
@@ -817,10 +885,10 @@ describe('checks and merging (slice 2)', () => {
 
   it('PR ready and pushes to an open PR refresh the head checks', () => {
     const t = value(m.prReadyForReview(glob({ status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(t)).toEqual(['refresh_checks']);
+    expect(effectKinds(t)).toEqual(['refresh_checks', 'review_change']);
     const pushed = value(m.commitPushed({ ...ready, headChecks: { sha: 'bbb', state: 'passed' } }, { sha: 'ccc', runId: null }, ctx(null)));
     expect(pushed.glob.headChecks).toBeNull();
-    expect(effectKinds(pushed)).toEqual(['refresh_checks']);
+    expect(effectKinds(pushed)).toEqual(['refresh_checks', 'review_change']);
   });
 
   it('a sub entering pr_open goes straight to the sub policy, without waiting for its checks', () => {
@@ -830,9 +898,37 @@ describe('checks and merging (slice 2)', () => {
       { kind: 'evaluate_sub_gate', globId: 's1t1', generation: 1, sha: 'bbb' },
     ]);
     const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(same)).toEqual(['refresh_checks']);
+    expect(effectKinds(same)).toEqual(['refresh_checks', 'review_change']);
     const superGlob = value(m.prReadyForReview(glob({ type: 'super', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(superGlob)).toEqual(['refresh_checks']);
+    expect(effectKinds(superGlob)).toEqual(['refresh_checks', 'review_change']);
+  });
+
+  describe('automatic independent review', () => {
+    const review = (stage: 'pre_merge' | 'post_merge', sha: string) => ({ kind: 'review_change', globId: 's1t1', generation: 1, stage, sha });
+
+    it('queues a pre-merge review of the head when a same or super is marked ready, none for a sub', () => {
+      const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+      expect(same.effects).toContainEqual(review('pre_merge', 'bbb'));
+      const sub = value(m.prReadyForReview(glob({ type: 'sub', status: 'implementing' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+      expect(effectKinds(sub)).not.toContain('review_change');
+    });
+
+    it('queues a review of each push while the PR is ready, but not for drafts, subs, superseded runs or the start commit', () => {
+      const pushed = value(m.commitPushed(ready, { sha: 'ccc', runId: null }, ctx(null)));
+      expect(pushed.effects).toContainEqual(review('pre_merge', 'ccc'));
+      const draft = glob({ status: 'in_progress', pr: { number: 7, state: 'draft', headSha: 'bbb' } });
+      expect(effectKinds(value(m.commitPushed(draft, { sha: 'ccc', runId: null }, ctx(null))))).not.toContain('review_change');
+      expect(effectKinds(value(m.commitPushed({ ...ready, type: 'sub' }, { sha: 'ccc', runId: null }, ctx(null))))).not.toContain('review_change');
+      expect(effectKinds(value(m.commitPushed(ready, { sha: 'ccc', runId: 'old-run' }, ctx(null))))).not.toContain('review_change');
+      expect(effectKinds(value(m.commitPushed(ready, { sha: 'ccc', runId: null, message: 's1t1: start' }, ctx(null))))).not.toContain('review_change');
+    });
+
+    it('reviews a sub once after it merges, and a same or super not at all (it was reviewed before)', () => {
+      const sub = value(m.merged(glob({ type: 'sub', status: 'merging', pr: { number: 7, state: 'ready', headSha: 'bbb' } }), { sha: 'm1' }, ctx(null)));
+      expect(sub.effects).toContainEqual(review('post_merge', 'm1'));
+      const same = value(m.merged(glob({ type: 'same', status: 'merging', pr: { number: 7, state: 'ready', headSha: 'bbb' } }), { sha: 'm1' }, ctx(null)));
+      expect(effectKinds(same)).not.toContain('review_change');
+    });
   });
 
   it('red checks on a sub\'s merge commit revert it and fail the sub; sames and supers are left alone', () => {
@@ -1022,7 +1118,7 @@ describe('merge failure recovery (row 16a)', () => {
       expect(t.glob.implementer).toBe(dev.email);
       expect(t.glob.pr?.headSha).toBe('bbb');
       expect(t.glob.runs).toEqual([]);
-      expect(effectKinds(t)).toEqual(['refresh_checks']);
+      expect(effectKinds(t)).toEqual(['refresh_checks', 'review_change']);
     }
   });
   it('leaves a failed sub, a non-merge failure and a draft PR alone', () => {

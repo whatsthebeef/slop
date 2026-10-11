@@ -25,6 +25,7 @@ export * from './domain/escalation-learning.js';
 export * from './domain/intake-learning.js';
 export * from './domain/type-learning.js';
 export * from './domain/size-check.js';
+export * from './domain/size-forecast.js';
 export * from './domain/manifests.js';
 export * from './domain/reconcile.js';
 export * from './domain/time-tracking.js';

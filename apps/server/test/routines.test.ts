@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FileRoutines, runInstructions } from '../src/routines.js';
+import { FileRoutines, investigateInstructions, runInstructions } from '../src/routines.js';
 
 describe('routine directory', () => {
   let dir = '';
@@ -62,6 +62,17 @@ describe('routine run instructions', () => {
     expect(text).toContain('retrying it automatically, once');
     expect(text).toContain('Type check (Run tsc)\nsrc/a.ts(1,1): error TS2322');
     expect(runInstructions(glob, 'run-2', null, true)).not.toContain('retrying it automatically');
+  });
+
+  it('tell an investigate-only run to stay on the base branch, commit nothing and push the investigation', () => {
+    const text = investigateInstructions(glob, 'run-3', 'whatsthebeef/slop', 'main');
+    expect(text).toContain('INVESTIGATE-ONLY');
+    expect(text).toContain('git fetch origin main');
+    expect(text).toContain('Investigate-only runs');
+    expect(text).toContain('do not create or push any branch');
+    expect(text).toContain('do not call mark_ready');
+    expect(text).not.toContain(`git checkout -B ${glob.id}`);
+    expect(investigateInstructions(glob, 'run-3', null, null)).not.toContain('Repository:');
   });
 
   it('leave the repository out for a board without one', () => {

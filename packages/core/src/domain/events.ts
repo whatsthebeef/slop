@@ -65,6 +65,9 @@ export const DOMAIN_EVENT_TYPES = [
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 
+/** Events of an investigate-only run (it never starts the glob), so run-history learning leaves them out. */
+export const isInvestigateEvent = (e: Pick<DomainEvent, 'data'>): boolean => e.data.purpose === 'investigate';
+
 /** A row in the append-only event log. `actor` is null for system and integration events. */
 export interface DomainEvent {
   readonly type: DomainEventType;
@@ -87,6 +90,8 @@ export type Effect =
       readonly generation: number;
       readonly runId: string;
       readonly routineOwner: string;
+      /** `investigate`: the run only investigates a glob in Planning (no branch yet, nothing is committed). */
+      readonly purpose?: 'investigate';
       /** An automatic retry of a watcher that gave up: the failed check it is asked to fix (name and first lines). */
       readonly failureSummary?: string;
       /** Set for Start and Retrigger: the executor refuses to fire while prerequisites are unmerged (Start anyway doesn't set it). */
@@ -163,7 +168,15 @@ export type Effect =
    */
   | { readonly kind: 'recheck_overlaps'; readonly globId: string; readonly boardId: number }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
-  | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number };
+  | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number }
+  /**
+   * Independent review of the change (spec, "When it runs"). `sha` is the reviewed target: the PR head for a pre-merge
+   * review of a same or super, the squash commit for a sub's post-merge review. The outbox keeps one job per glob, stage
+   * and sha, and cancels a pre-merge job whose head a newer push replaced; the executor drops one that is no longer current.
+   */
+  | { readonly kind: 'review_change'; readonly globId: string; readonly generation: number; readonly stage: ReviewStage; readonly sha: string };
+
+export type ReviewStage = 'pre_merge' | 'post_merge';
 
 export type EffectKind = Effect['kind'];
 
