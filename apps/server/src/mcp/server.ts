@@ -101,7 +101,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work) on a board. Pass the request as `input` and slop proposes the title, summary, type, category and group (intake); explicit fields win. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work) on a board. Pass the request as `input` and slop proposes the title, summary, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (a person can split it); an explicit `type` always wins. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -148,7 +148,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       let fields = {
         title: input.title ?? '',
         summary: input.summary ?? '',
-        type: input.type ?? ('same' as const),
+        type: input.type ?? ('sub' as const),
         category: input.category ?? ('task' as const),
         group: input.group ?? null,
         autoTrigger: input.autoTrigger ?? false,
@@ -493,6 +493,22 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       reply(await globs.reportFailure(email, id, reason, runId ?? null, agentSetVersion ?? null), (g) => globView(g)),
   );
 
+  server.registerTool(
+    'escalate_to_same',
+    {
+      description:
+        "Flag a running sub as needing a human: it becomes a same in place (same branch and PR, no auto-merge) with the reason shown on its card, and the owner is told. Only for a concrete reason: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth/permissions/secrets changes, weakened or deleted tests, changed agent instructions, scope well beyond the plan, or in-scope review findings still open after the allowed rounds. Otherwise let the sub merge. Routines pass their run ID (a superseded run's call is ignored). A person can make it a sub again.",
+      inputSchema: {
+        id: z.string(),
+        reason: z.string().min(1).describe('What a human should check, in one or two sentences'),
+        evidence: z.string().optional().describe('What showed it: files, review findings, the unsettled choice'),
+        runId: z.string().optional(),
+      },
+    },
+    async ({ id, reason, evidence, runId }) =>
+      reply(await globs.escalateToSame(email, id, { reason, evidence: evidence ?? null, runId: runId ?? null }), (g) => globView(g)),
+  );
+
   // ---------------------------------------------------------------------------
   // Knowledge and context (slice 3)
 
@@ -810,10 +826,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'put_artifact',
     {
       description:
-        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it) or a local review as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
+        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it), a local review or an investigation (the investigator\'s output ending in a fenced ```investigation JSON block; a block that does not validate is stored as text and the reply carries `validation`) as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
       inputSchema: {
         id: z.string(),
-        kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
         content: z.string().min(1),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
@@ -840,7 +856,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           agentSetVersion: agentSetVersion ?? null,
           reviewStats: reviewStats ?? null,
         }),
-        (a) => ('ignored' in a ? a : { id: a.id, kind: a.kind, version: a.version }),
+        (a) =>
+          'ignored' in a
+            ? a
+            : { id: a.id, kind: a.kind, version: a.version, ...(a.provenance.validation === undefined ? {} : { validation: a.provenance.validation }) },
       );
     },
   );
@@ -849,10 +868,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'artifact_upload_url',
     {
       description:
-        "A URL for uploading the implementation record (implementation_plan; postplan is an alias) or a local review from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
+        "A URL for uploading the implementation record (implementation_plan; postplan is an alias), a local review or an investigation from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
       inputSchema: {
         id: z.string(),
-        kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
         agentSetVersion: z.number().int().nonnegative().optional(),

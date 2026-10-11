@@ -14,7 +14,7 @@ const UPLOAD_PREFIX = '/uploads/artifact/';
 
 const payloadSchema = z.object({
   id: z.string(),
-  kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
+  kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
   email: z.string(),
   commitSha: z.string().nullable(),
   runId: z.string().nullable(),
@@ -118,6 +118,10 @@ export const mountArtifactUploads = (app: Hono<Env>, deps: ArtifactUploadDeps) =
       return c.json(errorBody(result.error), statusOf(result.error));
     }
     const a = result.value;
-    return c.json('ignored' in a ? a : { id: a.id, kind: a.kind, version: a.version });
+    return c.json(
+      'ignored' in a
+        ? a
+        : { id: a.id, kind: a.kind, version: a.version, ...(a.provenance.validation === undefined ? {} : { validation: a.provenance.validation }) },
+    );
   });
 };

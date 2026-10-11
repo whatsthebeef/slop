@@ -490,6 +490,13 @@ export const GlobCard = ({
         <OverlapChip glob={glob} />
         <SplitChip glob={glob} />
         <OversizedChip glob={glob} />
+        {glob.escalation != null && (
+          <Tip text={`Needs a human: ${glob.escalation.reason}`}>
+            <span className='font-mono text-[11px] text-required' data-testid='escalation-chip'>
+              needs a human
+            </span>
+          </Tip>
+        )}
         {glob.clash != null && (
           <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict`}>
             <span className='font-mono text-[11px] text-required' data-testid='clash-chip'>

@@ -9,8 +9,11 @@ import type { Glob } from './types.js';
  * recent the outcome is, within the bounds. A small sub that needed fixes says nothing about the size: it is a signal
  * for the board's risk areas instead.
  */
-/** A new board's limit, and the default of `boards.sub_max_changed_lines`. */
-export const SUB_LIMIT_DEFAULT = 2000;
+/**
+ * A new board's limit, and the default of `boards.sub_max_changed_lines`. The limit is only a high backstop: the agents
+ * escalate a sub to a same by judgement (`escalate_to_same`), and the gate converts one that is far larger than usual.
+ */
+export const SUB_LIMIT_DEFAULT = 5000;
 export const SUB_LIMIT_MIN = 200;
 export const SUB_LIMIT_MAX = 10_000;
 /** The step a board starts with, and the default of `boards.sub_limit_step`. */

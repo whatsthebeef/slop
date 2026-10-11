@@ -138,6 +138,18 @@ export interface BaseChecks {
 /** `none` until the glob first enters Doing: branches and draft PRs are created when work starts. */
 export type ProvisioningState = 'none' | 'pending' | 'ok' | 'failed';
 
+/** A running sub an agent (or a person) flagged as needing a human, which made it a same; cleared when it is made a sub again. */
+export interface Escalation {
+  readonly reason: string;
+  /** What showed it: files, findings, the unsettled choice. */
+  readonly evidence?: string;
+  /** Who escalated: the person's email, or the routine owner for a run. */
+  readonly by: string;
+  readonly at: string;
+  /** Set when a routine run escalated. */
+  readonly runId?: string;
+}
+
 export interface Failure {
   readonly reason: string;
   readonly at: string;
@@ -228,6 +240,8 @@ export interface Glob {
   /** Every routine run, oldest first; the last one is the current run. */
   readonly runs: readonly Run[];
   readonly failure: Failure | null;
+  /** Why a human should check this glob, when a sub was escalated to a same during implementation or review. */
+  readonly escalation?: Escalation | null;
   /** Set while the open PR conflicts with the base branch; cleared when it merges cleanly again. */
   readonly conflict?: OpenConflict | null;
   /** Set while the branch of a glob in Doing lacks commits from the base branch; cleared when it is up to date. */

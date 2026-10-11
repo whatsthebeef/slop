@@ -53,6 +53,10 @@ export const DOMAIN_EVENT_TYPES = [
   'ClashChanged',
   /** A glob was cut into parts (`split_glob`): on every part, with the source, its place and the other parts' IDs. */
   'GlobSplit',
+  /** A running sub was escalated to a same because a human should check it (reason and evidence in the data). */
+  'Escalated',
+  /** A person made an escalated glob a sub again. */
+  'Deescalated',
   'GlobDeleted',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];

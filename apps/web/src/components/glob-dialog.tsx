@@ -295,6 +295,14 @@ export const GlobDetail = ({
             </div>
           )}
 
+          {glob.escalation != null && (
+            <div className='grid gap-1 rounded border border-edge p-2 text-sm' data-testid='escalation-note'>
+              <span>Needs a human: {glob.escalation.reason}</span>
+              {glob.escalation.evidence !== undefined && <span className='text-xs text-muted-foreground'>{glob.escalation.evidence}</span>}
+              <span className='text-xs text-muted-foreground'>Escalated by {glob.escalation.by}</span>
+            </div>
+          )}
+
           <LabelReviews glob={glob} onReview={onReviewLabel} />
 
           {(glob.blockedBy?.length ?? 0) > 0 && (

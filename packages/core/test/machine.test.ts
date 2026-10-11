@@ -1408,3 +1408,44 @@ describe('allowedTypeChanges', () => {
     expect(tos(glob({ type: 'same', category: 'task', status: 'merging' }))).toEqual([]);
   });
 });
+
+describe('escalation to a same', () => {
+  const sub = (patch: Partial<Glob> = {}): Glob =>
+    glob({ type: 'sub', status: 'implementing', runs: [run()], pr: { number: 7, state: 'draft', headSha: 'bbb' }, ...patch });
+
+  it('a current run converts the sub to a same in place with the reason recorded', () => {
+    const t = value(m.escalateToSame(sub(), { reason: 'Unplanned auth change', evidence: 'src/auth.ts', runId: 'run-0' }, ctx(null)));
+    expect(t.glob.type).toBe('same');
+    expect(t.glob.status).toBe('implementing');
+    expect(t.glob.escalation).toMatchObject({ reason: 'Unplanned auth change', evidence: 'src/auth.ts', runId: 'run-0' });
+    expect(t.events.map((e) => e.type)).toEqual(['FieldsChanged', 'Escalated']);
+    expect(effectKinds(t)).toEqual(['sync_pr_labels']);
+  });
+
+  it('a call from a superseded run is ignored', () => {
+    expect(value(m.escalateToSame(sub(), { reason: 'x', runId: 'other' }, ctx(null))).changed).toBe(false);
+  });
+
+  it('a same is left as it is, and a merged sub is refused', () => {
+    expect(value(m.escalateToSame(glob({ type: 'same' }), { reason: 'x' }, ctx())).changed).toBe(false);
+    expect(errorCode(m.escalateToSame(sub({ status: 'reviewing' }), { reason: 'x', runId: 'run-0' }, ctx(null)))).toBe('invalid_transition');
+  });
+
+  it('an escalation needs a reason', () => {
+    expect(errorCode(m.escalateToSame(sub(), { reason: '  ', runId: 'run-0' }, ctx(null)))).toBe('invalid_input');
+  });
+
+  it('a person makes it a sub again, and the gate runs on a ready PR whose checks passed', () => {
+    const escalated = value(m.escalateToSame(sub(), { reason: 'x', runId: 'run-0' }, ctx(null))).glob;
+    expect(m.allowedActions(escalated, dev)).toContain('deescalate');
+    const ready = { ...escalated, status: 'pr_open' as const, pr: { number: 7, state: 'ready' as const, headSha: 'bbb' }, headChecks: { sha: 'bbb', state: 'passed' as const } };
+    const t = value(m.deescalate(ready, ctx()));
+    expect(t.glob.type).toBe('sub');
+    expect(t.glob.escalation).toBeNull();
+    expect(effectKinds(t)).toEqual(['sync_pr_labels', 'evaluate_sub_gate']);
+  });
+
+  it('only an escalated same can be made a sub again', () => {
+    expect(errorCode(m.deescalate(glob({ type: 'same' }), ctx()))).toBe('invalid_transition');
+  });
+});
