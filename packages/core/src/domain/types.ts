@@ -252,6 +252,11 @@ export interface Glob {
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Set while the glob is held in Planning for its `after`; cleared when released, started anyway or picked up. */
   readonly waiting?: { readonly since: string } | null;
+  /**
+   * A same that starts its routine by itself when what it waits for merges (set on the parts of a split that need another
+   * part; subs always do). A person turns it off, which ends the wait and leaves the needs in place.
+   */
+  readonly autoStart?: boolean;
   /** Set while another open glob changes the same exclusive paths; cleared when it no longer does. */
   readonly clash?: PathClash | null;
   readonly provisioning: ProvisioningState;

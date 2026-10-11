@@ -78,6 +78,8 @@ export interface SplitPart {
   readonly type?: SlopType;
   /** Indexes of earlier parts this one starts after; none means it runs in parallel. Part 0 has none. */
   readonly after?: readonly number[];
+  /** Indexes of earlier parts that may change the same files: recorded as overlaps, which order merges but never block a start. */
+  readonly overlaps?: readonly number[];
   /** Labels of the original's text attachments to copy to this part (link attachments always are). New parts only. */
   readonly attachments?: readonly string[];
 }
@@ -359,6 +361,9 @@ export class GlobService {
       for (const n of part.after ?? []) {
         if (!Number.isInteger(n) || n < 0 || n >= index) return invalidInput(`Part ${index} can only start after earlier parts, not ${n}`);
       }
+      for (const n of part.overlaps ?? []) {
+        if (!Number.isInteger(n) || n < 0 || n >= index) return invalidInput(`Part ${index} can only overlap earlier parts, not ${n}`);
+      }
       if (index === 0 && (part.after ?? []).length > 0) return invalidInput('Part 0 is the original glob and starts after nothing new');
     }
     const result = await this.deps.store.transaction(async (tx): Promise<Result<{ globs: Glob[]; added: readonly string[]; fresh: boolean }>> => {
@@ -436,6 +441,11 @@ export class GlobService {
         const checked = checkAfter(null, awaitedIds, board.id, (gid) => found.get(gid));
         if (!checked.ok) return checked;
         if (checked.value.length > MAX_AFTER) return invalidInput(`Part ${index} would wait for more than ${MAX_AFTER} globs`);
+        // Overlaps are never needs: a part that also needs the glob keeps only the need.
+        const overlapIds = [...new Set((part.overlaps ?? []).map((n) => ids[n] ?? ''))].filter((o) => !checked.value.includes(o));
+        const foundOverlaps = await this.closure(tx, overlapIds);
+        const checkedOverlaps = checkOverlaps(null, overlapIds, board.id, (gid) => foundOverlaps.get(gid));
+        if (!checkedOverlaps.ok) return checkedOverlaps;
         const created = machine.create(
           {
             id: partId,
@@ -448,6 +458,9 @@ export class GlobService {
             environment: original.environment,
             autoTrigger: false,
             after: checked.value,
+            ...(checkedOverlaps.value.length === 0 ? {} : { impliedAfter: explicitOverlaps(checkedOverlaps.value) }),
+            // A same part that waits for others starts by itself when they merge (a person can turn that off).
+            autoStart: true,
           },
           board,
           ctx,
