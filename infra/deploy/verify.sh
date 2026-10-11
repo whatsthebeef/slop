@@ -36,9 +36,9 @@ fi
 
 if [ -n "${2:-}" ]; then
   # The board stream's keep-alive is every 25 s; 70 s open means CloudFront's 60 s origin read timeout isn't cutting it.
-  DESC="the board's SSE stream stays open for 70 s and receives a keep-alive"
+  DESC="the board's SSE stream stays open for 70 s and receives a ping"
   OUT="$(curl -sS -N --max-time 70 -H "cookie: slop_session=$2" "$BASE/api/boards/${3:-15}/events" 2>&1 || true)"
-  check bash -c "echo '$OUT' | grep -q 'keep-alive'"
+  check bash -c "echo '$OUT' | grep -q 'event: ping'"
 else
   echo "skip  SSE (pass a slop_session cookie value as the second argument)"
 fi

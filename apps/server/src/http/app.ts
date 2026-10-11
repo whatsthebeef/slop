@@ -30,6 +30,8 @@ export interface AppDeps {
   readonly links: SignedLinks;
   /** Runs after a board is created (forks the catalog's agent set into it). */
   readonly onBoardCreated: (email: string, boardId: number) => Promise<void>;
+  /** How long the board's event stream may sit idle before it sends a `ping` event (default 25 s; CloudFront's origin read timeout is 60 s). */
+  readonly pingMs?: number;
 }
 
 export type Env = { Variables: { email: string } };
@@ -542,16 +544,17 @@ export const createApp = (deps: AppDeps) => {
           await stream.writeSSE({ event: 'hint', data: next });
           continue;
         }
-        // Wait for a hint, or send a keep-alive comment every 25 seconds.
+        // Wait for a hint, or send a `ping` event every 25 seconds. It is a named event, not an SSE comment,
+        // because the browser's EventSource hides comments, so the page couldn't tell a quiet stream from a dead one.
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 25_000);
+          const timer = setTimeout(resolve, deps.pingMs ?? 25_000);
           notify = () => {
             clearTimeout(timer);
             resolve();
           };
         });
         notify = null;
-        if (queue.length === 0 && open()) await stream.write(': keep-alive\n\n');
+        if (queue.length === 0 && open()) await stream.writeSSE({ event: 'ping', data: '{}' });
       }
       unsubscribe();
     });
