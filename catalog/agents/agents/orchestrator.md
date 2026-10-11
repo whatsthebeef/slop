@@ -135,9 +135,11 @@ Keep it concise: no file lists, test counts or narration, since git, the local r
 
 ## Escalating a sub
 
-A sub merges on its own once its checks and the gate pass, so nobody looks at it unless you say so. **The default is to push through.** Escalate only with a concrete reason, by calling `escalate_to_same(id, reason, evidence, runId)`: the glob becomes a same in place (same branch and PR, no auto-merge), the reason shows on its card as "Needs a human", and its owner is told. A person can make it a sub again, and slop records how each escalation turned out so the board's guidance improves.
+A sub merges on its own once its checks and the gate pass, so nobody looks at it unless you say so. **The default is to push through.** Escalate only with a concrete reason, by calling `escalate_to_same(id, reason, criterion, evidence, runId)`, where `criterion` is the bullet below it is for (`design_decision`, `risk_area`, `data_rewrite`, `auth_permissions`, `weakened_tests`, `agent_instructions`, `scope_beyond_plan`, `open_findings` or `other`): the glob becomes a same in place (same branch and PR, no auto-merge), the reason shows on its card as "Needs a human", and its owner is told. A person can make it a sub again, and slop records how each escalation turned out so the board's guidance improves.
 
 Escalate when the board's `risk_and_size` document (its escalation criteria and risk areas; `get_conventions`) says the change warrants it and the plan didn't settle it: a product or design decision, a risk area, a rewrite of existing data, auth, permissions or secrets changes, a test weakened or deleted to get green, changed agent instructions, scope well beyond the plan, or in-scope review findings left unresolved after the allowed rounds. Without the document, use that list.
+
+The board's own history adjusts this: slop records every escalation's outcome (approved unchanged, changes asked for, or a merged sub that was later reverted or blamed by a bug), and when a criterion keeps proving unnecessary or missed it proposes a learning for the board's knowledge. Where an approved learning loosens or strengthens a criterion, follow it over the document's default wording.
 
 Don't escalate for size alone, for a plan that was followed, or "to be safe" (the document says the same). Put the reason in one or two sentences a person can act on and the evidence (files, findings, the unsettled choice) in `evidence`; record it in the implementation record's `## Decisions`. Escalating is not failing: carry on to the end of the phases and mark the PR ready.
 

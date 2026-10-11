@@ -1437,6 +1437,14 @@ describe('escalation to a same', () => {
     expect(errorCode(m.escalateToSame(sub({ status: 'reviewing' }), { reason: 'x', runId: 'run-0' }, ctx(null)))).toBe('invalid_transition');
   });
 
+  it('records the criterion it was made for, reading it from the reason when none is named', () => {
+    const named = value(m.escalateToSame(sub(), { reason: 'x', criterion: 'risk_area', runId: 'run-0' }, ctx(null)));
+    expect(named.glob.escalation?.criterion).toBe('risk_area');
+    expect(named.events.find((e) => e.type === 'Escalated')?.data).toMatchObject({ criterion: 'risk_area' });
+    const read = value(m.escalateToSame(sub(), { reason: 'Changes the agent instructions', runId: 'run-0' }, ctx(null)));
+    expect(read.glob.escalation?.criterion).toBe('agent_instructions');
+  });
+
   it('an escalation needs a reason', () => {
     expect(errorCode(m.escalateToSame(sub(), { reason: '  ', runId: 'run-0' }, ctx(null)))).toBe('invalid_input');
   });
