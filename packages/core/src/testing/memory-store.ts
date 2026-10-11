@@ -1074,7 +1074,11 @@ export class MemoryStore implements Store {
         return Promise.resolve();
       },
       enqueueEffects: (effects) => {
-        s.outbox.push(...effects);
+        for (const effect of effects) {
+          // One pending recheck per board is enough: it reads the board as it is when it runs.
+          if (effect.kind === 'recheck_overlaps' && s.outbox.some((e) => e.kind === 'recheck_overlaps' && e.globId === effect.globId)) continue;
+          s.outbox.push(effect);
+        }
         return Promise.resolve();
       },
     };

@@ -2,11 +2,13 @@ import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js'
 import type { Result } from '../domain/errors.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
+import { listOf } from '../domain/matrix.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import type { Actor, Board, Category, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
+import { recheckOverlapsEffect } from '../domain/events.js';
 import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
 import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
@@ -689,7 +691,7 @@ export class GlobService {
       await tx.deleteEvents(glob.id);
       await tx.deleteGlob(glob.id);
       // The deletion itself is logged without a glob, so reports lose the glob's time.
-      await tx.enqueueEffects(transition.value.effects);
+      await tx.enqueueEffects([...transition.value.effects, recheckOverlapsEffect(glob.boardId)]);
       return ok(glob);
     });
     if (!result.ok) return result;
@@ -738,6 +740,80 @@ export class GlobService {
       return glob !== null && glob.status === 'planning' && glob.type === 'sub' && glob.waiting != null && !unresolved(await tx.getSizeCheck(id));
     });
     if (lift) await this.release(id);
+  }
+
+  /**
+   * Recomputes the predicted overlap edges of every open glob (Planning or Doing) on the board and replaces the stale
+   * ones (`recheck_overlaps`). An edge to a glob that went back to Planning, failed without a branch, was deleted, merged
+   * or no longer changes an exclusive path drops off; a new one is added when a branch or plan now shows it. Explicit
+   * edges, learned ones and ones a person overrode are kept. Each glob is its own version-checked write and a no-op when
+   * its edges are unchanged, so a repeat changes nothing. Returns the IDs whose edges changed.
+   */
+  async recheckOverlaps(boardId: number): Promise<string[]> {
+    const branchFiles = this.deps.branchFiles;
+    if (branchFiles === undefined) return [];
+    const read = await this.deps.store.transaction(async (tx) => {
+      const board = await tx.getBoard(boardId);
+      if (board === null) return null;
+      const globs = await tx.listGlobs(boardId, {});
+      const plans = new Map<string, string>();
+      for (const glob of globs) plans.set(glob.id, (await tx.listArtifacts(glob.id, 'plan'))[0]?.content ?? glob.summary);
+      return { board, globs, plans };
+    });
+    if (read === null) return [];
+    // One read of each branch per recheck, whoever asks: keyed by glob and head.
+    const cache = new Map<string, Promise<readonly string[] | null>>();
+    const cached: BranchFiles = {
+      filesOf: (board, glob) => {
+        const key = `${glob.id}@${glob.pr?.headSha ?? ''}`;
+        const found = cache.get(key) ?? branchFiles.filesOf(board, glob);
+        cache.set(key, found);
+        return found;
+      },
+    };
+    const prediction = await this.deps.dependencyLearning?.prediction(read.board.id);
+    const byId = new Map(read.globs.map((g) => [g.id, g]));
+    const changed: string[] = [];
+    for (const glob of read.globs) {
+      const open = listOf(glob.status) === 'planning' || listOf(glob.status) === 'doing';
+      if (!open || glob.type === 'super') continue;
+      const mine = glob.impliedAfter ?? [];
+      // Edges nobody may replace are not looked for again.
+      const skip = new Set([...(glob.after ?? []), ...mine.filter((i) => !machine.isReplaceableOverlap(i)).map((i) => i.id)]);
+      // An overlap is recorded on the later glob (it is the one that rebases), as at start: a newer glob adds none here.
+      for (const other of read.globs) {
+        if (other.id !== glob.id && !mine.some((i) => i.id === other.id) && (other.createdAt > glob.createdAt || (other.createdAt === glob.createdAt && other.id > glob.id))) skip.add(other.id);
+      }
+      const files = glob.provisioning === 'none' ? undefined : ((await cached.filesOf(read.board, glob)) ?? undefined);
+      const found = await findHolds(
+        this.deps.store,
+        cached,
+        read.board,
+        { id: glob.id, plan: read.plans.get(glob.id) ?? glob.summary, ...(files === undefined ? {} : { files }) },
+        skip,
+        prediction,
+      );
+      const dropReasons = new Map<string, string>();
+      for (const edge of mine.filter(machine.isReplaceableOverlap)) {
+        const other = byId.get(edge.id);
+        const state = other === undefined ? 'missing' : dependencyState(other);
+        dropReasons.set(
+          edge.id,
+          other === undefined
+            ? `${edge.id} was deleted`
+            : state === 'merged'
+              ? `${edge.id} merged`
+              : state === 'planning'
+                ? `${edge.id} is back in Planning`
+                : other.status === 'failed'
+                  ? `${edge.id} failed`
+                  : `${edge.id} no longer changes ${edge.paths.slice(0, 3).join(', ')}`,
+        );
+      }
+      const result = await this.command(null, glob.id, null, (g, ctx) => machine.overlapsRechecked(g, { edges: found, dropReasons }, ctx));
+      if (result.ok && result.value.version !== glob.version) changed.push(glob.id);
+    }
+    return changed;
   }
 
   /** Starts one held glob if everything it waits for has merged and the merge policy still lets it. */
@@ -853,7 +929,11 @@ export class GlobService {
         const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);
         const transition = step(glob, ctx, board, facts);
         if (!transition.ok) return transition;
-        const { changed, events, effects } = transition.value;
+        const { changed, events } = transition.value;
+        // A status change, a push or a merge may change which open globs overlap: queue the board's recheck (coalesced).
+        const moved =
+          changed && (transition.value.glob.status !== glob.status || events.some((e) => e.type === 'CommitPushed' || e.type === 'Merged'));
+        const effects = moved ? [...transition.value.effects, recheckOverlapsEffect(glob.boardId)] : transition.value.effects;
         if (!changed) {
           await tx.appendEvents(events);
           await tx.enqueueEffects(effects);
