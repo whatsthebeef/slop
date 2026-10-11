@@ -164,6 +164,41 @@ describe('knowledge and artifacts', () => {
     expect(errorCode(await knowledge.catalogUpdates('stranger@example.com', boardId))).toBe('forbidden');
   });
 
+  it('stores an investigation, and keeps a malformed one as text with a validation note', async () => {
+    const glob = unwrap(
+      await globs.create(DEV, { boardId, title: 'Investigate me', summary: 'x', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+    );
+    const good = [
+      '# Investigation',
+      '```investigation',
+      JSON.stringify({
+        files: [],
+        modules: [],
+        expectedLines: { min: 1, max: 2 },
+        parts: [],
+        riskTier: 'low',
+        riskAreas: [],
+        needsHuman: { needed: false, reason: null },
+        confidence: 'high',
+        planHash: 'h',
+        baseCommit: 'c',
+      }),
+      '```',
+    ].join('\n');
+    const first = unwrap(await artifacts.putArtifact(DEV, glob.id, 'investigation', good, { commitSha: null, runId: null, agentSetVersion: null }));
+    if ('ignored' in first) throw new Error('ignored');
+    expect(first.kind).toBe('investigation');
+    expect(first.provenance.validation).toBeUndefined();
+    const bad = unwrap(await artifacts.putArtifact(DEV, glob.id, 'investigation', '# Investigation\n```investigation\n{}\n```', { commitSha: null, runId: null, agentSetVersion: null }));
+    if ('ignored' in bad) throw new Error('ignored');
+    expect(bad.version).toBe(2);
+    expect(bad.content).toContain('# Investigation');
+    expect(bad.provenance.validation).toContain('Investigation block not parsed');
+    expect(unwrap(await artifacts.artifact(DEV, glob.id, 'investigation', '')).version).toBe(2);
+    // Listed, not inlined, in the context bundle.
+    expect(unwrap(await artifacts.context(DEV, glob.id)).available.map((a) => a.kind)).toEqual(['investigation']);
+  });
+
   it('serves documents by area or by name', async () => {
     unwrap(await knowledge.importCatalogEntries(ADMIN, boardId, ['typescript_conventions']));
     unwrap(await knowledge.importDocuments(ADMIN, boardId, [{ fileName: 'build_test_lint.md', content: BUILD_DOC }], 'import'));

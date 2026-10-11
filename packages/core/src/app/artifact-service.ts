@@ -1,5 +1,6 @@
 import { decisionViews } from '../domain/decisions.js';
 import type { DecisionView } from '../domain/decisions.js';
+import { parseInvestigation, validationNote } from '../domain/investigation.js';
 import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { INBOX_CONTEXT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
@@ -143,12 +144,20 @@ interface NewArtifact {
 const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: string, input: NewArtifact): Promise<Artifact> => {
   const { kind, label, content, link } = input;
   const globId = glob.id;
+  // An investigation whose block doesn't validate is kept as text, with the reason beside it.
+  const parsed = kind === 'investigation' ? parseInvestigation(content) : null;
   const provenance: Provenance = {
-    by: input.runId !== null ? 'routine' : kind === 'implementation_plan' || kind === 'local_review' ? 'sessionator' : 'human',
+    by:
+      input.runId !== null
+        ? 'routine'
+        : kind === 'implementation_plan' || kind === 'local_review' || kind === 'investigation'
+          ? 'sessionator'
+          : 'human',
     actor: email,
     runId: input.runId,
     agentSetVersion: input.agentSetVersion,
     ...(kind === 'local_review' && input.reviewStats !== null && { reviewStats: input.reviewStats }),
+    ...(parsed !== null && !parsed.ok && { validation: validationNote(parsed.errors) }),
   };
   const now = clock.now();
   const artifact = await tx.insertArtifact({ globId, kind, label, content, link, commitSha: input.commitSha, provenance, createdAt: now });
@@ -235,13 +244,13 @@ export class ArtifactService {
   }
 
   /**
-   * `put_artifact`: the implementation record and local reviews from implementers. `postplan` is an alias that writes
+   * `put_artifact`: the implementation record, local reviews and investigations from implementers. `postplan` is an alias that writes
    * the record, so agent sets that haven't been refreshed keep working.
    */
   async putArtifact(
     email: string,
     globId: string,
-    kind: 'implementation_plan' | 'postplan' | 'local_review',
+    kind: 'implementation_plan' | 'postplan' | 'local_review' | 'investigation',
     content: string,
     options: PutOptions,
   ): Promise<Result<Artifact | Ignored>> {

@@ -4,6 +4,7 @@ export * from './domain/edit-failure.js';
 export * from './domain/events.js';
 export * from './domain/ids.js';
 export * from './domain/matrix.js';
+export * from './domain/investigation.js';
 export * from './domain/knowledge.js';
 export * from './domain/local-run.js';
 export * from './domain/merge-policy.js';
