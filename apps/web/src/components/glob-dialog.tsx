@@ -5,6 +5,7 @@ import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
+import { actionTiers, orderActions } from '@/lib/action-style';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
@@ -134,7 +135,9 @@ export const GlobDetail = ({
   // Starting a flagged glob asks first: it is likely more than one PR's worth of work.
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   useEffect(() => setConfirmingOversized(null), [glob.id]);
-  const actions = (glob.allowedActions ?? []).filter((a) => a !== 'delete');
+  const allActions = (glob.allowedActions ?? []).filter((a) => a !== 'delete');
+  const actions = orderActions(allActions);
+  const tiers = actionTiers(allActions);
   const disabled = waitingFor(glob, actions, board.role);
   const status = viewStatusLine(glob, new Date().toISOString(), disabled);
   // Ready for review changes nothing until GitHub confirms, so say it was asked for meanwhile.
@@ -162,6 +165,46 @@ export const GlobDetail = ({
       setBusy(false);
     }
   };
+
+  const renderActions = (list: Action[]) =>
+    list.map((action) => {
+                  const button = (
+                    <Button
+                      key={action}
+                      variant={tiers.get(action) === 'primary' ? 'default' : tiers.get(action) === 'destructive' ? 'danger' : 'outline'}
+                      size='sm'
+                      disabled={busy}
+                      onClick={() => {
+                        if (action === 'mark_ready') {
+                          if (reviewedAtHead) void markReady();
+                          else setConfirmingReady(true);
+                          return;
+                        }
+                        if (action === 'start_again') {
+                          setConfirmingAgain(true);
+                          return;
+                        }
+                        if (oversized && (action === 'start' || action === 'start_anyway' || action === 'pick_up' || action === 'take_over')) {
+                          setConfirmingOversized(action);
+                          return;
+                        }
+                        void run(async () => {
+                          await onAction(action);
+                        });
+                      }}
+                    >
+                      {actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
+                    </Button>
+                  );
+                  const tip = ACTION_TIPS[action];
+                  return tip === undefined ? (
+                    button
+                  ) : (
+                    <Tip key={action} text={tip}>
+                      {button}
+                    </Tip>
+                  );
+    });
 
   return (
     <article className='mx-auto w-full max-w-[63rem] p-5' data-testid='glob-page'>
@@ -313,6 +356,7 @@ export const GlobDetail = ({
           {actions.length + disabled.length + typeButtons.length > 0 && (
             <div className='grid gap-1'>
               <div className='flex flex-wrap gap-2'>
+                {renderActions(actions.filter((a) => tiers.get(a) !== 'destructive'))}
                 {typeButtons.map((action) => (
                   <Tip key={action.to} text={action.tip}>
                     <Button
@@ -329,44 +373,6 @@ export const GlobDetail = ({
                     </Button>
                   </Tip>
                 ))}
-                {actions.map((action) => {
-                  const button = (
-                    <Button
-                      key={action}
-                      variant={action === 'start_again' ? 'outline' : 'default'}
-                      size='sm'
-                      disabled={busy}
-                      onClick={() => {
-                        if (action === 'mark_ready') {
-                          if (reviewedAtHead) void markReady();
-                          else setConfirmingReady(true);
-                          return;
-                        }
-                        if (action === 'start_again') {
-                          setConfirmingAgain(true);
-                          return;
-                        }
-                        if (oversized && (action === 'start' || action === 'start_anyway' || action === 'pick_up' || action === 'take_over')) {
-                          setConfirmingOversized(action);
-                          return;
-                        }
-                        void run(async () => {
-                          await onAction(action);
-                        });
-                      }}
-                    >
-                      {actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
-                    </Button>
-                  );
-                  const tip = ACTION_TIPS[action];
-                  return tip === undefined ? (
-                    button
-                  ) : (
-                    <Tip key={action} text={tip}>
-                      {button}
-                    </Tip>
-                  );
-                })}
                 {disabled.map(({ action, tip }) => (
                   <Tip key={action} text={tip}>
                     <Button variant='outline' size='sm' disabled>
@@ -374,6 +380,7 @@ export const GlobDetail = ({
                     </Button>
                   </Tip>
                 ))}
+                {renderActions(actions.filter((a) => tiers.get(a) === 'destructive'))}
               </div>
               {confirmingType !== null && (
                 <div role='alert' className='flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs'>
@@ -685,7 +692,7 @@ export const GlobDetail = ({
                 </div>
               </div>
             ) : (
-              <Button variant='ghost' size='sm' className='text-destructive' onClick={() => setConfirmDelete(true)}>
+              <Button variant='danger' size='sm' onClick={() => setConfirmDelete(true)}>
                 Delete…
               </Button>
             )}

@@ -10,6 +10,7 @@ const buttonVariants = cva(
       variant: {
         default: 'press border-primary bg-primary font-semibold text-primary-foreground hover:opacity-90',
         outline: 'press border-foreground/70 bg-card hover:bg-muted',
+        danger: 'press border-destructive bg-card text-destructive hover:bg-destructive/10',
         ghost: 'border-transparent hover:bg-muted',
         destructive: 'press border-destructive bg-destructive font-semibold text-card hover:opacity-90',
         selected: 'border-foreground bg-lcd text-lcd-foreground',
