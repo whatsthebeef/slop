@@ -76,7 +76,7 @@ export const boards = pgTable('boards', {
   runStartMinutes: integer('run_start_minutes').notNull().default(30),
   runRespondMinutes: integer('run_respond_minutes').notNull().default(30),
   /** The learned sub size limit (`sub_limit_changes` holds its history); not an admin setting. */
-  subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
+  subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(5000),
   /** The step the learned limit moves by now (see `sub-limit.ts`); starts at 500. */
   subLimitStep: integer('sub_limit_step').notNull().default(SUB_LIMIT_STEP),
   /** Effect checks: globs compared on each side of an approved change. */

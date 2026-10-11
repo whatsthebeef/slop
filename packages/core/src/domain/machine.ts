@@ -69,6 +69,7 @@ export type Action =
   | 'merge'
   /** A failed merge that GitHub never decided (no conflict, checks passed at the head): ask slop to merge again. */
   | 'retry_merge'
+  | 'deescalate'
   /** Supers: squash-merge what's done and keep going on the same glob and branch. */
   | 'merge_continue'
   /** Supers, from the board: ask slop to mark the draft PR ready (as the `mark_ready` tool does). */
@@ -1500,6 +1501,67 @@ export const subGateCheckCompleted = (
     .done();
 };
 
+/**
+ * A running sub is flagged as needing a human (the implementer or change_reviewer, with the reason; or a person): it
+ * becomes a same in place, keeping its branch and PR, so the sub gate no longer merges it. A run that is no longer
+ * current is ignored. Escalating a same is a no-op.
+ */
+export const escalateToSame = (
+  glob: Glob,
+  input: { reason: string; evidence?: string | null; runId?: string | null },
+  ctx: Context,
+): Result<Transition> => {
+  const runId = input.runId ?? null;
+  if (runId !== null) {
+    const run = currentRun(glob);
+    if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
+  }
+  if (glob.type !== 'sub') return unchanged(glob);
+  if (glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') {
+    return invalidTransition(glob, ctx.actor, 'A sub can only be escalated before it merges');
+  }
+  const reason = input.reason.trim();
+  if (reason === '') return invalidInput('An escalation needs a reason');
+  const evidence = input.evidence?.trim() ?? '';
+  const escalation = {
+    reason,
+    ...(evidence === '' ? {} : { evidence }),
+    by: ctx.actor?.email ?? 'routine',
+    at: ctx.now,
+    ...(runId === null ? {} : { runId }),
+  };
+  const b = new Builder(glob, ctx)
+    .set({ type: 'same', escalation })
+    .event('FieldsChanged', { type: { from: 'sub', to: 'same' } })
+    .event('Escalated', { reason, ...(evidence === '' ? {} : { evidence }), ...(runId === null ? {} : { runId }) });
+  if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  return b.done();
+};
+
+/**
+ * A person decides an escalation was unnecessary: the glob is a sub again. On a ready PR whose checks passed, the sub
+ * gate runs on the head, so a sub with nothing else to flag merges.
+ */
+export const deescalate = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.escalation == null || glob.type !== 'same') {
+    return invalidTransition(glob, actor, 'Only an escalated same can be made a sub again');
+  }
+  if (glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') {
+    return invalidTransition(glob, actor, 'An escalation can only be undone before the glob merges');
+  }
+  const b = new Builder(glob, ctx)
+    .set({ type: 'sub', escalation: null })
+    .event('FieldsChanged', { type: { from: 'same', to: 'sub' } })
+    .event('Deescalated', { reason: glob.escalation.reason });
+  if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  const sha = glob.pr?.headSha;
+  if (glob.status === 'pr_open' && glob.pr?.state === 'ready' && sha != null && glob.headChecks?.sha === sha && glob.headChecks.state === 'passed') {
+    b.effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha });
+  }
+  return b.done();
+};
+
 /** Rows 12–13: the sub gate's verdict on a commit. */
 export const subGateCompleted = (
   glob: Glob,
@@ -1745,6 +1807,9 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     recordAtHead(glob, facts)
   ) {
     actions.push('mark_ready');
+  }
+  if (!restricted && glob.escalation != null && glob.type === 'same' && ['implementing', 'in_progress', 'pr_open'].includes(glob.status)) {
+    actions.push('deescalate');
   }
   actions.push('delete');
   return actions;
