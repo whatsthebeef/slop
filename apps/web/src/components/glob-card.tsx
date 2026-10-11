@@ -1,4 +1,4 @@
-import { decisionOf, scopeLabel } from '@slop/core';
+import { decisionOf, findingsLabel, reviewOutdated, scopeLabel } from '@slop/core';
 import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
 import { Bot, Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -115,11 +115,13 @@ const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (kind: Artifa
     <span className='inline-flex items-center gap-0.5'>
       {present.map((a) => {
         const { title, icon: Icon } = ARTIFACT_META[a.kind];
+        // An independent review shows its finding count, and says so when a later push left it behind.
+        const status = a.review === undefined ? null : `${findingsLabel(a.review.findings)}${reviewOutdated(a.review, glob.pr?.headSha ?? null) ? ' (outdated)' : ''}`;
         return (
-          <Tip key={a.kind} text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}`}>
+          <Tip key={a.kind} text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}${status === null ? '' : `: ${status}`}`}>
           <button
             type='button'
-            className='rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
+            className='inline-flex items-center rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
             aria-label={title}
             data-testid={`artifact-icon-${a.kind}`}
             onClick={(e) => {
@@ -129,6 +131,7 @@ const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (kind: Artifa
             onKeyDown={(e) => e.stopPropagation()}
           >
             <Icon className='h-3.5 w-3.5' />
+            {status !== null && <span className='ml-0.5 font-mono text-[10px]' data-testid='review-status'>{status}</span>}
           </button>
           </Tip>
         );

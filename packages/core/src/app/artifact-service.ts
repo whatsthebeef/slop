@@ -5,7 +5,7 @@ import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { INBOX_CONTEXT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
 import { ARTIFACT_ROLE } from '../domain/knowledge.js';
-import type { Artifact, ArtifactKind, Provenance, ReviewStats } from '../domain/knowledge.js';
+import type { Artifact, ArtifactKind, IndependentReviewMeta, Provenance, ReviewStats } from '../domain/knowledge.js';
 import { applicableDecisions, scopedDecision } from '../domain/decision-glob.js';
 import type { ScopedDecision } from '../domain/decision-glob.js';
 import { payloadOf } from '../domain/payload.js';
@@ -311,6 +311,30 @@ export class ArtifactService {
       investigation?: InvestigationReactor;
     },
   ) {}
+
+  /**
+   * Stores an independent review as a new version of the glob's `independent_review` artifact, tied to the reviewed commit.
+   * A system write (no person acts): `model` names the reviewer. Not found when the glob is gone.
+   */
+  async addIndependentReview(
+    globId: string,
+    input: { readonly content: string; readonly commitSha: string; readonly meta: IndependentReviewMeta; readonly model: string },
+  ): Promise<Result<Artifact>> {
+    const result = await this.deps.store.transaction(async (tx): Promise<Result<{ artifact: Artifact; boardId: number }>> => {
+      const glob = await tx.getGlob(globId);
+      if (glob === null) return notFound(`No glob ${globId}`);
+      const now = this.deps.clock.now();
+      const provenance: Provenance = { by: 'reviewer', actor: input.model, runId: null, agentSetVersion: null, independentReview: input.meta };
+      const artifact = await tx.insertArtifact({ globId, kind: 'independent_review', label: '', content: input.content, link: null, commitSha: input.commitSha, provenance, createdAt: now });
+      await tx.appendEvents([
+        { type: 'ArtifactAdded', globId, actor: null, at: now, data: { kind: 'independent_review', label: '', version: artifact.version, commitSha: input.commitSha, stage: input.meta.stage, findings: input.meta.findings } },
+      ]);
+      return ok({ artifact, boardId: glob.boardId });
+    });
+    if (!result.ok) return result;
+    this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: result.value.boardId, globId });
+    return ok(result.value.artifact);
+  }
 
   /** `save_plan` and `PUT /globs/{id}/plan`: a new plan.md version, conditional on `version` when given. */
   async putPlan(email: string, globId: string, content: string, version?: number): Promise<Result<Artifact | Ignored>> {

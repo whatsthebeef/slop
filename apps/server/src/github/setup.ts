@@ -19,6 +19,8 @@ export const REQUIRED_APP_EVENTS = [
   'pull_request',
   'pull_request_review',
   'pull_request_review_comment',
+  // A resolved review thread: feedback on the independent reviewer's comments.
+  'pull_request_review_thread',
   'issue_comment',
   'check_run',
   'check_suite',
@@ -39,7 +41,8 @@ export const appManifest = (publicUrl: string, name: string) => ({
     contents: 'write',
     pull_requests: 'write',
     issues: 'write',
-    checks: 'read',
+    // Write: the "N findings" check run of an independent review (an existing installation must accept this).
+    checks: 'write',
     // Re-runs the failed jobs of a base check that broke in CI's setup (an existing installation must accept this).
     actions: 'write',
     statuses: 'read',

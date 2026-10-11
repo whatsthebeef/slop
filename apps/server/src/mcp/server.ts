@@ -410,6 +410,21 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   );
 
   server.registerTool(
+    'review_now',
+    {
+      description:
+        "Queue a fresh independent review of a glob that has a PR and is in Doing or Reviewing, as the glob's Review now button does. It always runs (an earlier review of the same commit doesn't stop it): an open PR is reviewed as it would land on the latest base branch, a merged one as its squash commit. The result is stored as the glob's independent_review artifact and posted on the PR (a GitHub review before merge, a PR comment after); it never blocks merging. Returns at once; the review follows in a few minutes.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const result = await globs.reviewNow(email, id);
+      // Not awaited: the review is minutes of model calls.
+      if (result.ok) void deps.outbox.drain(id).catch(() => undefined);
+      return reply(result, (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
     'pick_up',
     {
       description:
@@ -878,7 +893,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_artifact',
     {
       description:
-        "The latest version of one artifact of a glob in full: kind is 'implementation_plan' (the implementation record), 'local_review' or 'attachment' (with its label).",
+        "The latest version of one artifact of a glob in full: kind is 'implementation_plan' (the implementation record), 'local_review', 'independent_review' (the independent reviewer's findings) or 'attachment' (with its label).",
       inputSchema: { id: z.string(), kind: z.enum(ARTIFACT_KINDS), label: z.string().optional() },
     },
     async ({ id, kind, label }) => reply(await artifacts.artifact(email, id, kind, label ?? '')),

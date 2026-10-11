@@ -19,8 +19,8 @@ export const DEFAULT_SIZE_IGNORED_PATHS: readonly string[] = [
   '**/drizzle/meta/**',
 ];
 
-/** Matches a path against a glob: `**` spans directories, `*` stays within one. */
-export const matchesGlob = (path: string, glob: string): boolean => {
+/** A glob as a regular expression: `**` spans directories, `*` stays within one. */
+export const globRegExp = (glob: string): RegExp => {
   const ANY = '@@ANY@@';
   const pattern = glob
     .trim()
@@ -30,8 +30,11 @@ export const matchesGlob = (path: string, glob: string): boolean => {
     .replace(/\?/g, '[^/]')
     .split(ANY)
     .join('.*');
-  return new RegExp(`^${pattern}$`).test(path);
+  return new RegExp(`^${pattern}$`);
 };
+
+/** Matches a path against a glob (see `globRegExp`). */
+export const matchesGlob = (path: string, glob: string): boolean => globRegExp(glob).test(path);
 
 /** The path globs left out of the size: the policy's own list, or the defaults when it has none. */
 export const sizeIgnoredPathsOf = (policy: { readonly sizeIgnoredPaths?: readonly string[] } | null | undefined): readonly string[] =>

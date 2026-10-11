@@ -146,6 +146,10 @@ describe('GET /api/boards/:b/readiness: Claude workflow', () => {
     });
     expect(missing?.detail).toContain('pull_request_review, pull_request_review_comment');
     expect(await eventsItem([...REQUIRED_APP_EVENTS])).toMatchObject({ state: 'ok' });
+    // An App made before review threads were needed asks for the event (s15f43).
+    const withoutThread = await eventsItem(REQUIRED_APP_EVENTS.filter((e) => e !== 'pull_request_review_thread'));
+    expect(withoutThread).toMatchObject({ state: 'missing' });
+    expect(withoutThread?.detail).toContain('pull_request_review_thread');
   });
 
   it('reading the checklist raises the board setup line on the bar for each member, and dismissing is personal', async () => {

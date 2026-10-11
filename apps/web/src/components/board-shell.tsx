@@ -7,6 +7,7 @@ import { NotificationBar } from '@/components/notification-bar';
 import { AppSettings, BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
 import { hideSignedOff, isChatShortcut, WIDE_QUERY } from '@/lib/chat';
+import { spendLine } from '@/lib/review-settings';
 import { newCount } from '@/lib/inbox';
 import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
 import type { PageContext } from '@/lib/page-context';
@@ -36,6 +37,8 @@ const BoardTabs = ({
   // The Inbox tab counts items waiting for a person; hints refresh it on the pages that listen, and a slow poll covers the rest.
   const inbox = useQuery({ queryKey: inboxKey(boardId), queryFn: () => api.inbox(boardId), refetchInterval: pollInterval(false) });
   const waiting = newCount(inbox.data ?? []);
+  // A slow poll: the figure moves only when a review finishes.
+  const spend = useQuery({ queryKey: ['spend', boardId], queryFn: () => api.spend(boardId), refetchInterval: 5 * 60_000 });
   return (
     <header className='mx-5 mt-1.5 flex flex-wrap items-end gap-x-6 border-b border-edge/50 text-sm'>
       <nav className='flex gap-6' aria-label='Board sections'>
@@ -52,6 +55,11 @@ const BoardTabs = ({
         ))}
       </nav>
       <div className='ml-auto flex items-center gap-1 pb-1.5'>
+        {spend.data !== undefined && (
+          <span className='mr-2 text-xs text-muted-foreground' data-testid='llm-spend' title='Independent review spend only; other AI work is not counted yet'>
+            {spendLine(spend.data)}
+          </span>
+        )}
         <div ref={onActions} className='flex items-center' data-testid='header-actions' />
         <button
           type='button'

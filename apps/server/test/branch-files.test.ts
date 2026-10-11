@@ -25,6 +25,7 @@ const board: Board = {
   effectCheckGlobs: 10,
   agentKbApproval: 'docs',
   autoInvestigate: true,
+  review: { enabled: true, model: null, minSeverity: 'medium', ignoredPaths: [], toolCap: null },
   version: 1,
 };
 const glob = (patch: Partial<Glob> = {}): Glob => ({

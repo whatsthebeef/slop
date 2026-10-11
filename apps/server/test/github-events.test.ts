@@ -1,10 +1,11 @@
-import { GlobService } from '@slop/core';
+import { GlobService, ReviewFeedbackService, findingMarker } from '@slop/core';
 import type { Board, Result } from '@slop/core';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import * as schema from '../src/db/schema.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
+import type { PrReviewComment } from '../src/codehost.js';
 import { githubDeliveryHandler } from '../src/github/events.js';
 import { createTestDatabase } from './support/database.js';
 
@@ -188,5 +189,145 @@ describe('GitHub webhook deliveries', () => {
       payload: { ref: `refs/heads/${globId}`, after: 'c4', created: true, repository: { full_name: REPO } },
     });
     expect(deletedBranches).toContain(globId);
+  });
+
+  describe('feedback on the reviewer\'s inline comments (s15f43)', () => {
+    const wrongHandler = (comments: PrReviewComment[] = []) =>
+      githubDeliveryHandler({
+        db: database.db,
+        globs,
+        boardOf: (boardId) => store.transaction((tx) => tx.getBoard(boardId)),
+        github: { deleteBranch: () => Promise.resolve(), reviewComments: () => Promise.resolve(comments) },
+        feedback: new ReviewFeedbackService({ store }),
+      });
+    const bodyFor = (glob: string) =>
+      `**medium · convention: Use the helper**\n\nWhy.\n\n${findingMarker(glob, 3, { file: 'src/a.ts', category: 'convention', title: 'Use the helper' })}`;
+    const user = (login: string, type = 'User') => ({ login, type });
+    const comment = (cid: number, body: string, who = user('slop[bot]', 'Bot'), extra: object = {}) => ({
+      id: cid,
+      body,
+      path: 'src/a.ts',
+      line: 4,
+      user: who,
+      ...extra,
+    });
+    const thread = (comments: object[], extra: object = {}) => ({
+      action: 'resolved',
+      thread: { comments },
+      pull_request: { number: 7, head: { ref: globId } },
+      repository: { full_name: REPO },
+      ...extra,
+    });
+    const stored = () => store.transaction((tx) => tx.listReviewFeedback(1, '2020-01-01T00:00:00.000Z', '2100-01-01T00:00:00.000Z'));
+    const clear = () => database.db.delete(schema.reviewFeedback);
+
+    beforeEach(clear);
+
+    it('a thread resolved after a human /wrong reply is stored as wrong, with the finding it was about', async () => {
+      const feedbackHandle = wrongHandler();
+      await feedbackHandle({
+        id: id(),
+        event: 'pull_request_review_thread',
+        payload: thread([comment(501, bodyFor(globId)), comment(502, '/wrong the helper is private', user('dev'))]),
+      });
+      expect(await stored()).toMatchObject([
+        { globId, artifactVersion: 3, verdict: 'wrong', source: 'thread', category: 'convention', severity: 'medium', title: 'Use the helper', path: 'src/a.ts', line: 4, actor: 'dev' },
+      ]);
+    });
+
+    it('a plain resolve is stored as resolved, a bot reply does not make it wrong, and a redelivery adds nothing', async () => {
+      const feedbackHandle = wrongHandler();
+      const payload = thread([comment(511, bodyFor(globId)), comment(512, '/wrong', user('review-bot[bot]', 'Bot'))]);
+      await feedbackHandle({ id: id(), event: 'pull_request_review_thread', payload });
+      await feedbackHandle({ id: id(), event: 'pull_request_review_thread', payload });
+      await feedbackHandle({ id: 'same-delivery', event: 'pull_request_review_thread', payload });
+      expect(await feedbackHandle({ id: 'same-delivery', event: 'pull_request_review_thread', payload })).toBe(false);
+      expect((await stored()).map((f) => f.verdict)).toEqual(['resolved']);
+    });
+
+    it('ignores a thread that is not slop\'s finding, one from another repo or glob, and threads that are not resolved', async () => {
+      const feedbackHandle = wrongHandler();
+      const send = (payload: object) => feedbackHandle({ id: id(), event: 'pull_request_review_thread', payload });
+      await send(thread([comment(521, 'A human comment', user('dev')), comment(522, '/wrong', user('dev2'))]));
+      await send(thread([comment(523, bodyFor(globId)), comment(524, '/wrong', user('dev'))], { repository: { full_name: 'evil/fork' } }));
+      await send(thread([comment(525, bodyFor('s9t9')), comment(526, '/wrong', user('dev'))]));
+      await send(thread([comment(527, bodyFor(globId)), comment(528, '/wrong', user('dev'))], { action: 'unresolved' }));
+      expect(await stored()).toEqual([]);
+    });
+
+    it('a finding marker on a person\'s comment, or one naming another PR\'s glob, is not feedback', async () => {
+      const feedbackHandle = wrongHandler();
+      const send = (payload: object) => feedbackHandle({ id: id(), event: 'pull_request_review_thread', payload });
+      // A person forged the marker (and header) on their own comment.
+      await send(thread([comment(531, bodyFor(globId), user('mallory')), comment(532, '/wrong', user('dev'))]));
+      // The bot's comment on this PR names a different glob of the same board.
+      const otherGlobId = unwrap(
+        await globs.create(DEV, {
+          boardId: 1,
+          title: 'Other glob',
+          summary: '',
+          type: 'same',
+          category: 'task',
+          group: null,
+          environment: null,
+          autoTrigger: false,
+          idempotencyKey: null,
+        }),
+      ).id;
+      await send(thread([comment(533, bodyFor(otherGlobId)), comment(534, '/wrong', user('dev'))]));
+      expect(await stored()).toEqual([]);
+    });
+
+    it('a /wrong reply to a person\'s comment with a marker is not feedback', async () => {
+      const forged: PrReviewComment = {
+        id: 611,
+        body: bodyFor(globId),
+        inReplyTo: null,
+        author: 'mallory',
+        authorIsBot: false,
+        path: 'src/a.ts',
+        line: 4,
+        thumbsDown: 0,
+        createdAt: '2026-10-10T00:00:00.000Z',
+      };
+      await wrongHandler([forged])({
+        id: id(),
+        event: 'pull_request_review_comment',
+        payload: {
+          action: 'created',
+          comment: comment(612, '/wrong', user('dev'), { in_reply_to_id: 611 }),
+          pull_request: { number: 7, head: { ref: globId } },
+          repository: { full_name: REPO },
+        },
+      });
+      expect(await stored()).toEqual([]);
+    });
+
+    it('a /wrong reply on a finding comment is stored through the comment it replies to, once', async () => {
+      const parent: PrReviewComment = {
+        id: 601,
+        body: bodyFor(globId),
+        inReplyTo: null,
+        author: 'slop[bot]',
+        authorIsBot: true,
+        path: 'src/a.ts',
+        line: 4,
+        thumbsDown: 0,
+        createdAt: '2026-10-10T00:00:00.000Z',
+      };
+      const feedbackHandle = wrongHandler([parent]);
+      const reply = (cid: number, body: string, inReplyTo = 601) => ({
+        action: 'created',
+        comment: comment(cid, body, user('dev'), { in_reply_to_id: inReplyTo }),
+        pull_request: { number: 7, head: { ref: globId } },
+        repository: { full_name: REPO },
+      });
+      await feedbackHandle({ id: id(), event: 'pull_request_review_comment', payload: reply(602, 'False positive, it is private') });
+      await feedbackHandle({ id: id(), event: 'pull_request_review_comment', payload: reply(602, 'False positive, it is private') });
+      // A reply that does not say wrong, and a reply to some other comment, are not feedback.
+      await feedbackHandle({ id: id(), event: 'pull_request_review_comment', payload: reply(603, 'Thanks, fixing') });
+      await feedbackHandle({ id: id(), event: 'pull_request_review_comment', payload: reply(604, '/wrong', 999) });
+      expect(await stored()).toMatchObject([{ verdict: 'wrong', source: 'reply', githubCommentId: 602, actor: 'dev', globId }]);
+    });
   });
 });

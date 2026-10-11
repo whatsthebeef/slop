@@ -55,6 +55,7 @@ const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLoc
 
 const ACTION_TIPS: Partial<Record<Action, string>> = {
   investigate: 'Starts a routine run that investigates the plan (no branch, no commits) and attaches the result; starting later reuses it when the plan and files are unchanged',
+  review_now: 'Queues a fresh independent review of the change as it is now (an open PR as it would land on main, a merged one as its commit); it never blocks merging',
   start_anyway: 'Starts now, before what it waits for has merged; its branch will lack those changes',
   merge_continue: "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
   mark_ready: 'Marks the draft PR ready for review',

@@ -13,6 +13,7 @@ import type {
   ChatCitation,
   NotificationAction,
   NotificationClears,
+  ReviewBoardSettings,
   BaseChecks,
   Board,
   BoardJobResult,
@@ -37,7 +38,7 @@ import type {
   SignalFigures,
   TypeSignals,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES } from '@slop/core';
+import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -92,6 +93,8 @@ export const boards = pgTable('boards', {
   agentKbApproval: text('agent_kb_approval', { enum: AGENT_KB_APPROVALS }).notNull().default('docs'),
   /** Slop starts an investigate-only run by itself on a Planning glob intake flagged as big. */
   autoInvestigate: boolean('auto_investigate').notNull().default(true),
+  /** The independent reviewer's settings; a missing key reads as its default (`reviewSettingsOf`). */
+  reviewSettings: jsonb('review_settings').$type<Partial<ReviewBoardSettings>>().notNull().default({}),
   /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
   deploy: jsonb('deploy').$type<DeployIntegration>(),
   /** The latest check result on the base branch head; written by check events, not by settings changes. */
@@ -517,6 +520,57 @@ export const subLimitChanges = pgTable(
     step: integer('step').notNull().default(250),
   },
   (t) => [uniqueIndex('sub_limit_changes_outcome_idx').on(t.boardId, t.globId, t.outcome)],
+);
+
+/** What the LLM cost: one row per priced piece of work (a review), summed per board and month for the board's spend line. */
+export const llmSpend = pgTable(
+  'llm_spend',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    globId: text('glob_id'),
+    /** What the spend was for, such as `review`. */
+    source: text('source').notNull(),
+    model: text('model').notNull(),
+    inputTokens: integer('input_tokens').notNull(),
+    outputTokens: integer('output_tokens').notNull(),
+    /** Null when the model has no price: the tokens are kept, the cost is not known. */
+    costUsd: doublePrecision('cost_usd'),
+    /** Where to look it up, such as the review artifact's version. */
+    ref: text('ref'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [index('llm_spend_board_created_idx').on(t.boardId, t.createdAt)],
+);
+
+/** People's verdicts on the independent reviewer's inline comments (wrong, thumbs-down), read by the weekly mining. */
+export const reviewFeedback = pgTable(
+  'review_feedback',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    globId: text('glob_id').notNull(),
+    artifactVersion: integer('artifact_version').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    severity: text('severity', { enum: REVIEW_SEVERITIES }).notNull(),
+    category: text('category', { enum: REVIEW_CATEGORIES }).notNull(),
+    title: text('title').notNull(),
+    path: text('path').notNull(),
+    line: integer('line'),
+    verdict: text('verdict', { enum: REVIEW_VERDICTS }).notNull(),
+    source: text('source', { enum: REVIEW_FEEDBACK_SOURCES }).notNull(),
+    githubCommentId: bigint('github_comment_id', { mode: 'number' }).notNull(),
+    actor: text('actor'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('review_feedback_comment_idx').on(t.githubCommentId, t.source),
+    index('review_feedback_board_created_idx').on(t.boardId, t.createdAt),
+  ],
 );
 
 /** The dependency path patterns a board learned a weight for (spec, Dependencies); a pattern without a row has the catalog default. */

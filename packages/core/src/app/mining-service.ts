@@ -72,6 +72,7 @@ export class MiningService {
     const events = await tx.listBoardEvents(boardId, from);
     const artifacts = await tx.listArtifactMeta(boardId, ARTIFACT_KINDS, from);
     const findings = await tx.listBoardFindings(boardId, from, now);
+    const reviewFeedback = await tx.listReviewFeedback(boardId, from, now);
     const knowledge = await tx.listKnowledge(boardId, ['doc']);
     const items = await tx.listKbItems(boardId);
     return {
@@ -80,6 +81,7 @@ export class MiningService {
       events: events.filter((e) => e.at <= now),
       artifacts: artifacts.filter((a) => a.createdAt <= now),
       findings,
+      reviewFeedback,
       manifestChanges,
       documents: knowledge.map((d) => ({ name: d.name, content: d.content })),
       learnings: items.filter((i) => i.source === 'submitted').map((i) => ({ globIds: i.sourceGlobIds, agentSetVersion: i.agentSetVersion })),

@@ -41,6 +41,7 @@ const board = (
   effectCheckGlobs: 10,
   agentKbApproval: 'docs',
   autoInvestigate: true,
+  review: { enabled: true, model: null, minSeverity: 'medium', ignoredPaths: [], toolCap: null },
   version: 1,
   role: 'dev',
   ...(position === undefined ? {} : { position }),

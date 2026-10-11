@@ -110,6 +110,8 @@ export class LearningJobService {
       sizeCheck?: SizeCheckService;
       /** Null without a code host: the dependency signal isn't measured. */
       manifests: ManifestSource | null;
+      /** Runs just before mining reads the board's activity (the server collects review feedback from the code host); best effort. */
+      beforeMining?: (board: Board, now: string) => Promise<void>;
       /** Where a run that outlived its lease is reported (the server's error log). */
       log?: (task: string, message: string) => void;
     },
@@ -238,6 +240,11 @@ export class LearningJobService {
       const { sizeCheck } = this.deps;
       if (sizeCheck === undefined) throw new Error('The size-threshold job is not wired');
       return sizeCheck.learn(board.id);
+    }
+    try {
+      await this.deps.beforeMining?.(board, started);
+    } catch (error) {
+      this.deps.log?.('mining', `Collecting review feedback for board ${String(board.id)} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const commits = await this.deps.mining.mergedCommits(board.id, started);
     const manifestChanges =

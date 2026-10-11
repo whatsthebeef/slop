@@ -132,7 +132,7 @@ describe('decision globs', () => {
       expect(columns).toHaveLength(1);
       const indexes = await database.db.execute(sql`select indexname from pg_indexes where indexname = 'kb_proposals_decision_glob_idx'`);
       expect(indexes).toHaveLength(1);
-      const migration = await readFile(new URL('../drizzle/0046_decision_globs.sql', import.meta.url), 'utf8');
+      const migration = await readFile(new URL('../drizzle/0047_decision_globs.sql', import.meta.url), 'utf8');
       for (const statement of migration.split('--> statement-breakpoint')) await database.db.execute(sql.raw(statement));
       const journal = JSON.parse(await readFile(new URL('../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: { idx: number; when: number; tag: string }[] };
       const whens = journal.entries.map((e) => e.when);

@@ -11,6 +11,7 @@ import type { BoardNotification } from '../domain/notifications.js';
 import type { ChatMessage, ChatThread } from '../domain/chat.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
+import { DEFAULT_REVIEW_BOARD_SETTINGS } from '../domain/review-settings.js';
 import type { KbItem } from '../domain/kb.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
@@ -26,6 +27,9 @@ import type { EscalationRecord } from '../domain/escalation-learning.js';
 import type { RiskArea, RiskAreaChange } from '../domain/risk-area.js';
 import { SUB_LIMIT_STEP } from '../domain/sub-limit.js';
 import type { SubLimitChange } from '../domain/sub-limit.js';
+import type { ReviewFeedback } from '../domain/review-feedback.js';
+import { summariseSpend } from '../domain/spend.js';
+import type { LlmSpend } from '../domain/spend.js';
 import type { TypeCorrection } from '../domain/type-learning.js';
 import type { DependencyRule, DependencyRuleChange } from '../domain/dependency-rules.js';
 import type { GlobOutcome, IntakeSnapshot } from '../domain/intake-learning.js';
@@ -55,6 +59,8 @@ interface State {
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
+  llmSpend: LlmSpend[];
+  reviewFeedback: ReviewFeedback[];
   dependencyRules: DependencyRule[];
   dependencyRuleChanges: DependencyRuleChange[];
   riskAreas: RiskArea[];
@@ -144,6 +150,8 @@ const clone = (state: State): State => ({
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
+  llmSpend: [...state.llmSpend],
+  reviewFeedback: [...state.reviewFeedback],
   dependencyRules: [...state.dependencyRules],
   dependencyRuleChanges: [...state.dependencyRuleChanges],
   riskAreas: [...state.riskAreas],
@@ -198,6 +206,8 @@ export class MemoryStore implements Store {
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
+    llmSpend: [],
+    reviewFeedback: [],
     dependencyRules: [],
     dependencyRuleChanges: [],
     riskAreas: [],
@@ -326,7 +336,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, subLimitStep: SUB_LIMIT_STEP, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs', autoInvestigate: true };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, subLimitStep: SUB_LIMIT_STEP, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs', autoInvestigate: true, review: DEFAULT_REVIEW_BOARD_SETTINGS };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -343,6 +353,23 @@ export class MemoryStore implements Store {
         s.boards.set(boardId, { ...current, subMaxChangedLines: to, subLimitStep: step ?? current.subLimitStep });
         return Promise.resolve(true);
       },
+      insertLlmSpend: (row) => {
+        s.llmSpend.push({ ...row, id: this.nextRowId++ });
+        return Promise.resolve();
+      },
+      sumLlmSpend: (boardId, from, to) =>
+        Promise.resolve(summariseSpend(s.llmSpend.filter((r) => r.boardId === boardId && r.createdAt >= from && r.createdAt <= to))),
+      insertReviewFeedback: (row) => {
+        if (s.reviewFeedback.some((f) => f.githubCommentId === row.githubCommentId && f.source === row.source)) return Promise.resolve(false);
+        s.reviewFeedback.push({ ...row, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listReviewFeedback: (boardId, since, until) =>
+        Promise.resolve(
+          s.reviewFeedback
+            .filter((f) => f.boardId === boardId && f.createdAt >= since && f.createdAt <= until)
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id),
+        ),
       insertSubLimitChange: (change) => {
         if (s.subLimitChanges.some((c) => c.boardId === change.boardId && c.globId === change.globId && c.outcome === change.outcome)) {
           return Promise.resolve(false);
@@ -575,6 +602,7 @@ export class MemoryStore implements Store {
             createdAt: a.createdAt,
             by: a.provenance.by,
             actor: a.provenance.actor,
+            ...(a.provenance.independentReview === undefined ? {} : { review: a.provenance.independentReview }),
           });
         }
         return Promise.resolve([...summaries.values()]);
@@ -1133,8 +1161,9 @@ export class MemoryStore implements Store {
         for (const effect of effects) {
           // One pending recheck per board is enough: it reads the board as it is when it runs.
           if (effect.kind === 'recheck_overlaps' && s.outbox.some((e) => e.kind === 'recheck_overlaps' && e.globId === effect.globId)) continue;
-          if (effect.kind === 'review_change') {
-            const same = (e: Effect) => e.kind === 'review_change' && e.globId === effect.globId && e.stage === effect.stage;
+          // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
+          if (effect.kind === 'review_change' && effect.requestId === undefined) {
+            const same = (e: Effect) => e.kind === 'review_change' && e.requestId === undefined && e.globId === effect.globId && e.stage === effect.stage;
             if (s.outbox.some((e) => same(e) && e.kind === 'review_change' && e.sha === effect.sha)) continue;
             // A newer pre-merge head cancels the older head's pending job.
             if (effect.stage === 'pre_merge') s.outbox = s.outbox.filter((e) => !same(e));

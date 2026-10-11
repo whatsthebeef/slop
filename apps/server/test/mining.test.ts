@@ -265,6 +265,54 @@ describe('Mining reads and board jobs in Postgres', () => {
       belowThresholdRuns: 0,
     });
   });
+
+  it('reads review feedback into the mining input and raises a false-positive item from three globs (s15f43)', async () => {
+    const mining = new MiningService({ store, notifier });
+    const reviewed: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const globId = await newGlob(otherBoardId);
+      reviewed.push(globId);
+      now = ago(6 - i);
+      unwrap(
+        await artifacts.addIndependentReview(globId, {
+          content: '# Independent review\n',
+          commitSha: 'm1',
+          meta: { stage: 'pre_merge', headSha: 'h1', findings: 1, high: 0, medium: 1, low: 0 },
+          model: 'gpt-oss',
+        }),
+      );
+      await store.transaction((tx) =>
+        tx.insertReviewFeedback({
+          boardId: otherBoardId,
+          globId,
+          artifactVersion: 1,
+          fingerprint: `fp${String(i)}`,
+          severity: 'medium',
+          category: 'convention',
+          title: 'Use the helper',
+          path: 'src/a.ts',
+          line: 4,
+          verdict: i === 2 ? 'thumbs_down' : 'wrong',
+          source: i === 2 ? 'reaction' : 'reply',
+          githubCommentId: 9000 + i,
+          actor: null,
+          createdAt: ago(5 - i),
+        }),
+      );
+    }
+    now = NOW;
+    const activity = await store.transaction((tx) => mining.activity(tx, otherBoardId, NOW, null));
+    expect(activity.reviewFeedback.map((f) => f.globId)).toEqual(reviewed);
+    const result = await mining.mine(otherBoardId, NOW);
+    expect(result.raised).toHaveLength(1);
+    const item = await store.transaction((tx) => tx.getKbItem(result.raised[0] ?? ''));
+    expect(item?.signal).toMatchObject({
+      key: 'review_false_positive:convention',
+      kind: 'review_false_positive',
+      figures: { affected: 3, eligible: 3 },
+    });
+    expect(item?.signal?.examples[0]).toContain('Use the helper (src/a.ts)');
+  });
 });
 
 describe('Learning jobs on two servers at once (s15f8)', () => {
@@ -310,6 +358,35 @@ describe('Learning jobs on two servers at once (s15f8)', () => {
     expect((await store.transaction((tx) => tx.listKbItems(boardId))).filter((i) => i.source === 'mined')).toHaveLength(1);
     expect(await store.transaction((tx) => tx.getBoardJob(boardId, 'mining'))).toMatchObject({ lastRunAt: NOW, runningUntil: null, lastResult: { kind: 'mining', raised: [expect.any(String)] } });
 
+  });
+
+  it('collects review feedback just before mining, and mines anyway when collecting fails (s15f43)', async () => {
+    const store = new PgStore(database.db);
+    const clock = { now: () => NOW };
+    const notifier = { publish: () => undefined };
+    const board = await store.transaction((tx) =>
+      tx.insertBoard({ name: 'feedback', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] }),
+    );
+    const order: string[] = [];
+    const logs: string[] = [];
+    const jobs = (beforeMining: () => Promise<void>) =>
+      new LearningJobService({
+        store,
+        clock,
+        notifier,
+        mining: new MiningService({ store, notifier }),
+        manifests: null,
+        beforeMining: (b) => {
+          order.push(`collect ${String(b.id)}`);
+          return beforeMining();
+        },
+        log: (_task, message) => logs.push(message),
+      });
+    await jobs(() => Promise.reject(new Error('GitHub down'))).runDue();
+    expect(order).toEqual([`collect ${String(board.id)}`]);
+    expect(logs.join('\n')).toContain('Collecting review feedback');
+    expect(logs.join('\n')).toContain('GitHub down');
+    expect(await store.transaction((tx) => tx.getBoardJob(board.id, 'mining'))).toMatchObject({ lastResult: { kind: 'mining' } });
   });
 });
 
@@ -428,6 +505,7 @@ describe('Manifest changes and commit trailers', () => {
     effectCheckGlobs: 10,
     agentKbApproval: 'docs',
     autoInvestigate: true,
+    review: { enabled: true, model: null, minSeverity: 'medium', ignoredPaths: [], toolCap: null },
     version: 1,
   };
 

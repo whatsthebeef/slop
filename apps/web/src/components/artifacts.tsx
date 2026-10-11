@@ -1,7 +1,7 @@
 import { parseInvestigation } from '@slop/core';
 import type { ArtifactKind, Investigation } from '@slop/core';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardCheck, FileCheck, FileText, Microscope, Paperclip } from 'lucide-react';
+import { ClipboardCheck, FileCheck, FileText, Microscope, Paperclip, SearchCheck } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
@@ -21,6 +21,7 @@ export const ARTIFACT_META: Record<
   // Legacy rows only: postplans were migrated into the record and writes to the kind land there.
   postplan: { title: 'Postplan (old)', icon: FileCheck },
   local_review: { title: 'Local review', icon: ClipboardCheck },
+  independent_review: { title: 'Independent review', icon: SearchCheck },
   investigation: { title: 'Investigation', icon: Microscope },
   assessment: { title: 'Assessment', icon: ClipboardCheck },
   attachment: { title: 'Attachment', icon: Paperclip },
@@ -32,6 +33,7 @@ export const CARD_ARTIFACT_KINDS = [
   'implementation_plan',
   'local_review',
   'assessment',
+  'independent_review',
 ] as const;
 
 export interface ArtifactRef {

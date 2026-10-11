@@ -1,5 +1,5 @@
-import type { BoardService, Glob, GlobService, Result, SizeCheckService, SplitInfo } from '@slop/core';
-import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
+import type { BoardService, Glob, GlobService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
+import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -24,6 +24,8 @@ export interface AppDeps {
   readonly outbox: OutboxRunner;
   /** Keep whole on a flagged glob; absent: its route isn't mounted. */
   readonly sizeCheck?: SizeCheckService;
+  /** The board's LLM spend line; absent: its route isn't mounted. */
+  readonly spend?: SpendService;
   /** Refuses Ready for review for a branch that conflicts with its base. */
   readonly readyGate?: ReadyGate;
   /** Signs the board sign-in `state`. */
@@ -79,6 +81,17 @@ const settingsSchema = z.object({
   effectCheckGlobs: z.number().int().optional(),
   agentKbApproval: z.enum(AGENT_KB_APPROVALS).optional(),
   autoInvestigate: z.boolean().optional(),
+  // Only the keys sent change; core checks the values.
+  review: z
+    .object({
+      enabled: z.boolean(),
+      model: z.string().nullable(),
+      minSeverity: z.enum(REVIEW_SEVERITIES),
+      ignoredPaths: z.array(z.string()),
+      toolCap: z.number().int().nullable(),
+    })
+    .partial()
+    .optional(),
   deploy: z
     .discriminatedUnion('provider', [
       z.object({
@@ -346,6 +359,16 @@ export const createApp = (deps: AppDeps) => {
     return send(c, await boards.updateSettings(c.get('email'), Number(c.req.param('b')), version, settings));
   });
 
+  // This month's LLM spend (review spend so far), for the line on the board.
+  app.get('/api/boards/:b/spend', async (c) => {
+    const { spend } = deps;
+    if (spend === undefined) return c.json({ code: 'not_found', message: 'Spend is not tracked' }, 404);
+    const boardId = Number(c.req.param('b'));
+    const member = await boards.get(c.get('email'), boardId);
+    if (!member.ok) return send(c, member);
+    return send(c, await spend.monthToDate(boardId));
+  });
+
   app.get('/api/boards/:b/members', async (c) =>
     send(c, await boards.members(c.get('email'), Number(c.req.param('b')))),
   );
@@ -502,6 +525,8 @@ export const createApp = (deps: AppDeps) => {
       return globs.startAnyway(email, id, b.version);
     },
     investigate: (email: string, id: string, b: ActionBody) => globs.investigate(email, id, b.version),
+    // Queues an independent review of the PR as it is now (any member; the version is not checked, nothing on the glob changes).
+    'review-now': (email: string, id: string) => globs.reviewNow(email, id),
     retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version, b.anyway === true),
     'retry-autofix': (email: string, id: string, b: ActionBody) => globs.retryAutofix(email, id, b.version),
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),
@@ -529,7 +554,12 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, actionSchema);
     if (body instanceof Response) return body;
     const result = await actions[action.data](c.get('email'), c.req.param('id'), body);
-    if (result.ok) await deps.outbox.drain(result.value.id);
+    if (result.ok) {
+      const drained = deps.outbox.drain(result.value.id);
+      // A review takes minutes: it runs in the background, and the glob view answers at once.
+      if (action.data === 'review-now') void drained.catch(() => undefined);
+      else await drained;
+    }
     return withView(c, result);
   });
 

@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
-import type { AppSettings, BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PrSnapshot, Repo, RepoConnection, ReviewDiff, TestMergeTarget } from '../codehost.js';
+import { REVIEW_CHECK } from '../codehost.js';
+import type { AppSettings, BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -283,7 +284,7 @@ export class GitHub implements CodeHost, CommitGraph {
         filter: 'latest',
         per_page: 100,
       });
-      runs = checks.data.check_runs;
+      runs = checks.data.check_runs.filter((run) => run.name !== REVIEW_CHECK);
     }
     const state = classifyMergeState(data.mergeable_state, runs);
     return { sha: data.head.sha, state };
@@ -576,6 +577,109 @@ export class GitHub implements CodeHost, CommitGraph {
     }
     await gh.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', { ...r, body });
     return 'posted';
+  }
+
+  prDiff(repo: Repo, headSha: string, signal?: AbortSignal): Promise<string> {
+    return this.unifiedDiff(repo, `${repo.base}...${headSha}`, signal);
+  }
+
+  async submitReview(repo: Repo, prNumber: number, review: PostedReview): Promise<{ id: number; inline: number }> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name, pull_number: prNumber, commit_id: review.commitSha, event: 'COMMENT' as const };
+    try {
+      const { data } = await gh.request('POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
+        ...r,
+        body: review.body,
+        comments: review.comments.map((c) => ({ path: c.path, line: c.line, side: 'RIGHT' as const, body: c.body })),
+      });
+      return { id: Number(data.id), inline: review.comments.length };
+    } catch (error) {
+      // A comment whose line isn't in the PR's own diff (the reviewed change is the test merge, which can differ) fails the
+      // whole review with 422: post it again with the comments in the body, so no finding is lost.
+      if (review.comments.length === 0 || !isStatus(error, 422)) throw error;
+      const folded = [review.body, ...review.comments.map((c) => `**\`${c.path}:${String(c.line)}\`**\n\n${c.body}`)].join('\n\n');
+      const { data } = await gh.request('POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews', { ...r, body: folded.slice(0, 60_000) });
+      return { id: Number(data.id), inline: 0 };
+    }
+  }
+
+  async outdateReviews(repo: Repo, prNumber: number, markerPrefix: string, exceptId: number | null, rewrite: (body: string) => string): Promise<number> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name, pull_number: prNumber };
+    let changed = 0;
+    // Reviews come oldest first; slop's are looked for in the first five hundred.
+    for (let page = 1; page <= 5; page++) {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews', { ...r, per_page: 100, page });
+      for (const review of data) {
+        const body = review.body;
+        if (Number(review.id) === exceptId || !body.startsWith(markerPrefix)) continue;
+        const next = rewrite(body);
+        if (next === body) continue;
+        await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}', { ...r, review_id: Number(review.id), body: next });
+        // The inline comments can't be edited into "outdated", but GraphQL can fold them away as outdated. Best effort.
+        try {
+          const { data: comments } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments', { ...r, review_id: Number(review.id), per_page: 100 });
+          for (const comment of comments) {
+            await gh.graphql('mutation($id: ID!) { minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) { clientMutationId } }', { id: comment.node_id });
+          }
+        } catch {
+          // The body already says outdated; folding the comments away is a nicety.
+        }
+        changed += 1;
+      }
+      if (data.length < 100) break;
+    }
+    return changed;
+  }
+
+  async reviewComments(repo: Repo, prNumber: number): Promise<PrReviewComment[]> {
+    const gh = await this.octokit(repo);
+    const out: PrReviewComment[] = [];
+    // Comments come oldest first; the first thousand cover a PR's review.
+    for (let page = 1; page <= 10; page++) {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+        owner: repo.owner,
+        repo: repo.name,
+        pull_number: prNumber,
+        per_page: 100,
+        page,
+      });
+      for (const c of data) {
+        out.push({
+          id: Number(c.id),
+          body: c.body,
+          inReplyTo: c.in_reply_to_id ?? null,
+          author: c.user?.login ?? null,
+          authorIsBot: c.user?.type === 'Bot',
+          path: c.path,
+          line: c.line ?? c.original_line ?? null,
+          thumbsDown: c.reactions?.['-1'] ?? 0,
+          createdAt: c.created_at,
+        });
+      }
+      if (data.length < 100) break;
+    }
+    return out;
+  }
+
+  async reportCheck(repo: Repo, sha: string, check: ReportedCheck): Promise<'created' | 'unavailable'> {
+    const gh = await this.octokit(repo);
+    try {
+      await gh.request('POST /repos/{owner}/{repo}/check-runs', {
+        owner: repo.owner,
+        repo: repo.name,
+        name: check.name,
+        head_sha: sha,
+        status: 'completed',
+        conclusion: 'neutral',
+        output: { title: check.title, summary: check.summary },
+      });
+      return 'created';
+    } catch (error) {
+      // An installation that hasn't accepted the Checks write permission yet gets 403 (or 404): the review is still posted.
+      if (isStatus(error, 403, 404)) return 'unavailable';
+      throw error;
+    }
   }
 
   async diffSummary(repo: Repo, sha: string): Promise<DiffSummary> {
