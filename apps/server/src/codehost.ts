@@ -97,6 +97,10 @@ export interface CodeHost {
   readFile(repo: Repo, ref: string, path: string, signal?: AbortSignal): Promise<string | null>;
   /** The names of the files directly in directory `dir` on a branch; empty when the directory (or branch) doesn't exist. */
   listFiles(repo: Repo, ref: string, dir: string, signal?: AbortSignal): Promise<string[]>;
+  /** The entries directly in directory `dir` ('' is the root) on a ref, folders included; null when the directory (or ref) doesn't exist. */
+  listDir(repo: Repo, ref: string, dir: string, signal?: AbortSignal): Promise<{ name: string; type: 'file' | 'dir' }[] | null>;
+  /** A short-lived read-only token for fetching the repo with git (the reviewer's temporary clone). Never log it. */
+  readToken(repo: Repo): Promise<string>;
   /** The files commit `sha` changed against its first parent (mined signals read its dependency manifests). */
   commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles>;
   /** Marks a draft PR ready for review. */
