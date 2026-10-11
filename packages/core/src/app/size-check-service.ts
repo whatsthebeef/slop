@@ -4,22 +4,28 @@ import { isInvestigateEvent } from '../domain/events.js';
 import type { DomainEvent } from '../domain/events.js';
 import type { BoardJobResult } from '../domain/signals.js';
 import {
+  DEFAULT_SIZE_THRESHOLD,
   SIZE_BOUNDS,
   SIZE_EVENT_TYPES,
   buildProposal,
   estimateFromText,
   evidenceOf,
+  isChain,
   nextThreshold,
   oversizedReasons,
   prHoursOf,
   prRangeOf,
   sizeOutcomeOf,
   splitAfterStartOf,
+  splitOutcomeOf,
+  splitPartsOf,
+  splitShape,
   withModelParts,
 } from '../domain/size-check.js';
 import type { ModelPart, SizeCheck, SizeOutcome, SizeProposal, SizeThreshold, SizeThresholdView } from '../domain/size-check.js';
+import { dependencyIds, dependencyState } from '../domain/waiting.js';
 import type { Clock, Notifier, Store } from '../ports.js';
-import { memberOf } from './access.js';
+import { adminOf, memberOf } from './access.js';
 import type { Llm } from './intake-service.js';
 import { completeWithDeadline } from './llm-call.js';
 import { field, list, parseJson, text } from './llm-json.js';
@@ -59,13 +65,14 @@ export const checkFrom = (globId: string, boardId: number, assessment: SizeAsses
 
 const JUDGE_SYSTEM = `You judge whether the plan of a piece of software work is one pull request's worth of work.
 Count its independent parts: pieces that could be built, reviewed and merged on their own. A schema migration and the server code that uses it are one part; a separate screen, a separate integration or a separate migration's worth of work is another.
-Answer with JSON only: {"independentParts": a whole number, at least 1, "reason": "one short sentence"}.`;
+Also say how many parts could be built at the same time once any shared contract (a schema, an interface) is in place. A long plan whose steps each need the one before has 1: splitting it gains nothing.
+Answer with JSON only: {"independentParts": a whole number, at least 1, "parallelParts": a whole number, at least 1, "reason": "one short sentence"}.`;
 
 const PROPOSE_SYSTEM = `You split a plan that is too big for one pull request into parts that can each be built and merged on their own.
 Answer with JSON only: {"parts": [{"title": "...", "summary": "one or two sentences", "plan": "...", "after": [0]}]}.
-- 2 to 6 parts, in the order they should be built. Part 0 stays the original task.
+- 2 to 6 parts, in the order they should be built. Part 0 stays the original task. When the parts share something (a schema, an interface, a type), make part 0 that shared contract alone and let each other part need only part 0, so they can be built at the same time.
 - "plan" is the part's share of the original plan, copied verbatim (keep the goal and any context it needs): every task goes to exactly one part. A section with no task (Evidence, Why, Background, Notes, an investigation list) is context: never make it a part, leave it with the parts that use it.
-- "after" lists the earlier parts (their index) this one must wait for, only where it needs their code, changes the same files or needs a migration; otherwise leave it empty so parts run in parallel.`;
+- "after" lists the earlier parts (their index) whose code this one needs on main before it can start: direct prerequisites only. Touching the same files is not a need (leave it out); otherwise leave it empty so parts run in parallel.`;
 
 const intOf = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
@@ -121,21 +128,22 @@ export class SizeCheckService implements SizeAssessor {
         );
         const parsed = parseJson(answer);
         const parts = intOf(field(parsed, 'independentParts'));
-        if (parts !== null && parts >= 1) estimate = withModelParts(estimate, parts, text(field(parsed, 'reason'))?.trim().slice(0, 300) ?? null);
+        const parallel = intOf(field(parsed, 'parallelParts'));
+        if (parts !== null && parts >= 1) estimate = withModelParts(estimate, parts, text(field(parsed, 'reason'))?.trim().slice(0, 300) ?? null, parallel !== null && parallel >= 1 ? parallel : null);
       } catch {
         // Unavailable, slow or unusable: the text estimate stands.
       }
     }
-    const reasons = oversizedReasons(estimate, threshold);
-    return {
-      planHash: hash(plan),
-      estimate,
-      evidence: evidenceOf(estimate),
-      threshold,
-      flagged: reasons.length > 0,
-      reasons,
-      proposal: reasons.length > 0 ? await this.propose(plan) : null,
-    };
+    let reasons = oversizedReasons(estimate, threshold);
+    const evidence = evidenceOf(estimate);
+    let proposal = reasons.length > 0 ? await this.propose(plan) : null;
+    // A split whose parts would wait on each other in one line saves nothing: the glob stays whole, and the evidence says why.
+    if (proposal !== null && isChain(proposal)) {
+      evidence.push(`Not oversized: a split would be a chain of ${proposal.parts.length} parts (critical path ${proposal.criticalPath ?? proposal.parts.length}), with nothing to build in parallel`);
+      proposal = null;
+      reasons = [];
+    }
+    return { planHash: hash(plan), estimate, evidence, threshold, flagged: reasons.length > 0, reasons, proposal };
   }
 
   /** The model's split of a flagged plan; null when it is unavailable or gives fewer than 2 usable parts. */
@@ -213,8 +221,33 @@ export class SizeCheckService implements SizeAssessor {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
       if ((await tx.getBoard(boardId)) === null) return notFound(`No board ${boardId}`);
-      return ok({ current: await tx.getSizeThreshold(boardId), bounds: SIZE_BOUNDS, history: await tx.listSizeThresholdChanges(boardId) });
+      return ok({
+        current: await tx.getSizeThreshold(boardId),
+        defaults: DEFAULT_SIZE_THRESHOLD,
+        bounds: SIZE_BOUNDS,
+        history: await tx.listSizeThresholdChanges(boardId),
+      });
     });
+  }
+
+  /** Admins: puts the board back on the default threshold and keeps the history, with the reset as its own entry. */
+  async reset(email: string, boardId: number): Promise<Result<SizeThresholdView>> {
+    const now = this.deps.clock.now();
+    const done = await this.deps.store.transaction(async (tx): Promise<Result<null>> => {
+      const actor = await adminOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      if ((await tx.getBoard(boardId)) === null) return notFound(`No board ${boardId}`);
+      await tx.lockBoardJob(boardId, 'size_threshold');
+      const from = await tx.getSizeThreshold(boardId);
+      if (from.maxTasks === DEFAULT_SIZE_THRESHOLD.maxTasks && from.maxParts === DEFAULT_SIZE_THRESHOLD.maxParts) return ok(null);
+      // The history keeps one entry per glob, so a reset is filed under its own key rather than a glob.
+      await tx.insertSizeThresholdChange({ boardId, at: now, from, to: DEFAULT_SIZE_THRESHOLD, outcome: 'reset', globId: `reset:${now}`, evidence: `Reset to the defaults by ${email}` });
+      if (!(await tx.setSizeThreshold(boardId, from, DEFAULT_SIZE_THRESHOLD))) throw new Error(`Board ${boardId}'s size threshold changed during the reset`);
+      return ok(null);
+    });
+    if (!done.ok) return done;
+    this.deps.notifier.publish({ kind: 'board.changed', boardId });
+    return this.view(email, boardId);
   }
 
   /**
@@ -237,6 +270,7 @@ export class SizeCheckService implements SizeAssessor {
     for (const e of read.events) byGlob.set(e.globId, [...(byGlob.get(e.globId) ?? []), e]);
     const checks = new Map(read.checks.map((c) => [c.globId, c]));
     const categories = new Map(read.globs.map((g) => [g.id, g.category]));
+    const globsById = new Map(read.globs.map((g) => [g.id, g]));
     const range = prRangeOf(
       read.outcomes.flatMap((o) => {
         const hours = prHoursOf(byGlob.get(o.globId) ?? []);
@@ -249,6 +283,39 @@ export class SizeCheckService implements SizeAssessor {
     const changes: SizeThresholdResult['changes'][number][] = [];
     for (const outcome of due) {
       const events = byGlob.get(outcome.globId) ?? [];
+      // A glob cut up before it started is judged by how its parts went, once they have all merged; one whose parts the
+      // events don't name (older splits) is judged as before.
+      const splitIds = splitAfterStartOf(events) ? null : splitPartsOf(outcome.globId, events);
+      if (splitIds !== null) {
+        const partGlobs = splitIds.map((id) => globsById.get(id));
+        if (partGlobs.some((g) => g !== undefined && dependencyState(g) !== 'merged')) continue;
+        const shape = splitShape(
+          splitIds.map((id, index) => ({
+            after: dependencyIds(globsById.get(id) ?? {}).flatMap((n) => {
+              const at = splitIds.indexOf(n);
+              return at >= 0 && at < index ? [at] : [];
+            }),
+          })),
+        );
+        const partEvents = splitIds.flatMap((id) => byGlob.get(id) ?? []);
+        const splitAt = [...events].reverse().find((e) => e.type === 'GlobSplit')?.at;
+        const lastMerge = partEvents.filter((e) => e.type === 'Merged').map((e) => e.at).sort().at(-1);
+        const ms = splitAt === undefined || lastMerge === undefined ? Number.NaN : Date.parse(lastMerge) - Date.parse(splitAt);
+        const verdict = splitOutcomeOf(
+          {
+            parts: splitIds.length,
+            criticalPath: shape.criticalPath,
+            failedRuns: partEvents.filter((e) => e.type === 'RunFailed').length,
+            missing: partGlobs.filter((g) => g === undefined).length,
+            conflicts: partGlobs.filter((g) => g?.conflict != null).length,
+            hours: Number.isFinite(ms) && ms >= 0 ? ms / 3_600_000 : null,
+          },
+          range,
+        );
+        const change = await this.record(boardId, verdict.outcome, outcome.globId, verdict.evidence);
+        if (change !== null) changes.push(change);
+        continue;
+      }
       const found = sizeOutcomeOf(
         {
           globId: outcome.globId,

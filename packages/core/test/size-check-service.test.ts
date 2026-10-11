@@ -7,8 +7,10 @@ import type { Llm, LlmRequest } from '../src/app/intake-service.js';
 import { SizeCheckService } from '../src/app/size-check-service.js';
 import type { Result } from '../src/domain/errors.js';
 import type { GlobOutcome } from '../src/domain/intake-learning.js';
+import * as machine from '../src/domain/machine.js';
 import { DEFAULT_SIZE_THRESHOLD } from '../src/domain/size-check.js';
 import type { Glob } from '../src/domain/types.js';
+import { edgesOf } from '../src/domain/waiting.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
 const unwrap = <T>(result: Result<T>): T => {
@@ -45,6 +47,10 @@ describe('learned size check', () => {
   let calls: string[];
   let service: SizeCheckService;
   let clockNow: string;
+  /** What the judge answers; the default says five parts, three of them buildable at the same time. */
+  let judged: string;
+  /** What the proposer answers: the parts, with the model's needs. */
+  let proposed: { title: string; summary: string; plan: string; after: number[] }[];
 
   const llm: Llm = {
     complete: (request: LlmRequest) => {
@@ -53,13 +59,8 @@ describe('learned size check', () => {
       if (llmMode === 'junk') return Promise.resolve('no json here');
       return Promise.resolve(
         request.system.startsWith('You judge')
-          ? '{"independentParts": 5, "reason": "five pieces"}'
-          : JSON.stringify({
-              parts: [
-                { title: 'Data and server', summary: 'a', plan: '## Tasks\n1. migration in apps/server/drizzle\n2. endpoint in apps/server/drizzle', after: [] },
-                { title: 'Web', summary: 'b', plan: '## Tasks\n3. web card', after: [0] },
-              ],
-            }),
+          ? judged
+          : JSON.stringify({ parts: proposed }),
       );
     },
   };
@@ -88,6 +89,12 @@ describe('learned size check', () => {
   beforeEach(async () => {
     store = new MemoryStore();
     llmMode = 'ok';
+    judged = '{"independentParts": 5, "parallelParts": 3, "reason": "five pieces"}';
+    proposed = [
+      { title: 'Data and server', summary: 'a', plan: '## Tasks\n1. migration in apps/server/drizzle\n2. endpoint in apps/server/drizzle', after: [] },
+      { title: 'Web', summary: 'b', plan: '## Tasks\n3. web card', after: [0] },
+      { title: 'CLI', summary: 'c', plan: '## Tasks\n4. CLI command in apps/server/drizzle', after: [0] },
+    ];
     calls = [];
     clockNow = NOW;
     const notifier = new RecordingNotifier();
@@ -110,11 +117,14 @@ describe('learned size check', () => {
     expect(check).toMatchObject({ flagged: true, decision: null, threshold: DEFAULT_SIZE_THRESHOLD });
     expect(check?.estimate).toMatchObject({ tasks: 6, independentParts: 5, partsSource: 'model' });
     expect(check?.evidence.join('\n')).toContain('Model: 5 independent parts');
-    expect(check?.reasons.length).toBe(2);
+    expect(check?.reasons.length).toBe(3);
+    expect(check?.estimate.parallelParts).toBe(3);
     // The model's two parts; the untasked "Chat content" section is context, copied into each.
-    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['Data and server', 'Web']);
+    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['Data and server', 'Web', 'CLI']);
     for (const part of check?.proposal?.parts ?? []) expect(part.plan).toContain('This section has prose and no task of its own');
-    expect(check?.proposal?.parts[1]?.after).toEqual([0]);
+    expect(check?.proposal?.parts.map((p) => p.after)).toEqual([[], [0], [0]]);
+    // Part 0 is the shared contract: two parts that need only it, and the proposal shows the shape.
+    expect(check?.proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
   });
 
   it('does not flag a small plan, and makes no model call for a trivial one', async () => {
@@ -130,7 +140,8 @@ describe('learned size check', () => {
       const glob = await create('same', BIG);
       const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
       expect(check?.estimate.partsSource).toBe('text');
-      expect(check?.flagged).toBe(true);
+      // The text cannot tell whether parts could run at the same time, so it never flags.
+      expect(check?.flagged).toBe(false);
       expect(check?.proposal).toBeNull();
     }
   });
@@ -255,6 +266,118 @@ describe('learned size check', () => {
     expect([...(await globs.oversizedOf(boardId))]).toEqual([]);
   });
 
+  describe('serial plans, shared contracts and parallel parts', () => {
+    const contractParts = [
+      { title: 'Contract', summary: 'the shared schema', plan: '## Tasks\n1. migration in apps/server/drizzle/0001.sql', after: [] },
+      { title: 'Server', summary: 's', plan: '## Tasks\n2. endpoint in apps/server/src/shared.ts\n3. route in apps/server/src/http/app.ts', after: [0] },
+      { title: 'Web', summary: 'w', plan: '## Tasks\n4. web card\n5. web page\n6. web test', after: [0] },
+      { title: 'CLI', summary: 'c', plan: '## Tasks\n7. cli command in apps/server/src/shared.ts', after: [0] },
+    ];
+    const splitAsProposed = async (glob: Glob): Promise<Glob[]> => {
+      const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
+      const parts = (check?.proposal?.parts ?? []).map((p, index) => ({
+        title: p.title,
+        summary: p.summary,
+        plan: p.plan,
+        ...(index > 0 && p.after.length > 0 ? { after: [...p.after] } : {}),
+        ...(index > 0 && (p.overlaps ?? []).length > 0 ? { overlaps: [...(p.overlaps ?? [])] } : {}),
+        ...(index > 0 && p.type !== undefined ? { type: p.type } : {}),
+      }));
+      return unwrap(await globs.split(DEV, glob.id, glob.version, { parts, idempotencyKey: null }));
+    };
+
+    it('does not flag a long serial plan, however many tasks it has', async () => {
+      judged = '{"independentParts": 6, "parallelParts": 1, "reason": "each step needs the one before"}';
+      const glob = await create('same', BIG);
+      const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
+      expect(check).toMatchObject({ flagged: false, reasons: [], proposal: null });
+      expect(check?.estimate).toMatchObject({ tasks: 6, parallelParts: 1 });
+      expect(calls).toEqual(['judge']);
+    });
+
+    it('does not flag when the model leaves the parallelism out', async () => {
+      judged = '{"independentParts": 5, "reason": "five pieces"}';
+      const glob = await create('same', BIG);
+      expect((await store.transaction((tx) => tx.getSizeCheck(glob.id)))?.flagged).toBe(false);
+    });
+
+    it('flags three independent areas, and the proposal shows the critical path and parallelism', async () => {
+      const glob = await create('same', BIG);
+      const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
+      expect(check?.flagged).toBe(true);
+      expect(check?.reasons.join('; ')).toContain('3 parts could be built at the same time');
+      expect(check?.proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
+    });
+
+    it('drops a proposal whose parts wait on each other in one line, and does not flag the glob', async () => {
+      proposed = [
+        { title: 'A', summary: 'a', plan: '## Tasks\n1. a', after: [] },
+        { title: 'B', summary: 'b', plan: '## Tasks\n2. b', after: [0] },
+        { title: 'C', summary: 'c', plan: '## Tasks\n3. c', after: [1] },
+      ];
+      const glob = await create('sub', BIG);
+      const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
+      expect(check).toMatchObject({ flagged: false, proposal: null });
+      expect(check?.evidence.join('\n')).toContain('a chain of 3 parts');
+      expect((await get(glob.id)).status).toBe('implementing');
+    });
+
+    it('splits a shared schema and three consumers into part 0 plus three parts that need only part 0; shared files are overlaps', async () => {
+      proposed = contractParts;
+      const glob = await create('same', BIG);
+      const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
+      expect(check?.proposal?.parts.map((p) => p.after)).toEqual([[], [0], [0], [0]]);
+      expect(check?.proposal?.parts.map((p) => p.overlaps)).toEqual([[], [], [], [1]]);
+      // Small, low-risk parts are subs; the 3-task part stays the glob's own type.
+      expect(check?.proposal?.parts.map((p) => p.type)).toEqual([undefined, 'sub', undefined, 'sub']);
+      const created = await splitAsProposed(glob);
+      expect(created).toHaveLength(4);
+      const [first, server, web, cli] = created;
+      expect(server?.after).toEqual([first?.id]);
+      expect(web?.after).toEqual([first?.id]);
+      expect(cli?.after).toEqual([first?.id]);
+      expect(created.map((g) => g.type)).toEqual(['same', 'sub', 'same', 'sub']);
+      // The file overlap is an edge that never blocks, not a need.
+      expect(edgesOf(cli ?? {}).map((e) => [e.id, e.kind])).toEqual([[first?.id, 'needs'], [server?.id, 'overlaps']]);
+      expect(cli?.after).not.toContain(server?.id);
+    });
+
+    it('a split same starts its routine on its own when its last need merges, and a person can turn that off', async () => {
+      proposed = contractParts;
+      const glob = await create('same', BIG);
+      const [first, , web, cli] = await splitAsProposed(glob);
+      if (first === undefined || web === undefined || cli === undefined) throw new Error('no parts');
+      expect(web).toMatchObject({ status: 'planning', autoStart: true });
+      expect(web.waiting).not.toBeNull();
+      // Turn it off on the web part: the wait ends, the need stays.
+      const off = unwrap(await globs.update(DEV, web.id, web.version, { autoStart: false }));
+      expect(off).toMatchObject({ autoStart: false, waiting: null, status: 'planning', after: [first.id] });
+      unwrap(await globs.applyEvent(first.id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
+      const released = await globs.releaseDependents(first.id, boardId);
+      expect(released).toContain(cli.id);
+      expect(released).not.toContain(web.id);
+      expect((await get(web.id)).status).toBe('planning');
+    });
+
+    it('a split same that keeps the flag starts when its need merges', async () => {
+      proposed = contractParts;
+      const glob = await create('same', BIG);
+      const [first, , web] = await splitAsProposed(glob);
+      if (first === undefined || web === undefined) throw new Error('no parts');
+      unwrap(await globs.applyEvent(first.id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
+      expect(await globs.releaseDependents(first.id, boardId)).toContain(web.id);
+      const started = await get(web.id);
+      expect(started).toMatchObject({ status: 'implementing', waiting: null });
+      expect(started.runs).toHaveLength(1);
+    });
+
+    it('the flag only exists on a same that waits: a part with no needs has none', async () => {
+      proposed = contractParts;
+      const [first] = await splitAsProposed(await create('same', BIG));
+      expect(first?.autoStart).toBeUndefined();
+    });
+  });
+
   describe('the learning job', () => {
     const outcomeOf = (globId: string, patch: { rounds?: number; fixGlobs?: string[] } = {}): GlobOutcome => ({
       globId,
@@ -314,6 +437,68 @@ describe('learned size check', () => {
       await merge(messy.id, { fixGlobs: ['s1b9'] });
       const result = await service.learn(boardId);
       expect(result.changes.map((c) => c.outcome)).toEqual(['flag_confirmed', 'flag_confirmed']);
+      expect(await threshold()).toEqual(DEFAULT_SIZE_THRESHOLD);
+    });
+
+    describe('split outcomes', () => {
+      const partsOf = (after: number[][]) => after.map((a, i) => ({ title: `P${i}`, summary: '', plan: `## Tasks\n${i + 1}. step ${i + 1}`, after: a }));
+      /** Splits a flagged glob, merges the parts named (all by default) and records the source's outcome. */
+      const splitAndMerge = async (after: number[][], mergeParts = after.map((_, i) => i)) => {
+        const glob = await create('same', BIG);
+        const parts = unwrap(await globs.split(DEV, glob.id, glob.version, { parts: partsOf(after), idempotencyKey: null }));
+        for (const index of mergeParts) {
+          const part = parts[index];
+          if (part !== undefined) unwrap(await globs.applyEvent(part.id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
+        }
+        await store.transaction((tx) => tx.upsertGlobOutcome(outcomeOf(glob.id)));
+        return { glob, parts };
+      };
+      const failRun = (globId: string) =>
+        store.transaction((tx) => tx.appendEvents([{ type: 'RunFailed', globId, actor: null, at: NOW, data: {} }]));
+
+      it('a split whose parts serialised and stalled raises the threshold, with the cause in the history', async () => {
+        const { glob, parts } = await splitAndMerge([[], [0], [1]]);
+        await failRun(parts[1]?.id ?? '');
+        const result = await service.learn(boardId);
+        expect(result.changes).toMatchObject([{ globId: glob.id, outcome: 'split_stalled', from: { maxTasks: 5, maxParts: 3 }, to: { maxTasks: 6, maxParts: 4 } }]);
+        expect(await threshold()).toEqual({ maxTasks: 6, maxParts: 4 });
+        const history = unwrap(await service.view(DEV, boardId)).history;
+        expect(history[0]?.evidence).toContain('one after another');
+        expect(history[0]?.evidence).toContain('1 failed run');
+        expect((await service.learn(boardId)).changes).toEqual([]);
+      });
+
+      it('a split whose parts ran in parallel is recorded and leaves the threshold, even with a failed run', async () => {
+        const { glob, parts } = await splitAndMerge([[], [0], [0]]);
+        await failRun(parts[2]?.id ?? '');
+        const result = await service.learn(boardId);
+        expect(result.changes).toMatchObject([{ globId: glob.id, outcome: 'split_helped' }]);
+        expect(await threshold()).toEqual(DEFAULT_SIZE_THRESHOLD);
+      });
+
+      it('a serialised split that did not stall leaves the threshold', async () => {
+        await splitAndMerge([[], [0]]);
+        expect((await service.learn(boardId)).changes.map((c) => c.outcome)).toEqual(['split_helped']);
+      });
+
+      it('waits until every part has merged', async () => {
+        await splitAndMerge([[], [0], [1]], [0, 1]);
+        expect((await service.learn(boardId)).changes).toEqual([]);
+      });
+    });
+
+    it('shows the learned threshold beside the default, and an admin resets it', async () => {
+      const glob = await create('same', BIG);
+      await merge(glob.id);
+      await service.learn(boardId);
+      const view = unwrap(await service.view(DEV, boardId));
+      expect(view).toMatchObject({ current: { maxTasks: 6, maxParts: 4 }, defaults: DEFAULT_SIZE_THRESHOLD });
+      expect((await service.reset(DEV, boardId)).ok).toBe(false);
+      const reset = unwrap(await service.reset(ADMIN, boardId));
+      expect(reset.current).toEqual(DEFAULT_SIZE_THRESHOLD);
+      expect(reset.history.map((h) => h.outcome)).toEqual(['reset', 'kept_whole_clean']);
+      // The glob's outcome stays recorded: learning does not replay it.
+      expect((await service.learn(boardId)).changes).toEqual([]);
       expect(await threshold()).toEqual(DEFAULT_SIZE_THRESHOLD);
     });
 

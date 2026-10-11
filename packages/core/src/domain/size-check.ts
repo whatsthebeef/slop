@@ -59,12 +59,20 @@ export const loweredThreshold = (t: SizeThreshold): SizeThreshold => ({
   maxParts: Math.min(t.maxParts, Math.max(SIZE_PARTS_MIN, t.maxParts - SIZE_STEP)),
 });
 
-export const SIZE_OUTCOMES = ['kept_whole_clean', 'unflagged_struggled', 'flag_confirmed'] as const;
-/** `kept_whole_clean` raises, `unflagged_struggled` lowers, `flag_confirmed` (a flag that was right) leaves it. */
+export const SIZE_OUTCOMES = ['kept_whole_clean', 'unflagged_struggled', 'flag_confirmed', 'split_stalled', 'split_helped', 'reset'] as const;
+/**
+ * `kept_whole_clean` and `split_stalled` (a split whose parts serialised and stalled) raise, `unflagged_struggled` lowers,
+ * `flag_confirmed` (a flag that was right) and `split_helped` (a split whose parts ran in parallel) leave it; `reset` (an
+ * admin returning the board to the defaults) is the only one that sets it to something else.
+ */
 export type SizeOutcome = (typeof SIZE_OUTCOMES)[number];
 
 export const nextThreshold = (outcome: SizeOutcome, t: SizeThreshold): SizeThreshold =>
-  outcome === 'kept_whole_clean' ? raisedThreshold(t) : outcome === 'unflagged_struggled' ? loweredThreshold(t) : t;
+  outcome === 'kept_whole_clean' || outcome === 'split_stalled'
+    ? raisedThreshold(t)
+    : outcome === 'unflagged_struggled'
+      ? loweredThreshold(t)
+      : t;
 
 export interface SizeThresholdChange {
   readonly id: number;
@@ -81,6 +89,8 @@ export type NewSizeThresholdChange = Omit<SizeThresholdChange, 'id'>;
 
 export interface SizeThresholdView {
   readonly current: SizeThreshold;
+  /** What the board starts from and `reset` returns to. */
+  readonly defaults: SizeThreshold;
   readonly bounds: SizeBounds;
   readonly history: readonly SizeThresholdChange[];
 }
@@ -97,6 +107,11 @@ export interface SizeEstimate {
   /** The independent parts the work falls into: the model's judgement, else derived from the text. */
   readonly independentParts: number;
   readonly partsSource: 'model' | 'text';
+  /**
+   * The most parts that could be built at the same time: the model's judgement, null from the text estimate (and absent in
+   * checks stored before it existed). A plan is only oversized when this is 2 or more: serial work gains nothing from a split.
+   */
+  readonly parallelParts?: number | null;
   /** The model's one-line reason for its count; null for the text estimate. */
   readonly reasoning: string | null;
 }
@@ -119,20 +134,29 @@ export const estimateFromText = (plan: string): SizeEstimate => {
 };
 
 /** The estimate with the model's count of independent parts. */
-export const withModelParts = (estimate: SizeEstimate, parts: number, reasoning: string | null): SizeEstimate => ({
+export const withModelParts = (estimate: SizeEstimate, parts: number, reasoning: string | null, parallel: number | null = null): SizeEstimate => ({
   ...estimate,
   independentParts: clamp(Math.round(parts), 1, 20),
   partsSource: 'model',
+  parallelParts: parallel === null ? null : clamp(Math.round(parallel), 1, 20),
   reasoning,
 });
 
-/** Why the estimate exceeds the threshold, as plain text; empty when it doesn't. */
-export const oversizedReasons = (estimate: SizeEstimate, threshold: SizeThreshold): string[] => [
-  ...(estimate.tasks > threshold.maxTasks ? [`${estimate.tasks} tasks (more than ${threshold.maxTasks})`] : []),
-  ...(estimate.independentParts > threshold.maxParts
-    ? [`${estimate.independentParts} independent parts (more than ${threshold.maxParts})`]
-    : []),
-];
+/**
+ * Why the estimate exceeds the threshold, as plain text; empty when it doesn't. Size alone never flags: only work with at
+ * least 2 parts that could be built at the same time does (a long serial plan stays whole), and only the model can tell.
+ */
+export const oversizedReasons = (estimate: SizeEstimate, threshold: SizeThreshold): string[] => {
+  const parallel = estimate.parallelParts ?? null;
+  if (parallel === null || parallel < 2) return [];
+  const big = [
+    ...(estimate.tasks > threshold.maxTasks ? [`${estimate.tasks} tasks (more than ${threshold.maxTasks})`] : []),
+    ...(estimate.independentParts > threshold.maxParts
+      ? [`${estimate.independentParts} independent parts (more than ${threshold.maxParts})`]
+      : []),
+  ];
+  return big.length === 0 ? [] : [...big, `${parallel} parts could be built at the same time`];
+};
 
 /**
  * Whether slop investigates a glob in Planning by itself: intake flagged it big, or its part count is a guess (the text
@@ -147,7 +171,7 @@ export const evidenceOf = (estimate: SizeEstimate): string[] => [
   `Areas: ${estimate.areas.length === 0 ? 'none found' : estimate.areas.join(', ')}`,
   `${estimate.untaskedSections} sections with no task`,
   estimate.partsSource === 'model'
-    ? `Model: ${estimate.independentParts} independent parts${estimate.reasoning === null ? '' : ` (${estimate.reasoning})`}`
+    ? `Model: ${estimate.independentParts} independent parts, ${estimate.parallelParts == null ? 'parallelism not stated' : `${estimate.parallelParts} buildable at the same time`}${estimate.reasoning === null ? '' : ` (${estimate.reasoning})`}`
     : `Text only: ${estimate.independentParts} independent parts (the model's judgement was not available)`,
 ];
 
@@ -159,13 +183,35 @@ export interface ProposedPart {
   readonly title: string;
   readonly summary: string;
   readonly plan: string;
-  /** Indexes of earlier parts this one starts after. */
+  /** Indexes of earlier parts this one needs merged before it starts (`after` in split_glob's shape): direct prerequisites only. */
   readonly after: readonly number[];
+  /** Earlier parts that touch the same files or both need a migration: they order the merges but never block a start. Absent in older proposals. */
+  readonly overlaps?: readonly number[];
+  /** `sub` for a small, low-risk part (it starts by itself); absent: the original's type. Never set on part 0. */
+  readonly type?: 'sub';
 }
 
 export interface SizeProposal {
   readonly parts: readonly ProposedPart[];
+  /** Parts on the longest chain of needs (part 0 included): the fewest merges in a row. Absent in older proposals. */
+  readonly criticalPath?: number;
+  /** The most parts that can be built at the same time once their needs have merged. */
+  readonly maxParallel?: number;
 }
+
+/** The shape of a split from its needs: the longest chain of parts, and the widest level of parts that can run together. */
+export const splitShape = (parts: readonly { readonly after: readonly number[] }[]): { criticalPath: number; maxParallel: number } => {
+  const depth: number[] = [];
+  for (const [index, part] of parts.entries()) {
+    depth[index] = 1 + Math.max(0, ...part.after.filter((n) => n < index).map((n) => depth[n] ?? 1));
+  }
+  const width = new Map<number, number>();
+  for (const d of depth) width.set(d, (width.get(d) ?? 0) + 1);
+  return { criticalPath: Math.max(0, ...depth), maxParallel: Math.max(0, ...width.values()) };
+};
+
+/** A proposal whose parts wait on each other in one line: a split that gains nothing, so it is not offered. */
+export const isChain = (proposal: SizeProposal): boolean => (proposal.criticalPath ?? 0) >= proposal.parts.length;
 
 export const SIZE_DECISIONS = ['kept_whole', 'split'] as const;
 export type SizeDecision = (typeof SIZE_DECISIONS)[number];
@@ -207,43 +253,64 @@ export interface ModelPart {
 
 const lower = (s: string): string => s.toLowerCase();
 
-/** Whether two parts change the same files or both need a migration: the later one starts after the earlier. */
+/** Whether two parts change the same files or both need a migration: they overlap (merge order), but neither needs the other. */
 const sharesWork = (a: string, b: string): boolean => {
   const fa = extractPlanFeatures(a);
   const fb = extractPlanFeatures(b);
   return fa.filePaths.some((p) => fb.filePaths.includes(p)) || (fa.areas.includes('migration') && fb.areas.includes('migration'));
 };
 
+/** The most tasks a part may have and still start by itself as a sub. */
+const SUB_PART_MAX_TASKS = 2;
+
+/** A small part that touches no migration or infrastructure is low-risk: it can be a sub. */
+const lowRisk = (plan: string): boolean => {
+  const f = extractPlanFeatures(plan);
+  return f.tasks <= SUB_PART_MAX_TASKS && !f.areas.includes('migration') && !f.areas.includes('infra');
+};
+
 /**
- * The proposal from the model's parts (pure). Part 0 stays the original glob. A section of the plan with no task is
- * context, never a part: a part the model made of one (no task line, while the plan has tasks) is dropped, and every
- * context section a part doesn't already carry is copied into it. A part starts after earlier parts that share its files
- * or both need a migration, whatever the model said. Null when fewer than 2 parts remain.
+ * The proposal from the model's parts (pure). Part 0 stays the original glob, and is the shared contract the others build
+ * on when the model made it so. A section of the plan with no task is context, never a part: a part the model made of one
+ * (no task line, while the plan has tasks) is dropped, and every context section a part doesn't already carry is copied
+ * into it. A part needs only what the model said it needs, cut down to direct prerequisites (a part that needs part 0
+ * through another part does not name part 0 as well); sharing files or both needing a migration is an overlap, never a
+ * need. Low-risk parts after part 0 are subs. Null when fewer than 2 parts remain.
  */
 export const buildProposal = (plan: string, modelParts: readonly ModelPart[]): SizeProposal | null => {
   const hasTasks = extractPlanFeatures(plan).tasks > 0;
   const context = contextSectionList(plan);
-  const parts: ModelPart[] = modelParts
+  const parts: (ModelPart & { own: string })[] = modelParts
     .filter((p) => p.title.trim() !== '' && p.plan.trim() !== '')
     .filter((p) => !hasTasks || extractPlanFeatures(p.plan).tasks > 0)
     .slice(0, MAX_PROPOSED_PARTS)
     .map((p) => {
       const missing = context.filter((section) => !lower(p.plan).includes(lower(section.heading)));
       const carried = [p.plan.trim(), ...missing.map((section) => `## ${section.heading}\n\n${section.body}`)].join('\n\n');
-      return { title: p.title.trim().slice(0, 120), summary: p.summary.trim(), plan: carried, after: p.after };
+      return { title: p.title.trim().slice(0, 120), summary: p.summary.trim(), plan: carried, own: p.plan.trim(), after: p.after };
     });
   if (parts.length < 2) return null;
-  return {
-    parts: parts.map((p, index) => {
-      const after = new Set(
-        index === 0 ? [] : p.after.filter((n) => Number.isInteger(n) && n >= 0 && n < index),
-      );
-      for (let earlier = 0; earlier < index; earlier++) {
-        if (sharesWork(parts[earlier]?.plan ?? '', p.plan)) after.add(earlier);
-      }
-      return { title: p.title, summary: p.summary, plan: p.plan, after: [...after].sort((a, b) => a - b) };
-    }),
-  };
+  // Everything each part needs, directly or through others, to cut direct needs down and keep overlaps from repeating them.
+  const reach: Set<number>[] = [];
+  const built: ProposedPart[] = parts.map((p, index) => {
+    const wanted = index === 0 ? [] : [...new Set(p.after.filter((n) => Number.isInteger(n) && n >= 0 && n < index))];
+    const direct = wanted.filter((n) => !wanted.some((m) => m !== n && reach[m]?.has(n) === true));
+    const reached = new Set(direct.flatMap((n) => [n, ...(reach[n] ?? [])]));
+    reach[index] = reached;
+    const overlaps: number[] = [];
+    for (let earlier = 0; earlier < index; earlier++) {
+      if (!reached.has(earlier) && sharesWork(parts[earlier]?.own ?? '', p.own)) overlaps.push(earlier);
+    }
+    return {
+      title: p.title,
+      summary: p.summary,
+      plan: p.plan,
+      after: direct.sort((a, b) => a - b),
+      overlaps,
+      ...(index > 0 && lowRisk(p.own) ? { type: 'sub' as const } : {}),
+    };
+  });
+  return { parts: built, ...splitShape(built) };
 };
 
 // ---------------------------------------------------------------------------
@@ -324,6 +391,59 @@ export const sizeOutcomeOf = (input: SizeOutcomeInput, range: PrRange): { outcom
   }
   const problems = struggles(input, range);
   return problems.length === 0 ? null : { outcome: 'unflagged_struggled', evidence: `Not flagged, and it ${problems.join('; ')}` };
+};
+
+/** What the learning reads about a split once every part merged (or was deleted). */
+export interface SplitOutcomeInput {
+  readonly parts: number;
+  /** Parts on the longest chain of needs the parts actually had. */
+  readonly criticalPath: number;
+  /** `RunFailed` events across the parts. */
+  readonly failedRuns: number;
+  /** Parts deleted before they merged. */
+  readonly missing: number;
+  /** Parts whose PR conflicted with the base branch. */
+  readonly conflicts: number;
+  /** Hours from the split to the last part's merge; null when unknown. */
+  readonly hours: number | null;
+}
+
+/**
+ * What a finished split says: `split_stalled` when its parts ended up in one chain (nothing ran in parallel, so the split
+ * only added merges) and something stalled (a failed run, a deleted part, a conflict, or far longer than the board's PRs
+ * usually take), with the cause; otherwise `split_helped`. Only the first moves the threshold, toward keeping work whole.
+ */
+export const splitOutcomeOf = (input: SplitOutcomeInput, range: PrRange): { outcome: SizeOutcome; evidence: string } => {
+  const serialised = input.criticalPath >= input.parts;
+  const median = known(range);
+  const causes = [
+    ...(input.failedRuns > 0 ? [`${input.failedRuns} failed run${input.failedRuns === 1 ? '' : 's'}`] : []),
+    ...(input.missing > 0 ? [`${input.missing} part${input.missing === 1 ? ' was' : 's were'} deleted`] : []),
+    ...(input.conflicts > 0 ? [`${input.conflicts} part${input.conflicts === 1 ? '' : 's'} conflicted with the base branch`] : []),
+    ...(median !== null && input.hours !== null && input.hours > median * PR_LONG_FACTOR * input.parts
+      ? [`${hours(input.hours)} from the split to the last merge, the board's median PR is ${hours(median)}`]
+      : []),
+  ];
+  const shape = `${input.parts} parts, critical path ${input.criticalPath}`;
+  return serialised && causes.length > 0
+    ? { outcome: 'split_stalled', evidence: `Split into ${shape}: the parts ran one after another and stalled: ${causes.join('; ')}` }
+    : {
+        outcome: 'split_helped',
+        evidence: serialised ? `Split into ${shape}: the parts ran one after another but nothing stalled` : `Split into ${shape}: parts could run in parallel`,
+      };
+};
+
+/** The part IDs (part 0 first) of the latest split a glob was cut by, from its `GlobSplit` events; null when none says. */
+export const splitPartsOf = (globId: string, events: readonly DomainEvent[]): string[] | null => {
+  for (const e of [...events].reverse()) {
+    if (e.type !== 'GlobSplit' || e.globId !== globId) continue;
+    if (e.data['part'] !== 0) continue;
+    const parts = e.data['parts'];
+    if (!Array.isArray(parts)) continue;
+    const ids = parts.filter((p): p is string => typeof p === 'string');
+    return ids.length >= 2 && ids.length === parts.length ? ids : null;
+  }
+  return null;
 };
 
 /** Hours between a glob's first `PROpened` and its `Merged` event, from its events (oldest first); null without both. */

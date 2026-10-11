@@ -18,6 +18,9 @@ import {
   raisedThreshold,
   sizeOutcomeOf,
   splitAfterStartOf,
+  splitOutcomeOf,
+  splitPartsOf,
+  splitShape,
   withModelParts,
 } from '../src/domain/size-check.js';
 import type { SizeOutcomeInput } from '../src/domain/size-check.js';
@@ -93,12 +96,24 @@ describe('estimate from plan text', () => {
 });
 
 describe('flagging against the threshold', () => {
-  const base = estimateFromText('## Do\n- [ ] one\n');
-  it('flags more than 5 tasks or more than 3 parts by default', () => {
+  const base = { ...estimateFromText('## Do\n- [ ] one\n'), parallelParts: 3 };
+  it('flags more than 5 tasks or more than 3 parts by default, when parts could run at the same time', () => {
     expect(oversizedReasons({ ...base, tasks: 5, independentParts: 3 }, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
-    expect(oversizedReasons({ ...base, tasks: 6 }, DEFAULT_SIZE_THRESHOLD)).toHaveLength(1);
-    expect(oversizedReasons({ ...base, independentParts: 4 }, DEFAULT_SIZE_THRESHOLD)).toHaveLength(1);
-    expect(oversizedReasons({ ...base, tasks: 9, independentParts: 4 }, DEFAULT_SIZE_THRESHOLD)).toHaveLength(2);
+    // One reason for the size, one for the parallelism.
+    expect(oversizedReasons({ ...base, tasks: 6 }, DEFAULT_SIZE_THRESHOLD)).toHaveLength(2);
+    expect(oversizedReasons({ ...base, independentParts: 4 }, DEFAULT_SIZE_THRESHOLD)).toHaveLength(2);
+    expect(oversizedReasons({ ...base, tasks: 9, independentParts: 4 }, DEFAULT_SIZE_THRESHOLD)).toHaveLength(3);
+  });
+  it('never flags a serial plan, however many tasks it has', () => {
+    const serial = { ...base, tasks: 10, independentParts: 6, parallelParts: 1 };
+    expect(oversizedReasons(serial, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
+    expect(oversizedReasons({ ...serial, parallelParts: 2 }, DEFAULT_SIZE_THRESHOLD)).not.toEqual([]);
+  });
+  it('never flags on the text estimate, which cannot know the parallelism', () => {
+    const text = estimateFromText(`${PLAN}\n8. one more\n9. and another`);
+    expect(text.parallelParts ?? null).toBeNull();
+    expect(oversizedReasons({ ...text, tasks: 12, independentParts: 6 }, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
+    expect(oversizedReasons({ ...text, tasks: 12, parallelParts: undefined }, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
   });
   it('follows a moved threshold', () => {
     expect(oversizedReasons({ ...base, tasks: 6 }, { maxTasks: 6, maxParts: 3 })).toEqual([]);
@@ -123,6 +138,8 @@ describe('threshold steps and bounds', () => {
     expect(nextThreshold('kept_whole_clean', DEFAULT_SIZE_THRESHOLD).maxTasks).toBe(6);
     expect(nextThreshold('unflagged_struggled', DEFAULT_SIZE_THRESHOLD).maxTasks).toBe(4);
     expect(nextThreshold('flag_confirmed', DEFAULT_SIZE_THRESHOLD)).toEqual(DEFAULT_SIZE_THRESHOLD);
+    expect(nextThreshold('split_stalled', DEFAULT_SIZE_THRESHOLD).maxTasks).toBe(6);
+    expect(nextThreshold('split_helped', DEFAULT_SIZE_THRESHOLD)).toEqual(DEFAULT_SIZE_THRESHOLD);
   });
 });
 
@@ -210,18 +227,72 @@ describe('outcome inputs from events', () => {
   });
 });
 
+describe('split shape', () => {
+  it('is the longest chain and the widest level', () => {
+    expect(splitShape([{ after: [] }, { after: [0] }, { after: [0] }, { after: [0] }])).toEqual({ criticalPath: 2, maxParallel: 3 });
+    expect(splitShape([{ after: [] }, { after: [0] }, { after: [1] }])).toEqual({ criticalPath: 3, maxParallel: 1 });
+    expect(splitShape([{ after: [] }, { after: [] }])).toEqual({ criticalPath: 1, maxParallel: 2 });
+  });
+});
+
+describe('split outcomes', () => {
+  const range = prRangeOf([10, 10, 10, 10, 10]);
+  const input = { parts: 3, criticalPath: 3, failedRuns: 0, missing: 0, conflicts: 0, hours: 20 };
+  it('a serialised split that stalled is split_stalled, with the cause', () => {
+    const stalled = splitOutcomeOf({ ...input, failedRuns: 2 }, range);
+    expect(stalled.outcome).toBe('split_stalled');
+    expect(stalled.evidence).toContain('one after another');
+    expect(stalled.evidence).toContain('2 failed runs');
+    expect(splitOutcomeOf({ ...input, hours: 200 }, range).evidence).toContain('from the split to the last merge');
+    expect(splitOutcomeOf({ ...input, missing: 1 }, range).evidence).toContain('deleted');
+  });
+  it('a serialised split that did not stall, or one that ran in parallel, is split_helped', () => {
+    expect(splitOutcomeOf(input, range).outcome).toBe('split_helped');
+    expect(splitOutcomeOf({ ...input, criticalPath: 2, failedRuns: 3 }, range).outcome).toBe('split_helped');
+  });
+  it('reads the parts from the latest split event of part 0', () => {
+    const split = (data: DomainEvent['data']): DomainEvent => ({ type: 'GlobSplit', globId: 's1f1', actor: null, at: '2026-09-01T00:00:00.000Z', data });
+    expect(splitPartsOf('s1f1', [split({ source: 's1f1', part: 0, parts: ['s1f1', 's1f2'] })])).toEqual(['s1f1', 's1f2']);
+    expect(splitPartsOf('s1f1', [split({})])).toBeNull();
+    expect(splitPartsOf('s1f1', [])).toBeNull();
+  });
+});
+
 describe('proposal from the model parts', () => {
   const part = (title: string, plan: string, after: number[] = []) => ({ title, summary: `${title} summary`, plan, after });
-  it('copies a context section into every part and orders parts that share files', () => {
+  it('copies a context section into every part, and makes parts that share files overlaps, not needs', () => {
     const proposal = buildProposal(PLAN, [
       part('Data', '## Tasks\n1. Add the migration in apps/server/drizzle/0001.sql'),
       part('Server', '## Tasks\n2. Endpoint in apps/server/drizzle/0001.sql'),
       part('Web', '## Tasks\n3. Card'),
     ]);
     expect(proposal?.parts.map((p) => p.title)).toEqual(['Data', 'Server', 'Web']);
-    expect(proposal?.parts[1]?.after).toEqual([0]);
+    expect(proposal?.parts[1]?.after).toEqual([]);
+    expect(proposal?.parts[1]?.overlaps).toEqual([0]);
     expect(proposal?.parts[2]?.after).toEqual([]);
+    expect(proposal?.parts[2]?.overlaps).toEqual([]);
     for (const p of proposal?.parts ?? []) expect(p.plan).toContain('Some prose about the chat panel');
+  });
+  it('a shared contract as part 0 with three independent consumers: each consumer needs only part 0, low-risk ones are subs', () => {
+    const proposal = buildProposal(PLAN, [
+      part('Contract', '## Tasks\n1. Add the shared schema type in packages/core/src/schema.ts'),
+      part('Server', '## Tasks\n2. Endpoint in apps/server/src/http/app.ts', [0]),
+      part('Web', '## Tasks\n3. Card in apps/web/src/components/card.tsx', [0]),
+      part('CLI', '## Tasks\n4. CLI command\n5. LLM prompt\n6. Infra pipeline change\n7. Core tests', [0]),
+    ]);
+    expect(proposal?.parts.map((p) => p.after)).toEqual([[], [0], [0], [0]]);
+    expect(proposal).toMatchObject({ criticalPath: 2, maxParallel: 3 });
+    expect(proposal?.parts.map((p) => p.type)).toEqual([undefined, 'sub', 'sub', undefined]);
+  });
+  it('keeps direct needs only, and does not repeat a need (or one reached through another) as an overlap', () => {
+    const proposal = buildProposal(PLAN, [
+      part('A', '## Tasks\n1. a in apps/server/src/a.ts'),
+      part('B', '## Tasks\n2. b in apps/server/src/a.ts', [0]),
+      part('C', '## Tasks\n3. c in apps/server/src/a.ts', [0, 1]),
+    ]);
+    expect(proposal?.parts.map((p) => p.after)).toEqual([[], [0], [1]]);
+    expect(proposal?.parts.map((p) => p.overlaps)).toEqual([[], [], []]);
+    expect(proposal).toMatchObject({ criticalPath: 3, maxParallel: 1 });
   });
   it('does not repeat a section a part already carries, and drops bad `after` indexes', () => {
     const proposal = buildProposal(PLAN, [part('A', '## Tasks\n1. a'), part('B', '## Chat content\nprose\n\n## Tasks\n2. b', [0, 1, 5, -1])]);

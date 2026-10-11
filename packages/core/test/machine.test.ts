@@ -1490,6 +1490,12 @@ describe('escalation to a same', () => {
     expect(effectKinds(t)).toEqual(['sync_pr_labels']);
   });
 
+  it('a sub in Planning can be escalated before it starts', () => {
+    const t = value(m.escalateToSame(sub({ status: 'planning', runs: [], pr: null }), { reason: 'Open decision' }, ctx(null)));
+    expect(t.glob.type).toBe('same');
+    expect(t.glob.status).toBe('planning');
+  });
+
   it('a call from a superseded run is ignored', () => {
     expect(value(m.escalateToSame(sub(), { reason: 'x', runId: 'other' }, ctx(null))).changed).toBe(false);
   });

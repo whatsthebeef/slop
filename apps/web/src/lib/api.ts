@@ -343,6 +343,8 @@ export interface SplitPartInput {
   type?: SlopType;
   /** Indexes of earlier parts this one starts after. */
   after?: number[];
+  /** Indexes of earlier parts that may change the same files (merge order only). */
+  overlaps?: number[];
 }
 
 export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'after'>>;
@@ -543,6 +545,8 @@ export const api = {
   resetRiskAreas: (boardId: number) => request<RiskAreaView>('POST', `/api/boards/${boardId}/risk-areas/reset`, {}),
   /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
   sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
+  /** Admins: puts the size threshold back on the defaults (the history keeps the reset). */
+  resetSizeThreshold: (boardId: number) => request<SizeThresholdView>('POST', `/api/boards/${boardId}/size-threshold/reset`, {}),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */
   keepWhole: (id: string) => request<GlobView>('POST', `/api/globs/${id}/keep-whole`, {}),
   /** Whether the board has an active integration token (members); the secret is never returned here. */

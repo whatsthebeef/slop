@@ -5,6 +5,8 @@
  */
 import { RISK_TIERS } from './knowledge.js';
 import type { RiskTier } from './knowledge.js';
+import { MAX_PROPOSED_PARTS } from './size-check.js';
+import type { ProposedPart, SizeProposal, SizeThreshold } from './size-check.js';
 
 export const CHANGE_KINDS = ['create', 'modify', 'delete'] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
@@ -137,3 +139,62 @@ export const parseInvestigation = (content: string): InvestigationParse => {
 
 /** The note stored and shown with a malformed investigation. */
 export const validationNote = (errors: readonly string[]): string => `Investigation block not parsed: ${errors.join('; ')}`;
+
+// ---------------------------------------------------------------------------
+// What slop does on receipt (spec, Investigation as data)
+
+/** Why a human should check the glob, from the investigation; null when nothing in it asks for one. */
+export const escalationOf = (investigation: Investigation): { reason: string; evidence: string } | null => {
+  const reasons = [
+    ...(investigation.needsHuman.needed ? [investigation.needsHuman.reason?.trim() ?? ''] : []),
+    ...(investigation.riskAreas.length > 0 ? [`Touches the board's risk areas: ${investigation.riskAreas.join(', ')}`] : []),
+  ].filter((r) => r !== '');
+  if (reasons.length === 0) return null;
+  return {
+    reason: reasons.join('. '),
+    evidence: `Investigation: risk tier ${investigation.riskTier}, ${String(investigation.files.length)} files, confidence ${investigation.confidence}`,
+  };
+};
+
+/**
+ * The parts, each after the ones it needs (stable otherwise); null when they need each other in a circle. The first is
+ * the one that stays the original glob.
+ */
+const ordered = (parts: readonly InvestigationPart[]): InvestigationPart[] | null => {
+  const done: InvestigationPart[] = [];
+  const left = [...parts];
+  while (left.length > 0) {
+    const next = left.findIndex((p) => p.needs.every((n) => done.some((d) => d.name === n)));
+    if (next < 0) return null;
+    done.push(...left.splice(next, 1));
+  }
+  return done;
+};
+
+const bullets = (items: readonly string[]): string => items.map((i) => `- ${i}`).join('\n');
+
+/** A split proposal from the investigation's parts, in split_glob's shape; null when they can't be cut into 2 to 10 parts. */
+export const proposalFromParts = (parts: readonly InvestigationPart[], plan: string): SizeProposal | null => {
+  const sorted = ordered(parts);
+  if (sorted === null || sorted.length < 2 || sorted.length > MAX_PROPOSED_PARTS) return null;
+  const built: ProposedPart[] = sorted.map((part, index) => ({
+    title: part.name.trim().slice(0, 120),
+    summary: `Part ${String(index + 1)} of ${String(sorted.length)}, from the investigation. Files: ${part.files.join(', ')}`,
+    plan: `${index === 0 ? 'This part stays the original glob.' : 'A part split out of the original glob.'} Scope: ${part.name}\n\nFiles:\n${bullets(part.files)}\n\nOriginal plan (keep only this part's share of its tasks and "Done when" lines):\n\n${plan.trim()}`,
+    after: part.needs.map((n) => sorted.findIndex((p) => p.name === n)).sort((a, b) => a - b),
+  }));
+  return { parts: built };
+};
+
+/**
+ * The oversize flag an investigation raises: its parts name the cut, so it counts against the board's parts limit at the
+ * limit itself (the plan's own estimate is a guess, this is the investigator's reading of the code). Null below it.
+ */
+export const oversizeOf = (investigation: Investigation, threshold: SizeThreshold, plan: string): { reasons: string[]; proposal: SizeProposal | null } | null => {
+  const count = investigation.parts.length;
+  if (count < 2 || count < threshold.maxParts) return null;
+  return {
+    reasons: [`${String(count)} independent parts in the investigation (the board's limit is ${String(threshold.maxParts)})`],
+    proposal: proposalFromParts(investigation.parts, plan),
+  };
+};

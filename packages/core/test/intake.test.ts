@@ -58,10 +58,10 @@ describe('intake', () => {
     });
   });
 
-  it('says when the proposed plan has more tasks than the board threshold', async () => {
+  it('does not call a plan oversized by its text: only the model can say its parts run in parallel', async () => {
     const plan = '## Tasks\n' + Array.from({ length: 7 }, (_, i) => `${i + 1}. Step ${i + 1}`).join('\n');
     answer = JSON.stringify({ title: 'Big', summary: 's', plan, type: 'same', category: 'feature' });
-    expect((await propose('a big piece of work')).oversized).toEqual(['7 tasks (more than 5)']);
+    expect((await propose('a big piece of work')).oversized).toEqual([]);
   });
 
   it('keeps the model\'s file guesses that look like repo paths, and suggests globs the request waits for', async () => {
