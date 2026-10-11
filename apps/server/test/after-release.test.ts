@@ -1,4 +1,4 @@
-import { BoardService, CodeReviewService, FindingsService, GlobService } from '@slop/core';
+import { BoardService, GlobService } from '@slop/core';
 import type { Board, Effect, Result } from '@slop/core';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -59,8 +59,6 @@ describe('start after: a merged webhook releases a waiting sub through the outbo
     handle = githubDeliveryHandler({
       db: database.db,
       globs,
-      findings: new FindingsService({ store, notifier, clock }),
-      codeReviews: new CodeReviewService({ store, notifier, clock }),
       boardOf,
       github: { deleteBranch: () => Promise.resolve() },
     });

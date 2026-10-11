@@ -260,6 +260,13 @@
       "when": 1791581490047,
       "tag": "0036_chat_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791726503644,
+      "tag": "0037_drop_coderabbit",
+      "breakpoints": true
     }
   ]
 }

@@ -528,7 +528,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_review_guide',
     {
       description:
-        "The review guide for a repo: the documents with area `review_guide` on each slop board for that repo you are a member of, in full. CodeRabbit (or any reviewer) reads it before reviewing a PR. An empty list means the repo's boards have no review guide.",
+        "The review guide for a repo: the documents with area `review_guide` on each slop board for that repo you are a member of, in full. A reviewer reads it before reviewing a PR. An empty list means the repo's boards have no review guide.",
       inputSchema: { repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('owner/name') },
     },
     async ({ repo }) =>
@@ -641,7 +641,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields, plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). Pass `include` to get more in full: 'local_review', 'attachment:<label>', 'code_review' (CodeRabbit's summary, reviews and inline comments on the PR, verbatim), or 'all'.",
+        "The glob's context bundle: its fields, plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {
@@ -664,13 +664,13 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   const sourceTypes = z
     .array(z.enum(SOURCE_TYPES))
     .optional()
-    .describe('Only these kinds of source (glob_plan, implementation_plan, local_review, code_review, kb_doc, learning, decision, ...)');
+    .describe('Only these kinds of source (glob_plan, implementation_plan, local_review, kb_doc, learning, decision, ...)');
 
   server.registerTool(
     'search_text',
     {
       description:
-        "Keyword search over the board's plans, implementation records, reviews, CodeRabbit comments, knowledge, learnings and decisions: exact words, names, identifiers and file paths. Returns at most 10 cited chunks (source, date, title, link, glob), best first, a current decision ahead of the older ones it replaced; superseded or legacy items are labelled (`superseded by \"<title>\" on <date>`). In current mode superseded decisions rank last; all_time mode shows both. The board's search index; member of the board required.",
+        "Keyword search over the board's plans, implementation records, reviews, knowledge, learnings and decisions: exact words, names, identifiers and file paths. Returns at most 10 cited chunks (source, date, title, link, glob), best first, a current decision ahead of the older ones it replaced; superseded or legacy items are labelled (`superseded by \"<title>\" on <date>`). In current mode superseded decisions rank last; all_time mode shows both. The board's search index; member of the board required.",
       inputSchema: { ...searchFields, query: z.string().min(1).max(MAX_QUERY_LENGTH), sourceTypes },
     },
     async (p) => reply(await deps.search.text(email, toRequest(p))),

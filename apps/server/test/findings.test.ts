@@ -48,7 +48,7 @@ describe('Review findings in Postgres', () => {
   const source = (globId: string, patch: Partial<NewReviewSource> = {}): NewReviewSource => ({
     boardId,
     globId,
-    kind: 'coderabbit_comment',
+    kind: 'local_review',
     artifactId: null,
     externalId: null,
     commitSha: 'abc',
@@ -64,7 +64,7 @@ describe('Review findings in Postgres', () => {
     boardId,
     globId,
     sourceId,
-    source: 'coderabbit',
+    source: 'local_review',
     commitSha: 'abc',
     agentSetVersion: 2,
     severity: 'in_scope',
@@ -116,8 +116,8 @@ describe('Review findings in Postgres', () => {
   it('round-trips sources and findings, unique by artifact, external ID and fingerprint', async () => {
     const globId = await newGlob();
     const created = await store.transaction(async (tx) => ({
-      a: await tx.insertReviewSource(source(globId, { externalId: 'coderabbit:1' })),
-      again: await tx.insertReviewSource(source(globId, { externalId: 'coderabbit:1' })),
+      a: await tx.insertReviewSource(source(globId, { externalId: 'external:1' })),
+      again: await tx.insertReviewSource(source(globId, { externalId: 'external:1' })),
       // Many sources have no external ID (local reviews) or no artifact (comments).
       b: await tx.insertReviewSource(source(globId, { kind: 'local_review', artifactId: 77, content: null })),
       c: await tx.insertReviewSource(source(globId, { kind: 'local_review', artifactId: 78, content: null })),
@@ -265,8 +265,8 @@ describe('Review findings in Postgres', () => {
     await clearQueue();
     const globId = await newGlob();
     const ids = await store.transaction(async (tx) => {
-      const later = await tx.insertReviewSource(source(globId, { externalId: 'coderabbit:order-2', createdAt: '2026-10-05T11:00:00.000Z' }));
-      const older = await tx.insertReviewSource(source(globId, { externalId: 'coderabbit:order-1', createdAt: '2026-10-05T10:00:00.000Z' }));
+      const later = await tx.insertReviewSource(source(globId, { externalId: 'external:order-2', createdAt: '2026-10-05T11:00:00.000Z' }));
+      const older = await tx.insertReviewSource(source(globId, { externalId: 'external:order-1', createdAt: '2026-10-05T10:00:00.000Z' }));
       if (later === null || older === null) throw new Error('No source');
       return { later, older };
     });

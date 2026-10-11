@@ -19,7 +19,7 @@ import { useBoardMotion } from '@/lib/board-motion';
 import { useColumnGlide } from '@/lib/column-glide';
 import { withGlob } from '@/lib/glob-list';
 import { usePageContext } from '@/lib/page-context';
-import { codeReviewsKey, deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
+import { deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useToast } from '@/toast';
 
@@ -262,14 +262,6 @@ export const BoardPage = () => {
       Object.values(query.state.data?.indicators ?? {}).some((i) => i.state === 'deploying') ? DEPLOY_POLL_MS : false,
   });
 
-  // CodeRabbit's badges live beside the globs too (a `glob.reviews` hint refreshes them). A server without the route
-  // just leaves the cards without them.
-  const codeReviews = useQuery({
-    queryKey: [...codeReviewsKey(boardId), boardGlobIds.join(',')],
-    queryFn: () => api.boardCodeReviews(boardId, boardGlobIds),
-    enabled: boardGlobIds.length > 0,
-  });
-
   // The status bar's counts include this board; refresh them when its globs change, at most every
   // few seconds (a burst of live updates shouldn't refetch every board's counts each time), with a
   // trailing refresh so the last change in a burst still shows. The first load needs none: the
@@ -436,7 +428,6 @@ export const BoardPage = () => {
                       deploy={deployState.data?.indicators[glob.id]}
                       environments={deployState.data?.environments?.[glob.id]}
                       atf={deployState.data?.atf?.[glob.id]}
-                      codeReview={codeReviews.data?.[glob.id]}
                     />
                   );
                 })}

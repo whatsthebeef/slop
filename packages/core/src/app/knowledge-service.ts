@@ -460,11 +460,6 @@ export class KnowledgeService {
     });
   }
 
-  /** Whether the board has a review guide (slop then asks CodeRabbit for reviews it doesn't start itself). */
-  async hasReviewGuide(boardId: number): Promise<boolean> {
-    return this.deps.store.transaction(async (tx) => (await tx.listKnowledge(boardId, ['doc'])).some(isReviewGuide));
-  }
-
   /** `get_agent_set(board)`: every agent-set file as served (catalog plus the board's layers) and the set's version. */
   async agentSet(email: string, boardId: number): Promise<Result<AgentSet>> {
     const catalog = await this.deps.catalog.agentSet();
