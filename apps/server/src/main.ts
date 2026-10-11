@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -38,6 +38,11 @@ import { LlmHealth } from './llm-health.js';
 import { mountHealth } from './http/health.js';
 import { mountChat } from './http/chat.js';
 import { mountSearch } from './http/search.js';
+import { mountCode } from './http/code.js';
+import { CodeClones, DEFAULT_CAP_BYTES } from './code-clones.js';
+import { CodeIndex } from './code-index.js';
+import { CodeIndexer } from './code-indexer.js';
+import { GitCodeView } from './code-view.js';
 import { mountDecisions } from './http/decisions.js';
 import { mountInbox } from './http/inbox.js';
 import { mountSlack } from './http/slack.js';
@@ -234,6 +239,23 @@ const searchIndexer = new SearchIndexer({
   llm: searchLlm,
 });
 const search = new SearchService({ store, clock, embedder });
+// The code view: a clone per board on the data disk, an index of its base branch in Postgres, one read-only port over both.
+const codeClones = new CodeClones({
+  dir: config.CODE_DIR,
+  host: github,
+  capBytes: config.CODE_CAP_MB * 1024 * 1024 || DEFAULT_CAP_BYTES,
+  warn: (message) => console.warn(`[code] ${message}`),
+});
+const codeIndex = new CodeIndex(db);
+const codeIndexer = new CodeIndexer({ store, clones: codeClones, index: codeIndex });
+const code = new CodeViewService({
+  boards,
+  view: new GitCodeView({ clones: codeClones, index: codeIndex, board: boardOf, host: github }),
+  usage: codeIndex,
+  warn: (message) => console.warn(`[code] ${message}`),
+});
+// A push to a board's base branch marks it; the sync fetches and re-indexes within the debounce (10 s), and every 15 minutes anyway.
+const codeSync = new SearchSync(codeIndexer, logError, Date.now, 'code');
 // Sonnet answers board chat questions (one call per question); it takes no sampling parameters.
 const chat = new ChatService({
   store,
@@ -354,6 +376,7 @@ for (const id of Object.keys(INTEGRATION_NAMES) as IntegrationId[]) await notifi
 await notifications.clear(null, 'integration:local'); // the retired fake integration of local follow
 mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
 mountSearch(app, { search });
+mountCode(app, { code });
 mountChat(app, { chat });
 mountDecisions(app, { decisions });
 mountInbox(app, { inbox });
@@ -400,6 +423,7 @@ mountMcp(app, {
   knowledge,
   artifacts,
   search,
+  code,
   chat,
   intake,
   inbox,
@@ -419,7 +443,7 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, github, boardOf }),
+  handle: githubDeliveryHandler({ db, globs, github, boardOf, onBasePush: (boardId) => codeSync.mark(boardId) }),
 });
 
 app.onError((error, c) => {
@@ -481,6 +505,7 @@ const inboxJob = new KbPipelineJob(inboxPipeline, logError, { isDown: () => llmH
 if (runs('inbox')) inboxJob.start();
 const learningJobsRunner = new LearningJobs(learningJobs, logError);
 if (runs('learning')) learningJobsRunner.start();
+if (runs('code')) codeSync.start();
 const tunnelWatch = config.SLOP_TUNNEL_DOMAIN === undefined ? null : new TunnelWatch(config.SLOP_TUNNEL_DOMAIN, integrations);
 if (runs('tunnel')) tunnelWatch?.start();
 const followWatch =
@@ -505,6 +530,7 @@ const shutdown = () => {
   kbPipelineJob.stop();
   findingsJob.stop();
   searchSync.stop();
+  codeSync.stop();
   searchJob.stop();
   decisionSync.stop();
   decisionJob.stop();
