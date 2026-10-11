@@ -202,7 +202,7 @@ describe('services', () => {
     unwrap(await globs.delete(PO, glob.id, 1));
     expect(store.state.globs.size).toBe(0);
     expect(store.state.events).toEqual([]);
-    expect(store.state.outbox.map((e) => e.kind)).toEqual(['delete_glob_data']);
+    expect(store.state.outbox.map((e) => e.kind)).toEqual(['delete_glob_data', 'recheck_overlaps']);
     expect(notifier.hints.at(-1)).toMatchObject({ kind: 'glob.deleted', globId: glob.id });
   });
 
