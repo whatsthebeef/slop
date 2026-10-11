@@ -38,4 +38,17 @@ describe('classifyMergeState', () => {
     // A real failure beside it still fails the head.
     expect(classifyMergeState('unstable', [run('completed', 'cancelled'), run('completed', 'failure')])).toBe('failed');
   });
+
+  it('a clean head whose runs were all skipped (a draft PR) is pending, not passed', () => {
+    expect(classifyMergeState('clean', [run('completed', 'skipped'), run('completed', 'skipped')])).toBe('pending');
+    expect(classifyMergeState('clean', [run('completed', 'neutral')])).toBe('pending');
+    expect(classifyMergeState('clean', [run('completed', 'skipped'), run('completed', 'success')])).toBe('passed');
+  });
+
+  it('skipped runs, then real runs: no pass until a run succeeds, and a failure fails', () => {
+    expect(classifyMergeState('clean', [run('completed', 'skipped')])).toBe('pending');
+    expect(classifyMergeState('blocked', [run('completed', 'skipped'), run('in_progress', null)])).toBe('pending');
+    expect(classifyMergeState('unstable', [run('completed', 'failure')])).toBe('failed');
+    expect(classifyMergeState('clean', [run('completed', 'success')])).toBe('passed');
+  });
 });

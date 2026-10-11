@@ -11,6 +11,14 @@ export const isUnfinished = (run: { status: string; conclusion: string | null })
   run.status !== 'completed' || run.conclusion === 'cancelled';
 
 /**
+ * True when the head has check runs but none has succeeded: every run was skipped or neutral (e.g. the checks workflow
+ * skips draft PRs), so the real run hasn't happened yet. GitHub counts a skipped required check as satisfied, so
+ * `mergeable_state` alone can't tell this from a pass.
+ */
+export const noSuccessfulRun = (runs: readonly { status: string; conclusion: string | null }[]): boolean =>
+  runs.length > 0 && !runs.some((r) => r.status === 'completed' && r.conclusion === 'success');
+
+/**
  * Maps GitHub's `mergeable_state` to a merge state. `unstable` (a non-required check failed or is running) and
  * `blocked` (a required check is missing or failed) don't say which, so the head's check runs decide: any failed
  * run fails the head, any unfinished (or cancelled) run leaves it pending, and an `unstable` head with neither is a failing
@@ -23,7 +31,7 @@ export const classifyMergeState = (
   switch (mergeableState) {
     case 'clean':
     case 'has_hooks':
-      return 'passed';
+      return noSuccessfulRun(runs) ? 'pending' : 'passed';
     case 'unstable':
     case 'blocked': {
       if (runs.some((r) => r.status === 'completed' && r.conclusion !== null && FAILED_CONCLUSIONS.has(r.conclusion))) {
