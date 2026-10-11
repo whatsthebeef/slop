@@ -90,6 +90,7 @@ export { FakeEmbedder, vectorOf } from './testing/fake-embedder.js';
 export * from './app/intake-learning-service.js';
 export * from './app/size-check-service.js';
 export * from './domain/independent-review.js';
+export * from './domain/review-publish.js';
 export * from './app/review-engine.js';
 export * from './domain/review-tools.js';
 export * from './domain/code-view.js';

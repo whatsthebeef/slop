@@ -637,6 +637,11 @@ export class GlobService {
     return result.ok ? ok({ glob: result.value, warning }) : result;
   }
 
+  /** Review now: queues a fresh independent review of a glob with a PR in Doing or Reviewing (any board member; no version needed). */
+  reviewNow(email: string, id: string) {
+    return this.command(email, id, null, (glob, ctx) => machine.reviewNow(glob, ctx));
+  }
+
   /** Investigate: an investigate-only routine run on a glob in Planning (refused while any run is live). */
   investigate(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx) => machine.investigate(glob, ctx));

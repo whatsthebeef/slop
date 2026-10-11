@@ -494,6 +494,8 @@ export const createApp = (deps: AppDeps) => {
       return globs.startAnyway(email, id, b.version);
     },
     investigate: (email: string, id: string, b: ActionBody) => globs.investigate(email, id, b.version),
+    // Queues an independent review of the PR as it is now (any member; the version is not checked, nothing on the glob changes).
+    'review-now': (email: string, id: string) => globs.reviewNow(email, id),
     retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version, b.anyway === true),
     'retry-autofix': (email: string, id: string, b: ActionBody) => globs.retryAutofix(email, id, b.version),
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),
@@ -517,7 +519,12 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, actionSchema);
     if (body instanceof Response) return body;
     const result = await actions[action.data](c.get('email'), c.req.param('id'), body);
-    if (result.ok) await deps.outbox.drain(result.value.id);
+    if (result.ok) {
+      const drained = deps.outbox.drain(result.value.id);
+      // A review takes minutes: it runs in the background, and the glob view answers at once.
+      if (action.data === 'review-now') void drained.catch(() => undefined);
+      else await drained;
+    }
     return withView(c, result);
   });
 

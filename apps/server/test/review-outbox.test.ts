@@ -47,4 +47,20 @@ describe('review_change outbox jobs', () => {
     await enqueue(review('m1', 'post_merge', 's1t2'), review('ddd', 'pre_merge', 's1t2'));
     expect(await states('s1t2')).toEqual([['ccc', 'dropped'], ['m1', 'pending'], ['ddd', 'pending']]);
   });
+
+  it('always queues an on-demand review (a request id), whatever finished or is pending for the commit', async () => {
+    const asked = (id: string, sha = 'eee', stage: 'pre_merge' | 'post_merge' = 'pre_merge'): Effect => ({ kind: 'review_change', globId: 's1t3', generation: 1, stage, sha, requestId: id });
+    await enqueue(review('eee', 'pre_merge', 's1t3'));
+    await database.db.update(schema.outbox).set({ state: 'done' }).where(eq(schema.outbox.globId, 's1t3'));
+    await enqueue(asked('r1'), asked('r2'));
+    // The automatic review of the same commit isn't suppressed by the on-demand ones finishing, and vice versa.
+    await enqueue(review('fff', 'pre_merge', 's1t3'));
+    const rows = await jobs('s1t3');
+    expect(rows.map((r) => [r.effect.kind === 'review_change' ? r.effect.sha : '', r.effect.kind === 'review_change' ? (r.effect.requestId ?? 'auto') : '', r.state])).toEqual([
+      ['eee', 'auto', 'done'],
+      ['eee', 'r1', 'pending'],
+      ['eee', 'r2', 'pending'],
+      ['fff', 'auto', 'pending'],
+    ]);
+  });
 });

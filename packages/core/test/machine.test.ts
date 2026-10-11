@@ -873,6 +873,45 @@ describe('checks and merging (slice 2)', () => {
     });
   });
 
+  describe('review now (on-demand independent review)', () => {
+    const doing = glob({ status: 'pr_open', pr: { number: 7, state: 'draft', headSha: 'bbb' } });
+    const merged = glob({ type: 'sub', status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'bbb' } });
+
+    it('is offered in Doing and Reviewing for a glob with an open or merged PR, and nowhere else', () => {
+      expect(m.allowedActions(doing, dev)).toContain('review_now');
+      expect(m.allowedActions(glob({ status: 'in_progress', pr: { number: 7, state: 'draft', headSha: 'bbb' } }), dev)).toContain('review_now');
+      expect(m.allowedActions(merged, dev)).toContain('review_now');
+      expect(m.allowedActions(glob({ status: 'planning' }), dev)).not.toContain('review_now');
+      expect(m.allowedActions(glob({ status: 'in_progress', pr: null }), dev)).not.toContain('review_now');
+      expect(m.allowedActions(glob({ status: 'signed_off', pr: { number: 7, state: 'merged', headSha: 'bbb' } }), dev)).not.toContain('review_now');
+      expect(m.allowedActions(glob({ status: 'failed', pr: { number: 7, state: 'closed', headSha: 'bbb' } }), dev)).not.toContain('review_now');
+    });
+
+    it('queues one review job with a request id and changes nothing on the glob', () => {
+      const t = value(m.reviewNow(doing, ctx()));
+      expect(t.changed).toBe(false);
+      expect(t.effects).toHaveLength(1);
+      expect(t.effects[0]).toMatchObject({ kind: 'review_change', stage: 'pre_merge', sha: 'bbb', generation: 1 });
+      expect(t.effects[0]?.kind === 'review_change' ? t.effects[0].requestId : undefined).toEqual(expect.any(String));
+      expect(t.events.map((e) => e.type)).toEqual(['ReviewRequested']);
+    });
+
+    it('reviews a merged glob at the post-merge stage, with a request id each time it is asked', () => {
+      const first = value(m.reviewNow(merged, ctx()));
+      expect(first.effects[0]).toMatchObject({ kind: 'review_change', stage: 'post_merge' });
+      const id = (t: Transition) => (t.effects[0]?.kind === 'review_change' ? t.effects[0].requestId : undefined);
+      const calls = ['r1', 'r2'];
+      const asked = () => value(m.reviewNow(merged, { ...ctx(), newRunId: () => calls.shift() ?? 'x' }));
+      expect([id(asked()), id(asked())]).toEqual(['r1', 'r2']);
+    });
+
+    it('refuses a glob without a reviewable PR', () => {
+      expect(errorCode(m.reviewNow(glob({ status: 'planning' }), ctx()))).toBe('invalid_transition');
+      expect(errorCode(m.reviewNow(glob({ status: 'in_progress', pr: null }), ctx()))).toBe('invalid_transition');
+      expect(errorCode(m.reviewNow(glob({ status: 'failed', pr: { number: 7, state: 'closed', headSha: 'bbb' } }), ctx()))).toBe('invalid_transition');
+    });
+  });
+
   it('red checks on a sub\'s merge commit revert it and fail the sub; sames and supers are left alone', () => {
     const failure = { name: 'Type check', step: null, lines: [], url: 'https://ci/1' };
     const merged = (type: 'sub' | 'same' | 'super') =>

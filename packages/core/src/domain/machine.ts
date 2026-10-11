@@ -60,6 +60,8 @@ export type Action =
   | 'start'
   /** A glob in Planning: a routine run does the orchestrator's Phases 1–2 only and pushes the investigation; no branch, no commits. */
   | 'investigate'
+  /** A glob with a PR in Doing or Reviewing: queue an independent review of it as it is now. */
+  | 'review_now'
   /** A glob held for another glob to merge starts now, before it has. */
   | 'start_anyway'
   | 'pick_up'
@@ -469,6 +471,25 @@ export const investigate = (glob: Glob, ctx: Context, automatic = false): Result
   if (actor !== null && restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot investigate ${glob.type}s`);
   const triggeredBy = actor?.email ?? glob.creator;
   return new Builder(glob, ctx).queueRun(triggeredBy, undefined, false, 'investigate').done();
+};
+
+/** Whether a glob can be independently reviewed on demand: it has a PR (open or merged) and is in Doing or Reviewing. */
+export const canReviewNow = (glob: Glob): boolean =>
+  glob.pr !== null && glob.pr.state !== 'closed' && (listOf(glob.status) === 'doing' || glob.status === 'reviewing');
+
+/**
+ * Review now: queues a fresh independent review (never deduplicated against earlier ones) of the change as it is: an open
+ * PR as it would land on the latest base branch, a merged one as the squash commit. The glob itself doesn't change.
+ */
+export const reviewNow = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  const pr = glob.pr;
+  if (pr === null || !canReviewNow(glob)) return invalidTransition(glob, actor, 'Only a glob with a pull request in Doing or Reviewing can be reviewed now');
+  const stage = pr.state === 'merged' ? 'post_merge' : 'pre_merge';
+  return new Builder(glob, ctx)
+    .event('ReviewRequested', { stage })
+    .effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage, sha: pr.headSha ?? '', requestId: ctx.newRunId() })
+    .done();
 };
 
 /**
@@ -1886,6 +1907,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
       (facts.dependencies === undefined ? glob.waiting != null : waitingFor(glob, facts.dependencies).length > 0));
   if (glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
+  if (canReviewNow(glob)) actions.push('review_now');
   if (held && !restricted) actions.push('start_anyway');
   // Hand to routine: picked up, but no session has started and no run is live.
   if (!restricted && glob.status === 'in_progress' && glob.type !== 'super' && glob.implementer !== null && !hasLiveRun(glob)) {

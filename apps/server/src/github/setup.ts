@@ -39,7 +39,8 @@ export const appManifest = (publicUrl: string, name: string) => ({
     contents: 'write',
     pull_requests: 'write',
     issues: 'write',
-    checks: 'read',
+    // Write: the "N findings" check run of an independent review (an existing installation must accept this).
+    checks: 'write',
     // Re-runs the failed jobs of a base check that broke in CI's setup (an existing installation must accept this).
     actions: 'write',
     statuses: 'read',

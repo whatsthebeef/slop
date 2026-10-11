@@ -1,3 +1,5 @@
+import type { ReviewStage } from './events.js';
+
 /**
  * The board's knowledge base: documents (conventions, build commands, architecture, review
  * checklists), the agent-set files that `sstor init` writes into a checkout, the local-run spec
@@ -174,7 +176,7 @@ export const agentSetKind = (path: string): KnowledgeKind | null => {
   return null;
 };
 
-export const ARTIFACT_KINDS = ['plan', 'implementation_plan', 'postplan', 'local_review', 'investigation', 'attachment'] as const;
+export const ARTIFACT_KINDS = ['plan', 'implementation_plan', 'postplan', 'local_review', 'independent_review', 'investigation', 'attachment'] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
 export const RISK_TIERS = ['low', 'normal', 'high'] as const;
@@ -191,7 +193,7 @@ export interface ReviewStats {
 
 /** Who produced an artifact: a person, sessionator, a model with its prompt and agent-set version, or the backfill that gave an existing glob its plan.md v1. */
 export interface Provenance {
-  readonly by: 'human' | 'sessionator' | 'routine' | 'backfill';
+  readonly by: 'human' | 'sessionator' | 'routine' | 'backfill' | 'reviewer';
   readonly actor: string;
   readonly runId: string | null;
   readonly agentSetVersion: number | null;
@@ -199,6 +201,19 @@ export interface Provenance {
   readonly reviewStats?: ReviewStats;
   /** Investigations only: why the block could not be parsed; absent when it was valid. The text is stored either way. */
   readonly validation?: string;
+  /** Independent reviews only: what was reviewed and how many findings it kept (the card's status reads it). */
+  readonly independentReview?: IndependentReviewMeta;
+}
+
+/** The facts about one independent review that cards and the GitHub publisher need without parsing its text. */
+export interface IndependentReviewMeta {
+  readonly stage: ReviewStage;
+  /** The PR head when the review ran (a later push makes the review outdated). */
+  readonly headSha: string | null;
+  readonly findings: number;
+  readonly high: number;
+  readonly medium: number;
+  readonly low: number;
 }
 
 export interface Artifact {
@@ -229,4 +244,6 @@ export interface ArtifactSummary {
   readonly createdAt: string;
   readonly by: Provenance['by'];
   readonly actor: string;
+  /** Independent reviews only. */
+  readonly review?: IndependentReviewMeta;
 }

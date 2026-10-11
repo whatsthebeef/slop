@@ -1,5 +1,6 @@
 import type { CheckFailure } from '@slop/core';
 import { failureLines, jobOwnLog } from '@slop/core';
+import { REVIEW_CHECK } from '../codehost.js';
 import type { Repo } from '../codehost.js';
 import { FAILED_CONCLUSIONS, isUnfinished, noSuccessfulRun } from './merge-state.js';
 
@@ -84,7 +85,7 @@ export const readCommitChecks = async (request: Request, repo: Repo, sha: string
   });
   const runs = (isRecord(data) && Array.isArray(data.check_runs) ? data.check_runs : []).flatMap((r: unknown) => {
     const run = asCheckRun(r);
-    return run === null ? [] : [run];
+    return run === null || run.name === REVIEW_CHECK ? [] : [run];
   });
   const failed = runs
     .filter((r) => r.status === 'completed' && r.conclusion !== null && FAILED_CONCLUSIONS.has(r.conclusion))

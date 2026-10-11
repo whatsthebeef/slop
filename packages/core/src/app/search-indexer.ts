@@ -86,6 +86,8 @@ const artifactSource = (kind: ArtifactKind): SourceType => {
       return 'postplan';
     case 'local_review':
       return 'local_review';
+    case 'independent_review':
+      return 'independent_review';
     case 'investigation':
     case 'attachment':
       return 'attachment';
@@ -99,6 +101,7 @@ const authorityOf = (source: SourceType): AuthorityTier => {
     case 'implementation_plan':
       return 'merged_code';
     case 'local_review':
+    case 'independent_review':
     case 'attachment':
     case 'meeting':
     case 'thread':

@@ -33,6 +33,8 @@ export const DOMAIN_EVENT_TYPES = [
   'LabelItemTicked',
   'PickedUp',
   'ArtifactAdded',
+  /** A person asked for an independent review now (data: the stage it will run at). */
+  'ReviewRequested',
   'DeployRequested',
   'DeployReplaced',
   'DeployStarted',
@@ -173,8 +175,10 @@ export type Effect =
    * Independent review of the change (spec, "When it runs"). `sha` is the reviewed target: the PR head for a pre-merge
    * review of a same or super, the squash commit for a sub's post-merge review. The outbox keeps one job per glob, stage
    * and sha, and cancels a pre-merge job whose head a newer push replaced; the executor drops one that is no longer current.
+   * `requestId` marks an on-demand review (Review now): it is never deduplicated or cancelled, and it reviews whatever the
+   * PR is when it runs (the stage follows the PR's state, so `stage` and `sha` only say what it was when asked).
    */
-  | { readonly kind: 'review_change'; readonly globId: string; readonly generation: number; readonly stage: ReviewStage; readonly sha: string };
+  | { readonly kind: 'review_change'; readonly globId: string; readonly generation: number; readonly stage: ReviewStage; readonly sha: string; readonly requestId?: string };
 
 export type ReviewStage = 'pre_merge' | 'post_merge';
 

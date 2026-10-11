@@ -141,6 +141,7 @@ export const sourceTone = (source: ChatCitation['source']): string => {
     case 'postplan':
       return 'border-sky-600/60 bg-sky-500/10';
     case 'local_review':
+    case 'independent_review':
     case 'change_summary':
       return 'border-amber-600/60 bg-amber-500/10';
     case 'kb_doc':

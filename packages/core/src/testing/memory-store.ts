@@ -550,6 +550,7 @@ export class MemoryStore implements Store {
             createdAt: a.createdAt,
             by: a.provenance.by,
             actor: a.provenance.actor,
+            ...(a.provenance.independentReview === undefined ? {} : { review: a.provenance.independentReview }),
           });
         }
         return Promise.resolve([...summaries.values()]);
@@ -1108,8 +1109,9 @@ export class MemoryStore implements Store {
         for (const effect of effects) {
           // One pending recheck per board is enough: it reads the board as it is when it runs.
           if (effect.kind === 'recheck_overlaps' && s.outbox.some((e) => e.kind === 'recheck_overlaps' && e.globId === effect.globId)) continue;
-          if (effect.kind === 'review_change') {
-            const same = (e: Effect) => e.kind === 'review_change' && e.globId === effect.globId && e.stage === effect.stage;
+          // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
+          if (effect.kind === 'review_change' && effect.requestId === undefined) {
+            const same = (e: Effect) => e.kind === 'review_change' && e.requestId === undefined && e.globId === effect.globId && e.stage === effect.stage;
             if (s.outbox.some((e) => same(e) && e.kind === 'review_change' && e.sha === effect.sha)) continue;
             // A newer pre-merge head cancels the older head's pending job.
             if (effect.stage === 'pre_merge') s.outbox = s.outbox.filter((e) => !same(e));
