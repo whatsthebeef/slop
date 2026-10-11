@@ -1,5 +1,5 @@
-import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, CodeReviewComment, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, CODE_REVIEW_KINDS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
+import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -182,23 +182,6 @@ const toNotification = (row: typeof schema.boardNotifications.$inferSelect): Boa
   action: row.action,
   since: row.since.toISOString(),
   clears: row.clears,
-});
-
-const toCodeReview = (row: typeof schema.codeReviewComments.$inferSelect): CodeReviewComment => ({
-  id: row.id,
-  boardId: row.boardId,
-  globId: row.globId,
-  prNumber: row.prNumber,
-  externalId: row.externalId,
-  kind: oneOf(CODE_REVIEW_KINDS, row.kind),
-  author: row.author,
-  commitSha: row.commitSha,
-  path: row.path,
-  line: row.line,
-  body: row.body,
-  url: row.url,
-  createdAt: row.createdAt.toISOString(),
-  updatedAt: row.updatedAt.toISOString(),
 });
 
 const toKnowledge = (row: typeof schema.knowledge.$inferSelect): KnowledgeDoc => ({
@@ -541,7 +524,6 @@ export class PgStore implements Store {
       deleteGlob: async (id) => {
         await t.delete(schema.globEnvironments).where(eq(schema.globEnvironments.globId, id));
         await t.delete(schema.testRuns).where(eq(schema.testRuns.globId, id));
-        await t.delete(schema.codeReviewComments).where(eq(schema.codeReviewComments.globId, id));
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
@@ -1155,50 +1137,6 @@ export class PgStore implements Store {
           .where(and(eq(r.boardId, boardId), or(...matches)))
           .orderBy(desc(r.finishedAt), desc(r.id));
         return rows.map(toTestRun);
-      },
-
-      upsertCodeReviewComment: async (comment) => {
-        const c = schema.codeReviewComments;
-        const rows = await t
-          .insert(c)
-          .values({ ...comment, createdAt: new Date(comment.createdAt), updatedAt: new Date(comment.updatedAt) })
-          .onConflictDoUpdate({
-            target: c.externalId,
-            set: {
-              kind: sql`excluded.kind`,
-              body: sql`excluded.body`,
-              url: sql`excluded.url`,
-              commitSha: sql`excluded.commit_sha`,
-              path: sql`excluded.path`,
-              line: sql`excluded.line`,
-              updatedAt: sql`excluded.updated_at`,
-            },
-            // An edit replaces the stored copy unless that is newer (a late redelivery) or was deleted, and only when it
-            // differs.
-            setWhere: sql`${c.deletedAt} is null and ${c.updatedAt} <= excluded.updated_at and (${c.kind}, ${c.body}, ${c.url}, ${c.commitSha}, ${c.path}, ${c.line}, ${c.updatedAt}) is distinct from (excluded.kind, excluded.body, excluded.url, excluded.commit_sha, excluded.path, excluded.line, excluded.updated_at)`,
-          })
-          .returning({ id: c.id });
-        return rows.length === 1;
-      },
-      deleteCodeReviewComment: async (externalId, at) => {
-        const c = schema.codeReviewComments;
-        // A tombstone, not a delete: a late redelivery of the item must not store it again.
-        const [row] = await t
-          .update(c)
-          .set({ deletedAt: new Date(at) })
-          .where(and(eq(c.externalId, externalId), isNull(c.deletedAt)))
-          .returning();
-        return row === undefined ? null : toCodeReview(row);
-      },
-      listCodeReviewComments: async (boardId, globIds) => {
-        if (globIds.length === 0) return [];
-        const c = schema.codeReviewComments;
-        const rows = await t
-          .select()
-          .from(c)
-          .where(and(eq(c.boardId, boardId), inArray(c.globId, [...globIds]), isNull(c.deletedAt)))
-          .orderBy(asc(c.createdAt), asc(c.id));
-        return rows.map(toCodeReview);
       },
 
       insertReviewSource: async (input) => {

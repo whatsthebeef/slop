@@ -1,6 +1,4 @@
 import {
-  coderabbitSeverity,
-  coderabbitText,
   FINDING_CLASS_DESCRIPTIONS,
   FINDING_CLASSES,
   FINDING_SEVERITIES,
@@ -8,7 +6,7 @@ import {
   fingerprint,
   splitReview,
 } from '../domain/findings.js';
-import type { FindingClass, FindingSeverity, NewFinding, ReviewFinding, ReviewSource, SplitFinding } from '../domain/findings.js';
+import type { FindingClass, NewFinding, ReviewFinding, ReviewSource, SplitFinding } from '../domain/findings.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import type { Clock, Notifier, Store } from '../ports.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
@@ -116,8 +114,8 @@ type Outcome<T> = { ok: T } | { failure: string } | { unavailable: LlmUnavailabl
 /**
  * The review findings pipeline (spec, self-improvement signals): a background job claims each new
  * review source and splits it into findings (change_reviewer documents by their IN-SCOPE and
- * SUGGESTIONS sections, free-form reviews with one Haiku call whose findings must quote the review,
- * a CodeRabbit comment as one finding), then claims each finding and classifies it with one Haiku
+ * SUGGESTIONS sections, free-form reviews with one Haiku call whose findings must quote the review),
+ * then claims each finding and classifies it with one Haiku
  * call. Claims, deadlines, retries and waiting while the LLM is unavailable follow the KB pipeline.
  */
 export class FindingsPipeline {
@@ -202,7 +200,7 @@ export class FindingsPipeline {
       boardId: source.boardId,
       globId: source.globId,
       sourceId: source.id,
-      source: source.kind === 'coderabbit_comment' ? 'coderabbit' : 'local_review',
+      source: 'local_review',
       commitSha: source.commitSha,
       agentSetVersion: source.agentSetVersion,
       ...f,
@@ -223,22 +221,16 @@ export class FindingsPipeline {
     if (wrote) this.deps.notifier.publish({ kind: 'glob.findings', boardId: source.boardId, globId: source.globId });
   }
 
-  /** The text to split: a CodeRabbit comment's own, or the local review artifact's; null when it is gone. */
+  /** The text to split: the local review artifact's; null when it is gone. */
   private async contentOf(source: ReviewSource): Promise<string | null> {
-    if (source.kind === 'coderabbit_comment') return source.content;
     const { artifactId } = source;
     if (artifactId === null) return null;
     const artifact = await this.deps.store.transaction((tx) => tx.getArtifact(artifactId));
     return artifact?.content ?? null;
   }
 
-  /** A source's findings: one for a CodeRabbit comment, a structured review's sections, else the split model's answer. */
+  /** A source's findings: a structured review's sections, else the split model's answer. */
   private async findingsOf(source: ReviewSource, content: string): Promise<Outcome<SplitFinding[]>> {
-    if (source.kind === 'coderabbit_comment') {
-      const body = coderabbitText(content);
-      const severity: FindingSeverity = coderabbitSeverity(content);
-      return { ok: body === '' ? [] : [{ severity, round: null, path: source.path, line: source.line, text: body }] };
-    }
     // A review with no text (a link-only artifact) has nothing to split: no model call.
     if (content.trim() === '') return { ok: [] };
     const structured = splitReview(content);

@@ -61,12 +61,9 @@ describe('the behind-main warning', () => {
     });
     const boardOf = (boardId: number): Promise<Board | null> => store.transaction((tx) => tx.getBoard(boardId));
     host = new FakeHost();
-    const unused = () => Promise.reject(new Error('not used here'));
     handle = githubDeliveryHandler({
       db: database.db,
       globs,
-      findings: { recordCodeRabbitComment: unused },
-      codeReviews: { record: unused, remove: unused },
       boardOf,
       github: host,
     });

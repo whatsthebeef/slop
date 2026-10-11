@@ -8,7 +8,6 @@ export const SAFETY_SYNC_MS = 15 * 60_000;
 /** The hints that mean a board's searchable material changed. */
 export const marksBoardDirty = (hint: Hint): boolean =>
   hint.kind === 'glob.artifacts' ||
-  hint.kind === 'glob.reviews' ||
   hint.kind === 'glob.changed' ||
   hint.kind === 'glob.deleted' ||
   hint.kind === 'board.kb' ||

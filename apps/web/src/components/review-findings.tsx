@@ -14,7 +14,6 @@ const SEVERITY_TEXT: Record<FindingView['severity'], string> = {
 
 const SOURCE_TEXT: Record<FindingView['source'], string> = {
   local_review: 'local review',
-  coderabbit: 'CodeRabbit',
 };
 
 const where = (f: FindingView) => (f.path === null ? null : f.line === null ? f.path : `${f.path}:${f.line}`);
@@ -30,7 +29,7 @@ const grouped = (findings: readonly FindingView[]) => {
 
 /**
  * The glob view's review findings: counts per class, then each finding with its severity,
- * location, round, source and commit. Finding text comes from reviews and CodeRabbit, so it is
+ * location, round, source and commit. Finding text comes from reviews, so it is
  * shown as plain text, never as markdown. Findings live beside the glob: `glob.findings` hints and
  * reconnects refresh them, and a slow poll while any review or finding is still being processed
  * catches up on hints a hidden tab missed.

@@ -1305,8 +1305,6 @@ export const prReadyForReview = (
     b.updateRun({ state: 'watching', lastProgressAt: ctx.now, startedAt: run.startedAt ?? ctx.now });
   }
   b.status('pr_open').effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
-  // CodeRabbit reviews on its own unless the repo turned that off; the executor decides whether to ask (R3).
-  b.effect({ kind: 'request_code_review', globId: glob.id, generation: glob.generation });
   // A sub doesn't wait for the PR's checks: the board's policy decides at once, and the checks run on the base after it merges.
   if (glob.type === 'sub') b.effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha: pr.headSha });
   return b.done();

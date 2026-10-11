@@ -142,11 +142,6 @@ export type Effect =
   /** Bring the glob's PR branch up to date with the base branch so its checks run again (the base went green). */
   | { readonly kind: 'update_branch'; readonly globId: string; readonly generation: number; readonly sha: string }
   /**
-   * The PR is ready for review: ask CodeRabbit for one (`@coderabbitai review`) when the repo's `.coderabbit.yaml` turns
-   * its automatic reviews off and the board has a review guide. Posted once per PR.
-   */
-  | { readonly kind: 'request_code_review'; readonly globId: string; readonly generation: number }
-  /**
    * A glob merged: start the globs that waited for it, if nothing else holds them. Runs after commit; each released
    * glob is its own version-checked write, so a retry or a second delivery changes nothing.
    */

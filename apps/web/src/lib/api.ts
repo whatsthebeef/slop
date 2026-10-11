@@ -16,11 +16,9 @@ import type {
   Category,
   ChatCitation,
   ChatMessage,
-  CodeReviewBadge,
   Confidence,
   IntakeAccuracy,
   IntakeExample,
-  GlobCodeReview,
   DecisionView,
   Deploy,
   DeployIndicator,
@@ -462,12 +460,6 @@ export const api = {
   globEnvironments: (id: string) =>
     request<{ value: GlobEnvironment[] }>('GET', `/api/globs/${id}/environments`).then((r) => r.value),
   globTests: (id: string) => request<{ value: AtfRun[] }>('GET', `/api/globs/${id}/tests`).then((r) => r.value),
-  /** CodeRabbit's badge per glob (inline comment count and review link); globs with nothing stored are left out. */
-  boardCodeReviews: (boardId: number, globIds: readonly string[]) =>
-    request<{ value: Partial<Record<string, CodeReviewBadge>> }>(
-      'GET',
-      `/api/boards/${boardId}/code-reviews?globs=${globIds.map(encodeURIComponent).join(',')}`,
-    ).then((r) => r.value),
   searchBoard: (boardId: number, q: string, history: boolean) =>
     request<{ value: BoardSearchResult }>(
       'GET',
@@ -480,7 +472,6 @@ export const api = {
   saveChatAnswer: (boardId: number, chat: number, message: number, glob?: string) =>
     request<{ id: string }>('POST', `/api/boards/${boardId}/chats/${chat}/messages/${message}/save`, glob === undefined ? {} : { glob }),
   askChat: (boardId: number, input: ChatQuestion, stream?: ChatStream) => (stream === undefined ? request<ChatReply>('POST', `/api/boards/${boardId}/chat`, input) : askChatStream(boardId, input, stream)),
-  globCodeReview: (id: string) => request<{ value: GlobCodeReview }>('GET', `/api/globs/${id}/code-review`).then((r) => r.value),
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
   deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),
   createGlob: (boardId: number, input: NewGlob) =>

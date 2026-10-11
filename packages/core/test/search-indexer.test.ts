@@ -104,23 +104,6 @@ describe('SearchIndexer', () => {
     await addArtifact(task.id, 'local_review', 'Looks fine.');
     await addArtifact(task.id, 'attachment', 'Design notes body.', 'notes');
     await store.transaction((tx) =>
-      tx.upsertCodeReviewComment({
-        boardId,
-        globId: task.id,
-        prNumber: 7,
-        externalId: 'coderabbit:review_comment:1',
-        kind: 'inline',
-        author: 'coderabbit',
-        commitSha: null,
-        path: 'src/sync/retry.ts',
-        line: '10',
-        body: 'The loop never ends.',
-        url: 'https://github.com/acme/app/pull/7#discussion_r1',
-        createdAt: START,
-        updatedAt: START,
-      }),
-    );
-    await store.transaction((tx) =>
       tx.saveKnowledge({
         boardId,
         kind: 'doc',
@@ -167,7 +150,7 @@ describe('SearchIndexer', () => {
   it('indexes every kind of source with its facts and citations', async () => {
     await populate();
     const result = await indexer.syncBoard(boardId);
-    expect(result).toEqual({ written: 11, removed: 0, queued: 1 });
+    expect(result).toEqual({ written: 10, removed: 0, queued: 1 });
     const types = new Map<SourceType, number>();
     for (const item of items()) types.set(item.sourceType, (types.get(item.sourceType) ?? 0) + 1);
     expect(Object.fromEntries(types)).toEqual({
@@ -177,7 +160,6 @@ describe('SearchIndexer', () => {
       postplan: 1,
       local_review: 1,
       attachment: 1,
-      code_review: 1,
       kb_doc: 1,
       learning: 1,
       change_summary: 1,
@@ -192,7 +174,6 @@ describe('SearchIndexer', () => {
     expect(byRef('artifact:s1t1:postplan:').authority).toBe('merged_code');
     expect(byRef('artifact:s1t1:local_review:').authority).toBe('discussion');
     expect(byRef('artifact:s1f2:implementation_plan:')).toMatchObject({ sourceType: 'implementation_plan', authority: 'merged_code' });
-    expect(byRef('review:coderabbit:review_comment:1').externalUrl).toBe('https://github.com/acme/app/pull/7#discussion_r1');
     expect(byRef('kb:build_test_lint').globIds).toEqual([]);
     expect(chunksOf('kb:build_test_lint')).toMatchObject([{ header: '[Knowledge · 2026-10-05 · "build_test_lint" · Build]', text: 'Run pnpm test.' }]);
     expect(byRef('learning:s1k1').globIds).toEqual(['s1t1', 's1f2']);

@@ -190,11 +190,11 @@ describe('ranking', () => {
 
   it('cites each hit with its source, date, title, link and glob', () => {
     const [hit] = rankCandidates(
-      [candidate({ chunkId: 1, sourceType: 'code_review', externalUrl: 'https://example.com/c/1', globIds: ['s1t4', 's1t5'] })],
+      [candidate({ chunkId: 1, sourceType: 'change_summary', externalUrl: 'https://example.com/c/1', globIds: ['s1t4', 's1t5'] })],
       'current',
       NOW,
     );
-    expect(hit?.citation).toEqual({ source: 'code_review', date: NOW, title: 'Item 1', link: 'https://example.com/c/1', globId: 's1t4' });
+    expect(hit?.citation).toEqual({ source: 'change_summary', date: NOW, title: 'Item 1', link: 'https://example.com/c/1', globId: 's1t4' });
     expect(hit?.label).toBeNull();
   });
 });

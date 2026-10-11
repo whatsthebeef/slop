@@ -1,5 +1,3 @@
-import { globCodeReview } from '../domain/code-review.js';
-import type { CodeReviewComment } from '../domain/code-review.js';
 import { decisionViews } from '../domain/decisions.js';
 import type { DecisionView } from '../domain/decisions.js';
 import { err, invalidInput, notFound, ok } from '../domain/errors.js';
@@ -23,13 +21,8 @@ export interface GlobContext {
   readonly implementationRecord: { readonly version: number; readonly commitSha: string | null; readonly content: string } | null;
   /** Attachments in full: Clarifications and Assumptions always (they carry intent), others when asked for with `include`. */
   readonly attachments: readonly { readonly label: string; readonly content: string; readonly link: string | null }[];
-  /**
-   * Every other artifact, not in full: fetch one with `get_artifact` or `include` on `get_context`. CodeRabbit's stored
-   * review is listed as kind `code_review` while it isn't included.
-   */
+  /** Every other artifact, not in full: fetch one with `get_artifact` or `include` on `get_context`. */
   readonly available: readonly ArtifactListing[];
-  /** CodeRabbit's summary, reviews and inline comments, verbatim; only with `include: ['code_review']` (or `all`). */
-  readonly codeReview: CodeReviewContext | null;
   /**
    * What the board already knows about this glob's title and summary (current mode, top 5, cited, the glob's own
    * items left out). Absent when no search is configured.
@@ -88,16 +81,8 @@ export const AUTHORITY_STATEMENT =
 /** The most decisions one context bundle carries. */
 const CONTEXT_DECISIONS = 30;
 
-/** CodeRabbit's review of the glob's PR, as stored (R3). */
-export interface CodeReviewContext {
-  readonly summary: string | null;
-  readonly reviews: readonly { readonly body: string; readonly url: string | null; readonly commitSha: string | null }[];
-  readonly inline: readonly { readonly path: string | null; readonly line: string | null; readonly body: string; readonly url: string | null }[];
-  readonly comments: readonly { readonly body: string; readonly url: string | null }[];
-}
-
 export interface ArtifactListing {
-  readonly kind: ArtifactKind | 'code_review';
+  readonly kind: ArtifactKind;
   readonly label: string;
   readonly version: number;
   readonly commitSha: string | null;
@@ -115,30 +100,6 @@ const wanted = (include: readonly string[], a: Artifact): boolean =>
   include.includes('all') ||
   include.includes(a.kind) ||
   (a.kind === 'attachment' && include.some((i) => i.toLowerCase() === `attachment:${a.label}`.toLowerCase()));
-
-const codeReviewContext = (stored: readonly CodeReviewComment[]): CodeReviewContext => {
-  const grouped = globCodeReview(stored);
-  return {
-    summary: grouped.summary?.body ?? null,
-    reviews: grouped.reviews.map((r) => ({ body: r.body, url: r.url, commitSha: r.commitSha })),
-    inline: grouped.inline.map((c) => ({ path: c.path, line: c.line, body: c.body, url: c.url })),
-    comments: grouped.comments.map((c) => ({ body: c.body, url: c.url })),
-  };
-};
-
-/** The listing for CodeRabbit's stored review when it isn't included in full. */
-const codeReviewListing = (stored: readonly CodeReviewComment[]): ArtifactListing => {
-  const { badge } = globCodeReview(stored);
-  const latest = stored.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a));
-  return {
-    kind: 'code_review',
-    label: '',
-    version: stored.length,
-    commitSha: latest.commitSha,
-    size: stored.reduce((n, c) => n + c.body.length, 0),
-    description: `CodeRabbit: ${String(badge?.count ?? 0)} inline comments${badge?.hasSummary === true ? ', a summary' : ''}, ${String(stored.filter((c) => c.kind === 'review').length)} reviews`,
-  };
-};
 
 const describe = (a: Artifact): string => {
   const line = a.content.split('\n').map((l) => l.replace(/^[#>*\-\s]+/, '').trim()).find((l) => l !== '');
@@ -353,8 +314,6 @@ export class ArtifactService {
         (a.kind === 'attachment' && INLINE_LABELS.has(a.label.toLowerCase())) || wanted(include, a);
       // Legacy postplan rows were migrated into the record; they stay as history, not listed.
       const others = artifacts.filter((a) => a.kind !== 'plan' && a.kind !== 'implementation_plan' && a.kind !== 'postplan' && !full(a));
-      const codeReview = await tx.listCodeReviewComments(glob.boardId, [globId]);
-      const codeReviewInFull = include.includes('all') || include.includes('code_review');
       const related = this.deps.related === undefined ? undefined : await this.deps.related(tx, glob);
       const allDecisions = await tx.listDecisions(glob.boardId);
       const decisions = decisionViews(
@@ -407,16 +366,14 @@ export class ArtifactService {
             size: a.content.length,
             description: describe(a),
           })),
-          ...(codeReview.length === 0 || codeReviewInFull ? [] : [codeReviewListing(codeReview)]),
         ],
-        codeReview: codeReview.length === 0 || !codeReviewInFull ? null : codeReviewContext(codeReview),
         ...(related === undefined ? {} : { related }),
         decisions,
         inbox,
         authority: AUTHORITY_STATEMENT,
         ...(sizeCheck === null ? {} : { size: sizeContext(sizeCheck) }),
         fetch:
-          "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'code_review', 'all']). Inbox items are attached notes: their text is cut at 12000 characters (truncated: true); search_text finds the rest.",
+          "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'all']). Inbox items are attached notes: their text is cut at 12000 characters (truncated: true); search_text finds the rest.",
       });
     });
   }

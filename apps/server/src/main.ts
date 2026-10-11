@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, CodeReviewService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, SubLimitService, IntakeLearningService, SizeCheckService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, SubLimitService, IntakeLearningService, SizeCheckService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -23,7 +23,6 @@ import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { environmentExecutors } from './environment-executors.js';
 import { exclusivePathExecutors } from './exclusive-path-executors.js';
-import { codeReviewExecutors } from './code-review-executors.js';
 import { mountArtifactUploads } from './http/artifact-upload.js';
 import { mountDeploys } from './http/deploys.js';
 import { mountWeb } from './http/web.js';
@@ -37,7 +36,6 @@ import { CodeHostChanges } from './code-host-changes.js';
 import { marksBoardDirty, SearchSync } from './jobs/search-sync.js';
 import { LlmHealth } from './llm-health.js';
 import { mountHealth } from './http/health.js';
-import { mountCodeReviews } from './http/code-reviews.js';
 import { mountChat } from './http/chat.js';
 import { mountSearch } from './http/search.js';
 import { mountDecisions } from './http/decisions.js';
@@ -119,7 +117,6 @@ const deploys = new DeployService({
 });
 const environments = new EnvironmentService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
-const codeReviews = new CodeReviewService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 
 const outbox = new OutboxRunner(
   db,
@@ -135,8 +132,6 @@ const outbox = new OutboxRunner(
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
     ...exclusivePathExecutors(store, branchFiles, boardOf),
-    // Runs only once the outbox starts, after `knowledge` below exists.
-    ...codeReviewExecutors(github, boardOf, (boardId) => knowledge.hasReviewGuide(boardId)),
   },
   logError,
 );
@@ -351,7 +346,6 @@ awsSignInEnabled = awsSignIn !== null;
 for (const id of Object.keys(INTEGRATION_NAMES) as IntegrationId[]) await notifications.clear(null, integrationSource(id));
 await notifications.clear(null, 'integration:local'); // the retired fake integration of local follow
 mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
-mountCodeReviews(app, { codeReviews });
 mountSearch(app, { search });
 mountChat(app, { chat });
 mountDecisions(app, { decisions });
@@ -417,7 +411,7 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, findings, codeReviews, github, boardOf }),
+  handle: githubDeliveryHandler({ db, globs, github, boardOf }),
 });
 
 app.onError((error, c) => {
