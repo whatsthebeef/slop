@@ -12,7 +12,8 @@ import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
 import { SLOP_TYPES } from './types.js';
 import { mergeImplied } from './exclusive-paths.js';
-import { dependencyIds, refusalText, waitingFor, waitSummary } from './waiting.js';
+import { chainRefusal, dependencyIds, explicitOverlaps, NO_CHAIN, refusalText, waitingFor, waitSummary } from './waiting.js';
+import type { BlockingChain } from './waiting.js';
 import type { DependencyState } from './waiting.js';
 import type {
   Actor,
@@ -68,6 +69,7 @@ export type Action =
   | 'merge'
   /** A failed merge that GitHub never decided (no conflict, checks passed at the head): ask slop to merge again. */
   | 'retry_merge'
+  | 'deescalate'
   /** Supers: squash-merge what's done and keep going on the same glob and branch. */
   | 'merge_continue'
   /** Supers, from the board: ask slop to mark the draft PR ready (as the `mark_ready` tool does). */
@@ -83,6 +85,10 @@ export interface ActionFacts {
   readonly recordSha?: string | null;
   /** The state of every glob this one waits for (a missing entry reads as deleted); absent when not loaded. */
   readonly dependencies?: ReadonlyMap<string, DependencyState>;
+  /** Everything unmerged ahead of the glob, where loaded (Start and Retrigger refuse while it isn't empty). */
+  readonly chain?: BlockingChain;
+  /** The size check flagged the glob oversized and nobody has answered: it is held in Planning, though nothing it waits for is unmerged. */
+  readonly sizeHeld?: boolean;
 }
 
 const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
@@ -219,7 +225,7 @@ class Builder {
   }
 
   /** Queues a new routine run for whoever triggered it. */
-  queueRun(triggeredBy: string, retry?: { readonly failureSummary: string | null }): this {
+  queueRun(triggeredBy: string, retry?: { readonly failureSummary: string | null }, checkPrerequisites = false): this {
     const run: Run = {
       id: this.ctx.newRunId(),
       state: 'queued',
@@ -250,6 +256,7 @@ class Builder {
       runId: run.id,
       routineOwner: run.routineOwner,
       ...(retry?.failureSummary == null ? {} : { failureSummary: retry.failureSummary }),
+      ...(checkPrerequisites ? { checkPrerequisites: true as const } : {}),
     });
   }
 
@@ -299,6 +306,8 @@ export interface CreateInput {
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Set when the size check flagged the glob oversized: a sub or auto-triggered same waits in Planning, with this as the reason, until a person splits or keeps it whole. */
   readonly sizeHold?: string;
+  /** Same only: wait in Planning for `after` and start by itself when it merges (a split's part that needs another part). */
+  readonly autoStart?: boolean;
 }
 
 export const create = (
@@ -324,7 +333,8 @@ export const create = (
   const after = input.after ?? [];
   const impliedAfter = input.impliedAfter ?? [];
   const awaited = waitingFor({ after, impliedAfter }, dependencies);
-  const wantsStart = input.type === 'sub' || (input.type === 'same' && input.autoTrigger);
+  const startsBySelf = input.type === 'same' && input.autoStart === true && awaited.length > 0;
+  const wantsStart = input.type === 'sub' || (input.type === 'same' && input.autoTrigger) || startsBySelf;
   // A sub (or auto-started same) with something unmerged to wait for sits in Planning, with no branch, until released.
   const sizeHeld = wantsStart && input.sizeHold !== undefined;
   const held = wantsStart && (awaited.length > 0 || sizeHeld);
@@ -361,6 +371,7 @@ export const create = (
     ...(after.length > 0 && { after }),
     ...(impliedAfter.length > 0 && { impliedAfter }),
     ...(held && { waiting: { since: ctx.now } }),
+    ...(startsBySelf && { autoStart: true }),
   };
   const b = new Builder(glob, ctx).event('GlobCreated', {
     type: glob.type,
@@ -399,11 +410,13 @@ export const start = (
   dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
   /** Holds the board's merge policy found for this start (another open glob may change the same exclusive paths). */
   newHolds: readonly ImpliedAfter[] = [],
+  chain: BlockingChain = NO_CHAIN,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status !== 'planning' || glob.type !== 'same') {
     return invalidTransition(glob, actor, 'Only a same in planning can be started');
   }
+  if (chain.blockedBy.length > 0) return invalidTransition(glob, actor, chainRefusal(chain));
   const awaited = waitingFor(glob, dependencies);
   if (awaited.length > 0) return invalidTransition(glob, actor, refusalText(awaited));
   // A merge-policy hold keeps the request: the same waits in Planning and starts when the other glob merges.
@@ -414,18 +427,33 @@ export const start = (
       .event('Waiting', { for: holding.map((a) => a.id), note: waitSummary(holding) })
       .done();
   }
-  return new Builder(glob, ctx).set({ waiting: null }).status('implementing').queueRun(actor.email).done();
+  // Overlaps the policy predicted never hold the start; they stay on the glob as a note and order the merges.
+  const overlaps = newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) };
+  return new Builder(glob, ctx).set({ waiting: null, ...overlaps }).status('implementing').queueRun(actor.email, undefined, true).done();
 };
 
-/** Row 34: Start anyway. A sub or same in planning that waits for unmerged globs starts now; the hold is recorded as overridden. */
+/**
+ * Row 34: Start anyway. A sub or same in planning that is held (it waits for unmerged globs, or for its oversized flag to be
+ * answered) starts now; the hold is recorded as overridden. Also Hand to routine (row 34a): a glob a person picked up that has
+ * no routine run goes to a routine, the person no longer implementing it.
+ */
 export const startAnyway = (
   glob: Glob,
   ctx: Context,
   dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
+  if (glob.type !== 'super' && glob.status === 'in_progress' && glob.implementer !== null) {
+    if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+    return new Builder(glob, ctx)
+      .bumpGeneration()
+      .set({ implementer: null, failure: null })
+      .status('implementing')
+      .queueRun(actor.email)
+      .done();
+  }
   if (glob.status !== 'planning' || glob.type === 'super') {
-    return invalidTransition(glob, actor, 'Only a sub or same in planning can be started anyway');
+    return invalidTransition(glob, actor, 'Only a sub or same in planning, or one picked up with no routine run, can be started anyway');
   }
   const awaited = waitingFor(glob, dependencies);
   if (awaited.length === 0 && glob.waiting == null) {
@@ -464,7 +492,7 @@ export const released = (
       .done();
   }
   return new Builder(glob, ctx)
-    .set({ waiting: null })
+    .set({ waiting: null, ...(newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) }) })
     .event('Released', { after: dependencyIds(glob) })
     .status('implementing')
     .queueRun(glob.creator)
@@ -584,18 +612,19 @@ export const retryAutofix = (glob: Glob, ctx: Context): Result<Transition> => {
 };
 
 /** Row 20: re-trigger a failed sub or same on its existing branch. */
-export const retrigger = (glob: Glob, ctx: Context): Result<Transition> => {
+export const retrigger = (glob: Glob, ctx: Context, chain: BlockingChain = NO_CHAIN, anyway = false): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status !== 'failed' || glob.type === 'super') {
     return invalidTransition(glob, actor, 'Only a failed sub or same can be re-triggered');
   }
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+  if (chain.blockedBy.length > 0 && !anyway) return invalidTransition(glob, actor, chainRefusal(chain));
   return new Builder(glob, ctx)
     .bumpGeneration()
     .set({ implementer: null, failure: null })
     .effect({ kind: 'reopen_pr', globId: glob.id, generation: glob.generation + 1 })
     .status('implementing')
-    .queueRun(actor.email)
+    .queueRun(actor.email, undefined, !anyway)
     .done();
 };
 
@@ -934,6 +963,10 @@ export interface FieldChanges {
   readonly after?: readonly string[];
   /** Merge-policy holds found for a same becoming a sub (set by the service, not by clients). */
   readonly impliedAfter?: readonly ImpliedAfter[];
+  /** Globs this one overlaps, already checked (`checkOverlaps`): replaces the overlaps a person set, at any time (they never block). */
+  readonly overlaps?: readonly string[];
+  /** Turn a same's start-when-unblocked off (or back on): off ends its wait and keeps what it needs. */
+  readonly autoStart?: boolean;
 }
 
 /** Changing fields is not a transition, except same → sub from planning (row 26). */
@@ -977,6 +1010,23 @@ export const changeFields = (
     Object.assign(patch, { after: changes.after });
     diff['after'] = { from: [...(glob.after ?? [])], to: [...changes.after] };
   }
+  if (changes.overlaps !== undefined) {
+    const before = (glob.impliedAfter ?? []).filter((i) => i.source === 'explicit' && i.kind === 'overlaps').map((i) => i.id);
+    if (before.join('\n') !== changes.overlaps.join('\n')) {
+      const kept = (glob.impliedAfter ?? []).filter((i) => !(i.source === 'explicit' && i.kind === 'overlaps'));
+      const added = explicitOverlaps(changes.overlaps).filter((o) => !kept.some((k) => k.id === o.id));
+      Object.assign(patch, { impliedAfter: [...kept, ...added] });
+      diff['overlaps'] = { from: before, to: [...changes.overlaps] };
+    }
+  }
+  // Only a same waiting in Planning has a start of its own to switch; the flag changes nothing for any other glob.
+  const switchable = glob.type === 'same' && glob.status === 'planning';
+  const autoStartOff = switchable && changes.autoStart === false && glob.autoStart === true;
+  if (autoStartOff) {
+    Object.assign(patch, { autoStart: false });
+    diff['autoStart'] = { from: true, to: false };
+    if (glob.waiting != null) Object.assign(patch, { waiting: null });
+  }
   if (Object.keys(diff).length === 0) return unchanged(glob);
 
   const b = new Builder(glob, ctx).set(patch).event('FieldsChanged', diff);
@@ -986,7 +1036,7 @@ export const changeFields = (
   // A same becoming a sub starts, unless something it starts after hasn't merged; a held glob whose waiting list was
   // edited down to nothing starts too. A held sub turned into a same is no longer asked to start by itself.
   const becomesSub = glob.type === 'same' && type === 'sub';
-  const wasHeld = glob.waiting != null && glob.status === 'planning' && glob.type !== 'super';
+  const wasHeld = glob.waiting != null && glob.status === 'planning' && glob.type !== 'super' && !autoStartOff;
   if (wasHeld && glob.type === 'sub' && type === 'same') b.set({ waiting: null });
   else if (becomesSub || wasHeld) {
     const impliedAfter = becomesSub ? mergeImplied(glob.impliedAfter, changes.impliedAfter ?? []) : glob.impliedAfter;
@@ -1179,6 +1229,37 @@ export const clashChanged = (
     .done();
 };
 
+/** Whether an edge is a prediction a recheck may replace: implied, not learned or explicit, not blocking, not overridden. */
+export const isReplaceableOverlap = (edge: ImpliedAfter): boolean =>
+  (edge.source ?? 'implied') === 'implied' && (edge.kind ?? 'overlaps') === 'overlaps' && edge.overridden !== true;
+
+/**
+ * A recheck of a glob's predicted overlaps: the replaceable ones become `edges` (the others are kept as they are), with an
+ * event for each edge added or dropped and its reason. Nothing changes when the lists agree, so a repeat is a no-op.
+ */
+export const overlapsRechecked = (
+  glob: Glob,
+  result: { readonly edges: readonly ImpliedAfter[]; readonly dropReasons: ReadonlyMap<string, string> },
+  ctx: Context,
+): Result<Transition> => {
+  if (listOf(glob.status) !== 'planning' && listOf(glob.status) !== 'doing') return unchanged(glob);
+  const existing = glob.impliedAfter ?? [];
+  const before = existing.filter(isReplaceableOverlap);
+  const kept = existing.filter((e) => !isReplaceableOverlap(e));
+  const edges = result.edges.filter((e) => !kept.some((k) => k.id === e.id) && !(glob.after ?? []).includes(e.id));
+  const same = (a: ImpliedAfter, b: ImpliedAfter) => a.id === b.id && a.paths.join('\n') === b.paths.join('\n');
+  const dropped = before.filter((b) => !edges.some((e) => e.id === b.id));
+  const added = edges.filter((e) => !before.some((b) => b.id === e.id));
+  const moved = edges.filter((e) => before.some((b) => b.id === e.id && !same(b, e)));
+  if (dropped.length === 0 && added.length === 0 && moved.length === 0) return unchanged(glob);
+  const b = new Builder(glob, ctx);
+  const next = [...kept, ...edges];
+  b.set({ impliedAfter: next });
+  for (const edge of dropped) b.event('OverlapDropped', { with: edge.id, reason: result.dropReasons.get(edge.id) ?? 'it no longer changes an exclusive path' });
+  for (const edge of added) b.event('OverlapAdded', { with: edge.id, paths: [...edge.paths] });
+  return b.done();
+};
+
 /** The routine was fired: records its cloud session (if the fire response returned one). */
 export const runFired = (
   glob: Glob,
@@ -1298,8 +1379,6 @@ export const prReadyForReview = (
     b.updateRun({ state: 'watching', lastProgressAt: ctx.now, startedAt: run.startedAt ?? ctx.now });
   }
   b.status('pr_open').effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
-  // CodeRabbit reviews on its own unless the repo turned that off; the executor decides whether to ask (R3).
-  b.effect({ kind: 'request_code_review', globId: glob.id, generation: glob.generation });
   // A sub doesn't wait for the PR's checks: the board's policy decides at once, and the checks run on the base after it merges.
   if (glob.type === 'sub') b.effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha: pr.headSha });
   return b.done();
@@ -1478,6 +1557,67 @@ export const subGateCheckCompleted = (
   return new Builder(glob, ctx)
     .effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha: check.sha })
     .done();
+};
+
+/**
+ * A sub is flagged as needing a human (the investigator's findings in Planning, the implementer or change_reviewer, with the reason; or a person): it
+ * becomes a same in place, keeping its branch and PR, so the sub gate no longer merges it. A run that is no longer
+ * current is ignored. Escalating a same is a no-op.
+ */
+export const escalateToSame = (
+  glob: Glob,
+  input: { reason: string; evidence?: string | null; runId?: string | null },
+  ctx: Context,
+): Result<Transition> => {
+  const runId = input.runId ?? null;
+  if (runId !== null) {
+    const run = currentRun(glob);
+    if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
+  }
+  if (glob.type !== 'sub') return unchanged(glob);
+  if (glob.status !== 'planning' && glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') {
+    return invalidTransition(glob, ctx.actor, 'A sub can only be escalated before it merges');
+  }
+  const reason = input.reason.trim();
+  if (reason === '') return invalidInput('An escalation needs a reason');
+  const evidence = input.evidence?.trim() ?? '';
+  const escalation = {
+    reason,
+    ...(evidence === '' ? {} : { evidence }),
+    by: ctx.actor?.email ?? 'routine',
+    at: ctx.now,
+    ...(runId === null ? {} : { runId }),
+  };
+  const b = new Builder(glob, ctx)
+    .set({ type: 'same', escalation })
+    .event('FieldsChanged', { type: { from: 'sub', to: 'same' } })
+    .event('Escalated', { reason, ...(evidence === '' ? {} : { evidence }), ...(runId === null ? {} : { runId }) });
+  if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  return b.done();
+};
+
+/**
+ * A person decides an escalation was unnecessary: the glob is a sub again. On a ready PR whose checks passed, the sub
+ * gate runs on the head, so a sub with nothing else to flag merges.
+ */
+export const deescalate = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.escalation == null || glob.type !== 'same') {
+    return invalidTransition(glob, actor, 'Only an escalated same can be made a sub again');
+  }
+  if (glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') {
+    return invalidTransition(glob, actor, 'An escalation can only be undone before the glob merges');
+  }
+  const b = new Builder(glob, ctx)
+    .set({ type: 'sub', escalation: null })
+    .event('FieldsChanged', { type: { from: 'same', to: 'sub' } })
+    .event('Deescalated', { reason: glob.escalation.reason });
+  if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  const sha = glob.pr?.headSha;
+  if (glob.status === 'pr_open' && glob.pr?.state === 'ready' && sha != null && glob.headChecks?.sha === sha && glob.headChecks.state === 'passed') {
+    b.effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha });
+  }
+  return b.done();
 };
 
 /** Rows 12–13: the sub gate's verdict on a commit. */
@@ -1675,9 +1815,14 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   const held =
     glob.status === 'planning' &&
     glob.type !== 'super' &&
-    (facts.dependencies === undefined ? glob.waiting != null : waitingFor(glob, facts.dependencies).length > 0);
+    (facts.sizeHeld === true ||
+      (facts.dependencies === undefined ? glob.waiting != null : waitingFor(glob, facts.dependencies).length > 0));
   if (glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
   if (held && !restricted) actions.push('start_anyway');
+  // Hand to routine: picked up, but no session has started and no run is live.
+  if (!restricted && glob.status === 'in_progress' && glob.type !== 'super' && glob.implementer !== null && !hasLiveRun(glob)) {
+    actions.push('start_anyway');
+  }
   const canPickUp =
     !restricted &&
     !hasBusyRun(glob) &&
@@ -1720,6 +1865,9 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     recordAtHead(glob, facts)
   ) {
     actions.push('mark_ready');
+  }
+  if (!restricted && glob.escalation != null && glob.type === 'same' && ['implementing', 'in_progress', 'pr_open'].includes(glob.status)) {
+    actions.push('deescalate');
   }
   actions.push('delete');
   return actions;

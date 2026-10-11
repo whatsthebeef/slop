@@ -18,6 +18,8 @@ ENV NODE_ENV=production WEB_DIST=/app/web MIGRATIONS_DIR=/app/drizzle CATALOG_DI
 COPY --from=build /out .
 COPY --from=build /app/apps/server/drizzle ./drizzle
 COPY --from=build /app/apps/web/dist ./web
+# git: the code view's clones and the reviewer's searches (read-only fetch, ls-tree, grep and log; nothing is checked out or run).
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY catalog ./catalog
 # The files a deploy runs on the host (infra/deploy/deploy.sh extracts them from the pulled image).
 COPY compose.prod.yaml ./deploy/compose.yaml

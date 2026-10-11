@@ -31,12 +31,13 @@ import type {
   InboxSuggestion,
   SignalFigures,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES } from '@slop/core';
+import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES } from '@slop/core';
 import {
   bigint,
   bigserial,
   boolean,
   customType,
+  doublePrecision,
   foreignKey,
   index,
   integer,
@@ -76,7 +77,9 @@ export const boards = pgTable('boards', {
   runStartMinutes: integer('run_start_minutes').notNull().default(30),
   runRespondMinutes: integer('run_respond_minutes').notNull().default(30),
   /** The learned sub size limit (`sub_limit_changes` holds its history); not an admin setting. */
-  subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(2000),
+  subMaxChangedLines: integer('sub_max_changed_lines').notNull().default(5000),
+  /** The step the learned limit moves by now (see `sub-limit.ts`); starts at 500. */
+  subLimitStep: integer('sub_limit_step').notNull().default(SUB_LIMIT_STEP),
   /** Effect checks: globs compared on each side of an approved change. */
   effectCheckGlobs: integer('effect_check_globs').notNull().default(EFFECT_CHECK_GLOBS_DEFAULT),
   /** Which KB items an admin's agent may approve: 'docs' or 'docs_and_agent_files'. */
@@ -372,7 +375,7 @@ export const deploys = pgTable(
   ],
 );
 
-/** Reviews queued for splitting into findings: a local review artifact, or one CodeRabbit inline comment. */
+/** Reviews queued for splitting into findings: a local review artifact. */
 export const reviewSources = pgTable(
   'review_sources',
   {
@@ -386,7 +389,7 @@ export const reviewSources = pgTable(
     externalId: text('external_id'),
     commitSha: text('commit_sha'),
     agentSetVersion: integer('agent_set_version'),
-    /** CodeRabbit comments only; local reviews are read from their artifact. */
+    /** The source's own text; local reviews are read from their artifact. */
     content: text('content'),
     path: text('path'),
     line: text('line'),
@@ -499,8 +502,45 @@ export const subLimitChanges = pgTable(
     /** Null when neither the gate verdict nor the merge commit gave a count (it is evidence only). */
     changedLines: integer('changed_lines'),
     evidence: text('evidence').notNull(),
+    /** The step the move used before weighting; rows from before steps were learned were fixed at 250. */
+    step: integer('step').notNull().default(250),
   },
   (t) => [uniqueIndex('sub_limit_changes_outcome_idx').on(t.boardId, t.globId, t.outcome)],
+);
+
+/** The dependency path patterns a board learned a weight for (spec, Dependencies); a pattern without a row has the catalog default. */
+export const dependencyRules = pgTable(
+  'dependency_rules',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    pattern: text('pattern').notNull(),
+    weight: doublePrecision('weight').notNull(),
+    cleanCount: integer('clean_count').notNull().default(0),
+    conflictCount: integer('conflict_count').notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.pattern] })],
+);
+
+/** Each move of a dependency rule, once per board, glob, pattern and cause (resets have no glob, so repeat). */
+export const dependencyRuleChanges = pgTable(
+  'dependency_rule_changes',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    pattern: text('pattern').notNull(),
+    fromWeight: doublePrecision('from_weight').notNull(),
+    toWeight: doublePrecision('to_weight').notNull(),
+    cause: text('cause', { enum: DEPENDENCY_CAUSES }).notNull(),
+    globId: text('glob_id'),
+    evidence: text('evidence').notNull(),
+  },
+  (t) => [uniqueIndex('dependency_rule_changes_outcome_idx').on(t.boardId, t.globId, t.pattern, t.cause)],
 );
 
 /** What the size check judged about a glob (spec, Intake): the estimate with its evidence, the flag and the proposed split. */
@@ -537,6 +577,45 @@ export const sizeThresholds = pgTable('size_thresholds', {
   maxTasks: integer('max_tasks').notNull(),
   maxParts: integer('max_parts').notNull(),
 });
+
+/** A board's risk areas (spec, Intake): kinds of work that need a review; defaults are seeded lazily, learned ones come from outcomes. */
+export const boardRiskAreas = pgTable(
+  'board_risk_areas',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    pathPatterns: jsonb('path_patterns').$type<string[]>().notNull(),
+    why: text('why').notNull(),
+    source: text('source', { enum: RISK_AREA_SOURCES }).notNull(),
+    strength: integer('strength').notNull().default(0),
+    cleanCount: integer('clean_count').notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.name] })],
+);
+
+/** The risk areas' history: each change with the glob and outcome that caused it (a reset has no glob). */
+export const riskAreaChanges = pgTable(
+  'risk_area_changes',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    /** Null for a reset, or a change whose paths no area covers. */
+    areaName: text('area_name'),
+    kind: text('kind', { enum: RISK_AREA_CHANGE_KINDS }).notNull(),
+    globId: text('glob_id'),
+    cause: text('cause', { enum: RISK_AREA_CAUSES }).notNull(),
+  },
+  (t) => [
+    // Idempotent per glob, cause and area; rows without a glob or an area (resets, unscoped corrections) repeat freely.
+    uniqueIndex('risk_area_changes_outcome_idx').on(t.boardId, t.globId, t.cause, t.areaName),
+  ],
+);
 
 /** The size threshold's history: each outcome recorded once per board and glob, with the threshold before and after it. */
 export const sizeThresholdChanges = pgTable(
@@ -689,36 +768,6 @@ export const testRuns = pgTable(
     uniqueIndex('test_runs_event_idx').on(t.boardId, t.eventId),
     index('test_runs_board_env_sha_idx').on(t.boardId, t.environment, t.sha),
     index('test_runs_glob_idx').on(t.globId),
-  ],
-);
-
-/** CodeRabbit's summary, reviews and comments on a glob's PR, stored verbatim (R3); not the classification queue. */
-export const codeReviewComments = pgTable(
-  'code_review_comments',
-  {
-    id: bigserial('id', { mode: 'number' }).primaryKey(),
-    boardId: integer('board_id')
-      .notNull()
-      .references(() => boards.id, { onDelete: 'cascade' }),
-    globId: text('glob_id').notNull(),
-    prNumber: integer('pr_number').notNull(),
-    externalId: text('external_id').notNull(),
-    kind: text('kind').notNull(),
-    author: text('author').notNull(),
-    commitSha: text('commit_sha'),
-    path: text('path'),
-    line: text('line'),
-    body: text('body').notNull(),
-    url: text('url'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
-    /** Set when the code host deleted it: the row stays as a tombstone so a late redelivery can't bring it back. */
-    deletedAt: timestamp('deleted_at', { withTimezone: true }),
-  },
-  (t) => [
-    uniqueIndex('code_review_comments_external_idx').on(t.externalId),
-    index('code_review_comments_glob_idx').on(t.globId),
-    index('code_review_comments_board_glob_idx').on(t.boardId, t.globId),
   ],
 );
 
@@ -998,4 +1047,78 @@ export const inboxLinks = pgTable(
     linkedAt: timestamp('linked_at', { withTimezone: true }).notNull(),
   },
   (t) => [primaryKey({ columns: [t.inboxId, t.globId] }), index('inbox_links_glob_idx').on(t.globId)],
+);
+
+/**
+ * The code view's index of a board's base branch, rebuilt whenever the clone's base moves: one row per board naming the
+ * indexed commit, then the tree, the import graph and the path history at that commit. Symbols (definitions and
+ * references) will be another table keyed the same way, `(board_id, path, …)`, written in the same replace.
+ */
+export const codeIndex = pgTable('code_index', {
+  boardId: integer('board_id')
+    .primaryKey()
+    .references(() => boards.id, { onDelete: 'cascade' }),
+  commitSha: text('commit_sha').notNull(),
+  fileCount: integer('file_count').notNull(),
+  indexedAt: timestamp('indexed_at', { withTimezone: true }).notNull(),
+});
+
+export const codeFiles = pgTable(
+  'code_files',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    size: integer('size').notNull(),
+    language: text('language'),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.path] })],
+);
+
+/** `from_path` imports `to_path`, both files of the indexed commit. */
+export const codeImports = pgTable(
+  'code_imports',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    fromPath: text('from_path').notNull(),
+    toPath: text('to_path').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.fromPath, t.toPath] }), index('code_imports_to_idx').on(t.boardId, t.toPath)],
+);
+
+/** The newest commits that changed each path of the indexed commit (`glob_id` read from the subject). */
+export const codePathCommits = pgTable(
+  'code_path_commits',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    sha: text('sha').notNull(),
+    subject: text('subject').notNull(),
+    committedAt: timestamp('committed_at', { withTimezone: true }).notNull(),
+    /** Position in the base branch's log, 0 the newest: commits made in the same second still sort. */
+    seq: integer('seq').notNull(),
+    globId: text('glob_id'),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.path, t.sha] }), index('code_path_commits_path_idx').on(t.boardId, t.path, t.seq)],
+);
+
+/** Which code view operations each consumer calls (`mcp`, `chat`, and later the size check, reviewer and split), and how often they find nothing. */
+export const codeViewUsage = pgTable(
+  'code_view_usage',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    consumer: text('consumer').notNull(),
+    op: text('op').notNull(),
+    calls: integer('calls').notNull().default(0),
+    emptyResults: integer('empty_results').notNull().default(0),
+    lastAt: timestamp('last_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.consumer, t.op] })],
 );

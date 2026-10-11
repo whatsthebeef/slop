@@ -260,6 +260,41 @@
       "when": 1791581490047,
       "tag": "0036_chat_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791726503644,
+      "tag": "0037_drop_coderabbit",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1791729041448,
+      "tag": "0038_risk_areas_adaptive_limit",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1791732803200,
+      "tag": "0039_sub_limit_backstop",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1791733027845,
+      "tag": "0040_dependency_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1791733028845,
+      "tag": "0041_code_view",
+      "breakpoints": true
     }
   ]
 }

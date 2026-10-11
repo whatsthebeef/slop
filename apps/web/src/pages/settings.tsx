@@ -1,5 +1,5 @@
 import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, recentPeriods, ROLES } from '@slop/core';
-import type { AgentKbApproval, DeployIntegration, Environment, Role, SizeOutcome, SubLimitChange } from '@slop/core';
+import type { AgentKbApproval, DependencyCause, DeployIntegration, Environment, RiskAreaCause, Role, SizeOutcome, SubLimitChange } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -264,6 +264,8 @@ export const SettingsPage = () => {
           Agents may approve agent-file and contradicting items
         </label>
         <SubLimit boardId={boardId} admin={admin} />
+        <DependencyRules boardId={boardId} admin={admin} />
+        <RiskAreas boardId={boardId} admin={admin} />
         <SizeThreshold boardId={boardId} admin={admin} />
         <IntakeAccuracyView boardId={boardId} admin={admin} />
         <IntegrationToken boardId={boardId} admin={admin} />
@@ -340,7 +342,7 @@ const lines = (n: number) => n.toLocaleString('en');
 const changed = (n: number | null) => (n === null ? 'line count unknown' : `${lines(n)} lines`);
 
 /** Why an outcome moved the limit, in words. */
-const outcomeText = (change: SubLimitChange): string =>
+const outcomeText = (change: Pick<SubLimitChange, 'outcome' | 'changedLines'>): string =>
   change.outcome === 'merged_unchanged'
     ? `Converted for its size (${changed(change.changedLines)}) and merged unchanged`
     : `Passed the gate (${changed(change.changedLines)}) and needed fixes after merging`;
@@ -353,6 +355,9 @@ const SIZE_OUTCOME_TEXT: Record<SizeOutcome, string> = {
   kept_whole_clean: 'Flagged, kept whole and merged cleanly: raised',
   unflagged_struggled: 'Not flagged, and it struggled: lowered',
   flag_confirmed: 'Flag confirmed: unchanged',
+  split_stalled: 'Split, but the parts ran one after another and stalled: raised (keep work whole)',
+  split_helped: 'Split, and it helped: unchanged',
+  reset: 'Reset to the defaults',
 };
 
 /**
@@ -361,6 +366,10 @@ const SIZE_OUTCOME_TEXT: Record<SizeOutcome, string> = {
 const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
   const client = useQueryClient();
   const threshold = useQuery({ queryKey: ['size-threshold', boardId], queryFn: () => api.sizeThreshold(boardId) });
+  const reset = useMutation({
+    mutationFn: () => api.resetSizeThreshold(boardId),
+    onSuccess: (view) => client.setQueryData(['size-threshold', boardId], view),
+  });
   const jobs = useQuery({ queryKey: ['kb-jobs', boardId], queryFn: () => api.boardJobs(boardId) });
   const lastRun = jobs.data === undefined ? undefined : (jobs.data.find((j) => j.job === 'size_threshold')?.lastRunAt ?? null);
   const seenRun = useRef<string | null | undefined>(undefined);
@@ -379,15 +388,28 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
       </p>
     );
   if (threshold.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the size threshold…</p>;
-  const { current, bounds, history } = threshold.data;
+  const { current, defaults, bounds, history } = threshold.data;
+  const learned = defaults.maxTasks !== current.maxTasks || defaults.maxParts !== current.maxParts;
   return (
     <div className='grid gap-2' data-testid='size-threshold'>
       <p className='text-sm'>
-        Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts (learned from outcomes)
+        Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts ({learned ? 'learned from outcomes' : 'the default'})
       </p>
+      <p className='text-xs text-muted-foreground' data-testid='size-threshold-defaults'>
+        Default: {defaults.maxTasks} tasks, {defaults.maxParts} independent parts. Learned: {current.maxTasks} tasks, {current.maxParts} independent parts.
+      </p>
+      {admin && learned && (
+        <div>
+          <Button size='sm' variant='outline' disabled={reset.isPending} onClick={() => reset.mutate()}>
+            Reset to defaults
+          </Button>
+          {reset.isError && <span className='ml-2 text-xs text-red'>Could not reset the size threshold.</span>}
+        </div>
+      )}
       <p className='text-xs text-muted-foreground'>
-        Intake flags a glob above it and proposes a split. A flagged glob kept whole that merges cleanly raises the threshold; an
-        unflagged glob that struggles (the most review rounds, a failed run, a very long PR, or a split after it started) lowers it.
+        Intake flags a glob above it, and only when at least two of its parts could be built at the same time (a long serial plan stays whole), and
+        proposes a split with its critical path. A flagged glob kept whole that merges cleanly raises the threshold; so does a split whose parts ended
+        up one after another and stalled (the cause is in the history). An unflagged glob that struggles (the most review rounds, a failed run, a very long PR, or a split after it started) lowers it.
         Tasks stay between {bounds.tasks.min} and {bounds.tasks.max}, parts between {bounds.parts.min} and {bounds.parts.max}, in steps of {bounds.step}.
       </p>
       <JobStatus boardId={boardId} admin={admin} job='size_threshold' />
@@ -415,9 +437,11 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
                   <span className='block text-muted-foreground'>{change.evidence}</span>
                 </td>
                 <td>
-                  <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
-                    {change.globId}
-                  </Link>
+                  {change.outcome === 'reset' ? null : (
+                    <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
+                      {change.globId}
+                    </Link>
+                  )}
                 </td>
               </tr>
             ))}
@@ -654,7 +678,9 @@ const SubLimit = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
       <p className='text-xs text-muted-foreground'>
         Subs changing more lines convert to sames. A converted sub that merges unchanged raises the limit; a sub that
         needed fixes after merging (a sign-off label asking for changes, or a bug report blaming it) lowers it. It stays
-        between {lines(bounds.min)} and {lines(bounds.max)}, in steps of {bounds.step}.
+        between {lines(bounds.min)} and {lines(bounds.max)}. The step starts at {lines(bounds.startStep ?? 500)} lines, grows by half while
+        outcomes keep the same direction and halves when one reverses; it is {lines(bounds.step)} now. A small sub that
+        needed fixes leaves the limit alone and counts for the risk areas below.
       </p>
       <JobStatus boardId={boardId} admin={admin} job='sub_limit' />
       {history.length === 0 ? (
@@ -665,6 +691,7 @@ const SubLimit = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
             <tr>
               <th className='pr-3 font-normal'>Date</th>
               <th className='pr-3 font-normal'>Limit</th>
+              <th className='pr-3 font-normal'>Step</th>
               <th className='pr-3 font-normal'>Why</th>
               <th className='font-normal'>Glob</th>
             </tr>
@@ -676,6 +703,7 @@ const SubLimit = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
                 <td className='pr-3 whitespace-nowrap'>
                   {lines(change.fromLines)} → {lines(change.toLines)}
                 </td>
+                <td className='pr-3 whitespace-nowrap'>{change.step === undefined ? '' : lines(change.step)}</td>
                 <td className='pr-3'>
                   {outcomeText(change)}
                   <span className='block text-muted-foreground'>{change.evidence}</span>
@@ -684,6 +712,206 @@ const SubLimit = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
                   <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
                     {change.globId}
                   </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
+
+const DEPENDENCY_CAUSE_TEXT: Record<DependencyCause, string> = {
+  clean_overlap: 'An overlap merged with no conflict or rework',
+  conflicted_overlap: 'An overlap conflicted or needed a rebase',
+  unmerged_prerequisite: 'A run failed because a prerequisite was not merged',
+  start_anyway_succeeded: 'A need was started anyway and merged without it',
+  reset: 'An admin reset the rule',
+};
+
+/**
+ * The path patterns the board predicts overlaps from (overlaps order merges, they never hold a start), each with the
+ * catalog default and what the board learned from outcomes. Admins reset a rule to its default. Everything is rendered as text.
+ */
+const DependencyRules = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const client = useQueryClient();
+  const rules = useQuery({ queryKey: ['dependency-rules', boardId], queryFn: () => api.dependencyRules(boardId) });
+  const reset = useMutation({
+    mutationFn: (pattern: string | undefined) => api.resetDependencyRules(boardId, pattern),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['dependency-rules', boardId] }),
+  });
+  if (rules.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load the dependency rules.
+        <Button size='sm' variant='outline' onClick={() => void rules.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (rules.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the dependency rules…</p>;
+  const { rules: list, history, predictMin } = rules.data;
+  return (
+    <div className='grid gap-2' data-testid='dependency-rules'>
+      <p className='text-xs text-muted-foreground'>
+        A glob that needs another cannot start until it merges. Globs that only may change the same files overlap: they start
+        at once and the later merge rebases. Slop predicts overlaps from these path patterns. A pattern whose overlaps merged
+        cleanly is weakened and stops being predicted below {predictMin}; one that conflicted is strengthened. A run that failed
+        for unmerged prerequisites teaches the board a need.
+      </p>
+      {list.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No patterns yet: set exclusive paths in the merge policy.</p>
+      ) : (
+        <ul className='grid gap-1 text-xs'>
+          {list.map((rule) => (
+            <li key={rule.pattern}>
+              <span className='font-mono'>{rule.pattern}</span>{' '}
+              <span className='text-muted-foreground'>
+                weight {rule.weight} ({rule.state === 'learned' ? `learned, default ${rule.defaultWeight}` : 'default'};{' '}
+                {rule.predicted ? 'predicted' : 'not predicted'}; clean {rule.cleanCount}, conflicts {rule.conflictCount})
+              </span>
+              {admin && rule.state === 'learned' && (
+                <Button size='sm' variant='outline' className='ml-2' disabled={reset.isPending} onClick={() => reset.mutate(rule.pattern)}>
+                  Reset
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {reset.isError && <span className='text-xs text-red'>Could not reset the rule.</span>}
+      {history.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No changes recorded yet.</p>
+      ) : (
+        <table className='text-xs'>
+          <thead className='text-left text-muted-foreground'>
+            <tr>
+              <th className='pr-3 font-normal'>Date</th>
+              <th className='pr-3 font-normal'>Pattern</th>
+              <th className='pr-3 font-normal'>Weight</th>
+              <th className='font-normal'>Why</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((change) => (
+              <tr key={change.id} className='align-top'>
+                <td className='pr-3 whitespace-nowrap'>{new Date(change.at).toLocaleDateString()}</td>
+                <td className='pr-3 font-mono'>{change.pattern}</td>
+                <td className='pr-3 whitespace-nowrap'>
+                  {change.from} → {change.to}
+                </td>
+                <td>
+                  {DEPENDENCY_CAUSE_TEXT[change.cause]}
+                  {change.globId !== null && (
+                    <>
+                      {' '}
+                      <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
+                        {change.globId}
+                      </Link>
+                    </>
+                  )}
+                  <span className='block text-muted-foreground'>{change.evidence}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
+
+const RISK_CAUSE_TEXT: Record<RiskAreaCause, string> = {
+  reverted: 'A sub that changed it was reverted',
+  bug: 'A bug blamed a sub that changed it',
+  deploy_failed: 'A deploy failed after a sub changed it',
+  blocked: 'A person blocked a sub that changed it at auto-merge',
+  small_fix: 'A small sub that changed it needed fixes',
+  clean: 'Subs that changed it were clean',
+  type_to_same: 'A person changed intake\'s sub to same',
+  type_to_sub: 'A person changed intake\'s same to sub',
+  reset: 'An admin reset the areas',
+};
+
+/**
+ * The board's risk areas: work that intake sends to a person's review (type same). Defaults and learned ones, with the
+ * history of what changed them and why. Admins reset them to the defaults. Everything is rendered as text.
+ */
+const RiskAreas = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+  const client = useQueryClient();
+  const areas = useQuery({ queryKey: ['risk-areas', boardId], queryFn: () => api.riskAreas(boardId) });
+  const reset = useMutation({
+    mutationFn: () => api.resetRiskAreas(boardId),
+    onSuccess: (view) => client.setQueryData(['risk-areas', boardId], view),
+  });
+  if (areas.isError)
+    return (
+      <p className='flex items-center gap-2 text-sm text-red'>
+        Could not load the risk areas.
+        <Button size='sm' variant='outline' onClick={() => void areas.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  if (areas.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the risk areas…</p>;
+  const { areas: list, history } = areas.data;
+  return (
+    <div className='grid gap-2' data-testid='risk-areas'>
+      <p className='text-xs text-muted-foreground'>
+        Intake chooses sub unless the work matches one of these areas (or is beyond the sub size). Slop adds an area when a
+        sub that changed those paths was reverted, blamed by a bug, failed a deploy or needed fixes while small, or when a
+        person changes intake's type. Repeated clean subs remove a learned area.
+      </p>
+      <ul className='grid gap-1 text-xs'>
+        {list.map((area) => (
+          <li key={area.name}>
+            <span className='font-medium'>{area.name}</span>{' '}
+            <span className='text-muted-foreground'>
+              ({area.source}
+              {area.subSafe ? ', recent subs were clean' : ''}; strength {area.strength}, clean {area.cleanCount})
+            </span>
+            <span className='block text-muted-foreground'>{area.pathPatterns.join(', ')}</span>
+            <span className='block text-muted-foreground'>{area.why}</span>
+          </li>
+        ))}
+      </ul>
+      {admin && (
+        <div>
+          <Button size='sm' variant='outline' disabled={reset.isPending} onClick={() => reset.mutate()}>
+            Reset to defaults
+          </Button>
+          {reset.isError && <span className='ml-2 text-xs text-red'>Could not reset the risk areas.</span>}
+        </div>
+      )}
+      {history.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>No changes recorded yet.</p>
+      ) : (
+        <table className='text-xs'>
+          <thead className='text-left text-muted-foreground'>
+            <tr>
+              <th className='pr-3 font-normal'>Date</th>
+              <th className='pr-3 font-normal'>Area</th>
+              <th className='pr-3 font-normal'>Change</th>
+              <th className='font-normal'>Why</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((change) => (
+              <tr key={change.id} className='align-top'>
+                <td className='pr-3 whitespace-nowrap'>{new Date(change.at).toLocaleDateString()}</td>
+                <td className='pr-3'>{change.areaName ?? 'no known paths'}</td>
+                <td className='pr-3 whitespace-nowrap'>{change.kind}</td>
+                <td>
+                  {RISK_CAUSE_TEXT[change.cause]}
+                  {change.globId !== null && (
+                    <>
+                      {' '}
+                      <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(change.globId)}`}>
+                        {change.globId}
+                      </Link>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}

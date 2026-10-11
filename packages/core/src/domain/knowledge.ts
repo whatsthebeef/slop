@@ -174,7 +174,7 @@ export const agentSetKind = (path: string): KnowledgeKind | null => {
   return null;
 };
 
-export const ARTIFACT_KINDS = ['plan', 'implementation_plan', 'postplan', 'local_review', 'attachment'] as const;
+export const ARTIFACT_KINDS = ['plan', 'implementation_plan', 'postplan', 'local_review', 'investigation', 'attachment'] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
 export const RISK_TIERS = ['low', 'normal', 'high'] as const;
@@ -197,6 +197,8 @@ export interface Provenance {
   readonly agentSetVersion: number | null;
   /** Local reviews only, when the orchestrator passed them. */
   readonly reviewStats?: ReviewStats;
+  /** Investigations only: why the block could not be parsed; absent when it was valid. The text is stored either way. */
+  readonly validation?: string;
 }
 
 export interface Artifact {

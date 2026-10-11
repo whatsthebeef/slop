@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
-import type { Catalog, CatalogAgentSet } from '@slop/core';
+import type { Catalog, CatalogAgentSet, DependencyDefaults } from '@slop/core';
 import { agentSetKind, parseFrontmatter } from '@slop/core';
 
 const walk = async (dir: string): Promise<string[]> => {
@@ -55,6 +55,16 @@ export class FsCatalog implements Catalog {
       throw error;
     });
     return this.agents;
+  }
+
+  /** The starting path rules for dependency edges (`catalog/dependencies.json`): which paths never overlap and which do. */
+  async dependencyDefaults(): Promise<DependencyDefaults> {
+    const parsed: unknown = JSON.parse(await readFile(join(this.root, 'dependencies.json'), 'utf8'));
+    const list = (key: string): string[] => {
+      const value: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, key) : undefined;
+      return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : [];
+    };
+    return { neverOverlap: list('neverOverlap'), overlap: list('overlap') };
   }
 
   private async readAgentSet(): Promise<CatalogAgentSet> {

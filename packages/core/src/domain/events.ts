@@ -51,8 +51,16 @@ export const DOMAIN_EVENT_TYPES = [
   'HoldOverridden',
   /** Another open glob started or stopped changing the same exclusive paths as this one. */
   'ClashChanged',
+  /** An overlap edge was predicted for a glob (data: the other glob, its paths and why) by a recheck. */
+  'OverlapAdded',
+  /** A predicted overlap edge no longer holds and was dropped (data: the other glob and why). */
+  'OverlapDropped',
   /** A glob was cut into parts (`split_glob`): on every part, with the source, its place and the other parts' IDs. */
   'GlobSplit',
+  /** A running sub was escalated to a same because a human should check it (reason and evidence in the data). */
+  'Escalated',
+  /** A person made an escalated glob a sub again. */
+  'Deescalated',
   'GlobDeleted',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
@@ -81,6 +89,8 @@ export type Effect =
       readonly routineOwner: string;
       /** An automatic retry of a watcher that gave up: the failed check it is asked to fix (name and first lines). */
       readonly failureSummary?: string;
+      /** Set for Start and Retrigger: the executor refuses to fire while prerequisites are unmerged (Start anyway doesn't set it). */
+      readonly checkPrerequisites?: true;
     }
   | { readonly kind: 'squash_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
   /** Revert a sub's merge commit on the base branch after the checks on it failed. */
@@ -140,18 +150,22 @@ export type Effect =
   /** Bring the glob's PR branch up to date with the base branch so its checks run again (the base went green). */
   | { readonly kind: 'update_branch'; readonly globId: string; readonly generation: number; readonly sha: string }
   /**
-   * The PR is ready for review: ask CodeRabbit for one (`@coderabbitai review`) when the repo's `.coderabbit.yaml` turns
-   * its automatic reviews off and the board has a review guide. Posted once per PR.
-   */
-  | { readonly kind: 'request_code_review'; readonly globId: string; readonly generation: number }
-  /**
    * A glob merged: start the globs that waited for it, if nothing else holds them. Runs after commit; each released
    * glob is its own version-checked write, so a retry or a second delivery changes nothing.
    */
   | { readonly kind: 'release_waiting'; readonly globId: string; readonly generation: number }
   /** Read which exclusive paths the glob's branch changes and whether another open glob changes them too. */
   | { readonly kind: 'check_exclusive_paths'; readonly globId: string; readonly generation: number }
+  /**
+   * Something changed on the board that predicted overlaps depend on (a merge, a push, a status change, a plan save):
+   * recompute every open glob's implied overlap edges. Board-wide like `refresh_base_checks` (`globId` is `board-<id>`,
+   * not generation-checked); the outbox keeps one pending job per board and delays it a few seconds, so a burst runs once.
+   */
+  | { readonly kind: 'recheck_overlaps'; readonly globId: string; readonly boardId: number }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
   | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number };
 
 export type EffectKind = Effect['kind'];
+
+/** The board's overlap recheck: its `globId` is `board-<id>`, as for the other board-wide effects. */
+export const recheckOverlapsEffect = (boardId: number): Effect => ({ kind: 'recheck_overlaps', globId: `board-${String(boardId)}`, boardId });

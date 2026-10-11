@@ -106,8 +106,12 @@ export const createGlobSchema = z.object({
   autoTrigger: z.boolean().default(false),
   idempotencyKey: z.string().min(1).nullable().default(null),
   plan: z.string().optional(),
-  /** IDs of globs on the board to start after. */
+  /** IDs of globs on the board this one needs: their code must be on main first, so the glob waits for them to merge. */
+  needs: z.array(z.string().min(1)).max(20).optional(),
+  /** Alias of `needs`. */
   after: z.array(z.string().min(1)).max(20).optional(),
+  /** IDs of globs on the board this one overlaps: the same files may change, so only the merge order matters. Never blocks a start. */
+  overlaps: z.array(z.string().min(1)).max(20).optional(),
   /** Files intake guessed the work changes: with the plan, they decide whether the merge policy's exclusive paths hold it. */
   files: z.array(z.string().min(1).max(200)).max(20).optional(),
   /** What the intake proposal behind the form said, passed back so the glob's snapshot records it (the request is the text intake read). */
@@ -135,6 +139,7 @@ export const splitGlobSchema = z.object({
         category: z.enum(CATEGORIES).optional(),
         type: z.enum(SLOP_TYPES).optional(),
         after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
+        overlaps: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
         attachments: z.array(z.string().min(1)).optional(),
       }),
     )
@@ -150,7 +155,10 @@ const updateGlobSchema = z.object({
   category: z.enum(CATEGORIES).optional(),
   group: z.string().min(1).nullable().optional(),
   environment: z.string().min(1).nullable().optional(),
+  needs: z.array(z.string().min(1)).max(20).optional(),
   after: z.array(z.string().min(1)).max(20).optional(),
+  overlaps: z.array(z.string().min(1)).max(20).optional(),
+  autoStart: z.boolean().optional(),
 });
 
 /** A glob that came from a split says where: `split: { source, part, parts }`. */
@@ -159,7 +167,7 @@ const splitField = (split: SplitInfo | undefined) => (split === undefined ? {} :
 const versionSchema = z.object({ version: z.number().int() });
 
 /** Glob actions carry the version read; pick-up and take-over may also choose the environment. */
-const actionSchema = versionSchema.extend({ environment: z.string().min(1).optional() });
+const actionSchema = versionSchema.extend({ environment: z.string().min(1).optional(), anyway: z.boolean().optional() });
 type ActionBody = z.infer<typeof actionSchema>;
 
 const send = <T>(c: Context<Env>, result: Result<T>, map: (value: T) => unknown = (v) => v) =>
@@ -372,8 +380,8 @@ export const createApp = (deps: AppDeps) => {
     const splits = await globs.splitsOf(boardId);
     const oversized = await globs.oversizedOf(boardId);
     return send(c, result, (list) =>
-      list.map(({ glob, artifacts, dependencies }) => ({
-        ...globViewFor(glob, email, membership.value.role, artifacts, dependencies),
+      list.map(({ glob, artifacts, dependencies, chain }) => ({
+        ...globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain, glob.waiting != null && oversized.has(glob.id)),
         ...splitField(splits.get(glob.id)),
         ...(oversized.has(glob.id) ? { oversized: true } : {}),
       })),
@@ -405,9 +413,10 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
-    const { intake, ...fields } = body;
+    const { intake, needs, ...fields } = body;
     const created = await globs.create(email, {
       ...fields,
+      ...(needs === undefined && fields.after === undefined ? {} : { after: needs ?? fields.after ?? [] }),
       source: 'web',
       ...(intake === undefined ? {} : { intake: { ...intake, source: 'web' } }),
       plan: body.plan ?? body.summary,
@@ -429,8 +438,9 @@ export const createApp = (deps: AppDeps) => {
   app.patch('/api/globs/:id', async (c) => {
     const body = await parse(c, updateGlobSchema);
     if (body instanceof Response) return body;
-    const { version, ...changes } = body;
-    return withView(c, await globs.update(c.get('email'), c.req.param('id'), version, changes));
+    const { version, needs, ...changes } = body;
+    const after = needs ?? changes.after;
+    return withView(c, await globs.update(c.get('email'), c.req.param('id'), version, { ...changes, ...(after === undefined ? {} : { after }) }));
   });
 
   // Split a glob in Planning into parts (the board's Split; MCP's split_glob).
@@ -440,11 +450,12 @@ export const createApp = (deps: AppDeps) => {
     const email = c.get('email');
     const split = await globs.split(email, c.req.param('id'), body.version, {
       idempotencyKey: body.idempotencyKey,
-      parts: body.parts.map(({ category, type, after, attachments, ...rest }) => ({
+      parts: body.parts.map(({ category, type, after, overlaps, attachments, ...rest }) => ({
         ...rest,
         ...(category === undefined ? {} : { category }),
         ...(type === undefined ? {} : { type }),
         ...(after === undefined ? {} : { after }),
+        ...(overlaps === undefined ? {} : { overlaps }),
         ...(attachments === undefined ? {} : { attachments }),
       })),
     });
@@ -476,14 +487,19 @@ export const createApp = (deps: AppDeps) => {
 
   const actions = {
     start: (email: string, id: string, b: ActionBody) => globs.start(email, id, b.version),
-    'start-anyway': (email: string, id: string, b: ActionBody) => globs.startAnyway(email, id, b.version),
-    retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version),
+    // Starting a glob held for its oversized flag keeps it whole (recorded for the size learning); a glob not flagged is unaffected.
+    'start-anyway': async (email: string, id: string, b: ActionBody) => {
+      await deps.sizeCheck?.keepWhole(email, id);
+      return globs.startAnyway(email, id, b.version);
+    },
+    retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version, b.anyway === true),
     'retry-autofix': (email: string, id: string, b: ActionBody) => globs.retryAutofix(email, id, b.version),
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),
     'pick-up': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, false, b.environment),
     'take-over': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, true, b.environment),
     'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),
     merge: (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version),
+    deescalate: (email: string, id: string, b: ActionBody) => globs.deescalate(email, id, b.version),
     'retry-merge': (email: string, id: string, b: ActionBody) => globs.retryMerge(email, id, b.version),
     // Supers: row 31, and the board's Ready for review (both need the latest postplan at the head).
     'merge-continue': (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version, true),

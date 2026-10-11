@@ -77,9 +77,9 @@ export const GlobPage = () => {
       glob={open}
       initialArtifact={initialArtifact}
       onClose={toBoard}
-      onAction={(action: Action) => {
+      onAction={(action: Action, anyway?: boolean) => {
         const path = ACTION_PATHS[action];
-        return path === null ? Promise.resolve(false) : change(() => api.action(open.id, path, open.version));
+        return path === null ? Promise.resolve(false) : change(() => api.action(open.id, path, open.version, anyway));
       }}
       onReviewLabel={(label: LabelName, command: LabelCommand) => change(() => api.reviewLabel(open.id, label, command, open.version))}
       onUpdate={async (changes: GlobChanges) => {

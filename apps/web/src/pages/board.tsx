@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
+import { FilterPane, FilterToggle, useFilterPaneOpen } from '@/components/board-filter-pane';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
@@ -17,9 +18,11 @@ import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { useColumnGlide } from '@/lib/column-glide';
+import { activeCount, matchesFilters, parseFilters, writeFilters } from '@/lib/board-filters';
+import type { FilterValues } from '@/lib/board-filters';
 import { withGlob } from '@/lib/glob-list';
 import { usePageContext } from '@/lib/page-context';
-import { codeReviewsKey, deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
+import { deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useToast } from '@/toast';
 
@@ -34,7 +37,8 @@ type Direction = 'left' | 'right';
 
 const MOVE_DESCRIPTIONS: Partial<Record<Action, string>> = {
   start: 'a routine implements it',
-  pick_up: 'you implement it',
+  start_anyway: 'a routine implements it, ahead of what holds it',
+  pick_up: 'you implement it in your own session',
   take_over: 'you take it over from the routine',
   retrigger: 'a routine runs it again',
 };
@@ -92,6 +96,7 @@ const Column = ({
   total,
   boardId,
   ghost,
+  filtered,
 }: {
   list: List;
   children: ReactNode;
@@ -101,6 +106,8 @@ const Column = ({
   /** For the "See all" link at the foot of a list that is cut short. */
   boardId: number;
   ghost: Preview | null;
+  /** A filter is on, so an empty list says nothing matches rather than showing nothing. */
+  filtered: boolean;
 }) => (
   <section
     className='list-well flex min-w-64 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2'
@@ -122,6 +129,11 @@ const Column = ({
       </div>
     )}
     {children}
+    {filtered && count === 0 && (
+      <p className='px-1 py-2 text-center text-xs text-muted-foreground' data-testid='no-match'>
+        No globs match the filter
+      </p>
+    )}
     {total > count && (
       <Link to={`/boards/${boardId}/signed-off`} className='px-1 py-1 text-center text-xs text-muted-foreground hover:text-foreground' data-testid='see-all'>
         See all
@@ -233,7 +245,12 @@ export const BoardPage = () => {
   useColumnGlide(motion.container, hideSignedOff);
   // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens its page.
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Filters live in the URL so a filtered board can be linked; whether their pane is open is the viewer's own preference.
+  const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
+  const filtering = activeCount(filters);
+  const setFilters = (values: FilterValues) => setSearchParams((params) => writeFilters(params, values), { replace: true });
+  const [filterOpen, setFilterOpen] = useFilterPaneOpen();
   // "Create glob" under a chat answer arrives with the answer's text, to start the form from.
   const location = useLocation();
   const [createFrom, setCreateFrom] = useState('');
@@ -260,14 +277,6 @@ export const BoardPage = () => {
     // Hints normally refresh it; while something is deploying, also check now and then.
     refetchInterval: (query) =>
       Object.values(query.state.data?.indicators ?? {}).some((i) => i.state === 'deploying') ? DEPLOY_POLL_MS : false,
-  });
-
-  // CodeRabbit's badges live beside the globs too (a `glob.reviews` hint refreshes them). A server without the route
-  // just leaves the cards without them.
-  const codeReviews = useQuery({
-    queryKey: [...codeReviewsKey(boardId), boardGlobIds.join(',')],
-    queryFn: () => api.boardCodeReviews(boardId, boardGlobIds),
-    enabled: boardGlobIds.length > 0,
   });
 
   // The status bar's counts include this board; refresh them when its globs change, at most every
@@ -373,7 +382,7 @@ export const BoardPage = () => {
     return <p className='p-6 text-muted-foreground'>Loading…</p>;
   }
 
-  const all = shown ?? globs.data;
+  const all = (shown ?? globs.data).filter((g) => matchesFilters(g, filters));
   // Filtering by type was removed for now; it is to be redesigned with more options. The board shows every glob.
   const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
 
@@ -383,18 +392,23 @@ export const BoardPage = () => {
       <h1 className='sr-only'>{board.data.name}</h1>
       {headerActions !== null &&
         createPortal(
-          <button
-            type='button'
-            className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground'
-            aria-label='New glob'
-            title='New glob'
-            data-testid='new-glob'
-            onClick={() => setCreating(true)}
-          >
-            <Plus className='h-4 w-4' aria-hidden />
-          </button>,
+          <>
+            <button
+              type='button'
+              className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground'
+              aria-label='New glob'
+              title='New glob'
+              data-testid='new-glob'
+              onClick={() => setCreating(true)}
+            >
+              <Plus className='h-4 w-4' aria-hidden />
+            </button>
+            <FilterToggle open={filterOpen} active={filtering} onClick={() => setFilterOpen(!filterOpen)} />
+          </>,
           headerActions,
         )}
+
+      <FilterPane open={filterOpen} values={filters} onChange={setFilters} />
 
       <main
         ref={(el) => {
@@ -407,9 +421,9 @@ export const BoardPage = () => {
             const inList = all.filter((g) => g.list === list);
             const items =
               list === 'signed_off' ? bySignedOffNewest(inList) : inList.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-            const total = list === 'signed_off' ? Math.max(items.length, signedOffTotal.data ?? 0) : items.length;
+            const total = list === 'signed_off' && filtering === 0 ? Math.max(items.length, signedOffTotal.data ?? 0) : items.length;
             return (
-              <Column key={list} list={list} count={items.length} total={total} boardId={boardId} ghost={preview?.target === list ? preview : null}>
+              <Column key={list} list={list} count={items.length} total={total} boardId={boardId} ghost={preview?.target === list ? preview : null} filtered={filtering > 0}>
                 {items.map((glob) => {
                   const moves = movesFor(glob);
                   return (
@@ -436,7 +450,6 @@ export const BoardPage = () => {
                       deploy={deployState.data?.indicators[glob.id]}
                       environments={deployState.data?.environments?.[glob.id]}
                       atf={deployState.data?.atf?.[glob.id]}
-                      codeReview={codeReviews.data?.[glob.id]}
                     />
                   );
                 })}

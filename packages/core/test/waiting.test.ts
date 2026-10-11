@@ -5,7 +5,7 @@ import type { CreateGlobInput } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
 import * as machine from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
-import { checkAfter, dependencyState, waitingFor } from '../src/domain/waiting.js';
+import { blockingChain, chainRefusal, checkAfter, dependencyState, edgesOf, overlapIds, waitingFor } from '../src/domain/waiting.js';
 import type { DependencyState } from '../src/domain/waiting.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { ctx, dev, glob as fixture } from './fixtures.js';
@@ -153,7 +153,7 @@ describe('start after', () => {
     const second = await create({ after: [first.id] });
     const refused = await globs.start(DEV, second.id, second.version);
     expect(!refused.ok && refused.error.code).toBe('invalid_transition');
-    expect(!refused.ok && refused.error.message).toContain(`Waits for ${first.id} to merge`);
+    expect(!refused.ok && refused.error.message).toContain(`Blocked: 1 ahead, next: ${first.id}`);
     const view = unwrap(await globs.get(DEV, second.id));
     expect(view.allowedActions).not.toContain('start');
     expect(view.allowedActions).toContain('start_anyway');
@@ -334,10 +334,31 @@ describe('waiting (pure)', () => {
     ]);
   });
 
-  it('words an implied hold with its paths', () => {
+  it('an implied overlap never waits; a learned need does, worded with its evidence', () => {
     const states = new Map<string, DependencyState>([['s1t2', 'open']]);
-    const [first] = waitingFor({ impliedAfter: [{ id: 's1t2', paths: ['apps/server/drizzle/0001.sql'] }] }, states);
-    expect(first?.why).toBe('Waits for s1t2: both may change apps/server/drizzle/0001.sql');
+    const overlap = { id: 's1t2', paths: ['apps/server/drizzle/0001.sql'] };
+    expect(waitingFor({ impliedAfter: [overlap] }, states)).toEqual([]);
+    expect(waitingFor({ impliedAfter: [{ ...overlap, kind: 'overlaps' }] }, states)).toEqual([]);
+    const learned = { id: 's1t2', paths: [], kind: 'needs' as const, source: 'learned' as const, evidence: 'run r1 failed: s1t2 not merged' };
+    expect(waitingFor({ impliedAfter: [learned] }, states).map((a) => a.why)).toEqual(['Waits for s1t2: run r1 failed: s1t2 not merged']);
+    expect(waitingFor({ impliedAfter: [{ ...learned, overridden: true }] }, states)).toEqual([]);
+  });
+
+  it('lists every edge with its kind and source; an explicit need wins over a recorded edge', () => {
+    const edges = edgesOf({
+      after: ['s1t1'],
+      impliedAfter: [
+        { id: 's1t1', paths: ['a'] },
+        { id: 's1t2', paths: ['b'] },
+        { id: 's1t3', paths: [], kind: 'needs', source: 'learned', evidence: 'run r1' },
+      ],
+    });
+    expect(edges.map((e) => [e.id, e.kind, e.source])).toEqual([
+      ['s1t1', 'needs', 'explicit'],
+      ['s1t2', 'overlaps', 'implied'],
+      ['s1t3', 'needs', 'learned'],
+    ]);
+    expect(overlapIds({ after: ['s1t1'], impliedAfter: [{ id: 's1t2', paths: ['b'] }] })).toEqual(['s1t2']);
   });
 
   it('checkAfter drops merged ids, de-duplicates and caps the list', () => {
@@ -388,5 +409,72 @@ describe('waiting transitions', () => {
     const merged = machine.allowedActions(held, dev, { dependencies: states([['s1t2', 'merged']]) });
     expect(merged).toContain('start');
     expect(merged).not.toContain('start_anyway');
+  });
+});
+
+describe('blocking chain', () => {
+  const world = (...globs: Glob[]) => new Map(globs.map((g) => [g.id, g]));
+  const chainOf = (root: Glob, all: Map<string, Glob>) => blockingChain(root.id, root, (id) => all.get(id));
+  const g = (id: string, patch: Partial<Glob> = {}) => fixture({ id, status: 'planning', ...patch });
+
+  it('walks the whole chain, nearest first, and names the deepest startable glob', () => {
+    const a = g('s1t1');
+    const b = g('s1t2', { after: ['s1t1'] });
+    const c = g('s1t3', { after: ['s1t2'] });
+    const root = g('s1t4', { after: ['s1t3'] });
+    const chain = chainOf(root, world(a, b, c));
+    expect(chain.blockedBy.map((x) => [x.id, x.depth, x.status])).toEqual([
+      ['s1t3', 1, 'planning'],
+      ['s1t2', 2, 'planning'],
+      ['s1t1', 3, 'planning'],
+    ]);
+    expect(chain.nextStartable).toBe('s1t1');
+    expect(chainRefusal(chain)).toContain('Blocked: 3 ahead, next: s1t1');
+  });
+
+  it('skips merged links and does not walk past them', () => {
+    const oldest = g('s1t1');
+    const merged = g('s1t2', { status: 'reviewing', after: ['s1t1'] });
+    const root = g('s1t3', { after: ['s1t2'] });
+    expect(chainOf(root, world(oldest, merged)).blockedBy).toEqual([]);
+  });
+
+  it('walks a cycle once', () => {
+    const a = g('s1t1', { after: ['s1t2'] });
+    const b = g('s1t2', { after: ['s1t1'] });
+    const chain = chainOf(a, world(a, b));
+    expect(chain.blockedBy.map((x) => x.id)).toEqual(['s1t2']);
+  });
+
+  it('has no next glob when what is ahead is already in progress, and counts a deleted one', () => {
+    const doing = g('s1t1', { status: 'implementing' });
+    const root = g('s1t2', { after: ['s1t1', 's1t9'] });
+    const chain = chainOf(root, world(doing));
+    expect(chain.blockedBy.map((x) => [x.id, x.state])).toEqual([
+      ['s1t1', 'open'],
+      ['s1t9', 'missing'],
+    ]);
+    expect(chain.nextStartable).toBeNull();
+  });
+});
+
+describe('Retrigger and the routine fire with prerequisites unmerged', () => {
+  const failed = fixture({ status: 'failed', after: ['s1t1'] });
+  const chain = { blockedBy: [{ id: 's1t1', state: 'planning' as const, status: 'planning' as const, depth: 1 }], nextStartable: 's1t1' };
+
+  it('refuses Retrigger with the chain as the reason, and goes ahead anyway without a check on the fire', () => {
+    const refused = machine.retrigger(failed, ctx(dev), chain);
+    expect(!refused.ok && refused.error.message).toContain('Blocked: 1 ahead, next: s1t1');
+    const anyway = machine.retrigger(failed, ctx(dev), chain, true);
+    expect(anyway.ok && anyway.value.effects.find((e) => e.kind === 'fire_routine')).not.toHaveProperty('checkPrerequisites');
+  });
+
+  it('marks the fire of a plain Retrigger or Start to be checked, and Start anyway not', () => {
+    const retriggered = machine.retrigger(fixture({ status: 'failed' }), ctx(dev));
+    expect(retriggered.ok && retriggered.value.effects.find((e) => e.kind === 'fire_routine')).toHaveProperty('checkPrerequisites', true);
+    const start = machine.start(fixture({ status: 'planning', type: 'same' }), ctx(dev));
+    expect(start.ok && start.value.effects.find((e) => e.kind === 'fire_routine')).toHaveProperty('checkPrerequisites', true);
+    const anyway = machine.startAnyway(fixture({ status: 'planning', type: 'same', after: ['s1t1'] }), ctx(dev), new Map([['s1t1', 'planning' as const]]));
+    expect(anyway.ok && anyway.value.effects.find((e) => e.kind === 'fire_routine')).not.toHaveProperty('checkPrerequisites');
   });
 });

@@ -242,9 +242,7 @@ describe('PR and merge events (rows 11–16)', () => {
     expect(t.glob.pr).toEqual({ number: 7, state: 'ready', headSha: 'bbb' });
   });
 
-  it('row 11: PR ready asks the executor to request a CodeRabbit review (it decides whether to post, R3)', () => {
-    const t = value(m.prReadyForReview(glob({ status: 'implementing', generation: 3 }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(t.effects).toContainEqual({ kind: 'request_code_review', globId: 's1t1', generation: 3 });
+  it('row 11: PR ready is only valid while implementing or in progress', () => {
     expect(errorCode(m.prReadyForReview(glob({ status: 'reviewing' }), { number: 7, headSha: 'bbb' }, ctx(null)))).toBe('invalid_transition');
   });
 
@@ -673,6 +671,29 @@ describe('field changes and type changes (row 26)', () => {
       expect(m.allowedActions(held, dev, { dependencies: new Map([['s1t9', 'merged' as const]]) })).toContain('start');
     });
 
+    it('a glob held only for its oversized flag offers Start anyway with the dependencies loaded', () => {
+      const held = glob({ type: 'sub', status: 'planning', waiting: { since: NOW } });
+      expect(m.allowedActions(held, dev, { dependencies: new Map() })).not.toContain('start_anyway');
+      expect(m.allowedActions(held, dev, { dependencies: new Map(), sizeHeld: true })).toContain('start_anyway');
+      const t = value(m.startAnyway(held, ctx()));
+      expect(t.glob.status).toBe('implementing');
+      expect(t.glob.waiting).toBeNull();
+      expect(t.glob.runs.at(-1)?.state).toBe('queued');
+    });
+
+    it('a picked-up glob with no run can be handed to a routine; with a live run it cannot', () => {
+      const picked = glob({ type: 'sub', status: 'in_progress', implementer: dev.email, runs: [] });
+      expect(m.allowedActions(picked, dev)).toContain('start_anyway');
+      const t = value(m.startAnyway(picked, ctx()));
+      expect(t.glob.status).toBe('implementing');
+      expect(t.glob.implementer).toBeNull();
+      expect(t.glob.generation).toBe(picked.generation + 1);
+      expect(t.glob.runs.at(-1)?.state).toBe('queued');
+      const sup = glob({ type: 'super', status: 'in_progress', implementer: dev.email, runs: [] });
+      expect(m.allowedActions(sup, dev)).not.toContain('start_anyway');
+      expect(errorCode(m.startAnyway(sup, ctx()))).toBe('invalid_transition');
+    });
+
     it('a planned super offers Pick up but not Start; back to same offers both', () => {
       const sup = value(m.changeFields(planned(), { type: 'super' }, board, ctx())).glob;
       const actions = m.allowedActions(sup, dev);
@@ -738,7 +759,7 @@ describe('checks and merging (slice 2)', () => {
 
   it('PR ready and pushes to an open PR refresh the head checks', () => {
     const t = value(m.prReadyForReview(glob({ status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(t)).toEqual(['refresh_checks', 'request_code_review']);
+    expect(effectKinds(t)).toEqual(['refresh_checks']);
     const pushed = value(m.commitPushed({ ...ready, headChecks: { sha: 'bbb', state: 'passed' } }, { sha: 'ccc', runId: null }, ctx(null)));
     expect(pushed.glob.headChecks).toBeNull();
     expect(effectKinds(pushed)).toEqual(['refresh_checks']);
@@ -748,13 +769,12 @@ describe('checks and merging (slice 2)', () => {
     const sub = value(m.prReadyForReview(glob({ type: 'sub', status: 'implementing' }), { number: 7, headSha: 'bbb' }, ctx(null)));
     expect(sub.effects).toEqual([
       { kind: 'refresh_checks', globId: 's1t1', generation: 1 },
-      { kind: 'request_code_review', globId: 's1t1', generation: 1 },
       { kind: 'evaluate_sub_gate', globId: 's1t1', generation: 1, sha: 'bbb' },
     ]);
     const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(same)).toEqual(['refresh_checks', 'request_code_review']);
+    expect(effectKinds(same)).toEqual(['refresh_checks']);
     const superGlob = value(m.prReadyForReview(glob({ type: 'super', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(superGlob)).toEqual(['refresh_checks', 'request_code_review']);
+    expect(effectKinds(superGlob)).toEqual(['refresh_checks']);
   });
 
   it('red checks on a sub\'s merge commit revert it and fail the sub; sames and supers are left alone', () => {
@@ -1386,5 +1406,52 @@ describe('allowedTypeChanges', () => {
 
   it('offers nothing a refused change would be', () => {
     expect(tos(glob({ type: 'same', category: 'task', status: 'merging' }))).toEqual([]);
+  });
+});
+
+describe('escalation to a same', () => {
+  const sub = (patch: Partial<Glob> = {}): Glob =>
+    glob({ type: 'sub', status: 'implementing', runs: [run()], pr: { number: 7, state: 'draft', headSha: 'bbb' }, ...patch });
+
+  it('a current run converts the sub to a same in place with the reason recorded', () => {
+    const t = value(m.escalateToSame(sub(), { reason: 'Unplanned auth change', evidence: 'src/auth.ts', runId: 'run-0' }, ctx(null)));
+    expect(t.glob.type).toBe('same');
+    expect(t.glob.status).toBe('implementing');
+    expect(t.glob.escalation).toMatchObject({ reason: 'Unplanned auth change', evidence: 'src/auth.ts', runId: 'run-0' });
+    expect(t.events.map((e) => e.type)).toEqual(['FieldsChanged', 'Escalated']);
+    expect(effectKinds(t)).toEqual(['sync_pr_labels']);
+  });
+
+  it('a sub in Planning can be escalated before it starts', () => {
+    const t = value(m.escalateToSame(sub({ status: 'planning', runs: [], pr: null }), { reason: 'Open decision' }, ctx(null)));
+    expect(t.glob.type).toBe('same');
+    expect(t.glob.status).toBe('planning');
+  });
+
+  it('a call from a superseded run is ignored', () => {
+    expect(value(m.escalateToSame(sub(), { reason: 'x', runId: 'other' }, ctx(null))).changed).toBe(false);
+  });
+
+  it('a same is left as it is, and a merged sub is refused', () => {
+    expect(value(m.escalateToSame(glob({ type: 'same' }), { reason: 'x' }, ctx())).changed).toBe(false);
+    expect(errorCode(m.escalateToSame(sub({ status: 'reviewing' }), { reason: 'x', runId: 'run-0' }, ctx(null)))).toBe('invalid_transition');
+  });
+
+  it('an escalation needs a reason', () => {
+    expect(errorCode(m.escalateToSame(sub(), { reason: '  ', runId: 'run-0' }, ctx(null)))).toBe('invalid_input');
+  });
+
+  it('a person makes it a sub again, and the gate runs on a ready PR whose checks passed', () => {
+    const escalated = value(m.escalateToSame(sub(), { reason: 'x', runId: 'run-0' }, ctx(null))).glob;
+    expect(m.allowedActions(escalated, dev)).toContain('deescalate');
+    const ready = { ...escalated, status: 'pr_open' as const, pr: { number: 7, state: 'ready' as const, headSha: 'bbb' }, headChecks: { sha: 'bbb', state: 'passed' as const } };
+    const t = value(m.deescalate(ready, ctx()));
+    expect(t.glob.type).toBe('sub');
+    expect(t.glob.escalation).toBeNull();
+    expect(effectKinds(t)).toEqual(['sync_pr_labels', 'evaluate_sub_gate']);
+  });
+
+  it('only an escalated same can be made a sub again', () => {
+    expect(errorCode(m.deescalate(glob({ type: 'same' }), ctx()))).toBe('invalid_transition');
   });
 });

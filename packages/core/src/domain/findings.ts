@@ -2,11 +2,10 @@ import { LLM_WAITING_PREFIX } from './kb.js';
 import { markdownHeadings } from './sections.js';
 
 /**
- * Review findings (spec, self-improvement signals): local reviews and CodeRabbit inline comments
- * are split into findings, and each finding is classified into a fixed class, so they can be
- * counted per glob, commit and agent-set version.
+ * Review findings (spec, self-improvement signals): local reviews are split into findings, and each
+ * finding is classified into a fixed class, so they can be counted per glob, commit and agent-set version.
  */
-export const FINDING_SOURCES = ['local_review', 'coderabbit'] as const;
+export const FINDING_SOURCES = ['local_review'] as const;
 export type FindingSource = (typeof FINDING_SOURCES)[number];
 
 export const FINDING_SEVERITIES = ['in_scope', 'suggestion', 'unknown'] as const;
@@ -20,7 +19,7 @@ export type FindingState = (typeof FINDING_STATES)[number];
 export const REVIEW_SOURCE_STATES = ['pending', 'split', 'failed'] as const;
 export type ReviewSourceState = (typeof REVIEW_SOURCE_STATES)[number];
 
-export const REVIEW_SOURCE_KINDS = ['local_review', 'coderabbit_comment'] as const;
+export const REVIEW_SOURCE_KINDS = ['local_review'] as const;
 export type ReviewSourceKind = (typeof REVIEW_SOURCE_KINDS)[number];
 
 /** Countable classes beat free labels: new ones are added here when `other` notes cluster. */
@@ -68,7 +67,7 @@ export const FINDING_CLASS_DESCRIPTIONS: Readonly<Record<FindingClass, string>> 
   other: 'none of the above',
 };
 
-/** A review waiting to be split into findings, or already split: a local review artifact or one CodeRabbit comment. */
+/** A review waiting to be split into findings, or already split: a local review artifact. */
 export interface ReviewSource {
   readonly id: number;
   readonly boardId: number;
@@ -76,11 +75,11 @@ export interface ReviewSource {
   readonly kind: ReviewSourceKind;
   /** Local reviews: the artifact (version) the text is read from. */
   readonly artifactId: number | null;
-  /** CodeRabbit comments: `coderabbit:<comment id>`, so a redelivery isn't stored twice. */
+  /** An external ID, so a redelivery isn't stored twice. */
   readonly externalId: string | null;
   readonly commitSha: string | null;
   readonly agentSetVersion: number | null;
-  /** CodeRabbit comments only: the comment's text (local reviews are read from their artifact). */
+  /** The source's own text (local reviews are read from their artifact). */
   readonly content: string | null;
   readonly path: string | null;
   readonly line: string | null;
@@ -252,25 +251,6 @@ export const fingerprint = (text: string): string =>
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 300);
-
-/**
- * A CodeRabbit inline comment's severity, from its label: the first non-empty line before its
- * first `<details>` (often in `_..._`, so not `\b`). The rest of the body, its suggested code and
- * agent prompt included, is ignored, so a "critical section" in the text doesn't make it in scope.
- */
-export const coderabbitSeverity = (body: string): FindingSeverity => {
-  const cut = body.indexOf('<details>');
-  const label = (cut < 0 ? body : body.slice(0, cut)).split(/\r?\n/).find((l) => l.trim() !== '') ?? '';
-  if (label.includes('Potential issue') || /(?<![a-z])critical(?![a-z])/i.test(label)) return 'in_scope';
-  if (label.includes('Refactor suggestion') || /(?<![a-z])nitpick/i.test(label) || label.includes('🧹')) return 'suggestion';
-  return 'unknown';
-};
-
-/** A CodeRabbit inline comment's finding text: up to its first `<details>` (the agent prompt and committable suggestion). */
-export const coderabbitText = (body: string): string => {
-  const cut = body.indexOf('<details>');
-  return (cut < 0 ? body : body.slice(0, cut)).trim().slice(0, FINDING_TEXT_LIMIT);
-};
 
 /** A glob's findings as the glob view shows them: no fingerprint, version or queue fields but state and error. */
 export type FindingView = Omit<ReviewFinding, 'boardId' | 'globId' | 'sourceId' | 'fingerprint' | 'attempts' | 'processAfter' | 'version'>;

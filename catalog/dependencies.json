@@ -1,0 +1,14 @@
+{
+  "neverOverlap": [
+    "**/pnpm-lock.yaml",
+    "**/package-lock.json",
+    "**/yarn.lock",
+    "**/Cargo.lock",
+    "**/poetry.lock",
+    "**/*.generated.*"
+  ],
+  "overlap": [
+    "**/migrations/**",
+    "**/drizzle/**"
+  ]
+}
