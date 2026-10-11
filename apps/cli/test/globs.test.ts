@@ -145,6 +145,13 @@ describe('slop glob', () => {
     await expect(globCommand([], deps)).rejects.toBeInstanceOf(UsageError);
     await expect(globCommand(['--branch'], deps)).rejects.toBeInstanceOf(UsageError);
     await expect(globCommand(['main'], deps)).rejects.toBeInstanceOf(UsageError);
+    await expect(globCommand(['s1d3'], deps)).rejects.toBeInstanceOf(UsageError);
+  });
+
+  it('accepts a decision glob ID (k)', async () => {
+    const { deps, out } = setup({ get_glob: () => ({ ...glob({ status: 'planning' }), id: 's1k3', category: 'decision', type: 'same', branch: 's1k3' }) });
+    await globCommand(['s1k3'], deps);
+    expect(out.join('')).toContain('s1k3 [same decision] planning');
   });
 });
 

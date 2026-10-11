@@ -8,6 +8,7 @@ import { DEFAULT_RISK_AREAS } from '../src/domain/risk-area.js';
 import { INTAKE_SYSTEM } from '../src/app/intake-service.js';
 import type { LlmRequest } from '../src/app/intake-service.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import { glob } from './fixtures.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -105,6 +106,15 @@ describe('intake', () => {
     expect((await propose(`This relates to ${open} but is separate`)).suggestedAfter).toEqual([]);
     expect(waitedForIn(`wait for ${open}`, new Set())).toEqual([]);
     expect(waitedForIn(`Start after ${open.toUpperCase()}.`, new Set([open]))).toEqual([open]);
+    // A decision glob (k) is a glob too.
+    expect(waitedForIn('Start once s1k3 is accepted.', new Set(['s1k3']))).toEqual(['s1k3']);
+  });
+
+  it('never suggests waiting on a decision glob: only work globs can be waited for', async () => {
+    answer = JSON.stringify({ title: 'T', summary: 'S' });
+    const decision = glob({ id: `s${String(boardId)}k3`, boardId, category: 'decision', status: 'planning', type: 'same' });
+    await store.transaction((tx) => tx.insertGlob(decision, null));
+    expect((await propose(`Start once ${decision.id} is accepted, and after s${String(boardId)}t1.`)).suggestedAfter).toEqual([`s${String(boardId)}t1`]);
   });
 
   it('keeps the spec in plan, so the short summary never replaces it', async () => {

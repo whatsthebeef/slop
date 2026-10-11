@@ -1,5 +1,7 @@
 /** What the code view returns, its caps, and the light parser behind its import graph. Pure: nothing here reads a repository. */
 
+import { GLOB_ID_SOURCE } from './ids.js';
+
 /** Largest answers; every tool result is cut to these so a call can't flood a model's context. */
 export const CODE_TREE_LIMIT = 500;
 export const CODE_READ_LINES = 2000;
@@ -186,8 +188,9 @@ export const resolveImport = (from: string, specifier: string, files: ReadonlySe
   return null;
 };
 
+const SUBJECT_GLOB_ID = new RegExp(`^(${GLOB_ID_SOURCE}):`);
 /** A history subject's glob ID: `s15f49: title` (slop's own commit format). */
-export const globIdOfSubject = (subject: string): string | null => /^(s\d+[ftb]\d+):/.exec(subject)?.[1] ?? null;
+export const globIdOfSubject = (subject: string): string | null => SUBJECT_GLOB_ID.exec(subject)?.[1] ?? null;
 
 /** A ref a caller may name: a branch, tag, sha or `refs/pull/N/head`, never something git would read as an option. */
 export const safeRef = (raw: string): string | null =>

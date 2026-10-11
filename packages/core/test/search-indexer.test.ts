@@ -185,11 +185,11 @@ describe('SearchIndexer', () => {
 
   it('leaves decision globs and their artifacts out of the index (work listings exclude them by default)', async () => {
     await populate();
-    const decision = await addGlob({ id: 's1d1', category: 'decision', title: 'Never edit generated files', summary: 'Never edit src/gen/.', pr: null, provisioning: 'none' });
+    const decision = await addGlob({ id: 's1k1', category: 'decision', title: 'Never edit generated files', summary: 'Never edit src/gen/.', pr: null, provisioning: 'none' });
     await addArtifact(decision.id, 'plan', 'The proposal.');
     await addArtifact(decision.id, 'assessment', '## Assessment');
     expect(await indexer.syncBoard(boardId)).toEqual({ written: 10, removed: 0, queued: 1 });
-    expect(items().filter((i) => i.globIds.includes('s1d1'))).toEqual([]);
+    expect(items().filter((i) => i.globIds.includes('s1k1'))).toEqual([]);
   });
 
   it('writes nothing when nothing changed', async () => {

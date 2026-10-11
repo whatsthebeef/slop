@@ -20,7 +20,7 @@ const attributes = (patch: Partial<DecisionAttributes> = {}): DecisionAttributes
 
 const decision = (patch: Partial<Glob> = {}): Glob =>
   glob({
-    id: 's1d1',
+    id: 's1k1',
     category: 'decision',
     attributes: attributes(),
     pr: null,
@@ -39,7 +39,7 @@ const eventTypes = (t: Transition) => t.events.map((e) => e.type);
 const create = (patch: Partial<machine.CreateInput> = {}, actor: Actor = dev) =>
   machine.create(
     {
-      id: 's1d1',
+      id: 's1k1',
       boardId: 1,
       title: 'Never edit src/gen/',
       summary: 'Never edit src/gen/',
@@ -221,9 +221,9 @@ describe('D10: closed by the pipeline, and sync from the item', () => {
   });
 
   it('records the broader decisions it conflicts with, and clears them', () => {
-    const flagged = unwrap(machine.decisionConflicts(decision(), ['s1d7'], ctx(null)));
-    expect(flagged.glob.attributes).toMatchObject({ conflictsWith: ['s1d7'] });
-    expect(unwrap(machine.decisionConflicts(flagged.glob, ['s1d7'], ctx(null))).changed).toBe(false);
+    const flagged = unwrap(machine.decisionConflicts(decision(), ['s1k7'], ctx(null)));
+    expect(flagged.glob.attributes).toMatchObject({ conflictsWith: ['s1k7'] });
+    expect(unwrap(machine.decisionConflicts(flagged.glob, ['s1k7'], ctx(null))).changed).toBe(false);
     const cleared = unwrap(machine.decisionConflicts(flagged.glob, [], ctx(null)));
     expect(cleared.glob.attributes).not.toHaveProperty('conflictsWith');
   });

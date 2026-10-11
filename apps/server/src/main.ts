@@ -323,7 +323,7 @@ const subLimit = new SubLimitService({
   log: logError,
 });
 // Hourly: intake snapshots are embedded or rebuilt for older globs, and merged globs' outcomes recorded and refreshed at 14 days.
-const escalations = new EscalationLearningService({ store, clock, riskAreas });
+const escalations = new EscalationLearningService({ store, clock, riskAreas, notifier: hub });
 const typeLearning = new TypeLearningService({ store, clock });
 const intakeLearning = new IntakeLearningService({ store, clock, embedder, riskAreas, escalations });
 const learningJobs = new LearningJobService({

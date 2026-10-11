@@ -3,6 +3,7 @@ import { BoardService } from '../src/app/board-service.js';
 import { backfillBoard, backfillDecisionGlobs, BACKFILL_BATCH } from '../src/app/decision-backfill.js';
 import { GlobService } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
+import { parseId } from '../src/domain/ids.js';
 import { decisionOf, isArchivedDecision } from '../src/domain/decision-glob.js';
 import { UNPROCESSED } from '../src/domain/kb.js';
 import type { KbItem } from '../src/domain/kb.js';
@@ -54,6 +55,9 @@ describe('decision backfill', () => {
   };
   const insert = async (item: KbItem) => {
     await store.transaction(async (tx) => {
+      // Items take their number from the board's `k` counter, as newKbItemId does; decision globs share it.
+      const n = parseId(item.id)?.n ?? 0;
+      while ((await tx.nextNumber(boardId, 'k')) < n);
       if (!(await tx.insertKbItem(item))) throw new Error('duplicate item');
     });
     return item;
@@ -184,6 +188,19 @@ describe('decision backfill', () => {
     });
     const b = await byKey(`decision:${String(fromInbox.id)}`);
     expect(decisionOf(need(b))?.scope).toEqual({ kind: 'project', ref: null });
+  });
+
+  it('gives the glob of an item the item ID, and an extracted decision the next k number after the items', async () => {
+    const first = await insert(kbItem({}));
+    const second = await insert(kbItem({}));
+    await extracted({ decidedAt: day(NOW, -4), sourceKind: 'inbox', globId: null, ref: 'inbox:9' });
+    await backfillDecisionGlobs(store, clock);
+    expect(need(await byKey(`kb:${first.id}`)).id).toBe(first.id);
+    expect(need(await byKey(`kb:${second.id}`)).id).toBe(second.id);
+    const ids = (await decisionsOf()).map((g) => g.id);
+    const extractedId = ids.find((id) => id !== first.id && id !== second.id);
+    expect(parseId(extractedId ?? '')).toMatchObject({ letter: 'k' });
+    expect(parseId(extractedId ?? '')?.n).toBeGreaterThan(parseId(second.id)?.n ?? Infinity);
   });
 
   it('is idempotent: a second run creates nothing and changes nothing', async () => {

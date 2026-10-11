@@ -1,6 +1,6 @@
 import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
-import { formatId } from '../domain/ids.js';
+import { formatId, parseId } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import type { Context, Transition } from '../domain/machine.js';
 import { assessmentOf, broaderConflicts, decisionOf, decisionGlobTitle, defaultScope, extractedKey, inboxKey, kbItemKey, proposalText } from '../domain/decision-glob.js';
@@ -49,6 +49,11 @@ export interface NewDecisionGlob {
   /** plan.md v1: the proposal text (statement and evidence, Markdown). */
   readonly payload: string;
   readonly attributes: DecisionAttributes;
+  /**
+   * The glob's ID when it fronts a KB item: the item's own `k` ID (items and decision globs share the board's `k`
+   * sequence). Left out, the glob takes the next `k` number.
+   */
+  readonly id?: string;
   /** Makes creation idempotent: `kb:<item>`, `inbox:<id>`, `decision:<id>`. */
   readonly creationKey: string;
   readonly group?: string | null;
@@ -81,7 +86,11 @@ export const createDecisionInTx = async (tx: Tx, deps: DecisionDeps, input: NewD
     if (governed?.boardId !== input.boardId || governed.category === 'decision') return invalidInput(`No work glob ${scope.ref} on board ${String(input.boardId)}`);
   }
   const clock: Clock = input.at === undefined ? deps.clock : { now: () => input.at ?? '' };
-  const id = formatId(board.id, 'd', await tx.nextNumber(board.id, 'd'));
+  if (input.id !== undefined) {
+    const parsed = parseId(input.id);
+    if (parsed?.letter !== 'k' || parsed.boardId !== board.id) return invalidInput(`${input.id} is not a decision ID on board ${String(board.id)}`);
+  }
+  const id = input.id ?? formatId(board.id, 'k', await tx.nextNumber(board.id, 'k'));
   const transition = machine.create(
     {
       id,
@@ -138,6 +147,7 @@ export const createDecisionForItem = async (
     summary: item.statement,
     payload: proposalText(item),
     attributes: { scope: defaultScope(item.type), source: { kind: 'kb_item', id: item.id }, channel, kbItemId: item.id, outcome: null },
+    id: item.id,
     creationKey: kbItemKey(item.id),
     at: item.createdAt,
     assess: { item },

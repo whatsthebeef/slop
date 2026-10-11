@@ -1,3 +1,4 @@
+import { globIdInText } from '@slop/core';
 import { RequestError } from '@/lib/api';
 import type { ChatCitation, ChatMessage } from '@/lib/api';
 import type { PageContext } from '@/lib/page-context';
@@ -100,21 +101,27 @@ export const citedGlobs = (message: Pick<ChatMessage, 'citations'>, page: PageCo
   return [...new Set(ids)];
 };
 
-/** The one glob an answer is about: the page's, or the single glob it cites or mentions; none when it names several or has no sources (small talk, "couldn't find"). */
-export const openGlobOf = (message: Pick<ChatMessage, 'citations' | 'content'>, page: PageContext): string | undefined => {
+/**
+ * The one glob an answer is about: the page's, or the single glob it cites or mentions; none when it names several or has
+ * no sources (small talk, "couldn't find"). A mention counts only when it is a glob on the board (`boardGlobs`), since an ID
+ * like `s1k3` may be a KB item with no decision glob; until the board's list has loaded, mentions count for nothing.
+ */
+export const openGlobOf = (message: Pick<ChatMessage, 'citations' | 'content'>, page: PageContext, boardGlobs?: ReadonlySet<string>): string | undefined => {
   if ((message.citations ?? []).length === 0) return undefined;
   if (page.type === 'glob' && page.id !== undefined) return page.id;
-  const about = [...new Set([...(message.citations ?? []).flatMap((c) => (c.globId === null ? [] : [c.globId])), ...mentionedGlobs(message.content)])];
+  const mentioned = boardGlobs === undefined ? [] : mentionedGlobs(message.content).filter((id) => boardGlobs.has(id));
+  const about = [...new Set([...(message.citations ?? []).flatMap((c) => (c.globId === null ? [] : [c.globId])), ...mentioned])];
   return about.length === 1 ? about[0] : undefined;
 };
 
 /**
  * The buttons under an answer, only where they fit. *Create glob* and *Save to knowledge* are what the answering model
  * asked for (`actions`; saving also needs a glob to point at, one the answer cites or the page's). *Attach* adds the
- * open inbox item to the globs the answer cites; *Open in glob view* is for an answer about one glob. An answer with
+ * open inbox item to the globs the answer cites; *Open in glob view* is for an answer about one glob (mentions count only
+ * when they are among `boardGlobs`, see `openGlobOf`). An answer with
  * no sources (small talk, "couldn't find") gets nothing.
  */
-export const actionsFor = (message: Pick<ChatMessage, 'citations' | 'content' | 'actions'>, page: PageContext): AnswerAction[] => {
+export const actionsFor = (message: Pick<ChatMessage, 'citations' | 'content' | 'actions'>, page: PageContext, boardGlobs?: ReadonlySet<string>): AnswerAction[] => {
   const cited = message.citations ?? [];
   if (cited.length === 0) return [];
   const asked = message.actions ?? [];
@@ -122,7 +129,7 @@ export const actionsFor = (message: Pick<ChatMessage, 'citations' | 'content' | 
   if (asked.includes('create_glob')) actions.push('create_glob');
   if (page.type === 'inbox' && page.id !== undefined && cited.some((c) => c.globId !== null)) actions.push('attach');
   if (asked.includes('save') && citedGlobs(message, page).length > 0) actions.push('save');
-  if (openGlobOf(message, page) !== undefined) actions.push('open_glob');
+  if (openGlobOf(message, page, boardGlobs) !== undefined) actions.push('open_glob');
   return actions;
 };
 
@@ -166,4 +173,4 @@ export const withCiteLinks = (text: string, citations: readonly Pick<ChatCitatio
 };
 
 /** The glob IDs an answer mentions, in order and without repeats. */
-export const mentionedGlobs = (text: string): string[] => [...new Set(text.match(/\bs\d+[ftb]\d+\b/g) ?? [])];
+export const mentionedGlobs = (text: string): string[] => [...new Set(text.match(globIdInText()) ?? [])];

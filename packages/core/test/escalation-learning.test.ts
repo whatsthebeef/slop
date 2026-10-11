@@ -150,6 +150,7 @@ describe('escalation outcomes (pure)', () => {
 describe('escalation learning service', () => {
   let store: MemoryStore;
   let service: EscalationLearningService;
+  let notifier: RecordingNotifier;
   let boardId: number;
 
   const seed = async (globs: Glob[], events: DomainEvent[]): Promise<void> => {
@@ -163,11 +164,11 @@ describe('escalation learning service', () => {
 
   beforeEach(async () => {
     store = new MemoryStore();
-    const notifier = new RecordingNotifier();
+    notifier = new RecordingNotifier();
     const boards = new BoardService({ store, notifier });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
     boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
-    service = new EscalationLearningService({ store, clock: { now: () => NOW } });
+    service = new EscalationLearningService({ store, clock: { now: () => NOW }, notifier });
   });
 
   it('an escalation approved unchanged loosens its criterion, with its cause in the history and a learning proposed', async () => {
@@ -182,6 +183,11 @@ describe('escalation learning service', () => {
     expect(proposed).toHaveLength(1);
     expect(proposed[0]).toMatchObject({ type: 'agent-behaviour', sourceGlobIds: ['s1t1'], status: 'open' });
     expect(proposed[0]?.statement).toContain('unnecessary');
+    // Fronted by its decision glob under the item's own ID, like every new KB item, and published after the commit.
+    const itemId = proposed[0]?.id ?? '';
+    expect(proposed[0]?.decisionGlobId).toBe(itemId);
+    expect(await store.transaction((tx) => tx.getGlob(itemId))).toMatchObject({ category: 'decision', status: 'planning', attributes: { kbItemId: itemId, channel: 'mined' } });
+    expect(notifier.hints).toContainEqual({ kind: 'glob.changed', boardId, globId: itemId, version: 1 });
     // idempotent: a second pass records and proposes nothing
     expect(await service.learn(boardId, NOW)).toBe(0);
     expect(await items()).toHaveLength(1);

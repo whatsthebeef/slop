@@ -2,6 +2,7 @@ import type { EffectState } from './effect-check.js';
 import { isInvestigateEvent } from './events.js';
 import type { DomainEvent, JsonValue } from './events.js';
 import { FINDING_CLASS_DESCRIPTIONS } from './findings.js';
+import { globIdInText } from './ids.js';
 import type { FindingClass, ReviewFinding } from './findings.js';
 import type { LearningType } from './kb.js';
 import type { ArtifactKind, Provenance } from './knowledge.js';
@@ -226,7 +227,7 @@ export const normaliseFailure = (reason: string): string =>
     .toLowerCase()
     .replace(/https?:\/\/\S+/g, ' ')
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g, ' ')
-    .replace(/\bs\d+[ftbhk]\d+\b/g, ' ')
+    .replace(globIdInText(), ' ')
     .replace(/\b[0-9a-f]{7,40}\b/g, ' ')
     .replace(/\d+/g, ' ')
     .replace(/[^a-z\s]+/g, ' ')

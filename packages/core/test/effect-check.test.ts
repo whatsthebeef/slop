@@ -424,6 +424,8 @@ describe('Effect checks', () => {
     });
 
     const raised = await item(raisedId ?? '');
+    expect(raised.decisionGlobId).toBe(raised.id);
+    expect(await store.transaction((tx) => tx.getGlob(raised.id))).toMatchObject({ category: 'decision', status: 'planning', attributes: { kbItemId: raised.id, channel: 'mined' } });
     expect(raised).toMatchObject({
       status: 'open',
       type: 'gotcha',

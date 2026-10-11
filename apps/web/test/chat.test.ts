@@ -104,6 +104,7 @@ describe('answers', () => {
   it('finds the globs an answer mentions', () => {
     expect(mentionedGlobs('s15f25 replaced s15t3, see s15f25 and s1b2.')).toEqual(['s15f25', 's15t3', 's1b2']);
     expect(mentionedGlobs('nothing here')).toEqual([]);
+    expect(mentionedGlobs('the decision s15k3 governs s15t4')).toEqual(['s15k3', 's15t4']);
   });
 
   it('colours chips by source type', () => {
@@ -127,6 +128,13 @@ describe('answers', () => {
     expect(openGlobOf(reply([withGlob, cite({ globId: 's1t2' })]), { type: 'board' })).toBeUndefined();
     expect(openGlobOf(reply([withGlob], [], 'see s1t1'), { type: 'board' })).toBe('s1t1');
     expect(openGlobOf(reply([cite({})]), { type: 'glob', id: 's1t9' })).toBe('s1t9');
+    // A mention counts only when the board has that glob: a KB item ID (k) with no decision glob is not one.
+    const board = new Set(['s1t7', 's1k5']);
+    expect(actionsFor(reply([cite({})], [], 'see s1k2'), { type: 'board' }, board)).not.toContain('open_glob');
+    expect(openGlobOf(reply([cite({ globId: 's1t7' })], [], 'see s1k2'), { type: 'board' }, board)).toBe('s1t7');
+    expect(openGlobOf(reply([cite({})], [], 'see s1k5'), { type: 'board' }, board)).toBe('s1k5');
+    // Until the board's list has loaded, mentions count for nothing.
+    expect(openGlobOf(reply([cite({})], [], 'see s1k5'), { type: 'board' })).toBeUndefined();
     // Attach is for an open inbox item and an answer that cites a glob.
     expect(actionsFor(reply([withGlob]), { type: 'inbox', id: '3' })).toEqual(['attach', 'open_glob']);
     expect(actionsFor(reply([withGlob]), { type: 'inbox' })).not.toContain('attach');

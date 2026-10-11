@@ -164,7 +164,9 @@ describe('decision globs', () => {
       });
       const [first] = result.content as { text: string }[];
       const reply = JSON.parse(first?.text ?? 'null') as { id: string; globId: string };
-      expect(reply.globId).toMatch(new RegExp(`^s${String(boardId)}d\\d+$`));
+      // The decision glob fronts the item under the item's own k ID.
+      expect(reply.globId).toMatch(new RegExp(`^s${String(boardId)}k\\d+$`));
+      expect(reply.globId).toBe(reply.id);
       const glob = await view(reply.globId);
       expect(glob).toMatchObject({ category: 'decision', status: 'planning', attributes: { kbItemId: reply.id } });
       const [plan] = await store.transaction((tx) => tx.listArtifacts(reply.globId, 'plan'));

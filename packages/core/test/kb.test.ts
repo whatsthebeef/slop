@@ -127,7 +127,7 @@ describe('submit_learning', () => {
       outcome: null,
       ...UNPROCESSED,
       // Its face on the board: the decision glob made with it.
-      decisionGlobId: 's1d1',
+      decisionGlobId: 's1k1',
       version: 1,
     });
     const open = await store.transaction((tx) => tx.listKbItems(boardId, 'open'));

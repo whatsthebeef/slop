@@ -64,6 +64,7 @@ describe('code view domain', () => {
 
   it('finds the glob of a commit subject', () => {
     expect(globIdOfSubject('s15f49: Code view')).toBe('s15f49');
+    expect(globIdOfSubject('s15k3: A decision')).toBe('s15k3');
     expect(globIdOfSubject('Merge pull request #3')).toBeNull();
   });
 

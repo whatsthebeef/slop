@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { isDecisionAttributes, validateAttributes, validateScope, validateScopeEdit } from '../src/domain/attributes.js';
 import { ARTIFACT_KINDS, ARTIFACT_ROLE, isSpecialKind } from '../src/domain/knowledge.js';
 import { payloadOf } from '../src/domain/payload.js';
-import { formatId, letterOf, parseId } from '../src/domain/ids.js';
+import { GLOB_ID_PATTERN, formatId, globIdInText, letterOf, parseId } from '../src/domain/ids.js';
 import { isValidCombination, listOf } from '../src/domain/matrix.js';
 import { CATEGORIES, WORK_CATEGORIES } from '../src/domain/types.js';
 import { NOW } from './fixtures.js';
@@ -19,13 +19,20 @@ const decision = (patch: Record<string, unknown> = {}) => ({
 const message = (result: ReturnType<typeof validateAttributes>): string => (result.ok ? '' : result.error.message);
 
 describe('decision IDs and the category matrix', () => {
-  it('numbers decisions s<b>d<n>, and parses them back; work IDs are unchanged', () => {
-    expect(letterOf('decision')).toBe('d');
-    expect(formatId(1, letterOf('decision'), 3)).toBe('s1d3');
-    expect(parseId('s1d3')).toEqual({ boardId: 1, letter: 'd', n: 3 });
+  it('numbers decisions s<b>k<n> like KB items, and parses them back; work IDs are unchanged; there is no d letter', () => {
+    expect(letterOf('decision')).toBe('k');
+    expect(formatId(1, letterOf('decision'), 3)).toBe('s1k3');
+    expect(parseId('s1k3')).toEqual({ boardId: 1, letter: 'k', n: 3 });
+    expect(parseId('s1d3')).toBeNull();
     expect(parseId('s12k4')).toEqual({ boardId: 12, letter: 'k', n: 4 });
     expect([letterOf('feature'), letterOf('task'), letterOf('bug')]).toEqual(['f', 't', 'b']);
     expect(parseId('s1x3')).toBeNull();
+  });
+
+  it('has one glob-ID pattern that accepts every letter, k included, and not d', () => {
+    expect(['s1f2', 's1t2', 's1b2', 's1h2', 's15k3'].every((id) => GLOB_ID_PATTERN.test(id))).toBe(true);
+    expect(['s1d3', 's0k1', 's1k0', 's1k3x', 'xs1k3'].some((id) => GLOB_ID_PATTERN.test(id))).toBe(false);
+    expect('See s15k3 and s15t7, not s15d2 or as15k4.'.match(globIdInText())).toEqual(['s15k3', 's15t7']);
   });
 
   it('allows only a same for a decision, and keeps the work matrix', () => {
@@ -65,8 +72,8 @@ describe('attribute schemas', () => {
 
   it('checks the outcome and drops duplicate conflict IDs', () => {
     const outcome = { kind: 'needs_work', by: 'a@x.com', at: NOW, linkedGlobId: 's1t2' };
-    const result = validateAttributes('decision', decision({ outcome, conflictsWith: ['s1d9', 's1d9'], archived: true }));
-    expect(result.ok && isDecisionAttributes(result.value) ? result.value.conflictsWith : null).toEqual(['s1d9']);
+    const result = validateAttributes('decision', decision({ outcome, conflictsWith: ['s1k9', 's1k9'], archived: true }));
+    expect(result.ok && isDecisionAttributes(result.value) ? result.value.conflictsWith : null).toEqual(['s1k9']);
     expect(message(validateAttributes('decision', decision({ outcome: { ...outcome, kind: 'maybe' } })))).toMatch(/outcome.kind/);
     expect(message(validateAttributes('decision', decision({ outcome: { ...outcome, workLanded: false } })))).toMatch(/workLanded/);
   });

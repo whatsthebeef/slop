@@ -42,6 +42,7 @@ const itemGlob = async (tx: Tx, clock: Clock, item: KbItem): Promise<'created' |
     summary: item.statement,
     payload: proposalText(item),
     attributes: { scope: defaultScope(item.type), source: { kind: 'kb_item', id: item.id }, channel: 'migration', kbItemId: item.id, outcome: null },
+    id: item.id,
     creationKey: kbItemKey(item.id),
     at: item.createdAt,
   });

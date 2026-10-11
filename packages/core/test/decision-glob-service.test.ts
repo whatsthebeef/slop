@@ -173,7 +173,9 @@ describe('decision globs', () => {
   describe('creation', () => {
     it('is made with a submitted learning: Planning, linked both ways, proposal as plan.md, assessment v1', async () => {
       const made = await submit({ type: 'decision' });
-      expect(made.globId).toBe('s1d1');
+      // The glob fronts the item under the item's own ID.
+      expect(made.globId).toBe('s1k1');
+      expect(made.globId).toBe(made.id);
       const g = await glob(made.globId);
       expect(g).toMatchObject({ category: 'decision', type: 'same', status: 'planning', title: GEN, provisioning: 'none', labels: {}, runs: [], doingSince: null, version: 1 });
       expect(g.attributes).toEqual({
@@ -193,19 +195,19 @@ describe('decision globs', () => {
       expect(versions[0]?.content).toMatch(/Scope: the whole project/);
     });
 
-    it('scopes a non-decision learning to future work by default, and counts on its own d counter', async () => {
+    it('scopes a non-decision learning to future work by default, and numbers it in the k sequence of the KB items', async () => {
       const made = await submit({ type: 'pattern' });
       expect((await attributesOf(made.globId)).scope).toEqual({ kind: 'future_work', ref: null });
-      expect((await submit({ statement: 'Another' })).globId).toBe('s1d2');
+      expect((await submit({ statement: 'Another' })).globId).toBe('s1k2');
       expect((await newWork()).id).toBe('s1t2');
     });
 
     it('queues no effect for a decision: no branch, no PR, no run', async () => {
       await submit();
-      expect(store.state.outbox.filter((e) => 'globId' in e && e.globId === 's1d1')).toEqual([]);
-      await pickUp('s1d1');
-      expect(store.state.outbox.filter((e) => 'globId' in e && e.globId === 's1d1')).toEqual([]);
-      expect(await glob('s1d1')).toMatchObject({ status: 'in_progress', provisioning: 'none', runs: [], implementer: ADMIN });
+      expect(store.state.outbox.filter((e) => 'globId' in e && e.globId === 's1k1')).toEqual([]);
+      await pickUp('s1k1');
+      expect(store.state.outbox.filter((e) => 'globId' in e && e.globId === 's1k1')).toEqual([]);
+      expect(await glob('s1k1')).toMatchObject({ status: 'in_progress', provisioning: 'none', runs: [], implementer: ADMIN });
     });
 
     it('is idempotent on its creation key', async () => {
@@ -242,6 +244,26 @@ describe('decision globs', () => {
         }),
       );
       expect(errorCode(result)).toBe('invalid_input');
+    });
+
+    it('is refused an explicit id that is not a k ID on its board (s15f36)', async () => {
+      const make = (id: string) =>
+        store.transaction((tx) =>
+          createDecisionInTx(tx, { clock }, {
+            boardId,
+            actor: { email: DEV, role: 'dev' },
+            title: 'x',
+            summary: 'x',
+            payload: 'x',
+            attributes: { scope: { kind: 'project', ref: null }, source: { kind: 'manual' }, channel: 'human', kbItemId: null, outcome: null },
+            id,
+            creationKey: `manual:${id}`,
+          }),
+        );
+      for (const id of ['s1d5', 's1t5', `s${String(boardId + 1)}k5`, 'nope']) expect(errorCode(await make(id))).toBe('invalid_input');
+      expect(await store.transaction((tx) => tx.listGlobs(boardId, { include: 'decisions' }))).toHaveLength(0);
+      const made = await make(`s${String(boardId)}k5`);
+      expect(made.ok && made.value.glob.id).toBe(`s${String(boardId)}k5`);
     });
 
     it('is never made through GlobService.create', async () => {
@@ -386,7 +408,7 @@ describe('decision globs', () => {
       expect(errorCode(await decide(made.globId, { outcome: 'accept' }, DEV))).toBe('forbidden');
       expect(errorCode(await decisions.decide(ADMIN, made.globId, seen.version - 1, { outcome: 'accept' }))).toBe('version_conflict');
       expect(errorCode(await decisions.decide(ADMIN, workId, 1, { outcome: 'accept' }))).toBe('invalid_input');
-      expect(errorCode(await decisions.decide(ADMIN, 's1d99', 1, { outcome: 'accept' }))).toBe('not_found');
+      expect(errorCode(await decisions.decide(ADMIN, 's1k99', 1, { outcome: 'accept' }))).toBe('not_found');
       expect(await item(made.id)).toMatchObject({ status: 'open' });
       expect(await doc('build_test_lint')).not.toContain('--max-warnings');
       expect(errorCode(await decide(made.globId, { outcome: 'accept', reason: 'x', linkedGlobId: 's1t1' }))).toBe('invalid_input');
@@ -536,7 +558,7 @@ describe('decision globs', () => {
       await contradict(narrow.id, broad.id);
       await decisions.syncFromItem(narrow.id);
       expect((await attributesOf(narrow.globId)).conflictsWith).toEqual([broad.globId]);
-      expect((await assessments(narrow.globId)).at(-1)?.content).toMatch(/Conflicts with s1d1 \(broader scope\)/);
+      expect((await assessments(narrow.globId)).at(-1)?.content).toMatch(/Conflicts with s1k1 \(broader scope\)/);
 
       // The other way round: the broader item contradicting a narrower one is not flagged.
       const second = await submit({ type: 'decision', statement: 'Project-wide rule' });
@@ -726,11 +748,20 @@ describe('decision globs', () => {
   describe('the inbox', () => {
     const text = 'Standup 3 Oct.\n\nWe agreed the sync jobs will be pushed over a websocket instead of polling.';
 
+    it('numbers a promoted decision after the existing KB items of the board, in the same k sequence', async () => {
+      const first = await submit();
+      const second = await submit({ statement: 'Another' });
+      expect([first.id, second.id]).toEqual(['s1k1', 's1k2']);
+      const added = unwrap(await inbox.add(DEV, boardId, { text, title: 'Sync standup' }));
+      expect(unwrap(await inbox.promote(DEV, boardId, added.id, {})).glob.id).toBe('s1k3');
+      expect((await submit({ statement: 'A third' })).globId).toBe('s1k4');
+    });
+
     it('promotes an item to a decision glob in Planning and attaches the item to it as its source', async () => {
       const added = unwrap(await inbox.add(DEV, boardId, { text, title: 'Sync standup' }));
       const result = unwrap(await inbox.promote(DEV, boardId, added.id, { statement: 'Sync jobs use a websocket' }));
       const g = result.glob;
-      expect(g).toMatchObject({ id: 's1d1', category: 'decision', status: 'planning', title: 'Sync standup', summary: 'Sync jobs use a websocket' });
+      expect(g).toMatchObject({ id: 's1k1', category: 'decision', status: 'planning', title: 'Sync standup', summary: 'Sync jobs use a websocket' });
       expect(g.attributes).toEqual({ scope: { kind: 'future_work', ref: null }, source: { kind: 'inbox', id: added.id }, channel: 'inbox', kbItemId: null, outcome: null });
       const [plan] = await artifactsOf(g.id, 'plan');
       expect(plan?.content).toContain('Sync jobs use a websocket');
@@ -769,7 +800,8 @@ describe('decision globs', () => {
       expect(governed.scopedDecisions.map((d) => d.id)).toEqual([promoted.id]);
     });
 
-    it('promotes an extracted decision, once', async () => {
+    it('promotes an extracted decision, once, numbered after the KB items', async () => {
+      await submit();
       const row = await store.transaction((tx) =>
         tx.upsertDecision({
           boardId,
@@ -788,6 +820,7 @@ describe('decision globs', () => {
         }),
       );
       const g = unwrap(await decisions.promoteExtracted(DEV, boardId, row.id));
+      expect(g.id).toBe('s1k2');
       expect(g.attributes).toMatchObject({ scope: { kind: 'glob', ref: workId }, source: { kind: 'extracted', decisionId: row.id }, channel: 'human' });
       expect(unwrap(await decisions.promoteExtracted(DEV, boardId, row.id)).id).toBe(g.id);
       expect(errorCode(await decisions.promoteExtracted(DEV, boardId, 999))).toBe('not_found');

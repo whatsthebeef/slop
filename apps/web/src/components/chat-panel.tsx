@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MAX_QUERY_LENGTH } from '@slop/core';
 import { History, Maximize2, Minimize2, Pin, PinOff, Plus, Square, Trash2, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, SyntheticEvent } from 'react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -136,7 +136,11 @@ const Actions = ({
   const toast = useToast();
   const client = useQueryClient();
   const [saved, setSaved] = useState<string | null>(null);
-  const actions = actionsFor(message, page);
+  // The board's globs (the query GlobCards shares): a mention opens a glob only when the board has it.
+  const mentions = mentionedGlobs(message.content).length > 0;
+  const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId), enabled: mentions });
+  const boardGlobs = useMemo(() => (globs.data === undefined ? undefined : new Set(globs.data.map((g) => g.id))), [globs.data]);
+  const actions = actionsFor(message, page, boardGlobs);
   const save = useMutation({
     mutationFn: () => api.saveChatAnswer(boardId, chatId, message.id, page.type === 'glob' ? page.id : undefined),
     onSuccess: (r) => {
@@ -154,7 +158,7 @@ const Actions = ({
     onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not attach'),
   });
   if (actions.length === 0) return null;
-  const openGlob = openGlobOf(message, page);
+  const openGlob = openGlobOf(message, page, boardGlobs);
   return (
     <div className='mt-1 flex flex-wrap gap-1 pt-1' data-testid='chat-actions'>
       {actions.includes('create_glob') && (

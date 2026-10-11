@@ -1,4 +1,5 @@
 import { invalidInput, llmUnavailable, ok } from '../domain/errors.js';
+import { globIdInText } from '../domain/ids.js';
 import type { Result } from '../domain/errors.js';
 import { isValidCombination } from '../domain/matrix.js';
 import { SLOP_TYPES, WORK_CATEGORIES } from '../domain/types.js';
@@ -165,7 +166,7 @@ export const environmentNamedIn = (request: string, environments: readonly Envir
       ).test(request),
   )?.name ?? null;
 
-const GLOB_ID_IN_TEXT = /\bs\d+[ftb]\d+\b/gi;
+const GLOB_ID_IN_TEXT = globIdInText('gi');
 /** A cue that the glob named next must merge first: "after s15t7", "once s15t7 is merged", "wait for s15t7". */
 const WAIT_CUE = /(after|once|when|until|following|wait(?:s|ing)?\s+for)\b[^.\n;]{0,40}$/i;
 

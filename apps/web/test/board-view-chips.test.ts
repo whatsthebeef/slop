@@ -13,8 +13,8 @@ const attributes = (patch: Partial<DecisionAttributes> = {}): DecisionAttributes
 });
 
 const work = glob({ id: 's1t1', planner: 'dev@example.com' });
-const decision = glob({ id: 's1d1', category: 'decision', type: 'same', planner: 'po@example.com', attributes: attributes() });
-const archived = glob({ id: 's1d2', category: 'decision', type: 'same', status: 'signed_off', attributes: attributes({ archived: true }) });
+const decision = glob({ id: 's1k1', category: 'decision', type: 'same', planner: 'po@example.com', attributes: attributes() });
+const archived = glob({ id: 's1k2', category: 'decision', type: 'same', status: 'signed_off', attributes: attributes({ archived: true }) });
 const all = [work, decision, archived];
 
 const memoryStore = (initial: Record<string, string> = {}) => {
@@ -32,13 +32,13 @@ describe('board filter chips', () => {
 
   it('show the kinds the chips pick and never an archived decision', () => {
     expect(applyViewChips(all, ['work'], 'x').map((g) => g.id)).toEqual(['s1t1']);
-    expect(applyViewChips(all, ['decisions'], 'x').map((g) => g.id)).toEqual(['s1d1']);
-    expect(applyViewChips(all, ['work', 'decisions'], 'x').map((g) => g.id)).toEqual(['s1t1', 's1d1']);
-    expect(applyViewChips(all, [], 'x').map((g) => g.id)).toEqual(['s1t1', 's1d1']);
+    expect(applyViewChips(all, ['decisions'], 'x').map((g) => g.id)).toEqual(['s1k1']);
+    expect(applyViewChips(all, ['work', 'decisions'], 'x').map((g) => g.id)).toEqual(['s1t1', 's1k1']);
+    expect(applyViewChips(all, [], 'x').map((g) => g.id)).toEqual(['s1t1', 's1k1']);
   });
 
   it('narrow to my globs with Mine, across both kinds when neither kind chip is on', () => {
-    expect(applyViewChips(all, ['mine'], 'po@example.com').map((g) => g.id)).toEqual(['s1d1']);
+    expect(applyViewChips(all, ['mine'], 'po@example.com').map((g) => g.id)).toEqual(['s1k1']);
     expect(applyViewChips(all, ['mine'], 'dev@example.com').map((g) => g.id)).toEqual(['s1t1']);
     expect(applyViewChips(all, ['work', 'mine'], 'po@example.com')).toEqual([]);
   });
