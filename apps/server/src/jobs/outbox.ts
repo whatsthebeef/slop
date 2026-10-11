@@ -1,10 +1,19 @@
-import type { Effect, EffectKind, Glob, GlobService } from '@slop/core';
+import type { Effect, EffectKind, Glob, GlobService, OutboxLane } from '@slop/core';
 import { and, asc, eq, lte, sql } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/store.js';
 
-/** What an executor did: done, or dropped because it no longer applies. Throwing means retry. */
+/**
+ * What an executor did: done, or dropped because it no longer applies. Throwing means retry with backoff and spends an
+ * attempt. `{ state: 'pending', retryAfterMs }` retries later without spending one (for "LLM busy").
+ */
 export type Outcome = 'done' | 'dropped';
+
+/** An executor's request to run again later without spending an attempt. */
+export interface RetryLater {
+  readonly state: 'pending';
+  readonly retryAfterMs: number;
+}
 
 export interface ExecutorDeps {
   readonly globs: GlobService;
@@ -15,7 +24,10 @@ export interface AttemptInfo {
   readonly final: boolean;
 }
 
-export type Executor = (effect: Effect, glob: Glob | null, deps: ExecutorDeps, attempt?: AttemptInfo) => Promise<Outcome>;
+export type Executor = (effect: Effect, glob: Glob | null, deps: ExecutorDeps, attempt?: AttemptInfo) => Promise<Outcome | RetryLater>;
+
+/** An executor that never asks for a later retry (every one today). */
+export type SettledExecutor = (effect: Effect, glob: Glob | null, deps: ExecutorDeps, attempt?: AttemptInfo) => Promise<Outcome>;
 
 const MAX_ATTEMPTS = 8;
 const POLL_MS = 2_000;
@@ -24,7 +36,8 @@ const backoffSeconds = (attempts: number) => Math.min(2 ** attempts * 5, 3_600);
 
 /**
  * Executes outbox effects with retries. Every effect is re-checked against the glob's current
- * generation first, so work queued before a re-trigger, take over or start again is dropped.
+ * generation first, so work queued before a re-trigger, take over or start again is dropped. One runner drains one
+ * lane, so a slow lane (LLM calls) never delays the others.
  */
 export class OutboxRunner {
   private timer: NodeJS.Timeout | null = null;
@@ -36,6 +49,7 @@ export class OutboxRunner {
     private readonly deps: ExecutorDeps,
     private readonly executors: Partial<Record<EffectKind, Executor>>,
     private readonly log: (task: string, message: string) => void,
+    private readonly lane: OutboxLane = 'default',
   ) {}
 
   start(): void {
@@ -76,7 +90,7 @@ export class OutboxRunner {
   private async claim(globId?: string) {
     // One runner per instance; claim by marking the attempt so a crash mid-job retries later.
     return this.db.transaction(async (t) => {
-      const conditions = [eq(schema.outbox.state, 'pending'), lte(schema.outbox.runAfter, new Date())];
+      const conditions = [eq(schema.outbox.lane, this.lane), eq(schema.outbox.state, 'pending'), lte(schema.outbox.runAfter, new Date())];
       if (globId !== undefined) conditions.push(eq(schema.outbox.globId, globId));
       const [job] = await t
         .select()
@@ -116,6 +130,7 @@ export class OutboxRunner {
 
     let state: 'done' | 'dropped' | 'pending' | 'failed';
     let lastError: string | null = null;
+    let retryAfterMs: number | null = null;
     if (stale) {
       state = 'dropped';
     } else {
@@ -126,7 +141,12 @@ export class OutboxRunner {
         lastError = `No executor for ${effect.kind} yet`;
       } else {
         try {
-          state = await executor(effect, glob, this.deps, { final: job.attempts + 1 >= MAX_ATTEMPTS });
+          const outcome = await executor(effect, glob, this.deps, { final: job.attempts + 1 >= MAX_ATTEMPTS });
+          if (typeof outcome === 'string') state = outcome;
+          else {
+            state = 'pending';
+            retryAfterMs = outcome.retryAfterMs;
+          }
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error);
           state = job.attempts + 1 >= MAX_ATTEMPTS ? 'failed' : 'pending';
@@ -134,6 +154,14 @@ export class OutboxRunner {
         }
       }
     }
-    await this.db.update(schema.outbox).set({ state, lastError }).where(eq(schema.outbox.id, job.id));
+    await this.db
+      .update(schema.outbox)
+      .set(
+        retryAfterMs === null
+          ? { state, lastError }
+          : // Claim spent an attempt and set a backoff; give the attempt back and use the executor's delay.
+            { state, lastError, attempts: sql`${schema.outbox.attempts} - 1`, runAfter: new Date(Date.now() + retryAfterMs) },
+      )
+      .where(eq(schema.outbox.id, job.id));
   }
 }

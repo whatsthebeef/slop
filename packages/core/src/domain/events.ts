@@ -184,5 +184,18 @@ export type ReviewStage = 'pre_merge' | 'post_merge';
 
 export type EffectKind = Effect['kind'];
 
+/** The outbox lanes. Each has its own runner, so a slow lane never holds up the others. */
+export type OutboxLane = 'default' | 'llm';
+
+export const OUTBOX_LANES: readonly OutboxLane[] = ['default', 'llm'];
+
+/**
+ * The one place an effect kind is assigned its lane. Every kind is `default` except the slow LLM effects, which go in
+ * `llm`; there are none yet (the KB pipeline's routing and drafting add theirs).
+ */
+const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = {};
+
+export const laneOf = (kind: EffectKind): OutboxLane => LANE_OF_KIND[kind] ?? 'default';
+
 /** The board's overlap recheck: its `globId` is `board-<id>`, as for the other board-wide effects. */
 export const recheckOverlapsEffect = (boardId: number): Effect => ({ kind: 'recheck_overlaps', globId: `board-${String(boardId)}`, boardId });
