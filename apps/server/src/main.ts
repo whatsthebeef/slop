@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_MIN_SEVERITY, sizeIgnoredPathsOf, TypeLearningService } from '@slop/core';
+import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -15,6 +15,7 @@ import { readyGate } from './ready-gate.js';
 import { GitHub } from './github/client.js';
 import { AppCredentialsStore, fileSlot } from './github/credentials.js';
 import { githubDeliveryHandler } from './github/events.js';
+import { ReviewFeedbackPoller } from './review-feedback-poller.js';
 import { HostBranchFiles } from './branch-files.js';
 import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
@@ -152,22 +153,32 @@ const outbox = new OutboxRunner(
         artifacts,
         boardOf,
         log: (message) => logError('review', message),
-        // Per-board review settings aren't built yet: every board gets the defaults (its ignored paths are the merge policy's).
-        settings: async (boardId) => ({
-          model: config.REVIEW_MODEL,
-          minSeverity: DEFAULT_REVIEW_MIN_SEVERITY,
-          ignoredPaths: sizeIgnoredPathsOf(await store.transaction((tx) => readMergePolicy(tx, boardId))),
-          toolCap: null,
-        }),
+        // The board's settings over the server's default model and the merge policy's ignored paths.
+        settings: async (boardId) =>
+          resolveReviewSettings((await boardOf(boardId))?.review ?? DEFAULT_REVIEW_BOARD_SETTINGS, {
+            defaultModel: config.REVIEW_MODEL,
+            mergePolicyIgnoredPaths: sizeIgnoredPathsOf(await store.transaction((tx) => readMergePolicy(tx, boardId))),
+          }),
+        spend,
         // Per review (the model is a board setting); health tracking marks the model down on credential failures like the others.
-        llmFor: (model) => trackLlm(reviewerLlm(model, config.BEDROCK_REGION, logUsage), model),
+        llmFor: (model, onUsage) =>
+          trackLlm(
+            reviewerLlm(model, config.BEDROCK_REGION, (u) => {
+              logUsage(u);
+              onUsage(u);
+            }),
+            model,
+          ),
       })(glob, resolved),
+      async (boardId) => (await boardOf(boardId))?.review.enabled !== false,
     ),
   },
   logError,
 );
 
 const clock = { now: () => new Date().toISOString() };
+const spend = new SpendService({ store, clock });
+const reviewFeedback = new ReviewFeedbackService({ store });
 // Mining measures the board's signals: the weekly job, and the signal an admin picks to watch when approving.
 const mining = new MiningService({ store, notifier: hub });
 const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub, signals: mining });
@@ -356,6 +367,10 @@ const learningJobs = new LearningJobService({
   intakeLearning,
   sizeCheck,
   manifests: new CodeHostManifests(github, logError),
+  // Reactions and `/wrong` replies are read from GitHub just before mining measures them.
+  beforeMining: async (board, now) => {
+    await new ReviewFeedbackPoller({ store, host: github, feedback: reviewFeedback, log: (m) => logError('review feedback', m) }).collect(board, now);
+  },
   log: logError,
 });
 
@@ -372,6 +387,7 @@ const app = createApp({
   hub,
   outbox,
   sizeCheck,
+  spend,
   onBoardCreated: async (email, boardId) => {
     const adopted = await knowledge.adoptCatalogAgentSet(email, boardId);
     if (!adopted.ok) logError('board created', `Adopting the catalog agent set failed for board ${boardId}: ${adopted.error.message}`);
@@ -469,7 +485,7 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, github, boardOf, onBasePush: (boardId) => codeSync.mark(boardId) }),
+  handle: githubDeliveryHandler({ db, globs, github, boardOf, feedback: reviewFeedback, onBasePush: (boardId) => codeSync.mark(boardId) }),
 });
 
 app.onError((error, c) => {

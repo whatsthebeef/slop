@@ -6,6 +6,7 @@ import type {
 } from './independent-review.js';
 import { REVIEW_SEVERITIES } from './independent-review.js';
 import type { IndependentReviewMeta } from './knowledge.js';
+import { findingMarker } from './review-feedback.js';
 
 /**
  * How an independent review is shown (spec, "Publishing"): the glob artifact's text, the GitHub review with its inline
@@ -232,6 +233,8 @@ export const planReviewPublication = (
     readonly marker: string;
     readonly diff: string;
     readonly headDiff: string | null;
+    /** What the hidden finding markers name (inline comments only); without it the comments carry none. */
+    readonly feedbackIds?: { readonly globId: string; readonly version: number };
   },
   minSeverity: ReviewSeverity = DEFAULT_REVIEW_MIN_SEVERITY,
 ): ReviewPublication => {
@@ -240,7 +243,14 @@ export const planReviewPublication = (
   const inSummary: IndependentFinding[] = [];
   for (const f of bySeverity(review.findings)) {
     if (atLeast(f.severity, minSeverity) && anchors.get(f.file)?.has(f.line) === true)
-      inline.push({ path: f.file, line: f.line, body: findingBlock(f) });
+      inline.push({
+        path: f.file,
+        line: f.line,
+        body:
+          meta.feedbackIds === undefined
+            ? findingBlock(f)
+            : `${findingBlock(f)}\n\n${findingMarker(meta.feedbackIds.globId, meta.feedbackIds.version, f)}`,
+      });
     else inSummary.push(f);
   }
   const parts = [meta.marker, header(review, meta)];

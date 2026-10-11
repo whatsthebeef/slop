@@ -25,6 +25,7 @@ import type {
   AtfIndicator,
   EnvironmentIndicator,
   GlobEnvironment,
+  MonthSpend,
   ReadinessItem,
   Environment,
   Glob,
@@ -466,6 +467,8 @@ export const api = {
   board: (id: number) => request<BoardView>('GET', `/api/boards/${id}`),
   updateSettings: (id: number, version: number, settings: Partial<Board>) =>
     request<Board>('PATCH', `/api/boards/${id}/settings`, { ...settings, version }),
+  /** This month's LLM spend (review spend so far) in the board's time zone. */
+  spend: (id: number) => request<MonthSpend>('GET', `/api/boards/${id}/spend`),
   members: (id: number) => request<Member[]>('GET', `/api/boards/${id}/members`),
   setMember: (id: number, email: string, role: Role) =>
     request<Member>('POST', `/api/boards/${id}/members`, { email, role }),

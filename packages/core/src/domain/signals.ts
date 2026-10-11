@@ -1,9 +1,12 @@
 import type { EffectState } from './effect-check.js';
 import { isInvestigateEvent } from './events.js';
 import type { DomainEvent, JsonValue } from './events.js';
+import { REVIEW_GUIDE_AREA } from './code-review.js';
 import { FINDING_CLASS_DESCRIPTIONS } from './findings.js';
 import type { FindingClass, ReviewFinding } from './findings.js';
 import type { LearningType } from './kb.js';
+import { isFalsePositive } from './review-feedback.js';
+import type { ReviewFeedback } from './review-feedback.js';
 import type { ArtifactKind, Provenance } from './knowledge.js';
 import type { SlopType, Status } from './types.js';
 import type { SizeOutcome, SizeThreshold } from './size-check.js';
@@ -30,6 +33,7 @@ export const SIGNAL_KINDS = [
   'sub_converted',
   'ci_after_local',
   'dependency',
+  'review_false_positive',
 ] as const;
 export type SignalKind = (typeof SIGNAL_KINDS)[number];
 
@@ -111,6 +115,8 @@ export interface BoardActivity {
   readonly artifacts: readonly ArtifactMeta[];
   /** Review findings created in the window. */
   readonly findings: readonly ReviewFinding[];
+  /** What people said about the independent reviewer's inline comments, created in the window. */
+  readonly reviewFeedback: readonly ReviewFeedback[];
   /** Null when the manifests weren't fetched (no code host): the dependency signal isn't measured. */
   readonly manifestChanges: readonly ManifestChange[] | null;
   /** The board's documents, to tell whether a dependency is mentioned anywhere. */
@@ -787,6 +793,35 @@ const dependency = define({
   statement: (m) => `New dependencies have no conventions yet: ${m.label}. Document how the project uses them.`,
 });
 
+/** Globs whose independent review in the window had findings: the ones that could be told they were wrong. */
+const independentlyReviewedGlobs = (activity: BoardActivity): Set<string> =>
+  new Set(
+    activity.artifacts
+      .filter((a) => a.kind === 'independent_review' && (a.provenance.independentReview?.findings ?? 0) > 0)
+      .map((a) => a.globId),
+  );
+
+const reviewFalsePositive = define({
+  kind: 'review_false_positive',
+  agent: null,
+  type: 'decision',
+  suggestedTarget: `the review guide (area ${REVIEW_GUIDE_AREA}): what the independent reviewer should stop flagging`,
+  threshold: 'at least 3 globs with the same category of finding marked wrong',
+  eligibleGlobs: independentlyReviewedGlobs,
+  tallies: (activity) => {
+    const tallies = new Tallies();
+    for (const f of activity.reviewFeedback) {
+      // A plain resolve says nothing about whether the finding was right.
+      if (!isFalsePositive(f.verdict)) continue;
+      tallies.hit(`review_false_positive:${f.category}`, f.category, f.globId, `${f.globId}: ${cut(f.title, 160)} (${f.path})`);
+    }
+    return tallies.done(independentlyReviewedGlobs(activity).size);
+  },
+  crosses: (t) => t.affected >= 3,
+  statement: (m) =>
+    `People keep marking the independent reviewer's ${m.label} findings as wrong: ${String(m.figures.affected)} of ${String(m.figures.eligible)} reviewed globs ${WINDOW_WORDS}.`,
+});
+
 /** Every mined signal, in the order the spec lists them. */
 export const SIGNALS: readonly SignalDefinition[] = [
   finding,
@@ -799,6 +834,7 @@ export const SIGNALS: readonly SignalDefinition[] = [
   subConverted,
   ciAfterLocalSignal,
   dependency,
+  reviewFalsePositive,
 ];
 
 export const signalKindOf = (key: string): SignalKind | null => {

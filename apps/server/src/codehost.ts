@@ -103,6 +103,22 @@ export interface PostedReview {
   readonly comments: readonly { readonly path: string; readonly line: number; readonly body: string }[];
 }
 
+/** An inline comment on a PR, as the host lists it (slop's own review comments and people's replies to them). */
+export interface PrReviewComment {
+  readonly id: number;
+  readonly body: string;
+  /** The comment this one replies to; null for the first comment of a thread. */
+  readonly inReplyTo: number | null;
+  /** The author's login; null for a deleted account. */
+  readonly author: string | null;
+  readonly authorIsBot: boolean;
+  readonly path: string;
+  readonly line: number | null;
+  /** How many people reacted with a thumbs-down. */
+  readonly thumbsDown: number;
+  readonly createdAt: string;
+}
+
 /** A check run slop reports (not a gate: its conclusion is neutral). */
 export interface ReportedCheck {
   readonly name: string;
@@ -178,6 +194,8 @@ export interface CodeHost {
    * are minimized as outdated. Best effort; returns how many reviews it changed.
    */
   outdateReviews(repo: Repo, prNumber: number, markerPrefix: string, exceptId: number | null, rewrite: (body: string) => string): Promise<number>;
+  /** The PR's inline review comments (all authors, replies included), oldest first; the reviewer's own are found by their marker. */
+  reviewComments(repo: Repo, prNumber: number): Promise<PrReviewComment[]>;
   /** Reports a completed, neutral check run on `sha`; `unavailable` when the integration lacks the checks permission. */
   reportCheck(repo: Repo, sha: string, check: ReportedCheck): Promise<'created' | 'unavailable'>;
   /** Lines changed and files touched between the base branch and `sha`. */

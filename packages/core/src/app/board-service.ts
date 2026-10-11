@@ -5,6 +5,10 @@ import { appendSession, displaySessions, isContiguous, removeSession, sessionOrd
 import type { BoardSession } from '../domain/board-sessions.js';
 import { recordBaseChecks } from '../domain/checks.js';
 import type { BaseChecksChange } from '../domain/checks.js';
+import { MAX_REVIEW_TOOL_CAP } from '../domain/review-tools.js';
+import { mergeReviewSettings } from '../domain/review-settings.js';
+import type { ReviewBoardSettings } from '../domain/review-settings.js';
+import { REVIEW_SEVERITIES } from '../domain/independent-review.js';
 import type { BaseChecks, Board, CheckFailure, Environment, Member, Role } from '../domain/types.js';
 import type { Notifier, Store, Tx } from '../ports.js';
 
@@ -17,7 +21,10 @@ export interface CreateBoardInput {
 }
 
 /** What admins set. The sub size limit isn't here: slop learns it from outcomes (`sub-limit.ts`). */
-export type BoardSettings = Partial<
+export type BoardSettings = {
+  /** Only the keys given change; the rest stay as they are. */
+  readonly review?: Partial<ReviewBoardSettings>;
+} & Partial<
   Pick<
     Board,
     | 'name'
@@ -59,8 +66,53 @@ const isTimeZone = (zone: string): boolean => {
   }
 };
 
+/** Limits on the review settings, which are an input boundary: the model id goes to the provider and the paths run per file. */
+const REVIEW_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
+export const MAX_REVIEW_IGNORED_PATHS = 50;
+export const MAX_REVIEW_PATH_LENGTH = 200;
+export const MAX_REVIEW_PATH_WILDCARDS = 5;
+
+const validateReview = (review: Partial<ReviewBoardSettings>): Result<null> => {
+  if (review.model !== undefined && review.model !== null && !REVIEW_MODEL_PATTERN.test(review.model.trim())) {
+    return invalidInput('The review model is an id of letters, digits and . _ : / -, up to 200 characters, or none for the default');
+  }
+  if (review.minSeverity !== undefined && !REVIEW_SEVERITIES.includes(review.minSeverity)) {
+    return invalidInput(`The review severity is one of ${REVIEW_SEVERITIES.join(', ')}`);
+  }
+  const paths = review.ignoredPaths ?? [];
+  if (paths.length > MAX_REVIEW_IGNORED_PATHS) {
+    return invalidInput(`At most ${String(MAX_REVIEW_IGNORED_PATHS)} ignored review paths`);
+  }
+  for (const raw of paths) {
+    const path = raw.trim();
+    if (path === '') return invalidInput('Ignored review paths can not be empty');
+    if (path.length > MAX_REVIEW_PATH_LENGTH) {
+      return invalidInput(`Ignored review paths are at most ${String(MAX_REVIEW_PATH_LENGTH)} characters`);
+    }
+    if (path.split('**').length - 1 > MAX_REVIEW_PATH_WILDCARDS) {
+      return invalidInput(`Ignored review paths use ** at most ${String(MAX_REVIEW_PATH_WILDCARDS)} times`);
+    }
+  }
+  const cap = review.toolCap;
+  if (cap !== undefined && cap !== null && (!Number.isInteger(cap) || cap < 1 || cap > MAX_REVIEW_TOOL_CAP)) {
+    return invalidInput(`The review tool cap is a whole number from 1 to ${MAX_REVIEW_TOOL_CAP}`);
+  }
+  return ok(null);
+};
+
+/** The review settings as stored: the model and the paths trimmed (validation has already passed). */
+const trimReview = (review: Partial<ReviewBoardSettings>): Partial<ReviewBoardSettings> => ({
+  ...review,
+  ...(review.model === undefined || review.model === null ? {} : { model: review.model.trim() }),
+  ...(review.ignoredPaths === undefined ? {} : { ignoredPaths: review.ignoredPaths.map((p) => p.trim()) }),
+});
+
 const validateSettings = (settings: BoardSettings): Result<null> => {
   if (settings.name?.trim() === '') return invalidInput('A board needs a name');
+  if (settings.review !== undefined) {
+    const review = validateReview(settings.review);
+    if (!review.ok) return review;
+  }
   if (settings.timeZone !== undefined && !isTimeZone(settings.timeZone)) {
     return invalidInput(`Unknown time zone ${settings.timeZone}`);
   }
@@ -206,7 +258,12 @@ export class BoardService {
       const board = await tx.getBoard(boardId);
       if (board === null) return notFound(`No board ${boardId}`);
       if (board.version !== version) return invalidInput('The board settings have changed; reload them');
-      const next: Board = { ...board, ...settings, version: board.version + 1 };
+      const next: Board = {
+        ...board,
+        ...settings,
+        review: settings.review === undefined ? board.review : mergeReviewSettings(board.review, trimReview(settings.review)),
+        version: board.version + 1,
+      };
       if (!(await tx.updateBoard(next, version))) {
         return invalidInput('The board settings have changed; reload them');
       }

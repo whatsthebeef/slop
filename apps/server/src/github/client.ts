@@ -4,7 +4,7 @@ import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
 import { REVIEW_CHECK } from '../codehost.js';
-import type { AppSettings, BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PostedReview, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
+import type { AppSettings, BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -630,6 +630,36 @@ export class GitHub implements CodeHost, CommitGraph {
       if (data.length < 100) break;
     }
     return changed;
+  }
+
+  async reviewComments(repo: Repo, prNumber: number): Promise<PrReviewComment[]> {
+    const gh = await this.octokit(repo);
+    const out: PrReviewComment[] = [];
+    // Comments come oldest first; the first thousand cover a PR's review.
+    for (let page = 1; page <= 10; page++) {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+        owner: repo.owner,
+        repo: repo.name,
+        pull_number: prNumber,
+        per_page: 100,
+        page,
+      });
+      for (const c of data) {
+        out.push({
+          id: Number(c.id),
+          body: c.body,
+          inReplyTo: c.in_reply_to_id ?? null,
+          author: c.user?.login ?? null,
+          authorIsBot: c.user?.type === 'Bot',
+          path: c.path,
+          line: c.line ?? c.original_line ?? null,
+          thumbsDown: c.reactions?.['-1'] ?? 0,
+          createdAt: c.created_at,
+        });
+      }
+      if (data.length < 100) break;
+    }
+    return out;
   }
 
   async reportCheck(repo: Repo, sha: string, check: ReportedCheck): Promise<'created' | 'unavailable'> {

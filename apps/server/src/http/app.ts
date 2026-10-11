@@ -1,5 +1,5 @@
-import type { BoardService, GlobService, Result, SizeCheckService, SplitInfo } from '@slop/core';
-import { AGENT_KB_APPROVALS, CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
+import type { BoardService, GlobService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
+import { AGENT_KB_APPROVALS, CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -24,6 +24,8 @@ export interface AppDeps {
   readonly outbox: OutboxRunner;
   /** Keep whole on a flagged glob; absent: its route isn't mounted. */
   readonly sizeCheck?: SizeCheckService;
+  /** The board's LLM spend line; absent: its route isn't mounted. */
+  readonly spend?: SpendService;
   /** Refuses Ready for review for a branch that conflicts with its base. */
   readonly readyGate?: ReadyGate;
   /** Signs the board sign-in `state`. */
@@ -79,6 +81,17 @@ const settingsSchema = z.object({
   effectCheckGlobs: z.number().int().optional(),
   agentKbApproval: z.enum(AGENT_KB_APPROVALS).optional(),
   autoInvestigate: z.boolean().optional(),
+  // Only the keys sent change; core checks the values.
+  review: z
+    .object({
+      enabled: z.boolean(),
+      model: z.string().nullable(),
+      minSeverity: z.enum(REVIEW_SEVERITIES),
+      ignoredPaths: z.array(z.string()),
+      toolCap: z.number().int().nullable(),
+    })
+    .partial()
+    .optional(),
   deploy: z
     .discriminatedUnion('provider', [
       z.object({
@@ -339,6 +352,16 @@ export const createApp = (deps: AppDeps) => {
     if (body instanceof Response) return body;
     const { version, ...settings } = body;
     return send(c, await boards.updateSettings(c.get('email'), Number(c.req.param('b')), version, settings));
+  });
+
+  // This month's LLM spend (review spend so far), for the line on the board.
+  app.get('/api/boards/:b/spend', async (c) => {
+    const { spend } = deps;
+    if (spend === undefined) return c.json({ code: 'not_found', message: 'Spend is not tracked' }, 404);
+    const boardId = Number(c.req.param('b'));
+    const member = await boards.get(c.get('email'), boardId);
+    if (!member.ok) return send(c, member);
+    return send(c, await spend.monthToDate(boardId));
   });
 
   app.get('/api/boards/:b/members', async (c) =>

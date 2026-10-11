@@ -1,4 +1,4 @@
-import { globRegExp, ReviewEngine, reviewMetaOf, renderReviewArtifact } from '@slop/core';
+import { costOf, globRegExp, ReviewEngine, reviewMetaOf, renderReviewArtifact } from '@slop/core';
 import type {
   ArtifactService,
   Board,
@@ -7,7 +7,8 @@ import type {
   Llm,
   ReviewInputService,
   ReviewOutcome,
-  ReviewSeverity,
+  ReviewSettings,
+  SpendService,
 } from '@slop/core';
 import type { CodeHost } from './codehost.js';
 import { repoOf } from './codehost.js';
@@ -15,17 +16,7 @@ import { HostCodeAccess } from './review-code-access.js';
 import { publishReview } from './review-publish.js';
 import type { RunReview } from './review-executors.js';
 
-/** What a board decides about its reviews; every field has a default until the board settings exist. */
-export interface ReviewSettings {
-  /** The Bedrock model that reviews (not a Claude model). */
-  readonly model: string;
-  /** Findings at or above this are inline comments on GitHub. */
-  readonly minSeverity: ReviewSeverity;
-  /** Path globs the reviewer never reads. */
-  readonly ignoredPaths: readonly string[];
-  /** The cap on the reviewer's tool calls; null for the default. */
-  readonly toolCap: number | null;
-}
+export type { ReviewSettings };
 
 export interface ReviewRunDeps {
   readonly host: CodeHost;
@@ -33,8 +24,10 @@ export interface ReviewRunDeps {
   readonly artifacts: Pick<ArtifactService, 'addIndependentReview'>;
   readonly boardOf: (id: number) => Promise<Board | null>;
   readonly settings: (boardId: number) => Promise<ReviewSettings>;
-  /** The reviewer's model on the board's chosen model id. */
-  readonly llmFor: (model: string) => Llm;
+  /** Each review's cost goes in the spend ledger. */
+  readonly spend: Pick<SpendService, 'record'>;
+  /** The reviewer's model on the board's chosen model id; `onUsage` gets the tokens of each call it makes. */
+  readonly llmFor: (model: string, onUsage: (usage: { input: number; output: number }) => void) => Llm;
   readonly log?: (message: string) => void;
 }
 
@@ -63,40 +56,66 @@ export const makeRunReview =
     if (!assembled.ok) throw new Error(assembled.error.message);
 
     // A change of only skipped files costs no model call, but still gets its (empty) review so "Review now" answers.
-    const outcome: ReviewOutcome =
-      assembled.value.files.length === 0
-        ? { review: NOTHING_TO_REVIEW, dropped: [], truncated: false }
-        : await new ReviewEngine({ llm: deps.llmFor(settings.model) }).reviewChange(
-            assembled.value.input,
-            {
+    const used = { input: 0, output: 0 };
+    let version: number | null = null;
+    try {
+      const outcome: ReviewOutcome =
+        assembled.value.files.length === 0
+          ? { review: NOTHING_TO_REVIEW, dropped: [], truncated: false }
+          : await new ReviewEngine({
+              llm: deps.llmFor(settings.model, (u) => {
+                used.input += u.input;
+                used.output += u.output;
+              }),
+            }).reviewChange(assembled.value.input, {
               access: new HostCodeAccess(deps.host, repo, resolved.diff.ref),
               toolCap: settings.toolCap,
-            },
-          );
+            });
 
-    const sha = resolved.diff.sha;
-    const stored = await deps.artifacts.addIndependentReview(glob.id, {
-      content: renderReviewArtifact(outcome.review, {
-        stage: resolved.stage,
-        sha,
-        truncated: outcome.truncated,
-      }),
-      commitSha: sha,
-      meta: reviewMetaOf(outcome.review, resolved.stage, glob.pr?.headSha ?? null),
-      model: settings.model,
-    });
-    if (!stored.ok) throw new Error(stored.error.message);
-    await publishReview(
-      deps.host,
-      repo,
-      glob,
-      resolved,
-      {
-        review: outcome.review,
-        truncated: outcome.truncated,
-        version: stored.value.version,
-        minSeverity: settings.minSeverity,
-      },
-      deps.log,
-    );
+      const sha = resolved.diff.sha;
+      const cost = costOf(settings.model, used.input, used.output);
+      const stored = await deps.artifacts.addIndependentReview(glob.id, {
+        content: renderReviewArtifact(outcome.review, {
+          stage: resolved.stage,
+          sha,
+          truncated: outcome.truncated,
+        }),
+        commitSha: sha,
+        meta: {
+          ...reviewMetaOf(outcome.review, resolved.stage, glob.pr?.headSha ?? null),
+          ...(cost === null ? {} : { costUsd: cost }),
+        },
+        model: settings.model,
+      });
+      if (!stored.ok) throw new Error(stored.error.message);
+      version = stored.value.version;
+      await publishReview(
+        deps.host,
+        repo,
+        glob,
+        resolved,
+        {
+          review: outcome.review,
+          truncated: outcome.truncated,
+          version,
+          minSeverity: settings.minSeverity,
+        },
+        deps.log,
+      );
+    } finally {
+      // An attempt that failed after calling the model still cost money, so it is recorded too (the retry is another call).
+      try {
+        await deps.spend.record({
+          boardId: glob.boardId,
+          globId: glob.id,
+          source: 'review',
+          model: settings.model,
+          inputTokens: used.input,
+          outputTokens: used.output,
+          ref: version === null ? null : String(version),
+        });
+      } catch (error) {
+        deps.log?.(`review spend: not recorded: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   };

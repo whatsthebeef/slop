@@ -16,6 +16,7 @@ import {
 } from '../src/domain/signals.js';
 import type { ArtifactMeta, BoardActivity, Measurement } from '../src/domain/signals.js';
 import type { ReviewStats } from '../src/domain/knowledge.js';
+import type { ReviewFeedback } from '../src/domain/review-feedback.js';
 import type { SlopType } from '../src/domain/types.js';
 
 const AT = '2026-10-01T12:00:00.000Z';
@@ -88,6 +89,7 @@ const activity = (patch: Partial<BoardActivity> = {}, types: Record<string, Slop
     events: [],
     artifacts: [],
     findings: [],
+    reviewFeedback: [],
     manifestChanges: null,
     documents: [],
     learnings: [],
@@ -133,6 +135,65 @@ describe('mined signals: recurring finding classes', () => {
     expect(perGlob(a, 's1t2', 'finding:security')).toEqual({ eligible: true, affected: false });
     expect(perGlob(a, 's1t9', 'finding:security')).toEqual({ eligible: false, affected: false });
     expect(perGlob(a, 's1t1', 'nonsense:key')).toEqual({ eligible: false, affected: false });
+  });
+});
+
+let feedbackId = 0;
+const feedback = (globId: string, verdict: ReviewFeedback['verdict'], category: ReviewFeedback['category'] = 'convention'): ReviewFeedback => ({
+  id: ++feedbackId,
+  boardId: 1,
+  globId,
+  artifactVersion: 1,
+  fingerprint: `fp${String(feedbackId)}`,
+  severity: 'medium',
+  category,
+  title: `Unneeded ${category} remark`,
+  path: 'src/a.ts',
+  line: 3,
+  verdict,
+  source: 'reply',
+  githubCommentId: feedbackId,
+  actor: 'dev',
+  createdAt: AT,
+});
+
+const reviewedWithFindings = (globId: string, findings = 1): ArtifactMeta =>
+  artifact(globId, 'independent_review', {
+    provenance: {
+      by: 'reviewer',
+      actor: 'model',
+      runId: null,
+      agentSetVersion: null,
+      independentReview: { stage: 'pre_merge', headSha: null, findings, high: 0, medium: findings, low: 0 },
+    },
+  });
+
+describe('mined signals: review false positives (s15f43)', () => {
+  it('counts globs where a finding of a category was marked wrong or thumbed down, and crosses at 3 globs', () => {
+    const reviewed = globs(5).map((g) => reviewedWithFindings(g));
+    const a = activity({
+      artifacts: [...reviewed, reviewedWithFindings('s1t9', 0)],
+      reviewFeedback: [feedback('s1t1', 'wrong'), feedback('s1t2', 'thumbs_down'), feedback('s1t3', 'wrong'), feedback('s1t3', 'wrong')],
+    });
+    expect(measured(a, 'review_false_positive:convention')).toMatchObject({
+      kind: 'review_false_positive',
+      figures: { affected: 3, eligible: 5, count: 4 },
+      globIds: ['s1t1', 's1t2', 's1t3'],
+      examples: ['s1t1: Unneeded convention remark (src/a.ts)', expect.any(String), expect.any(String), expect.any(String)],
+      crosses: true,
+    });
+    expect(perGlob(a, 's1t1', 'review_false_positive:convention')).toEqual({ eligible: true, affected: true });
+    expect(perGlob(a, 's1t4', 'review_false_positive:convention')).toEqual({ eligible: true, affected: false });
+    expect(perGlob(a, 's1t9', 'review_false_positive:convention')).toEqual({ eligible: false, affected: false });
+  });
+
+  it('does not count a plain resolve, and stays under the threshold with two globs', () => {
+    const reviewed = globs(4).map((g) => reviewedWithFindings(g));
+    const a = activity({
+      artifacts: reviewed,
+      reviewFeedback: [feedback('s1t1', 'wrong'), feedback('s1t2', 'wrong'), feedback('s1t3', 'resolved'), feedback('s1t4', 'resolved')],
+    });
+    expect(measured(a, 'review_false_positive:convention')).toMatchObject({ figures: { affected: 2, eligible: 4 }, crosses: false });
   });
 });
 
@@ -416,6 +477,7 @@ describe('mined signals: a glob\'s agent-set version', () => {
       ['sub_converted', 'orchestrator'],
       ['ci_after_local', 'orchestrator'],
       ['dependency', null],
+      ['review_false_positive', null],
     ]);
     expect(SIGNALS.every((s) => s.threshold !== '')).toBe(true);
   });

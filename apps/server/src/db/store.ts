@@ -1,5 +1,5 @@
 import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
+import { AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -53,6 +53,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   effectCheckGlobs: row.effectCheckGlobs,
   agentKbApproval: row.agentKbApproval,
   autoInvestigate: row.autoInvestigate,
+  review: reviewSettingsOf(row.reviewSettings),
   deploy: row.deploy,
   readinessTicks: row.readinessTicks,
   baseChecks: row.baseChecks,
@@ -718,6 +719,7 @@ export class PgStore implements Store {
             effectCheckGlobs: board.effectCheckGlobs,
             agentKbApproval: board.agentKbApproval,
             autoInvestigate: board.autoInvestigate,
+            reviewSettings: { ...board.review, ignoredPaths: [...board.review.ignoredPaths] },
             version: board.version,
           })
           .where(and(eq(schema.boards.id, board.id), eq(schema.boards.version, expectedVersion)))
@@ -731,6 +733,44 @@ export class PgStore implements Store {
           .where(and(eq(schema.boards.id, boardId), eq(schema.boards.subMaxChangedLines, from)))
           .returning({ id: schema.boards.id });
         return rows.length === 1;
+      },
+      insertLlmSpend: async (row) => {
+        await t.insert(schema.llmSpend).values({ ...row, createdAt: new Date(row.createdAt) });
+      },
+      sumLlmSpend: async (boardId, from, to) => {
+        const s = schema.llmSpend;
+        const rows = await t
+          .select({ source: s.source, usd: sql<number>`coalesce(sum(${s.costUsd}), 0)::float8`, unpriced: sql<number>`(count(*) filter (where ${s.costUsd} is null))::int`, priced: sql<number>`(count(${s.costUsd}))::int` })
+          .from(s)
+          .where(and(eq(s.boardId, boardId), gte(s.createdAt, new Date(from)), lte(s.createdAt, new Date(to))))
+          .groupBy(s.source);
+        const bySource: Record<string, number> = {};
+        let usd = 0;
+        let unpricedCalls = 0;
+        for (const r of rows) {
+          // Like the in-memory store, a source with no priced rows is left out.
+          if (r.priced > 0) bySource[r.source] = r.usd;
+          usd += r.usd;
+          unpricedCalls += r.unpriced;
+        }
+        return { usd, unpricedCalls, bySource };
+      },
+      insertReviewFeedback: async (row) => {
+        const rows = await t
+          .insert(schema.reviewFeedback)
+          .values({ ...row, createdAt: new Date(row.createdAt) })
+          .onConflictDoNothing()
+          .returning({ id: schema.reviewFeedback.id });
+        return rows.length === 1;
+      },
+      listReviewFeedback: async (boardId, since, until) => {
+        const f = schema.reviewFeedback;
+        const rows = await t
+          .select()
+          .from(f)
+          .where(and(eq(f.boardId, boardId), gte(f.createdAt, new Date(since)), lte(f.createdAt, new Date(until))))
+          .orderBy(asc(f.createdAt), asc(f.id));
+        return rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }));
       },
       insertSubLimitChange: async (change) => {
         const rows = await t

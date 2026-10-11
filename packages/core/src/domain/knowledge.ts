@@ -214,6 +214,8 @@ export interface IndependentReviewMeta {
   readonly high: number;
   readonly medium: number;
   readonly low: number;
+  /** What the review cost in USD; absent when the model has no price or the review made no model call. */
+  readonly costUsd?: number;
 }
 
 export interface Artifact {

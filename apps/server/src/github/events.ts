@@ -1,5 +1,5 @@
-import type { Board, Glob, GlobService } from '@slop/core';
-import { machine, parseId } from '@slop/core';
+import type { Board, Glob, GlobService, ReviewFeedbackService } from '@slop/core';
+import { isWrongReply, machine, parseId } from '@slop/core';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import * as schema from '../db/schema.js';
@@ -46,6 +46,31 @@ const checkPayload = z.object({
   repository,
 });
 
+const reviewComment = z.object({
+  id: z.number(),
+  body: z.string(),
+  path: z.string(),
+  line: z.number().nullable().optional(),
+  original_line: z.number().nullable().optional(),
+  in_reply_to_id: z.number().nullable().optional(),
+  user: z.object({ login: z.string(), type: z.string() }).nullable(),
+});
+const prRef = z.object({ number: z.number(), head: z.object({ ref: z.string() }) });
+
+const reviewThreadPayload = z.object({
+  action: z.string(),
+  thread: z.object({ comments: z.array(reviewComment) }),
+  pull_request: prRef,
+  repository,
+});
+
+const reviewCommentPayload = z.object({
+  action: z.string(),
+  comment: reviewComment,
+  pull_request: prRef,
+  repository,
+});
+
 const SLOP_RUN = /^Slop-Run:\s*(\S+)\s*$/m;
 
 /**
@@ -57,10 +82,12 @@ export const githubDeliveryHandler =
   (deps: {
     db: Db;
     globs: GlobService;
-    github: Pick<CodeHost, 'deleteBranch'>;
+    github: Pick<CodeHost, 'deleteBranch'> & Partial<Pick<CodeHost, 'reviewComments'>>;
     boardOf: (id: number) => Promise<Board | null>;
     /** The base branch of a board received a push (the code view fetches it). */
     onBasePush?: (boardId: number) => void;
+    /** Absent: review comments' feedback isn't recorded. */
+    feedback?: Pick<ReviewFeedbackService, 'record'>;
   }) =>
   async (delivery: Delivery): Promise<boolean> => {
     const inserted = await deps.db
@@ -82,9 +109,10 @@ const handle = async (
   deps: {
     db: Db;
     globs: GlobService;
-    github: Pick<CodeHost, 'deleteBranch'>;
+    github: Pick<CodeHost, 'deleteBranch'> & Partial<Pick<CodeHost, 'reviewComments'>>;
     boardOf: (id: number) => Promise<Board | null>;
     onBasePush?: (boardId: number) => void;
+    feedback?: Pick<ReviewFeedbackService, 'record'>;
   },
   delivery: Delivery,
 ): Promise<boolean> => {
@@ -214,6 +242,61 @@ const handle = async (
         const passed = run.conclusion === 'success';
         await apply(glob, (g, ctx) => machine.subGateCheckCompleted(g, { sha: run.head_sha, passed }, ctx));
       }
+      return true;
+    }
+
+    case 'pull_request_review_thread': {
+      const { feedback } = deps;
+      const event = reviewThreadPayload.parse(delivery.payload);
+      if (feedback === undefined || event.action !== 'resolved') return true;
+      const glob = await globFor(event.pull_request.head.ref, event.repository.full_name);
+      const [root, ...replies] = event.thread.comments;
+      if (glob === null || root === undefined) return true;
+      // GitHub has no "wrong" reason on resolving, so a person's `/wrong` reply in the thread says it; a plain resolve is neutral.
+      const wrong = replies.find((r) => r.user?.type !== 'Bot' && isWrongReply(r.body));
+      await feedback.record({
+        boardId: glob.boardId,
+        prGlobId: glob.id,
+        rootIsBot: root.user?.type === 'Bot',
+        body: root.body,
+        path: root.path,
+        line: root.line ?? root.original_line ?? null,
+        verdict: wrong === undefined ? 'resolved' : 'wrong',
+        source: 'thread',
+        githubCommentId: root.id,
+        actor: (wrong ?? root).user?.login ?? null,
+        actorIsBot: wrong === undefined ? false : wrong.user?.type === 'Bot',
+        at: new Date().toISOString(),
+      });
+      return true;
+    }
+
+    case 'pull_request_review_comment': {
+      const { feedback } = deps;
+      const event = reviewCommentPayload.parse(delivery.payload);
+      const reply = event.comment;
+      if (feedback === undefined || event.action !== 'created' || reply.in_reply_to_id == null || !isWrongReply(reply.body)) return true;
+      const glob = await globFor(event.pull_request.head.ref, event.repository.full_name);
+      const board = glob === null ? null : await deps.boardOf(glob.boardId);
+      const repo = board === null ? null : repoOf(board);
+      if (glob === null || repo === null || deps.github.reviewComments === undefined) return true;
+      // The delivery doesn't carry the comment replied to, which holds the finding's marker.
+      const parent = (await deps.github.reviewComments(repo, event.pull_request.number)).find((c) => c.id === reply.in_reply_to_id);
+      if (parent === undefined) return true;
+      await feedback.record({
+        boardId: glob.boardId,
+        prGlobId: glob.id,
+        rootIsBot: parent.authorIsBot,
+        body: parent.body,
+        path: parent.path,
+        line: parent.line,
+        verdict: 'wrong',
+        source: 'reply',
+        githubCommentId: reply.id,
+        actor: reply.user?.login ?? null,
+        actorIsBot: reply.user?.type === 'Bot',
+        at: new Date().toISOString(),
+      });
       return true;
     }
 
