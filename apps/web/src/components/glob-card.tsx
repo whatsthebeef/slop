@@ -320,7 +320,7 @@ export const AfterChip = ({ glob }: { glob: GlobView }) => {
   return (
     <Tip text={reason === '' ? `Waits for ${ids.join(', ')} to merge` : `Waits for ${reason}`}>
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
-        waits for 
+        waits for{' '}
         {ids.map((id, i) => (
           <span key={id}>
             {i > 0 && ', '}
