@@ -82,3 +82,5 @@ export * from './app/intake-learning-service.js';
 export * from './app/size-check-service.js';
 export * from './domain/independent-review.js';
 export * from './app/review-engine.js';
+export * from './domain/review-input.js';
+export * from './app/review-input-service.js';
