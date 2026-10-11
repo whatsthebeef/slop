@@ -9,6 +9,10 @@ describe('actionTiers', () => {
     expect(tiers.get('take_over')).toBe('secondary');
   });
 
+  it('makes Make it a super primary when it is the only next step', () => {
+    expect(actionTiers(['make_super', 'delete']).get('make_super')).toBe('primary');
+  });
+
   it('never makes Start again primary', () => {
     expect(actionTiers(['start_again']).get('start_again')).toBe('destructive');
   });

@@ -41,6 +41,7 @@ describe('intake', () => {
       summary: 'Retries stop.',
       plan: 'Retries stop after a timeout. Done when: they resume.',
       type: 'sub',
+      typeReason: null,
       category: 'bug',
       group: 'Device Sync',
       environment: null,
@@ -55,6 +56,36 @@ describe('intake', () => {
       model: null,
       promptVersion: INTAKE_PROMPT_VERSION,
       oversized: [],
+    });
+  });
+
+  describe('type: when a person is needed', () => {
+    it('the prompt asks by when a person is needed, not by size', () => {
+      expect(INTAKE_SYSTEM).toMatch(/WHEN A PERSON IS NEEDED/);
+      expect(INTAKE_SYSTEM).toMatch(/"super": the plan still has decisions only a person can make/);
+      expect(INTAKE_SYSTEM).toMatch(/"same": the plan is settled, but a person must review/);
+      expect(INTAKE_SYSTEM).toMatch(/Big unsettled work is a "super"/);
+    });
+
+    it('a settled small change is a sub, a risk-area change a same, open design questions a super, each with its reason', async () => {
+      const cases = [
+        { type: 'sub', reason: 'Settled plan, no open questions' },
+        { type: 'same', reason: 'Touches auth, which a person reviews afterwards' },
+        { type: 'super', reason: 'The plan leaves the storage design open' },
+      ] as const;
+      for (const c of cases) {
+        answer = JSON.stringify({ title: 'T', summary: 'S', type: c.type, typeReason: c.reason, category: 'feature' });
+        expect(await propose('some work')).toMatchObject({ type: c.type, typeReason: c.reason });
+      }
+    });
+
+    it('an explicit type wins and carries no reason; a missing reason is null; a bug cannot be a super', async () => {
+      answer = JSON.stringify({ title: 'T', summary: 'S', type: 'super', typeReason: 'Open design', category: 'feature' });
+      expect(await propose('work', { type: 'same' })).toMatchObject({ type: 'same', typeReason: null });
+      answer = JSON.stringify({ title: 'T', summary: 'S', type: 'sub' });
+      expect((await propose('work')).typeReason).toBeNull();
+      answer = JSON.stringify({ title: 'T', summary: 'S', type: 'super', typeReason: 'Open design', category: 'bug' });
+      expect((await propose('work')).type).not.toBe('super');
     });
   });
 

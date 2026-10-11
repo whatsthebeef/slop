@@ -75,6 +75,8 @@ export const CreateGlobDialog = ({
         // An environment the person already chose wins over one the request names.
         environment: form.environment ?? proposal.environment,
         autoTrigger: proposal.autoTrigger,
+        // A super intake chose waits in Planning for a person to pick it up.
+        ...(!restricted && proposal.type === 'super' ? { start: false } : {}),
         ...(proposal.files === undefined || proposal.files.length === 0 ? {} : { files: proposal.files }),
       });
       // Only a suggestion: the person sees it in the field and may clear it.
@@ -216,6 +218,11 @@ export const CreateGlobDialog = ({
               </Button>
             </div>
           )}
+          {insight !== null && insight.typeReason != null && (
+            <p className='text-xs text-muted-foreground' data-testid='intake-type-reason'>
+              Type {insight.type}: {insight.typeReason}
+            </p>
+          )}
           {insight !== null && insight.examples.length > 0 && (
             <p className='text-xs text-muted-foreground' data-testid='intake-examples'>
               Based on similar globs:{' '}
@@ -234,6 +241,16 @@ export const CreateGlobDialog = ({
                 ? 'The sub waits in Planning until these have merged, then starts on the new main.'
                 : 'Start is refused until these have merged.'}
             </p>
+          )}
+          {form.type === 'super' && (
+            <label className='flex items-center gap-2 text-sm'>
+              <input
+                type='checkbox'
+                checked={form.start === false}
+                onChange={(e) => setForm({ ...form, ...(e.target.checked ? { start: false } : { start: true }) })}
+              />
+              Park in Planning until someone picks it up to pair
+            </label>
           )}
           {form.type === 'same' && (
             <label className='flex items-center gap-2 text-sm'>

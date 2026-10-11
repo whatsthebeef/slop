@@ -24,6 +24,7 @@ import type {
   BehindBase,
   CheckFailure,
   ChecklistItem,
+  Failure,
   Glob,
   HeadChecks,
   ImpliedAfter,
@@ -74,6 +75,8 @@ export type Action =
   /** A failed merge that GitHub never decided (no conflict, checks passed at the head): ask slop to merge again. */
   | 'retry_merge'
   | 'deescalate'
+  /** A failed sub or same whose routine said a person must decide something: becomes a super with the person implementing. */
+  | 'make_super'
   /** Supers: squash-merge what's done and keep going on the same glob and branch. */
   | 'merge_continue'
   /** Supers, from the board: ask slop to mark the draft PR ready (as the `mark_ready` tool does). */
@@ -327,6 +330,8 @@ export interface CreateInput {
   readonly sizeHold?: string;
   /** Same only: wait in Planning for `after` and start by itself when it merges (a split's part that needs another part). */
   readonly autoStart?: boolean;
+  /** Super only: `false` parks it in Planning (no branch, run or implementer) until a person picks it up to pair. */
+  readonly start?: boolean;
 }
 
 export const create = (
@@ -358,7 +363,9 @@ export const create = (
   const sizeHeld = wantsStart && input.sizeHold !== undefined;
   const held = wantsStart && (awaited.length > 0 || sizeHeld);
   const autoStart = input.type === 'same' && input.autoTrigger && !held;
-  const status: Status = held ? 'planning' : autoStart ? 'implementing' : initialStatus(input.type);
+  // A parked super waits in Planning for a person to pick it up; nobody's active glob until then.
+  const parked = input.type === 'super' && input.start === false;
+  const status: Status = held || parked ? 'planning' : autoStart ? 'implementing' : initialStatus(input.type);
   const glob: Glob = {
     id: input.id,
     boardId: input.boardId,
@@ -373,7 +380,7 @@ export const create = (
     generation: 1,
     creator: actor.email,
     planner: actor.email,
-    implementer: input.type === 'super' ? actor.email : null,
+    implementer: input.type === 'super' && !parked ? actor.email : null,
     labels: {},
     checklists: {},
     pr: null,
@@ -1084,8 +1091,10 @@ export const changeFields = (
   }
   // A same becoming a sub starts, unless something it starts after hasn't merged; a held glob whose waiting list was
   // edited down to nothing starts too. A held sub turned into a same is no longer asked to start by itself.
-  const becomesSub = glob.type === 'same' && type === 'sub';
-  const wasHeld = glob.waiting != null && glob.status === 'planning' && glob.type !== 'super' && !autoStartOff;
+  const becomesSub = (glob.type === 'same' || glob.type === 'super') && type === 'sub';
+  const wasHeld = glob.waiting != null && glob.status === 'planning' && glob.type !== 'super' && type !== 'super' && !autoStartOff;
+  // A glob parked as a super doesn't wait for anything: a person picks it up.
+  if (type === 'super' && glob.waiting != null) b.set({ waiting: null });
   if (wasHeld && glob.type === 'sub' && type === 'same') b.set({ waiting: null });
   else if (becomesSub || wasHeld) {
     const impliedAfter = becomesSub ? mergeImplied(glob.impliedAfter, changes.impliedAfter ?? []) : glob.impliedAfter;
@@ -1115,6 +1124,16 @@ const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> =
   if (from === 'sub' && to === 'same') {
     if (glob.status === 'merging' || glob.status === 'reviewing' || glob.status === 'signed_off') {
       return invalidTransition(glob, actor, 'A sub can only become a same before it merges');
+    }
+    return ok(null);
+  }
+  // A sub and a super swap only while parked in Planning with no run.
+  if ((from === 'sub' && to === 'super') || (from === 'super' && to === 'sub')) {
+    if (glob.status !== 'planning' || hasLiveRun(glob) || glob.implementer !== null) {
+      return invalidTransition(glob, actor, 'A sub and a super can only be swapped while in planning with no run and nobody implementing');
+    }
+    if (to === 'super' && (actor.role === 'qa' || actor.role === 'po')) {
+      return forbidden('QA and PO members cannot create supers');
     }
     return ok(null);
   }
@@ -1681,6 +1700,29 @@ export const deescalate = (glob: Glob, ctx: Context): Result<Transition> => {
   return b.done();
 };
 
+/** Whether the routine reported that a person has to decide something (`report_failure` with `kind: 'needs_pairing'`). */
+const needsPairing = (glob: Glob): boolean =>
+  glob.status === 'failed' && glob.failure?.kind === 'needs_pairing' && glob.type !== 'super' && glob.category !== 'bug';
+
+/**
+ * Make it a super: a person takes over a glob whose routine asked for pairing. The type becomes super with the person
+ * implementing, the failure clears and the glob goes to In progress; its branch, PR and provisioning stay as they are.
+ */
+export const makeSuper = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (!needsPairing(glob)) return invalidTransition(glob, actor, 'Only a failed sub or same whose routine asked for pairing can be made a super');
+  if (actor.role === 'qa' || actor.role === 'po') return forbidden('QA and PO members cannot create supers');
+  if (hasBusyRun(glob)) return runActive('A routine run is active or watching; take over to supersede it');
+  const b = new Builder(glob, ctx)
+    .endRun('superseded', null, { cause: 'make_super' })
+    .set({ type: 'super', implementer: actor.email, failure: null, escalation: null, ...(glob.waiting == null ? {} : { waiting: null }) })
+    .status('in_progress')
+    .event('FieldsChanged', { type: { from: glob.type, to: 'super' } })
+    .event('PickedUp', { takeOver: false, madeSuper: true });
+  if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  return b.done();
+};
+
 /** Rows 12–13: the sub gate's verdict on a commit. */
 export const subGateCompleted = (
   glob: Glob,
@@ -1809,12 +1851,20 @@ export const revertFailed = (glob: Glob, reason: string, ctx: Context): Result<T
 /** Rows 17, 18 and 25: `report_failure`, or a run timeout (always with its run ID). */
 export const reportFailure = (
   glob: Glob,
-  report: { reason: string; runId: string | null; agentSetVersion?: number | null },
+  report: { reason: string; runId: string | null; agentSetVersion?: number | null; kind?: 'needs_pairing'; decision?: string | null },
   ctx: Context,
 ): Result<Transition> => {
   // Every failure report records the agent-set version it ran with (spec: provenance).
   const agentSetVersion = report.agentSetVersion ?? null;
-  const failure = { reason: report.reason, at: ctx.now, ...(agentSetVersion === null ? {} : { agentSetVersion }) };
+  // Pairing is offered on a sub or same only (a super already has a person); it is never retried by slop.
+  const pairing = report.kind === 'needs_pairing' && glob.type !== 'super';
+  const decision = report.decision?.trim() ?? '';
+  const failure: Failure = {
+    reason: report.reason,
+    at: ctx.now,
+    ...(agentSetVersion === null ? {} : { agentSetVersion }),
+    ...(pairing ? { kind: 'needs_pairing' as const, ...(decision === '' ? {} : { decision: decision.slice(0, 1000) }) } : {}),
+  };
   if (report.runId === null) {
     // Row 18: an interactive session gave up.
     if (glob.status !== 'in_progress') {
@@ -1851,7 +1901,7 @@ export const reportFailure = (
     // A watcher that gave up is retried once by slop itself, on the same PR and branch; only if that run also ends
     // without fixing it does the glob show the failure and the Retry auto-fix button.
     const retried = glob.runs.some((r) => r.autoRetry === true);
-    if (GAVE_UP.test(report.reason) && !retried && glob.type !== 'super' && glob.implementer === null && glob.pr !== null) {
+    if (!pairing && GAVE_UP.test(report.reason) && !retried && glob.type !== 'super' && glob.implementer === null && glob.pr !== null) {
       return b.queueRun(run.triggeredBy, { failureSummary: failureSummaryOf(glob) }).done();
     }
     return b.set({ failure }).done();
@@ -1937,6 +1987,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (!restricted && glob.escalation != null && glob.type === 'same' && ['implementing', 'in_progress', 'pr_open'].includes(glob.status)) {
     actions.push('deescalate');
   }
+  if (actor.role !== 'qa' && actor.role !== 'po' && needsPairing(glob) && !hasBusyRun(glob)) actions.push('make_super');
   actions.push('delete');
   return actions;
 };

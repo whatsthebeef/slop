@@ -475,6 +475,7 @@ export const GlobCard = ({
       <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground'>
         <span>
           {glob.id} · {glob.type}
+          {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
         </span>
         <span className='inline-flex items-center gap-1.5'>
           <ActivityLabel glob={glob} />
