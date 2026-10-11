@@ -5,7 +5,7 @@ import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
-import { activityLabel, statusLine } from '@/lib/status-line';
+import { activityLabel, blockedLine, chainTip, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { actionTiers } from '@/lib/action-style';
@@ -312,6 +312,16 @@ export const CodeReviewIcon = ({ badge }: { badge: CodeReviewBadge }) => {
  * that glob on the board.
  */
 export const AfterChip = ({ glob }: { glob: GlobView }) => {
+  const blocked = blockedLine(glob);
+  if (blocked !== null) {
+    return (
+      <Tip text={`Waits for, in order: ${chainTip(glob)}`}>
+        <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
+          {blocked}
+        </span>
+      </Tip>
+    );
+  }
   if (glob.status !== 'planning') return null;
   const implied = (glob.impliedAfter ?? []).filter((i) => i.overridden !== true);
   const ids = [...new Set([...(glob.after ?? []), ...implied.map((i) => i.id)])];
