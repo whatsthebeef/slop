@@ -8,6 +8,7 @@ import type { MoveTag } from '@/lib/board-motion';
 import { activityLabel, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
+import { actionTiers } from '@/lib/action-style';
 import { Tip } from './ui/tip';
 import { LabelPopover } from './labels';
 import type { ReviewLabel } from './labels';
@@ -146,11 +147,13 @@ export interface CardMove {
 const MoveButton = ({
   move,
   hot,
+  primary,
   onPreview,
   onMove,
 }: {
   move: CardMove;
   hot: boolean;
+  primary: boolean;
   onPreview: (move: CardMove | null) => void;
   onMove: (move: CardMove) => void;
 }) => (
@@ -159,7 +162,7 @@ const MoveButton = ({
     type='button'
     className={cn(
       'rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
-      hot ? 'border-foreground bg-lcd text-lcd-foreground' : 'bg-background text-foreground hover:bg-muted',
+      hot ? 'border-foreground bg-lcd text-lcd-foreground' : primary ? 'border-primary bg-primary text-primary-foreground hover:opacity-90' : 'border-foreground/70 bg-card text-foreground hover:bg-muted',
     )}
     aria-label={move.description}
     data-testid={`move-${move.action}`}
@@ -507,11 +510,12 @@ export const GlobCard = ({
           </Tip>
         )}
         <span className='ml-auto inline-flex items-center gap-1'>
-          {moves.map((move) => (
+          {moves.map((move, _i, all) => (
             <MoveButton
               key={move.action}
               move={move}
               hot={move.action === previewing}
+              primary={actionTiers(all.map((m) => m.action)).get(move.action) === 'primary'}
               onPreview={onPreview}
               onMove={onMove}
             />

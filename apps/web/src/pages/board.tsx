@@ -41,8 +41,7 @@ const MOVE_DESCRIPTIONS: Partial<Record<Action, string>> = {
 
 /**
  * The moves a glob can make, each a state-machine action it allows: right takes a glob from
- * Planning into Doing; left takes a same back to Planning (Start again keeps a sub or super in
- * Doing, so it isn't a move for them). Leaving Doing happens through the merge and signing off
+ * Planning into Doing. Start again isn't a card move (it is in the glob view). Leaving Doing happens through the merge and signing off
  * through labels, so those lists have no moves.
  */
 const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
@@ -63,9 +62,6 @@ const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
     return (['start', 'start_anyway', 'pick_up', 'take_over', 'retrigger'] as const)
       .filter((a) => allowed.includes(a))
       .map((a) => make(a, 'right', 'doing'));
-  }
-  if (glob.list === 'doing' && glob.type === 'same' && allowed.includes('start_again')) {
-    return [make('start_again', 'left', 'planning')];
   }
   return [];
 };
