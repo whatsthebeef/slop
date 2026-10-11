@@ -11,6 +11,7 @@ import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
 import { SLOP_TYPES } from './types.js';
+import { criterionOf } from './escalation-learning.js';
 import { mergeImplied } from './exclusive-paths.js';
 import { chainRefusal, dependencyIds, explicitOverlaps, NO_CHAIN, refusalText, waitingFor, waitSummary } from './waiting.js';
 import type { BlockingChain } from './waiting.js';
@@ -1566,7 +1567,7 @@ export const subGateCheckCompleted = (
  */
 export const escalateToSame = (
   glob: Glob,
-  input: { reason: string; evidence?: string | null; runId?: string | null },
+  input: { reason: string; evidence?: string | null; criterion?: string | null; runId?: string | null },
   ctx: Context,
 ): Result<Transition> => {
   const runId = input.runId ?? null;
@@ -1581,8 +1582,10 @@ export const escalateToSame = (
   const reason = input.reason.trim();
   if (reason === '') return invalidInput('An escalation needs a reason');
   const evidence = input.evidence?.trim() ?? '';
+  const criterion = criterionOf(input.criterion, reason, evidence);
   const escalation = {
     reason,
+    criterion,
     ...(evidence === '' ? {} : { evidence }),
     by: ctx.actor?.email ?? 'routine',
     at: ctx.now,
@@ -1591,7 +1594,7 @@ export const escalateToSame = (
   const b = new Builder(glob, ctx)
     .set({ type: 'same', escalation })
     .event('FieldsChanged', { type: { from: 'sub', to: 'same' } })
-    .event('Escalated', { reason, ...(evidence === '' ? {} : { evidence }), ...(runId === null ? {} : { runId }) });
+    .event('Escalated', { reason, criterion, ...(evidence === '' ? {} : { evidence }), ...(runId === null ? {} : { runId }) });
   if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   return b.done();
 };

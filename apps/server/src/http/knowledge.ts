@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -88,6 +88,7 @@ export const mountKnowledge = (
     dependencyLearning?: DependencyLearningService;
     /** The board's risk areas; absent: their routes aren't mounted. */
     riskAreas?: RiskAreaService;
+    escalations?: EscalationLearningService;
     /** The learned size threshold; absent: its route isn't mounted. */
     sizeCheck?: SizeCheckService;
     /** Intake's accuracy (System page); absent: its route isn't mounted. */
@@ -212,6 +213,11 @@ export const mountKnowledge = (
   }
 
   // The board's risk areas (learned and default) with their history, for members; admins reset them to the defaults.
+  const { escalations } = deps;
+  if (escalations !== undefined) {
+    app.get('/api/boards/:b/escalations', async (c) => send(c, await escalations.view(c.get('email'), Number(c.req.param('b')))));
+    app.post('/api/boards/:b/escalations/reset', async (c) => send(c, await escalations.reset(c.get('email'), Number(c.req.param('b')))));
+  }
   const { riskAreas } = deps;
   if (riskAreas !== undefined) {
     app.get('/api/boards/:b/risk-areas', async (c) => send(c, await riskAreas.view(c.get('email'), Number(c.req.param('b')))));

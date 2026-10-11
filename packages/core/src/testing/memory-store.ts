@@ -22,6 +22,7 @@ import type { SizeCheck, SizeThreshold, SizeThresholdChange } from '../domain/si
 import { DEFAULT_SIZE_CALIBRATION } from '../domain/size-forecast.js';
 import type { SizeCalibration, SizeCalibrationChange, SizeRecord } from '../domain/size-forecast.js';
 import { riskChangeKey } from '../domain/risk-area.js';
+import type { EscalationRecord } from '../domain/escalation-learning.js';
 import type { RiskArea, RiskAreaChange } from '../domain/risk-area.js';
 import { SUB_LIMIT_STEP } from '../domain/sub-limit.js';
 import type { SubLimitChange } from '../domain/sub-limit.js';
@@ -57,6 +58,7 @@ interface State {
   dependencyRuleChanges: DependencyRuleChange[];
   riskAreas: RiskArea[];
   riskAreaChanges: RiskAreaChange[];
+  escalationRecords: EscalationRecord[];
   sizeChecks: SizeCheck[];
   sizeThresholds: Map<number, SizeThreshold>;
   sizeThresholdChanges: SizeThresholdChange[];
@@ -144,6 +146,7 @@ const clone = (state: State): State => ({
   dependencyRuleChanges: [...state.dependencyRuleChanges],
   riskAreas: [...state.riskAreas],
   riskAreaChanges: [...state.riskAreaChanges],
+  escalationRecords: [...state.escalationRecords],
   sizeChecks: [...state.sizeChecks],
   sizeThresholds: new Map(state.sizeThresholds),
   sizeThresholdChanges: [...state.sizeThresholdChanges],
@@ -196,6 +199,7 @@ export class MemoryStore implements Store {
     dependencyRuleChanges: [],
     riskAreas: [],
     riskAreaChanges: [],
+    escalationRecords: [],
     sizeChecks: [],
     sizeThresholds: new Map(),
     sizeThresholdChanges: [],
@@ -380,6 +384,15 @@ export class MemoryStore implements Store {
       },
       listRiskAreaChanges: (boardId) =>
         Promise.resolve(s.riskAreaChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      insertEscalationRecord: (record) => {
+        if (record.globId !== null && s.escalationRecords.some((r) => r.boardId === record.boardId && r.globId === record.globId && r.outcome === record.outcome)) {
+          return Promise.resolve(false);
+        }
+        s.escalationRecords.push({ ...record, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listEscalationRecords: (boardId) =>
+        Promise.resolve(s.escalationRecords.filter((r) => r.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
       getSizeCheck: (globId) => Promise.resolve(s.sizeChecks.find((c) => c.globId === globId) ?? null),
       listSizeChecks: (boardId) => Promise.resolve(s.sizeChecks.filter((c) => c.boardId === boardId)),
       upsertSizeCheck: (check) => {
