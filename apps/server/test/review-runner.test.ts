@@ -1,6 +1,6 @@
 import { LlmBusy, ok } from '@slop/core';
 import type { Result } from '@slop/core';
-import type { Artifact, Board, Glob, Llm, ReviewInputService } from '@slop/core';
+import type { Artifact, Board, Glob, Llm, ReviewInputService, SpendService } from '@slop/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { CodeHost, PostedReview } from '../src/codehost.js';
 import { makeRunReview } from '../src/review-runner.js';
@@ -69,7 +69,7 @@ const FINDING =
 
 type StoredInput = { content: string; commitSha: string; meta: unknown; model: string };
 
-const setup = (answers: string[], files: string[] = ['src/a.ts']) => {
+const setup = (answers: string[], files: string[] = ['src/a.ts'], model = settings.model) => {
   const host = new FakeCodeHost();
   host.prDiff = () => Promise.resolve(DIFF);
   const posted: PostedReview[] = [];
@@ -104,7 +104,15 @@ const setup = (answers: string[], files: string[] = ['src/a.ts']) => {
     },
   );
   const complete = vi.fn(() => Promise.resolve(answers.shift() ?? ''));
-  const llm: Llm = { complete };
+  // Each model call reports 1,000 input and 500 output tokens, as the Bedrock adapter does.
+  const onUsages: ((usage: { input: number; output: number }) => void)[] = [];
+  const llm: Llm = {
+    complete: () => {
+      onUsages.forEach((report) => report({ input: 1000, output: 500 }));
+      return complete();
+    },
+  };
+  const record = vi.fn<SpendService['record']>(() => Promise.resolve());
   const assemble = vi.fn<ReviewInputService['assemble']>(() =>
     Promise.resolve(ok({ input: { diff: DIFF, plan: 'p', reviewGuide: '' }, files, skipped: [] })),
   );
@@ -113,10 +121,14 @@ const setup = (answers: string[], files: string[] = ['src/a.ts']) => {
     inputs: { assemble },
     artifacts: { addIndependentReview },
     boardOf: () => Promise.resolve(board),
-    settings: () => Promise.resolve(settings),
-    llmFor: () => llm,
+    settings: () => Promise.resolve({ ...settings, model }),
+    spend: { record },
+    llmFor: (_model, onUsage) => {
+      onUsages.push(onUsage);
+      return llm;
+    },
   });
-  return { run, posted, outdate, check, comment, stored, complete, assemble };
+  return { run, posted, outdate, check, comment, stored, complete, assemble, record };
 };
 
 describe('RunReview', () => {
@@ -188,5 +200,50 @@ describe('RunReview', () => {
     await expect(t.run(glob(), resolved('pre_merge'))).rejects.toBeInstanceOf(LlmBusy);
     expect(t.stored).toEqual([]);
     expect(t.posted).toEqual([]);
+  });
+
+  it("records the review's tokens in the spend ledger, with the artifact version, and puts the cost on the review's meta", async () => {
+    const t = setup(
+      [`{"summary":"Adds a thing.","findings":[${FINDING}]}`, '{"verdicts":[{"index":0,"keep":true,"reason":"real"}]}'],
+      ['src/a.ts'],
+      'openai.gpt-oss-120b-1:0',
+    );
+    await t.run(glob(), resolved('pre_merge'));
+    // Two calls (findings, verification) of 1,000 in and 500 out each.
+    expect(t.record).toHaveBeenCalledOnce();
+    expect(t.record).toHaveBeenCalledWith({
+      boardId: 1,
+      globId: 's1t1',
+      source: 'review',
+      model: 'openai.gpt-oss-120b-1:0',
+      inputTokens: 2000,
+      outputTokens: 1000,
+      ref: '1',
+    });
+    expect(t.stored[0]?.meta).toMatchObject({ costUsd: (2000 * 0.15 + 1000 * 0.6) / 1_000_000 });
+  });
+
+  it('an unpriced model keeps its tokens but puts no cost on the review', async () => {
+    const t = setup([`{"summary":"s","findings":[]}`], ['src/a.ts'], 'some.unpriced-model');
+    await t.run(glob(), resolved('pre_merge'));
+    expect(t.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 1000, outputTokens: 500 }));
+    expect(t.stored[0]?.meta).not.toHaveProperty('costUsd');
+  });
+
+  it('a failed attempt that called the model still records what it cost, without an artifact version', async () => {
+    const t = setup(['not json at all', 'still not json']);
+    await expect(t.run(glob(), resolved('pre_merge'))).rejects.toThrow();
+    expect(t.stored).toEqual([]);
+    expect(t.record).toHaveBeenCalledOnce();
+    expect(t.record.mock.calls[0]?.[0]).toMatchObject({ ref: null });
+    expect(t.record.mock.calls[0]?.[0].inputTokens).toBeGreaterThan(0);
+  });
+
+  it('an empty review makes no model call, so no tokens reach the ledger (which keeps nothing for zero), and a spend write that fails does not fail the review', async () => {
+    const t = setup([], []);
+    await t.run(glob(), resolved('pre_merge'));
+    expect(t.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 0, outputTokens: 0 }));
+    t.record.mockRejectedValue(new Error('db down'));
+    await expect(t.run(glob(), resolved('pre_merge'))).resolves.toBeUndefined();
   });
 });

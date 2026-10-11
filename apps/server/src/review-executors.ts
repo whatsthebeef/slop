@@ -14,15 +14,20 @@ export type RunReview = (glob: Glob, resolved: Extract<ResolvedReview, { outcome
  * the PR merged. An on-demand job (Review now, it has a `requestId`) reviews the PR as it is when it runs, at whichever
  * stage that is: an open PR (draft or ready) before merge, a merged one after; only a PR closed without merging drops it.
  * A test merge the host hasn't computed yet is retried; a conflicting PR has no merged result and is dropped.
+ * A board with its reviewer turned off drops its automatic jobs, those queued before it was turned off too; "Review now"
+ * still runs, so a person can ask for a review of a board that doesn't review by itself.
  */
 export const reviewExecutors = (
   host: CodeHost,
   boardOf: (id: number) => Promise<Board | null>,
   run: RunReview,
+  /** Whether the board's automatic reviews are on (its review settings). */
+  enabled: (boardId: number) => Promise<boolean> = () => Promise.resolve(true),
 ): Partial<Record<EffectKind, Executor>> => ({
   review_change: async (effect, glob) => {
     if (effect.kind !== 'review_change' || glob === null || glob.pr === null) return 'dropped';
     const onDemand = effect.requestId !== undefined;
+    if (!onDemand && !(await enabled(glob.boardId))) return 'dropped';
     if (onDemand) {
       if (glob.pr.state === 'closed') return 'dropped';
     } else {

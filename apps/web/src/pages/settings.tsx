@@ -9,6 +9,8 @@ import { ReadinessChecklist } from '@/components/readiness';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
+import { MAX_REVIEW_TOOL_CAP, REVIEW_SEVERITY_CHOICES, reviewFormOf, reviewSettingsOfForm, toolCapInvalid } from '@/lib/review-settings';
+import type { ReviewForm } from '@/lib/review-settings';
 import { usePageContext } from '@/lib/page-context';
 import { useToast } from '@/toast';
 
@@ -37,6 +39,7 @@ export const SettingsPage = () => {
   const [effectCheckGlobs, setEffectCheckGlobs] = useState('');
   const [agentKbApproval, setAgentKbApproval] = useState<AgentKbApproval>('docs');
   const [autoInvestigate, setAutoInvestigate] = useState(true);
+  const [review, setReview] = useState<ReviewForm>(reviewFormOf({ enabled: true, model: null, minSeverity: 'medium', ignoredPaths: [], toolCap: null }));
 
   useEffect(() => {
     if (board.data === undefined) return;
@@ -48,6 +51,7 @@ export const SettingsPage = () => {
     setEffectCheckGlobs(String(board.data.effectCheckGlobs));
     setAgentKbApproval(board.data.agentKbApproval);
     setAutoInvestigate(board.data.autoInvestigate);
+    setReview(reviewFormOf(board.data.review));
   }, [board.data]);
 
   const save = useMutation({
@@ -61,6 +65,7 @@ export const SettingsPage = () => {
         deploy,
         agentKbApproval,
         autoInvestigate,
+        review: reviewSettingsOfForm(review),
         // Checked by the server (3 to 50); a blank field leaves it as it is.
         ...(effectCheckGlobs.trim() === '' ? {} : { effectCheckGlobs: Number(effectCheckGlobs) }),
       });
@@ -265,6 +270,71 @@ export const SettingsPage = () => {
           />
           Investigate big globs in Planning automatically
         </label>
+        <h3 className='text-xs font-semibold text-muted-foreground'>Independent review</h3>
+        <label className='flex items-center gap-2 text-sm' title='Off stops the automatic reviews; Review now on a glob still works'>
+          <input
+            type='checkbox'
+            disabled={!admin}
+            checked={review.enabled}
+            onChange={(e) => setReview({ ...review, enabled: e.target.checked })}
+            data-testid='review-enabled'
+          />
+          Review changes automatically
+        </label>
+        <Label>
+          Reviewer model (a Bedrock model ID; blank for the server's default)
+          <Input
+            value={review.model}
+            placeholder='Server default'
+            disabled={!admin}
+            onChange={(e) => setReview({ ...review, model: e.target.value })}
+            data-testid='review-model'
+          />
+        </Label>
+        <Label>
+          Comment on GitHub from this severity up (lower ones are listed in the review's summary)
+          <Select
+            className='w-32'
+            value={review.minSeverity}
+            disabled={!admin}
+            onChange={(e) => {
+              const severity = REVIEW_SEVERITY_CHOICES.find((s) => s === e.target.value);
+              if (severity !== undefined) setReview({ ...review, minSeverity: severity });
+            }}
+            data-testid='review-min-severity'
+          >
+            {REVIEW_SEVERITY_CHOICES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </Select>
+        </Label>
+        <Label>
+          Paths the reviewer skips, one glob per line (on top of the merge policy's size-ignored paths)
+          <textarea
+            className='min-h-16 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs'
+            value={review.ignoredPaths}
+            disabled={!admin}
+            onChange={(e) => setReview({ ...review, ignoredPaths: e.target.value })}
+            data-testid='review-ignored-paths'
+          />
+        </Label>
+        <Label>
+          Reviewer tool calls per review (1–{MAX_REVIEW_TOOL_CAP}; blank for the default)
+          <Input
+            type='number'
+            min={1}
+            max={MAX_REVIEW_TOOL_CAP}
+            step={1}
+            className='w-24'
+            value={review.toolCap}
+            disabled={!admin}
+            onChange={(e) => setReview({ ...review, toolCap: e.target.value })}
+            aria-invalid={toolCapInvalid(review)}
+            data-testid='review-tool-cap'
+          />
+        </Label>
         <h3 className='text-xs font-semibold text-muted-foreground'>Knowledge</h3>
         <label className='flex items-center gap-2 text-sm' title='Local-run spec, merge policy and whole documents always need a person'>
           <input
@@ -296,7 +366,7 @@ export const SettingsPage = () => {
             <Button variant='outline' size='sm' onClick={() => setEnvs([...envs, { name: '', allowBranchDeploy: true }])}>
               Add environment
             </Button>
-            <Button size='sm' disabled={save.isPending} onClick={() => save.mutate()}>
+            <Button size='sm' disabled={save.isPending || toolCapInvalid(review)} onClick={() => save.mutate()}>
               Save settings
             </Button>
           </div>

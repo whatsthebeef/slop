@@ -1,3 +1,4 @@
+import { parseFindingMarker } from '@slop/core';
 import type { Glob, IndependentReview } from '@slop/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { Repo } from '../src/codehost.js';
@@ -108,5 +109,17 @@ describe('publishReview', () => {
       expect.stringContaining('slop review after merge'),
     );
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('marks the inline comments with the finding marker, the glob and the artifact version, and the summary with none (s15f43)', async () => {
+    const host = new FakeCodeHost();
+    host.prDiff = () => Promise.resolve(DIFF);
+    const submit = vi.fn<FakeCodeHost['submitReview']>(() => Promise.resolve({ id: 1, inline: 1 }));
+    host.submitReview = submit;
+    await publishReview(host, repo, glob('head2'), target('pre_merge'), input);
+    const posted = submit.mock.calls[0]?.[2];
+    expect(posted?.comments).toHaveLength(1);
+    expect(parseFindingMarker(posted?.comments[0]?.body ?? '')).toMatchObject({ globId: 's1t1', version: 2 });
+    expect(posted?.body).not.toContain('slop-finding');
   });
 });

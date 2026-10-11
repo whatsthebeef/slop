@@ -43,12 +43,12 @@ const pre: Effect = { kind: 'review_change', globId: 's1t1', generation: 1, stag
 const post: Effect = { kind: 'review_change', globId: 's1t1', generation: 1, stage: 'post_merge', sha: 'sq1' };
 const deps = { globs: {} as GlobService };
 
-const setup = () => {
+const setup = (enabled = () => Promise.resolve(true)) => {
   const host = new FakeCodeHost();
   host.testMergeTarget = () => Promise.resolve({ outcome: 'ready', ref: 'refs/pull/7/merge', sha: 'm1', baseSha: 'b1', diff: 'd' });
   host.mergedTarget = (r, sha) => Promise.resolve({ ref: r.base, sha, baseSha: 'p1', diff: 'squash' });
   const run = vi.fn<RunReview>(() => Promise.resolve());
-  const execute = reviewExecutors(host, () => Promise.resolve(board), run).review_change;
+  const execute = reviewExecutors(host, () => Promise.resolve(board), run, enabled).review_change;
   if (execute === undefined) throw new Error('missing executor');
   return { host, run, execute };
 };
@@ -105,5 +105,18 @@ describe('review_change executor', () => {
     host.testMergeTarget = () => Promise.resolve({ outcome: 'conflict' });
     expect(await execute(pre, glob(), deps)).toBe('dropped');
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('a board with the reviewer off drops automatic jobs (queued earlier too) but still runs an on-demand one, and reviews again once it is back on', async () => {
+    let on = false;
+    const { run, execute } = setup(() => Promise.resolve(on));
+    expect(await execute(pre, glob(), deps)).toBe('dropped');
+    expect(await execute(post, glob({ type: 'sub', status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'aaa' } }), deps)).toBe('dropped');
+    expect(run).not.toHaveBeenCalled();
+    expect(await execute({ ...pre, requestId: 'r1' }, glob(), deps)).toBe('done');
+    expect(run).toHaveBeenCalledOnce();
+    on = true;
+    expect(await execute(pre, glob(), deps)).toBe('done');
+    expect(run).toHaveBeenCalledTimes(2);
   });
 });

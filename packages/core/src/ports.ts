@@ -21,6 +21,8 @@ import type { NewSizeCalibrationChange, SizeCalibration, SizeCalibrationChange, 
 import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdChange } from './domain/size-check.js';
 import type { EscalationRecord, NewEscalationRecord } from './domain/escalation-learning.js';
 import type { NewRiskAreaChange, RiskArea, RiskAreaChange } from './domain/risk-area.js';
+import type { NewReviewFeedback, ReviewFeedback } from './domain/review-feedback.js';
+import type { LlmSpend, SpendSummary } from './domain/spend.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { NewTypeCorrection, TypeCorrection } from './domain/type-learning.js';
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
@@ -79,7 +81,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'subLimitStep' | 'effectCheckGlobs' | 'agentKbApproval' | 'autoInvestigate' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'subLimitStep' | 'effectCheckGlobs' | 'agentKbApproval' | 'autoInvestigate' | 'review' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   /**
    * Sets the board's learned sub size limit to `to` if it is still `from`; returns false otherwise. It has no board
@@ -88,6 +90,14 @@ export interface Tx {
   setSubLimit(boardId: number, from: number, to: number, step?: number): Promise<boolean>;
   /** Records a sub-limit outcome; false when the board already has that glob's outcome (the learning is idempotent). */
   insertSubLimitChange(change: NewSubLimitChange): Promise<boolean>;
+  /** Adds a row to the LLM spend ledger (what a call or review cost, or its tokens when the model has no price). */
+  insertLlmSpend(row: Omit<LlmSpend, 'id'>): Promise<void>;
+  /** The board's priced spend and its unpriced calls over the period, by source. */
+  sumLlmSpend(boardId: number, from: string, to: string): Promise<SpendSummary>;
+  /** Stores a person's verdict on a review comment; false when that comment already has one from that source (idempotent). */
+  insertReviewFeedback(row: NewReviewFeedback): Promise<boolean>;
+  /** The board's review feedback created in the window, oldest first. */
+  listReviewFeedback(boardId: number, since: string, until: string): Promise<ReviewFeedback[]>;
   /** The board's learned dependency rules (path patterns whose overlap weight moved), and their history, newest first. */
   listDependencyRules(boardId: number): Promise<DependencyRule[]>;
   upsertDependencyRule(rule: DependencyRule): Promise<void>;

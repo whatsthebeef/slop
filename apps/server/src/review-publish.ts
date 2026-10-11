@@ -53,7 +53,7 @@ export const publishReview = async (
   const headDiff = await host.prDiff(repo, head).catch(() => null);
   const plan = planReviewPublication(
     input.review,
-    { ...meta, diff: resolved.diff.diff, headDiff },
+    { ...meta, diff: resolved.diff.diff, headDiff, feedbackIds: { globId: glob.id, version: input.version } },
     input.minSeverity,
   );
   const posted = await host.submitReview(repo, glob.pr.number, {

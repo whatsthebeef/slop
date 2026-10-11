@@ -19,6 +19,8 @@ export const REQUIRED_APP_EVENTS = [
   'pull_request',
   'pull_request_review',
   'pull_request_review_comment',
+  // A resolved review thread: feedback on the independent reviewer's comments.
+  'pull_request_review_thread',
   'issue_comment',
   'check_run',
   'check_suite',

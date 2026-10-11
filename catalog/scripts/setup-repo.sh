@@ -48,7 +48,7 @@ fi
 
 # Keep in step with REQUIRED_APP_EVENTS in slop's apps/server/src/github/setup.ts. GitHub applies a manifest's events
 # only when the App is created, so an App made before an event was added never receives it.
-required_events=(push pull_request pull_request_review pull_request_review_comment issue_comment check_run check_suite)
+required_events=(push pull_request pull_request_review pull_request_review_comment pull_request_review_thread issue_comment check_run check_suite)
 echo "GitHub App events for $app..."
 if app_json=$(gh api "apps/$app" 2>&1); then
   subscribed=$(printf '%s' "$app_json" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin).get("events", [])))')
