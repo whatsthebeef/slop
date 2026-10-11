@@ -161,7 +161,7 @@ describe('a sub whose PR is ready', () => {
   });
 
   it("generated files (the defaults without a merge policy) don't count toward the size, and the verdict says how many", async () => {
-    await store.transaction((tx) => tx.setSubLimit(1, 2000, 200));
+    await store.transaction((tx) => tx.setSubLimit(1, 5000, 200));
     try {
       host.diff = { changedLines: 3300, files: ['src/a.ts', 'pnpm-lock.yaml'], fileLines: { 'src/a.ts': 60, 'pnpm-lock.yaml': 3240 } };
       await handle(readyForReview());
@@ -170,7 +170,7 @@ describe('a sub whose PR is ready', () => {
       const verdicts = await store.transaction((tx) => tx.listBoardEvents(1, '2000-01-01T00:00:00.000Z', ['SubReviewCompleted']));
       expect(verdicts.filter((e) => e.globId === globId).at(-1)?.data).toMatchObject({ passed: true, changedLines: 60, ignoredLines: 3240 });
     } finally {
-      await store.transaction((tx) => tx.setSubLimit(1, 200, 2000));
+      await store.transaction((tx) => tx.setSubLimit(1, 200, 5000));
     }
   });
 
@@ -189,7 +189,7 @@ describe('a sub whose PR is ready', () => {
   });
 
   it('the policy decides with the learned limit as it is now, and records its cause, size and limit (s15f8)', async () => {
-    await store.transaction((tx) => tx.setSubLimit(1, 2000, 200));
+    await store.transaction((tx) => tx.setSubLimit(1, 5000, 200));
     try {
       host.diff = { changedLines: 250, files: ['src/a.ts'] };
       await handle(readyForReview());
@@ -205,7 +205,7 @@ describe('a sub whose PR is ready', () => {
         limit: 200,
       });
     } finally {
-      await store.transaction((tx) => tx.setSubLimit(1, 200, 2000));
+      await store.transaction((tx) => tx.setSubLimit(1, 200, 5000));
     }
   });
 });

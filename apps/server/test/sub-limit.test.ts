@@ -122,6 +122,8 @@ describe('The learned sub limit in Postgres', () => {
       }),
     ).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
+    // These tests walk the limit up from 2000; a new board starts at the backstop default.
+    await store.transaction((tx) => tx.setSubLimit(boardId, 5000, 2000));
   });
 
   afterAll(async () => {
@@ -336,6 +338,7 @@ describe('The learned sub limit in Postgres', () => {
         environments: [],
       }),
     ).id;
+    await store.transaction((tx) => tx.setSubLimit(other, 5000, 2000));
     await store.transaction(async (tx) => {
       await tx.insertGlob(
         globOf('s8t1', { boardId: other, type: 'same', status: 'signed_off' }),
