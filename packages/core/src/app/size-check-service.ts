@@ -1,5 +1,6 @@
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import { isInvestigateEvent } from '../domain/events.js';
 import type { DomainEvent } from '../domain/events.js';
 import type { BoardJobResult } from '../domain/signals.js';
 import {
@@ -253,7 +254,7 @@ export class SizeCheckService implements SizeAssessor {
           globId: outcome.globId,
           flagged: checks.get(outcome.globId)?.flagged === true,
           outcome,
-          failedRuns: events.filter((e) => e.type === 'RunFailed').length,
+          failedRuns: events.filter((e) => e.type === 'RunFailed' && !isInvestigateEvent(e)).length,
           prHours: prHoursOf(events),
           split: events.some((e) => e.type === 'GlobSplit'),
           splitAfterStart: splitAfterStartOf(events),

@@ -28,7 +28,7 @@ Call `get_glob(id)` before anything else. It returns the status, version, genera
 - **Slop type** sets the mode:
   - `sub` or `same`: the full phase pipeline below.
   - `super`: do not run the phases. Follow **Super mode** instead.
-- The glob's branch is the glob ID itself (e.g. `s1t4`). sstor (or the routine's checkout) has already put you on it. **Do not create branches.** Never commit to or push `<base>`.
+- The glob's branch is the glob ID itself (e.g. `s1t4`). sstor (or the routine's checkout) has already put you on it. **Do not create branches.** Never commit to or push `<base>`. The one exception is an **investigate-only run** on a glob in Planning, which has no branch yet: see Investigate-only runs.
 
 **Uploading artifacts:** the implementation record and local review are files, so upload them from the file instead of typing their text into a tool call. Anything over a few KB: in a local session run `slop put-artifact <id> --kind <kind> --file <path> [--commit <sha>] [--agent-set <n>] [--review-stats '<json>'] [--run <runId>]`; in a routine (or wherever the `slop` CLI isn't installed) call `artifact_upload_url(id, kind, commitSha, agentSetVersion, reviewStats, runId)` with the same fields and then `curl --data-binary @<path> '<url>'` (the link is single use and lasts 5 minutes; if curl can't reach slop, fall back to `put_artifact`). Keep inline `put_artifact` for small ones. Wherever this file says `put_artifact(id, kind, content, …)` for a file, this is how to send it.
 
@@ -42,6 +42,7 @@ When a run ID is given:
 
 - Never call `AskUserQuestion` and never wait for a person. Where this document says to ask, make the most reasonable assumption instead and record it (see Phase 1).
 - **Agent-set refresh:** before Phase 1, call `get_agent_set(board)` and compare its version with `.claude/slop-agent-set.json`. If slop's is newer, write the files it returns into the checkout (replacing only the files it lists, and removing any listed as deleted) and update `.claude/slop-agent-set.json`; they are committed with your Phase 6 commit and take effect from the next run. Carry on with the instructions already loaded. **Only on the glob's branch:** if `git branch --show-current` is `<base>` (a session started in the main checkout), do not write any files: say that a newer agent set exists and that it arrives with the next glob's commit, or `sstor init` on a branch. Uncommitted agent-set files on `<base>` make `dev.sh follow` hold.
+- If the fire text says **INVESTIGATE-ONLY**, follow **Investigate-only runs** instead of the rest of this section and of the Workflow: no agent-set refresh, no branch checkout, no commits.
 - Do **not** call `pick_up`: routines never record a human implementer.
 - Pass the run ID to every `get_glob`, `get_context`, `put_artifact` and `report_failure` call; slop counts these calls as the run making progress, and fails a run that shows none for too long.
 - Every commit carries the trailer `Slop-Run: <runId>`.
@@ -153,6 +154,16 @@ Escalate when you found, during implementation or review, that:
 
 Don't escalate for size alone (a large mechanical change, a rename across many files), for a plan that was followed, or "to be safe". Put the reason in one or two sentences a person can act on and the evidence (files, findings, the unsettled choice) in `evidence`; record it in the implementation record's `## Decisions`. Escalating is not failing: carry on to the end of the phases and mark the PR ready.
 
+## Investigate-only runs
+
+An *Investigate* action (or slop itself, for a glob intake flagged big) fires a routine run on a glob that is still in **Planning**. It has no branch and no PR. The run does Phases 1–2 and nothing else, so a person (or the later implementing run) has the investigation before work starts.
+
+1. Stay on `<base>` (`git fetch origin <base>`; the checkout may start there). **Never** create a branch, commit, push, write agent-set files, open a PR, call `pick_up` or call `mark_ready`.
+2. Call `get_glob(id, runId)` and `get_context(id, runId)`, and fetch the board knowledge as in Phase 1 steps 1–4. Write the context file as there. Ambiguities become `## Assumptions` in the context file (and an `Assumptions` attachment); don't ask. Skip the size check's split step: if the work is too big, say so under `## Size` in the plan file with the parts you would cut.
+3. Run Phase 2 steps 1–4: the investigator writes `.reviews/<id>-plan.md` ending with the `investigation` block (plan hash and base commit as in step 2), and you push it with `put_artifact(id, kind: 'investigation', …, runId, agentSetVersion)`. **Do not skip the investigator**, even when plan.md looks settled: the investigation is the product of this run. If the glob already has an investigation that is still current (Phase 2, *Reuse or refresh*), push nothing and say so.
+4. A reply without a `validation` note ends the run: slop closes it when the investigation is stored, and the glob stays in Planning. If the block did not validate, have it fixed once and push again; if it still does not validate, call `report_failure(id, reason, runId)`.
+5. Skip Phases 3–6, the record (nothing was built) and the Auto-fix section. Finish with a short summary: the investigation's risk tier, files, parts and whether it needs a human.
+
 ## Workflow
 
 Run all phases sequentially without pausing, except where a phase says to ask the developer. Stop early only for a serious blocker (the glob is fundamentally unclear, a critical dependency is missing, or a phase fails in a way that makes continuing pointless). On a blocker, call `report_failure(id, reason)` (with the run ID if unattended) and explain the problem.
@@ -187,6 +198,15 @@ When resuming from a phase, read the output files of the earlier phases. The dev
    - If a split was needed but slop hadn't flagged it, submit an `agent-behaviour` learning in Phase 6 (name the glob and what in the plan showed it was too big), as evidence for the size threshold.
 
 ### Phase 2: Investigation
+
+**Reuse or refresh.** If `get_context` returned an `investigation` (the glob was investigated earlier, usually by an investigate-only run), decide first whether it still holds, unless this run is investigate-only (it investigates anyway, unless the investigation is still current: then push nothing). Reuse it only when **all** of these hold:
+
+- `validation` is null (the block parsed);
+- `planHash` equals the `sha256sum` of the plan text in `.reviews/<id>-context.md`'s plan section (computed as in step 2) — a changed plan means a different task;
+- the base moved little in the investigation's relevant files: after `git fetch origin <base>`, `git diff --stat <investigation.baseCommit> origin/<base> -- <files from investigation.files>` shows none of those files deleted or renamed and fewer than about 30 changed lines in total (a commit that is not in the base's history counts as moved a lot);
+- its `needsHuman` is not `true` unless a person has since answered it (an Assumptions or Clarifications attachment, or a decision, that addresses its reason).
+
+*Reuse:* fetch the investigation text (`get_artifact(id, 'investigation')`), write it to `.reviews/<id>-plan.md`, skip the investigator and the push (step 4), go to step 5 with the investigation's recommended proposal and note "investigation reused (version N)" in the plan file. *Refresh:* run the investigator as below, giving it the earlier investigation as a starting point (it must still read the code), and push the new one in step 4: it becomes the latest version and supersedes the old. Either way, say which and why (plan hash changed / these files changed by N lines / reused with no relevant change) in the plan file and, when you start the record in step 7, in its `## Decisions` ("Investigation reused" or "Investigation refreshed: …"), so reuse vs refresh is recorded.
 
 1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 6.
 2. Invoke the **investigator** with:

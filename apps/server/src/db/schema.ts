@@ -84,6 +84,8 @@ export const boards = pgTable('boards', {
   effectCheckGlobs: integer('effect_check_globs').notNull().default(EFFECT_CHECK_GLOBS_DEFAULT),
   /** Which KB items an admin's agent may approve: 'docs' or 'docs_and_agent_files'. */
   agentKbApproval: text('agent_kb_approval', { enum: AGENT_KB_APPROVALS }).notNull().default('docs'),
+  /** Slop starts an investigate-only run by itself on a Planning glob intake flagged as big. */
+  autoInvestigate: boolean('auto_investigate').notNull().default(true),
   /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
   deploy: jsonb('deploy').$type<DeployIntegration>(),
   /** The latest check result on the base branch head; written by check events, not by settings changes. */

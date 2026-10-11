@@ -1,4 +1,5 @@
 import type { EffectState } from './effect-check.js';
+import { isInvestigateEvent } from './events.js';
 import type { DomainEvent, JsonValue } from './events.js';
 import { FINDING_CLASS_DESCRIPTIONS } from './findings.js';
 import type { FindingClass, ReviewFinding } from './findings.js';
@@ -468,6 +469,8 @@ const reruns = (activity: BoardActivity): Map<string, { edited: boolean; example
     let ended = false;
     let edit: string | null = null;
     for (const e of events) {
+      // An investigate-only run is not an attempt at the glob.
+      if (isInvestigateEvent(e)) continue;
       const endsRun = (e.type === 'RunFailed' && field(e, 'ignored') !== true) || (e.type === 'RunEnded' && text(e, 'outcome') === 'superseded');
       if (endsRun) {
         ended = true;
@@ -578,7 +581,7 @@ const failures = (activity: BoardActivity): { globId: string; reason: string }[]
   activity.events.flatMap((e) => {
     const reason = text(e, 'reason');
     if (reason === null) return [];
-    if (e.type === 'RunFailed' && field(e, 'ignored') !== true) return [{ globId: e.globId, reason }];
+    if (e.type === 'RunFailed' && field(e, 'ignored') !== true && !isInvestigateEvent(e)) return [{ globId: e.globId, reason }];
     if (e.type === 'StatusChanged' && text(e, 'to') === 'failed') return [{ globId: e.globId, reason }];
     return [];
   });
@@ -633,6 +636,7 @@ const supersededDetail = (ended: DomainEvent, events: readonly DomainEvent[]): s
 /** Ended routine runs, and which of them someone superseded by taking over or starting again (with the example's detail). */
 const endedRuns = (activity: BoardActivity): { globId: string; stepIn: string | null; at: string; detail: string }[] =>
   activity.events.flatMap((e) => {
+    if (isInvestigateEvent(e)) return [];
     if (e.type === 'RunFailed' && field(e, 'ignored') !== true) return [{ globId: e.globId, stepIn: null, at: e.at, detail: '' }];
     if (e.type !== 'RunEnded') return [];
     const cause = text(e, 'outcome') === 'superseded' ? supersededCause(e, activity.events) : null;

@@ -72,7 +72,15 @@ export interface Run {
   readonly sessionUrl: string | null;
   /** Set on the run slop queued by itself after a watching run gave up: the one automatic retry. */
   readonly autoRetry?: true;
+  /**
+   * `investigate`: an investigate-only run on a glob in Planning (orchestrator Phases 1–2, no branch, no commits). It ends
+   * when its investigation is pushed; absent on every implementing run.
+   */
+  readonly purpose?: RunPurpose;
 }
+
+export const RUN_PURPOSES = ['investigate'] as const;
+export type RunPurpose = (typeof RUN_PURPOSES)[number];
 
 export type PrState = 'draft' | 'ready' | 'closed' | 'merged';
 
@@ -337,6 +345,8 @@ export interface Board {
   readonly effectCheckGlobs: number;
   /** Which KB items an admin's agent may approve (`decide_kb_item`); admins set it. */
   readonly agentKbApproval: AgentKbApproval;
+  /** Slop starts an investigate-only run by itself on a glob in Planning that intake flagged as big (on by default). */
+  readonly autoInvestigate: boolean;
   readonly version: number;
 }
 

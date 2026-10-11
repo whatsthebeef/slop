@@ -19,6 +19,7 @@ You will receive:
 - **Group siblings** (optional): other globs in the same group and their status. Build on what they introduced and avoid duplicating it.
 - **Clarifications or Assumptions** (optional): authoritative answers (interactive) or recorded assumptions (unattended). They override conflicting assumptions from the description or codebase defaults.
 - **Learnings file** (optional): approved decisions, gotchas and patterns from earlier globs, fetched from slop. Factor relevant entries into your proposals and flag known risks.
+- **Earlier investigation** (optional): the glob's previous investigation, when the orchestrator is refreshing one that no longer holds (the plan or its relevant files changed). Use it as a starting point and for what it already established, but read the code again: it is stale where the plan or those files changed.
 - **Unattended flag**: if set, there is no user. Never call `AskUserQuestion`.
 - **Base branch**, **repo context**, **board doc paths**, **output path**.
 

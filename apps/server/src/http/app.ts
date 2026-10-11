@@ -78,6 +78,7 @@ const settingsSchema = z.object({
   // Core checks the range (3 to 50).
   effectCheckGlobs: z.number().int().optional(),
   agentKbApproval: z.enum(AGENT_KB_APPROVALS).optional(),
+  autoInvestigate: z.boolean().optional(),
   deploy: z
     .discriminatedUnion('provider', [
       z.object({
@@ -489,6 +490,7 @@ export const createApp = (deps: AppDeps) => {
       await deps.sizeCheck?.keepWhole(email, id);
       return globs.startAnyway(email, id, b.version);
     },
+    investigate: (email: string, id: string, b: ActionBody) => globs.investigate(email, id, b.version),
     retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version, b.anyway === true),
     'retry-autofix': (email: string, id: string, b: ActionBody) => globs.retryAutofix(email, id, b.version),
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),

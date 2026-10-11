@@ -61,6 +61,9 @@ export const DOMAIN_EVENT_TYPES = [
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 
+/** Events of an investigate-only run (it never starts the glob), so run-history learning leaves them out. */
+export const isInvestigateEvent = (e: Pick<DomainEvent, 'data'>): boolean => e.data.purpose === 'investigate';
+
 /** A row in the append-only event log. `actor` is null for system and integration events. */
 export interface DomainEvent {
   readonly type: DomainEventType;
@@ -83,6 +86,8 @@ export type Effect =
       readonly generation: number;
       readonly runId: string;
       readonly routineOwner: string;
+      /** `investigate`: the run only investigates a glob in Planning (no branch yet, nothing is committed). */
+      readonly purpose?: 'investigate';
       /** An automatic retry of a watcher that gave up: the failed check it is asked to fix (name and first lines). */
       readonly failureSummary?: string;
       /** Set for Start and Retrigger: the executor refuses to fire while prerequisites are unmerged (Start anyway doesn't set it). */

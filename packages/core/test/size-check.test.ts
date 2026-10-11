@@ -10,6 +10,7 @@ import {
   buildProposal,
   estimateFromText,
   loweredThreshold,
+  needsInvestigation,
   nextThreshold,
   oversizedReasons,
   prHoursOf,
@@ -245,5 +246,23 @@ describe('proposal from the model parts', () => {
   });
   it('is null with fewer than two usable parts', () => {
     expect(buildProposal('## Do\n- [ ] one\n', [part('Only', '- [ ] x'), part('', 'y')])).toBeNull();
+  });
+});
+
+describe('needsInvestigation', () => {
+  const check = (flagged: boolean, tasks: number, partsSource: 'model' | 'text') => ({
+    flagged,
+    estimate: { ...estimateFromText('## Tasks\n- [ ] a\n'), tasks, partsSource },
+  });
+
+  it('investigates a flagged glob, and a plan of several tasks whose part count is only a text guess', () => {
+    expect(needsInvestigation(check(true, 1, 'model'))).toBe(true);
+    expect(needsInvestigation(check(false, 3, 'text'))).toBe(true);
+  });
+
+  it('leaves a model-judged small plan, a one-task plan and a glob with no check alone', () => {
+    expect(needsInvestigation(check(false, 3, 'model'))).toBe(false);
+    expect(needsInvestigation(check(false, 1, 'text'))).toBe(false);
+    expect(needsInvestigation(null)).toBe(false);
   });
 });

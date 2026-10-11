@@ -36,6 +36,7 @@ export const SettingsPage = () => {
   const [deploy, setDeploy] = useState<DeployIntegration | null>(null);
   const [effectCheckGlobs, setEffectCheckGlobs] = useState('');
   const [agentKbApproval, setAgentKbApproval] = useState<AgentKbApproval>('docs');
+  const [autoInvestigate, setAutoInvestigate] = useState(true);
 
   useEffect(() => {
     if (board.data === undefined) return;
@@ -46,6 +47,7 @@ export const SettingsPage = () => {
     setDeploy(board.data.deploy);
     setEffectCheckGlobs(String(board.data.effectCheckGlobs));
     setAgentKbApproval(board.data.agentKbApproval);
+    setAutoInvestigate(board.data.autoInvestigate);
   }, [board.data]);
 
   const save = useMutation({
@@ -58,6 +60,7 @@ export const SettingsPage = () => {
         repo: repo.trim() === '' ? null : repo.trim(),
         deploy,
         agentKbApproval,
+        autoInvestigate,
         // Checked by the server (3 to 50); a blank field leaves it as it is.
         ...(effectCheckGlobs.trim() === '' ? {} : { effectCheckGlobs: Number(effectCheckGlobs) }),
       });
@@ -252,6 +255,16 @@ export const SettingsPage = () => {
             data-testid='effect-check-globs'
           />
         </Label>
+        <label className='flex items-center gap-2 text-sm' title='A glob in Planning that intake flags as big gets a routine run that investigates it (no branch, no commits)'>
+          <input
+            type='checkbox'
+            disabled={!admin}
+            checked={autoInvestigate}
+            onChange={(e) => setAutoInvestigate(e.target.checked)}
+            data-testid='auto-investigate'
+          />
+          Investigate big globs in Planning automatically
+        </label>
         <h3 className='text-xs font-semibold text-muted-foreground'>Knowledge</h3>
         <label className='flex items-center gap-2 text-sm' title='Local-run spec, merge policy and whole documents always need a person'>
           <input

@@ -52,6 +52,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   subLimitStep: row.subLimitStep,
   effectCheckGlobs: row.effectCheckGlobs,
   agentKbApproval: row.agentKbApproval,
+  autoInvestigate: row.autoInvestigate,
   deploy: row.deploy,
   readinessTicks: row.readinessTicks,
   baseChecks: row.baseChecks,
@@ -669,6 +670,7 @@ export class PgStore implements Store {
             // Not the learned sub limit: `setSubLimit` writes it, so a settings save doesn't undo a learned move.
             effectCheckGlobs: board.effectCheckGlobs,
             agentKbApproval: board.agentKbApproval,
+            autoInvestigate: board.autoInvestigate,
             version: board.version,
           })
           .where(and(eq(schema.boards.id, board.id), eq(schema.boards.version, expectedVersion)))

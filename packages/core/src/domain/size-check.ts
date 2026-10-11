@@ -1,3 +1,4 @@
+import { isInvestigateEvent } from './events.js';
 import type { DomainEvent } from './events.js';
 import { contextSectionList, extractPlanFeatures } from './intake-learning.js';
 import type { Area, GlobOutcome } from './intake-learning.js';
@@ -132,6 +133,13 @@ export const oversizedReasons = (estimate: SizeEstimate, threshold: SizeThreshol
     ? [`${estimate.independentParts} independent parts (more than ${threshold.maxParts})`]
     : []),
 ];
+
+/**
+ * Whether slop investigates a glob in Planning by itself: intake flagged it big, or its part count is a guess (the text
+ * estimate stands because the model didn't answer) for a plan with more than one task. A one-task plan is plainly small.
+ */
+export const needsInvestigation = (check: { readonly flagged: boolean; readonly estimate: SizeEstimate } | null): boolean =>
+  check !== null && (check.flagged || (check.estimate.partsSource === 'text' && check.estimate.tasks > 1));
 
 /** The evidence stored with an estimate. */
 export const evidenceOf = (estimate: SizeEstimate): string[] => [
@@ -329,7 +337,7 @@ export const prHoursOf = (events: readonly DomainEvent[]): number | null => {
 
 /** Whether a `GlobSplit` event came after the glob's first run (or pick-up). */
 export const splitAfterStartOf = (events: readonly DomainEvent[]): boolean => {
-  const started = events.find((e) => e.type === 'RunTriggered' || e.type === 'PickedUp');
+  const started = events.find((e) => (e.type === 'RunTriggered' && !isInvestigateEvent(e)) || e.type === 'PickedUp');
   return started !== undefined && events.some((e) => e.type === 'GlobSplit' && e.at > started.at);
 };
 

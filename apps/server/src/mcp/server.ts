@@ -385,6 +385,20 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   );
 
   server.registerTool(
+    'investigate_glob',
+    {
+      description:
+        "Investigate a sub or same in Planning: fires a routine run that does the orchestrator's Phases 1–2 only (investigator, no implementation) and pushes the investigation artifact, without a branch or commits. The glob stays in Planning. When the glob later starts, the orchestrator reuses the investigation if its plan hash matches and the base has moved little in its relevant files, otherwise it re-investigates and supersedes it. Refused with run_active while a run is live.",
+      inputSchema: { id: z.string(), version: z.number().int() },
+    },
+    async ({ id, version }) => {
+      const result = await globs.investigate(email, id, version);
+      if (result.ok) await deps.outbox.drain(id);
+      return reply(result, (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
     'pick_up',
     {
       description:
@@ -928,13 +942,18 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         // A routine's slop call is progress for its run (and marks a queued run active).
         await deps.globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
       }
+      const stored = await artifacts.putArtifact(email, id, kind, content, {
+        commitSha: commitSha ?? null,
+        runId: runId ?? null,
+        agentSetVersion: agentSetVersion ?? null,
+        reviewStats: reviewStats ?? null,
+      });
+      // An investigate-only run ends with its investigation; one whose block didn't validate stays open for the fix.
+      if (stored.ok && !('ignored' in stored.value) && kind === 'investigation' && runId !== undefined && stored.value.provenance.validation === undefined) {
+        await globs.applyEvent(id, (g, ctx) => machine.investigationPushed(g, runId, ctx));
+      }
       return reply(
-        await artifacts.putArtifact(email, id, kind, content, {
-          commitSha: commitSha ?? null,
-          runId: runId ?? null,
-          agentSetVersion: agentSetVersion ?? null,
-          reviewStats: reviewStats ?? null,
-        }),
+        stored,
         (a) =>
           'ignored' in a
             ? a
