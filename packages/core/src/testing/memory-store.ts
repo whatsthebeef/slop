@@ -19,6 +19,8 @@ import { GLOB_OWNED_SOURCES, matchesFilters } from '../domain/search.js';
 import type { Candidate, KnowledgeItem } from '../domain/search.js';
 import { DEFAULT_SIZE_THRESHOLD } from '../domain/size-check.js';
 import type { SizeCheck, SizeThreshold, SizeThresholdChange } from '../domain/size-check.js';
+import { DEFAULT_SIZE_CALIBRATION } from '../domain/size-forecast.js';
+import type { SizeCalibration, SizeCalibrationChange, SizeRecord } from '../domain/size-forecast.js';
 import { riskChangeKey } from '../domain/risk-area.js';
 import type { RiskArea, RiskAreaChange } from '../domain/risk-area.js';
 import { SUB_LIMIT_STEP } from '../domain/sub-limit.js';
@@ -58,6 +60,9 @@ interface State {
   sizeChecks: SizeCheck[];
   sizeThresholds: Map<number, SizeThreshold>;
   sizeThresholdChanges: SizeThresholdChange[];
+  sizeCalibrations: Map<number, SizeCalibration>;
+  sizeCalibrationChanges: SizeCalibrationChange[];
+  sizeRecords: SizeRecord[];
   intakeSnapshots: { snapshot: IntakeSnapshot; embedding: readonly number[] | null }[];
   globOutcomes: GlobOutcome[];
   environmentDeploys: EnvironmentDeploy[];
@@ -142,6 +147,9 @@ const clone = (state: State): State => ({
   sizeChecks: [...state.sizeChecks],
   sizeThresholds: new Map(state.sizeThresholds),
   sizeThresholdChanges: [...state.sizeThresholdChanges],
+  sizeCalibrations: new Map(state.sizeCalibrations),
+  sizeCalibrationChanges: [...state.sizeCalibrationChanges],
+  sizeRecords: [...state.sizeRecords],
   intakeSnapshots: [...state.intakeSnapshots],
   globOutcomes: [...state.globOutcomes],
   environmentDeploys: [...state.environmentDeploys],
@@ -191,6 +199,9 @@ export class MemoryStore implements Store {
     sizeChecks: [],
     sizeThresholds: new Map(),
     sizeThresholdChanges: [],
+    sizeCalibrations: new Map(),
+    sizeCalibrationChanges: [],
+    sizeRecords: [],
     intakeSnapshots: [],
     globOutcomes: [],
     environmentDeploys: [],
@@ -395,6 +406,24 @@ export class MemoryStore implements Store {
       },
       listSizeThresholdChanges: (boardId) =>
         Promise.resolve(s.sizeThresholdChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      getSizeCalibration: (boardId) => Promise.resolve(s.sizeCalibrations.get(boardId) ?? DEFAULT_SIZE_CALIBRATION),
+      setSizeCalibration: (boardId, calibration) => {
+        s.sizeCalibrations.set(boardId, calibration);
+        return Promise.resolve();
+      },
+      insertSizeCalibrationChange: (change) => {
+        if (s.sizeCalibrationChanges.some((c) => c.boardId === change.boardId && c.globId === change.globId && c.cause === change.cause)) return Promise.resolve(false);
+        s.sizeCalibrationChanges.push({ ...change, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listSizeCalibrationChanges: (boardId) =>
+        Promise.resolve(s.sizeCalibrationChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      getSizeRecord: (globId) => Promise.resolve(s.sizeRecords.find((r) => r.globId === globId) ?? null),
+      upsertSizeRecord: (record) => {
+        s.sizeRecords = [...s.sizeRecords.filter((r) => r.globId !== record.globId), record];
+        return Promise.resolve();
+      },
+      listSizeRecords: (boardId) => Promise.resolve(s.sizeRecords.filter((r) => r.boardId === boardId)),
       setBaseChecks: (boardId, baseChecks) => {
         const current = s.boards.get(boardId);
         if (current !== undefined) s.boards.set(boardId, { ...current, baseChecks });

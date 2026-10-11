@@ -1,6 +1,11 @@
 import type {
   GlobOutcome,
   SizeEstimate,
+  SizeCalibration,
+  CalibrationValue,
+  SizeForecast,
+  SizeRecord,
+  Investigation,
   SizeProposal,
   SizeThreshold,
   PlanFeatures,
@@ -635,6 +640,52 @@ export const sizeThresholdChanges = pgTable(
     evidence: text('evidence').notNull(),
   },
   (t) => [uniqueIndex('size_threshold_changes_glob_idx').on(t.boardId, t.globId)],
+);
+
+/** The board's learned size calibration (weights, per-area factors, samples); no row means the defaults. */
+export const sizeCalibrations = pgTable('size_calibrations', {
+  boardId: integer('board_id')
+    .primaryKey()
+    .references(() => boards.id, { onDelete: 'cascade' }),
+  state: jsonb('state').$type<SizeCalibration>().notNull(),
+});
+
+/** The calibration's history: each move with its cause as text, once per board, glob and cause. */
+export const sizeCalibrationChanges = pgTable(
+  'size_calibration_changes',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    globId: text('glob_id').notNull(),
+    kind: text('kind').notNull(),
+    /** The area of an area factor, else null. */
+    area: text('area'),
+    from: jsonb('from').$type<CalibrationValue>().notNull(),
+    to: jsonb('to').$type<CalibrationValue>().notNull(),
+    cause: text('cause').notNull(),
+  },
+  (t) => [uniqueIndex('size_calibration_changes_outcome_idx').on(t.boardId, t.globId, t.cause)],
+);
+
+/** A glob's three size points (the forecast, the investigation's correction, the actual outcome), kept for calibration. */
+export const globSizeRecords = pgTable(
+  'glob_size_records',
+  {
+    globId: text('glob_id')
+      .primaryKey()
+      .references(() => globs.id, { onDelete: 'cascade' }),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
+    estimate: jsonb('estimate').$type<SizeForecast>().notNull(),
+    investigation: jsonb('investigation').$type<Investigation>(),
+    actual: jsonb('actual').$type<SizeRecord['actual']>().notNull(),
+  },
+  (t) => [index('glob_size_records_board_idx').on(t.boardId)],
 );
 
 /**

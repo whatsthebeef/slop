@@ -17,6 +17,7 @@ import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
 import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
+import type { NewSizeCalibrationChange, SizeCalibration, SizeCalibrationChange, SizeRecord } from './domain/size-forecast.js';
 import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdChange } from './domain/size-check.js';
 import type { NewRiskAreaChange, RiskArea, RiskAreaChange } from './domain/risk-area.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
@@ -120,6 +121,20 @@ export interface Tx {
   insertSizeThresholdChange(change: NewSizeThresholdChange): Promise<boolean>;
   /** A board's recorded size-threshold outcomes, newest first. */
   listSizeThresholdChanges(boardId: number): Promise<SizeThresholdChange[]>;
+  /** The board's size calibration (the defaults until it has moved). */
+  getSizeCalibration(boardId: number): Promise<SizeCalibration>;
+  /** Replaces the board's size calibration. */
+  setSizeCalibration(boardId: number, calibration: SizeCalibration): Promise<void>;
+  /** Records a calibration move; false when the board already has one for that glob with that cause (idempotent). */
+  insertSizeCalibrationChange(change: NewSizeCalibrationChange): Promise<boolean>;
+  /** A board's calibration moves, newest first. */
+  listSizeCalibrationChanges(boardId: number): Promise<SizeCalibrationChange[]>;
+  /** The glob's three-point size record, or null when none was made. */
+  getSizeRecord(globId: string): Promise<SizeRecord | null>;
+  /** Writes the glob's size record (one per glob). */
+  upsertSizeRecord(record: SizeRecord): Promise<void>;
+  /** The board's size records. */
+  listSizeRecords(boardId: number): Promise<SizeRecord[]>;
   /** Records the base branch's latest check result. It has no board version: check results arrive on their own. */
   setBaseChecks(boardId: number, baseChecks: BaseChecks): Promise<void>;
   /** Board notifications have no version: sources raise and clear them on their own. */

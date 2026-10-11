@@ -51,6 +51,10 @@ Full test runs and coverage are the **tester**'s job; don't run the full suite.
 3. **Do NOT commit.**
 4. Return a summary of what was fixed, including any deviation from the plan.
 
+## Flag what needs a human
+
+You can't call slop, so say so in your summary under `## Needs a human`, with the reason and evidence, whenever you hit one of the orchestrator's escalation criteria: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth, permissions or secrets changes, a test you had to weaken or delete, a change to agent instructions, or scope well beyond the plan. The orchestrator escalates the sub from it. Leave the section out when none applies; size alone is not a reason.
+
 ## Coding guidelines
 
 - **Follow the board's conventions docs and existing patterns.** Match code style, naming, formatting and architecture. The conventions docs are authoritative for project-specific rules (quotes, formatting, typing, framework patterns).

@@ -339,7 +339,11 @@ export class GlobService {
       return ok({ ...transition.value, glob, changed: true });
     });
     if (!result.ok) return result;
-    if (result.value.changed) this.publish(result.value.glob);
+    if (result.value.changed) {
+      this.publish(result.value.glob);
+      // The forecast from the code and history is made in the background: creating a glob never waits on it.
+      if (result.value.glob.status === 'planning') void this.deps.sizeCheck?.refresh(result.value.glob.id);
+    }
     return ok(result.value.glob);
   }
 

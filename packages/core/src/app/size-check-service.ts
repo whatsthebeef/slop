@@ -1,6 +1,10 @@
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import type { GlobOutcome } from '../domain/intake-learning.js';
 import type { DomainEvent } from '../domain/events.js';
+import { parseInvestigation } from '../domain/investigation.js';
+import { areasMatching } from '../domain/risk-area.js';
+import { safeGrepPattern, safeRepoPath } from '../domain/review-tools.js';
 import type { BoardJobResult } from '../domain/signals.js';
 import {
   SIZE_BOUNDS,
@@ -16,9 +20,26 @@ import {
   splitAfterStartOf,
   withModelParts,
 } from '../domain/size-check.js';
+import {
+  FOOTPRINT_MAX_CALLS,
+  FORECAST_EVENT_TYPES,
+  REFERENCE_K,
+  DEFAULT_SIZE_CALIBRATION,
+  REFERENCE_MIN_RELEVANCE,
+  calibrate,
+  footprintOf,
+  forecastFrom,
+  parseFilesLine,
+  proposalFromForecast,
+  referenceFrom,
+  sampleOf,
+  sizeRecordOf,
+} from '../domain/size-forecast.js';
+import type { CodeFootprint, ReferenceClass, SizeCalibrationView } from '../domain/size-forecast.js';
 import type { ModelPart, SizeCheck, SizeOutcome, SizeProposal, SizeThreshold, SizeThresholdView } from '../domain/size-check.js';
-import type { Clock, Notifier, Store } from '../ports.js';
+import type { Clock, Embedder, Notifier, Store } from '../ports.js';
 import { memberOf } from './access.js';
+import type { CodeView } from './code-view.js';
 import type { Llm } from './intake-service.js';
 import { completeWithDeadline } from './llm-call.js';
 import { field, list, parseJson, text } from './llm-json.js';
@@ -66,6 +87,21 @@ Answer with JSON only: {"parts": [{"title": "...", "summary": "one or two senten
 - "plan" is the part's share of the original plan, copied verbatim (keep the goal and any context it needs): every task goes to exactly one part. A section with no task (Evidence, Why, Background, Notes, an investigation list) is context: never make it a part, leave it with the parts that use it.
 - "after" lists the earlier parts (their index) this one must wait for, only where it needs their code, changes the same files or needs a migration; otherwise leave it empty so parts run in parallel.`;
 
+const FOOTPRINT_SYSTEM = `You predict which files of a repository a plan will change, by looking at the repository.
+Answer with one JSON object and nothing else, one of:
+{"action": "tree", "path": "<directory relative to the repository root, empty for the root>"}   the entries of a directory
+{"action": "grep", "pattern": "<regular expression>"}   matching lines (path:line:text)
+{"action": "done", "files": ["<repo-relative file path>", ...]}   your prediction: every file the plan changes or creates
+You may look only a few times, so look where the plan points and then answer done.`;
+
+/** Model turns of the footprint loop: its looks (all code-view calls but the last) and the turn that must answer. */
+const FOOTPRINT_LOOK_CALLS = FOOTPRINT_MAX_CALLS - 1;
+const FOOTPRINT_MAX_FILES = 60;
+const FOOTPRINT_OBSERVATION_CHARS = 3000;
+const REFERENCE_POOL = 40;
+const EMBED_PLAN_CHARS = 2000;
+const LEARN_EVENT_TYPES = [...SIZE_EVENT_TYPES, 'Escalated'] as const;
+
 const intOf = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
 /** The model's proposed parts from its answer; empty when it gave no usable ones. */
@@ -102,6 +138,10 @@ export class SizeCheckService implements SizeAssessor {
       /** The intake model; absent: estimates come from the text alone. */
       llm?: Llm;
       llmTimeoutMs?: number;
+      /** The board's repository, read-only; absent: no forecast from code. */
+      codeView?: CodeView;
+      /** Embeds plans for the reference class; absent: no history in the forecast. */
+      embedder?: Embedder;
       /** Called after a re-judged check was written, so the glob's hold follows it (set when newly flagged, lifted when not). */
       onRechecked?: (globId: string) => Promise<void>;
     },
@@ -161,8 +201,11 @@ export class SizeCheckService implements SizeAssessor {
         return { boardId: glob.boardId, plan, previous: await tx.getSizeCheck(globId) };
       });
       if (read === null) return;
-      // Same plan as the stored check: nothing to judge again.
-      if (read.previous?.planHash === hash(read.plan)) return;
+      // Same plan as the stored check: nothing to judge again, unless its forecast is still to be made.
+      if (read.previous?.planHash === hash(read.plan)) {
+        if (read.previous.estimate.forecast === undefined) await this.forecast(globId);
+        return;
+      }
       const assessment = await this.assess(read.boardId, read.plan);
       const written = await this.deps.store.transaction(async (tx) => {
         const glob = await tx.getGlob(globId);
@@ -176,9 +219,181 @@ export class SizeCheckService implements SizeAssessor {
       if (written) {
         await this.deps.onRechecked?.(globId);
         this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: read.boardId, globId });
+        await this.forecast(globId);
       }
     } catch {
       // Best effort: the check made at creation stands.
+    }
+  }
+
+  /**
+   * The forecast of a glob in Planning: its code footprint and reference class, written into the check's estimate, with
+   * the flag, reasons and fan-out proposal judged again by it. Runs in the background after a glob is created or its plan
+   * saved. A missing code view or model, or any failure, leaves the text estimate: it never throws.
+   */
+  async forecast(globId: string): Promise<void> {
+    if (this.deps.codeView === undefined || this.deps.llm === undefined) return;
+    try {
+      const read = await this.deps.store.transaction(async (tx) => {
+        const glob = await tx.getGlob(globId);
+        if (glob === null || glob.status !== 'planning') return null;
+        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? glob.summary;
+        const check = await tx.getSizeCheck(globId);
+        return check === null ? null : { boardId: glob.boardId, plan, check };
+      });
+      if (read === null || read.check.planHash !== hash(read.plan) || read.plan.trim().length < MIN_JUDGED_CHARS) return;
+      const footprint = await this.footprint(read.boardId, read.plan);
+      if (footprint === null || footprint.files.length === 0) return;
+      const reference = await this.referenceClass(read.boardId, read.plan);
+      const written = await this.deps.store.transaction(async (tx) => {
+        const glob = await tx.getGlob(globId);
+        if (glob === null || glob.status !== 'planning') return false;
+        const latest = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? glob.summary;
+        const current = await tx.getSizeCheck(globId);
+        if (current === null || hash(latest) !== current.planHash || current.planHash !== read.check.planHash) return false;
+        const [calibration, threshold] = [await tx.getSizeCalibration(read.boardId), await tx.getSizeThreshold(read.boardId)];
+        const forecast = forecastFrom(footprint, reference, current.estimate, calibration);
+        const estimate = { ...current.estimate, forecast };
+        const reasons = oversizedReasons(estimate, threshold);
+        const proposed = reasons.length > 0 ? proposalFromForecast(latest, forecast) : null;
+        await tx.updateSizeAssessment({
+          ...current,
+          estimate,
+          evidence: evidenceOf(estimate),
+          threshold,
+          flagged: reasons.length > 0,
+          reasons,
+          proposal: proposed === null ? (reasons.length > 0 ? current.proposal : null) : { parts: proposed },
+          updatedAt: this.deps.clock.now(),
+        });
+        return true;
+      });
+      if (written) {
+        await this.deps.onRechecked?.(globId);
+        this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: read.boardId, globId });
+      }
+    } catch {
+      // Best effort: the text estimate stands.
+    }
+  }
+
+  /**
+   * The files a plan is predicted to change, found by the model looking at the board's repository through the code view
+   * (a capped loop: at most `FOOTPRINT_MAX_CALLS` code-view calls in all), then the modules, fan-in, migration, public
+   * API and risk areas those files fall in. Null when the code view or model is missing or gives no usable answer.
+   */
+  async footprint(boardId: number, plan: string): Promise<CodeFootprint | null> {
+    const { codeView, llm } = this.deps;
+    if (codeView === undefined || llm === undefined) return null;
+    try {
+      let calls = 0;
+      const view = <T>(call: () => Promise<T>): Promise<T> => {
+        if (calls >= FOOTPRINT_MAX_CALLS) throw new Error('The code view call budget is spent');
+        calls++;
+        return call();
+      };
+      const transcript: string[] = [];
+      let predicted: string[] | null = null;
+      for (let turn = 0; turn <= FOOTPRINT_LOOK_CALLS; turn++) {
+        const last = turn === FOOTPRINT_LOOK_CALLS;
+        const answer = await completeWithDeadline(
+          llm,
+          {
+            system: FOOTPRINT_SYSTEM,
+            prompt: `Plan:\n<<<\n${plan.slice(0, MAX_PLAN_CHARS)}\n>>>\n${transcript.length === 0 ? '' : `\nWhat you have seen so far:\n${transcript.join('\n')}\n`}${last ? '\nYou may not look any more: answer with action "done".' : ''}`,
+            maxTokens: 1500,
+          },
+          this.deps.llmTimeoutMs ?? SIZE_LLM_TIMEOUT_MS,
+        );
+        const parsed = parseJson(answer);
+        const action = text(field(parsed, 'action'));
+        if (action === 'done') {
+          predicted = list(field(parsed, 'files')).flatMap((f) => {
+            const path = safeRepoPath(text(f) ?? '');
+            return path === null || path === '' ? [] : [path];
+          });
+          break;
+        }
+        if (last) break;
+        if (action === 'tree') {
+          const path = safeRepoPath(text(field(parsed, 'path')) ?? '') ?? '';
+          const seen = await view(() => codeView.tree(boardId, null, path)).then(
+            (entries) => (entries === null ? 'no such directory' : entries.slice(0, 80).map((e) => (e.type === 'dir' ? `${e.name}/` : e.name)).join('\n')),
+            () => 'unavailable',
+          );
+          transcript.push(`tree ${path === '' ? '(root)' : path}:\n${seen.slice(0, FOOTPRINT_OBSERVATION_CHARS)}`);
+        } else if (action === 'grep') {
+          const pattern = safeGrepPattern(text(field(parsed, 'pattern')) ?? '');
+          if (pattern === null) {
+            transcript.push('grep: the pattern was not usable');
+            continue;
+          }
+          const seen = await view(() => codeView.grep(boardId, null, pattern, [], 30)).then(
+            (result) => result.hits.map((h) => `${h.path}:${String(h.line)}:${h.text.slice(0, 120)}`).join('\n') || 'no matches',
+            () => 'unavailable',
+          );
+          transcript.push(`grep ${pattern}:\n${seen.slice(0, FOOTPRINT_OBSERVATION_CHARS)}`);
+        } else break;
+      }
+      if (predicted === null) return null;
+      const files = [...new Set(predicted)].slice(0, FOOTPRINT_MAX_FILES);
+      if (files.length === 0) return null;
+      const importers: Record<string, string[]> = {};
+      let fanIn = 0;
+      try {
+        for (const m of await view(() => codeView.touchedModules(boardId, files))) {
+          importers[m.module] = m.importers.map((i) => i.path);
+          fanIn += m.fanIn;
+        }
+      } catch {
+        // Without the module read the footprint has no fan-in or needs, but its files stand.
+      }
+      const areas = await this.deps.store.transaction((tx) => tx.listRiskAreas(boardId));
+      const matching = areasMatching(areas, files);
+      return footprintOf(files, {
+        importers,
+        fanIn,
+        riskAreas: matching.map((a) => a.name),
+        publicApi: matching.some((a) => /public api/i.test(a.name)),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The reference class: the merged globs whose change summaries are nearest to the plan (the embedder and the board's
+   * vector index), `REFERENCE_K` distinct ones, each with what actually happened to it. Null without an embedder or a match.
+   */
+  async referenceClass(boardId: number, plan: string): Promise<ReferenceClass | null> {
+    if (this.deps.embedder === undefined) return null;
+    try {
+      const [embedding] = await this.deps.embedder.embed([plan.slice(0, EMBED_PLAN_CHARS)], AbortSignal.timeout(SIZE_LLM_TIMEOUT_MS));
+      if (embedding === undefined) return null;
+      return await this.deps.store.transaction(async (tx) => {
+        const candidates = await tx.vectorCandidates({ boardId, query: '', mode: 'all_time', sourceTypes: ['change_summary'] }, embedding, REFERENCE_POOL);
+        const picked = new Map<string, (typeof candidates)[number]>();
+        for (const c of candidates) {
+          const id = c.globIds[0];
+          if (id !== undefined && c.relevance >= REFERENCE_MIN_RELEVANCE && !picked.has(id) && picked.size < REFERENCE_K) picked.set(id, c);
+        }
+        if (picked.size === 0) return null;
+        const outcomes = new Map((await tx.listGlobOutcomes(boardId)).map((o) => [o.globId, o]));
+        const events = await tx.listBoardEvents(boardId, EPOCH, FORECAST_EVENT_TYPES);
+        return referenceFrom(
+          [...picked].map(([globId, c]) =>
+            sampleOf({
+              globId,
+              title: c.title,
+              files: parseFilesLine(c.text),
+              outcome: outcomes.get(globId) ?? null,
+              events: events.filter((e) => e.globId === globId),
+            }),
+          ),
+        );
+      });
+    } catch {
+      return null;
     }
   }
 
@@ -228,7 +443,7 @@ export class SizeCheckService implements SizeAssessor {
         tx.listSizeChecks(boardId),
         tx.listGlobs(boardId, {}),
         tx.listSizeThresholdChanges(boardId),
-        tx.listBoardEvents(boardId, EPOCH, SIZE_EVENT_TYPES),
+        tx.listBoardEvents(boardId, EPOCH, LEARN_EVENT_TYPES),
       ]);
       return { outcomes, checks, globs, recorded: new Set(changes.map((c) => c.globId)), events };
     });
@@ -267,7 +482,82 @@ export class SizeCheckService implements SizeAssessor {
     if (changes.some((c) => c.from.maxTasks !== c.to.maxTasks || c.from.maxParts !== c.to.maxParts))
       this.deps.notifier.publish({ kind: 'board.changed', boardId });
     const threshold = await this.deps.store.transaction((tx) => tx.getSizeThreshold(boardId));
-    return { kind: 'size_threshold', threshold, changes };
+    const calibration = await this.learnCalibration(boardId, read.outcomes, byGlob, categories);
+    return { kind: 'size_threshold', threshold, changes, ...(calibration === null ? {} : { calibration }) };
+  }
+
+  /**
+   * The three-point records of merged globs that had a forecast (estimate, the investigation when the glob has one, and
+   * what happened), each stored once, and the board's calibration moved by them (area factors, weights) with a cause per
+   * move. Under the board's job lock; a glob already recorded is skipped. Null when nothing was recorded.
+   */
+  private async learnCalibration(
+    boardId: number,
+    outcomes: readonly GlobOutcome[],
+    byGlob: ReadonlyMap<string, readonly DomainEvent[]>,
+    categories: ReadonlyMap<string, string>,
+  ): Promise<NonNullable<SizeThresholdResult['calibration']> | null> {
+    const moves: { globId: string; cause: string }[] = [];
+    let records = 0;
+    const due = outcomes
+      .filter((o) => o.final && categories.get(o.globId) !== 'bug')
+      .sort((a, b) => a.mergedAt.localeCompare(b.mergedAt) || a.globId.localeCompare(b.globId));
+    for (const outcome of due) {
+      const gathered = await this.deps.store.transaction(async (tx) => {
+        const [check, record] = [await tx.getSizeCheck(outcome.globId), await tx.getSizeRecord(outcome.globId)];
+        const forecast = check?.estimate.forecast;
+        if (forecast === undefined || record !== null) return null;
+        const artifact = (await tx.artifactVersions(outcome.globId, 'investigation', '')).at(-1);
+        const parsed = artifact === undefined ? null : parseInvestigation(artifact.content);
+        const summaries = await tx.changeCandidates({ boardId, query: '', mode: 'all_time', globId: outcome.globId }, 5);
+        const files = summaries.map((c) => parseFilesLine(c.text)).find((f) => f !== null) ?? null;
+        return { forecast, investigation: parsed?.ok === true ? parsed.investigation : null, files };
+      });
+      if (gathered === null) continue;
+      const events = byGlob.get(outcome.globId) ?? [];
+      const record = sizeRecordOf({
+        globId: outcome.globId,
+        boardId,
+        at: this.deps.clock.now(),
+        forecast: gathered.forecast,
+        investigation: gathered.investigation,
+        outcome,
+        files: gathered.files,
+        events,
+        hoursOpen: prHoursOf(events),
+      });
+      const made = await this.deps.store.transaction(async (tx) => {
+        await tx.lockBoardJob(boardId, 'size_threshold');
+        if ((await tx.getSizeRecord(outcome.globId)) !== null) return null;
+        await tx.upsertSizeRecord(record);
+        const moved = calibrate(await tx.getSizeCalibration(boardId), record);
+        await tx.setSizeCalibration(boardId, moved.state);
+        const written: { globId: string; cause: string }[] = [];
+        for (const change of moved.changes) {
+          if (await tx.insertSizeCalibrationChange({ ...change, boardId, at: this.deps.clock.now() })) written.push({ globId: change.globId, cause: change.cause });
+        }
+        return written;
+      });
+      if (made === null) continue;
+      records++;
+      moves.push(...made);
+    }
+    if (moves.length > 0) this.deps.notifier.publish({ kind: 'board.changed', boardId });
+    return records === 0 ? null : { records, moves };
+  }
+
+  /** The board's calibration (weights, area factors), its defaults and its history, for members (board settings). */
+  async calibrationView(email: string, boardId: number): Promise<Result<SizeCalibrationView>> {
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      if ((await tx.getBoard(boardId)) === null) return notFound(`No board ${boardId}`);
+      return ok({
+        current: await tx.getSizeCalibration(boardId),
+        defaults: DEFAULT_SIZE_CALIBRATION,
+        history: await tx.listSizeCalibrationChanges(boardId),
+      });
+    });
   }
 
   /** Records one outcome and moves the threshold in one transaction under the board's job lock. Null when already recorded. */

@@ -1,6 +1,8 @@
 import type { DomainEvent } from './events.js';
 import { contextSectionList, extractPlanFeatures } from './intake-learning.js';
 import type { Area, GlobOutcome } from './intake-learning.js';
+import { forecastEvidence, forecastReasons } from './size-forecast.js';
+import type { SizeForecast } from './size-forecast.js';
 
 /**
  * The learned size check (spec, Intake): intake judges whether a glob is one PR's worth of work. A glob whose estimate
@@ -98,6 +100,8 @@ export interface SizeEstimate {
   readonly partsSource: 'model' | 'text';
   /** The model's one-line reason for its count; null for the text estimate. */
   readonly reasoning: string | null;
+  /** The forecast from the code and from similar merged globs, once made (it takes over the flag and the proposal). */
+  readonly forecast?: SizeForecast;
 }
 
 /** Without the model: about three tasks to a part. Sections with no task are context, never parts. */
@@ -126,7 +130,10 @@ export const withModelParts = (estimate: SizeEstimate, parts: number, reasoning:
 });
 
 /** Why the estimate exceeds the threshold, as plain text; empty when it doesn't. */
-export const oversizedReasons = (estimate: SizeEstimate, threshold: SizeThreshold): string[] => [
+export const oversizedReasons = (estimate: SizeEstimate, threshold: SizeThreshold): string[] =>
+  estimate.forecast !== undefined ? forecastReasons(estimate.forecast, threshold) : textReasons(estimate, threshold);
+
+const textReasons = (estimate: SizeEstimate, threshold: SizeThreshold): string[] => [
   ...(estimate.tasks > threshold.maxTasks ? [`${estimate.tasks} tasks (more than ${threshold.maxTasks})`] : []),
   ...(estimate.independentParts > threshold.maxParts
     ? [`${estimate.independentParts} independent parts (more than ${threshold.maxParts})`]
@@ -135,6 +142,7 @@ export const oversizedReasons = (estimate: SizeEstimate, threshold: SizeThreshol
 
 /** The evidence stored with an estimate. */
 export const evidenceOf = (estimate: SizeEstimate): string[] => [
+  ...(estimate.forecast === undefined ? [] : forecastEvidence(estimate.forecast)),
   `${estimate.tasks} tasks, ${estimate.doneWhenLines} "Done when" lines`,
   `Areas: ${estimate.areas.length === 0 ? 'none found' : estimate.areas.join(', ')}`,
   `${estimate.untaskedSections} sections with no task`,

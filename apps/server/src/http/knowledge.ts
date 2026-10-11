@@ -222,6 +222,8 @@ export const mountKnowledge = (
   const { sizeCheck } = deps;
   if (sizeCheck !== undefined) {
     app.get('/api/boards/:b/size-threshold', async (c) => send(c, await sizeCheck.view(c.get('email'), Number(c.req.param('b')))));
+    // The size forecast's calibration: weights, per-area factors against the defaults, and the history with causes.
+    app.get('/api/boards/:b/size-calibration', async (c) => send(c, await sizeCheck.calibrationView(c.get('email'), Number(c.req.param('b')))));
   }
 
   // How often intake's category and type survived to the merge, by month and prompt version, and typical effort by kind (System page), for members.

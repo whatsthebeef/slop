@@ -44,6 +44,7 @@ import type {
   SearchHit,
   SizeCheck,
   SizeThresholdView,
+  SizeCalibrationView,
   SlopType,
   RiskAreaView,
   SubLimitChange,
@@ -542,6 +543,8 @@ export const api = {
   resetRiskAreas: (boardId: number) => request<RiskAreaView>('POST', `/api/boards/${boardId}/risk-areas/reset`, {}),
   /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
   sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
+  /** The size forecast's calibration: weights, per-area factors against the defaults, and the history with causes (members). */
+  sizeCalibration: (boardId: number) => request<SizeCalibrationView>('GET', `/api/boards/${boardId}/size-calibration`),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */
   keepWhole: (id: string) => request<GlobView>('POST', `/api/globs/${id}/keep-whole`, {}),
   /** Whether the board has an active integration token (members); the secret is never returned here. */
