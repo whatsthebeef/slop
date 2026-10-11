@@ -138,6 +138,11 @@ const schema = z.object({
   KB_DRAFT_MODEL: z.string().default('us.anthropic.claude-opus-5-5'),
   /** Haiku 4.5 splits free-form reviews into findings and classifies each finding (temperature 0). */
   FINDINGS_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
+  /**
+   * The independent reviewer's default model: not a Claude model, so its blind spots differ from the implementers'
+   * (OpenAI's open-weight gpt-oss-120b; Amazon Nova is the alternative). A board's own setting overrides it.
+   */
+  REVIEW_MODEL: z.string().default('openai.gpt-oss-120b-1:0'),
   /** Titan Text Embeddings V2 (1024 dimensions) embeds search chunks and queries; it is the only embedding model slop uses. */
   EMBED_MODEL: z.string().default('amazon.titan-embed-text-v2:0'),
   /** Haiku 4.5 writes the "why this changed" note of each merged change for the search index. */

@@ -201,3 +201,13 @@ export class BedrockLlm implements Llm {
     return whole;
   }
 }
+
+/**
+ * The independent reviewer's LLM on a board's chosen Bedrock model (temperature 0, so a re-review of the same
+ * change gives the same findings). Created per review, because the model is a per-board setting.
+ */
+export const reviewerLlm = (
+  modelId: string,
+  region: string,
+  onUsage?: (usage: { model: string; input: number; output: number }) => void,
+): BedrockLlm => new BedrockLlm({ id: modelId, configKey: 'REVIEW_MODEL' }, region, onUsage, 0);
