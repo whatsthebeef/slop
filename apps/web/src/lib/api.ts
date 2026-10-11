@@ -48,6 +48,8 @@ import type {
   RiskAreaView,
   SubLimitChange,
   SubLimitView,
+  DependencyRulesView,
+  Edge,
   TargetChange,
 } from '@slop/core';
 import type { PageContext } from './page-context';
@@ -64,6 +66,8 @@ export interface GlobView extends Glob {
   readonly waitingFor?: readonly AwaitedDependency[];
   readonly waitedOnBy?: readonly string[];
   /** Everything unmerged ahead of the glob, transitively (absent when nothing is), and the one to start next. */
+  /** Every dependency edge with its kind (needs block the start, overlaps only order merges), source and evidence; absent on an older server. */
+  readonly edges?: readonly Edge[];
   readonly blockedBy?: readonly BlockedBy[];
   readonly nextStartable?: string | null;
   /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
@@ -526,6 +530,11 @@ export const api = {
   boardSignals: (boardId: number) => request<KbSignal[]>('GET', `/api/boards/${boardId}/kb/signals`),
   /** The board's learned sub size limit, its bounds and its history (members). */
   subLimit: (boardId: number) => request<SubLimitResponse>('GET', `/api/boards/${boardId}/sub-limit`),
+  /** The board's dependency rules (learned over catalog defaults) and their history (members). */
+  dependencyRules: (boardId: number) => request<DependencyRulesView>('GET', `/api/boards/${boardId}/dependency-rules`),
+  /** Drops what the board learned for one pattern, or for all of them (admins). */
+  resetDependencyRules: (boardId: number, pattern?: string) =>
+    request<null>('POST', `/api/boards/${boardId}/dependency-rules/reset`, pattern === undefined ? {} : { pattern }),
   /** The board's risk areas (learned and default) and their history (members). */
   riskAreas: (boardId: number) => request<RiskAreaView>('GET', `/api/boards/${boardId}/risk-areas`),
   /** Drops the learned risk areas and restores the defaults (admins). */

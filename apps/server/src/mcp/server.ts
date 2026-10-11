@@ -123,12 +123,24 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
             "One of the board's environments that allows branch deploys. Without one, intake suggests an environment the request targets (\"deploy to staging\"), and a sub gets the board's default for subs",
           ),
         autoTrigger: z.boolean().optional().describe('Same only: start a routine run straight away'),
+        needs: z
+          .array(z.string().min(1))
+          .max(20)
+          .optional()
+          .describe(
+            'IDs of globs on this board whose code this glob needs (it uses what they add). It cannot start until they have merged: a sub waits in Planning, a same is refused Start until then. Alias: `after`. Add one only when the code really is missing without it; a glob that merely touches the same files is an overlap.',
+          ),
+        overlaps: z
+          .array(z.string().min(1))
+          .max(20)
+          .optional()
+          .describe('IDs of globs on this board that may change the same files. Never blocks a start; it only orders the merges (the later one rebases on main as usual).'),
         after: z
           .array(z.string().min(1))
           .max(20)
           .optional()
           .describe(
-            'IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
+            'Alias of `needs`: IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
           ),
       },
     },
@@ -190,7 +202,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         ...(intakeRecord === null ? {} : { intake: intakeRecord }),
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
-        ...(input.after === undefined ? {} : { after: input.after }),
+        ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
+        ...(input.overlaps === undefined ? {} : { overlaps: input.overlaps }),
         ...(files.length === 0 ? {} : { files }),
       });
       if (!created.ok) return reply(created);
@@ -342,11 +355,14 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         category: z.enum(CATEGORIES).optional(),
         group: z.string().nullable().optional(),
         environment: z.string().nullable().optional(),
-        after: z.array(z.string().min(1)).max(20).optional(),
+        needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged before it starts (alias: `after`)'),
+        after: z.array(z.string().min(1)).max(20).optional().describe('Alias of `needs`'),
+        overlaps: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs that may change the same files; never blocks a start'),
       },
     },
-    async ({ id, version, ...changes }) => {
-      const clean = Object.fromEntries(Object.entries(changes).filter(([, v]) => v !== undefined));
+    async ({ id, version, needs, ...changes }) => {
+      const merged = needs === undefined && changes.after === undefined ? changes : { ...changes, after: [...new Set([...(needs ?? []), ...(changes.after ?? [])])] };
+      const clean = Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined));
       return reply(await globs.update(email, id, version, clean), (g) => globView(g));
     },
   );

@@ -23,6 +23,7 @@ import { riskChangeKey } from '../domain/risk-area.js';
 import type { RiskArea, RiskAreaChange } from '../domain/risk-area.js';
 import { SUB_LIMIT_STEP } from '../domain/sub-limit.js';
 import type { SubLimitChange } from '../domain/sub-limit.js';
+import type { DependencyRule, DependencyRuleChange } from '../domain/dependency-rules.js';
 import type { GlobOutcome, IntakeSnapshot } from '../domain/intake-learning.js';
 import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
@@ -50,6 +51,8 @@ interface State {
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
+  dependencyRules: DependencyRule[];
+  dependencyRuleChanges: DependencyRuleChange[];
   riskAreas: RiskArea[];
   riskAreaChanges: RiskAreaChange[];
   sizeChecks: SizeCheck[];
@@ -132,6 +135,8 @@ const clone = (state: State): State => ({
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
+  dependencyRules: [...state.dependencyRules],
+  dependencyRuleChanges: [...state.dependencyRuleChanges],
   riskAreas: [...state.riskAreas],
   riskAreaChanges: [...state.riskAreaChanges],
   sizeChecks: [...state.sizeChecks],
@@ -179,6 +184,8 @@ export class MemoryStore implements Store {
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
+    dependencyRules: [],
+    dependencyRuleChanges: [],
     riskAreas: [],
     riskAreaChanges: [],
     sizeChecks: [],
@@ -325,6 +332,24 @@ export class MemoryStore implements Store {
       },
       listSubLimitChanges: (boardId) =>
         Promise.resolve(s.subLimitChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
+      listDependencyRules: (boardId) => Promise.resolve(s.dependencyRules.filter((r) => r.boardId === boardId)),
+      upsertDependencyRule: (rule) => {
+        s.dependencyRules = [...s.dependencyRules.filter((r) => !(r.boardId === rule.boardId && r.pattern === rule.pattern)), rule];
+        return Promise.resolve();
+      },
+      deleteDependencyRules: (boardId, pattern) => {
+        s.dependencyRules = s.dependencyRules.filter((r) => r.boardId !== boardId || (pattern !== undefined && r.pattern !== pattern));
+        return Promise.resolve();
+      },
+      insertDependencyRuleChange: (change) => {
+        const same = (c: DependencyRuleChange): boolean =>
+          c.boardId === change.boardId && c.globId === change.globId && c.pattern === change.pattern && c.cause === change.cause;
+        if (change.globId !== null && s.dependencyRuleChanges.some(same)) return Promise.resolve(false);
+        s.dependencyRuleChanges.push({ ...change, id: this.nextRowId++ });
+        return Promise.resolve(true);
+      },
+      listDependencyRuleChanges: (boardId) =>
+        Promise.resolve(s.dependencyRuleChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
       listRiskAreas: (boardId) => Promise.resolve(s.riskAreas.filter((a) => a.boardId === boardId)),
       putRiskArea: (area) => {
         s.riskAreas = [...s.riskAreas.filter((a) => !(a.boardId === area.boardId && a.name === area.name)), area];

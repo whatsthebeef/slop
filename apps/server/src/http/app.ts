@@ -106,8 +106,12 @@ export const createGlobSchema = z.object({
   autoTrigger: z.boolean().default(false),
   idempotencyKey: z.string().min(1).nullable().default(null),
   plan: z.string().optional(),
-  /** IDs of globs on the board to start after. */
+  /** IDs of globs on the board this one needs: their code must be on main first, so the glob waits for them to merge. */
+  needs: z.array(z.string().min(1)).max(20).optional(),
+  /** Alias of `needs`. */
   after: z.array(z.string().min(1)).max(20).optional(),
+  /** IDs of globs on the board this one overlaps: the same files may change, so only the merge order matters. Never blocks a start. */
+  overlaps: z.array(z.string().min(1)).max(20).optional(),
   /** Files intake guessed the work changes: with the plan, they decide whether the merge policy's exclusive paths hold it. */
   files: z.array(z.string().min(1).max(200)).max(20).optional(),
   /** What the intake proposal behind the form said, passed back so the glob's snapshot records it (the request is the text intake read). */
@@ -150,7 +154,9 @@ const updateGlobSchema = z.object({
   category: z.enum(CATEGORIES).optional(),
   group: z.string().min(1).nullable().optional(),
   environment: z.string().min(1).nullable().optional(),
+  needs: z.array(z.string().min(1)).max(20).optional(),
   after: z.array(z.string().min(1)).max(20).optional(),
+  overlaps: z.array(z.string().min(1)).max(20).optional(),
 });
 
 /** A glob that came from a split says where: `split: { source, part, parts }`. */
@@ -405,9 +411,10 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
-    const { intake, ...fields } = body;
+    const { intake, needs, ...fields } = body;
     const created = await globs.create(email, {
       ...fields,
+      ...(needs === undefined && fields.after === undefined ? {} : { after: needs ?? fields.after ?? [] }),
       source: 'web',
       ...(intake === undefined ? {} : { intake: { ...intake, source: 'web' } }),
       plan: body.plan ?? body.summary,
@@ -429,8 +436,9 @@ export const createApp = (deps: AppDeps) => {
   app.patch('/api/globs/:id', async (c) => {
     const body = await parse(c, updateGlobSchema);
     if (body instanceof Response) return body;
-    const { version, ...changes } = body;
-    return withView(c, await globs.update(c.get('email'), c.req.param('id'), version, changes));
+    const { version, needs, ...changes } = body;
+    const after = needs ?? changes.after;
+    return withView(c, await globs.update(c.get('email'), c.req.param('id'), version, { ...changes, ...(after === undefined ? {} : { after }) }));
   });
 
   // Split a glob in Planning into parts (the board's Split; MCP's split_glob).

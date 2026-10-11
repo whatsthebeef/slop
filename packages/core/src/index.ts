@@ -57,6 +57,8 @@ export * from './app/findings-service.js';
 export * from './app/mining-service.js';
 export * from './app/effect-check-service.js';
 export * from './app/sub-limit-service.js';
+export * from './app/dependency-learning-service.js';
+export * from './domain/dependency-rules.js';
 export * from './app/risk-area-service.js';
 export * from './app/learning-jobs.js';
 export * from './app/deploy-service.js';

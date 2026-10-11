@@ -12,7 +12,7 @@ import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
 import { SLOP_TYPES } from './types.js';
 import { mergeImplied } from './exclusive-paths.js';
-import { chainRefusal, dependencyIds, NO_CHAIN, refusalText, waitingFor, waitSummary } from './waiting.js';
+import { chainRefusal, dependencyIds, explicitOverlaps, NO_CHAIN, refusalText, waitingFor, waitSummary } from './waiting.js';
 import type { BlockingChain } from './waiting.js';
 import type { DependencyState } from './waiting.js';
 import type {
@@ -422,7 +422,9 @@ export const start = (
       .event('Waiting', { for: holding.map((a) => a.id), note: waitSummary(holding) })
       .done();
   }
-  return new Builder(glob, ctx).set({ waiting: null }).status('implementing').queueRun(actor.email, undefined, true).done();
+  // Overlaps the policy predicted never hold the start; they stay on the glob as a note and order the merges.
+  const overlaps = newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) };
+  return new Builder(glob, ctx).set({ waiting: null, ...overlaps }).status('implementing').queueRun(actor.email, undefined, true).done();
 };
 
 /**
@@ -485,7 +487,7 @@ export const released = (
       .done();
   }
   return new Builder(glob, ctx)
-    .set({ waiting: null })
+    .set({ waiting: null, ...(newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) }) })
     .event('Released', { after: dependencyIds(glob) })
     .status('implementing')
     .queueRun(glob.creator)
@@ -956,6 +958,8 @@ export interface FieldChanges {
   readonly after?: readonly string[];
   /** Merge-policy holds found for a same becoming a sub (set by the service, not by clients). */
   readonly impliedAfter?: readonly ImpliedAfter[];
+  /** Globs this one overlaps, already checked (`checkOverlaps`): replaces the overlaps a person set, at any time (they never block). */
+  readonly overlaps?: readonly string[];
 }
 
 /** Changing fields is not a transition, except same → sub from planning (row 26). */
@@ -998,6 +1002,15 @@ export const changeFields = (
   if (afterChanged) {
     Object.assign(patch, { after: changes.after });
     diff['after'] = { from: [...(glob.after ?? [])], to: [...changes.after] };
+  }
+  if (changes.overlaps !== undefined) {
+    const before = (glob.impliedAfter ?? []).filter((i) => i.source === 'explicit' && i.kind === 'overlaps').map((i) => i.id);
+    if (before.join('\n') !== changes.overlaps.join('\n')) {
+      const kept = (glob.impliedAfter ?? []).filter((i) => !(i.source === 'explicit' && i.kind === 'overlaps'));
+      const added = explicitOverlaps(changes.overlaps).filter((o) => !kept.some((k) => k.id === o.id));
+      Object.assign(patch, { impliedAfter: [...kept, ...added] });
+      diff['overlaps'] = { from: before, to: [...changes.overlaps] };
+    }
   }
   if (Object.keys(diff).length === 0) return unchanged(glob);
 

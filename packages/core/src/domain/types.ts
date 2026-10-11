@@ -173,10 +173,24 @@ export interface BehindBase {
   readonly at: string;
 }
 
-/** A hold the board's merge policy put on a glob: it waits for `id` because both may change `paths`. */
+/** What an edge between two globs means: `needs` (the code must be on main; blocks start) or `overlaps` (same files; orders merges only). */
+export type EdgeKind = 'needs' | 'overlaps';
+/** Who set an edge: a person or a split (`explicit`), path prediction (`implied`), or slop's learning from outcomes (`learned`). */
+export type EdgeSource = 'explicit' | 'implied' | 'learned';
+
+/**
+ * An edge slop recorded beside `after` (the explicit needs): the board's merge policy predicted that both globs may change
+ * `paths` (an overlap), or slop learned the glob needs `id` from a run that failed without it (a need).
+ */
 export interface ImpliedAfter {
   readonly id: string;
   readonly paths: readonly string[];
+  /** Absent means `overlaps`: predictions never block a start. Only a learned `needs` does. */
+  readonly kind?: EdgeKind;
+  /** Absent means `implied`. */
+  readonly source?: EdgeSource;
+  /** The run or event that set it, for learned edges. */
+  readonly evidence?: string;
   /** Set when a person chose Start anyway: kept for display, no longer holds. */
   readonly overridden?: true;
 }

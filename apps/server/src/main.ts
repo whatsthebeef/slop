@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService } from '@slop/core';
+import { ArtifactService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -83,8 +83,13 @@ const auth = new Auth(db, config);
 const boards = new BoardService({ store, notifier: hub });
 // The board's merge policy reads which files a branch changes; `github` exists by the time this is first called.
 const branchFiles = new HostBranchFiles(() => github, logError);
+const catalog = new FsCatalog(config.CATALOG_DIR);
+// Which dependency edges are real on each board: predicts overlaps from learned weights, learns needs from failed runs.
+const dependencyLearning = new DependencyLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, catalog });
 const globs = new GlobService({
   store,
+  dependencyLearning,
+  log: (task, message) => logError(task, message),
   notifier: hub,
   clock: { now: () => new Date().toISOString() },
   ids: { runId: () => randomUUID() },
@@ -136,7 +141,6 @@ const outbox = new OutboxRunner(
   logError,
 );
 
-const catalog = new FsCatalog(config.CATALOG_DIR);
 const clock = { now: () => new Date().toISOString() };
 // Mining measures the board's signals: the weekly job, and the signal an admin picks to watch when approving.
 const mining = new MiningService({ store, notifier: hub });
@@ -327,7 +331,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
-mountKnowledge(app, { knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, intakeLearning, sizeCheck, logError });
+mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, intakeLearning, sizeCheck, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
 const awsSignIn =
