@@ -598,7 +598,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
 export const ACTION_LABELS: Record<Action, string> = {
   start: 'Start',
   start_anyway: 'Start anyway',
-  pick_up: 'Pick up',
+  pick_up: "Pick up (I'll do it)",
   take_over: 'Take over',
   retrigger: 'Re-trigger',
   retry_autofix: 'Retry auto-fix',

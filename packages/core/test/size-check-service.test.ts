@@ -149,6 +149,18 @@ describe('learned size check', () => {
     expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.decision).toBe('kept_whole');
   });
 
+  it('Start anyway on a flagged sub offers the action and starts it; keeping whole first records the override', async () => {
+    const sub = await create('sub', BIG);
+    const view = unwrap(await globs.get(DEV, sub.id));
+    expect(view.allowedActions).toContain('start_anyway');
+    unwrap(await service.keepWhole(DEV, sub.id));
+    const started = unwrap(await globs.startAnyway(DEV, sub.id, sub.version));
+    expect(started.status).toBe('implementing');
+    expect(started.implementer).toBeNull();
+    expect(started.runs).toHaveLength(1);
+    expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.decision).toBe('kept_whole');
+  });
+
   it('does not auto-trigger a flagged same, and leaves one without auto-trigger alone', async () => {
     const auto = await create('same', BIG, true);
     expect(auto.status).toBe('planning');
