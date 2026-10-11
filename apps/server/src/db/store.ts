@@ -1,5 +1,5 @@
-import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, TEST_RUN_KINDS } from '@slop/core';
+import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, DependencyRuleChange, RiskArea, RiskAreaChange, EscalationRecord, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -109,6 +109,17 @@ const toRiskAreaChange = (row: typeof schema.riskAreaChanges.$inferSelect): Risk
   kind: oneOf(RISK_AREA_CHANGE_KINDS, row.kind),
   globId: row.globId,
   cause: oneOf(RISK_AREA_CAUSES, row.cause),
+});
+
+const toEscalationRecord = (row: typeof schema.escalationRecords.$inferSelect): EscalationRecord => ({
+  id: row.id,
+  boardId: row.boardId,
+  at: row.at.toISOString(),
+  globId: row.globId,
+  criterion: oneOf(ESCALATION_CRITERIA, row.criterion),
+  outcome: oneOf(ESCALATION_OUTCOMES, row.outcome),
+  weight: row.weight,
+  cause: row.cause,
 });
 
 const toSizeCheck = (row: typeof schema.globSizeChecks.$inferSelect): SizeCheck => ({
@@ -771,6 +782,22 @@ export class PgStore implements Store {
             .where(eq(schema.riskAreaChanges.boardId, boardId))
             .orderBy(desc(schema.riskAreaChanges.at), desc(schema.riskAreaChanges.id))
         ).map(toRiskAreaChange),
+      insertEscalationRecord: async (record) => {
+        const rows = await t
+          .insert(schema.escalationRecords)
+          .values({ ...record, at: new Date(record.at) })
+          .onConflictDoNothing()
+          .returning({ id: schema.escalationRecords.id });
+        return rows.length === 1;
+      },
+      listEscalationRecords: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.escalationRecords)
+            .where(eq(schema.escalationRecords.boardId, boardId))
+            .orderBy(desc(schema.escalationRecords.at), desc(schema.escalationRecords.id))
+        ).map(toEscalationRecord),
       getSizeCheck: async (globId) => {
         const [row] = await t.select().from(schema.globSizeChecks).where(eq(schema.globSizeChecks.globId, globId));
         return row === undefined ? null : toSizeCheck(row);
