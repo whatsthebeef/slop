@@ -86,6 +86,8 @@ export interface ActionFacts {
   readonly dependencies?: ReadonlyMap<string, DependencyState>;
   /** Everything unmerged ahead of the glob, where loaded (Start and Retrigger refuse while it isn't empty). */
   readonly chain?: BlockingChain;
+  /** The size check flagged the glob oversized and nobody has answered: it is held in Planning, though nothing it waits for is unmerged. */
+  readonly sizeHeld?: boolean;
 }
 
 const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
@@ -423,15 +425,28 @@ export const start = (
   return new Builder(glob, ctx).set({ waiting: null }).status('implementing').queueRun(actor.email, undefined, true).done();
 };
 
-/** Row 34: Start anyway. A sub or same in planning that waits for unmerged globs starts now; the hold is recorded as overridden. */
+/**
+ * Row 34: Start anyway. A sub or same in planning that is held (it waits for unmerged globs, or for its oversized flag to be
+ * answered) starts now; the hold is recorded as overridden. Also Hand to routine (row 34a): a glob a person picked up that has
+ * no routine run goes to a routine, the person no longer implementing it.
+ */
 export const startAnyway = (
   glob: Glob,
   ctx: Context,
   dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
+  if (glob.type !== 'super' && glob.status === 'in_progress' && glob.implementer !== null) {
+    if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+    return new Builder(glob, ctx)
+      .bumpGeneration()
+      .set({ implementer: null, failure: null })
+      .status('implementing')
+      .queueRun(actor.email)
+      .done();
+  }
   if (glob.status !== 'planning' || glob.type === 'super') {
-    return invalidTransition(glob, actor, 'Only a sub or same in planning can be started anyway');
+    return invalidTransition(glob, actor, 'Only a sub or same in planning, or one picked up with no routine run, can be started anyway');
   }
   const awaited = waitingFor(glob, dependencies);
   if (awaited.length === 0 && glob.waiting == null) {
@@ -1680,9 +1695,14 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   const held =
     glob.status === 'planning' &&
     glob.type !== 'super' &&
-    (facts.dependencies === undefined ? glob.waiting != null : waitingFor(glob, facts.dependencies).length > 0);
+    (facts.sizeHeld === true ||
+      (facts.dependencies === undefined ? glob.waiting != null : waitingFor(glob, facts.dependencies).length > 0));
   if (glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
   if (held && !restricted) actions.push('start_anyway');
+  // Hand to routine: picked up, but no session has started and no run is live.
+  if (!restricted && glob.status === 'in_progress' && glob.type !== 'super' && glob.implementer !== null && !hasLiveRun(glob)) {
+    actions.push('start_anyway');
+  }
   const canPickUp =
     !restricted &&
     !hasBusyRun(glob) &&

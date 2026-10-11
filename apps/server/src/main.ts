@@ -399,6 +399,7 @@ mountMcp(app, {
   chat,
   intake,
   inbox,
+  sizeCheck,
   publicUrl: config.PUBLIC_URL,
   agentSetValues,
   links,

@@ -23,6 +23,8 @@ export const actionLabel = (
   labels: Record<Action, string>,
   status?: string,
 ): string => {
+  // Start anyway on a glob a person picked up is a hand-over to the routine.
+  if (action === 'start_anyway' && status === 'in_progress') return 'Hand to routine';
   if (action !== 'start_again') return labels[action];
   return status === 'planning' && type === 'same' ? 'Start over' : START_AGAIN_LABELS[type];
 };

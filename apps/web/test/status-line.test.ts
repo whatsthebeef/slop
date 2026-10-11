@@ -142,6 +142,14 @@ describe('activity label', () => {
     expect(activityLabel(view({ currentRun: run({ state: 'ended' }) }), NOW)).toBeNull();
   });
 
+  it('says a picked-up glob has no session once it has sat untouched, and not while a run is live', () => {
+    const later = new Date(Date.parse(NOW) + 30 * 60_000).toISOString();
+    const picked = view({ status: 'in_progress', implementer: 'dev@example.com', updatedAt: NOW, currentRun: null });
+    expect(activityLabel(picked, NOW)).toBeNull();
+    expect(activityLabel(picked, later)).toMatchObject({ kind: 'picked_up', text: 'Picked up, no session yet' });
+    expect(activityLabel({ ...picked, ...live('active') }, later)?.kind).toBe('working');
+  });
+
   it('puts merging over checks over the run', () => {
     const base = prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') });
     expect(activityLabel(base, NOW)?.kind).toBe('checks');
