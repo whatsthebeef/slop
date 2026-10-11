@@ -119,6 +119,33 @@ Write one or more **high-level proposals** to the output path. If only one appro
 - <the test that should be written to prevent this bug from recurring>
 ```
 
+### 4. End with the investigation block
+
+End the plan file with one fenced block, ```` ```investigation ````, holding a JSON object. Slop validates it and shows it on the glob. Fill it from what you found, for the recommended proposal:
+
+```investigation
+{
+  "files": [{"path": "apps/server/src/x.ts", "change": "create | modify | delete"}],
+  "modules": ["server", "web"],
+  "expectedLines": {"min": 40, "max": 120},
+  "parts": [{"name": "core", "files": ["packages/core/src/x.ts"], "needs": []}],
+  "riskTier": "low | normal | high",
+  "riskAreas": [],
+  "needsHuman": {"needed": false, "reason": null},
+  "confidence": "low | medium | high",
+  "planHash": "<the plan hash the orchestrator gave you>",
+  "baseCommit": "<the base commit you read the code at>"
+}
+```
+
+- `files`: every file the recommended proposal creates, modifies or deletes. `modules`: the packages or areas they fall in.
+- `expectedLines`: a range for lines changed, not a promise.
+- `parts`: the parts that could each ship and be reviewed on their own (the same cut as `## Size`), each with its files and, in `needs`, the names of the other parts it builds on. Use `[]` when the work is one part.
+- `riskTier` is the tier from the orchestrator's definition; `riskAreas` names the risk areas the change touches (`[]` if none).
+- `needsHuman`: `needed: true` with a `reason` when a person must decide or do something before code is written (an unclear requirement, a missing credential or dependency, a risky data migration). Otherwise `{"needed": false, "reason": null}`.
+- `planHash` and `baseCommit`: copy the values the orchestrator passed; if you were not given them, say so in the prose and use `unknown`.
+- Strict JSON: double quotes, no comments, no trailing commas. A block that does not validate is stored as plain text with a note, and nothing acts on it.
+
 ## Guidelines
 
 - **Report oversize**: if mapping the criteria to code shows the glob holds parts that could each ship and be reviewed on their own (several migrations, server, web and LLM work together, many separate tasks), say so under `## Size`. Don't plan the whole thing as one change and don't split it yourself; the orchestrator does that.

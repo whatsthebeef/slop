@@ -1,5 +1,5 @@
-import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, DependencyRuleChange, RiskArea, RiskAreaChange, EscalationRecord, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
+import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -148,6 +148,27 @@ const toSizeThresholdChange = (row: typeof schema.sizeThresholdChanges.$inferSel
   outcome: oneOf(SIZE_OUTCOMES, row.outcome),
   globId: row.globId,
   evidence: row.evidence,
+});
+
+const toSizeCalibrationChange = (row: typeof schema.sizeCalibrationChanges.$inferSelect): SizeCalibrationChange => ({
+  id: row.id,
+  boardId: row.boardId,
+  at: row.at.toISOString(),
+  globId: row.globId,
+  kind: oneOf(['area_factor', 'weights'] as const, row.kind),
+  area: row.area === null ? null : oneOf(AREAS, row.area),
+  from: row.from,
+  to: row.to,
+  cause: row.cause,
+});
+
+const toSizeRecord = (row: typeof schema.globSizeRecords.$inferSelect): SizeRecord => ({
+  globId: row.globId,
+  boardId: row.boardId,
+  recordedAt: row.recordedAt.toISOString(),
+  estimate: row.estimate,
+  investigation: row.investigation,
+  actual: row.actual,
 });
 
 const toIntakeSnapshot = (row: typeof schema.intakeSnapshots.$inferSelect): IntakeSnapshot => ({
@@ -855,6 +876,42 @@ export class PgStore implements Store {
             .where(eq(schema.sizeThresholdChanges.boardId, boardId))
             .orderBy(desc(schema.sizeThresholdChanges.at), desc(schema.sizeThresholdChanges.id))
         ).map(toSizeThresholdChange),
+      getSizeCalibration: async (boardId) => {
+        const [row] = await t.select().from(schema.sizeCalibrations).where(eq(schema.sizeCalibrations.boardId, boardId));
+        return row === undefined ? DEFAULT_SIZE_CALIBRATION : row.state;
+      },
+      setSizeCalibration: async (boardId, calibration) => {
+        const c = schema.sizeCalibrations;
+        await t.insert(c).values({ boardId, state: calibration }).onConflictDoUpdate({ target: c.boardId, set: { state: calibration } });
+      },
+      insertSizeCalibrationChange: async (change) => {
+        const rows = await t
+          .insert(schema.sizeCalibrationChanges)
+          .values({ ...change, at: new Date(change.at) })
+          .onConflictDoNothing()
+          .returning({ id: schema.sizeCalibrationChanges.id });
+        return rows.length === 1;
+      },
+      listSizeCalibrationChanges: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.sizeCalibrationChanges)
+            .where(eq(schema.sizeCalibrationChanges.boardId, boardId))
+            .orderBy(desc(schema.sizeCalibrationChanges.at), desc(schema.sizeCalibrationChanges.id))
+        ).map(toSizeCalibrationChange),
+      getSizeRecord: async (globId) => {
+        const [row] = await t.select().from(schema.globSizeRecords).where(eq(schema.globSizeRecords.globId, globId));
+        return row === undefined ? null : toSizeRecord(row);
+      },
+      upsertSizeRecord: async (record) => {
+        const r = schema.globSizeRecords;
+        const { globId, recordedAt, ...rest } = record;
+        const values = { ...rest, recordedAt: new Date(recordedAt) };
+        await t.insert(r).values({ globId, ...values }).onConflictDoUpdate({ target: r.globId, set: values });
+      },
+      listSizeRecords: async (boardId) =>
+        (await t.select().from(schema.globSizeRecords).where(eq(schema.globSizeRecords.boardId, boardId))).map(toSizeRecord),
       setBaseChecks: async (boardId, baseChecks) => {
         await t.update(schema.boards).set({ baseChecks }).where(eq(schema.boards.id, boardId));
       },
@@ -1385,12 +1442,16 @@ export class PgStore implements Store {
         return rows.map((row) => toFinding(row.finding));
       },
 
-      listBoardEvents: async (boardId, since, types) => {
+      listBoardEvents: async (boardId, since, types, globIds) => {
         const e = schema.events;
         const conditions = [eq(schema.globs.boardId, boardId), gte(e.at, new Date(since))];
         if (types !== undefined) {
           if (types.length === 0) return [];
           conditions.push(inArray(e.type, [...types]));
+        }
+        if (globIds !== undefined) {
+          if (globIds.length === 0) return [];
+          conditions.push(inArray(e.globId, [...globIds]));
         }
         const rows = await t
           .select({ globId: e.globId, type: e.type, actor: e.actor, at: e.at, data: e.data })
@@ -1715,8 +1776,13 @@ export class PgStore implements Store {
         };
         await t.insert(o).values({ globId: outcome.globId, ...values }).onConflictDoUpdate({ target: o.globId, set: values });
       },
-      listGlobOutcomes: async (boardId) => {
-        const rows = await t.select({ outcome: schema.globOutcomes.outcome }).from(schema.globOutcomes).where(eq(schema.globOutcomes.boardId, boardId));
+      listGlobOutcomes: async (boardId, globIds) => {
+        if (globIds?.length === 0) return [];
+        const o = schema.globOutcomes;
+        const rows = await t
+          .select({ outcome: o.outcome })
+          .from(o)
+          .where(globIds === undefined ? eq(o.boardId, boardId) : and(eq(o.boardId, boardId), inArray(o.globId, [...globIds])));
         return rows.map((r) => r.outcome);
       },
       listDecisions: async (boardId) => {

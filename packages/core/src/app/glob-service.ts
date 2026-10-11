@@ -343,7 +343,11 @@ export class GlobService {
       return ok({ ...transition.value, glob, changed: true });
     });
     if (!result.ok) return result;
-    if (result.value.changed) this.publish(result.value.glob);
+    if (result.value.changed) {
+      this.publish(result.value.glob);
+      // The forecast from the code and history is made in the background: creating a glob never waits on it.
+      if (result.value.glob.status === 'planning') this.refreshSizeInBackground(result.value.glob.id);
+    }
     return ok(result.value.glob);
   }
 
@@ -740,6 +744,15 @@ export class GlobService {
       if (result.ok && result.value.status !== 'planning') released.push(waiting.id);
     }
     return released;
+  }
+
+  /** The background size refresh: never awaited, and a rejection (or a throw) is logged, never unhandled. */
+  private refreshSizeInBackground(id: string): void {
+    const check = this.deps.sizeCheck;
+    if (check === undefined) return;
+    void Promise.resolve()
+      .then(() => check.refresh(id))
+      .catch((e: unknown) => this.deps.log?.('size check refresh', e instanceof Error ? e.message : String(e)));
   }
 
   /**
