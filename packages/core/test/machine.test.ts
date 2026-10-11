@@ -759,10 +759,10 @@ describe('checks and merging (slice 2)', () => {
 
   it('PR ready and pushes to an open PR refresh the head checks', () => {
     const t = value(m.prReadyForReview(glob({ status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(t)).toEqual(['refresh_checks']);
+    expect(effectKinds(t)).toEqual(['refresh_checks', 'review_change']);
     const pushed = value(m.commitPushed({ ...ready, headChecks: { sha: 'bbb', state: 'passed' } }, { sha: 'ccc', runId: null }, ctx(null)));
     expect(pushed.glob.headChecks).toBeNull();
-    expect(effectKinds(pushed)).toEqual(['refresh_checks']);
+    expect(effectKinds(pushed)).toEqual(['refresh_checks', 'review_change']);
   });
 
   it('a sub entering pr_open goes straight to the sub policy, without waiting for its checks', () => {
@@ -772,9 +772,37 @@ describe('checks and merging (slice 2)', () => {
       { kind: 'evaluate_sub_gate', globId: 's1t1', generation: 1, sha: 'bbb' },
     ]);
     const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(same)).toEqual(['refresh_checks']);
+    expect(effectKinds(same)).toEqual(['refresh_checks', 'review_change']);
     const superGlob = value(m.prReadyForReview(glob({ type: 'super', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
-    expect(effectKinds(superGlob)).toEqual(['refresh_checks']);
+    expect(effectKinds(superGlob)).toEqual(['refresh_checks', 'review_change']);
+  });
+
+  describe('automatic independent review', () => {
+    const review = (stage: 'pre_merge' | 'post_merge', sha: string) => ({ kind: 'review_change', globId: 's1t1', generation: 1, stage, sha });
+
+    it('queues a pre-merge review of the head when a same or super is marked ready, none for a sub', () => {
+      const same = value(m.prReadyForReview(glob({ type: 'same', status: 'in_progress' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+      expect(same.effects).toContainEqual(review('pre_merge', 'bbb'));
+      const sub = value(m.prReadyForReview(glob({ type: 'sub', status: 'implementing' }), { number: 7, headSha: 'bbb' }, ctx(null)));
+      expect(effectKinds(sub)).not.toContain('review_change');
+    });
+
+    it('queues a review of each push while the PR is ready, but not for drafts, subs, superseded runs or the start commit', () => {
+      const pushed = value(m.commitPushed(ready, { sha: 'ccc', runId: null }, ctx(null)));
+      expect(pushed.effects).toContainEqual(review('pre_merge', 'ccc'));
+      const draft = glob({ status: 'in_progress', pr: { number: 7, state: 'draft', headSha: 'bbb' } });
+      expect(effectKinds(value(m.commitPushed(draft, { sha: 'ccc', runId: null }, ctx(null))))).not.toContain('review_change');
+      expect(effectKinds(value(m.commitPushed({ ...ready, type: 'sub' }, { sha: 'ccc', runId: null }, ctx(null))))).not.toContain('review_change');
+      expect(effectKinds(value(m.commitPushed(ready, { sha: 'ccc', runId: 'old-run' }, ctx(null))))).not.toContain('review_change');
+      expect(effectKinds(value(m.commitPushed(ready, { sha: 'ccc', runId: null, message: 's1t1: start' }, ctx(null))))).not.toContain('review_change');
+    });
+
+    it('reviews a sub once after it merges, and a same or super not at all (it was reviewed before)', () => {
+      const sub = value(m.merged(glob({ type: 'sub', status: 'merging', pr: { number: 7, state: 'ready', headSha: 'bbb' } }), { sha: 'm1' }, ctx(null)));
+      expect(sub.effects).toContainEqual(review('post_merge', 'm1'));
+      const same = value(m.merged(glob({ type: 'same', status: 'merging', pr: { number: 7, state: 'ready', headSha: 'bbb' } }), { sha: 'm1' }, ctx(null)));
+      expect(effectKinds(same)).not.toContain('review_change');
+    });
   });
 
   it('red checks on a sub\'s merge commit revert it and fail the sub; sames and supers are left alone', () => {
@@ -964,7 +992,7 @@ describe('merge failure recovery (row 16a)', () => {
       expect(t.glob.implementer).toBe(dev.email);
       expect(t.glob.pr?.headSha).toBe('bbb');
       expect(t.glob.runs).toEqual([]);
-      expect(effectKinds(t)).toEqual(['refresh_checks']);
+      expect(effectKinds(t)).toEqual(['refresh_checks', 'review_change']);
     }
   });
   it('leaves a failed sub, a non-merge failure and a draft PR alone', () => {

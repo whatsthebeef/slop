@@ -2111,6 +2111,24 @@ export class PgStore implements Store {
             rows.push({ kind: effect.kind, globId: effect.globId, effect, runAfter: new Date(Date.now() + RECHECK_DELAY_MS) });
             continue;
           }
+          if (effect.kind === 'review_change') {
+            // One review job per glob, stage and reviewed commit (a repeated webhook or reconcile queues none). A newer
+            // pre-merge head cancels the jobs for older ones that haven't finished.
+            const jobs = schema.outbox;
+            const same = sql`${jobs.kind} = 'review_change' and ${jobs.globId} = ${effect.globId} and ${jobs.effect}->>'stage' = ${effect.stage}`;
+            const [existing] = await t
+              .select({ id: jobs.id })
+              .from(jobs)
+              .where(sql`${same} and ${jobs.effect}->>'sha' = ${effect.sha} and ${jobs.state} in ('pending', 'done')`)
+              .limit(1);
+            if (existing !== undefined || rows.some((r) => r.effect.kind === 'review_change' && r.globId === effect.globId && r.effect.stage === effect.stage && r.effect.sha === effect.sha)) continue;
+            if (effect.stage === 'pre_merge') {
+              await t
+                .update(jobs)
+                .set({ state: 'dropped', lastError: 'A newer commit replaced the reviewed head' })
+                .where(sql`${same} and ${jobs.effect}->>'sha' <> ${effect.sha} and ${jobs.state} = 'pending'`);
+            }
+          }
           rows.push({ kind: effect.kind, globId: effect.globId, effect });
         }
         if (rows.length === 0) return;
