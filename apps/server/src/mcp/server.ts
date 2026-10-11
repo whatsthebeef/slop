@@ -810,10 +810,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'put_artifact',
     {
       description:
-        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it) or a local review as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
+        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it), a local review or an investigation (the investigator\'s output ending in a fenced ```investigation JSON block; a block that does not validate is stored as text and the reply carries `validation`) as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
       inputSchema: {
         id: z.string(),
-        kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
         content: z.string().min(1),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
@@ -840,7 +840,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           agentSetVersion: agentSetVersion ?? null,
           reviewStats: reviewStats ?? null,
         }),
-        (a) => ('ignored' in a ? a : { id: a.id, kind: a.kind, version: a.version }),
+        (a) =>
+          'ignored' in a
+            ? a
+            : { id: a.id, kind: a.kind, version: a.version, ...(a.provenance.validation === undefined ? {} : { validation: a.provenance.validation }) },
       );
     },
   );
@@ -849,10 +852,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'artifact_upload_url',
     {
       description:
-        "A URL for uploading the implementation record (implementation_plan; postplan is an alias) or a local review from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
+        "A URL for uploading the implementation record (implementation_plan; postplan is an alias), a local review or an investigation from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
       inputSchema: {
         id: z.string(),
-        kind: z.enum(['implementation_plan', 'postplan', 'local_review']),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
         agentSetVersion: z.number().int().nonnegative().optional(),
