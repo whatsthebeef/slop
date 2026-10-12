@@ -191,6 +191,8 @@ export const outbox = pgTable(
   {
     id: bigserial('id', { mode: 'number' }).primaryKey(),
     kind: text('kind').notNull(),
+    /** Which runner executes it (`laneOf(kind)` at insert). */
+    lane: text('lane').notNull().default('default'),
     globId: text('glob_id').notNull(),
     effect: jsonb('effect').$type<Effect>().notNull(),
     state: text('state', { enum: ['pending', 'done', 'dropped', 'failed'] })
@@ -201,7 +203,7 @@ export const outbox = pgTable(
     lastError: text('last_error'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('outbox_pending_idx').on(t.state, t.runAfter)],
+  (t) => [index('outbox_lane_pending_idx').on(t.lane, t.state, t.runAfter)],
 );
 
 export const sessions = pgTable('sessions', {

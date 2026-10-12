@@ -479,3 +479,4 @@ A check that was skipped has not passed. If a fast check (lint, type check, test
 - "Not checked" in a report is never a reason to go ahead with the Phase 6 push or an auto-fix push.
 
 In s15t12, the run said "I couldn't run eslint because @eslint/js isn't installed in this environment". It still pushed b462e02 and marked PR #50 ready. CI Lint then failed with 18 errors in `apps/server/test/renumber-migrations.test.ts`.
+

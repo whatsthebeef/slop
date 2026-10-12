@@ -27,3 +27,4 @@ Steps 4–5 push files: send each from its file as the orchestrator's **Uploadin
    <sha>
    ```
    If any step failed, do **not** write the marker. Explain what failed; sstor will stop and report instead of marking the PR ready or merging.
+

@@ -132,11 +132,8 @@ const deploys = new DeployService({
 const environments = new EnvironmentService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 
-const outbox = new OutboxRunner(
-  db,
-  // `decisionGlobs` is built below, after the knowledge service it needs; it is only called once an effect runs.
-  { globs, decisions: { linkedMerged: (mergedId, boardId) => decisionGlobs.linkedMerged(mergedId, boardId) } },
-  {
+// One executor table; each runner drains only its own lane (`laneOf(kind)`).
+const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
     ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths, logError),
     ...deployExecutors(
       deploys,
@@ -174,9 +171,12 @@ const outbox = new OutboxRunner(
       })(glob, resolved),
       async (boardId) => (await boardOf(boardId))?.review.enabled !== false,
     ),
-  },
-  logError,
-);
+};
+// `default` carries every effect today; `llm` is for slow model calls so they never hold up the others.
+// `decisionGlobs` is built below, after the knowledge service it needs; it is only called once an effect runs.
+const outboxDeps: ConstructorParameters<typeof OutboxRunner>[1] = { globs, decisions: { linkedMerged: (mergedId, boardId) => decisionGlobs.linkedMerged(mergedId, boardId) } };
+const outbox = new OutboxRunner(db, outboxDeps, outboxExecutors, logError, 'default');
+const llmOutbox = new OutboxRunner(db, outboxDeps, outboxExecutors, logError, 'llm');
 
 const clock = { now: () => new Date().toISOString() };
 const spend = new SpendService({ store, clock });
@@ -299,6 +299,8 @@ const chat = new ChatService({
   search,
   // Haiku rewrites the question for search, so typos and follow-ups still find their records.
   rewriteLlm: searchLlm,
+  // Questions about the code go through the code view (base branch, a capped loop of calls), counted as consumer `chat`.
+  code,
   warn: (message) => console.warn(`[chat] ${message}`),
   llm: trackLlm(new BedrockLlm({ id: config.CHAT_MODEL, configKey: 'CHAT_MODEL' }, config.BEDROCK_REGION, logUsage, null), config.CHAT_MODEL),
   // "Think harder" answers one question with Opus.
@@ -527,7 +529,10 @@ if (runs('kb')) {
   }
 }
 
-if (runs('outbox')) outbox.start();
+if (runs('outbox')) {
+  outbox.start();
+  llmOutbox.start();
+}
 const runWatch = new RunWatch(store, globs, logError);
 if (runs('runs')) runWatch.start();
 const deployWatch = new DeployWatch(deploys, logError);
@@ -580,6 +585,7 @@ const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
 
 const shutdown = () => {
   outbox.stop();
+  llmOutbox.stop();
   runWatch.stop();
   reconcileWatch.stop();
   deployWatch.stop();

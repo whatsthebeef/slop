@@ -3,13 +3,18 @@ import { ChatService } from '../src/app/chat-service.js';
 import type { NewLearning } from '../src/app/knowledge-service.js';
 import { LlmBusy, LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
+import { BoardService } from '../src/app/board-service.js';
+import { CodeViewService } from '../src/app/code-view.js';
+import type { CodeView } from '../src/app/code-view.js';
 import { SearchService } from '../src/app/search-service.js';
-import { CHAT_DONT_KNOW, impliesHistory, isSmallTalk, parseActions } from '../src/domain/chat.js';
+import { CHAT_CODE_MAX_CALLS, CHAT_DONT_KNOW, CHAT_NO_CODE, impliesHistory, isSmallTalk, parseActions, parseCodeCall, withoutCodeRequests } from '../src/domain/chat.js';
 import type { PageContext } from '../src/domain/chat.js';
 import type { Result } from '../src/domain/errors.js';
 import type { AuthorityTier, ItemStatus, NewKnowledgeItem, SourceType } from '../src/domain/search.js';
 import { FakeEmbedder, vectorOf } from '../src/testing/fake-embedder.js';
-import { MemoryStore } from '../src/testing/memory-store.js';
+import { windowOf } from '../src/domain/code-view.js';
+import type { CodeLineRange } from '../src/domain/code-view.js';
+import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { glob as makeGlob } from './fixtures.js';
 
 const NOW = '2026-10-05T12:00:00.000Z';
@@ -512,5 +517,192 @@ describe('small talk and the actions line', () => {
     expect(parseActions('Answer [1]\n<actions>save</actions>')).toEqual({ text: 'Answer [1]', actions: ['save'] });
     expect(parseActions('Answer [1]')).toEqual({ text: 'Answer [1]', actions: [] });
     expect(parseActions('Answer\n<actions>create_glob,  nope')).toEqual({ text: 'Answer', actions: ['create_glob'] });
+  });
+});
+
+/** Answers each model turn from a script: a string, or a function of the request (to wait or to look at the prompt). */
+class ScriptedLlm implements Llm {
+  requests: LlmRequest[] = [];
+  constructor(private readonly turns: (string | ((request: LlmRequest) => Promise<string>))[]) {}
+  complete(request: LlmRequest): Promise<string> {
+    this.requests.push(request);
+    const turn = this.turns[this.requests.length - 1] ?? 'unscripted';
+    return typeof turn === 'string' ? Promise.resolve(turn) : turn(request);
+  }
+}
+
+class FakeCodeView implements CodeView {
+  calls: string[] = [];
+  tree(_b: number, ref: string | null, path: string) {
+    this.calls.push(`tree ${String(ref)} ${path}`);
+    return Promise.resolve([{ name: 'main.ts', path: 'main.ts', type: 'file' as const, size: 9 }]);
+  }
+  read(_b: number, ref: string | null, path: string, range?: CodeLineRange) {
+    this.calls.push(`read ${String(ref)} ${path}`);
+    return Promise.resolve(windowOf(path, Array.from({ length: 80 }, (_, i) => `line ${String(i + 1)}`).join('\n'), range));
+  }
+  grep(_b: number, ref: string | null, pattern: string) {
+    this.calls.push(`grep ${String(ref)} ${pattern}`);
+    return Promise.resolve({ hits: [{ path: 'src/main.ts', line: 42, text: 'export const x = 1' }], truncated: false });
+  }
+  history() {
+    return Promise.resolve([]);
+  }
+  imports() {
+    return Promise.resolve([]);
+  }
+  importedBy() {
+    return Promise.resolve([]);
+  }
+  touchedModules() {
+    return Promise.resolve([]);
+  }
+}
+
+describe('ChatService reading the code', () => {
+  let store: MemoryStore;
+  let view: FakeCodeView;
+  let boards: BoardService;
+  let repoBoard: number;
+  let bareBoard: number;
+  const usage: string[] = [];
+
+  const serviceWith = (llm: Llm, extra: { code?: boolean; llmTimeoutMs?: number } = {}) =>
+    new ChatService({
+      store,
+      clock: { now: () => NOW },
+      search: new SearchService({ store, clock: { now: () => NOW }, embedder: new FakeEmbedder() }),
+      llm,
+      ...(extra.code === false ? {} : { code: new CodeViewService({ boards, view, usage: { record: (_b, consumer, op) => Promise.resolve(void usage.push(`${consumer}:${op}`)) } }) }),
+      ...(extra.llmTimeoutMs === undefined ? {} : { llmTimeoutMs: extra.llmTimeoutMs }),
+    });
+
+  beforeEach(async () => {
+    store = new MemoryStore();
+    view = new FakeCodeView();
+    usage.length = 0;
+    boards = new BoardService({ store, notifier: new RecordingNotifier() });
+    await store.transaction((tx) => tx.upsertUser({ email: DEV, name: DEV, active: true }));
+    const made = unwrap(await boards.create(DEV, { name: 'demo', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+    repoBoard = made.id;
+    bareBoard = unwrap(await boards.create(DEV, { name: 'bare', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+  });
+
+  /** A record on a board, so the model is called even when the question needs the code and the code can't be read. */
+  const seedRecord = (board: number) =>
+    store.transaction(async (tx) => {
+      await tx.replaceItem(
+        { boardId: board, sourceType: 'decision', externalRef: 'd1', title: 'Retry', occurredAt: NOW, authority: 'decision', status: 'active', supersededBy: null, globIds: [], globGroup: null, externalUrl: null, contentHash: 'd1', state: 'ready' },
+        [{ position: 0, header: '[Retry]', text: 'retry helper decision' }],
+      );
+    });
+
+  const ask = (service: ChatService, board = repoBoard, onText?: (text: string) => void) =>
+    service.ask(DEV, { boardId: board, question: 'where is the retry helper implemented?' }, onText);
+
+  it('looks at the code, shows each call as a step and cites the file and line range it read', async () => {
+    const llm = new ScriptedLlm([
+      '{"tool": "grep", "pattern": "retry"}',
+      '{"tool": "read", "path": "src/main.ts", "start": 10, "end": 20}',
+      (request) => Promise.resolve(/\[1\] src\/main\.ts:10-20/.test(request.prompt) ? 'It lives in src/main.ts [1]' : 'no read seen'),
+    ]);
+    const streamed: string[] = [];
+    const answer = unwrap(await ask(serviceWith(llm), repoBoard, (t) => streamed.push(t)));
+    expect(answer.reply.content).toBe('It lives in src/main.ts [1]');
+    expect(answer.reply.tools).toEqual(["Searched the board's records (current): 0 found", 'Searched the code for retry: 1 hits', 'Read src/main.ts:10-20']);
+    expect(answer.reply.citations).toEqual([expect.objectContaining({ n: 1, source: 'code', sourceLabel: 'Code', title: 'src/main.ts:10-20', link: null })]);
+    // Base branch only, counted as chat; the requests that were code looks never reach the stream.
+    expect(view.calls).toEqual(['grep null retry', 'read null src/main.ts']);
+    expect(usage).toEqual(['chat:search_code', 'chat:read_file']);
+    expect(streamed.join('')).toBe('It lives in src/main.ts [1]');
+  });
+
+  it('stops at the cap: the last turn may not look, and a model that still asks gets no answer', async () => {
+    const llm = new ScriptedLlm(Array.from({ length: CHAT_CODE_MAX_CALLS + 3 }, () => '{"tool": "tree", "path": ""}'));
+    const answer = unwrap(await ask(serviceWith(llm)));
+    expect(view.calls).toHaveLength(CHAT_CODE_MAX_CALLS);
+    expect(llm.requests).toHaveLength(CHAT_CODE_MAX_CALLS + 1);
+    expect(llm.requests[CHAT_CODE_MAX_CALLS]?.prompt).toContain('You may not look at the code any more');
+    expect(answer.reply.content).toBe(CHAT_DONT_KNOW);
+    expect(answer.reply.citations).toEqual([]);
+  });
+
+  it('answers without looking when the model chooses to', async () => {
+    const llm = new ScriptedLlm([CHAT_DONT_KNOW]);
+    unwrap(await ask(serviceWith(llm)));
+    expect(view.calls).toEqual([]);
+    expect(llm.requests).toHaveLength(1);
+  });
+
+  it('is told a request could not be made and still counts it against the cap', async () => {
+    const llm = new ScriptedLlm(['{"tool": "read", "path": "../etc/passwd"}', (r) => Promise.resolve(r.prompt.includes('could not be made') ? CHAT_DONT_KNOW : 'told nothing')]);
+    unwrap(await ask(serviceWith(llm)));
+    expect(view.calls).toEqual([]);
+    expect(llm.requests).toHaveLength(2);
+  });
+
+  it('ends at the deadline for the whole loop, not for each call', async () => {
+    const slow = (reply: string) => (request: LlmRequest) =>
+      new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => resolve(reply), 40);
+        request.signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(new Error('aborted'));
+        });
+      });
+    // Each call alone fits in 70 ms; three do not.
+    const llm = new ScriptedLlm([slow('{"tool": "tree", "path": ""}'), slow('{"tool": "tree", "path": ""}'), slow('too late [1]')]);
+    const result = await ask(serviceWith(llm, { llmTimeoutMs: 70 }));
+    expect(errorCode(result)).toBe('llm_unavailable');
+    // The first look ran; the second call was cut by the loop's remaining time, not by its own 70 ms.
+    expect(view.calls).toHaveLength(1);
+  });
+
+  it('stops when the person stops the answer', async () => {
+    const stop = new AbortController();
+    const llm = new ScriptedLlm(['{"tool": "tree", "path": ""}', () => { stop.abort(); return Promise.reject(new Error('aborted')); }]);
+    const result = await serviceWith(llm).ask(DEV, { boardId: repoBoard, question: 'where is the retry helper implemented?', signal: stop.signal });
+    expect(errorCode(result)).toBe('invalid_input');
+  });
+
+  it('answers as before when the service has no code view, and says it could not read the code when the question needed it', async () => {
+    await seedRecord(repoBoard);
+    const llm = new ScriptedLlm([CHAT_NO_CODE]);
+    const answer = unwrap(await ask(serviceWith(llm, { code: false })));
+    expect(llm.requests[0]?.system).not.toContain('"tool"');
+    expect(answer.reply).toMatchObject({ content: CHAT_NO_CODE, citations: [] });
+    expect(answer.reply.tools).toContain("Couldn't read the code");
+  });
+
+  it('does not offer the loop for a board without a repository', async () => {
+    await seedRecord(bareBoard);
+    const llm = new ScriptedLlm([CHAT_NO_CODE]);
+    unwrap(await ask(serviceWith(llm), bareBoard));
+    expect(llm.requests[0]?.system).not.toContain('"tool"');
+    expect(view.calls).toEqual([]);
+  });
+
+  it('tells the model when a code look fails, so it can say it could not read the code', async () => {
+    view.read = () => Promise.reject(new Error('clone gone'));
+    const llm = new ScriptedLlm(['{"tool": "read", "path": "src/main.ts"}', (r) => Promise.resolve(r.prompt.includes('the code could not be read') ? CHAT_NO_CODE : 'unaware')]);
+    expect(unwrap(await ask(serviceWith(llm))).reply.content).toBe(CHAT_NO_CODE);
+  });
+
+  it('parses code requests and holds back their stream', () => {
+    expect(parseCodeCall('Plain answer')).toBeNull();
+    expect(parseCodeCall('{"tool": "nope"}')).toHaveProperty('problem');
+    expect(parseCodeCall('{"tool": "grep", "pattern": "-e"}')).toHaveProperty('problem');
+    expect(parseCodeCall('{"tool": "read", "path": "a.ts", "start": 3, "end": 9}')).toEqual({ tool: 'read', path: 'a.ts', start: 3, end: 9 });
+    expect(parseCodeCall('{"tool": "imports", "path": "a.ts", "direction": "importedBy"}')).toEqual({ tool: 'imports', path: 'a.ts', direction: 'importedBy' });
+    const out: string[] = [];
+    const request = withoutCodeRequests((t) => out.push(t));
+    request('  {"tool"');
+    request(': "tree"}');
+    expect(out).toEqual([]);
+    const answer = withoutCodeRequests((t) => out.push(t));
+    answer(' ');
+    answer('It is');
+    answer(' here');
+    expect(out.join('')).toBe(' It is here');
   });
 });

@@ -157,3 +157,4 @@ End the plan file with one fenced block, ```` ```investigation ````, holding a J
 - **Don't over-engineer**: plan only what this glob needs. No speculative abstractions.
 - **Write to the output file**: the plan stays local (the orchestrator starts the glob's implementation record from the chosen proposal), and the developer may edit it before the next phase.
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
+
