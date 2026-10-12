@@ -712,6 +712,8 @@ export const api = {
   addToInbox: (boardId: number, paste: NewInboxPaste) => request<{ id: number; created: boolean }>('POST', `/api/boards/${boardId}/inbox`, paste),
   attachInbox: (boardId: number, id: number, globIds: readonly string[]) =>
     request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/attach`, { globIds }),
+  detachInbox: (boardId: number, id: number, globIds: readonly string[]) =>
+    request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/detach`, { globIds }),
   keepInbox: (boardId: number, id: number) => request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/keep`),
   discardInbox: (boardId: number, id: number) => request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/discard`),
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */

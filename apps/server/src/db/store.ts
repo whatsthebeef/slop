@@ -1,5 +1,5 @@
 import type { KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { laneOf, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
+import { laneOf, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -1162,7 +1162,7 @@ export class PgStore implements Store {
           .from(schema.artifacts)
           .where(and(...conditions))
           .orderBy(schema.artifacts.kind, schema.artifacts.label, desc(schema.artifacts.version));
-        return rows.map(toArtifact).sort((a, b) => b.id - a.id);
+        return rows.map(toArtifact).filter((a) => !isClearedAttachment(a)).sort((a, b) => b.id - a.id);
       },
       artifactVersions: async (globId, kind, label) => {
         const rows = await t
@@ -1187,12 +1187,14 @@ export class PgStore implements Store {
             commitSha: a.commitSha,
             createdAt: a.createdAt,
             provenance: a.provenance,
+            content: a.content,
+            link: a.link,
           })
           .from(a)
           .innerJoin(schema.globs, eq(schema.globs.id, a.globId))
           .where(and(...conditions))
           .orderBy(a.globId, a.kind, a.label, desc(a.version));
-        return rows.map(
+        return rows.filter((row) => !isClearedAttachment(row)).map(
           (row): ArtifactSummary => ({
             globId: row.globId,
             kind: oneOf(ARTIFACT_KINDS, row.kind),
@@ -2094,6 +2096,11 @@ export class PgStore implements Store {
           .values({ ...link, linkedAt: new Date(link.linkedAt) })
           .onConflictDoNothing()
           .returning({ id: schema.inboxLinks.inboxId });
+        return rows.length === 1;
+      },
+      deleteInboxLink: async (inboxId, globId) => {
+        const l = schema.inboxLinks;
+        const rows = await t.delete(l).where(and(eq(l.inboxId, inboxId), eq(l.globId, globId))).returning({ id: l.inboxId });
         return rows.length === 1;
       },
       listInboxLinks: async (boardId) => {

@@ -13,7 +13,7 @@ import type { Env } from './app.js';
 import { errorBody, globView, statusOf } from './views.js';
 
 export interface InboxRoutesDeps {
-  readonly inbox: Pick<InboxService, 'add' | 'importItems' | 'list' | 'get' | 'attach' | 'keep' | 'discard' | 'promote'>;
+  readonly inbox: Pick<InboxService, 'add' | 'importItems' | 'list' | 'get' | 'attach' | 'detach' | 'keep' | 'discard' | 'promote'>;
   /** Promotes an extracted decision to a decision glob (absent: that route isn't mounted). */
   readonly decisionGlobs?: Pick<DecisionGlobService, 'promoteExtracted'>;
 }
@@ -128,6 +128,15 @@ export const mountInbox = (app: Hono<Env>, deps: InboxRoutesDeps): void => {
     const body = attachBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return bad(c, `Give globIds: 1 to ${String(MAX_ATTACH_GLOBS)} glob IDs`);
     return send(c, await deps.inbox.attach(c.get('email'), board, item, body.data.globIds));
+  });
+
+  app.post('/api/boards/:b/inbox/:id/detach', async (c) => {
+    const { board, item } = ids(c);
+    if (!Number.isSafeInteger(board) || !Number.isSafeInteger(item))
+      return bad(c, 'Bad inbox item');
+    const body = attachBody.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return bad(c, `Give globIds: 1 to ${String(MAX_ATTACH_GLOBS)} glob IDs`);
+    return send(c, await deps.inbox.detach(c.get('email'), board, item, body.data.globIds));
   });
 
   // Promote to decision: a decision glob in Planning with the item attached as its source (idempotent).

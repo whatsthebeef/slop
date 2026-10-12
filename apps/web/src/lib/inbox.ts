@@ -40,4 +40,10 @@ export const processingNote = (
 };
 
 /** Whether an attachment link is an inbox item's page in this app (and so opens in place); anything else, `//host` included, is an ordinary link. */
+/** The board and item an inbox link points at (the link a glob's attachment carries); null for any other link. */
+export const inboxLinkTarget = (link: string): { boardId: number; itemId: number } | null => {
+  const m = /^\/boards\/(\d+)\/inbox\?item=(\d+)$/.exec(link);
+  return m === null ? null : { boardId: Number(m[1]), itemId: Number(m[2]) };
+};
+
 export const isInboxLink = (link: string): boolean => /^\/boards\/\d+\/inbox\?item=\d+$/.test(link);
