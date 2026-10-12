@@ -23,7 +23,10 @@ describe('outbox lanes', () => {
   afterAll(() => drop());
 
   const insert = async (effect: Effect, lane: string) => {
-    const [row] = await database.db.insert(schema.outbox).values({ kind: effect.kind, lane, globId: effect.globId, effect }).returning();
+    // The column defaults to the database's now(), which has microseconds and its own clock; a drain a moment after the
+    // insert compares it with Node's millisecond clock and can find the job not yet due. Insert it due a second ago.
+    const runAfter = new Date(Date.now() - 1_000);
+    const [row] = await database.db.insert(schema.outbox).values({ kind: effect.kind, lane, globId: effect.globId, effect, runAfter }).returning();
     if (row === undefined) throw new Error('insert failed');
     return row.id;
   };
