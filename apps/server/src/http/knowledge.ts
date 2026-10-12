@@ -216,6 +216,14 @@ export const mountKnowledge = (
       const result = await knowledgePage.requestRebuild(c.get('email'), Number(c.req.param('b')));
       return result.ok ? c.json(result.value, 202) : send(c, result);
     });
+    // Admins and POs: pin decisions as key, mark them not key, or undo (verdict null).
+    app.post('/api/boards/:b/knowledge-page/feedback', async (c) => {
+      const body = z
+        .object({ globIds: z.array(z.string().min(1)).min(1).max(50), verdict: z.enum(['pin', 'hide']).nullable() })
+        .safeParse(await c.req.json().catch(() => null));
+      if (!body.success) return c.json({ code: 'invalid_input', message: 'globIds (1 to 50) and verdict (pin, hide or null) are required' }, 422);
+      return send(c, await knowledgePage.setVerdict(c.get('email'), Number(c.req.param('b')), body.data.globIds, body.data.verdict));
+    });
   }
 
   // The board's learned sub size limit, its bounds and its history (board settings), for members.

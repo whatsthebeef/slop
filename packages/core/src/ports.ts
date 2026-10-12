@@ -15,7 +15,7 @@ import type { GlobReportFacts } from './domain/time-tracking.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
-import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from './domain/knowledge-page.js';
+import type { KnowledgePageFeedback, KnowledgePageHistoryEntry, KnowledgePageVersion } from './domain/knowledge-page.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ChoiceUsageRow, ContextRetrievalRow } from './domain/choice-usage.js';
 import type { ContextSettingChange, ContextSettingKey, ContextSettings, NewContextSettingChange } from './domain/context-settings.js';
@@ -194,10 +194,11 @@ export interface Tx {
   /** Records when the person last opened the board; leaves its place in the bar alone. Ignored for a non-member. */
   touchBoardSession(email: string, boardId: number, at: string): Promise<void>;
   /**
-   * Writes the person's bar: positions 1..n in the given order, null for the rest of their sessions. Creates the
-   * sessions that don't exist yet (with no view time). Every board must be one the person belongs to.
+   * Gives the person's session on the board this number in the bar, or null to take it out; no other session changes.
+   * Creates the session if it doesn't exist yet (with no view time). The board must be one the person belongs to, and a
+   * number is held by one session at a time.
    */
-  setBoardSessionOrder(email: string, boardIds: readonly number[]): Promise<void>;
+  setBoardSessionPosition(email: string, boardId: number, position: number | null): Promise<void>;
 
   getUser(email: string): Promise<User | null>;
   upsertUser(user: User): Promise<void>;
@@ -229,6 +230,12 @@ export interface Tx {
   getKnowledgePageVersion(boardId: number, version: number): Promise<KnowledgePageVersion | null>;
   /** The board's versions without their sections, newest first, at most `limit`. */
   listKnowledgePageVersions(boardId: number, limit: number): Promise<KnowledgePageHistoryEntry[]>;
+  /** The board's Pin / Not key verdicts, newest first. */
+  listKnowledgePageFeedback(boardId: number): Promise<KnowledgePageFeedback[]>;
+  /** Records a verdict on a decision glob, replacing the one it had. */
+  saveKnowledgePageFeedback(feedback: KnowledgePageFeedback): Promise<void>;
+  /** Undoes a verdict. */
+  deleteKnowledgePageFeedback(boardId: number, globId: string): Promise<void>;
 
   getDeploy(id: string): Promise<Deploy | null>;
   /** Writes deploys (insert or replace by ID). */

@@ -740,6 +740,22 @@ export class PgStore implements Store {
           .limit(limit);
         return rows.map((r) => ({ version: r.version, createdAt: r.createdAt.toISOString(), reason: r.reason }));
       },
+      listKnowledgePageFeedback: async (boardId) => {
+        const f = schema.knowledgePageFeedback;
+        const rows = await t.select().from(f).where(eq(f.boardId, boardId)).orderBy(desc(f.at), f.globId);
+        return rows.map((r) => ({ boardId: r.boardId, globId: r.globId, verdict: r.verdict, by: r.by, at: r.at.toISOString() }));
+      },
+      saveKnowledgePageFeedback: async (feedback) => {
+        const values = { ...feedback, at: new Date(feedback.at) };
+        await t
+          .insert(schema.knowledgePageFeedback)
+          .values(values)
+          .onConflictDoUpdate({ target: [schema.knowledgePageFeedback.boardId, schema.knowledgePageFeedback.globId], set: values });
+      },
+      deleteKnowledgePageFeedback: async (boardId, globId) => {
+        const f = schema.knowledgePageFeedback;
+        await t.delete(f).where(and(eq(f.boardId, boardId), eq(f.globId, globId)));
+      },
       insertLlmSpend: async (row) => {
         await t.insert(schema.llmSpend).values({ ...row, createdAt: new Date(row.createdAt) });
       },
@@ -1064,26 +1080,11 @@ export class PgStore implements Store {
           .values({ email, boardId, lastViewedAt: new Date(at) })
           .onConflictDoUpdate({ target: [schema.boardSessions.email, schema.boardSessions.boardId], set: { lastViewedAt: new Date(at) } });
       },
-      setBoardSessionOrder: async (email, boardIds) => {
-        if (boardIds.length > 0) {
-          await t
-            .insert(schema.boardSessions)
-            .values(boardIds.map((boardId) => ({ email, boardId })))
-            .onConflictDoNothing();
-        }
-        // Clear first, then set: renumbering in one `position - 1` update can trip the unique index mid-statement.
+      setBoardSessionPosition: async (email, boardId, position) => {
         await t
-          .update(schema.boardSessions)
-          .set({ position: null })
-          .where(and(eq(schema.boardSessions.email, email), sql`${schema.boardSessions.position} is not null`));
-        if (boardIds.length === 0) return;
-        const values = sql.join(
-          boardIds.map((boardId, i) => sql`(${boardId}::integer, ${i + 1}::integer)`),
-          sql`, `,
-        );
-        await t.execute(
-          sql`update ${schema.boardSessions} set position = v.position from (values ${values}) as v(board_id, position) where ${schema.boardSessions.email} = ${email} and ${schema.boardSessions.boardId} = v.board_id`,
-        );
+          .insert(schema.boardSessions)
+          .values({ email, boardId, position })
+          .onConflictDoUpdate({ target: [schema.boardSessions.email, schema.boardSessions.boardId], set: { position } });
       },
 
       getUser: async (email): Promise<User | null> => {

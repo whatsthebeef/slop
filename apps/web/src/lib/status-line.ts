@@ -196,7 +196,7 @@ export interface Waiting {
 const MERGE_WAIT_LABELS: Partial<Record<Action, string>> = {
   merge: 'Merge',
   merge_continue: 'Merge and continue',
-  mark_ready: 'Ready for review',
+  mark_ready: 'Mark done (PR ready)',
 };
 
 const failedWhy = (glob: GlobView, head: string): string => {
@@ -213,7 +213,7 @@ const failedWhy = (glob: GlobView, head: string): string => {
 
 /**
  * Actions the glob is heading for but can't take yet: merging waits for the checks on the PR head, and a super's
- * Merge and continue and Ready for review wait for the latest implementation record at the head.
+ * Merge and continue and Mark done (PR ready) wait for the latest implementation record at the head.
  */
 export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Role): Waiting[] => {
   // QA and PO can't take these actions at all, so a reason would mislead them.

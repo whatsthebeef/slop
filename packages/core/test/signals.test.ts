@@ -480,6 +480,7 @@ describe('mined signals: a glob\'s agent-set version', () => {
       ['review_false_positive', null],
       ['missing_doc', null],
       ['choice_in_use', null],
+      ['knowledge_page', null],
     ]);
     expect(SIGNALS.every((s) => s.threshold !== '')).toBe(true);
   });
@@ -746,5 +747,50 @@ describe('mined signals: missing_doc', () => {
     const young = old(5);
     expect(measureSignals(activity({ ...young, globs: young.globs.map((g) => ({ ...g, createdAt: '2026-10-01T12:00:00.000Z' })) }))).toEqual([]);
     expect(measureSignals(activity({ globs: old(5).globs }))).toEqual([]);
+  });
+});
+
+describe('mined signals: knowledge_page (s15f63)', () => {
+  const verdict = (n: number, v: 'pin' | 'hide', area: string | null = 'Testing', scope = 'project') => ({
+    globId: `s1k${String(n)}`,
+    title: `Decision ${String(n)}`,
+    verdict: v,
+    at: '2026-10-01T12:00:00.000Z',
+    area,
+    scope,
+  });
+
+  it('crosses at 3 verdicts the same way in one area, and not at 2', () => {
+    const two = measureSignals(activity({ knowledgePageFeedback: [verdict(1, 'hide'), verdict(2, 'hide')] }));
+    expect(two).toMatchObject([{ key: 'knowledge_page:testing:hide', crosses: false }]);
+    const three = measureSignals(activity({ knowledgePageFeedback: [verdict(1, 'hide'), verdict(2, 'hide'), verdict(3, 'hide')] }));
+    expect(three).toMatchObject([{ key: 'knowledge_page:testing:hide', crosses: true, globIds: ['s1k1', 's1k2', 's1k3'], figures: { affected: 3, eligible: 3 } }]);
+    expect(three[0]?.examples[0]).toContain('Not key: "Decision 1"');
+  });
+
+  it('keeps the two verdicts, and the areas, apart; an entry-less decision counts under its scope', () => {
+    const keys = measureSignals(
+      activity({
+        knowledgePageFeedback: [verdict(1, 'hide'), verdict(2, 'pin'), verdict(3, 'hide', 'Deploys'), verdict(4, 'hide', null, 'glob s1t1'), verdict(5, 'hide', null, 'glob s1t1')],
+      }),
+    ).map((m) => [m.key, m.crosses]);
+    expect(keys).toEqual([
+      ['knowledge_page:deploys:hide', false],
+      ['knowledge_page:scope glob s1t1:hide', false],
+      ['knowledge_page:testing:hide', false],
+      ['knowledge_page:testing:pin', false],
+    ]);
+  });
+
+  it('measures nothing when the verdicts were not read', () => {
+    expect(measureSignals(activity({}))).toEqual([]);
+  });
+
+  it('words the statement from the key and targets the guide', () => {
+    const def = SIGNALS.find((x) => x.kind === 'knowledge_page');
+    const m = measureSignals(activity({ knowledgePageFeedback: [verdict(1, 'pin'), verdict(2, 'pin'), verdict(3, 'pin')] }))[0];
+    expect(def?.suggestedTarget).toBe('knowledge-page-guide');
+    expect(m).toBeDefined();
+    expect(def?.statement(m as Measurement)).toContain('3 decisions about testing as key');
   });
 });

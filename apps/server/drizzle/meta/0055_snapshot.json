@@ -1,5 +1,5 @@
 {
-  "id": "6bf510d4-0098-4117-87f9-945dbcde3275",
+  "id": "8707d629-2846-40ff-9bdf-49266c2be288",
   "prevId": "3186e02c-9a4f-44ed-bcda-d9e11649e615",
   "version": "7",
   "dialect": "postgresql",
@@ -811,7 +811,7 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "default": 60
+          "default": 1440
         },
         "review_settings": {
           "name": "review_settings",
@@ -849,109 +849,6 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.choice_usage": {
-      "name": "choice_usage",
-      "schema": "",
-      "columns": {
-        "board_id": {
-          "name": "board_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "decision_id": {
-          "name": "decision_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "day": {
-          "name": "day",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "glob_id": {
-          "name": "glob_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "''"
-        },
-        "count": {
-          "name": "count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        }
-      },
-      "indexes": {
-        "choice_usage_board_day_idx": {
-          "name": "choice_usage_board_day_idx",
-          "columns": [
-            {
-              "expression": "board_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "day",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "choice_usage_board_id_boards_id_fk": {
-          "name": "choice_usage_board_id_boards_id_fk",
-          "tableFrom": "choice_usage",
-          "tableTo": "boards",
-          "columnsFrom": [
-            "board_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "choice_usage_decision_id_decisions_id_fk": {
-          "name": "choice_usage_decision_id_decisions_id_fk",
-          "tableFrom": "choice_usage",
-          "tableTo": "decisions",
-          "columnsFrom": [
-            "decision_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "choice_usage_decision_id_day_glob_id_pk": {
-          "name": "choice_usage_decision_id_day_glob_id_pk",
-          "columns": [
-            "decision_id",
-            "day",
-            "glob_id"
-          ]
-        }
-      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
@@ -1500,162 +1397,6 @@
             "board_id",
             "consumer",
             "op"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.context_setting_changes": {
-      "name": "context_setting_changes",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "bigserial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "board_id": {
-          "name": "board_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "at": {
-          "name": "at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key": {
-          "name": "key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "before": {
-          "name": "before",
-          "type": "double precision",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "after": {
-          "name": "after",
-          "type": "double precision",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "outcome": {
-          "name": "outcome",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "evidence": {
-          "name": "evidence",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "context_setting_changes_board_at_idx": {
-          "name": "context_setting_changes_board_at_idx",
-          "columns": [
-            {
-              "expression": "board_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "context_setting_changes_board_id_boards_id_fk": {
-          "name": "context_setting_changes_board_id_boards_id_fk",
-          "tableFrom": "context_setting_changes",
-          "tableTo": "boards",
-          "columnsFrom": [
-            "board_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.context_settings": {
-      "name": "context_settings",
-      "schema": "",
-      "columns": {
-        "board_id": {
-          "name": "board_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key": {
-          "name": "key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "value": {
-          "name": "value",
-          "type": "double precision",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "context_settings_board_id_boards_id_fk": {
-          "name": "context_settings_board_id_boards_id_fk",
-          "tableFrom": "context_settings",
-          "tableTo": "boards",
-          "columnsFrom": [
-            "board_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "context_settings_board_id_key_pk": {
-          "name": "context_settings_board_id_key_pk",
-          "columns": [
-            "board_id",
-            "key"
           ]
         }
       },
@@ -6604,6 +6345,109 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.choice_usage": {
+      "name": "choice_usage",
+      "schema": "",
+      "columns": {
+        "board_id": {
+          "name": "board_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_id": {
+          "name": "decision_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "day": {
+          "name": "day",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "glob_id": {
+          "name": "glob_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "count": {
+          "name": "count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "choice_usage_board_day_idx": {
+          "name": "choice_usage_board_day_idx",
+          "columns": [
+            {
+              "expression": "board_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "day",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "choice_usage_board_id_boards_id_fk": {
+          "name": "choice_usage_board_id_boards_id_fk",
+          "tableFrom": "choice_usage",
+          "tableTo": "boards",
+          "columnsFrom": [
+            "board_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "choice_usage_decision_id_decisions_id_fk": {
+          "name": "choice_usage_decision_id_decisions_id_fk",
+          "tableFrom": "choice_usage",
+          "tableTo": "decisions",
+          "columnsFrom": [
+            "decision_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "choice_usage_decision_id_day_glob_id_pk": {
+          "name": "choice_usage_decision_id_day_glob_id_pk",
+          "columns": [
+            "decision_id",
+            "day",
+            "glob_id"
+          ]
+        }
+      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

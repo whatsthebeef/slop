@@ -69,27 +69,29 @@ describe('board sessions in Postgres', () => {
   const sessions = (email = DEV): Promise<BoardSession[]> =>
     store.transaction((tx) => tx.listBoardSessions(email));
 
-  it('renumbers without tripping the unique index (removing the first, reversing)', async () => {
+  it('sets and clears one session without moving the others', async () => {
     const [a, b, c] = ids as [number, number, number];
-    await store.transaction((tx) => tx.setBoardSessionOrder(DEV, [a, b, c]));
-    await store.transaction((tx) => tx.setBoardSessionOrder(DEV, [b, c]));
-    expect(bar(await sessions())).toEqual([b, c]);
-    expect((await sessions()).find((s) => s.boardId === a)?.position).toBeNull();
-    await store.transaction((tx) => tx.setBoardSessionOrder(DEV, [c, b, a]));
+    const set = (id: number, position: number | null) =>
+      store.transaction((tx) => tx.setBoardSessionPosition(DEV, id, position));
+    await set(a, 1);
+    await set(b, 2);
+    await set(c, 5);
+    await set(a, null);
     expect((await sessions()).filter((s) => ids.slice(0, 3).includes(s.boardId))).toEqual([
-      { boardId: a, position: 3, lastViewedAt: null },
+      { boardId: a, position: null, lastViewedAt: null },
       { boardId: b, position: 2, lastViewedAt: null },
-      { boardId: c, position: 1, lastViewedAt: null },
+      { boardId: c, position: 5, lastViewedAt: null },
     ]);
-    await store.transaction((tx) => tx.setBoardSessionOrder(DEV, []));
-    expect(bar(await sessions())).toEqual([]);
+    await set(a, 1);
+    await expect(set(c, 1)).rejects.toThrow();
   });
 
   it('touches the view time without moving the position, creating the row when missing', async () => {
     const [a, b] = ids as [number, number];
     await store.transaction((tx) => tx.touchBoardSession(DEV, a, T1));
     expect(await sessions()).toEqual([{ boardId: a, position: null, lastViewedAt: T1 }]);
-    await store.transaction((tx) => tx.setBoardSessionOrder(DEV, [b, a]));
+    await store.transaction((tx) => tx.setBoardSessionPosition(DEV, b, 1));
+    await store.transaction((tx) => tx.setBoardSessionPosition(DEV, a, 2));
     await store.transaction((tx) => tx.touchBoardSession(DEV, a, T2));
     expect(await sessions()).toEqual([
       { boardId: a, position: 2, lastViewedAt: T2 },
@@ -108,9 +110,9 @@ describe('board sessions in Postgres', () => {
     expect(await sessions(OTHER)).toEqual([]);
   });
 
-  it('rejects an order with a board the person is not a member of', async () => {
+  it('rejects a position for a board the person is not a member of', async () => {
     const [a] = ids as [number];
-    await expect(store.transaction((tx) => tx.setBoardSessionOrder(OTHER, [a]))).rejects.toThrow();
+    await expect(store.transaction((tx) => tx.setBoardSessionPosition(OTHER, a, 1))).rejects.toThrow();
   });
 
   it('serialises concurrent adds: unique, contiguous positions and a repeated board once', async () => {
@@ -145,10 +147,11 @@ describe('board sessions in Postgres', () => {
       unwrap(await boards.openBoard(DEV, id, T1));
     }
     expect(bar(unwrap(await boards.removeSession(DEV, a)))).toEqual([b, c]);
-    expect(bar(unwrap(await boards.addSession(DEV, a)))).toEqual([b, c, a]);
+    expect((await boards.memberships(DEV)).find((m) => m.board.id === c)?.position).toBe(3);
+    expect(bar(unwrap(await boards.addSession(DEV, a)))).toEqual([a, b, c]);
     const memberships = await boards.memberships(DEV);
     expect(memberships.find((m) => m.board.id === a)).toMatchObject({
-      position: 3,
+      position: 1,
       lastViewedAt: T1,
     });
   });

@@ -9,7 +9,7 @@ import type { DecisionAttributes } from '../src/domain/attributes.js';
 import { err, notFound, ok } from '../src/domain/errors.js';
 import type { Result } from '../src/domain/errors.js';
 import { knowledgePageEffect } from '../src/domain/events.js';
-import { KNOWLEDGE_PAGE_PROMPT_VERSION } from '../src/domain/knowledge-page.js';
+import { KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_PROMPT_VERSION } from '../src/domain/knowledge-page.js';
 import type { Glob } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { glob as globFixture } from './fixtures.js';
@@ -41,8 +41,8 @@ class FakeLlm implements Llm {
 const IMPLEMENTER = '---\nname: implementer\ndescription: Implements plans\n---\n# Implementer\n';
 const TESTER = '---\nname: tester\ndescription: Runs the tests\n---\n# Tester\n';
 
-const groups = (...entries: { area: string; text: string; globIds: string[] }[]) =>
-  JSON.stringify({ groups: entries.map((e) => ({ area: e.area, entries: [{ text: e.text, rationale: 'Because', globIds: e.globIds }] })) });
+const groups = (...entries: { area: string; text: string; globIds: string[]; key?: boolean }[]) =>
+  JSON.stringify({ groups: entries.map((e) => ({ area: e.area, entries: [{ text: e.text, rationale: 'Because', globIds: e.globIds, ...(e.key === undefined ? {} : { key: e.key }) }] })) });
 
 describe('knowledge page', () => {
   let store: MemoryStore;
@@ -120,25 +120,32 @@ describe('knowledge page', () => {
     const boards = new BoardService({ store, notifier });
     boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
+    // The default is daily; most tests step by an hour.
+    const created = unwrap(await boards.get(ADMIN, boardId)).board;
+    expect(created.knowledgePageIntervalMinutes).toBe(KNOWLEDGE_PAGE_INTERVAL_DEFAULT);
+    unwrap(await boards.updateSettings(ADMIN, boardId, created.version, { knowledgePageIntervalMinutes: 60 }));
     notifier.hints.length = 0;
   });
 
-  it('writes the first version: agents and changes from data, decisions from one model call over every decision in force', async () => {
+  it('writes the first version: agents from data, decisions from one model call over every decision in force', async () => {
     const a = await accepted({ id: 's1k1' });
-    const b = await accepted({ id: 's1k2' }, { target: { suggested: null, routed: { kind: 'agent', name: 'agents/implementer.md', section: null, newDocument: null } } });
-    llm.answer(groups({ area: 'Testing', text: 'Run the suite', globIds: [a.id, b.id] }));
+    await accepted({ id: 's1k2' }, { target: { suggested: null, routed: { kind: 'agent', name: 'agents/implementer.md', section: null, newDocument: null } } });
+    llm.answer(groups({ area: 'Testing', text: 'Run the suite', globIds: [a.id], key: true }));
 
     expect(await page.regenerate(boardId, false)).toBe('done');
 
     expect(llm.calls).toHaveLength(1);
     expect(llm.calls[0]?.prompt).toContain('Statement of s1k1');
-    expect(llm.calls[0]?.prompt).toContain('Statement of s1k2');
+    // The agent's own learning targets its file: it is in the agent set already, so the page leaves it out.
+    expect(llm.calls[0]?.prompt).not.toContain('Statement of s1k2');
     const v = latest();
-    expect(v).toMatchObject({ version: 1, reason: 'first', changed: { agents: true, decisions: true, changes: true } });
+    expect(v).toMatchObject({ version: 1, reason: 'first', changed: { agents: true, decisions: true } });
+    expect(v.sections).not.toHaveProperty('changes');
     expect(v.sections.agents).toMatchObject([
       { path: 'agents/implementer.md', kind: 'agent', name: 'implementer', description: 'Implements plans', changedInAgentSet: null, decisionGlobId: 's1k2' },
     ]);
-    expect(v.sections.decisions).toEqual([{ area: 'Testing', entries: [{ text: 'Run the suite', rationale: 'Because', globIds: ['s1k1', 's1k2'] }] }]);
+    expect(v.sections.decisions).toEqual([{ area: 'Testing', entries: [{ text: 'Run the suite', rationale: 'Because', globIds: ['s1k1'], key: true, at: START }] }]);
+    expect(Object.keys(v.basis.decisions)).toEqual(['s1k1']);
     expect(v.basis.promptVersion).toBe(KNOWLEDGE_PAGE_PROMPT_VERSION);
     expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
     expect(store.state.llmSpend).toMatchObject([{ boardId, source: KNOWLEDGE_PAGE_SPEND_SOURCE, model: 'test-model', ref: '1' }]);
@@ -201,6 +208,10 @@ describe('knowledge page', () => {
     expect(versions()).toHaveLength(2);
   });
 
+  it('defaults a board to one regeneration a day', () => {
+    expect(KNOWLEDGE_PAGE_INTERVAL_DEFAULT).toBe(1440);
+  });
+
   it('rejects an interval outside 5 to 1440 minutes', async () => {
     const boards = new BoardService({ store, notifier });
     const board = unwrap(await boards.get(ADMIN, boardId)).board;
@@ -218,7 +229,8 @@ describe('knowledge page', () => {
     expect(llm.calls).toHaveLength(1);
 
     advance(61 * MINUTE);
-    const c = await accepted({ id: 's1k3', summary: 'Gamma statement' }, { target: { suggested: null, routed: { kind: 'agent', name: 'agents/implementer.md', section: null, newDocument: null } } });
+    const c = await accepted({ id: 's1k3', summary: 'Gamma statement' });
+    await accepted({ id: 's1k4', summary: 'Delta statement' }, { target: { suggested: null, routed: { kind: 'agent', name: 'agents/implementer.md', section: null, newDocument: null } } });
     set = { ...set, version: 2, files: [{ path: 'agents/implementer.md', content: `${IMPLEMENTER}\n## Board rules\n\n- Gamma.\n` }, { path: 'agents/tester.md', content: TESTER }] };
     llm.answer(groups({ area: 'Testing', text: 'Written alpha and beta', globIds: [a.id, b.id] }, { area: 'Agents', text: 'Gamma applies', globIds: [c.id] }));
 
@@ -229,15 +241,17 @@ describe('knowledge page', () => {
     // The previous section and the change; none of the unchanged decisions' own text.
     expect(prompt).toContain('Written alpha and beta');
     expect(prompt).toContain('Gamma statement');
+    // The agent-targeted learning is not a page decision, but the agent still links to it.
+    expect(prompt).not.toContain('Delta statement');
     expect(prompt).not.toContain('Alpha statement');
     expect(prompt).not.toContain('Beta statement');
     const v = latest();
-    expect(v).toMatchObject({ version: 2, reason: 'delta', changed: { agents: true, decisions: true, changes: true } });
+    expect(v).toMatchObject({ version: 2, reason: 'delta', changed: { agents: true, decisions: true } });
     expect(v.sections.agents.map((x) => [x.path, x.changedInAgentSet, x.decisionGlobId])).toEqual([
-      ['agents/implementer.md', 2, 's1k3'],
+      ['agents/implementer.md', 2, 's1k4'],
       ['agents/tester.md', 2, null],
     ]);
-    expect(v.sections.changes).toContainEqual({ at: now, kind: 'agent_set', text: 'Agent set updated to version 2', why: 'Changed: agents/implementer.md, agents/tester.md', globId: null, agentSetVersion: 2 });
+    expect(v.basis.agentSetBumps).toEqual([{ version: 2, at: now, changedPaths: ['agents/implementer.md', 'agents/tester.md'] }]);
     expect(v.sections.decisions.map((g) => g.area)).toEqual(['Testing', 'Agents']);
   });
 
@@ -273,7 +287,7 @@ describe('knowledge page', () => {
     await reopen(a.id);
     expect(await page.regenerate(boardId, false)).toBe('done');
     expect(llm.calls).toHaveLength(1);
-    expect(latest().sections.decisions).toEqual([{ area: 'Testing', entries: [{ text: 'B and C', rationale: '', globIds: ['s1k2', 's1k3'] }] }]);
+    expect(latest().sections.decisions).toEqual([{ area: 'Testing', entries: [{ text: 'B and C', rationale: '', globIds: ['s1k2', 's1k3'], key: false, at: START }] }]);
 
     advance(61 * MINUTE);
     await reopen(b.id);
@@ -315,25 +329,96 @@ describe('knowledge page', () => {
     expect(llm.calls[1]?.prompt).toContain('Alpha statement');
   });
 
-  it('writes recent changes without a model: decisions accepted and work signed off, newest first', async () => {
-    const a = await accepted({ id: 's1k1', title: 'Use the linter' });
-    const work = globFixture({ id: 's1t9', boardId, title: 'Fix login', summary: 'Fixes the login timeout', status: 'signed_off' });
-    await store.transaction(async (tx) => {
-      await tx.insertGlob(work, null);
-      await tx.appendEvents([
-        { type: 'StatusChanged', globId: work.id, actor: DEV, at: '2026-10-05T11:00:00.000Z', data: { from: 'reviewing', to: 'signed_off' } },
-        { type: 'DecisionDecided', globId: a.id, actor: ADMIN, at: '2026-10-05T11:30:00.000Z', data: { outcome: { kind: 'accept', by: ADMIN, at: now, reason: 'Fewer bugs' } } },
-        { type: 'StatusChanged', globId: 's1t404', actor: DEV, at: '2026-10-05T11:45:00.000Z', data: { from: 'reviewing', to: 'signed_off' } },
-      ]);
+  it('leaves out learnings that target any file of the agent set, and keeps project decisions and document learnings', async () => {
+    const target = (kind: 'agent' | 'command' | 'hook' | 'settings' | 'mcp' | 'claude_md' | 'doc', name: string) => ({
+      target: { suggested: null, routed: { kind, name, section: null, newDocument: null } },
     });
-    llm.answer(groups({ area: 'Lint', text: 'Use the linter', globIds: [a.id] }));
+    await accepted({ id: 's1k1' });
+    await accepted({ id: 's1k2' }, { origin: { kind: 'inbox', id: 1 } });
+    await accepted({ id: 's1k3' }, target('doc', 'docs/build.md'));
+    for (const [n, kind] of (['agent', 'command', 'hook', 'settings', 'mcp', 'claude_md'] as const).entries()) {
+      await accepted({ id: `s1k${String(10 + n)}` }, target(kind, `file-${kind}`));
+    }
+    llm.answer(groups({ area: 'Testing', text: 'Kept', globIds: ['s1k1', 's1k2', 's1k3'] }));
     await page.regenerate(boardId, false);
+    expect(Object.keys(latest().basis.decisions).sort()).toEqual(['s1k1', 's1k2', 's1k3']);
+    expect(llm.calls[0]?.prompt).not.toContain('"id":"s1k10"');
+    expect(llm.calls[0]?.prompt).not.toContain('"id":"s1k15"');
+  });
 
-    expect(latest().sections.changes).toEqual([
-      { at: '2026-10-05T11:30:00.000Z', kind: 'decision', text: 'Use the linter', why: 'Fewer bugs', globId: 's1k1' },
-      { at: '2026-10-05T11:00:00.000Z', kind: 'work', text: 'Fix login', why: 'Fixes the login timeout', globId: 's1t9' },
+  it('reads key from the answer, treats a missing or non-boolean key as false, and stamps each entry with its newest decision time', async () => {
+    const a = await accepted({ id: 's1k1' });
+    advance(MINUTE);
+    const b = await accepted({ id: 's1k2' });
+    llm.answer(
+      JSON.stringify({
+        groups: [
+          {
+            area: 'Testing',
+            entries: [
+              { text: 'Key', rationale: '', globIds: [a.id, b.id], key: true },
+              { text: 'No flag', rationale: '', globIds: [a.id] },
+              { text: 'Odd flag', rationale: '', globIds: [b.id], key: 'yes' },
+            ],
+          },
+        ],
+      }),
+    );
+    await page.regenerate(boardId, false);
+    expect(latest().sections.decisions[0]?.entries.map((e) => [e.text, e.key, e.at])).toEqual([
+      ['Key', true, now],
+      ['No flag', false, START],
+      ['Odd flag', false, now],
     ]);
-    // One call, for the decisions section: the changes cost none.
+  });
+
+  it('shows the model the previous entries with their key flag', async () => {
+    const a = await accepted({ id: 's1k1' });
+    llm.answer(groups({ area: 'Testing', text: 'Run it', globIds: [a.id], key: true }));
+    await page.regenerate(boardId, false);
+    advance(61 * MINUTE);
+    const b = await accepted({ id: 's1k2' });
+    llm.answer(groups({ area: 'Testing', text: 'Run it', globIds: [a.id], key: true }, { area: 'Other', text: 'More', globIds: [b.id], key: false }));
+    await page.regenerate(boardId, false);
+    expect(llm.calls[1]?.prompt).toContain('"text":"Run it","rationale":"Because","globIds":["s1k1"],"key":true');
+    expect(llm.calls[1]?.system).toContain('"key"');
+  });
+
+  it('writes no recent changes, and keeps the history of agent-set versions in the basis', async () => {
+    const a = await accepted();
+    llm.answer(groups({ area: 'Testing', text: 'Run the suite', globIds: [a.id] }));
+    await page.regenerate(boardId, false);
+    expect(latest().sections).not.toHaveProperty('changes');
+    expect(latest().changed).not.toHaveProperty('changes');
+    expect(latest().basis).not.toHaveProperty('changesHash');
+  });
+
+  it('refuses an answer once, asks again with the validation error, and writes the corrected section', async () => {
+    const a = await accepted();
+    const b = await accepted();
+    llm.answer(groups({ area: 'Testing', text: 'Only one', globIds: [a.id] }), groups({ area: 'Testing', text: 'Both', globIds: [a.id, b.id], key: true }));
+    expect(await page.regenerate(boardId, false)).toBe('done');
+    expect(llm.calls).toHaveLength(2);
+    expect(llm.calls[0]?.prompt).not.toContain('previous answer was refused');
+    expect(llm.calls[1]?.prompt).toContain('Your previous answer was refused: The model left decisions out of the section: s1k2');
+    expect(versions()).toHaveLength(1);
+    expect(latest().sections.decisions[0]?.entries[0]?.text).toBe('Both');
+    // Spend covers both calls, recorded once.
+    expect(store.state.llmSpend).toHaveLength(1);
+  });
+
+  it('retries a reply that is not JSON', async () => {
+    const a = await accepted();
+    llm.answer('Sorry, here are some thoughts', groups({ area: 'Testing', text: 'Fine', globIds: [a.id] }));
+    expect(await page.regenerate(boardId, false)).toBe('done');
+    expect(llm.calls).toHaveLength(2);
+    expect(llm.calls[1]?.prompt).toContain('did not answer with a list of groups');
+  });
+
+  it('does not retry when the model itself is unavailable', async () => {
+    await accepted();
+    llm.answer(new LlmUnavailable('down', 'Fix it'));
+    await page.regenerate(boardId, false);
     expect(llm.calls).toHaveLength(1);
   });
 
@@ -372,12 +457,19 @@ describe('knowledge page', () => {
     expect(versions()).toEqual([]);
   });
 
-  it('throws on an answer that leaves a decision out, so the job is retried', async () => {
+  it('throws when the second answer also leaves a decision out, so the job is retried and the previous version stays', async () => {
     const a = await accepted();
+    const b = await accepted();
+    llm.answer(groups({ area: 'Testing', text: 'Both', globIds: [a.id, b.id] }));
+    await page.regenerate(boardId, false);
+    advance(61 * MINUTE);
     await accepted();
-    llm.answer(groups({ area: 'Testing', text: 'Only one', globIds: [a.id] }));
+    const bad = groups({ area: 'Testing', text: 'Only one', globIds: [a.id] });
+    llm.answer(bad, bad);
     await expect(page.regenerate(boardId, false)).rejects.toThrow(/left decisions out/);
-    expect(versions()).toEqual([]);
+    expect(llm.calls).toHaveLength(3);
+    expect(versions()).toHaveLength(1);
+    expect(store.state.llmSpend).toHaveLength(1);
   });
 
   it('writes a first version without a model call when there are no decisions', async () => {
@@ -390,9 +482,151 @@ describe('knowledge page', () => {
     expect(await page.regenerate(999, false)).toBe('dropped');
   });
 
+  describe('the guide and the verdicts (s15f63)', () => {
+    const verdict = (globIds: string[], v: 'pin' | 'hide' | null, who = ADMIN) => page.setVerdict(who, boardId, globIds, v);
+    const firstPage = async () => {
+      const a = await accepted({ id: 's1k1', title: 'Alpha title' });
+      const b = await accepted({ id: 's1k2', title: 'Beta title' });
+      llm.answer(
+        JSON.stringify({
+          groups: [
+            {
+              area: 'Testing',
+              entries: [
+                { text: 'Alpha', rationale: '', globIds: [a.id], key: true },
+                { text: 'Beta', rationale: '', globIds: [b.id], key: false },
+              ],
+            },
+          ],
+        }),
+      );
+      await page.regenerate(boardId, false);
+      advance(61 * MINUTE);
+      return { a, b };
+    };
+    const entry = (text: string) => latest().sections.decisions.flatMap((g) => g.entries).find((e) => e.text === text);
+
+    it('seeds the guide on first use, puts it in the prompt and writes its version into the basis', async () => {
+      const a = await accepted();
+      llm.answer(groups({ area: 'Testing', text: 'One', globIds: [a.id] }));
+      await page.regenerate(boardId, false);
+
+      const doc = await store.transaction((tx) => tx.getKnowledge(boardId, 'doc', 'knowledge-page-guide'));
+      expect(doc).toMatchObject({ version: 1, area: 'knowledge-page', audience: [] });
+      expect(doc?.description).toContain('what the knowledge page shows as key decisions');
+      expect(llm.calls[0]?.prompt).toContain("The board's rules for what is key:");
+      expect(llm.calls[0]?.prompt).toContain('not obvious from the code');
+      expect(latest().basis.guideVersion).toBe(1);
+    });
+
+    it('rebuilds with the new text when the guide changes, and not before', async () => {
+      const { a } = await firstPage();
+      expect(await page.regenerate(boardId, false)).toBe('done');
+      expect(versions()).toHaveLength(1);
+
+      await store.transaction(async (tx) => {
+        const doc = await tx.getKnowledge(boardId, 'doc', 'knowledge-page-guide');
+        if (doc === null) throw new Error('no guide');
+        await tx.saveKnowledge({ ...doc, content: 'Only product behaviour is key.', version: doc.version + 1 });
+      });
+      llm.answer(groups({ area: 'Testing', text: 'Alpha again', globIds: [a.id, 's1k2'], key: false }));
+      expect(await page.regenerate(boardId, false)).toBe('done');
+
+      expect(latest()).toMatchObject({ version: 2, reason: 'guide', basis: { guideVersion: 2 } });
+      expect(llm.calls[1]?.prompt).toContain('Only product behaviour is key.');
+      expect(llm.calls[1]?.prompt).toContain('There is no previous section');
+    });
+
+    it('lets a verdict win over the model, with no model call, and gives the model\'s word back when it is undone', async () => {
+      const { a, b } = await firstPage();
+      unwrap(await verdict([a.id], 'hide'));
+      unwrap(await verdict([b.id], 'pin'));
+
+      expect(await page.regenerate(boardId, false)).toBe('done');
+      expect(llm.calls).toHaveLength(1);
+      expect(latest()).toMatchObject({ version: 2, reason: 'delta', changed: { decisions: true } });
+      expect(entry('Alpha')).toMatchObject({ key: false, modelKey: true });
+      expect(entry('Beta')).toMatchObject({ key: true, modelKey: false });
+      expect(latest().basis.feedback).toEqual({ s1k1: 'hide', s1k2: 'pin' });
+
+      advance(61 * MINUTE);
+      unwrap(await verdict([a.id, b.id], null));
+      expect(await page.regenerate(boardId, false)).toBe('done');
+      expect(llm.calls).toHaveLength(1);
+      expect(entry('Alpha')).toMatchObject({ key: true });
+      expect(entry('Alpha')).not.toHaveProperty('modelKey');
+      expect(entry('Beta')).toMatchObject({ key: false });
+    });
+
+    it('keeps a verdict over a later model answer for the same decision', async () => {
+      const { a } = await firstPage();
+      unwrap(await verdict([a.id], 'hide'));
+      const c = await accepted({ id: 's1k3', title: 'Gamma title' });
+      llm.answer(
+        JSON.stringify({
+          groups: [{ area: 'Testing', entries: [{ text: 'Alpha', rationale: '', globIds: [a.id, 's1k2'], key: true }, { text: 'Gamma', rationale: '', globIds: [c.id], key: true }] }],
+        }),
+      );
+      await page.regenerate(boardId, false);
+      expect(entry('Alpha')).toMatchObject({ key: false });
+      expect(entry('Gamma')).toMatchObject({ key: true });
+    });
+
+    it('shows the model the newest 20 verdicts as examples, each with its decision title', async () => {
+      const ids: string[] = [];
+      for (let i = 1; i <= 22; i++) ids.push((await accepted({ id: `s1k${String(i)}`, title: `Title ${String(i)}` })).id);
+      llm.answer(groups({ area: 'Testing', text: 'All', globIds: ids }));
+      await page.regenerate(boardId, false);
+      advance(61 * MINUTE);
+      for (const [n, id] of ids.entries()) {
+        unwrap(await verdict([id], n % 2 === 0 ? 'pin' : 'hide'));
+        advance(MINUTE);
+      }
+      const extra = await accepted({ id: 's1k99', title: 'Fresh title' });
+      llm.answer(groups({ area: 'Testing', text: 'All', globIds: [...ids, extra.id] }));
+      await page.regenerate(boardId, false);
+
+      const prompt = llm.calls[1]?.prompt ?? '';
+      expect(prompt).toContain('- not key: Title 22');
+      expect(prompt).toContain('- pinned: Title 21');
+      expect(prompt).toContain('- not key: Title 4');
+      expect(prompt).not.toContain('Title 2\n');
+      expect(prompt).not.toContain('- pinned: Title 1\n');
+      expect(prompt.split('\n').filter((l) => /^- (pinned|not key): /.test(l))).toHaveLength(20);
+    });
+
+    it('shows the model its own earlier key flag, not a verdict\'s', async () => {
+      const { a, b } = await firstPage();
+      unwrap(await verdict([a.id], 'hide'));
+      await page.regenerate(boardId, false);
+      advance(61 * MINUTE);
+      await accepted({ id: 's1k3' });
+      llm.answer(
+        JSON.stringify({ groups: [{ area: 'Testing', entries: [{ text: 'Alpha', rationale: '', globIds: [a.id], key: true }, { text: 'Beta', rationale: '', globIds: [b.id], key: false }, { text: 'New', rationale: '', globIds: ['s1k3'], key: false }] }] }),
+      );
+      await page.regenerate(boardId, false);
+      expect(llm.calls[1]?.prompt).toContain('"text":"Alpha","rationale":"","globIds":["s1k1"],"key":true');
+    });
+
+    it('lets admins and POs give verdicts, others not, and only on decisions of the board', async () => {
+      const { a } = await firstPage();
+      const boards = new BoardService({ store, notifier });
+      await store.transaction((tx) => tx.upsertUser({ email: 'po@example.com', name: 'po', active: true }));
+      unwrap(await boards.setMember(ADMIN, boardId, 'po@example.com', 'po'));
+
+      expect((await verdict([a.id], 'pin', DEV)).ok).toBe(false);
+      expect((await verdict([a.id], 'pin', 'po@example.com')).ok).toBe(true);
+      expect((await verdict(['s1k404'], 'pin')).ok).toBe(false);
+      expect((await verdict([], 'pin')).ok).toBe(false);
+      const view = unwrap(await page.view(DEV, boardId));
+      expect(view.feedback).toMatchObject([{ globId: a.id, verdict: 'pin', by: 'po@example.com' }]);
+      expect(jobs().length).toBeGreaterThan(0);
+    });
+  });
+
   describe('reading and rebuilding', () => {
     it('serves the current version, the history and whether a regeneration waits', async () => {
-      expect(unwrap(await page.view(DEV, boardId))).toEqual({ current: null, history: [], nextRegenerationAt: null, pending: false });
+      expect(unwrap(await page.view(DEV, boardId))).toEqual({ current: null, history: [], nextRegenerationAt: null, pending: false, agentSetHistory: [], feedback: [] });
       await page.regenerate(boardId, false);
       advance(MINUTE);
       await store.transaction((tx) => tx.enqueueEffects([knowledgePageEffect(boardId)]));
@@ -403,6 +637,19 @@ describe('knowledge page', () => {
       expect(unwrap(await page.version(DEV, boardId, 1)).version).toBe(1);
       const missing = await page.version(DEV, boardId, 2);
       expect(missing).toEqual(notFound("No version 2 of board 1's knowledge page"));
+    });
+
+    it('serves the last 10 observed agent-set versions, newest first', async () => {
+      await page.regenerate(boardId, false);
+      for (let v = 2; v <= 14; v++) {
+        advance(1440 * MINUTE);
+        set = { ...set, version: v, files: [{ path: 'agents/implementer.md', content: `${IMPLEMENTER}\nEdit ${String(v)}\n` }] };
+        await page.regenerate(boardId, false);
+      }
+      const history = unwrap(await page.view(DEV, boardId)).agentSetHistory;
+      expect(history.map((h) => h.version)).toEqual([14, 13, 12, 11, 10, 9, 8, 7, 6, 5]);
+      expect(history[0]).toMatchObject({ changedPaths: ['agents/implementer.md'] });
+      expect(history[0]?.at).toBe(now);
     });
 
     it('is for members only', async () => {
@@ -451,7 +698,24 @@ describe('parseDecisionGroups', () => {
         { area: 'Empty', entries: [] },
       ],
     });
-    expect(parseDecisionGroups(`Here you go:\n${answer}`, allowed, new Set(['s1k1']))).toEqual([{ area: 'General', entries: [{ text: 'Keep', rationale: 'why', globIds: ['s1k1'] }] }]);
+    expect(parseDecisionGroups(`Here you go:\n${answer}`, allowed, new Set(['s1k1']))).toEqual([{ area: 'General', entries: [{ text: 'Keep', rationale: 'why', globIds: ['s1k1'], key: false }] }]);
+  });
+
+  it('reads key as true only for a boolean true', () => {
+    const answer = JSON.stringify({
+      groups: [
+        {
+          area: 'A',
+          entries: [
+            { text: 'one', rationale: '', globIds: ['s1k1'], key: true },
+            { text: 'two', rationale: '', globIds: ['s1k2'], key: false },
+            { text: 'three', rationale: '', globIds: ['s1k1'] },
+            { text: 'four', rationale: '', globIds: ['s1k2'], key: 'true' },
+          ],
+        },
+      ],
+    });
+    expect(parseDecisionGroups(answer, allowed, new Set()).flatMap((g) => g.entries.map((e) => e.key))).toEqual([true, false, false, false]);
   });
 
   it('refuses an answer that is not a list of groups, or that leaves a required decision out', () => {

@@ -1,6 +1,8 @@
 import { CHOICE_USAGE_RETENTION_DAYS, CHOICE_USAGE_WINDOW_DAYS, summariseUsage, usageFrom } from '../domain/choice-usage.js';
 import type { ChoiceActivity } from '../domain/choice-usage.js';
+import { decisionOf, scopeLabel } from '../domain/decision-glob.js';
 import { isSuperseded } from '../domain/decisions.js';
+import { KNOWLEDGE_PAGE_FEEDBACK_DAYS } from '../domain/knowledge-page.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import { learningDecision, learningEvidence, learningFacts, learningLinks, learningStatus } from '../domain/learning.js';
 import type { LearningRead } from '../domain/learning.js';
@@ -19,6 +21,7 @@ import type {
   ManifestChange,
   Measurement,
   MergedCommit,
+  KnowledgePageVerdictActivity,
 } from '../domain/signals.js';
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { squash } from './kb-dedupe.js';
@@ -82,6 +85,7 @@ export class MiningService {
     const learnings = await boardLearnings(tx, boardId);
     const choices = await this.choices(tx, boardId, now, knowledge);
     const settings = await tx.getContextSettings(boardId);
+    const knowledgePageFeedback = await this.knowledgePageFeedback(tx, boardId, now);
     return {
       window: { from, to: now },
       globs: globs.map((g) => ({ id: g.id, type: g.type, status: g.status, createdAt: g.createdAt })),
@@ -94,11 +98,41 @@ export class MiningService {
       documentAreasKnown: true,
       choices,
       settings,
+      knowledgePageFeedback,
       learnings: learnings.flatMap(({ glob }) => {
         const facts = learningFacts(glob);
         return facts.source === 'submitted' ? [{ globIds: facts.sourceGlobIds, agentSetVersion: facts.agentSetVersion }] : [];
       }),
     };
+  }
+
+  /**
+   * The Pin / Not key verdicts of the last `KNOWLEDGE_PAGE_FEEDBACK_DAYS` days (an undone one is gone), each with the
+   * area of the current page's entry behind the decision, and the decision's scope for when it has none.
+   */
+  private async knowledgePageFeedback(tx: Tx, boardId: number, now: string): Promise<KnowledgePageVerdictActivity[]> {
+    const from = new Date(Date.parse(now) - KNOWLEDGE_PAGE_FEEDBACK_DAYS * DAY_MS).toISOString();
+    const verdicts = (await tx.listKnowledgePageFeedback(boardId)).filter((f) => f.at >= from && f.at <= now);
+    if (verdicts.length === 0) return [];
+    const areas = new Map<string, string>();
+    for (const group of (await tx.latestKnowledgePageVersion(boardId))?.sections.decisions ?? []) {
+      for (const entry of group.entries) for (const id of entry.globIds) areas.set(id, group.area);
+    }
+    const out: KnowledgePageVerdictActivity[] = [];
+    for (const f of verdicts) {
+      const glob = await tx.getGlob(f.globId);
+      if (glob === null) continue;
+      const decision = decisionOf(glob);
+      out.push({
+        globId: f.globId,
+        title: glob.title,
+        verdict: f.verdict,
+        at: f.at,
+        area: areas.get(f.globId) ?? null,
+        scope: decision === null ? 'project' : scopeLabel(decision.scope),
+      });
+    }
+    return out;
   }
 
   /**
