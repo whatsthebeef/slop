@@ -90,6 +90,9 @@ const artifactSource = (kind: ArtifactKind): SourceType => {
       return 'independent_review';
     case 'investigation':
     case 'assessment':
+    case 'draft':
+    case 'outcome':
+    case 'effect_check':
     case 'attachment':
       return 'attachment';
   }

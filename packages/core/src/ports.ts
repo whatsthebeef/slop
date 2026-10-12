@@ -1,7 +1,7 @@
 import type { BoardSession } from './domain/board-sessions.js';
 import type { Deploy, DeployState } from './domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
-import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
+import type { DomainEvent, DomainEventType, Effect, EffectKind, OutboxJob } from './domain/events.js';
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
 import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, ChatThread, NewChatMessage, NewChatThread } from './domain/chat.js';
@@ -212,6 +212,10 @@ export interface Tx {
   artifactVersions(globId: string, kind: ArtifactKind, label: string): Promise<Artifact[]>;
   /** Content-free summaries of the latest version of each artifact on the given globs of a board. */
   listArtifactSummaries(boardId: number, globIds: readonly string[]): Promise<ArtifactSummary[]>;
+  /** The latest version of each artifact (per glob, kind and label) of the given globs, of the given kinds, with content: one read for many globs. */
+  latestArtifacts(globIds: readonly string[], kinds: readonly ArtifactKind[]): Promise<Artifact[]>;
+  /** The newest outbox job (any state) per glob and kind, of the given globs and kinds: one read for many globs. */
+  latestOutboxJobs(globIds: readonly string[], kinds: readonly EffectKind[]): Promise<OutboxJob[]>;
 
   /** Inserts a new KB item; returns false if the ID already exists. */
   insertKbItem(item: KbItem): Promise<boolean>;

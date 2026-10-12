@@ -4,7 +4,7 @@ import type { InboxItem, InboxLink } from '../domain/inbox.js';
 import type { IntegrationToken } from '../domain/integration-tokens.js';
 import type { Deploy } from '../domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
-import type { DomainEvent, Effect } from '../domain/events.js';
+import type { DomainEvent, Effect, OutboxJob } from '../domain/events.js';
 import { sameCommit } from '../domain/signals.js';
 import type { TestRun } from '../domain/test-runs.js';
 import type { BoardNotification } from '../domain/notifications.js';
@@ -37,6 +37,14 @@ import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
 import type { SearchQuery } from '../domain/search.js';
 
+/** An outbox job in memory: the job and the effect it runs. */
+export interface MemoryOutboxJob extends OutboxJob {
+  readonly effect: Effect;
+}
+
+/** Memory has no clock: a queued job may run at once. */
+const QUEUED_AT = '1970-01-01T00:00:00.000Z';
+
 interface State {
   globs: Map<string, { glob: Glob; creationKey: string | null }>;
   boards: Map<number, Board>;
@@ -47,6 +55,8 @@ interface State {
   counters: Map<string, number>;
   events: DomainEvent[];
   outbox: Effect[];
+  /** Every effect queued, as an outbox job (what `latestOutboxJobs` reads; tests that run jobs update their state). */
+  outboxJobs: MemoryOutboxJob[];
   nextBoardId: number;
   knowledge: Map<string, KnowledgeDoc>;
   knowledgeHistory: KnowledgeDoc[];
@@ -138,6 +148,7 @@ const clone = (state: State): State => ({
   counters: new Map(state.counters),
   events: [...state.events],
   outbox: [...state.outbox],
+  outboxJobs: [...state.outboxJobs],
   nextBoardId: state.nextBoardId,
   knowledge: new Map(state.knowledge),
   knowledgeHistory: [...state.knowledgeHistory],
@@ -194,6 +205,7 @@ export class MemoryStore implements Store {
     counters: new Map(),
     events: [],
     outbox: [],
+    outboxJobs: [],
     nextBoardId: 1,
     knowledge: new Map(),
     knowledgeHistory: [],
@@ -920,6 +932,21 @@ export class MemoryStore implements Store {
             .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.chunkId - b.chunkId)
             .slice(0, limit),
         ),
+      latestArtifacts: (globIds, kinds) => {
+        const latest = new Map<string, Artifact>();
+        for (const a of s.artifacts) {
+          if (globIds.includes(a.globId) && kinds.includes(a.kind)) latest.set(`${a.globId}:${a.kind}:${a.label}`, a);
+        }
+        return Promise.resolve([...latest.values()]);
+      },
+      latestOutboxJobs: (globIds, kinds) => {
+        const latest = new Map<string, OutboxJob>();
+        for (const j of s.outboxJobs) {
+          if (!globIds.includes(j.globId) || !kinds.includes(j.kind)) continue;
+          latest.set(`${j.globId}:${j.kind}`, { id: j.id, globId: j.globId, kind: j.kind, state: j.state, attempts: j.attempts, lastError: j.lastError, runAfter: j.runAfter });
+        }
+        return Promise.resolve([...latest.values()]);
+      },
       listLatestArtifacts: (boardId) => {
         const latest = new Map<string, Artifact>();
         for (const a of s.artifacts) {
@@ -1166,9 +1193,13 @@ export class MemoryStore implements Store {
             const same = (e: Effect) => e.kind === 'review_change' && e.requestId === undefined && e.globId === effect.globId && e.stage === effect.stage;
             if (s.outbox.some((e) => same(e) && e.kind === 'review_change' && e.sha === effect.sha)) continue;
             // A newer pre-merge head cancels the older head's pending job.
-            if (effect.stage === 'pre_merge') s.outbox = s.outbox.filter((e) => !same(e));
+            if (effect.stage === 'pre_merge') {
+              s.outbox = s.outbox.filter((e) => !same(e));
+              s.outboxJobs = s.outboxJobs.map((j) => (same(j.effect) && j.state === 'pending' ? { ...j, state: 'dropped' } : j));
+            }
           }
           s.outbox.push(effect);
+          s.outboxJobs.push({ id: this.nextRowId++, globId: effect.globId, kind: effect.kind, state: 'pending', attempts: 0, lastError: null, runAfter: QUEUED_AT, effect });
         }
         return Promise.resolve();
       },

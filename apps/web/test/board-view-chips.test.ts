@@ -5,7 +5,7 @@ import { glob } from '../../../packages/core/test/fixtures';
 
 const attributes = (patch: Partial<DecisionAttributes> = {}): DecisionAttributes => ({
   scope: { kind: 'project', ref: null },
-  source: { kind: 'manual' },
+  origin: { kind: 'manual' },
   channel: 'human',
   kbItemId: null,
   outcome: null,

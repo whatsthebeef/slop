@@ -1,4 +1,4 @@
-import type { IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { laneOf, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -1215,6 +1215,37 @@ export class PgStore implements Store {
             by: row.provenance.by,
             actor: row.provenance.actor,
             ...(row.provenance.independentReview === undefined ? {} : { review: row.provenance.independentReview }),
+          }),
+        );
+      },
+
+      latestArtifacts: async (globIds, kinds) => {
+        if (globIds.length === 0 || kinds.length === 0) return [];
+        const a = schema.artifacts;
+        const rows = await t
+          .selectDistinctOn([a.globId, a.kind, a.label])
+          .from(a)
+          .where(and(inArray(a.globId, [...globIds]), inArray(a.kind, [...kinds])))
+          .orderBy(a.globId, a.kind, a.label, desc(a.version));
+        return rows.map(toArtifact);
+      },
+      latestOutboxJobs: async (globIds, kinds) => {
+        if (globIds.length === 0 || kinds.length === 0) return [];
+        const o = schema.outbox;
+        const rows = await t
+          .selectDistinctOn([o.globId, o.kind], { id: o.id, effect: o.effect, state: o.state, attempts: o.attempts, lastError: o.lastError, runAfter: o.runAfter })
+          .from(o)
+          .where(and(inArray(o.globId, [...globIds]), inArray(o.kind, [...kinds])))
+          .orderBy(o.globId, o.kind, desc(o.id));
+        return rows.map(
+          (row): OutboxJob => ({
+            id: row.id,
+            globId: row.effect.globId,
+            kind: row.effect.kind,
+            state: row.state,
+            attempts: row.attempts,
+            lastError: row.lastError,
+            runAfter: row.runAfter.toISOString(),
           }),
         );
       },

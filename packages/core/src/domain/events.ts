@@ -68,6 +68,8 @@ export const DOMAIN_EVENT_TYPES = [
   'DecisionDecided',
   /** The work glob a decision waited on merged. */
   'DecisionWorkLanded',
+  /** An admin reopened a learning the KB pipeline closed (data: how it was closed). */
+  'DecisionReopened',
   /** A glob's attributes changed (a decision's scope, or its conflict flags). */
   'AttributesChanged',
 ] as const;
@@ -202,6 +204,22 @@ export const OUTBOX_LANES: readonly OutboxLane[] = ['default', 'llm'];
 const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = {};
 
 export const laneOf = (kind: EffectKind): OutboxLane => LANE_OF_KIND[kind] ?? 'default';
+
+export const OUTBOX_STATES = ['pending', 'done', 'dropped', 'failed'] as const;
+export type OutboxState = (typeof OUTBOX_STATES)[number];
+
+/** An outbox job as readers see it (without the effect): where it is, how many attempts it spent, and its last error. */
+export interface OutboxJob {
+  readonly id: number;
+  readonly globId: string;
+  readonly kind: EffectKind;
+  readonly state: OutboxState;
+  readonly attempts: number;
+  /** The last failure, or why it waits (an executor's retry-later reason). */
+  readonly lastError: string | null;
+  /** When it may run next. */
+  readonly runAfter: string;
+}
 
 /** The board's overlap recheck: its `globId` is `board-<id>`, as for the other board-wide effects. */
 export const recheckOverlapsEffect = (boardId: number): Effect => ({ kind: 'recheck_overlaps', globId: `board-${String(boardId)}`, boardId });

@@ -9,7 +9,7 @@ import { NOW } from './fixtures.js';
 
 const decision = (patch: Record<string, unknown> = {}) => ({
   scope: { kind: 'project', ref: null },
-  source: { kind: 'kb_item', id: 's1k1' },
+  origin: { kind: 'kb_item', id: 's1k1' },
   channel: 'agent',
   kbItemId: 's1k1',
   outcome: null,
@@ -66,8 +66,68 @@ describe('attribute schemas', () => {
     expect(message(validateAttributes('decision', decision({ extra: 1 })))).toMatch(/unknown keys: extra/);
     expect(message(validateAttributes('decision', undefined))).toMatch(/needs attributes/);
     expect(message(validateAttributes('decision', decision({ channel: 'fax' })))).toMatch(/channel/);
-    expect(message(validateAttributes('decision', decision({ source: { kind: 'inbox', id: 0 } })))).toMatch(/inbox item number/);
+    expect(message(validateAttributes('decision', decision({ origin: { kind: 'inbox', id: 0 } })))).toMatch(/inbox item number/);
     expect(message(validateAttributes('decision', decision({ archived: false })))).toMatch(/archived/);
+  });
+
+  it('accepts a submitted or mined origin with no ID: the decision is the learning, same ID', () => {
+    for (const kind of ['submitted', 'mined'] as const) {
+      const result = validateAttributes('decision', decision({ origin: { kind }, kbItemId: null }));
+      expect(result.ok && isDecisionAttributes(result.value) ? result.value.origin : null).toEqual({ kind });
+    }
+    expect(message(validateAttributes('decision', decision({ origin: { kind: 'carrier pigeon' } })))).toMatch(/origin.kind/);
+    expect(message(validateAttributes('decision', decision({ source: { kind: 'manual' } })))).toMatch(/unknown keys: source/);
+  });
+
+  it('carries a KB learning\'s own fields, each checked when present', () => {
+    const target = { kind: 'doc', name: 'build_test_lint', section: 'Test', newDocument: null };
+    const signal = {
+      key: 'finding:x',
+      kind: 'finding',
+      agent: 'implementer',
+      label: 'Findings',
+      window: { from: NOW, to: NOW },
+      figures: { affected: 3, eligible: 10, rate: 0.3, count: 4 },
+      globIds: ['s1t1'],
+      examples: ['an example'],
+      measuredAt: NOW,
+    };
+    const kb = {
+      kind: 'gotcha',
+      sourceGlobs: ['s1t1', 's1t2'],
+      target: { suggested: 'build doc', routed: target },
+      agentSetVersion: 4,
+      signal,
+      evidenceCount: 2,
+      catalogCandidate: true,
+      catalogReason: 'Holds for any project',
+      closedAs: 'covered',
+      stale: { since: NOW, reason: 'no_recent_evidence', dismissedAt: null },
+      document: { name: 'architecture', area: 'architecture', audience: ['implementer'], description: 'How it fits' },
+      coveredByText: { kind: 'knowledge', knowledgeKind: 'doc', name: 'build_test_lint', section: null },
+      possiblyCoveredByText: { knowledgeKind: 'doc', name: 'build_test_lint', section: 'Test', quote: 'Run vitest', reason: 'Says it' },
+      contradictsText: [{ kind: 'knowledge', ref: 'build_test_lint', note: 'Says the opposite' }],
+    };
+    const result = validateAttributes('decision', decision({ origin: { kind: 'mined' }, kbItemId: null, ...kb }));
+    expect(result.ok ? result.value : result.error).toEqual({ ...decision({ origin: { kind: 'mined' }, kbItemId: null }), ...kb });
+    // Unrouted: a suggested target only.
+    expect(validateAttributes('decision', decision({ target: { suggested: null, routed: null } })).ok).toBe(true);
+    const bad: [Record<string, unknown>, RegExp][] = [
+      [{ kind: 'rumour' }, /kind must be one of/],
+      [{ sourceGlobs: 's1t1' }, /sourceGlobs/],
+      [{ target: { suggested: null, routed: { ...target, kind: 'novel' } } }, /target/],
+      [{ agentSetVersion: -1 }, /agentSetVersion/],
+      [{ signal: { ...signal, kind: 'hunch' } }, /signal/],
+      [{ evidenceCount: 0 }, /evidenceCount/],
+      [{ catalogCandidate: false }, /catalogCandidate/],
+      [{ closedAs: 'lost' }, /closedAs/],
+      [{ stale: { since: NOW, reason: 'bored', dismissedAt: null } }, /stale/],
+      [{ document: { name: 'x' } }, /document/],
+      [{ coveredByText: { kind: 'item', id: 's1k2' } }, /coveredByText/],
+      [{ possiblyCoveredByText: { kind: 'item', id: 's1k2', quote: 'q', shortQuote: true } }, /possiblyCoveredByText/],
+      [{ contradictsText: [{ kind: 'item', ref: 's1k2', note: 'n' }] }, /contradictsText/],
+    ];
+    for (const [patch, expected] of bad) expect(message(validateAttributes('decision', decision(patch)))).toMatch(expected);
   });
 
   it('checks the outcome and drops duplicate conflict IDs', () => {
@@ -105,6 +165,8 @@ describe('artifact roles and payload', () => {
     expect(ARTIFACT_ROLE.plan).toBe('payload');
     expect((['implementation_plan', 'postplan'] as const).map((k) => ARTIFACT_ROLE[k])).toEqual(['record', 'record']);
     expect((['local_review', 'investigation', 'assessment'] as const).every((k) => isSpecialKind(k))).toBe(true);
+    // A KB learning's pipeline output has its own place in the decision section.
+    expect((['draft', 'outcome', 'effect_check'] as const).every((k) => isSpecialKind(k))).toBe(true);
     expect(isSpecialKind('attachment')).toBe(false);
   });
 

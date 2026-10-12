@@ -146,7 +146,7 @@ export const createDecisionForItem = async (
     title: decisionGlobTitle(item.statement),
     summary: item.statement,
     payload: proposalText(item),
-    attributes: { scope: defaultScope(item.type), source: { kind: 'kb_item', id: item.id }, channel, kbItemId: item.id, outcome: null },
+    attributes: { scope: defaultScope(item.type), origin: { kind: 'kb_item', id: item.id }, channel, kbItemId: item.id, outcome: null },
     id: item.id,
     creationKey: kbItemKey(item.id),
     at: item.createdAt,
@@ -183,7 +183,7 @@ export const createDecisionForInbox = async (
     payload: `${statement}\n\n## Source\n\n${inboxTitle(item)} (${inboxLink(item.boardId, item.id)})\n\n> ${excerpt.replace(/\n/g, '\n> ')}\n`,
     attributes: {
       scope: input.scope ?? { kind: 'future_work', ref: null },
-      source: { kind: 'inbox', id: item.id },
+      origin: { kind: 'inbox', id: item.id },
       channel: 'inbox',
       kbItemId: null,
       outcome: null,
@@ -213,7 +213,7 @@ export const createDecisionForExtracted = async (
     payload: `${decision.statement.trim()}\n\n## Source\n\n${decision.sourceLabel}\n\n> ${decision.quote.replace(/\n/g, '\n> ')}\n`,
     attributes: {
       scope: decision.globId === null ? { kind: 'project', ref: null } : { kind: 'glob', ref: decision.globId },
-      source: { kind: 'extracted', decisionId: decision.id },
+      origin: { kind: 'extracted', decisionId: decision.id },
       channel,
       kbItemId: null,
       outcome: null,

@@ -11,8 +11,8 @@ import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
 import { isDecisionAttributes, sameScope, validateAttributes, validateScopeEdit } from './attributes.js';
-import type { DecisionAttributes, DecisionOutcome, DecisionOutcomeKind, DecisionScope, GlobAttributes } from './attributes.js';
-import { SLOP_TYPES } from './types.js';
+import type { DecisionAttributes, DecisionClosedAs, DecisionOutcome, DecisionOutcomeKind, DecisionScope, GlobAttributes } from './attributes.js';
+import { CLOSING_EDGE_KINDS, SLOP_TYPES } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { mergeImplied } from './exclusive-paths.js';
 import { chainRefusal, dependencyIds, explicitOverlaps, NO_CHAIN, refusalText, waitingFor, waitSummary } from './waiting.js';
@@ -28,6 +28,7 @@ import type {
   ChecklistItem,
   Failure,
   Glob,
+  GlobLink,
   HeadChecks,
   ImpliedAfter,
   LabelName,
@@ -2071,27 +2072,25 @@ const outcomeJson = (outcome: DecisionOutcome): JsonValue => ({
   ...(outcome.linkedGlobId === undefined ? {} : { linkedGlobId: outcome.linkedGlobId }),
 });
 
+type MutableAttributes = { -readonly [K in keyof DecisionAttributes]: DecisionAttributes[K] };
+
 /** The attributes with `outcome` set (or cleared) and the archived flag as given; the rest is kept. */
-const withOutcome = (attributes: DecisionAttributes, outcome: DecisionOutcome | null, archived: boolean): DecisionAttributes => ({
-  scope: attributes.scope,
-  source: attributes.source,
-  channel: attributes.channel,
-  kbItemId: attributes.kbItemId,
-  outcome,
-  ...(attributes.conflictsWith === undefined ? {} : { conflictsWith: attributes.conflictsWith }),
-  ...(archived ? { archived: true as const } : {}),
-});
+const withOutcome = (attributes: DecisionAttributes, outcome: DecisionOutcome | null, archived: boolean): DecisionAttributes => {
+  const next: MutableAttributes = { ...attributes, outcome };
+  if (archived) next.archived = true;
+  else delete next.archived;
+  return next;
+};
 
 /** The attributes with the conflict flags replaced (none when `ids` is empty); the rest is kept. */
-const withConflicts = (attributes: DecisionAttributes, ids: readonly string[]): DecisionAttributes => ({
-  scope: attributes.scope,
-  source: attributes.source,
-  channel: attributes.channel,
-  kbItemId: attributes.kbItemId,
-  outcome: attributes.outcome,
-  ...(ids.length === 0 ? {} : { conflictsWith: [...ids] }),
-  ...(attributes.archived === true ? { archived: true as const } : {}),
-});
+const withConflicts = (attributes: DecisionAttributes, ids: readonly string[]): DecisionAttributes => {
+  const next: MutableAttributes = { ...attributes };
+  if (ids.length === 0) delete next.conflictsWith;
+  else next.conflictsWith = [...ids];
+  return next;
+};
+
+const linkJson = (link: GlobLink): JsonValue => ({ id: link.id, kind: link.kind, source: link.source, ...(link.detail === undefined ? {} : { detail: link.detail }) });
 
 /** Row D1: a decision enters Planning with no run, no provisioning and no labels. */
 const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<Transition> => {
@@ -2256,6 +2255,55 @@ export const archiveDecision = (glob: Glob, reason: string, ctx: Context): Resul
     .set({ attributes: withOutcome(decisionAttributesOf(glob), outcome, true), signedOffAt: ctx.now })
     .status('signed_off')
     .event('DecisionDecided', { outcome: outcomeJson(outcome) })
+    .done();
+};
+
+/**
+ * Row D10′: the KB pipeline closed the learning without a decision (merged into an open one, suppressed by a rejected one,
+ * covered by approved knowledge). The decision ends Signed off and archived with a `closed` outcome, `closedAs`, and the
+ * link to what closed it (none when a document's text covers it). Nothing to do once it is signed off.
+ */
+export const closeDecision = (glob: Glob, closedAs: DecisionClosedAs, link: GlobLink | null, ctx: Context): Result<Transition> => {
+  if (glob.category !== 'decision' || glob.status === 'signed_off') return unchanged(glob);
+  if (link !== null && !CLOSING_EDGE_KINDS.includes(link.kind)) return invalidInput(`A ${link.kind} link does not close a decision`);
+  const outcome: DecisionOutcome = { kind: 'closed', by: 'slop', at: ctx.now, reason: `The knowledge pipeline closed the item as ${closedAs}` };
+  const attributes: MutableAttributes = { ...withOutcome(decisionAttributesOf(glob), outcome, true), closedAs };
+  const links = (glob.links ?? []).filter((l) => link === null || !(l.id === link.id && l.kind === link.kind));
+  return new Builder(glob, ctx)
+    .set({ attributes, links: link === null ? links : [...links, link], signedOffAt: ctx.now })
+    .status('signed_off')
+    .event('DecisionDecided', { outcome: outcomeJson(outcome), closedAs, link: link === null ? null : linkJson(link) })
+    .done();
+};
+
+/**
+ * Row D12: an admin reopens a learning the pipeline closed. The decision goes back to Planning with no outcome, no
+ * implementer and no sign-off; `closedAs`, `archived`, the text coverage and the closing link go. A merge the admin undid
+ * keeps the pair apart: the merged-into learning becomes a `kept_apart_from` link, so consolidation never merges them again.
+ */
+export const reopenClosedDecision = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'decision') return notDecision(glob, actor);
+  if (actor.role !== 'admin') return forbidden('Only admins can reopen a learning the pipeline closed');
+  const attributes = decisionAttributesOf(glob);
+  const closedAs = attributes.closedAs;
+  if (glob.status !== 'signed_off' || closedAs === undefined) return invalidTransition(glob, actor, 'Only a decision the knowledge pipeline closed can be reopened this way');
+  const before = glob.links ?? [];
+  const former = before.find((l) => l.kind === 'duplicate_of')?.id ?? null;
+  const links = before.filter((l) => !CLOSING_EDGE_KINDS.includes(l.kind));
+  const keepApart = former !== null && !links.some((l) => l.kind === 'kept_apart_from' && l.id === former);
+  const next: MutableAttributes = { ...withOutcome(attributes, null, false) };
+  delete next.closedAs;
+  delete next.coveredByText;
+  return new Builder(glob, ctx)
+    .set({
+      attributes: next,
+      links: keepApart ? [...links, { id: former, kind: 'kept_apart_from', source: 'explicit' }] : links,
+      implementer: null,
+      signedOffAt: null,
+    })
+    .status('planning')
+    .event('DecisionReopened', { closedAs })
     .done();
 };
 

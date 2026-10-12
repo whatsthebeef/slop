@@ -24,6 +24,10 @@ export const ARTIFACT_META: Record<
   independent_review: { title: 'Independent review', icon: SearchCheck },
   investigation: { title: 'Investigation', icon: Microscope },
   assessment: { title: 'Assessment', icon: ClipboardCheck },
+  // A KB learning's pipeline output (JSON), shown by the decision section rather than as files.
+  draft: { title: 'Draft', icon: FileText },
+  outcome: { title: 'Outcome', icon: FileCheck },
+  effect_check: { title: 'Effect check', icon: SearchCheck },
   attachment: { title: 'Attachment', icon: Paperclip },
 };
 

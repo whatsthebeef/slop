@@ -1,4 +1,5 @@
 import type { ReviewStage } from './events.js';
+import type { KbMergeNote, KbTarget } from './kb.js';
 
 /**
  * The board's knowledge base: documents (conventions, build commands, architecture, review
@@ -176,7 +177,23 @@ export const agentSetKind = (path: string): KnowledgeKind | null => {
   return null;
 };
 
-export const ARTIFACT_KINDS = ['plan', 'implementation_plan', 'postplan', 'local_review', 'independent_review', 'investigation', 'assessment', 'attachment'] as const;
+/**
+ * A KB item's decision glob also keeps its pipeline output: the `draft` (the drafted change, JSON), the `outcome` of an
+ * approval (JSON) and the `effect_check` (JSON). Each is a new version when it changes; empty content means cleared.
+ */
+export const ARTIFACT_KINDS = [
+  'plan',
+  'implementation_plan',
+  'postplan',
+  'local_review',
+  'independent_review',
+  'investigation',
+  'assessment',
+  'draft',
+  'outcome',
+  'effect_check',
+  'attachment',
+] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
 /**
@@ -193,6 +210,9 @@ export const ARTIFACT_ROLE: Record<ArtifactKind, ArtifactRole> = {
   independent_review: 'special',
   investigation: 'special',
   assessment: 'special',
+  draft: 'special',
+  outcome: 'special',
+  effect_check: 'special',
   attachment: 'attachment',
 };
 export const isSpecialKind = (kind: ArtifactKind): boolean => ARTIFACT_ROLE[kind] === 'special';
@@ -221,6 +241,24 @@ export interface Provenance {
   readonly validation?: string;
   /** Independent reviews only: what was reviewed and how many findings it kept (the card's status reads it). */
   readonly independentReview?: IndependentReviewMeta;
+  /** Drafts only: the target version it was drafted against (0: the target doesn't exist yet) and the target itself. */
+  readonly draft?: DraftMeta;
+  /** Evidence attachments only: the near-duplicate learning that brought it and that learning's source globs. */
+  readonly evidence?: EvidenceMeta;
+  /** Merge-note attachments only: the verified quotes the pipeline closed the learning on. */
+  readonly mergeNote?: KbMergeNote;
+}
+
+/** What a draft was made against, so a draft whose target moved since is redone. */
+export interface DraftMeta {
+  readonly targetVersion: number;
+  readonly target: KbTarget | null;
+}
+
+/** Where an evidence attachment came from: a learning folded into this one. */
+export interface EvidenceMeta {
+  readonly itemId: string;
+  readonly globIds: readonly string[];
 }
 
 /** The facts about one independent review that cards and the GitHub publisher need without parsing its text. */

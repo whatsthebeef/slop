@@ -182,7 +182,7 @@ describe('decision backfill', () => {
     expect(a).toMatchObject({ status: 'signed_off', signedOffAt: fromGlob.decidedAt, createdAt: fromGlob.decidedAt, title: 'Extracted plan:1' });
     expect(decisionOf(need(a))).toMatchObject({
       scope: { kind: 'glob', ref: workId },
-      source: { kind: 'extracted', decisionId: fromGlob.id },
+      origin: { kind: 'extracted', decisionId: fromGlob.id },
       channel: 'migration',
       outcome: { kind: 'accept', by: 'dev@example.com' },
     });

@@ -103,7 +103,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     expect(mined.decisionGlobId).toBe('s1k1');
     const decision = await store.transaction((tx) => tx.getGlob('s1k1'));
     expect(decision).toMatchObject({ category: 'decision', status: 'planning', planner: MINED_BY, createdAt: mined.createdAt });
-    expect(decision?.attributes).toMatchObject({ channel: 'mined', kbItemId: mined.id, scope: { kind: 'future_work', ref: null }, source: { kind: 'kb_item', id: mined.id } });
+    expect(decision?.attributes).toMatchObject({ channel: 'mined', kbItemId: mined.id, scope: { kind: 'future_work', ref: null }, origin: { kind: 'kb_item', id: mined.id } });
     expect(await store.transaction((tx) => tx.artifactVersions('s1k1', 'assessment', ''))).toHaveLength(1);
   });
 

@@ -180,7 +180,7 @@ describe('decision globs', () => {
       expect(g).toMatchObject({ category: 'decision', type: 'same', status: 'planning', title: GEN, provisioning: 'none', labels: {}, runs: [], doingSince: null, version: 1 });
       expect(g.attributes).toEqual({
         scope: { kind: 'project', ref: null },
-        source: { kind: 'kb_item', id: made.id },
+        origin: { kind: 'kb_item', id: made.id },
         channel: 'agent',
         kbItemId: made.id,
         outcome: null,
@@ -222,7 +222,7 @@ describe('decision globs', () => {
           title: 'x',
           summary: 'x',
           payload: 'x',
-          attributes: { scope: { kind: 'project', ref: null }, source: { kind: 'kb_item', id: made.id }, channel: 'agent', kbItemId: made.id, outcome: null },
+          attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'kb_item', id: made.id }, channel: 'agent', kbItemId: made.id, outcome: null },
           creationKey: `kb:${made.id}`,
         }).then((r) => ({ r, existing }));
       });
@@ -239,7 +239,7 @@ describe('decision globs', () => {
           title: 'x',
           summary: 'x',
           payload: 'x',
-          attributes: { scope: { kind: 'glob', ref: 's9t9' }, source: { kind: 'manual' }, channel: 'human', kbItemId: null, outcome: null },
+          attributes: { scope: { kind: 'glob', ref: 's9t9' }, origin: { kind: 'manual' }, channel: 'human', kbItemId: null, outcome: null },
           creationKey: 'manual:1',
         }),
       );
@@ -255,7 +255,7 @@ describe('decision globs', () => {
             title: 'x',
             summary: 'x',
             payload: 'x',
-            attributes: { scope: { kind: 'project', ref: null }, source: { kind: 'manual' }, channel: 'human', kbItemId: null, outcome: null },
+            attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'manual' }, channel: 'human', kbItemId: null, outcome: null },
             id,
             creationKey: `manual:${id}`,
           }),
@@ -762,7 +762,7 @@ describe('decision globs', () => {
       const result = unwrap(await inbox.promote(DEV, boardId, added.id, { statement: 'Sync jobs use a websocket' }));
       const g = result.glob;
       expect(g).toMatchObject({ id: 's1k1', category: 'decision', status: 'planning', title: 'Sync standup', summary: 'Sync jobs use a websocket' });
-      expect(g.attributes).toEqual({ scope: { kind: 'future_work', ref: null }, source: { kind: 'inbox', id: added.id }, channel: 'inbox', kbItemId: null, outcome: null });
+      expect(g.attributes).toEqual({ scope: { kind: 'future_work', ref: null }, origin: { kind: 'inbox', id: added.id }, channel: 'inbox', kbItemId: null, outcome: null });
       const [plan] = await artifactsOf(g.id, 'plan');
       expect(plan?.content).toContain('Sync jobs use a websocket');
       expect(plan?.content).toContain('> Standup 3 Oct.');
@@ -821,7 +821,7 @@ describe('decision globs', () => {
       );
       const g = unwrap(await decisions.promoteExtracted(DEV, boardId, row.id));
       expect(g.id).toBe('s1k2');
-      expect(g.attributes).toMatchObject({ scope: { kind: 'glob', ref: workId }, source: { kind: 'extracted', decisionId: row.id }, channel: 'human' });
+      expect(g.attributes).toMatchObject({ scope: { kind: 'glob', ref: workId }, origin: { kind: 'extracted', decisionId: row.id }, channel: 'human' });
       expect(unwrap(await decisions.promoteExtracted(DEV, boardId, row.id)).id).toBe(g.id);
       expect(errorCode(await decisions.promoteExtracted(DEV, boardId, 999))).toBe('not_found');
     });
