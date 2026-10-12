@@ -46,6 +46,21 @@ describe('SLOP_WORK_TIME_ZONE', () => {
   });
 });
 
+describe('PUBLIC_URL_ALIASES', () => {
+  it('defaults to none and parses a comma-separated list', () => {
+    expect(loadConfig({}).PUBLIC_URL_ALIASES).toEqual([]);
+    expect(loadConfig({ PUBLIC_URL_ALIASES: 'https://a.cloudfront.net/, https://b.example.com' }).PUBLIC_URL_ALIASES).toEqual([
+      'https://a.cloudfront.net',
+      'https://b.example.com',
+    ]);
+  });
+  it('refuses anything that is not an https origin', () => {
+    expect(() => loadConfig({ PUBLIC_URL_ALIASES: 'http://a.example.com' })).toThrow('PUBLIC_URL_ALIASES');
+    expect(() => loadConfig({ PUBLIC_URL_ALIASES: 'https://a.example.com/path' })).toThrow('PUBLIC_URL_ALIASES');
+    expect(() => loadConfig({ PUBLIC_URL_ALIASES: 'nope' })).toThrow('PUBLIC_URL_ALIASES');
+  });
+});
+
 describe('AUTH_MODE', () => {
   it('allows dev sign-in on a local PUBLIC_URL', () => {
     expect(loadConfig({}).AUTH_MODE).toBe('dev');

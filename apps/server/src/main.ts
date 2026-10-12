@@ -472,6 +472,7 @@ mountMcp(app, {
   inbox,
   sizeCheck,
   publicUrl: config.PUBLIC_URL,
+  publicUrlAliases: config.PUBLIC_URL_ALIASES,
   agentSetValues,
   links,
   reports,

@@ -28,7 +28,13 @@ const publicUrl = (app.node.tryGetContext('publicUrl') as string | undefined)?.r
 if (production && publicUrl !== undefined && !publicUrl.startsWith('https://')) {
   throw new Error('-c publicUrl must be https://<production address> (the host stack\'s PublicUrl output)');
 }
-const origins = production && publicUrl !== undefined ? [publicUrl] : [];
+// Other addresses that still reach production (the CloudFront address while a custom domain takes over): their sign-in
+// callbacks stay valid alongside publicUrl's. Drop them by deploying without the context.
+const publicUrlAliases = production ? csv('publicUrlAliases', []).map((u) => u.replace(/\/$/, '')) : [];
+for (const alias of publicUrlAliases) {
+  if (!alias.startsWith('https://')) throw new Error(`-c publicUrlAliases entries must be https:// addresses (got ${alias})`);
+}
+const origins = production && publicUrl !== undefined ? [publicUrl, ...publicUrlAliases] : [];
 
 /**
  * Production deploys in order: the secrets and host first (`-c deployConnectionArn=...`, no publicUrl), then, once the
@@ -67,6 +73,13 @@ new AuthStack(app, `slop-${stage}-auth`, {
  */
 const flag = (key: string): boolean => app.node.tryGetContext(key) === 'true' || app.node.tryGetContext(key) === true;
 const wantsHost = flag('host') || app.node.tryGetContext('deployConnectionArn') !== undefined;
+const customDomain = (): { domainName: string; certificateArn: string } | undefined => {
+  const domainName = app.node.tryGetContext('domainName') as string | undefined;
+  const certificateArn = app.node.tryGetContext('certificateArn') as string | undefined;
+  if (!domainName && !certificateArn) return undefined;
+  if (!domainName || !certificateArn) throw new Error('-c domainName and -c certificateArn go together (the certificate must be in us-east-1)');
+  return { domainName, certificateArn };
+};
 if (flag('secrets') || wantsHost) {
   const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION ?? 'us-east-1' };
   const secretsStack = new Stack(app, `slop-${stage}-secrets`, { env, tags: { project: 'slop', stage } });
@@ -89,6 +102,8 @@ if (flag('secrets') || wantsHost) {
       alertEmail: (app.node.tryGetContext('alertEmail') as string | undefined) || undefined,
       // CodeBuild projects boards deploy with, in this account (-c deployProjects=<project>,<project>); names stay out of the repo.
       deployProjects: csv('deployProjects', []),
+      // A custom domain in front of the distribution (-c domainName=slopmux.example.com -c certificateArn=arn:aws:acm:us-east-1:...).
+      customDomain: customDomain(),
       tags: { project: 'slop', stage },
     });
   }

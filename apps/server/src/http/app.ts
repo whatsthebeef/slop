@@ -217,7 +217,7 @@ export const createApp = (deps: AppDeps) => {
     });
   }
 
-  const originOf = (c: Context<Env>) => requestOrigin(c, auth.config.PUBLIC_URL);
+  const originOf = (c: Context<Env>) => requestOrigin(c, auth.config.PUBLIC_URL, auth.config.PUBLIC_URL_ALIASES);
 
   if (auth.config.AUTH_MODE === 'cognito') {
     app.get('/auth/login', (c) => {

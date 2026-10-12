@@ -2,9 +2,9 @@
 # Checks production through CloudFront once it is deployed (T4 of s15f32): health, the public URL slop builds from
 # CloudFront's headers, MCP and webhook paths reaching the app, and, with a session cookie, that the SSE stream stays open.
 #
-#   infra/deploy/verify.sh https://<id>.cloudfront.net [slop_session cookie value [board number, default 15]]
+#   infra/deploy/verify.sh https://<address> [slop_session cookie value [board number, default 15]]
 set -uo pipefail
-BASE="${1:?usage: verify.sh https://<id>.cloudfront.net [slop_session cookie value]}"
+BASE="${1:?usage: verify.sh https://<address> [slop_session cookie value]}"
 BASE="${BASE%/}"
 FAILED=0
 check() { if "$@"; then echo "ok    $DESC"; else echo "FAIL  $DESC"; FAILED=1; fi; }
