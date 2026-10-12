@@ -5,15 +5,17 @@ import {
   MAX_ATTACH_GLOBS,
   MAX_IMPORT_ITEMS,
 } from '@slop/core';
-import type { InboxService } from '@slop/core';
+import type { DecisionGlobService, InboxService } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import { isDate, parseBound } from '../search-request.js';
 import type { Env } from './app.js';
-import { errorBody, statusOf } from './views.js';
+import { errorBody, globView, statusOf } from './views.js';
 
 export interface InboxRoutesDeps {
-  readonly inbox: Pick<InboxService, 'add' | 'importItems' | 'list' | 'get' | 'attach' | 'keep' | 'discard'>;
+  readonly inbox: Pick<InboxService, 'add' | 'importItems' | 'list' | 'get' | 'attach' | 'keep' | 'discard' | 'promote'>;
+  /** Promotes an extracted decision to a decision glob (absent: that route isn't mounted). */
+  readonly decisionGlobs?: Pick<DecisionGlobService, 'promoteExtracted'>;
 }
 
 const pasteBody = z.object({
@@ -40,6 +42,11 @@ const importBody = z.object({
     .max(MAX_IMPORT_ITEMS),
 });
 const attachBody = z.object({ globIds: z.array(z.string().min(1)).min(1).max(MAX_ATTACH_GLOBS) });
+const promoteBody = z.object({
+  title: z.string().min(1).max(200).optional(),
+  statement: z.string().min(1).max(4000).optional(),
+  scope: z.object({ kind: z.string(), ref: z.string().nullable() }).strict().optional(),
+});
 const statusParam = z.enum(INBOX_STATUSES);
 
 const bad = (c: Context<Env>, message: string) => c.json({ code: 'invalid_input', message }, 422);
@@ -122,6 +129,27 @@ export const mountInbox = (app: Hono<Env>, deps: InboxRoutesDeps): void => {
     if (!body.success) return bad(c, `Give globIds: 1 to ${String(MAX_ATTACH_GLOBS)} glob IDs`);
     return send(c, await deps.inbox.attach(c.get('email'), board, item, body.data.globIds));
   });
+
+  // Promote to decision: a decision glob in Planning with the item attached as its source (idempotent).
+  app.post('/api/boards/:b/inbox/:id/promote', async (c) => {
+    const { board, item } = ids(c);
+    if (!Number.isSafeInteger(board) || !Number.isSafeInteger(item)) return bad(c, 'Bad inbox item');
+    const body = promoteBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return bad(c, body.error.issues[0]?.message ?? 'Bad promotion');
+    const result = await deps.inbox.promote(c.get('email'), board, item, body.data);
+    return result.ok ? c.json({ glob: globView(result.value.glob), item: result.value.view }) : c.json(errorBody(result.error), statusOf(result.error));
+  });
+
+  // An extracted decision (a glob's decisions list) becomes a decision glob the same way.
+  const { decisionGlobs } = deps;
+  if (decisionGlobs !== undefined) {
+    app.post('/api/boards/:b/decisions/:id/promote', async (c) => {
+      const { board, item } = ids(c);
+      if (!Number.isSafeInteger(board) || !Number.isSafeInteger(item)) return bad(c, 'Bad decision');
+      const result = await decisionGlobs.promoteExtracted(c.get('email'), board, item);
+      return result.ok ? c.json({ glob: globView(result.value) }) : c.json(errorBody(result.error), statusOf(result.error));
+    });
+  }
 
   app.post('/api/boards/:b/inbox/:id/keep', async (c) => {
     const { board, item } = ids(c);

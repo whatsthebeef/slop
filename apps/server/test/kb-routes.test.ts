@@ -1,4 +1,5 @@
 import {
+  kbItems,
   ArtifactService,
   BoardService,
   FindingsService,
@@ -123,6 +124,13 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     await drop();
   });
 
+  /** A write that changes nothing but the version, as a concurrent writer's would. */
+  const bump = (id: string) =>
+    store.transaction(async (tx) => {
+      const current = await kbItems(tx).getKbItem(id);
+      if (current === null) throw new Error('missing');
+      await kbItems(tx, { clock: { now: () => new Date().toISOString() } }).updateKbItem({ ...current, version: current.version + 1 }, current.version);
+    });
   const post = (path: string, body: unknown, email = ADMIN) =>
     app.request(path, {
       method: 'POST',
@@ -139,9 +147,12 @@ describe('KB routes: retrying failed items and catalog updates', () => {
         evidence: 'Seen',
       }),
     );
+    // Routing gave up: its job failed after the llm lane's attempts.
     await database.db.execute(
-      sql`update kb_proposals set processing = 'failed', processing_error = 'Haiku is down', processing_attempts = ${MAX_PROCESSING_ATTEMPTS}, version = 2 where id = ${id}`,
+      sql`update outbox set state = 'failed', last_error = 'Haiku is down', attempts = ${MAX_PROCESSING_ATTEMPTS} where glob_id = ${id} and kind = 'kb_route'`,
     );
+    // Something else wrote the item once (it is now at version 2).
+    await bump(id);
     expect((await post(`/api/kb/${id}/retry`, { version: 2 }, DEV)).status).toBe(403);
     expect((await post(`/api/kb/${id}/retry`, {})).status).toBe(422);
     const stale = await post(`/api/kb/${id}/retry`, { version: 1 });
@@ -157,11 +168,14 @@ describe('KB routes: retrying failed items and catalog updates', () => {
       processingAttempts: 0,
       version: 3,
     });
-    expect(await store.transaction((tx) => tx.getKbItem(id))).toMatchObject({
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({
       processing: 'pending',
       processingAttempts: 0,
       version: 3,
     });
+    // A fresh routing job, beside the failed one.
+    const jobs = await database.db.execute(sql`select state, attempts from outbox where glob_id = ${id} and kind = 'kb_route' order by id`);
+    expect(jobs.map((j) => [j.state, j.attempts])).toEqual([['failed', MAX_PROCESSING_ATTEMPTS], ['pending', 0]]);
     // Only failed items: retrying again is refused.
     expect((await post(`/api/kb/${id}/retry`, { version: 3 })).status).toBe(422);
   });
@@ -172,9 +186,15 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     );
     const target = { kind: 'doc', name: 'testing', section: null, newDocument: null };
     const coveredBy = { kind: 'knowledge', knowledgeKind: 'doc', name: 'testing', section: null };
-    await database.db.execute(
-      sql`update kb_proposals set status = 'covered', processing = 'routed', target = ${JSON.stringify(target)}::jsonb, covered_by = ${JSON.stringify(coveredBy)}::jsonb, version = 2 where id = ${id}`,
-    );
+    // The pipeline closed it as covered by a document's text.
+    await store.transaction(async (tx) => {
+      const current = await kbItems(tx).getKbItem(id);
+      if (current === null) throw new Error('missing');
+      await kbItems(tx, { clock: { now: () => new Date().toISOString() } }).updateKbItem(
+        { ...current, status: 'covered', target: { ...target, kind: 'doc' }, coveredBy: { ...coveredBy, kind: 'knowledge', knowledgeKind: 'doc' }, version: 2 },
+        current.version,
+      );
+    });
     expect((await post(`/api/kb/${id}/reopen`, { version: 2 }, DEV)).status).toBe(403);
     expect((await post(`/api/kb/${id}/reopen`, {})).status).toBe(422);
     expect((await post(`/api/kb/${id}/reopen`, { version: 1 })).status).toBe(409);
@@ -182,7 +202,7 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     const response = await post(`/api/kb/${id}/reopen`, { version: 2 });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ id, status: 'open', coveredBy: null, processing: 'routed', target, version: 3 });
-    expect(await store.transaction((tx) => tx.getKbItem(id))).toMatchObject({ status: 'open', coveredBy: null, processing: 'routed' });
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({ status: 'open', coveredBy: null, processing: 'routed' });
     // Only closed items: reopening an open one is refused.
     expect((await post(`/api/kb/${id}/reopen`, { version: 3 })).status).toBe(422);
   });
@@ -206,7 +226,10 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     expect((await get('?limit=1001')).status).toBe(422);
 
     // Ordered by decision, not submission: the older item decided last leads the page.
-    await database.db.execute(sql`update kb_proposals set decided_at = now() + interval '1 hour' where id = ${rejected[0]}`);
+    // (A decision's time is its outcome's.)
+    await database.db.execute(
+      sql`update globs set data = jsonb_set(data, '{attributes,outcome,at}', to_jsonb(to_char((now() + interval '1 hour') at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))) where id = ${rejected[0]}`,
+    );
     const redecided = (await (await get('?limit=1')).json()) as { decided: { items: KbItem[] } };
     expect(redecided.decided.items.map((i) => i.id)).toEqual([rejected[0]]);
   });

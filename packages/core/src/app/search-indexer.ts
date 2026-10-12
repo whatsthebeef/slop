@@ -12,6 +12,7 @@ import type { Llm } from './intake-service.js';
 import { LLM_TIMEOUT_MS, LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { hash } from './text-hash.js';
+import { kbItems } from './kb-items.js';
 
 /** Chunks embedded per call to the embedder (and per `processNext` step). */
 export const EMBED_BATCH = 32;
@@ -89,6 +90,10 @@ const artifactSource = (kind: ArtifactKind): SourceType => {
     case 'independent_review':
       return 'independent_review';
     case 'investigation':
+    case 'assessment':
+    case 'draft':
+    case 'outcome':
+    case 'effect_check':
     case 'attachment':
       return 'attachment';
   }
@@ -284,7 +289,7 @@ export class SearchIndexer {
         text: parseFrontmatter(doc.content).body,
       });
     }
-    for (const item of await tx.listKbItems(board.id, 'approved')) {
+    for (const item of await kbItems(tx).listKbItems(board.id, 'approved')) {
       // A whole-document proposal became a knowledge document; its text is indexed as that.
       if (item.document !== null) continue;
       // A decision learning is indexed as a decision (DecisionPipeline), so search doesn't return it twice.

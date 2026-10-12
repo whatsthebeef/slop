@@ -1,4 +1,4 @@
-import { isValidCombination, machine } from '@slop/core';
+import { decisionOf, isValidCombination, machine } from '@slop/core';
 import type { Action, Category, EditFailure } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { ACTION_LABELS } from '@/lib/api';
-import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
+import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { blockedLine, chainTip, viewStatusLine, waitingFor } from '@/lib/status-line';
 import {
@@ -20,6 +20,7 @@ import {
 } from '@/lib/type-change';
 import type { TypeAction } from '@/lib/type-change';
 import { ArtifactsSection } from './artifacts';
+import { DecisionAssessment, DecisionSection } from './decision-section';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
 import type { ArtifactRef } from './artifacts';
 import { ActivityLabel, GroupChip } from './glob-card';
@@ -44,6 +45,12 @@ const STATUS_TEXT: Record<GlobView['status'], string> = {
   signed_off: 'Signed off',
 };
 
+/** A decision glob uses the same lists for a different journey: it is decided in Doing and signed off once accepted. */
+const DECISION_STATUS_TEXT: Partial<Record<GlobView['status'], string>> = {
+  in_progress: 'Doing: being decided',
+  reviewing: 'Decided; awaiting sign-off',
+};
+
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
 
 const ACTION_TIPS: Partial<Record<Action, string>> = {
@@ -66,6 +73,7 @@ export const GlobDetail = ({
   onReload,
   onAction,
   onReviewLabel,
+  onDecide,
   onDelete,
 }: {
   board: BoardView;
@@ -81,8 +89,12 @@ export const GlobDetail = ({
   /** `anyway` goes ahead of unmerged prerequisites (Retrigger). */
   onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
+  /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
+  onDecide: (input: DecideInput) => Promise<boolean>;
   onDelete: () => Promise<void>;
 }) => {
+  // A decision glob has no branch, PR, runs, deploys or labels: those parts of the view are left out.
+  const decision = decisionOf(glob) !== null;
   const [draft, setDraft] = useState<GlobChanges>({});
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -138,7 +150,8 @@ export const GlobDetail = ({
   // Starting a flagged glob asks first: it is likely more than one PR's worth of work.
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   useEffect(() => setConfirmingOversized(null), [glob.id]);
-  const allActions = (glob.allowedActions ?? []).filter((a) => a !== 'delete');
+  // Decide has its own panel with the five outcomes.
+  const allActions = (glob.allowedActions ?? []).filter((a) => a !== 'delete' && a !== 'decide');
   const actions = orderActions(allActions);
   const tiers = actionTiers(allActions);
   const disabled = waitingFor(glob, actions, board.role);
@@ -234,31 +247,42 @@ export const GlobDetail = ({
       </div>
         <div className='grid gap-4'>
           <div className='flex flex-wrap items-center gap-2 text-sm'>
-            <span className='rounded bg-muted px-2 py-0.5'>{STATUS_TEXT[glob.status]}</span>
-            <Tip text={typeBlocker ?? `This is a ${glob.type}`}>
+            <span className='rounded bg-muted px-2 py-0.5'>{(decision ? DECISION_STATUS_TEXT[glob.status] : undefined) ?? STATUS_TEXT[glob.status]}</span>
+            {decision ? (
               <span className='rounded border px-2 py-0.5 text-xs' data-testid='glob-type'>
-                {glob.type}
+                decision
               </span>
-            </Tip>
+            ) : (
+              <Tip text={typeBlocker ?? `This is a ${glob.type}`}>
+                <span className='rounded border px-2 py-0.5 text-xs' data-testid='glob-type'>
+                  {glob.type}
+                </span>
+              </Tip>
+            )}
             <ActivityLabel glob={glob} />
             {glob.group !== null && <GroupChip name={glob.group} />}
-            <LabelChips glob={glob} />
+            {!decision && <LabelChips glob={glob} />}
             <span className='ml-auto text-xs text-muted-foreground'>
-              branch{' '}
-              {board.repo === null ? (
-                <span className='font-mono'>{glob.branch}</span>
-              ) : (
-                <a
-                  className='font-mono underline-offset-2 hover:underline'
-                  href={`https://github.com/${board.repo}/compare/${board.baseBranch}...${glob.branch}`}
-                  target='_blank'
-                  rel='noreferrer'
-                  title={`Compare ${glob.branch} with ${board.baseBranch} on GitHub`}
-                >
-                  {glob.branch}
-                </a>
-              )}{' '}
-              · v{glob.version}
+              {!decision && (
+                <>
+                  branch{' '}
+                  {board.repo === null ? (
+                    <span className='font-mono'>{glob.branch}</span>
+                  ) : (
+                    <a
+                      className='font-mono underline-offset-2 hover:underline'
+                      href={`https://github.com/${board.repo}/compare/${board.baseBranch}...${glob.branch}`}
+                      target='_blank'
+                      rel='noreferrer'
+                      title={`Compare ${glob.branch} with ${board.baseBranch} on GitHub`}
+                    >
+                      {glob.branch}
+                    </a>
+                  )}{' '}
+                  ·{' '}
+                </>
+              )}
+              v{glob.version}
             </span>
           </div>
 
@@ -305,7 +329,7 @@ export const GlobDetail = ({
             </div>
           )}
 
-          <LabelReviews glob={glob} onReview={onReviewLabel} />
+          {!decision && <LabelReviews glob={glob} onReview={onReviewLabel} />}
 
           {(glob.blockedBy?.length ?? 0) > 0 && (
             <div className='grid gap-1 rounded border p-2 text-sm' data-testid='prerequisites'>
@@ -324,7 +348,7 @@ export const GlobDetail = ({
             </div>
           )}
 
-          {((glob.waitingFor?.length ?? 0) > 0 || (glob.waitedOnBy?.length ?? 0) > 0 || canEditAfter) && (
+          {!decision && ((glob.waitingFor?.length ?? 0) > 0 || (glob.waitedOnBy?.length ?? 0) > 0 || canEditAfter) && (
             <div className='grid gap-2 rounded border p-2 text-sm' data-testid='waits'>
               {(glob.waitingFor?.length ?? 0) > 0 && (
                 <div data-testid='waiting-for'>
@@ -373,7 +397,7 @@ export const GlobDetail = ({
             </div>
           )}
 
-          {splittable && !splitting && (
+          {!decision && splittable && !splitting && (
             <div>
               <Tip text='Cut this glob into parts: part 1 stays here, the others are created with their share of the plan'>
                 <Button variant='outline' size='sm' disabled={busy} data-testid='split-glob' onClick={() => setSplitting(true)}>
@@ -382,14 +406,14 @@ export const GlobDetail = ({
               </Tip>
             </div>
           )}
-          {oversized && <OversizedGlob glob={glob} canKeep={board.role !== 'qa' || glob.type === 'sub'} onDone={() => onClose()} />}
+          {!decision && oversized && <OversizedGlob glob={glob} canKeep={board.role !== 'qa' || glob.type === 'sub'} onDone={() => onClose()} />}
           {splitting && <SplitGlob glob={glob} onCancel={() => setSplitting(false)} onDone={() => onClose()} />}
 
           {actions.length + disabled.length + typeButtons.length > 0 && (
             <div className='grid gap-1'>
               <div className='flex flex-wrap gap-2'>
                 {renderActions(actions.filter((a) => tiers.get(a) !== 'destructive'))}
-                {typeButtons.map((action) => (
+                {(decision ? [] : typeButtons).map((action) => (
                   <Tip key={action.to} text={action.tip}>
                     <Button
                       variant='outline'
@@ -535,6 +559,7 @@ export const GlobDetail = ({
               <Textarea value={merged.summary} onChange={(e) => edit({ summary: e.target.value })} />
             </Label>
             <div className='grid grid-cols-2 items-end gap-3 sm:grid-cols-3'>
+              {!decision && (
               <Label>
                 Category
                 <Select
@@ -548,6 +573,7 @@ export const GlobDetail = ({
                   ))}
                 </Select>
               </Label>
+              )}
               <Label>
                 Group
                 <Input
@@ -555,6 +581,7 @@ export const GlobDetail = ({
                   onChange={(e) => edit({ group: e.target.value === '' ? null : e.target.value })}
                 />
               </Label>
+              {!decision && (
               <Label>
                 Environment
                 <Select
@@ -569,6 +596,7 @@ export const GlobDetail = ({
                   ))}
                 </Select>
               </Label>
+              )}
             </div>
             {categoryNote !== null && failure === null && (
               <div role='status' className='flex items-center justify-end gap-2 text-xs text-muted-foreground' data-testid='category-saved'>
@@ -634,17 +662,23 @@ export const GlobDetail = ({
 
           <PlanEditor globId={glob.id} summary={glob.summary} />
 
-          <DeploysSection board={board} glob={glob} />
+          {decision && <DecisionSection board={board} glob={glob} busy={busy} onDecide={onDecide} onUpdate={onUpdate} />}
 
-          <EnvironmentsSection board={board} glob={glob} />
+          {!decision && (
+            <>
+              <DeploysSection board={board} glob={glob} />
 
-          <TestsSection glob={glob} />
+              <EnvironmentsSection board={board} glob={glob} />
+
+              <TestsSection glob={glob} />
+            </>
+          )}
 
           <ArtifactsSection globId={glob.id} artifacts={glob.artifacts ?? []} selected={artifact} onSelect={setArtifact} />
 
           <GlobDecisions boardId={glob.boardId} globId={glob.id} />
 
-          <ReviewFindings globId={glob.id} />
+          {decision ? <DecisionAssessment glob={glob} /> : <ReviewFindings globId={glob.id} />}
 
           <dl className='grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground'>
             <dt>Planner</dt>
@@ -653,6 +687,8 @@ export const GlobDetail = ({
             <dd>{glob.implementer ?? '—'}</dd>
             <dt>Created</dt>
             <dd>{when(glob.createdAt)}</dd>
+            {!decision && (
+              <>
             <dt>Pull request</dt>
             <dd>
               {glob.pr === null ? (
@@ -676,6 +712,8 @@ export const GlobDetail = ({
                 </a>
               )}
             </dd>
+              </>
+            )}
             {glob.prs.length > 0 && (
               <>
                 <dt>Merged and continued</dt>

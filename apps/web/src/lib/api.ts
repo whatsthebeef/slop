@@ -19,6 +19,9 @@ import type {
   Confidence,
   IntakeAccuracy,
   IntakeExample,
+  DecisionDiff,
+  DecisionOutcomeKind,
+  DecisionScope,
   DecisionView,
   Deploy,
   DeployIndicator,
@@ -358,7 +361,19 @@ export interface SplitPartInput {
   overlaps?: number[];
 }
 
-export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'after'>>;
+export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'after'>> & {
+  /** A decision's scope, the only attribute a person edits. */
+  attributes?: { scope: DecisionScope };
+};
+
+/** What a person chooses for a decision in Doing (`POST /api/globs/:id/decision`). */
+export interface DecideInput {
+  readonly outcome: Exclude<DecisionOutcomeKind, 'closed'>;
+  readonly reason?: string;
+  readonly editedDraft?: string;
+  readonly target?: TargetChange;
+  readonly linkedGlobId?: string;
+}
 
 export type ActionPath =
   | 'start'
@@ -376,7 +391,9 @@ export type ActionPath =
   | 'deescalate'
   | 'make-super'
   | 'merge-continue'
-  | 'mark-ready';
+  | 'mark-ready'
+  | 'sign-off'
+  | 'reopen';
 
 /** What the board's banner shows: each integration that needs a person, and the in-app AWS sign-in (local development only). */
 export interface IntegrationHealthView {
@@ -599,6 +616,17 @@ export const api = {
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
   artifactVersions: (id: string, kind: ArtifactKind, label: string) =>
     request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts/${kind}?label=${encodeURIComponent(label)}`),
+  /** Decision globs: the outcome of a decision in Doing. */
+  decide: (id: string, version: number, input: DecideInput) => request<GlobView>('POST', `/api/globs/${id}/decision`, { ...input, version }),
+  /** Decision globs: the proposed change against the target as it is now. */
+  globDiff: (id: string) => request<DecisionDiff>('GET', `/api/globs/${id}/diff`),
+  /** Decision globs: writes or refreshes the assessment. */
+  assess: (id: string) => request<{ kind: ArtifactKind; version: number; content: string }>('POST', `/api/globs/${id}/assessment`, {}),
+  /** Inbox: promotes an item to a decision glob in Planning (idempotent). */
+  promoteInbox: (boardId: number, id: number) =>
+    request<{ glob: GlobView; item: InboxItemView }>('POST', `/api/boards/${boardId}/inbox/${id}/promote`, {}),
+  /** Promotes an extracted decision to a decision glob in Planning (idempotent). */
+  promoteDecision: (boardId: number, id: number) => request<{ glob: GlobView }>('POST', `/api/boards/${boardId}/decisions/${id}/promote`, {}),
   findings: (id: string) => request<GlobFindings>('GET', `/api/globs/${id}/findings`),
   /** The decisions taken on a glob, newest first, with what replaced them. */
   decisions: (boardId: number, id: string) => request<{ decisions: DecisionView[] }>('GET', `/api/boards/${boardId}/globs/${id}/decisions`),
@@ -636,6 +664,10 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   make_super: 'make-super',
   merge_continue: 'merge-continue',
   mark_ready: 'mark-ready',
+  // The outcome has its own dialog and route (api.decide).
+  decide: null,
+  sign_off: 'sign-off',
+  reopen: 'reopen',
   delete: null,
 };
 
@@ -656,5 +688,8 @@ export const ACTION_LABELS: Record<Action, string> = {
   make_super: 'Make it a super',
   merge_continue: 'Merge and continue',
   mark_ready: 'Ready for review',
+  decide: 'Decide',
+  sign_off: 'Sign off',
+  reopen: 'Reopen',
   delete: 'Delete',
 };

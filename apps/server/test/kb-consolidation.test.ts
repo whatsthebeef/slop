@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import {
+  kbItems,
   ArtifactService,
   BoardService,
   DEDUPE_SYSTEM,
@@ -25,6 +26,9 @@ import type { Env } from '../src/http/app.js';
 import { mountKnowledge } from '../src/http/knowledge.js';
 import { createTestDatabase } from './support/database.js';
 import { fakeCodeHost } from './support/fake-codehost.js';
+
+/** KB items written in setup: their time doesn't matter. */
+const KB_WRITES = { clock: { now: () => '2026-10-05T12:00:00.000Z' } };
 
 const DEV = 'dev@example.com';
 const ADMIN = 'admin@example.com';
@@ -108,9 +112,9 @@ describe('Weekly consolidation in Postgres', () => {
 
   // Each test starts with no open items, so the run compares only its own.
   beforeEach(async () => {
-    await database.db.execute(
-      sql`update kb_proposals set status = 'rejected' where status = 'open'`,
-    );
+    // (Earlier tests' learnings go: they are decision globs, and nothing else on the board is.)
+    await database.db.execute(sql`delete from artifacts where glob_id in (select id from globs where data->>'category' = 'decision')`);
+    await database.db.execute(sql`delete from globs where data->>'category' = 'decision'`);
   });
 
   /** An open, drafted statement, as the pipeline leaves it. */
@@ -143,11 +147,11 @@ describe('Weekly consolidation in Postgres', () => {
       version: 2,
       ...patch,
     };
-    expect(await store.transaction((tx) => tx.insertKbItem(item))).toBe(true);
+    expect(await store.transaction((tx) => kbItems(tx, KB_WRITES).insertKbItem(item))).toBe(true);
     return item;
   };
   const get = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -163,48 +167,8 @@ describe('Weekly consolidation in Postgres', () => {
       { timeout: 5_000, interval: 20 },
     );
 
-  it('the consolidation migration adds its columns with their defaults, and re-running it is harmless', async () => {
-    const migration = await readFile(new URL(`../drizzle/${MIGRATION}.sql`, import.meta.url), 'utf8');
-    for (const statement of migration.split('--> statement-breakpoint'))
-      await database.db.execute(sql.raw(statement));
-    const columns = await database.db.execute(sql`
-      select column_name, data_type, is_nullable, column_default from information_schema.columns
-      where table_name = 'kb_proposals' and column_name in ('stale_since', 'stale_reason', 'stale_dismissed_at', 'kept_apart_from', 'merge_note')
-      order by column_name`);
-    expect([...columns]).toEqual([
-      {
-        column_name: 'kept_apart_from',
-        data_type: 'jsonb',
-        is_nullable: 'NO',
-        column_default: "'[]'::jsonb",
-      },
-      { column_name: 'merge_note', data_type: 'jsonb', is_nullable: 'YES', column_default: null },
-      {
-        column_name: 'stale_dismissed_at',
-        data_type: 'timestamp with time zone',
-        is_nullable: 'YES',
-        column_default: null,
-      },
-      { column_name: 'stale_reason', data_type: 'text', is_nullable: 'YES', column_default: null },
-      {
-        column_name: 'stale_since',
-        data_type: 'timestamp with time zone',
-        is_nullable: 'YES',
-        column_default: null,
-      },
-    ]);
-    // A row from before the migration reads as never flagged, kept apart from nothing and not merged by consolidation.
-    const id = `s${String(boardId)}k${String(++n)}`;
-    await database.db.execute(sql`
-      insert into kb_proposals (id, board_id, status, type, statement, evidence, source_glob_ids, source, submitted_by, created_at, version)
-      values (${id}, ${boardId}, 'rejected', 'gotcha', 'Old', 'Old', '[]'::jsonb, 'submitted', ${DEV}, now(), 1)`);
-    expect(await get(id)).toMatchObject({
-      staleSince: null,
-      staleReason: null,
-      staleDismissedAt: null,
-      keptApartFrom: [],
-      mergeNote: null,
-    });
+  it('the consolidation migration\'s journal entry follows the one before, and board jobs keep a state', async () => {
+    // (Its kb_proposals columns went with the table when the items became decision globs.)
     const journal = JSON.parse(
       await readFile(new URL('../drizzle/meta/_journal.json', import.meta.url), 'utf8'),
     ) as {
@@ -234,7 +198,7 @@ describe('Weekly consolidation in Postgres', () => {
       mergeNote: { by: 'consolidation', quote: 'a', survivorQuote: 'b', at: START },
       version: item.version + 1,
     };
-    expect(await store.transaction((tx) => tx.updateKbItem(updated, item.version))).toBe(true);
+    expect(await store.transaction((tx) => kbItems(tx, KB_WRITES).updateKbItem(updated, item.version))).toBe(true);
     expect(await get(item.id)).toEqual(updated);
   });
 
@@ -325,7 +289,7 @@ describe('Weekly consolidation in Postgres', () => {
           // Another writer updates the loser and holds its transaction open: the merge reads the committed
           // version (unchanged), writes the survivor, then waits on the loser's row.
           concurrent = store.transaction(async (tx) => {
-            const wrote = await tx.updateKbItem(
+            const wrote = await kbItems(tx, KB_WRITES).updateKbItem(
               { ...loser, evidence: 'Edited meanwhile', version: loser.version + 1 },
               loser.version,
             );
@@ -428,7 +392,7 @@ describe('Weekly consolidation in Postgres', () => {
         [PAIRS_SYSTEM]: () => Promise.resolve(PAIR(survivor.id, loser.id)),
         [VERIFY_SYSTEM]: async () => {
           // A pipeline worker merges the new item into the survivor while the pair is being verified.
-          expect(await pipeline.process(fresh.id)).toBe(true);
+          expect(await pipeline.runStep(fresh.id, 'route')).toBe('done');
           return SAME;
         },
       }),
@@ -558,7 +522,7 @@ describe('Consolidation routes', () => {
       staleReason: 'no_recent_evidence',
       version: 4,
     };
-    await store.transaction((tx) => tx.insertKbItem(item));
+    await store.transaction((tx) => kbItems(tx, KB_WRITES).insertKbItem(item));
     expect((await post(`/api/kb/${id}/keep`, { version: 4 }, DEV)).status).toBe(403);
     expect((await post(`/api/kb/${id}/keep`, { version: 3 })).status).toBe(409);
     const kept = await post(`/api/kb/${id}/keep`, { version: 4 });

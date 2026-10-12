@@ -1,7 +1,8 @@
 import type { BoardSession } from './domain/board-sessions.js';
 import type { Deploy, DeployState } from './domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
-import type { DomainEvent, DomainEventType, Effect } from './domain/events.js';
+import type { DecisionOrigin } from './domain/attributes.js';
+import type { DomainEvent, DomainEventType, Effect, EffectKind, OutboxJob } from './domain/events.js';
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
 import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, ChatThread, NewChatMessage, NewChatThread } from './domain/chat.js';
@@ -14,7 +15,6 @@ import type { GlobReportFacts } from './domain/time-tracking.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
-import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
 import type { NewSizeCalibrationChange, SizeCalibration, SizeCalibrationChange, SizeRecord } from './domain/size-forecast.js';
@@ -28,11 +28,20 @@ import type { NewTypeCorrection, TypeCorrection } from './domain/type-learning.j
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
 import type { BaseChecks, Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
 
+/**
+ * Which globs a listing includes: `work` (the default: features, tasks and bugs, so every consumer that treats a glob as
+ * work is unchanged), `decisions` (decision globs only) or `all`. Anything that must see decisions asks for them.
+ */
+export type GlobInclude = 'work' | 'decisions' | 'all';
+
 export interface GlobFilter {
+  readonly include?: GlobInclude;
   readonly status?: readonly Status[];
   readonly type?: SlopType;
   readonly group?: string;
   readonly person?: string;
+  /** Decision globs whose proposal came from one of these (`submitted` and `mined`: the KB items). */
+  readonly origins?: readonly DecisionOrigin['kind'][];
 }
 
 export interface DeployFilter {
@@ -205,26 +214,10 @@ export interface Tx {
   artifactVersions(globId: string, kind: ArtifactKind, label: string): Promise<Artifact[]>;
   /** Content-free summaries of the latest version of each artifact on the given globs of a board. */
   listArtifactSummaries(boardId: number, globIds: readonly string[]): Promise<ArtifactSummary[]>;
-
-  /** Inserts a new KB item; returns false if the ID already exists. */
-  insertKbItem(item: KbItem): Promise<boolean>;
-  getKbItem(id: string): Promise<KbItem | null>;
-  /** A board's KB items, oldest first, optionally with one status. */
-  listKbItems(boardId: number, status?: KbItemStatus): Promise<KbItem[]>;
-  /**
-   * A board's newest `limit` KB items with one of `statuses`, newest first by `decidedAt` (else
-   * `createdAt`), and how many there are in all.
-   */
-  listRecentKbItems(boardId: number, statuses: readonly KbItemStatus[], limit: number): Promise<{ items: KbItem[]; total: number }>;
-  /**
-   * The oldest open item on any board still waiting for the pipeline (`pending` routing or
-   * `routed`, waiting for its draft) whose `processAfter` is unset or not after `now`.
-   */
-  nextKbItemToProcess(now: string): Promise<KbItem | null>;
-  /** Open items, on every board, whose processing ended `failed` (the busy-recovery pass picks from these). */
-  listFailedKbItems(): Promise<KbItem[]>;
-  /** Writes `item` if the stored version is still `expectedVersion`; returns false otherwise. */
-  updateKbItem(item: KbItem, expectedVersion: number): Promise<boolean>;
+  /** The latest version of each artifact (per glob, kind and label) of the given globs, of the given kinds, with content: one read for many globs. */
+  latestArtifacts(globIds: readonly string[], kinds: readonly ArtifactKind[]): Promise<Artifact[]>;
+  /** The newest outbox job (any state) per glob and kind, of the given globs and kinds: one read for many globs. */
+  latestOutboxJobs(globIds: readonly string[], kinds: readonly EffectKind[]): Promise<OutboxJob[]>;
 
   getDeploy(id: string): Promise<Deploy | null>;
   /** Writes deploys (insert or replace by ID). */

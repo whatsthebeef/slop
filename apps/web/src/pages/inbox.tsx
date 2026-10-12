@@ -138,6 +138,17 @@ const Card = ({
     onSuccess: onChanged,
     onError: (e) => toast(message(e)),
   });
+  // A decision glob in Planning with this item attached as its source; promoting again returns the same glob.
+  const client = useQueryClient();
+  const promote = useMutation({
+    mutationFn: () => api.promoteInbox(boardId, item.id),
+    onSuccess: ({ glob }) => {
+      void client.invalidateQueries({ queryKey: globsKey(boardId) });
+      toast(`Promoted to decision ${glob.id}`);
+      onChanged();
+    },
+    onError: (e) => toast(message(e)),
+  });
   // The glob's attachment links here: bring the item into view.
   useEffect(() => {
     if (highlighted)
@@ -211,6 +222,11 @@ const Card = ({
         {item.status !== 'discarded' && (
           <Button size="sm" onClick={() => setAttaching(suggestions.map((s) => s.globId))}>
             Attach to…
+          </Button>
+        )}
+        {item.status !== 'discarded' && (
+          <Button size="sm" variant="outline" disabled={promote.isPending} onClick={() => promote.mutate()}>
+            Promote to decision
           </Button>
         )}
         {item.status === 'new' && (

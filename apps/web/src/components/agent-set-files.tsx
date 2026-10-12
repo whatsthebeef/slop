@@ -2,6 +2,7 @@ import { lineDiff } from '@slop/core';
 import type { AgentSetEntry, AgentSetEntryStatus } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { DiffRow } from '@/components/diff-view';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Label, Textarea } from '@/components/ui/input';
@@ -22,19 +23,7 @@ const STATUS_TEXT: Record<AgentSetEntryStatus, string> = {
 export const LineDiff = ({ board, catalog }: { board: string; catalog: string }) => (
   <pre className='max-h-96 overflow-auto rounded-md border text-xs'>
     {lineDiff(board, catalog).map((line, i) => (
-      <div
-        key={i}
-        className={
-          line.op === 'removed'
-            ? 'bg-red-500/10 text-red-700 dark:text-red-300'
-            : line.op === 'added'
-              ? 'bg-green-500/10 text-green-700 dark:text-green-300'
-              : 'text-muted-foreground'
-        }
-      >
-        {line.op === 'removed' ? '- ' : line.op === 'added' ? '+ ' : '  '}
-        {line.text}
-      </div>
+      <DiffRow key={i} op={line.op} text={line.text} />
     ))}
   </pre>
 );

@@ -1,3 +1,4 @@
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { EscalationLearningService } from '../src/app/escalation-learning-service.js';
@@ -150,6 +151,7 @@ describe('escalation outcomes (pure)', () => {
 describe('escalation learning service', () => {
   let store: MemoryStore;
   let service: EscalationLearningService;
+  let notifier: RecordingNotifier;
   let boardId: number;
 
   const seed = async (globs: Glob[], events: DomainEvent[]): Promise<void> => {
@@ -159,15 +161,15 @@ describe('escalation learning service', () => {
     });
   };
   const records = () => store.transaction((tx) => tx.listEscalationRecords(boardId));
-  const items = () => store.transaction((tx) => tx.listKbItems(boardId, 'open'));
+  const items = () => store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'open'));
 
   beforeEach(async () => {
     store = new MemoryStore();
-    const notifier = new RecordingNotifier();
+    notifier = new RecordingNotifier();
     const boards = new BoardService({ store, notifier });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
     boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
-    service = new EscalationLearningService({ store, clock: { now: () => NOW } });
+    service = new EscalationLearningService({ store, clock: { now: () => NOW }, notifier });
   });
 
   it('an escalation approved unchanged loosens its criterion, with its cause in the history and a learning proposed', async () => {
@@ -182,6 +184,10 @@ describe('escalation learning service', () => {
     expect(proposed).toHaveLength(1);
     expect(proposed[0]).toMatchObject({ type: 'agent-behaviour', sourceGlobIds: ['s1t1'], status: 'open' });
     expect(proposed[0]?.statement).toContain('unnecessary');
+    // The item is its decision glob (same ID), like every new KB item, published after the commit.
+    const itemId = proposed[0]?.id ?? '';
+    expect(await store.transaction((tx) => tx.getGlob(itemId))).toMatchObject({ category: 'decision', status: 'planning', attributes: { origin: { kind: 'mined' }, channel: 'mined' } });
+    expect(notifier.hints).toContainEqual({ kind: 'glob.changed', boardId, globId: itemId, version: 1 });
     // idempotent: a second pass records and proposes nothing
     expect(await service.learn(boardId, NOW)).toBe(0);
     expect(await items()).toHaveLength(1);

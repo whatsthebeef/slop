@@ -64,6 +64,14 @@ export const DOMAIN_EVENT_TYPES = [
   /** A person made an escalated glob a sub again. */
   'Deescalated',
   'GlobDeleted',
+  /** A person chose an outcome for a decision glob (accept, retarget, needs work, reject), or the pipeline closed it. */
+  'DecisionDecided',
+  /** The work glob a decision waited on merged. */
+  'DecisionWorkLanded',
+  /** An admin reopened a learning the KB pipeline closed (data: how it was closed). */
+  'DecisionReopened',
+  /** A glob's attributes changed (a decision's scope, or its conflict flags). */
+  'AttributesChanged',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 
@@ -178,7 +186,14 @@ export type Effect =
    * `requestId` marks an on-demand review (Review now): it is never deduplicated or cancelled, and it reviews whatever the
    * PR is when it runs (the stage follows the PR's state, so `stage` and `sha` only say what it was when asked).
    */
-  | { readonly kind: 'review_change'; readonly globId: string; readonly generation: number; readonly stage: ReviewStage; readonly sha: string; readonly requestId?: string };
+  | { readonly kind: 'review_change'; readonly globId: string; readonly generation: number; readonly stage: ReviewStage; readonly sha: string; readonly requestId?: string }
+  /**
+   * The KB pipeline's steps for one learning (`globId` is the KB item's ID): route and deduplicate it, or draft it against
+   * its target. No generation: the executor re-derives the step from the item and drops a job that no longer applies, so a
+   * repeat costs at most one model call. The outbox keeps one pending job per item and kind.
+   */
+  | { readonly kind: 'kb_route'; readonly globId: string }
+  | { readonly kind: 'kb_draft'; readonly globId: string };
 
 export type ReviewStage = 'pre_merge' | 'post_merge';
 
@@ -191,11 +206,67 @@ export const OUTBOX_LANES: readonly OutboxLane[] = ['default', 'llm'];
 
 /**
  * The one place an effect kind is assigned its lane. Every kind is `default` except the slow LLM effects, which go in
- * `llm`; there are none yet (the KB pipeline's routing and drafting add theirs).
+ * `llm`: the KB pipeline's routing and drafting. The `llm` runner starts with the `llm` job switch (or `kb`), so a new
+ * llm-lane kind runs wherever those are on.
  */
-const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = {};
+const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm' };
 
 export const laneOf = (kind: EffectKind): OutboxLane => LANE_OF_KIND[kind] ?? 'default';
+
+/**
+ * Attempts a job may spend before it ends `failed`. A model that keeps giving unusable answers is given up on sooner
+ * (the item stays decidable by hand); waits for an unavailable or busy model spend none.
+ */
+const MAX_ATTEMPTS_OF_LANE: Readonly<Record<OutboxLane, number>> = { default: 8, llm: 3 };
+
+export const maxAttemptsOf = (lane: OutboxLane): number => MAX_ATTEMPTS_OF_LANE[lane];
+
+/**
+ * How long a job waits after a thrown failure before it runs again: 5 s doubling on `default`; 30 s doubling on `llm`,
+ * so its three attempts span minutes rather than seconds (a model's bad minute passes). Capped at an hour.
+ */
+export const outboxBackoffMs = (attempts: number, lane: OutboxLane = 'default'): number =>
+  Math.min(2 ** attempts * (lane === 'llm' ? 30 : 5), 3_600) * 1000;
+
+/** How long a step on the `llm` lane may take before another runner may claim it again: above two model calls' deadlines. */
+export const LLM_CLAIM_LEASE_MS = 5 * 60_000;
+
+/**
+ * How long a claim holds a job: its backoff on `default` (a crash mid-job retries after it); on `llm` at least the
+ * lease, because a step can run for minutes and a second runner must not take it meanwhile.
+ */
+export const claimLeaseMs = (attempts: number, lane: OutboxLane = 'default'): number =>
+  lane === 'llm' ? Math.max(outboxBackoffMs(attempts, lane), LLM_CLAIM_LEASE_MS) : outboxBackoffMs(attempts, lane);
+
+/**
+ * An executor's request to run again later without spending an attempt (an LLM that is busy or unavailable, or a record
+ * that changed under it). `reason` is kept as the job's last error, so the item can say why it waits; without one the
+ * last error stays as it was.
+ */
+export interface RetryLater {
+  readonly state: 'pending';
+  readonly retryAfterMs: number;
+  readonly reason?: string;
+}
+
+/** What running an effect did: done, dropped because it no longer applies, or asked to run again later. Throwing spends an attempt. */
+export type EffectOutcome = 'done' | 'dropped' | RetryLater;
+
+export const OUTBOX_STATES = ['pending', 'done', 'dropped', 'failed'] as const;
+export type OutboxState = (typeof OUTBOX_STATES)[number];
+
+/** An outbox job as readers see it (without the effect): where it is, how many attempts it spent, and its last error. */
+export interface OutboxJob {
+  readonly id: number;
+  readonly globId: string;
+  readonly kind: EffectKind;
+  readonly state: OutboxState;
+  readonly attempts: number;
+  /** The last failure, or why it waits (an executor's retry-later reason). */
+  readonly lastError: string | null;
+  /** When it may run next. */
+  readonly runAfter: string;
+}
 
 /** The board's overlap recheck: its `globId` is `board-<id>`, as for the other board-wide effects. */
 export const recheckOverlapsEffect = (boardId: number): Effect => ({ kind: 'recheck_overlaps', globId: `board-${String(boardId)}`, boardId });

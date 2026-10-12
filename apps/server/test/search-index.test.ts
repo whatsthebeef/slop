@@ -1,4 +1,4 @@
-import { FakeEmbedder, GlobService, SearchIndexer, UNPROCESSED } from '@slop/core';
+import { FakeEmbedder, GlobService, SearchIndexer, UNPROCESSED, kbItems } from '@slop/core';
 import type { ChangeSource, KbItem, Llm } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -6,6 +6,9 @@ import * as schema from '../src/db/schema.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
 import { createTestDatabase } from './support/database.js';
+
+/** KB items written in setup: their time doesn't matter. */
+const KB_WRITES = { clock: { now: () => '2026-10-05T12:00:00.000Z' } };
 
 const DEV = 'dev@example.com';
 const SHA = 'abcdef0123456789';
@@ -110,7 +113,7 @@ describe('search index backfill', () => {
         processing: 'drafted',
         version: 2,
       };
-      await tx.insertKbItem(learning);
+      await kbItems(tx, KB_WRITES).insertKbItem(learning);
       await tx.appendEvents([{ type: 'Merged', globId, actor: null, at: new Date().toISOString(), data: { sha: SHA } }]);
     });
   });

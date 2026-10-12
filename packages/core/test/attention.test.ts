@@ -38,3 +38,12 @@ describe('needs a human', () => {
     expect(isMine(glob({ planner: 'b@x.com', implementer: 'c@x.com' }), 'a@x.com')).toBe(false);
   });
 });
+
+describe('needs a human: decision globs', () => {
+  it('waits on a pick-up (Planning) or a sign-off (Reviewing), not while someone is deciding it', () => {
+    expect(needsHuman(glob({ category: 'decision', status: 'planning' }))).toBe(true);
+    expect(needsHuman(glob({ category: 'decision', status: 'reviewing' }))).toBe(true);
+    expect(needsHuman(glob({ category: 'decision', status: 'in_progress' }))).toBe(false);
+    expect(needsHuman(glob({ category: 'decision', status: 'signed_off' }))).toBe(false);
+  });
+});

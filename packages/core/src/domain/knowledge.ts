@@ -1,4 +1,6 @@
 import type { ReviewStage } from './events.js';
+import type { EffectCheck } from './effect-check.js';
+import type { KbMergeNote, KbOutcome, KbTarget } from './kb.js';
 
 /**
  * The board's knowledge base: documents (conventions, build commands, architecture, review
@@ -176,8 +178,45 @@ export const agentSetKind = (path: string): KnowledgeKind | null => {
   return null;
 };
 
-export const ARTIFACT_KINDS = ['plan', 'implementation_plan', 'postplan', 'local_review', 'independent_review', 'investigation', 'attachment'] as const;
+/**
+ * A KB item's decision glob also keeps its pipeline output: the `draft` (the drafted change, JSON), the `outcome` of an
+ * approval (JSON) and the `effect_check` (JSON). Each is a new version when it changes; empty content means cleared.
+ */
+export const ARTIFACT_KINDS = [
+  'plan',
+  'implementation_plan',
+  'postplan',
+  'local_review',
+  'independent_review',
+  'investigation',
+  'assessment',
+  'draft',
+  'outcome',
+  'effect_check',
+  'attachment',
+] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+
+/**
+ * What an artifact kind is for: the `payload` is what the glob is about (plan.md; a decision's proposal), a `record` is
+ * what was done (served in full by `get_context`), a `special` artifact has its own place in the view and is only listed,
+ * and an `attachment` is free-form material.
+ */
+export type ArtifactRole = 'payload' | 'record' | 'special' | 'attachment';
+export const ARTIFACT_ROLE: Record<ArtifactKind, ArtifactRole> = {
+  plan: 'payload',
+  implementation_plan: 'record',
+  postplan: 'record',
+  local_review: 'special',
+  independent_review: 'special',
+  investigation: 'special',
+  assessment: 'special',
+  draft: 'special',
+  outcome: 'special',
+  effect_check: 'special',
+  attachment: 'attachment',
+};
+export const isSpecialKind = (kind: ArtifactKind): boolean => ARTIFACT_ROLE[kind] === 'special';
 
 export const RISK_TIERS = ['low', 'normal', 'high'] as const;
 export type RiskTier = (typeof RISK_TIERS)[number];
@@ -203,6 +242,31 @@ export interface Provenance {
   readonly validation?: string;
   /** Independent reviews only: what was reviewed and how many findings it kept (the card's status reads it). */
   readonly independentReview?: IndependentReviewMeta;
+  /** Drafts only: the section it replaces, the target and its version it was drafted against, and the one-line why. */
+  readonly draft?: DraftMeta;
+  /** A learning's outcome artifact: what its approval did (or an agent's rejection). */
+  readonly kbOutcome?: KbOutcome;
+  /** A learning's effect-check artifact: whether the approved change worked. */
+  readonly effectCheck?: EffectCheck;
+  /** Evidence attachments only: the near-duplicate learning that brought it and that learning's source globs. */
+  readonly evidence?: EvidenceMeta;
+  /** Merge-note attachments only: the verified quotes the pipeline closed the learning on. */
+  readonly mergeNote?: KbMergeNote;
+}
+
+/** A draft's section (null: append, or a new document's body), what it was made against (so a draft whose target moved since is redone), and why. */
+export interface DraftMeta {
+  readonly section: string | null;
+  /** The target's version it was drafted against (0: the target didn't exist yet). */
+  readonly targetVersion: number | null;
+  readonly target: KbTarget | null;
+  readonly rationale: string | null;
+}
+
+/** Where an evidence attachment came from: a learning folded into this one. */
+export interface EvidenceMeta {
+  readonly itemId: string;
+  readonly globIds: readonly string[];
 }
 
 /** The facts about one independent review that cards and the GitHub publisher need without parsing its text. */

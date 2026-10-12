@@ -1,3 +1,5 @@
+import type { GlobAttributes } from './attributes.js';
+import type { JsonValue } from './events.js';
 import type { ReviewBoardSettings } from './review-settings.js';
 
 /** What an admin's agent may approve through `decide_kb_item`: documentation items only, or agent-set files and contradicting items too. */
@@ -8,7 +10,10 @@ export const AGENT_KB_APPROVAL_DEFAULT: AgentKbApproval = 'docs';
 export const SLOP_TYPES = ['sub', 'same', 'super'] as const;
 export type SlopType = (typeof SLOP_TYPES)[number];
 
-export const CATEGORIES = ['feature', 'task', 'bug'] as const;
+/** What a person or intake may create through the work form; `decision` globs come from KB items, the inbox and the backfill only. */
+export const WORK_CATEGORIES = ['feature', 'task', 'bug'] as const;
+export type WorkCategory = (typeof WORK_CATEGORIES)[number];
+export const CATEGORIES = [...WORK_CATEGORIES, 'decision'] as const;
 export type Category = (typeof CATEGORIES)[number];
 
 export const STATUSES = [
@@ -221,6 +226,27 @@ export interface ImpliedAfter {
   readonly overridden?: true;
 }
 
+/**
+ * How two decisions relate, as the KB pipeline (or an admin) found: closed into another learning (`duplicate_of`,
+ * `suppressed_by`, `covered_by`), a hint that another may already say it (`possibly_covered_by`), a contradiction, or a
+ * pair an admin kept apart by reopening a merge. Kept apart from the dependency edges (`after`, `impliedAfter`) on purpose:
+ * they never hold a start or order a merge.
+ */
+export const DECISION_EDGE_KINDS = ['duplicate_of', 'suppressed_by', 'covered_by', 'possibly_covered_by', 'contradicts', 'kept_apart_from'] as const;
+export type DecisionEdgeKind = (typeof DECISION_EDGE_KINDS)[number];
+
+/** The links that close a decision: Reopen removes them. */
+export const CLOSING_EDGE_KINDS: readonly DecisionEdgeKind[] = ['duplicate_of', 'suppressed_by', 'covered_by'];
+
+/** A link from a decision glob to another (`id`): set by the KB `pipeline` or by a person (`explicit`), with its details. */
+export interface GlobLink {
+  readonly id: string;
+  readonly kind: DecisionEdgeKind;
+  readonly source: 'pipeline' | 'explicit';
+  /** Per kind: a coverage hint's quotes and claim (`possibly_covered_by`), a contradiction's note (`contradicts`). */
+  readonly detail?: JsonValue;
+}
+
 /** Another open glob that changes some of the same exclusive paths as this one; a warning, never a block. */
 export interface PathClash {
   readonly with: string;
@@ -234,6 +260,8 @@ export interface Glob {
   readonly summary: string;
   readonly type: SlopType;
   readonly category: Category;
+  /** Per-category fields (a decision's scope and outcome); absent on legacy globs. */
+  readonly attributes?: GlobAttributes;
   readonly group: string | null;
   readonly environment: string | null;
   readonly status: Status;
@@ -264,6 +292,8 @@ export interface Glob {
   readonly after?: readonly string[];
   /** Holds from the board's merge policy (exclusive paths): the same as `after`, with the reason. */
   readonly impliedAfter?: readonly ImpliedAfter[];
+  /** Decisions only: how this decision relates to others (never a dependency; see `GlobLink`). */
+  readonly links?: readonly GlobLink[];
   /** Set while the glob is held in Planning for its `after`; cleared when released, started anyway or picked up. */
   readonly waiting?: { readonly since: string } | null;
   /**

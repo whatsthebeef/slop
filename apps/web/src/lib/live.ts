@@ -49,6 +49,9 @@ export const inboxKey = (boardId: number) => ['inbox', boardId] as const;
 /** One glob's decisions in the glob view; invalidated by `glob.decisions` hints and on reconnect. */
 export const globDecisionsKey = (globId: string) => ['glob-decisions', globId] as const;
 
+/** A decision glob's proposed change and draft in the glob view; invalidated by that glob's hints. */
+export const globDiffKey = (globId: string) => ['glob-diff', globId] as const;
+
 /** One artifact's versions in the glob view; invalidated by `glob.artifacts` hints. */
 export const artifactKey = (globId: string, kind: string, label: string) => ['artifact', globId, kind, label] as const;
 
@@ -256,8 +259,13 @@ export const useLiveBoard = (boardId: number): LiveState => {
       void client.invalidateQueries({ queryKey: ['board', boardId] });
       return;
     }
-    // The board shows no KB data; the Knowledge page follows those hints itself.
-    if (hint.kind === 'board.kb') return;
+    // The Knowledge page follows these itself; the board only needs them for decision globs, which the pipeline and mining
+    // create and draft without a glob hint of their own (the board list has no KB data otherwise).
+    if (hint.kind === 'board.kb') {
+      void client.invalidateQueries({ queryKey: globsKey(boardId) });
+      void client.invalidateQueries({ queryKey: ['glob-diff'] });
+      return;
+    }
     if (hint.kind === 'board.tests') {
       // An environment's ATF run (or the check that placed globs at its commit): it shows on every glob held there.
       void client.invalidateQueries({ queryKey: deploysKey(boardId) });
@@ -304,6 +312,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
       replace(null, id);
       return;
     }
+    void client.invalidateQueries({ queryKey: globDiffKey(id) });
     if (hint.kind === 'glob.artifacts') {
       // Artifacts don't bump the glob's version, so always refetch (the view carries their summaries).
       void client.invalidateQueries({ queryKey: ['artifact', id] });
@@ -336,6 +345,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
     void client.invalidateQueries({ queryKey: inboxKey(boardId) });
     void client.invalidateQueries({ queryKey: ['findings'] });
     void client.invalidateQueries({ queryKey: ['glob-decisions'] });
+    void client.invalidateQueries({ queryKey: ['glob-diff'] });
   };
 
   return useBoardEvents(boardId, { onHint, onReconnect });

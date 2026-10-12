@@ -1,6 +1,7 @@
 import { composeAgentSet } from '../domain/agent-set.js';
 import { effectItemOf } from '../domain/effect-check.js';
-import { BUSY_WAITING_PREFIX, LLM_WAITING_PREFIX, failedBecauseBusy } from '../domain/kb.js';
+import type { EffectOutcome, RetryLater } from '../domain/events.js';
+import { BUSY_WAITING_PREFIX, LLM_WAITING_PREFIX, kbStepOf } from '../domain/kb.js';
 import type {
   KbContradiction,
   KbCoverage,
@@ -8,7 +9,7 @@ import type {
   KbItem,
   KbMergeNote,
   KbPossibleCoverage,
-  KbProcessing,
+  KbStep,
   KbTarget,
   NewDocumentMeta,
 } from '../domain/kb.js';
@@ -17,25 +18,27 @@ import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/know
 import { checkLocalRun, LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
 import { checkMergePolicy, MERGE_POLICY_NAME, parseMergePolicy, renderMergePolicy } from '../domain/merge-policy.js';
 import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
-import type { Catalog, Clock, Notifier, Store, Tx } from '../ports.js';
+import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
-import { documentTarget, targetState } from './knowledge-service.js';
+import { draftPreview, documentTarget, targetState } from './knowledge-service.js';
 import type { TargetState } from './knowledge-service.js';
 import { addEvidenceTo, keptApart, longEnoughQuote, normalised, verifiedQuote } from './kb-dedupe.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
+import { kbItems } from './kb-items.js';
+import type { KbItems } from './kb-items.js';
 
-/** Failures at one stage (LLM errors or unusable answers) before an item is marked `failed`. */
-export const MAX_PROCESSING_ATTEMPTS = 3;
-/** How long a claimed item is held before another worker may take it (a crash mid-item retries after this). */
-const LEASE_MS = 5 * 60_000;
 /**
- * How long one LLM call may take before it is abandoned and the attempt fails (retried with
- * backoff). Below the lease, so a stalled call can't hold the single worker, and every board's items, forever.
+ * Failures at one stage (LLM errors or unusable answers) before an item is marked `failed`: the `llm` outbox lane's
+ * limit for the KB pipeline's jobs, and the other pipelines' own.
+ */
+export const MAX_PROCESSING_ATTEMPTS = 3;
+/**
+ * How long one LLM call may take before it is abandoned and the attempt fails (retried with backoff), so a stalled
+ * call can't hold the lane, and every board's items, forever.
  */
 export const LLM_TIMEOUT_MS = 2 * 60_000;
-const backoffMs = (attempts: number) => 30_000 * 2 ** (attempts - 1);
 /**
  * How long an item waits after an `LlmUnavailable` (expired sign-in, no model access) before it is
  * tried again. No attempt is counted: only a person can fix it, and items shouldn't fail meanwhile.
@@ -176,6 +179,9 @@ interface Drafted {
   readonly rationale: string | null;
 }
 
+/** Run the step again at once: the item changed under it (decided, merged into, retargeted), and the rerun re-reads it. */
+const AGAIN: RetryLater = { state: 'pending', retryAfterMs: 0 };
+
 /** The item changed while it was processed (decided, or merged into); thrown so the writes roll back. */
 class StaleItem extends Error {
   constructor(id: string) {
@@ -223,108 +229,82 @@ export class KbPipeline {
     },
   ) {}
 
+  /** The KB items in `tx`, writing with the pipeline's clock and collecting the live hints for after the commit. */
+  private kb(tx: Tx, hints: Hint[]): KbItems {
+    return kbItems(tx, { clock: this.deps.clock, raise: (hint) => hints.push(hint) });
+  }
+
   /** One LLM call with a deadline; a timeout rejects with a readable reason, recorded like any other failure. */
   private complete(llm: Llm, request: Omit<LlmRequest, 'signal'>): Promise<string> {
     return completeWithDeadline(llm, request, this.deps.llmTimeoutMs ?? LLM_TIMEOUT_MS);
   }
 
-  /** Claims the oldest item due for routing or drafting and processes it; returns its ID, or null when none is due. */
-  async processNext(): Promise<string | null> {
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const now = this.deps.clock.now();
-      const next = await this.deps.store.transaction((tx) => tx.nextKbItemToProcess(now));
-      if (next === null) return null;
-      const claimed = await this.claim(next.id);
-      // Another worker took it first: look for the next one.
-      if (claimed === null) continue;
-      await this.run(claimed);
-      return claimed.id;
+  /**
+   * Self-healing, run when the `llm` runner starts: every board's open learnings whose step has no job waiting get one
+   * (`KbItems.queueDueSteps`). Idempotent: a step already queued is not queued again. Returns how many it queued.
+   */
+  async queueDueSteps(): Promise<number> {
+    const boards = await this.deps.store.transaction((tx) => tx.listAllBoards());
+    let queued = 0;
+    for (const board of boards) {
+      const n = await this.deps.store.transaction((tx) => kbItems(tx).queueDueSteps(board.id));
+      if (n > 0) this.deps.notifier.publish({ kind: 'board.kb', boardId: board.id });
+      queued += n;
     }
-    return null;
+    return queued;
   }
 
   /**
-   * Claims one given item, if it is still open and waiting for routing or drafting, and processes
-   * it; returns whether it ran. The job uses `processNext`; this is for a caller (so far only tests)
-   * that must process a particular item while others are due too.
+   * Runs one step of one item, as the outbox's `kb_route` and `kb_draft` jobs ask: re-reads the item and drops the job
+   * when that step is no longer its next (decided, closed, already routed or drafted). A failure (an LLM error, an
+   * unusable answer) throws with a readable reason, spending one of the job's attempts; an unavailable or busy LLM, or
+   * an item that changed under the step, asks to run again later without spending one.
    */
-  async process(itemId: string): Promise<boolean> {
-    const claimed = await this.claim(itemId);
-    if (claimed === null) return false;
-    await this.run(claimed);
-    return true;
-  }
-
-  /**
-   * Takes the item with a conditional write that holds it for a lease, so two workers can't both
-   * process it and a crash mid-item retries once the lease ends.
-   */
-  private async claim(itemId: string): Promise<KbItem | null> {
-    const now = this.deps.clock.now();
-    return this.deps.store.transaction(async (tx) => {
-      const item = await tx.getKbItem(itemId);
-      if (item?.status !== 'open' || !(item.processing === 'pending' || item.processing === 'routed')) return null;
-      if (item.processAfter !== null && item.processAfter > now) return null;
-      const claimed: KbItem = { ...item, processAfter: this.later(now, LEASE_MS), version: item.version + 1 };
-      return (await tx.updateKbItem(claimed, item.version)) ? claimed : null;
-    });
-  }
-
-  private async run(item: KbItem): Promise<void> {
-    await this.step(item);
-    // Whatever ended the busy streak (a success, a real failure) starts the next one over.
-    const after = await this.deps.store.transaction((tx) => tx.getKbItem(item.id));
-    if (after?.processingError?.startsWith(BUSY_WAITING_PREFIX) !== true) this.busy.clear(item.id);
-  }
-
-  private async step(item: KbItem): Promise<void> {
-    if (item.processing === 'routed') {
-      await this.draft(item);
-      return;
+  async runStep(itemId: string, step: KbStep): Promise<EffectOutcome> {
+    const item = await this.deps.store.transaction((tx) => kbItems(tx).getKbItem(itemId));
+    if (item === null || kbStepOf(item) !== step) return 'dropped';
+    let outcome: EffectOutcome | null = null;
+    try {
+      outcome = step === 'route' ? await this.route(item) : await this.draft(item);
+      return outcome;
+    } finally {
+      // Whatever ended the busy streak (a success, a real failure) starts the next one over.
+      if (!(typeof outcome === 'object' && outcome?.reason?.startsWith(BUSY_WAITING_PREFIX) === true)) this.busy.clear(item.id);
     }
+  }
+
+  /** Routes and deduplicates an item: one routing call, then one dedupe call against the routed target. */
+  private async route(item: KbItem): Promise<EffectOutcome> {
     if (item.document !== null) {
       // A document proposal names its own target (items from before routing existed land here).
       const { document } = item;
-      await this.finish(item, async (tx) => ({
+      return this.finish(item, async (tx) => ({
         routing: { target: await documentTarget(tx, item.boardId, document), catalogCandidate: false, catalogReason: null },
         dedupe: NO_MATCH,
       }));
-      return;
     }
     const snapshot = await this.snapshot(item);
     const decided = await this.ask(item, snapshot);
-    if ('unavailable' in decided) await this.wait(item, decided.unavailable);
-    else if ('failure' in decided) await this.fail(item, decided.failure, 'pending');
-    else await this.finish(item, () => Promise.resolve(decided));
+    if ('unavailable' in decided) return this.waitFor(item, decided.unavailable);
+    if ('failure' in decided) throw new Error(decided.failure.slice(0, 500));
+    return this.finish(item, () => Promise.resolve(decided));
   }
 
   /**
-   * Drafts a routed item against its target's current text. A document proposal is its own draft,
-   * so it needs no call. If the target changes during the call, the item is released to be drafted again.
+   * Drafts a routed item against its target's current text. If the target changes during the call, the step runs
+   * again at once against the new text.
    */
-  private async draft(item: KbItem): Promise<void> {
+  private async draft(item: KbItem): Promise<EffectOutcome> {
     const { target } = item;
-    if (item.document !== null || target === null) {
-      // Document proposals (routed before drafting existed) are their own draft; an item with no
-      // target can't be drafted and is left for an admin to decide or retarget.
-      const wrote = await this.write(item, (current) =>
-        current.document !== null
-          ? { ...current, processing: 'drafted', processAfter: null }
-          : { ...current, processing: 'failed', processingError: 'No target to draft against', processAfter: null },
-      );
-      if (wrote) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
-      return;
-    }
+    // `kbStepOf` only asks to draft an item with a target and no document.
+    if (target === null) return 'dropped';
     const catalog = await this.deps.catalog.agentSet();
     const context = await this.deps.store.transaction(async (tx) => ({
       state: await targetState(tx, catalog, item.boardId, target),
       docs: target.newDocument === null ? [] : await tx.listKnowledge(item.boardId, ['doc']),
     }));
     const { state } = context;
-    if (state === null) {
-      await this.fail(item, `The target ${target.name} is no longer on the board; choose another target`, 'routed');
-      return;
-    }
+    if (state === null) throw new Error(`The target ${target.name} is no longer on the board; choose another target`);
     let drafted: Drafted | string;
     try {
       drafted = parseDraft(
@@ -337,19 +317,16 @@ export class KbPipeline {
         state,
       );
     } catch (error) {
-      if (error instanceof LlmUnavailable) await this.wait(item, error);
-      else await this.fail(item, error instanceof Error ? error.message : String(error), 'routed');
-      return;
+      if (error instanceof LlmUnavailable) return this.waitFor(item, error);
+      throw new Error((error instanceof Error ? error.message : String(error)).slice(0, 500), { cause: error });
     }
-    if (typeof drafted === 'string') {
-      await this.fail(item, drafted, 'routed');
-      return;
-    }
+    if (typeof drafted === 'string') throw new Error(drafted.slice(0, 500));
     const { draft, rationale } = drafted;
+    // The decision's assessment is refreshed with the new draft's diff.
     const wrote = await this.write(item, async (current, tx) => {
       const now = await targetState(tx, catalog, item.boardId, target);
-      // The target moved during the call: release the item to be drafted against the new text.
-      if (now?.version !== state.version) return { ...current, processAfter: null };
+      // The target moved during the call: draft again against the new text.
+      if (now?.version !== state.version) return null;
       return {
         ...current,
         target: drafted.target,
@@ -361,17 +338,36 @@ export class KbPipeline {
         processingAttempts: 0,
         processAfter: null,
       };
-    });
-    if (wrote) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
+    }, catalog);
+    if (wrote !== 'written') return AGAIN;
+    this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
+    return 'done';
   }
 
-  /** A conditional write of the claimed item; false when it changed meanwhile (decided, retargeted). */
-  private async write(item: KbItem, next: (current: KbItem, tx: Tx) => KbItem | Promise<KbItem>): Promise<boolean> {
-    return this.deps.store.transaction(async (tx) => {
-      const current = await tx.getKbItem(item.id);
-      if (current?.version !== item.version) return false;
-      return tx.updateKbItem({ ...(await next(current, tx)), version: current.version + 1 }, current.version);
+  /**
+   * A conditional write of the item as the step read it: `changed` when it changed meanwhile (decided, retargeted), and
+   * `skipped` when `next` returns null (nothing to write). With `catalog`, the draft's preview goes to the assessment.
+   */
+  private async write(
+    item: KbItem,
+    next: (current: KbItem, tx: Tx) => KbItem | null | Promise<KbItem | null>,
+    catalog?: CatalogAgentSet,
+  ): Promise<'written' | 'changed' | 'skipped'> {
+    let hints: Hint[] = [];
+    const wrote = await this.deps.store.transaction(async (tx): Promise<'written' | 'changed' | 'skipped'> => {
+      hints = [];
+      const kb = this.kb(tx, hints);
+      const current = await kb.getKbItem(item.id);
+      if (current?.version !== item.version) return 'changed';
+      const changed = await next(current, tx);
+      if (changed === null) return 'skipped';
+      const written: KbItem = { ...changed, version: current.version + 1 };
+      // The decision's assessment is refreshed with the new draft's diff.
+      const preview = catalog === undefined ? null : await draftPreview(tx, catalog, written);
+      return (await kb.updateKbItem(written, current.version, { preview })) ? 'written' : 'changed';
     });
+    for (const hint of hints) this.deps.notifier.publish(hint);
+    return wrote;
   }
 
   /**
@@ -442,7 +438,7 @@ export class KbPipeline {
       // or another item raised for it, so it can't be closed as covered by (or a repeat of) the change it questions.
       const original = item.signal === null ? null : effectItemOf(item.signal.key);
       const aboutOriginal = (i: KbItem) => original !== null && (i.id === original || i.signal?.key === item.signal?.key);
-      const others = (await tx.listKbItems(item.boardId)).filter(
+      const others = (await kbItems(tx).listKbItems(item.boardId)).filter(
         (i) => i.id !== item.id && i.document === null && !aboutOriginal(i),
       );
       return {
@@ -457,11 +453,17 @@ export class KbPipeline {
     });
   }
 
-  /** Writes the outcome in one transaction, conditional on the item (and any item it adds evidence to). */
-  private async finish(item: KbItem, decide: (tx: Tx) => Promise<{ routing: Routing; dedupe: Dedupe }>): Promise<void> {
+  /**
+   * Writes the outcome in one transaction, conditional on the item (and any item it adds evidence to); when either
+   * changed meanwhile, nothing is written and the step runs again at once.
+   */
+  private async finish(item: KbItem, decide: (tx: Tx) => Promise<{ routing: Routing; dedupe: Dedupe }>): Promise<EffectOutcome> {
+    let hints: Hint[] = [];
     try {
       await this.deps.store.transaction(async (tx) => {
-        const current = await tx.getKbItem(item.id);
+        hints = [];
+        const kb = this.kb(tx, hints);
+        const current = await kb.getKbItem(item.id);
         if (current?.version !== item.version) throw new StaleItem(item.id);
         const { routing, dedupe } = await decide(tx);
         let next: KbItem = {
@@ -481,10 +483,10 @@ export class KbPipeline {
           status: 'open' | 'approved',
           adjust?: (merged: KbItem) => KbItem,
         ): Promise<boolean> => {
-          const other = await tx.getKbItem(id);
+          const other = await kb.getKbItem(id);
           // An admin separated them (reopening a merge): the item stays open rather than joining it again.
           if (other?.status !== status || keptApart(other, current)) return false;
-          if (!(await addEvidenceTo(tx, other, current, adjust))) throw new StaleItem(id);
+          if (!(await addEvidenceTo(kb, other, current, adjust))) throw new StaleItem(id);
           return true;
         };
         // The verified quotes go on the closed item, so its card shows what it closed on.
@@ -499,16 +501,16 @@ export class KbPipeline {
         // back unchanged on the version read, so a change committed since fails it (and the item is retried), and
         // the row stays locked until this transaction commits.
         const stillRejected = async (id: string): Promise<boolean> => {
-          const other = await tx.getKbItem(id);
+          const other = await kb.getKbItem(id);
           if (other?.status !== 'rejected' || keptApart(other, current)) return false;
-          if (!(await tx.updateKbItem(other, other.version))) throw new StaleItem(id);
+          if (!(await kb.updateKbItem(other, other.version))) throw new StaleItem(id);
           return true;
         };
         // A short-quote hint on an item is only shown when an admin hasn't kept that item apart from this one, as a
         // closure on it would be refused; a target hint it hid is shown instead.
         const shownHint = async (hint: KbPossibleCoverage | null): Promise<KbPossibleCoverage | null> => {
           if (hint === null || hint.kind !== 'item') return hint;
-          const other = await tx.getKbItem(hint.id);
+          const other = await kb.getKbItem(hint.id);
           if (other === null || !keptApart(other, current)) return hint;
           const { kind, name, section } = routing.target;
           return hint.alsoTarget === undefined ? null : { knowledgeKind: kind, name, section, ...hint.alsoTarget };
@@ -519,7 +521,7 @@ export class KbPipeline {
         // target's, so it stays behind.
         const hint = dedupe.possiblyCoveredBy;
         const rejectedHint = hint?.kind === 'item' && hint.claim === 'suppressed' ? hint : null;
-        const hinted = rejectedHint === null ? null : await tx.getKbItem(rejectedHint.id);
+        const hinted = rejectedHint === null ? null : await kb.getKbItem(rejectedHint.id);
         const carryHint = (survivor: KbItem): KbItem => {
           if (rejectedHint === null || hinted === null) return survivor;
           if (survivor.possiblyCoveredBy !== null || keptApart(hinted, survivor)) return survivor;
@@ -547,94 +549,28 @@ export class KbPipeline {
           // open for an admin to decide.
           next = { ...next, possiblyCoveredBy: await shownHint(dedupe.possiblyCoveredBy), contradicts: dedupe.contradicts };
         }
-        if (!(await tx.updateKbItem(next, current.version))) throw new StaleItem(item.id);
+        if (!(await kb.updateKbItem(next, current.version))) throw new StaleItem(item.id);
       });
     } catch (error) {
-      // Decided or merged into meanwhile: a still-pending item is retried when its lease ends.
-      if (error instanceof StaleItem) return;
+      // Decided or merged into meanwhile: the rerun re-reads it (and drops the job if it is no longer due).
+      if (error instanceof StaleItem) return AGAIN;
       throw error;
     }
     this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
+    for (const hint of hints) this.deps.notifier.publish(hint);
+    return 'done';
   }
 
   /**
-   * Records a failed attempt at a stage (`retry`: the state to retry it from): back off and retry,
-   * or give up after the last attempt (the item stays open).
+   * Asks to run the step again once the LLM can be used (credentials, model access: after `LLM_WAIT_MS`; busy: after
+   * a growing delay). Not a failed attempt: the item never ends `failed` this way, and the job's last error says why it
+   * waits. The Knowledge page hears of it from the outbox once the job is updated.
    */
-  private async fail(item: KbItem, reason: string, retry: KbProcessing): Promise<void> {
-    const now = this.deps.clock.now();
-    const message = reason.slice(0, 500);
-    const recorded = await this.deps.store.transaction(async (tx) => {
-      const current = await tx.getKbItem(item.id);
-      if (current?.version !== item.version) return false;
-      const attempts = current.processingAttempts + 1;
-      const last = attempts >= MAX_PROCESSING_ATTEMPTS;
-      const next: KbItem = {
-        ...current,
-        processingAttempts: attempts,
-        processingError: message,
-        processing: last ? 'failed' : retry,
-        processAfter: last ? null : this.later(now, backoffMs(attempts)),
-        version: current.version + 1,
-      };
-      return tx.updateKbItem(next, current.version);
-    });
-    // Retrying shows the error and attempt count too, not only the final failure.
-    if (recorded) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
-  }
-
-  /**
-   * Releases an item the LLM couldn't be used for (credentials, model access) at the same stage,
-   * to be tried again after `LLM_WAIT_MS`. Not a failed attempt: the count is unchanged and the item
-   * never ends `failed` this way; `processingError` says why it waits.
-   */
-  private async wait(item: KbItem, unavailable: LlmUnavailable): Promise<void> {
-    const now = this.deps.clock.now();
-    // Busy is the same wait with a growing delay, and says when the item comes back.
-    const retryAt = this.later(now, unavailable instanceof LlmBusy ? this.busy.next(item.id) : LLM_WAIT_MS);
-    const message = (unavailable instanceof LlmBusy ? busyMessage(retryAt) : `${LLM_WAITING_PREFIX}${unavailable.reason}`).slice(0, 500);
-    const wrote = await this.write(item, (current) => ({
-      ...current,
-      processingError: message,
-      processAfter: retryAt,
-    }));
-    // Each probe while the LLM is down releases the item again; the page only needs to hear of the
-    // first (the write only lands on the claimed version, so `item` is what it replaced).
-    if (wrote && item.processingError !== message) this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
-  }
-
-  /**
-   * Puts open items that went `failed` only because Bedrock was busy (before busy errors stopped
-   * spending attempts) back at their stage with fresh attempts: `routed` when they had a target
-   * (drafting failed), else `pending`. Run once when the job starts; returns how many were requeued.
-   */
-  async requeueBusyFailed(): Promise<number> {
-    const requeued = await this.deps.store.transaction(async (tx) => {
-      const boards = new Set<number>();
-      let count = 0;
-      for (const item of await tx.listFailedKbItems()) {
-        if (!failedBecauseBusy(item)) continue;
-        const next: KbItem = {
-          ...item,
-          processing: item.target === null ? 'pending' : 'routed',
-          processingAttempts: 0,
-          processingError: null,
-          processAfter: null,
-          version: item.version + 1,
-        };
-        if (await tx.updateKbItem(next, item.version)) {
-          boards.add(item.boardId);
-          count++;
-        }
-      }
-      return { boards, count };
-    });
-    for (const boardId of requeued.boards) this.deps.notifier.publish({ kind: 'board.kb', boardId });
-    return requeued.count;
-  }
-
-  private later(now: string, ms: number): string {
-    return new Date(Date.parse(now) + ms).toISOString();
+  private waitFor(item: KbItem, unavailable: LlmUnavailable): RetryLater {
+    const ms = unavailable instanceof LlmBusy ? this.busy.next(item.id) : LLM_WAIT_MS;
+    const retryAt = new Date(Date.parse(this.deps.clock.now()) + ms).toISOString();
+    const reason = (unavailable instanceof LlmBusy ? busyMessage(retryAt) : `${LLM_WAITING_PREFIX}${unavailable.reason}`).slice(0, 500);
+    return { state: 'pending', retryAfterMs: ms, reason };
   }
 }
 

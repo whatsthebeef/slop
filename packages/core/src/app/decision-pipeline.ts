@@ -22,6 +22,7 @@ import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 import { hash } from './text-hash.js';
+import { kbItems } from './kb-items.js';
 
 /** Haiku answers in seconds; a stalled call fails the attempt well inside the lease. */
 export const DECISIONS_LLM_TIMEOUT_MS = 60_000;
@@ -255,7 +256,7 @@ export class DecisionPipeline {
       const live = new Set(sources.map((s) => s.ref));
       const globs = new Set<string>();
       let written = 0;
-      for (const item of await tx.listKbItems(boardId, 'approved')) {
+      for (const item of await kbItems(tx).listKbItems(boardId, 'approved')) {
         if (item.type !== 'decision' || item.document !== null || item.statement.trim() === '') continue;
         const ref = `learning:${item.id}`;
         live.add(ref);

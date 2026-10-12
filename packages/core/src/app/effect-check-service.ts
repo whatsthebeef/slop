@@ -20,10 +20,11 @@ import type { KbItem } from '../domain/kb.js';
 import { MAX_SIGNAL_GLOBS, signalKindOf } from '../domain/signals.js';
 import type { BoardActivity, BoardJobResult, KbSignal } from '../domain/signals.js';
 import type { Board } from '../domain/types.js';
-import type { Notifier, Store, Tx } from '../ports.js';
+import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { newKbItemId } from './knowledge-service.js';
 import { MINED_BY } from './mining-service.js';
 import type { MiningService } from './mining-service.js';
+import { kbItems } from './kb-items.js';
 
 export type EffectCheckResult = Extract<BoardJobResult, { kind: 'effect_check' }>;
 
@@ -65,7 +66,7 @@ export class EffectCheckService {
     const read = await this.deps.store.transaction(async (tx) => {
       const board = await tx.getBoard(boardId);
       if (board === null) throw new Error(`No board ${boardId}`);
-      const items = (await tx.listKbItems(boardId)).filter(
+      const items = (await kbItems(tx).listKbItems(boardId)).filter(
         (i) => isWatched(i) && (only === undefined || only.includes(i.id)),
       );
       if (items.length === 0) return null;
@@ -82,11 +83,12 @@ export class EffectCheckService {
     let written = false;
     const decided: { id: string; state: EffectState }[] = [];
     const raised: string[] = [];
+    const hints: Hint[] = [];
     for (const item of items) {
       let outcome: { state: EffectState; raisedItemId: string | null } | null;
       try {
         outcome = await this.deps.store.transaction((tx) =>
-          this.checkItem(tx, board, item.id, activity, globs, now),
+          this.checkItem(tx, board, item.id, activity, globs, now, hints),
         );
       } catch (error) {
         // Someone else wrote the item meanwhile: the next run checks it again.
@@ -99,6 +101,7 @@ export class EffectCheckService {
       else decided.push({ id: item.id, state: outcome.state });
       if (outcome.raisedItemId !== null) raised.push(outcome.raisedItemId);
     }
+    for (const hint of hints) this.deps.notifier.publish(hint);
     if (written) this.deps.notifier.publish({ kind: 'board.kb', boardId });
     return { kind: 'effect_check', watching, decided, raised };
   }
@@ -114,9 +117,10 @@ export class EffectCheckService {
     activity: BoardActivity,
     globs: readonly EffectGlob[],
     now: string,
+    hints: Hint[],
   ): Promise<{ state: EffectState; raisedItemId: string | null } | null> {
     await tx.lockBoardJob(board.id, 'effect_check');
-    const item = await tx.getKbItem(itemId);
+    const item = await kbItems(tx).getKbItem(itemId);
     if (item === null || !isWatched(item) || item.signal === null || item.decidedAt === null)
       return null;
     // Approved before effect checks: watched from the approval, by its outcome.
@@ -135,14 +139,14 @@ export class EffectCheckService {
       checkedAt: now,
     };
     const raisedItemId = raisesItem(check.state)
-      ? await this.raise(tx, board, item, item.signal, check, now)
+      ? await this.raise(tx, board, item, item.signal, check, now, hints)
       : null;
     const updated: KbItem = {
       ...item,
       effectCheck: { ...check, raisedItemId },
       version: item.version + 1,
     };
-    if (!(await tx.updateKbItem(updated, item.version))) throw new EffectCheckConflict(item.id);
+    if (!(await kbItems(tx, { clock: { now: () => now }, raise: (h) => hints.push(h) }).updateKbItem(updated, item.version))) throw new EffectCheckConflict(item.id);
     return { state: check.state, raisedItemId };
   }
 
@@ -154,6 +158,7 @@ export class EffectCheckService {
     watched: KbSignal,
     check: EffectCheck,
     now: string,
+    hints: Hint[],
   ): Promise<string> {
     const { after } = check;
     if (after === null || original.decidedAt === null)
@@ -170,7 +175,7 @@ export class EffectCheckService {
       examples: [],
       measuredAt: now,
     };
-    const inserted = await tx.insertKbItem({
+    const item: KbItem = {
       id,
       boardId: board.id,
       status: 'open',
@@ -197,7 +202,8 @@ export class EffectCheckService {
       // Unprocessed: the KB pipeline routes, dedupes and drafts it like any mined item; humans decide.
       ...UNPROCESSED,
       version: 1,
-    });
+    };
+    const inserted = await kbItems(tx, { clock: { now: () => now }, raise: (h) => hints.push(h) }).insertKbItem(item);
     if (!inserted) throw new Error(`KB item ${id} already exists`);
     return id;
   }

@@ -1,3 +1,4 @@
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
@@ -15,6 +16,7 @@ import type { Result } from '../src/domain/errors.js';
 import type { KbItem } from '../src/domain/kb.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import { MemoryKbQueue } from '../src/testing/kb-queue.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -66,6 +68,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
   let notifier: RecordingNotifier;
   let knowledge: KnowledgeService;
   let pipeline: KbPipeline;
+  let queue: MemoryKbQueue;
   let router: FakeLlm;
   let drafter: FakeLlm;
   let now: string;
@@ -77,7 +80,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
   };
 
   const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -107,7 +110,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
   ) => {
     const id = await targeted(target, patch);
     drafter.answer(answer);
-    expect(await pipeline.process(id)).toBe(true);
+    expect(await queue.process(id)).toBe(true);
     expect((await item(id)).processing).toBe('drafted');
     return id;
   };
@@ -137,6 +140,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
     drafter = new FakeLlm();
     knowledge = new KnowledgeService({ store, clock, catalog, notifier });
     pipeline = new KbPipeline({ store, clock, catalog, notifier, route: router, draft: drafter });
+    queue = new MemoryKbQueue(store, pipeline, clock, notifier);
     const boards = new BoardService({ store, notifier });
     const globs = new GlobService({
       store,
@@ -192,7 +196,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
   it("fails (to retry) a draft that rewrites the whole document under the document's title", async () => {
     const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: null });
     drafter.answer(draftAnswer('Build', '# Build\n\n## Test\n\nRun vitest --reporter=dot.\n\n## Lint\n\nRun eslint.'));
-    expect(await pipeline.process(id)).toBe(true);
+    expect(await queue.process(id)).toBe(true);
     expect(await item(id)).toMatchObject({
       processing: 'routed',
       draft: null,
@@ -210,7 +214,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
       }),
       json({ contradicts: [] }),
     );
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect((await item(id)).processing).toBe('routed');
 
     drafter.answer(
@@ -220,7 +224,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
         'Quiet output keeps logs short',
       ),
     );
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect(await item(id)).toMatchObject({
       processing: 'drafted',
       draft: { section: 'Test', content: '## Test\n\nRun vitest with `--reporter=dot`.' },
@@ -242,7 +246,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
     expect(call?.prompt).toContain('# Build\n\n## Test\n\nRun vitest.\n\n## Lint\n\nRun eslint.');
     expect(call?.prompt).not.toContain('area: build');
     expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
-    expect(await pipeline.processNext()).toBeNull();
+    expect(await queue.processNext()).toBeNull();
 
     expect(await preview(id)).toEqual({
       version: 1,
@@ -405,18 +409,19 @@ describe('KB pipeline: drafting and approving drafts', () => {
   it('retries unusable drafts and errors with backoff, then marks drafting failed with the target kept, still decidable', async () => {
     const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: 'Test' });
     drafter.answer('{"section": "Test"}');
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(id)).toMatchObject({
       processing: 'routed',
       processingAttempts: 1,
       processingError: 'The draft answer was not usable JSON',
+      // The llm lane's backoff after a first failed attempt.
       processAfter: '2026-10-05T12:00:30.000Z',
     });
-    expect(await pipeline.processNext()).toBeNull();
+    expect(await queue.processNext()).toBeNull();
     for (let attempt = 2; attempt <= MAX_PROCESSING_ATTEMPTS; attempt++) {
       advance(120_000);
       drafter.answer(new Error('Sonnet is down'));
-      expect(await pipeline.processNext()).toBe(id);
+      expect(await queue.processNext()).toBe(id);
     }
     const failed = await item(id);
     expect(failed).toMatchObject({
@@ -428,7 +433,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
     });
     expect(router.calls).toHaveLength(0);
     advance(3_600_000);
-    expect(await pipeline.processNext()).toBeNull();
+    expect(await queue.processNext()).toBeNull();
     expect(errorOf(await approveDraft(id))?.code).toBe('invalid_input');
     // Edit then approve still works without a draft.
     unwrap(
@@ -441,7 +446,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
     const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: 'Test' });
     for (let probe = 0; probe <= MAX_PROCESSING_ATTEMPTS; probe++) {
       drafter.answer(new LlmUnavailable('No access to the Bedrock model m', 'Enable model access'));
-      expect(await pipeline.processNext()).toBe(id);
+      expect(await queue.processNext()).toBe(id);
       advance(60_000);
     }
     expect(await item(id)).toMatchObject({
@@ -458,7 +463,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
     const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: 'Test' });
     for (let attempt = 1; attempt <= MAX_PROCESSING_ATTEMPTS; attempt++) {
       drafter.answer(new Error('Sonnet is down'));
-      expect(await pipeline.processNext()).toBe(id);
+      expect(await queue.processNext()).toBe(id);
       advance(120_000);
     }
     const failed = await item(id);
@@ -476,18 +481,19 @@ describe('KB pipeline: drafting and approving drafts', () => {
       version: failed.version + 1,
     });
     expect(await item(id)).toEqual(retried);
-    expect(notifier.hints).toEqual([{ kind: 'board.kb', boardId }]);
+    // The retry is a write to the learning's decision glob too.
+    expect(notifier.hints).toEqual([{ kind: 'glob.changed', boardId, globId: id, version: retried.version }, { kind: 'board.kb', boardId }]);
     // Only failed items can be retried.
     expect(errorOf(await knowledge.retryProcessing(ADMIN, id, retried.version))?.code).toBe('invalid_input');
     drafter.answer(draftAnswer('Test', '## Test\n\nRun vitest --reporter=dot.'));
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect((await item(id)).processing).toBe('drafted');
 
     // Routing failed: no target, so it goes back to routing.
     const other = await submit({ statement: 'Another rule' });
     for (let attempt = 1; attempt <= MAX_PROCESSING_ATTEMPTS; attempt++) {
       router.answer(new Error('Haiku is down'));
-      expect(await pipeline.processNext()).toBe(other);
+      expect(await queue.processNext()).toBe(other);
       advance(120_000);
     }
     const unrouted = await item(other);
@@ -498,7 +504,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
       processingAttempts: 0,
       processAfter: null,
     });
-    expect(await pipeline.processNext()).toBe(other);
+    expect(await queue.processNext()).toBe(other);
     expect(router.calls.length).toBe(MAX_PROCESSING_ATTEMPTS + 1);
   });
 
@@ -543,7 +549,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
     expect(await doc('build_test_lint')).not.toContain('New');
 
     drafter.answer(draftAnswer('Test', '## Test\n\nNewer'));
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect(await item(id)).toMatchObject({ processing: 'drafted', draftedAgainstVersion: 2 });
     expect(drafter.calls[1]?.prompt).toContain('## Format');
   });
@@ -563,13 +569,13 @@ describe('KB pipeline: drafting and approving drafts', () => {
     );
 
     unwrap(await approveDraft(first));
-    expect(await item(first)).toMatchObject({ status: 'approved', processing: 'drafted' });
+    expect(await item(first)).toMatchObject({ status: 'approved', processing: 'none' });
     expect(await item(second)).toMatchObject({ status: 'open', processing: 'routed', draft: null });
     expect(await item(elsewhere)).toMatchObject({ processing: 'drafted' });
 
     // The next loop drafts it against the new text.
     drafter.answer(draftAnswer('Lint', '## Lint\n\nTwo'));
-    expect(await pipeline.processNext()).toBe(second);
+    expect(await queue.processNext()).toBe(second);
     expect(await item(second)).toMatchObject({ processing: 'drafted', draftedAgainstVersion: 2 });
 
     unwrap(
@@ -596,7 +602,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
       );
       return draftAnswer('Test', '## Test\n\nStale');
     });
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(id)).toMatchObject({
       processing: 'routed',
       draft: null,
@@ -604,12 +610,37 @@ describe('KB pipeline: drafting and approving drafts', () => {
       processingAttempts: 0,
     });
     drafter.answer(draftAnswer('Test', '## Test\n\nFresh'));
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect(await item(id)).toMatchObject({
       processing: 'drafted',
       draftedAgainstVersion: 2,
       draft: { content: '## Test\n\nFresh' },
     });
+  });
+
+  it('queues a fresh draft when the item is retargeted after its draft committed but before its job settled', async () => {
+    const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: 'Test' });
+    drafter.answer(draftAnswer('Test', '## Test\n\nRun vitest --reporter=dot.'));
+    // The retarget lands in the window between the step's commit and the runner marking the job done.
+    const late = new MemoryKbQueue(
+      store,
+      {
+        runStep: async (itemId, step) => {
+          const outcome = await pipeline.runStep(itemId, step);
+          unwrap(await knowledge.changeTarget(ADMIN, id, (await item(id)).version, { kind: 'doc', name: 'build_test_lint', section: 'Lint' }));
+          return outcome;
+        },
+      },
+      { now: () => now },
+      notifier,
+    );
+    expect(await late.process(id)).toBe(true);
+    const drafts = store.state.outboxJobs.filter((j) => j.globId === id && j.kind === 'kb_draft');
+    expect(drafts.map((j) => [j.state, j.attempts])).toEqual([['done', 1], ['pending', 0]]);
+    expect(await item(id)).toMatchObject({ processing: 'routed', draft: null, target: { section: 'Lint' } });
+    drafter.answer(draftAnswer('Lint', '## Lint\n\nRun eslint --max-warnings 0.'));
+    expect(await queue.process(id)).toBe(true);
+    expect(await item(id)).toMatchObject({ processing: 'drafted', draft: { section: 'Lint' } });
   });
 
   it('changes the target as an admin: the draft is cleared and drafted again without routing', async () => {
@@ -680,7 +711,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
       },
     });
     drafter.answer(draftAnswer('Testing', '### Testing\n\n- Y'));
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect(router.calls).toHaveLength(0);
     expect(await item(id)).toMatchObject({
       processing: 'drafted',

@@ -1,3 +1,5 @@
+import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
@@ -105,7 +107,7 @@ describe('submit_learning', () => {
         }),
       ),
     );
-    const item = await store.transaction((tx) => tx.getKbItem(id));
+    const item = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     expect(item).toEqual({
       id,
       boardId,
@@ -126,18 +128,19 @@ describe('submit_learning', () => {
       document: null,
       outcome: null,
       ...UNPROCESSED,
+      // Its face on the board: the decision glob made with it.
       version: 1,
     });
-    const open = await store.transaction((tx) => tx.listKbItems(boardId, 'open'));
+    const open = await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'open'));
     expect(open.map((i) => i.id)).toEqual([id]);
-    expect(await store.transaction((tx) => tx.listKbItems(boardId, 'approved'))).toEqual([]);
+    expect(await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'approved'))).toEqual([]);
   });
 
   it('stores no agent-set version or target when none is given', async () => {
     const { id } = unwrap(
       await knowledge.submitLearning(DEV, boardId, learning({ suggestedTarget: '  ' })),
     );
-    expect(await store.transaction((tx) => tx.getKbItem(id))).toMatchObject({
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({
       agentSetVersion: null,
       suggestedTarget: null,
     });
@@ -201,7 +204,7 @@ describe('KB review', () => {
     ).id;
 
   const item = async (id: string) => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -280,24 +283,26 @@ describe('KB review', () => {
 
   it('hints the Knowledge page on submits and decisions, and the board only when its agent-set version moves', async () => {
     const kb = { kind: 'board.kb', boardId };
+    // Decision globs raise their own glob hints; this test is about the board's.
+    const boardHints = () => notifier.hints.filter((h) => h.kind.startsWith('board.'));
     notifier.hints.length = 0;
     const first = await submit();
-    expect(notifier.hints).toEqual([kb]);
+    expect(boardHints()).toEqual([kb]);
 
     notifier.hints.length = 0;
     expect(errorCode(await knowledge.reject(ADMIN, first, 7, 'Stale'))).toBe('version_conflict');
     const empty = { sourceGlobId: globId, type: 'gotcha', statement: '', evidence: 'x' };
     expect(errorCode(await knowledge.submitLearning(DEV, boardId, empty))).toBe('invalid_input');
-    expect(notifier.hints).toEqual([]);
+    expect(boardHints()).toEqual([]);
     unwrap(await knowledge.reject(ADMIN, first, 1, 'Already known'));
-    expect(notifier.hints).toEqual([kb]);
+    expect(boardHints()).toEqual([kb]);
 
     // A document edit changes only knowledge; an agent file also moves the board's agent-set version.
     const second = await submit();
     notifier.hints.length = 0;
     const docEdit = { as: 'edit', target: { kind: 'doc', name: 'build' }, content: 'Run pnpm -r build.\n' } as const;
     unwrap(await knowledge.approve(ADMIN, second, 1, docEdit));
-    expect(notifier.hints).toEqual([kb]);
+    expect(boardHints()).toEqual([kb]);
     const third = await submit({ type: 'agent-behaviour' });
     notifier.hints.length = 0;
     unwrap(
@@ -307,16 +312,16 @@ describe('KB review', () => {
         content: 'Implement the plan.\nTest first.\n',
       }),
     );
-    expect(notifier.hints).toEqual(expect.arrayContaining([kb, { kind: 'board.changed', boardId }]));
-    expect(notifier.hints).toHaveLength(2);
+    expect(boardHints()).toEqual(expect.arrayContaining([kb, { kind: 'board.changed', boardId }]));
+    expect(boardHints()).toHaveLength(2);
 
     notifier.hints.length = 0;
     unwrap(await knowledge.importDocuments(ADMIN, boardId, [{ fileName: 'notes.md', content: 'Notes.\n' }], 'upload'));
-    expect(notifier.hints).toEqual([kb]);
+    expect(boardHints()).toEqual([kb]);
     // Re-importing the same content changes nothing, so it hints nothing.
     notifier.hints.length = 0;
     unwrap(await knowledge.importDocuments(ADMIN, boardId, [{ fileName: 'notes.md', content: 'Notes.\n' }], 'upload'));
-    expect(notifier.hints).toEqual([]);
+    expect(boardHints()).toEqual([]);
   });
 
   it('publishes KB hints only after the write has committed', async () => {
@@ -326,9 +331,10 @@ describe('KB review', () => {
       clock: { now: () => later },
       catalog,
       notifier: {
-        publish: () => {
+        publish: (hint) => {
           // A client refetching on the hint must find the change.
-          reads.push(store.transaction(async (tx) => (await tx.listKbItems(boardId)).at(-1)?.status));
+          if (hint.kind !== 'board.kb') return;
+          reads.push(store.transaction(async (tx) => (await kbItems(tx).listKbItems(boardId)).at(-1)?.status));
         },
       },
     });
@@ -476,10 +482,10 @@ describe('KB review', () => {
     const ids: string[] = [];
     for (let n = 0; n < 3; n++) ids.push(await submit({ statement: `Rule ${n}` }));
     const decideAt = async (id: string, at: string) => {
-      const item = await store.transaction((tx) => tx.getKbItem(id));
+      const item = await store.transaction((tx) => kbItems(tx).getKbItem(id));
       if (item === null) throw new Error('no item');
       await store.transaction((tx) =>
-        tx.updateKbItem({ ...item, status: 'rejected', decidedBy: ADMIN, decidedAt: at, decisionReason: 'No', version: item.version + 1 }, item.version),
+        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...item, status: 'rejected', decidedBy: ADMIN, decidedAt: at, decisionReason: 'No', version: item.version + 1 }, item.version),
       );
     };
     // The newer submissions are decided first; the oldest one last.
@@ -567,7 +573,7 @@ describe('KB review', () => {
       const id = await submit();
       const open = await item(id);
       await store.transaction((tx) =>
-        tx.updateKbItem(
+        kbItems(tx, TEST_KB_WRITES).updateKbItem(
           {
             ...open,
             processing: 'drafted',

@@ -492,3 +492,23 @@ describe('edge cases', () => {
     expect(reportCsv(rows)).toBe('developer,period,RnD hours,maintenance hours,% RnD\r\nbob@example.com,2026-10,3.00,5.00,37.5\r\n');
   });
 });
+
+describe('time tracking: decision globs', () => {
+  it('opens no segment for a decision picked up and held in Doing, and leaves work segments alone', () => {
+    const events = [
+      created('s1k1', BOB, at(MON, '08:00'), 'same', 'decision', 'planning'),
+      same('s1t4'),
+      ...pickUp('s1k1', ANA, at(MON, '09:00')),
+      ...pickUp('s1t4', ANA, at(MON, '11:00')),
+    ];
+    const segments = deriveSegments(events, NO_FACTS, at(MON, '17:00'));
+    expect(segments.filter((s) => s.globId === 's1k1')).toEqual([]);
+    expect(hours(segments, ANA, 's1t4')).toBe(6);
+  });
+
+  it('ignores a decision known only from its row (events without a creation)', () => {
+    const facts = new Map<string, GlobFacts>([['s1k2', { planner: BOB, category: 'decision', type: 'same' }]]);
+    const segments = deriveSegments(pickUp('s1k2', ANA, at(MON, '09:00')), facts, at(MON, '17:00'));
+    expect(segments).toEqual([]);
+  });
+});

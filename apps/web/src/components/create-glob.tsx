@@ -1,4 +1,4 @@
-import { CATEGORIES, isValidCombination, SLOP_TYPES } from '@slop/core';
+import { isValidCombination, SLOP_TYPES, WORK_CATEGORIES } from '@slop/core';
 import type { Category, SlopType } from '@slop/core';
 import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
@@ -174,7 +174,7 @@ export const CreateGlobDialog = ({
                 value={form.category}
                 onChange={(e) => setForm({ ...form, category: e.target.value as Category })}
               >
-                {CATEGORIES.map((c) => (
+                {WORK_CATEGORIES.map((c) => (
                   <option key={c} disabled={!isValidCombination(form.type, c)}>
                     {c}
                   </option>

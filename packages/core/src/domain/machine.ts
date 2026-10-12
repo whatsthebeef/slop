@@ -10,7 +10,9 @@ import type { ArtifactSummary } from './knowledge.js';
 import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
-import { SLOP_TYPES } from './types.js';
+import { isDecisionAttributes, sameScope, validateAttributes, validateScopeEdit } from './attributes.js';
+import type { DecisionAttributes, DecisionClosedAs, DecisionOutcome, DecisionOutcomeKind, DecisionScope, GlobAttributes } from './attributes.js';
+import { CLOSING_EDGE_KINDS, SLOP_TYPES } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { mergeImplied } from './exclusive-paths.js';
 import { chainRefusal, dependencyIds, explicitOverlaps, NO_CHAIN, refusalText, waitingFor, waitSummary } from './waiting.js';
@@ -26,6 +28,7 @@ import type {
   ChecklistItem,
   Failure,
   Glob,
+  GlobLink,
   HeadChecks,
   ImpliedAfter,
   LabelName,
@@ -83,6 +86,12 @@ export type Action =
   | 'merge_continue'
   /** Supers, from the board: ask slop to mark the draft PR ready (as the `mark_ready` tool does). */
   | 'mark_ready'
+  /** Decision globs: choose an outcome (accept, retarget, needs work, reject). */
+  | 'decide'
+  /** Decision globs: sign off an accepted decision. */
+  | 'sign_off'
+  /** Decision globs: take an accepted decision back to Doing to choose again. */
+  | 'reopen'
   | 'delete';
 
 /**
@@ -195,7 +204,8 @@ class Builder {
 
   /** A glob gets its branch and draft PR when it enters Doing; queued before any routine run. */
   ensureProvisioned(): this {
-    if (this.glob.provisioning !== 'none') return this;
+    // A decision never gets a branch or a PR.
+    if (this.glob.category === 'decision' || this.glob.provisioning !== 'none') return this;
     this.set({ provisioning: 'pending' });
     return this.effect({ kind: 'provision', globId: this.glob.id, generation: this.glob.generation });
   }
@@ -320,6 +330,8 @@ export interface CreateInput {
   readonly summary: string;
   readonly type: SlopType;
   readonly category: Category;
+  /** Decisions: the full attributes (scope, source, channel); validated by `create`. Work globs: none. */
+  readonly attributes?: GlobAttributes;
   readonly group: string | null;
   readonly environment: string | null;
   /** Same only: start a routine run immediately (explicit instruction or `autoTrigger`). */
@@ -350,6 +362,7 @@ export const create = (
     return forbidden('QA and PO members cannot create supers');
   }
   if (input.title.trim() === '') return invalidInput('A glob needs a title');
+  if (input.category === 'decision') return createDecision(input, ctx, actor);
   // A sub created without an environment gets the board's default for subs, if it has one.
   const environment =
     input.environment ?? (input.type === 'sub' ? (board.environments.find((e) => e.subDefault === true)?.name ?? null) : null);
@@ -590,6 +603,7 @@ export interface PickUpOptions {
 
 /** Rows 6–10: pick up, optionally taking over a routine run, optionally choosing the environment. */
 export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOptions): Result<Transition> => {
+  if (glob.category === 'decision') return pickUpDecision(glob, ctx);
   const actor = requireActor(ctx);
   if (restrictedFrom(actor, glob)) {
     return forbidden(`QA and PO members cannot pick up ${glob.type}s`);
@@ -906,7 +920,15 @@ export const retryMerge = (glob: Glob, ctx: Context): Result<Transition> => {
 };
 
 /** Row 24: delete the glob and everything it owns. */
-export const remove = (glob: Glob, ctx: Context): Result<Transition> =>
+export const remove = (glob: Glob, ctx: Context): Result<Transition> => {
+  // A decision may govern work, so only an admin or PO deletes one (a person; the system never does).
+  if (glob.category === 'decision' && ctx.actor !== null && !mayDecide(ctx.actor)) {
+    return forbidden('Only an admin or PO can delete a decision');
+  }
+  return removeGlob(glob, ctx);
+};
+
+const removeGlob = (glob: Glob, ctx: Context): Result<Transition> =>
   new Builder(glob, ctx)
     .endRun('superseded', null, { cause: 'deleted' })
     .event('GlobDeleted', { status: glob.status })
@@ -1042,6 +1064,8 @@ export interface FieldChanges {
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Globs this one overlaps, already checked (`checkOverlaps`): replaces the overlaps a person set, at any time (they never block). */
   readonly overlaps?: readonly string[];
+  /** A decision's scope (the only attribute a client edits); checked by `changeFields`. */
+  readonly attributes?: unknown;
   /** Turn a same's start-when-unblocked off (or back on): off ends its wait and keeps what it needs. */
   readonly autoStart?: boolean;
 }
@@ -1055,6 +1079,9 @@ export const changeFields = (
   dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
+  if ((changes.category !== undefined && changes.category !== glob.category && (changes.category === 'decision' || glob.category === 'decision'))) {
+    return invalidCombination('A glob cannot become a decision, or stop being one');
+  }
   const type = changes.type ?? glob.type;
   const category = changes.category ?? glob.category;
   if (!isValidCombination(type, category)) {
@@ -1068,13 +1095,15 @@ export const changeFields = (
 
   const typeCheck = checkTypeChange(glob, type, actor);
   if (!typeCheck.ok) return typeCheck;
+  const scope = changes.attributes === undefined ? ok(null) : scopeEdit(glob, changes.attributes, actor);
+  if (!scope.ok) return scope;
 
   const afterChanged = changes.after !== undefined && changes.after.join('\n') !== (glob.after ?? []).join('\n');
   if (afterChanged && (glob.status !== 'planning' || glob.provisioning !== 'none')) {
     return invalidTransition(glob, actor, 'What a glob waits for can only be changed before the glob has started');
   }
 
-  const patch: { -readonly [K in keyof FieldChanges]: FieldChanges[K] } = {};
+  const patch: { -readonly [K in keyof Omit<FieldChanges, 'attributes'>]: FieldChanges[K] } = {};
   const diff: { [key: string]: JsonValue } = {};
   for (const key of ['title', 'summary', 'type', 'category', 'group', 'environment'] as const) {
     const value = key === 'title' ? changes.title?.trim() : changes[key];
@@ -1096,6 +1125,11 @@ export const changeFields = (
       diff['overlaps'] = { from: before, to: [...changes.overlaps] };
     }
   }
+  let attributes: Partial<Glob> = {};
+  if (scope.value !== null) {
+    attributes = { attributes: { ...decisionAttributesOf(glob), scope: scope.value } };
+    diff['attributes'] = { scope: { from: scopeJson(decisionAttributesOf(glob).scope), to: scopeJson(scope.value) } };
+  }
   // Only a same waiting in Planning has a start of its own to switch; the flag changes nothing for any other glob.
   const switchable = glob.type === 'same' && glob.status === 'planning';
   const autoStartOff = switchable && changes.autoStart === false && glob.autoStart === true;
@@ -1106,7 +1140,7 @@ export const changeFields = (
   }
   if (Object.keys(diff).length === 0) return unchanged(glob);
 
-  const b = new Builder(glob, ctx).set(patch).event('FieldsChanged', diff);
+  const b = new Builder(glob, ctx).set({ ...patch, ...attributes }).event('FieldsChanged', diff);
   if (('type' in diff || 'environment' in diff) && glob.pr !== null) {
     b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   }
@@ -1947,6 +1981,7 @@ export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
 // What a person can do next (drives the glob view's buttons and error messages)
 
 export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}): Action[] => {
+  if (glob.category === 'decision') return decisionActions(glob, actor);
   const actions: Action[] = [];
   const restricted = restrictedFrom(actor, glob);
   // Held: waiting for another glob to merge. Without the dependencies loaded, the glob's own mark says it.
@@ -2011,5 +2046,334 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   }
   if (actor.role !== 'qa' && actor.role !== 'po' && needsPairing(glob) && !hasBusyRun(glob)) actions.push('make_super');
   actions.push('delete');
+  return actions;
+};
+
+// ---------------------------------------------------------------------------
+// Decision globs (rows D1-D11)
+//
+// A decision is the board's face for a proposed knowledge change: it never has a branch, PR, run or merge. It moves
+// Planning -> Doing (picked up) -> Reviewing (accepted) -> Signed off, or ends Signed off when rejected or closed.
+
+const mayDecide = (actor: Actor): boolean => actor.role === 'admin' || actor.role === 'po';
+
+/** The attributes of a decision glob; a decision without them is a broken record, never a state to handle. */
+export const decisionAttributesOf = (glob: Glob): DecisionAttributes => {
+  const attributes = glob.attributes;
+  if (glob.category !== 'decision' || !isDecisionAttributes(attributes)) throw new Error(`${glob.id} is not a decision glob`);
+  return attributes;
+};
+
+const scopeJson = (scope: DecisionScope): JsonValue => ({ kind: scope.kind, ref: scope.ref });
+
+const outcomeJson = (outcome: DecisionOutcome): JsonValue => ({
+  kind: outcome.kind,
+  ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+  ...(outcome.linkedGlobId === undefined ? {} : { linkedGlobId: outcome.linkedGlobId }),
+});
+
+type MutableAttributes = { -readonly [K in keyof DecisionAttributes]: DecisionAttributes[K] };
+
+/** The attributes with `outcome` set (or cleared) and the archived flag as given; the rest is kept. */
+const withOutcome = (attributes: DecisionAttributes, outcome: DecisionOutcome | null, archived: boolean): DecisionAttributes => {
+  const next: MutableAttributes = { ...attributes, outcome };
+  if (archived) next.archived = true;
+  else delete next.archived;
+  return next;
+};
+
+/** The attributes with the conflict flags replaced (none when `ids` is empty); the rest is kept. */
+const withConflicts = (attributes: DecisionAttributes, ids: readonly string[]): DecisionAttributes => {
+  const next: MutableAttributes = { ...attributes };
+  if (ids.length === 0) delete next.conflictsWith;
+  else next.conflictsWith = [...ids];
+  return next;
+};
+
+const linkJson = (link: GlobLink): JsonValue => ({ id: link.id, kind: link.kind, source: link.source, ...(link.detail === undefined ? {} : { detail: link.detail }) });
+
+/** Row D1: a decision enters Planning with no run, no provisioning and no labels. */
+const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<Transition> => {
+  const attributes = validateAttributes('decision', input.attributes);
+  if (!attributes.ok) return attributes;
+  if (!isDecisionAttributes(attributes.value) || attributes.value.outcome !== null) {
+    return invalidInput('A new decision has no outcome yet');
+  }
+  if (input.environment !== null) return invalidInput('A decision has no environment');
+  const glob: Glob = {
+    id: input.id,
+    boardId: input.boardId,
+    title: input.title.trim(),
+    summary: input.summary,
+    type: 'same',
+    category: 'decision',
+    attributes: attributes.value,
+    group: input.group,
+    environment: null,
+    status: 'planning',
+    version: 0,
+    generation: 1,
+    creator: actor.email,
+    planner: actor.email,
+    implementer: null,
+    labels: {},
+    checklists: {},
+    pr: null,
+    prs: [],
+    mergeMode: null,
+    headChecks: null,
+    runs: [],
+    failure: null,
+    provisioning: 'none',
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+    signedOffAt: null,
+    doingSince: null,
+  };
+  return new Builder(glob, ctx)
+    .event('GlobCreated', { type: glob.type, category: glob.category, group: glob.group, environment: null, status: glob.status })
+    .done();
+};
+
+/** A scope edit on a decision (admins and POs): null when it changes nothing. */
+const scopeEdit = (glob: Glob, value: unknown, actor: Actor): Result<DecisionScope | null> => {
+  const scope = validateScopeEdit(glob.category, value);
+  if (!scope.ok) return scope;
+  if (!mayDecide(actor)) return forbidden('Only admins and POs can change a decision\'s scope');
+  return ok(sameScope(decisionAttributesOf(glob).scope, scope.value) ? null : scope.value);
+};
+
+const notDecision = (glob: Glob, actor: Actor | null): Result<never> =>
+  invalidTransition(glob, actor, 'This only applies to a decision glob');
+
+/** Rows D2 and D3: an admin or PO picks a decision up (or takes it over); no provisioning, no run. */
+export const pickUpDecision = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'decision') return notDecision(glob, actor);
+  if (!mayDecide(actor)) return forbidden('Only admins and POs can pick up a decision');
+  if (glob.status === 'in_progress' && glob.implementer === actor.email) return unchanged(glob);
+  if (glob.status === 'planning') {
+    return new Builder(glob, ctx).set({ implementer: actor.email }).status('in_progress').event('PickedUp', { takeOver: false }).done();
+  }
+  if (glob.status === 'in_progress') {
+    return new Builder(glob, ctx).set({ implementer: actor.email }).event('PickedUp', { takeOver: true }).done();
+  }
+  return invalidTransition(glob, actor, `A decision in ${glob.status} cannot be picked up`);
+};
+
+/** What a person chooses for a decision in Doing. */
+export interface DecideInput {
+  readonly outcome: Exclude<DecisionOutcomeKind, 'closed'>;
+  /** Required for a rejection. */
+  readonly reason?: string;
+  /** Required for needs work: the work glob that will make the change. */
+  readonly linkedGlobId?: string;
+}
+
+/**
+ * Rows D4, D5, D7 and D11. The caller has already applied the knowledge change in the same transaction. Accept goes to
+ * Reviewing, reject to Signed off (archived); needs work and retarget stay in Doing (needs work records the linked glob,
+ * retarget only an event, since the item is redrafted before it can be accepted).
+ */
+export const decideDecision = (glob: Glob, input: DecideInput, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'decision') return notDecision(glob, actor);
+  if (!mayDecide(actor)) return forbidden('Only admins and POs can decide a decision');
+  if (glob.status !== 'in_progress') return invalidTransition(glob, actor, 'A decision is decided in Doing: pick it up first');
+  const attributes = decisionAttributesOf(glob);
+  if (attributes.outcome !== null && attributes.outcome.kind !== 'needs_work') {
+    return invalidTransition(glob, actor, 'This decision already has an outcome: reopen it to choose again');
+  }
+  const reason = input.reason?.trim() ?? '';
+  if (input.outcome === 'reject' && reason === '') return invalidInput('Rejecting needs a reason');
+  if (input.outcome === 'needs_work' && (input.linkedGlobId ?? '') === '') return invalidInput('Needs work needs the work glob that will make the change');
+  const outcome: DecisionOutcome = {
+    kind: input.outcome,
+    by: actor.email,
+    at: ctx.now,
+    ...(reason === '' ? {} : { reason }),
+    ...(input.outcome === 'needs_work' && input.linkedGlobId !== undefined ? { linkedGlobId: input.linkedGlobId } : {}),
+  };
+  const b = new Builder(glob, ctx);
+  switch (input.outcome) {
+    case 'accept':
+    case 'accept_with_edits':
+      b.set({ attributes: withOutcome(attributes, outcome, false) }).status('reviewing');
+      break;
+    case 'needs_work':
+      b.set({ attributes: withOutcome(attributes, outcome, false) });
+      break;
+    case 'reject':
+      b.set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now }).status('signed_off');
+      break;
+    case 'retarget':
+      break;
+  }
+  return b.event('DecisionDecided', { outcome: outcomeJson(outcome) }).done();
+};
+
+/** Row D6: the work glob a needs-work decision waits on merged; the decision moves to Reviewing. A repeat changes nothing. */
+export const decisionWorkLanded = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (glob.category !== 'decision' || glob.status !== 'in_progress') return unchanged(glob);
+  const attributes = decisionAttributesOf(glob);
+  const outcome = attributes.outcome;
+  if (outcome?.kind !== 'needs_work' || outcome.workLanded === true) return unchanged(glob);
+  const landed: DecisionOutcome = { ...outcome, workLanded: true };
+  return new Builder(glob, ctx)
+    .set({ attributes: withOutcome(attributes, landed, false) })
+    .status('reviewing')
+    .event('DecisionWorkLanded', { linkedGlobId: outcome.linkedGlobId ?? null })
+    .done();
+};
+
+/** Row D8: sign off an accepted decision. */
+export const signOffDecision = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'decision') return notDecision(glob, actor);
+  if (!mayDecide(actor)) return forbidden('Only admins and POs can sign off a decision');
+  if (glob.status !== 'reviewing') return invalidTransition(glob, actor, 'Only a decision in Reviewing can be signed off');
+  return new Builder(glob, ctx).set({ signedOffAt: ctx.now }).status('signed_off').done();
+};
+
+/** Row D9: an accepted decision goes back to Doing, its outcome cleared, to be chosen again. */
+export const reopenDecision = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'decision') return notDecision(glob, actor);
+  if (!mayDecide(actor)) return forbidden('Only admins and POs can reopen a decision');
+  if (glob.status !== 'reviewing') return invalidTransition(glob, actor, 'Only a decision in Reviewing can be reopened');
+  return new Builder(glob, ctx)
+    .set({ attributes: withOutcome(decisionAttributesOf(glob), null, false) })
+    .status('in_progress')
+    .done();
+};
+
+/**
+ * Row D10′: the KB pipeline closed the learning without a decision (merged into an open one, suppressed by a rejected one,
+ * covered by approved knowledge). The decision ends Signed off and archived with a `closed` outcome, `closedAs`, and the
+ * link to what closed it (none when a document's text covers it). Nothing to do once it is signed off.
+ */
+export const closeDecision = (glob: Glob, closedAs: DecisionClosedAs, link: GlobLink | null, ctx: Context): Result<Transition> => {
+  if (glob.category !== 'decision' || glob.status === 'signed_off') return unchanged(glob);
+  if (link !== null && !CLOSING_EDGE_KINDS.includes(link.kind)) return invalidInput(`A ${link.kind} link does not close a decision`);
+  const outcome: DecisionOutcome = { kind: 'closed', by: 'slop', at: ctx.now, reason: `The knowledge pipeline closed the item as ${closedAs}` };
+  const attributes: MutableAttributes = { ...withOutcome(decisionAttributesOf(glob), outcome, true), closedAs };
+  const links = (glob.links ?? []).filter((l) => link === null || !(l.id === link.id && l.kind === link.kind));
+  return new Builder(glob, ctx)
+    .set({ attributes, links: link === null ? links : [...links, link], signedOffAt: ctx.now })
+    .status('signed_off')
+    .event('DecisionDecided', { outcome: outcomeJson(outcome), closedAs, link: link === null ? null : linkJson(link) })
+    .done();
+};
+
+/**
+ * Row D12: an admin reopens a learning the pipeline closed. The decision goes back to Planning with no outcome, no
+ * implementer and no sign-off; `closedAs`, `archived`, the text coverage and the closing link go. A merge the admin undid
+ * keeps the pair apart: the merged-into learning becomes a `kept_apart_from` link, so consolidation never merges them again.
+ */
+export const reopenClosedDecision = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'decision') return notDecision(glob, actor);
+  if (actor.role !== 'admin') return forbidden('Only admins can reopen a learning the pipeline closed');
+  const attributes = decisionAttributesOf(glob);
+  const closedAs = attributes.closedAs;
+  if (glob.status !== 'signed_off' || closedAs === undefined) return invalidTransition(glob, actor, 'Only a decision the knowledge pipeline closed can be reopened this way');
+  const before = glob.links ?? [];
+  const former = before.find((l) => l.kind === 'duplicate_of')?.id ?? null;
+  const links = before.filter((l) => !CLOSING_EDGE_KINDS.includes(l.kind));
+  const keepApart = former !== null && !links.some((l) => l.kind === 'kept_apart_from' && l.id === former);
+  const next: MutableAttributes = { ...withOutcome(attributes, null, false) };
+  delete next.closedAs;
+  delete next.coveredByText;
+  return new Builder(glob, ctx)
+    .set({
+      attributes: next,
+      links: keepApart ? [...links, { id: former, kind: 'kept_apart_from', source: 'explicit' }] : links,
+      implementer: null,
+      signedOffAt: null,
+    })
+    .status('planning')
+    .event('DecisionReopened', { closedAs })
+    .done();
+};
+
+/**
+ * The learning was approved (on the Knowledge page, by an agent, or through the decision's own Accept): the decision is
+ * accepted, picked up or not, and moves to Reviewing. `kind` says whether the draft was edited first.
+ */
+export const decisionApproved = (
+  glob: Glob,
+  approval: { readonly by: string; readonly kind?: 'accept' | 'accept_with_edits'; readonly reason?: string | null },
+  ctx: Context,
+): Result<Transition> => {
+  if (glob.category !== 'decision') return unchanged(glob);
+  const attributes = decisionAttributesOf(glob);
+  const current = attributes.outcome?.kind;
+  if (current === 'accept' || current === 'accept_with_edits') return unchanged(glob);
+  const reason = approval.reason ?? null;
+  const outcome: DecisionOutcome = { kind: approval.kind ?? 'accept', by: approval.by, at: ctx.now, ...(reason === null ? {} : { reason }) };
+  return new Builder(glob, ctx)
+    .set({ attributes: withOutcome(attributes, outcome, false) })
+    .status('reviewing')
+    .event('DecisionDecided', { outcome: outcomeJson(outcome), via: 'knowledge' })
+    .done();
+};
+
+/** The item behind a decision was rejected on the Knowledge page (or by an agent): the decision ends Signed off, archived. */
+export const decisionRejected = (glob: Glob, rejection: { readonly by: string; readonly reason: string }, ctx: Context): Result<Transition> => {
+  if (glob.category !== 'decision') return unchanged(glob);
+  const attributes = decisionAttributesOf(glob);
+  if (attributes.outcome?.kind === 'reject' && attributes.archived === true) return unchanged(glob);
+  const outcome: DecisionOutcome = { kind: 'reject', by: rejection.by, at: ctx.now, reason: rejection.reason };
+  return new Builder(glob, ctx)
+    .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
+    .status('signed_off')
+    .event('DecisionDecided', { outcome: outcomeJson(outcome), via: 'knowledge' })
+    .done();
+};
+
+/**
+ * The learning is open again after an agent's decision was reopened: the decision goes back to Planning with no
+ * outcome. Nothing to do for a decision that is already open or waits on work. (One the pipeline closed is reopened by D12.)
+ */
+export const decisionReopened = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (glob.category !== 'decision') return unchanged(glob);
+  const attributes = decisionAttributesOf(glob);
+  const kind = attributes.outcome?.kind;
+  // An item that stays open beside a needs-work decision is the expected state (the work lands first).
+  if (kind === 'needs_work') return unchanged(glob);
+  if (kind === undefined && attributes.archived !== true && glob.status !== 'signed_off') return unchanged(glob);
+  return new Builder(glob, ctx)
+    .set({ attributes: withOutcome(attributes, null, false), implementer: null, signedOffAt: null })
+    .status('planning')
+    .event('AttributesChanged', { outcome: null })
+    .done();
+};
+
+/** The broader decisions this one contradicts changed (`conflictsWith`); a repeat changes nothing. */
+export const decisionConflicts = (glob: Glob, ids: readonly string[], ctx: Context): Result<Transition> => {
+  if (glob.category !== 'decision') return unchanged(glob);
+  const attributes = decisionAttributesOf(glob);
+  const before = attributes.conflictsWith ?? [];
+  if (before.join('\n') === ids.join('\n')) return unchanged(glob);
+  return new Builder(glob, ctx).set({ attributes: withConflicts(attributes, ids) }).event('AttributesChanged', { conflictsWith: [...ids] }).done();
+};
+
+/** What a person can do with a decision (drives the glob view's buttons): there is no start, merge, retrigger or labels. */
+const decisionActions = (glob: Glob, actor: Actor): Action[] => {
+  const actions: Action[] = [];
+  if (mayDecide(actor)) {
+    if (glob.status === 'planning' || (glob.status === 'in_progress' && glob.implementer !== actor.email)) actions.push('pick_up');
+    if (glob.status === 'in_progress') {
+      const outcome = glob.attributes !== undefined && isDecisionAttributes(glob.attributes) ? glob.attributes.outcome : null;
+      if (outcome === null || outcome.kind === 'needs_work') actions.push('decide');
+    }
+    if (glob.status === 'reviewing') actions.push('sign_off', 'reopen');
+    const attributes = glob.attributes !== undefined && isDecisionAttributes(glob.attributes) ? glob.attributes : null;
+    // A learning the KB pipeline closed: admins reopen it (row D12).
+    if (glob.status === 'signed_off' && attributes?.closedAs !== undefined && actor.role === 'admin') actions.push('reopen');
+    // A learning an agent submitted or slop mined is never deleted: it is rejected instead.
+    const learning = attributes?.origin.kind === 'submitted' || attributes?.origin.kind === 'mined';
+    if (!learning) actions.push('delete');
+  }
   return actions;
 };

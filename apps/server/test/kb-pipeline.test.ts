@@ -1,10 +1,12 @@
-import { readFile } from 'node:fs/promises';
-import { GlobService, KbPipeline, KnowledgeService, ROUTE_SYSTEM } from '@slop/core';
-import type { KbItem, Llm, Result } from '@slop/core';
+import { DEDUPE_SYSTEM, GlobService, KbPipeline, KnowledgeService, kbItems, LlmBusy, LlmUnavailable, MAX_PROCESSING_ATTEMPTS, ROUTE_SYSTEM, UNPROCESSED } from '@slop/core';
+import type { Effect, GlobService as Globs, KbItem, Llm, Result } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
+import { OutboxRunner } from '../src/jobs/outbox.js';
+import type { Executor } from '../src/jobs/outbox.js';
+import { kbExecutors } from '../src/kb-executors.js';
 import { createTestDatabase } from './support/database.js';
 
 const DEV = 'dev@example.com';
@@ -30,7 +32,7 @@ describe('KB pipeline in Postgres', () => {
   let knowledge: KnowledgeService;
   let boardId: number;
   let globId: string;
-  let now = '2026-10-05T12:00:00.000Z';
+  const now = '2026-10-05T12:00:00.000Z';
   const clock = { now: () => now };
   const notifier = { publish: () => undefined };
 
@@ -84,117 +86,173 @@ describe('KB pipeline in Postgres', () => {
     unwrap(await knowledge.submitLearning(DEV, boardId, { sourceGlobId: globId, type: 'gotcha', statement, evidence: 'Seen in review' })).id;
 
   const get = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
+  /** Ends every waiting pipeline job so each test starts with an empty queue. */
+  const clearQueue = () => database.db.execute(sql`update outbox set state = 'done' where lane = 'llm' and state = 'pending'`);
+  /** Makes an item's waiting jobs due (their backoff over); a minute back, so the database's clock running ahead of ours can't matter. */
+  const due = (id: string) =>
+    database.db.execute(sql`update outbox set run_after = now() - interval '1 minute' where glob_id = ${id} and state = 'pending'`);
+  const jobs = async (id: string) =>
+    (
+      await database.db.execute(sql`select kind, lane, state, attempts, last_error, run_after from outbox where glob_id = ${id} and lane = 'llm' order by id`)
+    ).map((j) => ({ kind: j.kind, lane: j.lane, state: j.state, attempts: j.attempts, lastError: j.last_error, runAfter: j.run_after }));
 
-  /** Marks every pending item routed so each test starts with an empty queue. */
-  const clearQueue = () =>
-    database.db.execute(sql`update kb_proposals set processing = 'drafted' where processing in ('pending', 'routed')`);
+  const deps = { globs: {} as Globs };
+  /** The `llm` lane's runner with the KB executors over a pipeline with these models (always up unless `down`). */
+  const runner = (route: Llm, draft: Llm = route, settled: Effect[] = [], down: () => boolean = () => false) =>
+    new OutboxRunner(
+      database.db,
+      deps,
+      kbExecutors(new KbPipeline({ store, clock, catalog, notifier, route, draft }), { isDown: down }),
+      () => undefined,
+      'llm',
+      (effect) => settled.push(effect),
+    );
+  const answers = (...queue: (string | Error)[]): Llm => ({
+    complete: () => {
+      const next = queue.shift();
+      if (next === undefined) return Promise.reject(new Error('No canned answer'));
+      return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
+    },
+  });
 
-  it('round-trips the pipeline columns', async () => {
-    const id = await submit('Generated files live in src/gen/');
-    const item = await get(id);
-    expect(item).toMatchObject({
-      processing: 'pending',
-      processingError: null,
-      processingAttempts: 0,
-      processAfter: null,
-      target: null,
-      catalogCandidate: false,
-      occurrenceCount: 1,
-      extraEvidence: [],
-      possiblyCoveredBy: null,
-      contradicts: [],
-      draft: null,
-    });
-    const updated: KbItem = {
-      ...item,
-      status: 'merged',
+  it('round-trips every KB item field through its decision glob, artifacts, attachments and links', async () => {
+    const id = `s${String(boardId)}k500`;
+    const item: KbItem = {
+      id,
+      boardId,
+      status: 'open',
+      type: 'gotcha',
+      statement: 'Generated files live in src/gen/',
+      evidence: 'Seen in review',
+      suggestedTarget: 'build',
+      sourceGlobIds: [globId],
+      source: 'mined',
+      signal: null,
+      agentSetVersion: 3,
+      submittedBy: DEV,
+      createdAt: '2026-10-05T12:00:00.000Z',
+      decidedBy: null,
+      decidedAt: null,
+      decisionReason: null,
+      document: null,
+      outcome: null,
+      ...UNPROCESSED,
       processing: 'drafted',
-      processingError: 'once failed',
-      processingAttempts: 2,
-      processAfter: '2026-10-05T12:05:00.000Z',
       target: { kind: 'agent', name: 'agents/implementer.md', section: 'Testing', newDocument: null },
       catalogCandidate: true,
       catalogReason: 'Generic',
       occurrenceCount: 3,
       extraEvidence: [{ itemId: 's1k9', globIds: [globId], evidence: 'More', submittedBy: DEV, at: '2026-10-05T12:00:00.000Z' }],
-      duplicateOf: 's1k8',
-      suppressedBy: 's1k7',
-      coveredBy: { kind: 'knowledge', knowledgeKind: 'doc', name: 'build', section: null },
       possiblyCoveredBy: { knowledgeKind: 'doc', name: 'build', section: 'Test', quote: 'Run vitest.', reason: 'Names the runner' },
       contradicts: [{ kind: 'item', ref: 's1k6', note: 'Conflicts' }],
       draft: { section: 'Testing', content: '### Testing\n\n- New rule\n' },
       draftedAgainstVersion: 4,
       rationale: 'Because',
-      version: item.version + 1,
+      keptApartFrom: ['s1k5'],
+      version: 1,
     };
-    expect(await store.transaction((tx) => tx.updateKbItem(updated, item.version))).toBe(true);
-    expect(await get(id)).toEqual(updated);
+    const writes = { clock };
+    expect(await store.transaction((tx) => kbItems(tx, writes).insertKbItem(item))).toBe(true);
+    expect(await get(id)).toEqual(item);
+    const closed: KbItem = {
+      ...item,
+      status: 'covered',
+      coveredBy: { kind: 'knowledge', knowledgeKind: 'doc', name: 'build', section: null },
+      mergeNote: { by: 'consolidation', quote: 'a', survivorQuote: 'b', at: '2026-10-05T12:00:00.000Z' },
+      version: 2,
+    };
+    expect(await store.transaction((tx) => kbItems(tx, writes).updateKbItem(closed, 1))).toBe(true);
+    // Closed, it reads as out of the pipeline.
+    expect(await get(id)).toEqual({ ...closed, processing: 'none' });
+    const glob = await store.transaction((tx) => tx.getGlob(id));
+    expect(glob).toMatchObject({ category: 'decision', status: 'signed_off', version: 2, attributes: { closedAs: 'covered', archived: true, coveredByText: { name: 'build' } } });
+    // A stale version writes nothing.
+    expect(await store.transaction((tx) => kbItems(tx, writes).updateKbItem({ ...closed, version: 3 }, 1))).toBe(false);
   });
 
-  it('finds the oldest open item that is due for routing or drafting', async () => {
+  it('queues routing on the llm lane in the submit transaction, and reads the pipeline fields from that job', async () => {
     await clearQueue();
-    expect(await store.transaction((tx) => tx.nextKbItemToProcess(now))).toBeNull();
+    const id = await submit('Queued on submit');
+    expect(await jobs(id)).toMatchObject([{ kind: 'kb_route', lane: 'llm', state: 'pending', attempts: 0, lastError: null }]);
+    expect(await get(id)).toMatchObject({ processing: 'pending', processingAttempts: 0, processingError: null, processAfter: null });
+    // One pending job per item and kind: queueing it again adds none.
+    await store.transaction((tx) => tx.enqueueEffects([{ kind: 'kb_route', globId: id }, { kind: 'kb_route', globId: id }]));
+    expect(await jobs(id)).toHaveLength(1);
+    await database.db.execute(sql`update outbox set attempts = 2, last_error = 'Bedrock is down', run_after = '2026-10-05T12:00:20.000Z' where glob_id = ${id}`);
+    expect(await get(id)).toMatchObject({ processing: 'pending', processingAttempts: 2, processingError: 'Bedrock is down', processAfter: '2026-10-05T12:00:20.000Z' });
+    await database.db.execute(sql`update outbox set state = 'failed' where glob_id = ${id}`);
+    expect(await get(id)).toMatchObject({ processing: 'failed', processingAttempts: 2, processingError: 'Bedrock is down', processAfter: null });
+  });
+
+  it('runs the oldest due job first, leaves one backing off until it is due, and drops a decided item\'s job', async () => {
+    await clearQueue();
     const first = await submit('First');
     const second = await submit('Second');
     const third = await submit('Third');
-    const held = await get(first);
-    await store.transaction((tx) =>
-      tx.updateKbItem({ ...held, processAfter: '2026-10-05T12:01:00.000Z', version: held.version + 1 }, held.version),
-    );
+    await database.db.execute(sql`update outbox set run_after = now() + interval '1 minute' where glob_id = ${first}`);
     unwrap(await knowledge.reject(ADMIN, second, (await get(second)).version, 'No'));
-    expect((await store.transaction((tx) => tx.nextKbItemToProcess(now)))?.id).toBe(third);
-    expect((await store.transaction((tx) => tx.nextKbItemToProcess('2026-10-05T12:01:00.000Z')))?.id).toBe(first);
-    // Routed items wait for their draft; drafted and failed ones wait for nothing.
-    const routed = await get(third);
-    await store.transaction((tx) =>
-      tx.updateKbItem({ ...routed, processing: 'routed', version: routed.version + 1 }, routed.version),
-    );
-    expect((await store.transaction((tx) => tx.nextKbItemToProcess(now)))?.id).toBe(third);
-    for (const processing of ['drafted', 'failed'] as const) {
-      const current = await get(third);
-      await store.transaction((tx) => tx.updateKbItem({ ...current, processing, version: current.version + 1 }, current.version));
-      expect(await store.transaction((tx) => tx.nextKbItemToProcess(now))).toBeNull();
-    }
+    const order: string[] = [];
+    const executor: Executor = (effect) => {
+      order.push(`${effect.kind} ${effect.globId}`);
+      return Promise.resolve('done');
+    };
+    const record = new OutboxRunner(database.db, deps, { kb_route: executor, kb_draft: executor }, () => undefined, 'llm');
+    await record.drain();
+    expect(order).toEqual([`kb_route ${second}`, `kb_route ${third}`]);
+    await due(first);
+    await record.drain();
+    expect(order.at(-1)).toBe(`kb_route ${first}`);
+
+    // The real executor re-reads the item: the rejected item's step no longer applies, so its job is dropped unrun.
+    const id = await submit('Rejected before routing');
+    unwrap(await knowledge.reject(ADMIN, id, (await get(id)).version, 'No'));
+    await runner(answers()).drain();
+    expect(await jobs(id)).toMatchObject([{ kind: 'kb_route', state: 'dropped', attempts: 1 }]);
   });
 
-  it('lets only one of two concurrent workers claim an item, and merges a near-duplicate with conditional writes', async () => {
+  it('lets only one of two llm runners run a job, and merges a near-duplicate with conditional writes', async () => {
     await clearQueue();
     const first = await submit('Run vitest with --reporter=dot');
     let routeCalls = 0;
-    // The claiming worker's model call waits until the other worker has come back empty-handed:
-    // once routed, the item is legitimately due again for drafting, so an instant answer would let
-    // the second worker claim it for that next stage and make the test racy.
+    // The claiming runner's model call waits until the other runner has come back empty-handed (the conventions'
+    // gate): once routed, the item's draft job is legitimately due, so an instant answer would let the other runner
+    // claim that next step and make the test racy.
     let release = (): void => undefined;
-    const otherWorkerDone = new Promise<void>((resolve) => {
+    const otherRunnerDone = new Promise<void>((resolve) => {
       release = resolve;
     });
+    // When the claim holds the job until, read while the step is inside its model call.
+    let heldUntil: number | null = null;
     const route: Llm = {
       complete: async (request) => {
-        await otherWorkerDone;
+        if (request.system === ROUTE_SYSTEM && heldUntil === null) {
+          const [claimed] = await jobs(first);
+          heldUntil = new Date(String(claimed?.runAfter)).getTime();
+        }
+        await otherRunnerDone;
         // Routing, then dedupe against the open items earlier tests left.
         if (request.system === ROUTE_SYSTEM) routeCalls++;
         return request.system === ROUTE_SYSTEM ? NEW_DOC : '{}';
       },
     };
-    const workers = [0, 1].map(() => new KbPipeline({ store, clock, catalog, notifier, route, draft: route }));
-    const results = await Promise.all(
-      workers.map(async (w) => {
-        let claimed: string | null = null;
-        try {
-          claimed = await w.processNext();
-          return claimed;
-        } finally {
-          // The losing worker releases the gate; on a store error too, so the test fails fast.
-          if (claimed === null) release();
-        }
-      }),
-    );
-    expect(results.filter((r) => r === first)).toHaveLength(1);
+    // Drafting fails at once, so the claiming runner's drain ends with the draft job backing off.
+    const draft = answers(new Error('Sonnet is down'));
+    const runners = [runner(route, draft), runner(route, draft)];
+    const drained = runners.map((r) => r.drain());
+    await Promise.race(drained.map((d, i) => d.then(() => i)));
+    release();
+    await Promise.all(drained);
     expect(routeCalls).toBe(1);
+    // The claim holds the job for the llm lane's lease, not a few seconds: no runner takes it again mid-call.
+    expect(heldUntil).toBeGreaterThan(Date.now() + 4 * 60_000);
+    expect(await jobs(first)).toMatchObject([
+      { kind: 'kb_route', state: 'done', attempts: 1 },
+      { kind: 'kb_draft', state: 'pending', attempts: 1, lastError: 'Sonnet is down' },
+    ]);
     expect(await get(first)).toMatchObject({
       processing: 'routed',
       catalogCandidate: true,
@@ -203,15 +261,98 @@ describe('KB pipeline in Postgres', () => {
 
     const second = await submit('Use the dot reporter for vitest');
     const duplicateOf = { id: first, quote: 'Run vitest with --reporter=dot', newQuote: 'Use the dot reporter for vitest' };
-    const answers = [NEW_DOC, JSON.stringify({ checked: [{ ref: first, relation: 'same fact' }], duplicateOf })];
-    const dedupe: Llm = { complete: () => Promise.resolve(answers.shift() ?? '') };
-    await new KbPipeline({ store, clock, catalog, notifier, route: dedupe, draft: dedupe }).process(second);
+    await runner(answers(NEW_DOC, JSON.stringify({ checked: [{ ref: first, relation: 'same fact' }], duplicateOf }))).drain(second);
     expect(await get(second)).toMatchObject({
       status: 'merged',
       duplicateOf: first,
       mergeNote: { by: 'intake', quote: 'Use the dot reporter for vitest', survivorQuote: 'Run vitest with --reporter=dot' },
     });
     expect(await get(first)).toMatchObject({ status: 'open', occurrenceCount: 2, extraEvidence: [{ itemId: second }] });
+  });
+
+  it('reruns a job whose claim crashed once its backoff ends, with the attempt it spent', async () => {
+    await clearQueue();
+    const id = await submit('Crashed mid-call');
+    // A runner claimed it (an attempt spent, a backoff set) and died before settling it.
+    await database.db.execute(sql`update outbox set attempts = 1, run_after = now() + interval '5 seconds' where glob_id = ${id}`);
+    const route = answers(NEW_DOC, '{}');
+    await runner(route, answers(new Error('Sonnet is down'))).drain();
+    expect(await jobs(id)).toMatchObject([{ kind: 'kb_route', state: 'pending', attempts: 1 }]);
+    await due(id);
+    await runner(route, answers(new Error('Sonnet is down'))).drain();
+    expect(await jobs(id)).toMatchObject([{ kind: 'kb_route', state: 'done', attempts: 2 }, { kind: 'kb_draft' }]);
+    expect(await get(id)).toMatchObject({ processing: 'routed', target: { name: 'testing' } });
+  });
+
+  it('fails a job after the llm lane\'s three attempts, the item still decidable, telling the page each time', async () => {
+    await clearQueue();
+    const id = await submit('Fails three times');
+    const settled: Effect[] = [];
+    const llm = answers('Sure! Here is my answer.', new Error('Bedrock is down'), 'not json');
+    for (let attempt = 1; attempt <= MAX_PROCESSING_ATTEMPTS; attempt++) {
+      await runner(llm, llm, settled).drain(id);
+      await due(id);
+    }
+    expect(await jobs(id)).toMatchObject([{ kind: 'kb_route', state: 'failed', attempts: MAX_PROCESSING_ATTEMPTS, lastError: 'The routing answer was not usable JSON' }]);
+    expect(await get(id)).toMatchObject({
+      status: 'open',
+      processing: 'failed',
+      processingAttempts: MAX_PROCESSING_ATTEMPTS,
+      processingError: 'The routing answer was not usable JSON',
+      processAfter: null,
+    });
+    expect(settled).toHaveLength(MAX_PROCESSING_ATTEMPTS);
+    // Nothing runs it again by itself.
+    await runner(answers(NEW_DOC, '{}')).drain(id);
+    expect((await jobs(id)).map((j) => j.state)).toEqual(['failed']);
+    unwrap(await knowledge.approve(ADMIN, id, (await get(id)).version, { as: 'learning' }));
+    expect(await get(id)).toMatchObject({ status: 'approved' });
+  });
+
+  it('waits while the models are unavailable or busy, spending no attempt and keeping why, and tells the page once', async () => {
+    await clearQueue();
+    const id = await submit('Waits for the model');
+    const settled: Effect[] = [];
+    const expired = () => new LlmUnavailable('AWS sign-in expired', 'Run `aws sso login`');
+    for (let probe = 0; probe < MAX_PROCESSING_ATTEMPTS + 1; probe++) {
+      await runner(answers(expired()), undefined, settled).drain(id);
+      await due(id);
+    }
+    expect(await jobs(id)).toMatchObject([{ kind: 'kb_route', state: 'pending', attempts: 0, lastError: 'AI unavailable: AWS sign-in expired' }]);
+    expect(await get(id)).toMatchObject({ processing: 'pending', processingAttempts: 0, processingError: 'AI unavailable: AWS sign-in expired' });
+    expect(settled).toHaveLength(1);
+    // A busy Bedrock backs off without spending an attempt either, however often it answers so.
+    for (let round = 0; round < MAX_PROCESSING_ATTEMPTS + 1; round++) {
+      await runner(answers(new LlmBusy())).drain(id);
+      const [job] = await jobs(id);
+      expect(job).toMatchObject({ state: 'pending', attempts: 0 });
+      expect(String(job?.lastError)).toMatch(/^Waiting: Bedrock busy/);
+      await due(id);
+    }
+    await runner(answers(NEW_DOC, '{}'), answers(new Error('Sonnet is down'))).drain(id);
+    expect(await get(id)).toMatchObject({ processing: 'routed', target: { name: 'testing' } });
+  });
+
+  it('runs a job again at once when its item changes during the call, spending no attempt', async () => {
+    await clearQueue();
+    const id = await submit('Changes under the call');
+    let calls = 0;
+    const route: Llm = {
+      complete: async (request) => {
+        if (request.system === DEDUPE_SYSTEM) return '{}';
+        calls++;
+        if (calls === 1) {
+          // Something else writes the item while it is being routed: the result is dropped and the step reruns.
+          const current = await get(id);
+          await store.transaction((tx) => kbItems(tx, { clock }).updateKbItem({ ...current, evidence: 'More evidence', version: current.version + 1 }, current.version));
+        }
+        return NEW_DOC;
+      },
+    };
+    await runner(route, answers(new Error('Sonnet is down'))).drain(id);
+    expect(calls).toBe(2);
+    expect(await jobs(id)).toMatchObject([{ kind: 'kb_route', state: 'done', attempts: 1 }, { kind: 'kb_draft' }]);
+    expect(await get(id)).toMatchObject({ processing: 'routed', evidence: 'More evidence' });
   });
 
   it('drafts routed items, applies a draft in one click and re-queues another draft on the same document', async () => {
@@ -224,18 +365,20 @@ describe('KB pipeline in Postgres', () => {
         'upload',
       ),
     );
+    // The import re-queued the drafts of items an earlier test left on this document.
+    await clearQueue();
     const target = { kind: 'doc' as const, name: 'build', section: 'Test' };
     const first = await submit('Use the dot reporter');
     const second = await submit('Use --run in CI');
     for (const id of [first, second]) unwrap(await knowledge.changeTarget(ADMIN, id, (await get(id)).version, target));
-    const answers = [
+    const drafts = [
       JSON.stringify({ section: 'Test', content: '## Test\n\nRun vitest --reporter=dot.', rationale: 'Quiet' }),
       JSON.stringify({ section: 'Test', content: '## Test\n\nRun vitest --run.', rationale: 'CI' }),
     ];
-    const draft: Llm = { complete: () => Promise.resolve(answers.shift() ?? '') };
-    const pipeline = new KbPipeline({ store, clock, catalog, notifier, route: draft, draft });
-    expect(await pipeline.processNext()).toBe(first);
-    expect(await pipeline.processNext()).toBe(second);
+    const draft: Llm = { complete: () => Promise.resolve(drafts.shift() ?? '') };
+    // Both retargeted items wait for their drafts, the first queued first.
+    await runner(draft).drain();
+    expect(drafts).toEqual([]);
     expect(await get(first)).toMatchObject({
       processing: 'drafted',
       draft: { section: 'Test', content: '## Test\n\nRun vitest --reporter=dot.' },
@@ -249,18 +392,34 @@ describe('KB pipeline in Postgres', () => {
     const doc = await store.transaction((tx) => tx.getKnowledge(boardId, 'doc', 'build'));
     expect(doc).toMatchObject({ area: 'build', content: '# Build\n\n## Test\n\nRun vitest --reporter=dot.\n', version: 2 });
     expect(await get(second)).toMatchObject({ status: 'open', processing: 'routed', draft: null, draftedAgainstVersion: null });
+    // The approval queued its draft again.
+    expect((await jobs(second)).at(-1)).toMatchObject({ kind: 'kb_draft', state: 'pending', attempts: 0 });
   });
 
-  it('migration 0013 marks decided items routed and leaves open ones pending for the job; re-running is harmless', async () => {
-    const open = await submit('Still open');
-    const decided = await submit('Decided');
-    unwrap(await knowledge.approve(ADMIN, decided, (await get(decided)).version, { as: 'learning' }));
-    // As before the migration: every row pending.
-    await database.db.execute(sql`update kb_proposals set processing = 'pending'`);
-    const migration = await readFile(new URL('../drizzle/0013_kb_routing.sql', import.meta.url), 'utf8');
-    for (const statement of migration.split('--> statement-breakpoint')) await database.db.execute(sql.raw(statement));
-    expect((await get(open)).processing).toBe('pending');
-    expect((await get(decided)).processing).toBe('routed');
-    now = '2026-10-05T13:00:00.000Z';
+  it('queues a fresh draft when the item is retargeted after its draft committed but before the job settled', async () => {
+    await clearQueue();
+    const id = await submit('Retargeted while drafted');
+    unwrap(await knowledge.changeTarget(ADMIN, id, (await get(id)).version, { kind: 'doc', name: 'build', section: 'Test' }));
+    let retargeted = false;
+    const pipeline = new KbPipeline({ store, clock, catalog, notifier, route: answers(), draft: answers(JSON.stringify({ section: 'Test', content: '## Test\n\nRun vitest --run.', rationale: 'CI' }), new Error('Sonnet is down')) });
+    // The retarget lands after the step's commit and before the runner marks the job done.
+    const late = {
+      runStep: async (itemId: string, step: 'route' | 'draft') => {
+        const outcome = await pipeline.runStep(itemId, step);
+        if (step === 'draft' && !retargeted) {
+          retargeted = true;
+          unwrap(await knowledge.changeTarget(ADMIN, id, (await get(id)).version, { kind: 'doc', name: 'build', section: 'Lint' }));
+        }
+        return outcome;
+      },
+    };
+    await new OutboxRunner(database.db, deps, kbExecutors(late, { isDown: () => false }), () => undefined, 'llm').drain(id);
+    // The first draft job finished; the retarget got a job of its own, which ran (and failed once here).
+    expect((await jobs(id)).filter((j) => j.kind === 'kb_draft')).toMatchObject([
+      { state: 'done', attempts: 1 },
+      { state: 'pending', attempts: 1, lastError: 'Sonnet is down' },
+    ]);
+    expect(await get(id)).toMatchObject({ processing: 'routed', draft: null, target: { section: 'Lint' } });
   });
+
 });

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import {
+  kbItems,
   ArtifactService,
   BoardService,
   EffectCheckService,
@@ -28,6 +29,9 @@ import { HintHub } from '../src/notifier.js';
 import { SignedLinks } from '../src/signed-links.js';
 import { createTestDatabase } from './support/database.js';
 import { fakeCodeHost } from './support/fake-codehost.js';
+
+/** KB items written in setup: their time doesn't matter. */
+const KB_WRITES = { clock: { now: () => '2026-10-05T12:00:00.000Z' } };
 
 const DEV = 'dev@example.com';
 const ADMIN = 'admin@example.com';
@@ -186,6 +190,8 @@ describe('Effect checks in Postgres', () => {
     await database.db.execute(
       sql`update globs set data = data || jsonb_build_object('createdAt', ${work}::text, 'updatedAt', ${mergedAt}::text), updated_at = ${mergedAt} where id = ${id}`,
     );
+    // What it got at creation (the accepted decisions governing it, once a learning is approved) dates from then too.
+    await database.db.execute(sql`update artifacts set created_at = ${work} where glob_id = ${id}`);
     return id;
   };
 
@@ -215,26 +221,20 @@ describe('Effect checks in Postgres', () => {
         processing: 'drafted',
         version: 1,
       };
-      await tx.insertKbItem(item);
+      await kbItems(tx, KB_WRITES).insertKbItem(item);
       return item;
     });
   const get = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
 
-  it('the effect-check migration adds its columns with their defaults, and re-running it is harmless', async () => {
-    const migration = await readFile(
-      new URL(`../drizzle/${MIGRATION}.sql`, import.meta.url),
-      'utf8',
-    );
-    for (const statement of migration.split('--> statement-breakpoint'))
-      await database.db.execute(sql.raw(statement));
+  it('the effect-check migration adds the board column with its default, and its journal entry follows the one before', async () => {
+    // (Its kb_proposals column went with the table when the items became decision globs.)
     const columns = await database.db.execute(sql`
       select table_name, column_name, data_type, is_nullable, column_default from information_schema.columns
-      where (table_name = 'boards' and column_name = 'effect_check_globs') or (table_name = 'kb_proposals' and column_name = 'effect_check')
-      order by table_name`);
+      where table_name = 'boards' and column_name = 'effect_check_globs'`);
     expect([...columns]).toEqual([
       {
         table_name: 'boards',
@@ -243,21 +243,7 @@ describe('Effect checks in Postgres', () => {
         is_nullable: 'NO',
         column_default: '10',
       },
-      {
-        table_name: 'kb_proposals',
-        column_name: 'effect_check',
-        data_type: 'jsonb',
-        is_nullable: 'YES',
-        column_default: null,
-      },
     ]);
-    // A row from before the migration has no check.
-    const id = `s${String(boardId)}k9999`;
-    await database.db.execute(sql`
-      insert into kb_proposals (id, board_id, status, type, statement, evidence, source_glob_ids, source, submitted_by, created_at, version)
-      values (${id}, ${boardId}, 'rejected', 'gotcha', 'Old', 'Old', '[]'::jsonb, 'submitted', ${DEV}, now(), 1)`);
-    expect((await get(id)).effectCheck).toBeNull();
-    await database.db.execute(sql`delete from kb_proposals where id = ${id}`);
     const journal = JSON.parse(
       await readFile(new URL('../drizzle/meta/_journal.json', import.meta.url), 'utf8'),
     ) as {
@@ -397,7 +383,7 @@ describe('Effect checks in Postgres', () => {
   });
 
   it('raises one revise-or-revert item when two runs check at once, and stores the check', async () => {
-    const watching = (await store.transaction((tx) => tx.listKbItems(boardId))).filter(
+    const watching = (await store.transaction((tx) => kbItems(tx).listKbItems(boardId))).filter(
       (i) => i.effectCheck?.state === 'watching',
     );
     expect(watching).toHaveLength(1);
@@ -417,7 +403,7 @@ describe('Effect checks in Postgres', () => {
       raisedItemId: raised[0],
       after: { affected: 2, eligible: 3 },
     });
-    const items = await store.transaction((tx) => tx.listKbItems(boardId));
+    const items = await store.transaction((tx) => kbItems(tx).listKbItems(boardId));
     expect(items.filter((i) => i.signal?.key === `effect:${watched.id}`).map((i) => i.id)).toEqual(
       raised,
     );
@@ -430,6 +416,7 @@ describe('Effect checks in Postgres', () => {
   });
   it('refuses a watch signal on a document approval at the route (s15f8)', async () => {
     const item = await mined();
+    const before = await get(item.id);
     const refused = await request('POST', `/api/kb/${item.id}/approve`, {
       as: 'document',
       version: item.version,
@@ -440,7 +427,7 @@ describe('Effect checks in Postgres', () => {
     expect(((await refused.json()) as { message: string }).message).toContain(
       "A document proposal doesn't watch a signal",
     );
-    expect(await get(item.id)).toEqual(item);
+    expect(await get(item.id)).toEqual(before);
   });
 
   it('answers the approval when the check started on it fails, and logs the failure (s15f8)', async () => {

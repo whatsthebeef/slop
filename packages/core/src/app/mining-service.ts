@@ -17,8 +17,9 @@ import type {
   Measurement,
   MergedCommit,
 } from '../domain/signals.js';
-import type { Notifier, Store, Tx } from '../ports.js';
+import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { newKbItemId } from './knowledge-service.js';
+import { kbItems } from './kb-items.js';
 
 export type MiningResult = Extract<BoardJobResult, { kind: 'mining' }>;
 
@@ -73,7 +74,7 @@ export class MiningService {
     const findings = await tx.listBoardFindings(boardId, from, now);
     const reviewFeedback = await tx.listReviewFeedback(boardId, from, now);
     const knowledge = await tx.listKnowledge(boardId, ['doc']);
-    const items = await tx.listKbItems(boardId);
+    const items = await kbItems(tx).listKbItems(boardId);
     return {
       window: { from, to: now },
       globs: globs.map((g) => ({ id: g.id, type: g.type, status: g.status, createdAt: g.createdAt })),
@@ -98,7 +99,10 @@ export class MiningService {
    * New dependencies are raised together, once per name.
    */
   async mine(boardId: number, now: string, options: MineOptions = {}): Promise<MiningResult> {
+    // The new decision globs' hints, published once the run commits.
+    const hints: Hint[] = [];
     const result = await this.deps.store.transaction(async (tx): Promise<MiningResult> => {
+      hints.length = 0;
       // The lease keeps runs apart only while it lasts: a second run waits here and then reads the first's rows.
       await tx.lockBoardJob(boardId, 'mining');
       const board = await tx.getBoard(boardId);
@@ -111,7 +115,7 @@ export class MiningService {
       const signalOf = (m: Measurement): KbSignal => signalFrom(m, activity, now);
 
       const raise = async (m: Measurement): Promise<string> => {
-        const id = await this.insertItem(tx, board.id, board.agentSetVersion, m, signalOf(m), now);
+        const id = await this.insertItem(tx, board.id, board.agentSetVersion, m, signalOf(m), now, hints);
         raised.push(id);
         return id;
       };
@@ -142,7 +146,7 @@ export class MiningService {
           if (row !== undefined) await record(m.key, { ...measured, belowThresholdRuns: row.belowThresholdRuns + 1 });
           continue;
         }
-        const original = row?.itemId == null ? null : await tx.getKbItem(row.itemId);
+        const original = row?.itemId == null ? null : await kbItems(tx).getKbItem(row.itemId);
         const item = original === null ? null : await surviving(tx, original);
         if (item === null) {
           await record(m.key, { ...measured, itemId: await raise(m), raisedAt: now, belowThresholdRuns: 0 });
@@ -189,6 +193,7 @@ export class MiningService {
         refreshed,
       };
     });
+    for (const hint of hints) this.deps.notifier.publish(hint);
     if (result.raised.length > 0 || result.refreshed.length > 0) this.deps.notifier.publish({ kind: 'board.kb', boardId });
     return result;
   }
@@ -202,10 +207,10 @@ export class MiningService {
     return measureSignals(activity).map((m) => signalFrom(m, activity, now));
   }
 
-  private async insertItem(tx: Tx, boardId: number, agentSetVersion: number, m: Measurement, signal: KbSignal, now: string): Promise<string> {
+  private async insertItem(tx: Tx, boardId: number, agentSetVersion: number, m: Measurement, signal: KbSignal, now: string, hints: Hint[]): Promise<string> {
     const definition = signalDefinition(m.key);
     const id = await newKbItemId(tx, boardId);
-    const inserted = await tx.insertKbItem({
+    const item: KbItem = {
       id,
       boardId,
       status: 'open',
@@ -227,8 +232,10 @@ export class MiningService {
       // Unprocessed, like a submitted item: the KB pipeline routes, dedupes and drafts it.
       ...UNPROCESSED,
       version: 1,
-    });
-    // The counter is atomic, so a clash means the counter and the table disagree.
+    };
+    // The item is its decision glob, so mined proposals are decided where the board looks.
+    const inserted = await kbItems(tx, { clock: { now: () => now }, raise: (h) => hints.push(h) }).insertKbItem(item);
+    // The counter is atomic, so a clash means the counter and the globs disagree.
     if (!inserted) throw new Error(`KB item ${id} already exists`);
     return id;
   }
@@ -253,7 +260,7 @@ export class MiningService {
       version: item.version + 1,
     };
     // A conflicting write (the pipeline has it) leaves the refresh to next week.
-    return tx.updateKbItem(updated, item.version);
+    return kbItems(tx, { clock: { now: () => now } }).updateKbItem(updated, item.version);
   }
 }
 
@@ -284,7 +291,7 @@ const surviving = async (tx: Tx, item: KbItem): Promise<KbItem | null> => {
           ? current.coveredBy.id
           : null;
     if (next === null) return current.status === 'merged' ? null : current;
-    const found = await tx.getKbItem(next);
+    const found = await kbItems(tx).getKbItem(next);
     if (found === null) return current.status === 'merged' ? null : current;
     current = found;
   }

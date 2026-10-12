@@ -32,7 +32,7 @@ export type BoardFilter = ChipsFilter | TextFilter;
 /** Splits a comma or space separated list, dropping empties. */
 const tokens = (raw: string): string[] => raw.split(/[\s,]+/).filter((t) => t !== '');
 
-const CATEGORIES: Category[] = ['feature', 'task', 'bug'];
+const CATEGORIES: Category[] = ['feature', 'task', 'bug', 'decision'];
 
 /** The board's filters. Adding one is one entry here: the pane renders this list and the board applies it. */
 export const BOARD_FILTERS: BoardFilter[] = [

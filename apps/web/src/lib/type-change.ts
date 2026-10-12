@@ -1,4 +1,4 @@
-import { CATEGORIES, isValidCombination, machine } from '@slop/core';
+import { isValidCombination, machine, WORK_CATEGORIES } from '@slop/core';
 import type { Category, EditFailure, Role, SlopType } from '@slop/core';
 import type { GlobChanges, GlobView } from './api';
 
@@ -40,7 +40,7 @@ export const subConfirmation = (action: TypeAction): string => `Make it a sub? $
 export const typeActionChanges = (action: TypeAction): GlobChanges => ({ type: action.to });
 
 /** The categories the glob's type allows. */
-export const categoryOptions = (type: SlopType): Category[] => CATEGORIES.filter((c) => isValidCombination(type, c));
+export const categoryOptions = (type: SlopType): Category[] => WORK_CATEGORIES.filter((c) => isValidCombination(type, c));
 
 export type CategorySave =
   | { readonly saved: true; readonly undo: Category }

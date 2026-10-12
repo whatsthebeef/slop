@@ -4,7 +4,13 @@ import { parseInvestigation, validationNote } from '../domain/investigation.js';
 import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { INBOX_CONTEXT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
+import { ARTIFACT_ROLE } from '../domain/knowledge.js';
 import type { Artifact, ArtifactKind, IndependentReviewMeta, Provenance, ReviewStats } from '../domain/knowledge.js';
+import { applicableDecisions, scopedDecision } from '../domain/decision-glob.js';
+import type { ScopedDecision } from '../domain/decision-glob.js';
+import { payloadOf } from '../domain/payload.js';
+import type { Payload } from '../domain/payload.js';
+import type { GlobAttributes } from '../domain/attributes.js';
 import { recheckOverlapsEffect } from '../domain/events.js';
 import { currentRun } from '../domain/machine.js';
 import type { SearchHit } from '../domain/search.js';
@@ -21,6 +27,15 @@ export interface GlobContext {
   readonly board: { readonly id: number; readonly repo: string | null; readonly baseBranch: string };
   /** plan.md: the latest version, or the summary when no plan has been written yet. */
   readonly plan: { readonly version: number; readonly content: string } | null;
+  /** What the glob is about: plan.md for work, the proposal text for a decision. The same as `plan`, which older agent sets read. */
+  readonly payload: Payload | null;
+  /** A decision's scope, source and outcome; absent on work globs. */
+  readonly attributes?: GlobAttributes;
+  /**
+   * The accepted decisions that govern this glob by scope, broadest first (live: one accepted after the glob was created
+   * still reaches it). Empty when none, and for a decision glob.
+   */
+  readonly scopedDecisions: readonly ScopedDecision[];
   /** The implementation record (every glob type, one format): the latest version, in full; null before the first is pushed. */
   readonly implementationRecord: { readonly version: number; readonly commitSha: string | null; readonly content: string } | null;
   /** Attachments in full: Clarifications and Assumptions always (they carry intent), others when asked for with `include`. */
@@ -152,7 +167,7 @@ export interface InboxContextItem {
 
 /** What `get_context` tells an agent about conflicting sources. */
 export const AUTHORITY_STATEMENT =
-  'When sources disagree: merged code and the implementation record win, then current decisions (newest first), then plan.md, then older discussion. Superseded decisions are history: read them for why, not for what to do.';
+  'When sources disagree: merged code and the implementation record win, then current decisions (newest first), then plan.md, then older discussion. Superseded decisions are history: read them for why, not for what to do. Accepted decisions in scopedDecisions govern this glob by their scope, broadest first.';
 
 /** The most decisions one context bundle carries. */
 const CONTEXT_DECISIONS = 30;
@@ -209,6 +224,8 @@ interface NewArtifact {
   readonly runId: string | null;
   readonly agentSetVersion: number | null;
   readonly reviewStats: ReviewStats | null;
+  /** Who produced it, when the kind and run don't say (decision globs' plan.md from a channel). */
+  readonly by?: Provenance['by'];
 }
 
 /**
@@ -216,18 +233,19 @@ interface NewArtifact {
  * checked the writer's access). The one write path for artifacts: `put` and the inbox's attach both use it. The
  * caller publishes `glob.artifacts` after the commit.
  */
-const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: string, input: NewArtifact): Promise<Artifact> => {
+export const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: string, input: NewArtifact): Promise<Artifact> => {
   const { kind, label, content, link } = input;
   const globId = glob.id;
   // An investigation whose block doesn't validate is kept as text, with the reason beside it.
   const parsed = kind === 'investigation' ? parseInvestigation(content) : null;
   const provenance: Provenance = {
     by:
-      input.runId !== null
+      input.by ??
+      (input.runId !== null
         ? 'routine'
-        : kind === 'implementation_plan' || kind === 'local_review' || kind === 'investigation'
+        : kind === 'implementation_plan' || kind === 'local_review' || kind === 'investigation' || kind === 'assessment'
           ? 'sessionator'
-          : 'human',
+          : 'human'),
     actor: email,
     runId: input.runId,
     agentSetVersion: input.agentSetVersion,
@@ -424,7 +442,7 @@ export class ArtifactService {
       const full = (a: Artifact) =>
         (a.kind === 'attachment' && INLINE_LABELS.has(a.label.toLowerCase())) || wanted(include, a);
       // Legacy postplan rows were migrated into the record; they stay as history, not listed.
-      const others = artifacts.filter((a) => a.kind !== 'plan' && a.kind !== 'implementation_plan' && a.kind !== 'postplan' && !full(a));
+      const others = artifacts.filter((a) => ARTIFACT_ROLE[a.kind] !== 'payload' && ARTIFACT_ROLE[a.kind] !== 'record' && !full(a));
       const related = this.deps.related === undefined ? undefined : await this.deps.related(tx, glob);
       const allDecisions = await tx.listDecisions(glob.boardId);
       const decisions = decisionViews(
@@ -435,6 +453,9 @@ export class ArtifactService {
         .sort((a, b) => Number(a.status === 'superseded') - Number(b.status === 'superseded'))
         .slice(0, CONTEXT_DECISIONS);
       const sizeCheck = await tx.getSizeCheck(globId);
+      const scopedDecisions = applicableDecisions(await tx.listGlobs(glob.boardId, { include: 'decisions' }), glob)
+        .map(scopedDecision)
+        .filter((d): d is ScopedDecision => d !== null);
       const inbox = (await tx.listInboxForGlob(globId)).map((i) => ({
         id: i.id,
         title: inboxTitle(i),
@@ -463,6 +484,9 @@ export class ArtifactService {
             : glob.summary.trim() === ''
               ? null
               : { version: 0, content: glob.summary },
+        payload: payloadOf(artifacts, glob),
+        ...(glob.attributes === undefined ? {} : { attributes: glob.attributes }),
+        scopedDecisions,
         implementationRecord:
           record === null ? null : { version: record.version, commitSha: record.commitSha, content: record.content },
         attachments: artifacts

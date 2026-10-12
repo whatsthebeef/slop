@@ -12,11 +12,13 @@ import {
 } from '../domain/escalation-learning.js';
 import type { EscalationCandidate, EscalationRecord, EscalationView } from '../domain/escalation-learning.js';
 import { UNPROCESSED } from '../domain/kb.js';
+import type { KbItem } from '../domain/kb.js';
 import type { Board } from '../domain/types.js';
-import type { Store, Tx } from '../ports.js';
+import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 import { newKbItemId } from './knowledge-service.js';
 import type { RiskAreaService } from './risk-area-service.js';
+import { kbItems } from './kb-items.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** How far back the learning reads events: an outcome older than this is settled. */
@@ -36,6 +38,8 @@ export class EscalationLearningService {
       clock: { now(): string };
       /** Absent: outcomes are recorded but not passed to risk areas. */
       riskAreas?: RiskAreaService;
+      /** Absent: a submitted learning's decision glob reaches the board on its next load. */
+      notifier?: Notifier;
     },
   ) {}
 
@@ -98,7 +102,10 @@ export class EscalationLearningService {
 
   /** Records one outcome, passes it to the risk areas and, when it changes a criterion's stance, submits the learning. */
   private async record(board: Board, candidate: EscalationCandidate, paths: readonly string[]): Promise<boolean> {
+    const hints: Hint[] = [];
     const stored = await this.deps.store.transaction(async (tx) => {
+      // A retried transaction starts again, so it publishes only what its last attempt made.
+      hints.length = 0;
       const before = criteriaOf(await tx.listEscalationRecords(board.id));
       const inserted = await tx.insertEscalationRecord({
         boardId: board.id,
@@ -114,25 +121,29 @@ export class EscalationLearningService {
       const after = criteriaOf(records).find((c) => c.criterion === candidate.criterion);
       const was = before.find((c) => c.criterion === candidate.criterion);
       if (after !== undefined && was !== undefined && after.stance !== was.stance) {
-        await this.submit(tx, board, candidate, after.stance, records);
+        hints.push(...(await this.submit(tx, board, candidate, after.stance, records)));
       }
       return true;
     });
     if (!stored) return false;
+    for (const hint of hints) this.deps.notifier?.publish(hint);
     await this.passToRiskAreas(board.id, candidate, paths);
     return true;
   }
 
-  /** A learning for the board's admins: the guidance for a criterion whose stance changed. Never edits the knowledge itself. */
+  /**
+   * A learning for the board's admins: the guidance for a criterion whose stance changed, fronted by its decision glob
+   * like every other new KB item. Never edits the knowledge itself. Returns what to publish after the commit.
+   */
   private async submit(
     tx: Tx,
     board: Board,
     candidate: EscalationCandidate,
     stance: 'loosened' | 'default' | 'strengthened',
     records: readonly EscalationRecord[],
-  ): Promise<void> {
+  ): Promise<Hint[]> {
     const id = await newKbItemId(tx, board.id);
-    const inserted = await tx.insertKbItem({
+    const item: KbItem = {
       id,
       boardId: board.id,
       status: 'open',
@@ -141,7 +152,8 @@ export class EscalationLearningService {
       evidence: guidanceEvidence(candidate.criterion, records),
       suggestedTarget: 'risk_and_size',
       sourceGlobIds: [candidate.globId],
-      source: 'submitted',
+      // Slop raised it from outcomes, as mining does: a mined proposal.
+      source: 'mined',
       signal: null,
       agentSetVersion: board.agentSetVersion,
       submittedBy: SUBMITTED_BY,
@@ -153,8 +165,11 @@ export class EscalationLearningService {
       outcome: null,
       ...UNPROCESSED,
       version: 1,
-    });
+    };
+    const hints: Hint[] = [];
+    const inserted = await kbItems(tx, { clock: this.deps.clock, raise: (h) => hints.push(h) }).insertKbItem(item);
     if (!inserted) throw new Error(`KB item ${id} already exists`);
+    return hints;
   }
 
   /**

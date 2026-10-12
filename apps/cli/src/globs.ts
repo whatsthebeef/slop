@@ -32,8 +32,9 @@ export const PROVISION_TIMEOUT_MS = 60_000;
 const FIRST_POLL_DELAY_MS = 1_000;
 const MAX_POLL_DELAY_MS = 8_000;
 
-// Glob IDs as slop formats them (s1t4); also keeps an ID from reaching git as an option.
-const GLOB_ID = /^s[1-9]\d*[ftbh][1-9]\d*$/;
+// Glob IDs as slop formats them (s1t4); also keeps an ID from reaching git as an option. Mirrors GLOB_ID_PATTERN in
+// packages/core/src/domain/ids.ts (the CLI doesn't depend on @slop/core).
+const GLOB_ID = /^s[1-9]\d*[ftbhk][1-9]\d*$/;
 
 const LIVE_RUN_STATES: ReadonlySet<string> = new Set(['queued', 'active', 'watching']);
 const MERGED_STATUSES: ReadonlySet<string> = new Set(['reviewing', 'signed_off']);

@@ -1,5 +1,5 @@
-import type { BoardService, GlobService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
-import { AGENT_KB_APPROVALS, CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
+import type { BoardService, DecisionGlobService, Glob, GlobService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
+import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -30,6 +30,8 @@ export interface AppDeps {
   readonly readyGate?: ReadyGate;
   /** Signs the board sign-in `state`. */
   readonly links: SignedLinks;
+  /** Reopens a decision: one the KB pipeline closed through the Knowledge page's reopen; absent: only accepted ones (row D9). */
+  readonly decisions?: Pick<DecisionGlobService, 'reopen'>;
   /** Runs after a board is created (forks the catalog's agent set into it). */
   readonly onBoardCreated: (email: string, boardId: number) => Promise<void>;
   /** How long the board's event stream may sit idle before it sends a `ping` event (default 25 s; CloudFront's origin read timeout is 60 s). */
@@ -114,7 +116,7 @@ export const createGlobSchema = z.object({
   title: z.string().min(1),
   summary: z.string().default(''),
   type: z.enum(SLOP_TYPES).default('same'),
-  category: z.enum(CATEGORIES).default('task'),
+  category: z.enum(WORK_CATEGORIES).default('task'),
   group: z.string().min(1).nullable().default(null),
   environment: z.string().min(1).nullable().default(null),
   autoTrigger: z.boolean().default(false),
@@ -152,7 +154,7 @@ export const splitGlobSchema = z.object({
         title: z.string().min(1),
         summary: z.string().default(''),
         plan: z.string().min(1),
-        category: z.enum(CATEGORIES).optional(),
+        category: z.enum(WORK_CATEGORIES).optional(),
         type: z.enum(SLOP_TYPES).optional(),
         after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
         overlaps: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
@@ -168,12 +170,14 @@ const updateGlobSchema = z.object({
   title: z.string().min(1).optional(),
   summary: z.string().optional(),
   type: z.enum(SLOP_TYPES).optional(),
-  category: z.enum(CATEGORIES).optional(),
+  category: z.enum(WORK_CATEGORIES).optional(),
   group: z.string().min(1).nullable().optional(),
   environment: z.string().min(1).nullable().optional(),
   needs: z.array(z.string().min(1)).max(20).optional(),
   after: z.array(z.string().min(1)).max(20).optional(),
   overlaps: z.array(z.string().min(1)).max(20).optional(),
+  /** A decision's scope, the only attribute a client edits; core validates it (kind, ref, glob on the board). */
+  attributes: z.object({ scope: z.object({ kind: z.string(), ref: z.string().nullable() }).strict() }).strict().optional(),
   autoStart: z.boolean().optional(),
 });
 
@@ -185,6 +189,9 @@ const versionSchema = z.object({ version: z.number().int() });
 /** Glob actions carry the version read; pick-up and take-over may also choose the environment. */
 const actionSchema = versionSchema.extend({ environment: z.string().min(1).optional(), anyway: z.boolean().optional() });
 type ActionBody = z.infer<typeof actionSchema>;
+
+/** Rejected and pipeline-closed decisions are archived: they leave the board and its counts. */
+const shown = (glob: Glob): boolean => !isArchivedDecision(glob);
 
 const send = <T>(c: Context<Env>, result: Result<T>, map: (value: T) => unknown = (v) => v) =>
   result.ok ? c.json(map(result.value) as object) : c.json(errorBody(result.error), statusOf(result.error));
@@ -288,7 +295,7 @@ export const createApp = (deps: AppDeps) => {
     const open = STATUSES.filter((s) => s !== 'signed_off');
     const views = await Promise.all(
       memberships.map(async (m) => {
-        const listed = await globs.list(email, m.board.id, { status: open });
+        const listed = await globs.list(email, m.board.id, { status: open, include: 'all' });
         const list = (listed.ok ? listed.value : []).filter((g) => isMine(g, email));
         const reviews = Object.fromEntries(
           LABEL_NAMES.map((name) => [
@@ -394,14 +401,15 @@ export const createApp = (deps: AppDeps) => {
     if (!membership.ok) return send(c, membership);
     const status = c.req.query('status');
     // The board shows open globs and only the latest signed-off ones; read those first so artifacts load for them alone.
-    const signedOff = await globs.list(email, boardId, { status: ['signed_off'] });
+    // Decisions share the board with work; a rejected or closed one is archived and not shown.
+    const signedOff = await globs.list(email, boardId, { status: ['signed_off'], include: 'all' });
     if (!signedOff.ok) return send(c, signedOff);
-    const kept = new Set(latestSignedOff(signedOff.value).map((g) => g.id));
+    const kept = new Set(latestSignedOff(signedOff.value.filter(shown)).map((g) => g.id));
     const result = await globs.listWithArtifacts(
       email,
       boardId,
-      { ...(status === undefined ? {} : { status: z.array(z.enum(STATUSES)).parse(status.split(',')) }) },
-      (g) => g.status !== 'signed_off' || kept.has(g.id),
+      { include: 'all', ...(status === undefined ? {} : { status: z.array(z.enum(STATUSES)).parse(status.split(',')) }) },
+      (g) => shown(g) && (g.status !== 'signed_off' || kept.has(g.id)),
     );
     const splits = await globs.splitsOf(boardId);
     const oversized = await globs.oversizedOf(boardId);
@@ -416,16 +424,16 @@ export const createApp = (deps: AppDeps) => {
 
   // How many globs are signed off in all (the board's column shows the latest few).
   app.get('/api/boards/:b/signed-off/count', async (c) =>
-    send(c, await globs.list(c.get('email'), Number(c.req.param('b')), { status: ['signed_off'] }), (list) => ({ total: list.length })),
+    send(c, await globs.list(c.get('email'), Number(c.req.param('b')), { status: ['signed_off'], include: 'all' }), (list) => ({ total: list.filter(shown).length })),
   );
 
   app.get('/api/boards/:b/signed-off', async (c) => {
     const email = c.get('email');
-    const result = await globs.list(email, Number(c.req.param('b')), { status: ['signed_off'] });
+    const result = await globs.list(email, Number(c.req.param('b')), { status: ['signed_off'], include: 'all' });
     const cursor = c.req.query('cursor');
     const pageSize = 50;
     return send(c, result, (list) => {
-      const sorted = bySignedOffNewest(list);
+      const sorted = bySignedOffNewest(list.filter(shown));
       const start = cursor === undefined ? 0 : Number(cursor);
       const page = sorted.slice(start, start + pageSize);
       return {
@@ -524,6 +532,9 @@ export const createApp = (deps: AppDeps) => {
     retrigger: (email: string, id: string, b: ActionBody) => globs.retrigger(email, id, b.version, b.anyway === true),
     'retry-autofix': (email: string, id: string, b: ActionBody) => globs.retryAutofix(email, id, b.version),
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),
+    // Decision globs (the outcome has its own route: POST /api/globs/:id/decision).
+    'sign-off': (email: string, id: string, b: ActionBody) => globs.signOffDecision(email, id, b.version),
+    reopen: (email: string, id: string, b: ActionBody) => (deps.decisions ?? { reopen: (e: string, i: string, v: number) => globs.reopenDecision(e, i, v) }).reopen(email, id, b.version),
     'pick-up': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, false, b.environment),
     'take-over': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, true, b.environment),
     'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),

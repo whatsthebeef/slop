@@ -25,6 +25,8 @@ describe('board filters', () => {
     expect(matchesFilters(view({ category: 'feature' }), values)).toBe(true);
     expect(matchesFilters(view({ category: 'bug' }), values)).toBe(true);
     expect(matchesFilters(view({ category: 'task' }), values)).toBe(false);
+    expect(matchesFilters(view({ category: 'decision' }), parse('category=decision'))).toBe(true);
+    expect(matchesFilters(view({ category: 'bug' }), parse('category=decision'))).toBe(false);
   });
 
   it('ignores unknown categories and keeps a stable order', () => {

@@ -1,6 +1,6 @@
 import type { KbItem } from '../domain/kb.js';
-import type { Tx } from '../ports.js';
 import { text } from './llm-json.js';
+import type { KbItems } from './kb-items.js';
 
 /**
  * What the KB pipeline's intake dedupe and weekly consolidation share: the checks that keep a model's answer from
@@ -93,18 +93,13 @@ export const withEvidenceFrom = (into: KbItem, from: KbItem): KbItem => ({
  * changed meanwhile, and the caller rolls the transaction back.
  */
 export const addEvidenceTo = async (
-  tx: Tx,
+  kb: KbItems,
   into: KbItem,
   from: KbItem,
   adjust: (merged: KbItem) => KbItem = (m) => m,
 ): Promise<boolean> => {
-  let merged = withEvidenceFrom(into, from);
-  // The write bumps its version, so a claim running on it now drops its result: make it due
-  // again at once rather than after the claim's lease. An item with an error is backing off
-  // after a failure (or retrying one); it keeps its time so a failing model isn't hammered.
-  const waiting = merged.processing === 'pending' || merged.processing === 'routed';
-  if (waiting && merged.processingError === null) merged = { ...merged, processAfter: null };
-  return tx.updateKbItem(adjust(merged), into.version);
+  // The write bumps its version, so a step running on it now finds it changed and runs again at once.
+  return kb.updateKbItem(adjust(withEvidenceFrom(into, from)), into.version);
 };
 
 /**
@@ -114,12 +109,12 @@ export const addEvidenceTo = async (
  * may have landed).
  */
 export const mergeItems = async (
-  tx: Tx,
+  kb: KbItems,
   survivor: KbItem,
   loser: KbItem,
   closed: KbItem,
   adjust: (merged: KbItem) => KbItem = (m) => m,
 ): Promise<boolean> => {
-  if (!(await addEvidenceTo(tx, survivor, loser, adjust))) return false;
-  return tx.updateKbItem({ ...closed, version: loser.version + 1 }, loser.version);
+  if (!(await addEvidenceTo(kb, survivor, loser, adjust))) return false;
+  return kb.updateKbItem({ ...closed, version: loser.version + 1 }, loser.version);
 };

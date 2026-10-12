@@ -18,6 +18,7 @@ import {
 import type { ExampleCandidate, GlobOutcome, IntakeSnapshot } from '../src/domain/intake-learning.js';
 import { FakeEmbedder } from '../src/testing/fake-embedder.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import { glob as globFixture } from './fixtures.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -341,6 +342,22 @@ describe('intake learning through the services', () => {
     expect(await learning.run(boardId, now)).toMatchObject({ backfilled: 1, embedded: 1 });
     expect(await snapshots()).toMatchObject([{ globId: glob.id, backfilled: true, source: 'backfill', decisions: { type: 'same', category: 'feature', promptVersion: null } }]);
     expect(await learning.run(boardId, now)).toMatchObject({ backfilled: 0, embedded: 0 });
+  });
+
+  it('leaves decision globs out: no snapshot is backfilled for one and accuracy never counts it', async () => {
+    const work = await create('Real work');
+    const decision = globFixture({
+      id: `s${String(boardId)}d1`,
+      boardId,
+      category: 'decision',
+      type: 'same',
+      attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'manual' }, channel: 'human', outcome: null },
+    });
+    await store.transaction((tx) => tx.insertGlob(decision, null));
+    store.state.intakeSnapshots = [];
+    expect(await learning.run(boardId, now)).toMatchObject({ backfilled: 1 });
+    expect((await snapshots()).map((s) => s.globId)).toEqual([work.id]);
+    expect(unwrap(await learning.accuracy(DEV, boardId))).toMatchObject({ snapshots: 1 });
   });
 
   it('shows accuracy to members only', async () => {

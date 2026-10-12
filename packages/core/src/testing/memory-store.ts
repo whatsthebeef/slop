@@ -4,7 +4,7 @@ import type { InboxItem, InboxLink } from '../domain/inbox.js';
 import type { IntegrationToken } from '../domain/integration-tokens.js';
 import type { Deploy } from '../domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
-import type { DomainEvent, Effect } from '../domain/events.js';
+import type { DomainEvent, Effect, OutboxJob } from '../domain/events.js';
 import { sameCommit } from '../domain/signals.js';
 import type { TestRun } from '../domain/test-runs.js';
 import type { BoardNotification } from '../domain/notifications.js';
@@ -12,7 +12,6 @@ import type { ChatMessage, ChatThread } from '../domain/chat.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import { DEFAULT_REVIEW_BOARD_SETTINGS } from '../domain/review-settings.js';
-import type { KbItem } from '../domain/kb.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
@@ -37,6 +36,14 @@ import type { Board, Glob, Member, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
 import type { SearchQuery } from '../domain/search.js';
 
+/** An outbox job in memory: the job and the effect it runs. */
+export interface MemoryOutboxJob extends OutboxJob {
+  readonly effect: Effect;
+}
+
+/** Memory has no clock: a queued job may run at once. */
+const QUEUED_AT = '1970-01-01T00:00:00.000Z';
+
 interface State {
   globs: Map<string, { glob: Glob; creationKey: string | null }>;
   boards: Map<number, Board>;
@@ -47,11 +54,12 @@ interface State {
   counters: Map<string, number>;
   events: DomainEvent[];
   outbox: Effect[];
+  /** Every effect queued, as an outbox job (what `latestOutboxJobs` reads; tests that run jobs update their state). */
+  outboxJobs: MemoryOutboxJob[];
   nextBoardId: number;
   knowledge: Map<string, KnowledgeDoc>;
   knowledgeHistory: KnowledgeDoc[];
   artifacts: Artifact[];
-  kbItems: Map<string, KbItem>;
   deploys: Map<string, Deploy>;
   reviewSources: ReviewSource[];
   findings: ReviewFinding[];
@@ -138,11 +146,11 @@ const clone = (state: State): State => ({
   counters: new Map(state.counters),
   events: [...state.events],
   outbox: [...state.outbox],
+  outboxJobs: [...state.outboxJobs],
   nextBoardId: state.nextBoardId,
   knowledge: new Map(state.knowledge),
   knowledgeHistory: [...state.knowledgeHistory],
   artifacts: [...state.artifacts],
-  kbItems: new Map(state.kbItems),
   deploys: new Map(state.deploys),
   reviewSources: [...state.reviewSources],
   findings: [...state.findings],
@@ -194,11 +202,11 @@ export class MemoryStore implements Store {
     counters: new Map(),
     events: [],
     outbox: [],
+    outboxJobs: [],
     nextBoardId: 1,
     knowledge: new Map(),
     knowledgeHistory: [],
     artifacts: [],
-    kbItems: new Map(),
     deploys: new Map(),
     reviewSources: [],
     findings: [],
@@ -319,12 +327,15 @@ export class MemoryStore implements Store {
             .filter(
               (g) =>
                 g.boardId === boardId &&
+                (filter.include === 'all' || (filter.include === 'decisions') === (g.category === 'decision')) &&
                 (filter.status === undefined || filter.status.includes(g.status)) &&
                 (filter.type === undefined || g.type === filter.type) &&
                 (filter.group === undefined || g.group === filter.group) &&
                 (filter.person === undefined ||
                   g.planner === filter.person ||
-                  g.implementer === filter.person),
+                  g.implementer === filter.person) &&
+                (filter.origins === undefined ||
+                  (g.attributes !== undefined && 'origin' in g.attributes && filter.origins.includes(g.attributes.origin.kind))),
             ),
         ),
       nextNumber: (boardId, letter) => {
@@ -606,43 +617,6 @@ export class MemoryStore implements Store {
         }
         return Promise.resolve([...summaries.values()]);
       },
-      insertKbItem: (item) => {
-        if (s.kbItems.has(item.id)) return Promise.resolve(false);
-        s.kbItems.set(item.id, item);
-        return Promise.resolve(true);
-      },
-      getKbItem: (id) => Promise.resolve(s.kbItems.get(id) ?? null),
-      listKbItems: (boardId, status) =>
-        Promise.resolve(
-          [...s.kbItems.values()].filter((i) => i.boardId === boardId && (status === undefined || i.status === status)),
-        ),
-      listRecentKbItems: (boardId, statuses, limit) => {
-        // Newest by decision, else by submission; later inserts first among equals.
-        const all = [...s.kbItems.values()]
-          .map((item, index) => ({ item, index }))
-          .filter(({ item }) => item.boardId === boardId && statuses.includes(item.status))
-          .sort((a, b) => (b.item.decidedAt ?? b.item.createdAt).localeCompare(a.item.decidedAt ?? a.item.createdAt) || b.index - a.index)
-          .map(({ item }) => item);
-        return Promise.resolve({ items: all.slice(0, limit), total: all.length });
-      },
-      nextKbItemToProcess: (now) =>
-        Promise.resolve(
-          [...s.kbItems.values()]
-            .filter(
-              (i) =>
-                i.status === 'open' &&
-                (i.processing === 'pending' || i.processing === 'routed') &&
-                (i.processAfter === null || i.processAfter <= now),
-            )
-            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] ?? null,
-        ),
-      listFailedKbItems: () =>
-        Promise.resolve([...s.kbItems.values()].filter((i) => i.status === 'open' && i.processing === 'failed')),
-      updateKbItem: (item, expectedVersion) => {
-        if (s.kbItems.get(item.id)?.version !== expectedVersion) return Promise.resolve(false);
-        s.kbItems.set(item.id, item);
-        return Promise.resolve(true);
-      },
       getDeploy: (id) => Promise.resolve(s.deploys.get(id) ?? null),
       saveDeploys: (deploys) => {
         for (const d of deploys) s.deploys.set(d.id, d);
@@ -919,6 +893,21 @@ export class MemoryStore implements Store {
             .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.chunkId - b.chunkId)
             .slice(0, limit),
         ),
+      latestArtifacts: (globIds, kinds) => {
+        const latest = new Map<string, Artifact>();
+        for (const a of s.artifacts) {
+          if (globIds.includes(a.globId) && kinds.includes(a.kind)) latest.set(`${a.globId}:${a.kind}:${a.label}`, a);
+        }
+        return Promise.resolve([...latest.values()]);
+      },
+      latestOutboxJobs: (globIds, kinds) => {
+        const latest = new Map<string, OutboxJob>();
+        for (const j of s.outboxJobs) {
+          if (!globIds.includes(j.globId) || !kinds.includes(j.kind)) continue;
+          latest.set(`${j.globId}:${j.kind}`, { id: j.id, globId: j.globId, kind: j.kind, state: j.state, attempts: j.attempts, lastError: j.lastError, runAfter: j.runAfter });
+        }
+        return Promise.resolve([...latest.values()]);
+      },
       listLatestArtifacts: (boardId) => {
         const latest = new Map<string, Artifact>();
         for (const a of s.artifacts) {
@@ -1160,14 +1149,21 @@ export class MemoryStore implements Store {
         for (const effect of effects) {
           // One pending recheck per board is enough: it reads the board as it is when it runs.
           if (effect.kind === 'recheck_overlaps' && s.outbox.some((e) => e.kind === 'recheck_overlaps' && e.globId === effect.globId)) continue;
+          // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running, or
+          // backing off) gets a sibling, so a change it may not have seen still gets its step.
+          if ((effect.kind === 'kb_route' || effect.kind === 'kb_draft') && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;
           // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
           if (effect.kind === 'review_change' && effect.requestId === undefined) {
             const same = (e: Effect) => e.kind === 'review_change' && e.requestId === undefined && e.globId === effect.globId && e.stage === effect.stage;
             if (s.outbox.some((e) => same(e) && e.kind === 'review_change' && e.sha === effect.sha)) continue;
             // A newer pre-merge head cancels the older head's pending job.
-            if (effect.stage === 'pre_merge') s.outbox = s.outbox.filter((e) => !same(e));
+            if (effect.stage === 'pre_merge') {
+              s.outbox = s.outbox.filter((e) => !same(e));
+              s.outboxJobs = s.outboxJobs.map((j) => (same(j.effect) && j.state === 'pending' ? { ...j, state: 'dropped' } : j));
+            }
           }
           s.outbox.push(effect);
+          s.outboxJobs.push({ id: this.nextRowId++, globId: effect.globId, kind: effect.kind, state: 'pending', attempts: 0, lastError: null, runAfter: QUEUED_AT, effect });
         }
         return Promise.resolve();
       },

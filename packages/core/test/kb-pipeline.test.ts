@@ -1,3 +1,4 @@
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
@@ -11,6 +12,7 @@ import { llmWaitingReason } from '../src/domain/kb.js';
 import type { KbItem } from '../src/domain/kb.js';
 import type { Catalog, Tx } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import { MemoryKbQueue, TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -96,7 +98,9 @@ describe('KB pipeline: routing and dedupe', () => {
   let notifier: RecordingNotifier;
   let knowledge: KnowledgeService;
   let pipeline: KbPipeline;
+  let queue: MemoryKbQueue;
   let llm: FakeLlm;
+  let drafter: FakeLlm;
   let now: string;
   let boardId: number;
   let globId: string;
@@ -118,7 +122,7 @@ describe('KB pipeline: routing and dedupe', () => {
     ).id;
 
   const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -127,7 +131,7 @@ describe('KB pipeline: routing and dedupe', () => {
   const routedAlone = async (patch: Partial<NewLearning> = {}) => {
     const id = await submit(patch);
     llm.answer(toNewDoc('testing'));
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     return id;
   };
 
@@ -138,7 +142,9 @@ describe('KB pipeline: routing and dedupe', () => {
     const clock = { now: () => now };
     llm = new FakeLlm();
     knowledge = new KnowledgeService({ store, clock, catalog, notifier });
-    pipeline = new KbPipeline({ store, clock, catalog, notifier, route: llm, draft: new FakeLlm() });
+    drafter = new FakeLlm();
+    pipeline = new KbPipeline({ store, clock, catalog, notifier, route: llm, draft: drafter });
+    queue = new MemoryKbQueue(store, pipeline, clock, notifier);
     const boards = new BoardService({ store, notifier });
     const globs = new GlobService({
       store,
@@ -190,12 +196,14 @@ describe('KB pipeline: routing and dedupe', () => {
   it('leaves a new statement pending for the pipeline and returns its ID straight away', async () => {
     const id = await submit();
     expect(await item(id)).toMatchObject({ processing: 'pending', target: null, occurrenceCount: 1, processingAttempts: 0 });
+    // Its routing job was queued in the submit's own transaction, on the llm lane.
+    expect(store.state.outboxJobs.filter((j) => j.globId === id).map((j) => [j.kind, j.state, j.attempts])).toEqual([['kb_route', 'pending', 0]]);
   });
 
   it('routes to a document section, showing the model the document index and agent files', async () => {
     const id = await submit({ suggestedTarget: 'build_test_lint' });
     llm.answer(toDoc('build_test_lint', '## Test'), NO_MATCH);
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
 
     expect(await item(id)).toMatchObject({
       status: 'open',
@@ -219,7 +227,7 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(dedupe?.prompt).not.toContain('Run eslint.');
     expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
     // Next in line: its draft.
-    expect((await store.transaction((tx) => tx.nextKbItemToProcess(now)))?.id).toBe(id);
+    expect(queue.jobOf(id)).toMatchObject({ kind: 'kb_draft', state: 'pending', attempts: 0 });
   });
 
   it("routes to an agent file's board rules and flags a catalog candidate with its reason", async () => {
@@ -248,7 +256,7 @@ describe('KB pipeline: routing and dedupe', () => {
       }),
       NO_MATCH,
     );
-    await pipeline.processNext();
+    await queue.processNext();
 
     expect(await item(id)).toMatchObject({
       processing: 'routed',
@@ -279,13 +287,14 @@ describe('KB pipeline: routing and dedupe', () => {
     const first = await routedAlone();
     const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated', evidence: 'Tester note' });
     llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: claim(first), suppressedBy: null, coveredBy: null, contradicts: [] }));
-    expect(await pipeline.process(second)).toBe(true);
+    expect(await queue.process(second)).toBe(true);
 
     expect(llm.calls[2]?.prompt).toContain(`- ${first} (gotcha): Generated files live in src/gen/`);
     expect(await item(second)).toMatchObject({
       status: 'merged',
       duplicateOf: first,
-      processing: 'routed',
+      // Closed, it has left the pipeline.
+      processing: 'none',
       mergeNote: { by: 'intake', quote: GEN_AGAIN, survivorQuote: GEN, at: START },
     });
     const merged = await item(first);
@@ -296,7 +305,7 @@ describe('KB pipeline: routing and dedupe', () => {
       extraEvidence: [{ itemId: second, globIds: [otherGlobId], evidence: 'Tester note', submittedBy: DEV, at: START }],
     });
     // Merged items leave the open queue.
-    const open = await store.transaction((tx) => tx.listKbItems(boardId, 'open'));
+    const open = await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'open'));
     expect(open.map((i) => i.id)).toEqual([first]);
   });
 
@@ -305,41 +314,74 @@ describe('KB pipeline: routing and dedupe', () => {
     const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
     // An admin reopened a merge between them (or between one and an item the other holds).
     const pending = await item(second);
-    await store.transaction((tx) => tx.updateKbItem({ ...pending, keptApartFrom: [first], version: pending.version + 1 }, pending.version));
+    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...pending, keptApartFrom: [first], version: pending.version + 1 }, pending.version));
     const before = await item(first);
     llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: claim(first), suppressedBy: null, coveredBy: null, contradicts: [] }));
-    expect(await pipeline.process(second)).toBe(true);
+    expect(await queue.process(second)).toBe(true);
     expect(await item(second)).toMatchObject({ status: 'open', duplicateOf: null, processing: 'routed' });
     expect(await item(first)).toEqual(before);
   });
 
-  it('makes an open item it merges into due again at once, so a claim running on it is redone without waiting out the lease', async () => {
+  it('runs a step again at once when the item it works on is merged into meanwhile, spending no attempt', async () => {
     const first = await routedAlone();
-    // A worker has claimed the first item for drafting (its lease runs for five minutes).
-    const claimed = await item(first);
-    const lease = '2026-10-05T12:05:00.000Z';
-    await store.transaction((tx) => tx.updateKbItem({ ...claimed, processAfter: lease, version: claimed.version + 1 }, claimed.version));
     const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
-    llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: claim(first), suppressedBy: null, coveredBy: null, contradicts: [] }));
-    expect(await pipeline.processNext()).toBe(second);
-    expect(await item(first)).toMatchObject({ occurrenceCount: 2, processing: 'routed', processAfter: null });
+    // The first item is being drafted when the second is merged into it.
+    drafter.answer(async () => {
+      llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: claim(first), suppressedBy: null, coveredBy: null, contradicts: [] }));
+      expect(await queue.process(second)).toBe(true);
+      return json({ section: null, content: '# Testing\n\nA draft that missed the merge.\n', rationale: 'r' });
+    });
+    expect(await queue.process(first)).toBe(true);
+    expect(await item(second)).toMatchObject({ status: 'merged', duplicateOf: first });
+    // The draft written against the older item is dropped, and its job is due again now, with its attempt given back.
+    expect(await item(first)).toMatchObject({ occurrenceCount: 2, processing: 'routed', draft: null, processAfter: null });
+    expect(queue.jobOf(first)).toMatchObject({ kind: 'kb_draft', state: 'pending', attempts: 0, runAfter: now });
+    // The step itself says so: run again at once.
+    drafter.answer(async () => {
+      const current = await item(first);
+      await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, evidence: `${current.evidence} (more)`, version: current.version + 1 }, current.version));
+      return json({ section: null, content: '# Testing\n\nAnother draft.\n', rationale: 'r' });
+    });
+    expect(await pipeline.runStep(first, 'draft')).toEqual({ state: 'pending', retryAfterMs: 0 });
+    drafter.answer(json({ section: null, content: '# Testing\n\nThe draft.\n', rationale: 'r' }));
+    expect(await queue.process(first)).toBe(true);
+    expect(await item(first)).toMatchObject({ processing: 'drafted', draft: { content: '# Testing\n\nThe draft.' } });
+  });
 
-    // An item backing off after a failure keeps its backoff.
-    const third = await submit({ statement: 'Generated code is kept in src/gen/' });
+  it('leaves the backoff of an item it merges into alone', async () => {
+    const first = await routedAlone();
+    // The first item's draft failed once and backs off.
+    drafter.answer(new Error('Bedrock is down'));
+    expect(await queue.process(first)).toBe(true);
     const backingOff = await item(first);
-    const backoff = '2026-10-05T12:01:00.000Z';
-    await store.transaction((tx) =>
-      tx.updateKbItem(
-        { ...backingOff, processingError: 'Bedrock is down', processingAttempts: 1, processAfter: backoff, version: backingOff.version + 1 },
-        backingOff.version,
-      ),
-    );
+    expect(backingOff).toMatchObject({ processingAttempts: 1, processingError: 'Bedrock is down', processAfter: '2026-10-05T12:00:30.000Z' });
+    const third = await submit({ statement: 'Generated code is kept in src/gen/' });
     llm.answer(
       toNewDoc('testing'),
       json({ checked: classed('same fact', first), duplicateOf: claim(first, GEN, 'Generated code is kept in src/gen/'), contradicts: [] }),
     );
-    expect(await pipeline.process(third)).toBe(true);
-    expect(await item(first)).toMatchObject({ occurrenceCount: 3, processAfter: backoff });
+    expect(await queue.process(third)).toBe(true);
+    expect(await item(first)).toMatchObject({ occurrenceCount: 2, processingAttempts: 1, processAfter: backingOff.processAfter });
+  });
+
+  it('heals a learning whose step lost its job: queues it once, and leaves a failed one for an admin', async () => {
+    const lost = await submit();
+    const failed = await submit({ statement: 'Code in src/gen/ is generated' });
+    // The routing job of one was lost (marked done without routing); the other's failed for good.
+    store.state.outboxJobs = store.state.outboxJobs.map((j) => (j.globId === lost ? { ...j, state: 'done', attempts: 1 } : j));
+    queue.fail(failed, 'The routing answer was not usable JSON');
+    expect(await pipeline.queueDueSteps()).toBe(1);
+    expect(queue.jobOf(lost)).toMatchObject({ kind: 'kb_route', state: 'pending', attempts: 0 });
+    expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
+    // Idempotent: nothing more to queue.
+    expect(await pipeline.queueDueSteps()).toBe(0);
+    // A routed learning whose draft job is missing gets its draft queued.
+    llm.answer(toNewDoc('testing'), NO_MATCH);
+    expect(await queue.process(lost)).toBe(true);
+    store.state.outboxJobs = store.state.outboxJobs.filter((j) => !(j.globId === lost && j.kind === 'kb_draft'));
+    expect(await pipeline.queueDueSteps()).toBe(1);
+    expect(queue.jobOf(lost)).toMatchObject({ kind: 'kb_draft', state: 'pending' });
+    expect(await item(failed)).toMatchObject({ processing: 'failed' });
   });
 
   it('suppresses an item matching a rejected one', async () => {
@@ -348,7 +390,7 @@ describe('KB pipeline: routing and dedupe', () => {
     unwrap(await knowledge.reject(ADMIN, rejected, decided.version, 'Not true here'));
     const id = await submit({ statement: GEN_AGAIN });
     llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', rejected), suppressedBy: claim(rejected), duplicateOf: null, coveredBy: null, contradicts: [] }));
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
 
     expect(llm.calls[1]?.prompt).toContain(`- ${rejected}: Generated files live in src/gen/ (rejected: Not true here)`);
     expect(await item(id)).toMatchObject({
@@ -364,7 +406,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const id = await submit({ statement: GEN_AGAIN });
     const value = claim(rejected, `"${GEN}."`, `${GEN_AGAIN}.`);
     llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', rejected), suppressedBy: value, contradicts: [] }));
-    expect(await pipeline.process(id)).toBe(true);
+    expect(await queue.process(id)).toBe(true);
     expect(await item(id)).toMatchObject({
       status: 'suppressed',
       suppressedBy: rejected,
@@ -394,7 +436,7 @@ describe('KB pipeline: routing and dedupe', () => {
     it('closes on both quotes and keeps them on the closed item', async () => {
       const { other, id } = await setUp();
       answer(other, claim(other, ` generated FILES live in  src/gen/`, 'code in src/gen/ is generated'));
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       expect(await item(id)).toMatchObject({
         status: closedAs,
         [answerField]: other,
@@ -419,7 +461,7 @@ describe('KB pipeline: routing and dedupe', () => {
     ])('leaves the item open, with no hint, on %s', async (_, value) => {
       const { other, id, before } = await setUp();
       answer(other, value(other));
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       expect(await item(id)).toMatchObject({
         status: 'open',
         processing: 'routed',
@@ -439,7 +481,7 @@ describe('KB pipeline: routing and dedupe', () => {
       const [, quote, newQuote, tooShort] = test;
       const { other, id, before } = await setUp();
       answer(other, claim(other, quote, newQuote));
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       expect(await item(id)).toMatchObject({
         status: 'open',
         processing: 'routed',
@@ -493,7 +535,7 @@ describe('KB pipeline: routing and dedupe', () => {
           contradicts: [],
         }),
       );
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       const result = await item(id);
       expect(result).toMatchObject({ status: 'open', suppressedBy: null, duplicateOf: null, contradicts: [] });
       expect(result.possiblyCoveredBy).toEqual(hint(rejected, 'suppressed'));
@@ -510,7 +552,7 @@ describe('KB pipeline: routing and dedupe', () => {
           contradicts: [],
         }),
       );
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       const result = await item(id);
       expect(result).toMatchObject({ status: 'open', duplicateOf: null, coveredBy: null });
       expect(result.possiblyCoveredBy).toEqual({
@@ -523,7 +565,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const keepApart = async (id: string, other: string) => {
       const pending = await item(id);
       await store.transaction((tx) =>
-        tx.updateKbItem({ ...pending, keptApartFrom: [other], version: pending.version + 1 }, pending.version),
+        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...pending, keptApartFrom: [other], version: pending.version + 1 }, pending.version),
       );
     };
 
@@ -539,7 +581,7 @@ describe('KB pipeline: routing and dedupe', () => {
           contradicts: [],
         }),
       );
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       const result = await item(id);
       expect(result).toMatchObject({ status: 'open', suppressedBy: null });
       expect(result.possiblyCoveredBy).toEqual({
@@ -567,7 +609,7 @@ describe('KB pipeline: routing and dedupe', () => {
           contradicts: [],
         }),
       );
-      expect(await pipeline.process(ids.id)).toBe(true);
+      expect(await queue.process(ids.id)).toBe(true);
       expect(await item(ids.id)).toMatchObject({ status: 'open', duplicateOf: null, coveredBy: null, possiblyCoveredBy: null });
     });
 
@@ -581,7 +623,7 @@ describe('KB pipeline: routing and dedupe', () => {
           contradicts: [{ kind: 'item', ref: approved, quote: 'Generated files are committed', note: 'Says they are committed' }],
         }),
       );
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       const result = await item(id);
       expect(result).toMatchObject({
         status: 'open',
@@ -614,7 +656,7 @@ describe('KB pipeline: routing and dedupe', () => {
 
     it('flags the open item with the hint, naming the merged item its own quote is from', async () => {
       const { open, rejected, id } = await setUp();
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       expect(await item(id)).toMatchObject({ status: 'merged', duplicateOf: open, possiblyCoveredBy: null });
       const survivor = await item(open);
       expect(survivor).toMatchObject({ status: 'open', occurrenceCount: 2, contradicts: [] });
@@ -635,9 +677,9 @@ describe('KB pipeline: routing and dedupe', () => {
       const own = { knowledgeKind: 'doc' as const, name: 'testing', section: null, quote: 'Its own', reason: 'Earlier' };
       const current = await item(open);
       await store.transaction((tx) =>
-        tx.updateKbItem({ ...current, possiblyCoveredBy: own, version: current.version + 1 }, current.version),
+        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, possiblyCoveredBy: own, version: current.version + 1 }, current.version),
       );
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       expect((await item(open)).possiblyCoveredBy).toEqual(own);
     });
 
@@ -645,9 +687,9 @@ describe('KB pipeline: routing and dedupe', () => {
       const { open, rejected, id } = await setUp();
       const current = await item(open);
       await store.transaction((tx) =>
-        tx.updateKbItem({ ...current, keptApartFrom: [rejected], version: current.version + 1 }, current.version),
+        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, keptApartFrom: [rejected], version: current.version + 1 }, current.version),
       );
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       expect(await item(open)).toMatchObject({ occurrenceCount: 2, possiblyCoveredBy: null });
     });
   });
@@ -666,10 +708,10 @@ describe('KB pipeline: routing and dedupe', () => {
       const { rejected, id } = await setUp();
       const pending = await item(id);
       await store.transaction((tx) =>
-        tx.updateKbItem({ ...pending, keptApartFrom: [rejected], version: pending.version + 1 }, pending.version),
+        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...pending, keptApartFrom: [rejected], version: pending.version + 1 }, pending.version),
       );
       llm.answer(toNewDoc('testing'), answer(rejected));
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       expect(await item(id)).toMatchObject({ status: 'open', processing: 'routed', suppressedBy: null, mergeNote: null });
     });
 
@@ -684,11 +726,13 @@ describe('KB pipeline: routing and dedupe', () => {
         transaction((tx) =>
           work({
             ...tx,
-            getKbItem: async (itemId) => {
-              const read = await tx.getKbItem(itemId);
-              if (armed && itemId === rejected && read !== null) {
+            // The item is its glob: the change lands right after the glob is read.
+            getGlob: async (globId) => {
+              const read = await tx.getGlob(globId);
+              if (armed && globId === rejected && read !== null) {
                 armed = false;
-                await tx.updateKbItem({ ...read, decisionReason: 'Edited', version: read.version + 1 }, read.version);
+                const current = await kbItems(tx).getKbItem(globId);
+                if (current !== null) await kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, decisionReason: 'Edited', version: current.version + 1 }, current.version);
               }
               return read;
             },
@@ -698,7 +742,7 @@ describe('KB pipeline: routing and dedupe', () => {
         armed = true;
         return Promise.resolve(answer(rejected));
       });
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       // Rolled back: still pending, to be retried when its lease ends, and the rejected item unchanged.
       expect(await item(id)).toMatchObject({ status: 'open', processing: 'pending', suppressedBy: null, mergeNote: null });
       expect(await item(rejected)).toEqual(before);
@@ -710,11 +754,11 @@ describe('KB pipeline: routing and dedupe', () => {
         // Changed while the dedupe call ran (no service does this today: the check is a defence).
         const current = await item(rejected);
         await store.transaction((tx) =>
-          tx.updateKbItem({ ...current, status: 'open', version: current.version + 1 }, current.version),
+          kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, status: 'open', version: current.version + 1 }, current.version),
         );
         return answer(rejected);
       });
-      expect(await pipeline.process(id)).toBe(true);
+      expect(await queue.process(id)).toBe(true);
       expect(await item(id)).toMatchObject({ status: 'open', processing: 'routed', suppressedBy: null, mergeNote: null });
     });
   });
@@ -725,7 +769,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const before = await item(approvedId);
     const id = await submit({ sourceGlobId: otherGlobId });
     llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', approvedId), coveredBy: { kind: 'item', id: approvedId, quote: 'generated files live in  src/gen/' }, contradicts: [] }));
-    await pipeline.processNext();
+    await queue.processNext();
 
     expect(await item(id)).toMatchObject({ status: 'covered', coveredBy: { kind: 'item', id: approvedId } });
     expect(await item(approvedId)).toMatchObject({
@@ -758,7 +802,7 @@ describe('KB pipeline: routing and dedupe', () => {
       const id = await submit({ sourceGlobId });
       const current = await item(id);
       const statement = `Revise or revert ${originalId} (${original.statement}): after 3 globs the rate of CI failing after local checks passed is 33% (1/3), against 33% (1/3) before.`;
-      await store.transaction((tx) => tx.updateKbItem({ ...current, statement, signal, version: current.version + 1 }, current.version));
+      await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, statement, signal, version: current.version + 1 }, current.version));
       return id;
     };
     // An earlier one for the same original, rejected.
@@ -778,7 +822,7 @@ describe('KB pipeline: routing and dedupe', () => {
         contradicts: [],
       }),
     );
-    await pipeline.processNext();
+    await queue.processNext();
 
     const dedupePrompt = llm.calls[1]?.prompt ?? '';
     expect(dedupePrompt).not.toContain(`- ${originalId} `);
@@ -799,7 +843,7 @@ describe('KB pipeline: routing and dedupe', () => {
       toDoc('build_test_lint', 'Test'),
       json({ checked: classed('same fact', approvedId), coveredBy: { kind: 'item', id: approvedId, quote }, contradicts: [] }),
     );
-    await pipeline.processNext();
+    await queue.processNext();
 
     expect(await item(id)).toMatchObject({
       status: 'open',
@@ -815,7 +859,7 @@ describe('KB pipeline: routing and dedupe', () => {
     unwrap(await knowledge.approve(ADMIN, approvedId, (await item(approvedId)).version, { as: 'learning' }));
     const id = await submit({ sourceGlobId: otherGlobId });
     llm.answer(toDoc('build_test_lint', 'Test'), json({ checked: classed('same fact', approvedId), coveredBy: { kind: 'item', id: approvedId, quote: 'generated files live in  src/gen/' }, contradicts: [] }));
-    await pipeline.processNext();
+    await queue.processNext();
     const closed = await item(id);
     expect(closed.status).toBe('covered');
     const evidenceHolder = await item(approvedId);
@@ -836,7 +880,7 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(await item(approvedId)).toEqual(evidenceHolder);
     // The pipeline drafts it (here the drafter has no answer) without routing or deduplicating it again.
     const calls = llm.calls.length;
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect(llm.calls).toHaveLength(calls);
     expect(await item(id)).toMatchObject({ status: 'open', processing: 'routed', processingAttempts: 1 });
     // And an admin can decide it now.
@@ -847,11 +891,11 @@ describe('KB pipeline: routing and dedupe', () => {
     const id = await submit();
     const current = await item(id);
     await store.transaction((tx) =>
-      tx.updateKbItem({ ...current, status: 'merged', duplicateOf: 's1k99', target: null, version: current.version + 1 }, current.version),
+      kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, status: 'merged', duplicateOf: 's1k99', target: null, version: current.version + 1 }, current.version),
     );
     const refused = await knowledge.reopen(ADMIN, id, current.version + 1);
     expect(errorCode(refused)).toBe('invalid_input');
-    expect(await item(id)).toMatchObject({ status: 'merged', processing: 'pending' });
+    expect(await item(id)).toMatchObject({ status: 'merged', processing: 'none', target: null });
   });
 
   it('keeps an item open and flags it when the target text may already say it, never closing it', async () => {
@@ -860,7 +904,7 @@ describe('KB pipeline: routing and dedupe', () => {
       toDoc('build_test_lint', 'Test'),
       json({ checked: classed('same fact', 'current text'), coveredBy: { kind: 'target', quote: 'run  VITEST.', reason: 'Names the runner' } }),
     );
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(id)).toMatchObject({
       status: 'open',
       processing: 'routed',
@@ -877,7 +921,7 @@ describe('KB pipeline: routing and dedupe', () => {
       toDoc('build_test_lint', 'Test'),
       json({ checked: classed('same fact', 'current text'), coveredBy: { kind: 'target', quote: 'Run aws sso login', reason: 'Run locally' } }),
     );
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(targetId)).toMatchObject({ status: 'open', coveredBy: null, possiblyCoveredBy: null });
 
     const itemId = await submit({ sourceGlobId: otherGlobId });
@@ -885,7 +929,7 @@ describe('KB pipeline: routing and dedupe', () => {
       toDoc('build_test_lint', 'Test'),
       json({ checked: classed('same fact', approvedId), coveredBy: { kind: 'item', id: approvedId, quote: 'Docker compose from worktrees' }, contradicts: [] }),
     );
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(itemId)).toMatchObject({ status: 'open', coveredBy: null, possiblyCoveredBy: null });
     expect(await item(approvedId)).toMatchObject({ occurrenceCount: 1, extraEvidence: [] });
   });
@@ -904,7 +948,7 @@ describe('KB pipeline: routing and dedupe', () => {
         ],
       }),
     );
-    expect(await pipeline.process(id)).toBe(true);
+    expect(await queue.process(id)).toBe(true);
     expect(llm.calls[2]?.prompt).toContain('(none;');
     expect(await item(id)).toMatchObject({
       status: 'open',
@@ -933,7 +977,7 @@ describe('KB pipeline: routing and dedupe', () => {
         ],
       }),
     );
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(id)).toMatchObject({
       status: 'open',
       processing: 'routed',
@@ -950,27 +994,28 @@ describe('KB pipeline: routing and dedupe', () => {
     const id = await submit();
     llm.answer('Sure! Here is my answer.');
     notifier.hints.length = 0;
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(id)).toMatchObject({
       processing: 'pending',
       processingAttempts: 1,
       processingError: 'The routing answer was not usable JSON',
+      // The llm lane's backoff after a first failed attempt.
       processAfter: '2026-10-05T12:00:30.000Z',
     });
     // The page shows the error while it retries.
     expect(notifier.hints).toEqual([{ kind: 'board.kb', boardId }]);
     // Not due yet.
-    expect(await pipeline.processNext()).toBeNull();
+    expect(await queue.processNext()).toBeNull();
 
     advance(30_000);
     llm.answer(new Error('Bedrock is down'));
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect(await item(id)).toMatchObject({ processing: 'pending', processingAttempts: 2, processingError: 'Bedrock is down' });
 
     advance(60_000);
     // An agent file that doesn't exist is as unusable as bad JSON.
     llm.answer(json({ target: { kind: 'agent_file', name: 'agents/nobody.md', section: null } }));
-    await pipeline.processNext();
+    await queue.processNext();
     const failed = await item(id);
     expect(failed).toMatchObject({
       status: 'open',
@@ -981,7 +1026,7 @@ describe('KB pipeline: routing and dedupe', () => {
     });
     expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
     advance(3_600_000);
-    expect(await pipeline.processNext()).toBeNull();
+    expect(await queue.processNext()).toBeNull();
     expect(unwrap(await knowledge.approve(ADMIN, id, failed.version, { as: 'learning' })).status).toBe('approved');
   });
 
@@ -997,7 +1042,7 @@ describe('KB pipeline: routing and dedupe', () => {
       llmTimeoutMs: 20,
     });
     const id = await submit();
-    expect(await timed.processNext()).toBe(id);
+    expect(await new MemoryKbQueue(store, timed, { now: () => now }, notifier).processNext()).toBe(id);
     expect(hanging.signals).toHaveLength(1);
     expect(hanging.signals[0]?.aborted).toBe(true);
     expect(await item(id)).toMatchObject({
@@ -1005,12 +1050,13 @@ describe('KB pipeline: routing and dedupe', () => {
       processing: 'pending',
       processingAttempts: 1,
       processingError: 'The model did not answer within 0.02 s',
+      // The llm lane's backoff after a first failed attempt.
       processAfter: '2026-10-05T12:00:30.000Z',
     });
     // The worker is free again: the next due item is processed.
     advance(30_000);
     llm.answer(toDoc('build_test_lint', 'Test'), NO_MATCH);
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect(await item(id)).toMatchObject({ processing: 'routed', processingError: null, processingAttempts: 0 });
   });
 
@@ -1018,13 +1064,13 @@ describe('KB pipeline: routing and dedupe', () => {
     const id = await submit();
     // One ordinary failure first: its attempt stays counted.
     llm.answer(new Error('Bedrock is down'));
-    await pipeline.processNext();
+    await queue.processNext();
     advance(30_000);
     const expired = new LlmUnavailable('AWS sign-in expired', 'Run `aws sso login`');
     notifier.hints.length = 0;
     for (let probe = 0; probe < MAX_PROBES; probe++) {
       llm.answer(expired);
-      expect(await pipeline.processNext()).toBe(id);
+      expect(await queue.processNext()).toBe(id);
       const waiting = await item(id);
       expect(waiting).toMatchObject({
         status: 'open',
@@ -1034,7 +1080,7 @@ describe('KB pipeline: routing and dedupe', () => {
         processAfter: new Date(Date.parse(now) + 60_000).toISOString(),
       });
       expect(llmWaitingReason(waiting)).toBe('AWS sign-in expired');
-      expect(await pipeline.processNext()).toBeNull();
+      expect(await queue.processNext()).toBeNull();
       advance(60_000);
     }
     // The card heard of it once, not on every probe.
@@ -1042,12 +1088,12 @@ describe('KB pipeline: routing and dedupe', () => {
 
     // Also from the dedupe call.
     llm.answer(toDoc('build_test_lint', 'Test'), expired);
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(id)).toMatchObject({ processing: 'pending', processingAttempts: 1, target: null });
 
     advance(60_000);
     llm.answer(toDoc('build_test_lint', 'Test'), NO_MATCH);
-    await pipeline.processNext();
+    await queue.processNext();
     const routed = await item(id);
     expect(routed).toMatchObject({ processing: 'routed', processingError: null, processingAttempts: 0 });
     expect(llmWaitingReason(routed)).toBeNull();
@@ -1056,19 +1102,19 @@ describe('KB pipeline: routing and dedupe', () => {
   it('backs off on a busy Bedrock without spending an attempt: three busy answers never fail an item', async () => {
     const id = await submit();
     llm.answer(new Error('Bedrock is down'));
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(id)).toMatchObject({ processingAttempts: 1 });
     advance(30_000);
     const delays: number[] = [];
     for (let round = 0; round < 6; round++) {
       llm.answer(new LlmBusy());
-      expect(await pipeline.processNext()).toBe(id);
+      expect(await queue.processNext()).toBe(id);
       const waiting = await item(id);
       expect(waiting).toMatchObject({ status: 'open', processing: 'pending', processingAttempts: 1 });
       expect(waiting.processingError).toMatch(/^Waiting: Bedrock busy \(retrying at \d\d:\d\d UTC\)$/);
       const delay = Date.parse(waiting.processAfter ?? '') - Date.parse(now);
       delays.push(delay);
-      expect(await pipeline.processNext()).toBeNull();
+      expect(await queue.processNext()).toBeNull();
       advance(delay);
     }
     // 1, 2, 4, 8, 15, 15 minutes, each with up to 25% jitter.
@@ -1078,34 +1124,8 @@ describe('KB pipeline: routing and dedupe', () => {
     });
     // A real failure still counts.
     llm.answer(new Error('Bedrock is down'));
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(id)).toMatchObject({ processing: 'pending', processingAttempts: 2, processingError: 'Bedrock is down' });
-  });
-
-  it('requeues only the items that failed because Bedrock was busy, at their stage with fresh attempts', async () => {
-    const busyRouting = await submit({ statement: 'Busy while routing' });
-    const busyDrafting = await submit({ statement: 'Busy while drafting' });
-    const real = await submit({ statement: 'Real failure' });
-    const fail = async (id: string, error: string, target: KbItem['target']) => {
-      await store.transaction(async (tx) => {
-        const current = await tx.getKbItem(id);
-        if (current === null) throw new Error('missing');
-        await tx.updateKbItem(
-          { ...current, processing: 'failed', processingAttempts: 3, processingError: error, processAfter: null, target, version: current.version + 1 },
-          current.version,
-        );
-      });
-    };
-    const target = { kind: 'doc', name: 'build_test_lint', section: null, newDocument: null } as const;
-    await fail(busyRouting, 'Bedrock is unable to process your request.', null);
-    await fail(busyDrafting, 'Too many requests, please wait before trying again.', target);
-    await fail(real, 'The routing answer was not usable JSON', null);
-
-    expect(await pipeline.requeueBusyFailed()).toBe(2);
-    expect(await item(busyRouting)).toMatchObject({ processing: 'pending', processingAttempts: 0, processingError: null });
-    expect(await item(busyDrafting)).toMatchObject({ processing: 'routed', processingAttempts: 0, processingError: null });
-    expect(await item(real)).toMatchObject({ processing: 'failed', processingAttempts: 3 });
-    expect(await pipeline.requeueBusyFailed()).toBe(0);
   });
 
   it('accepts the dedupe answer with its restated fact and checked relations, merging only a "same fact" candidate', async () => {
@@ -1122,7 +1142,7 @@ describe('KB pipeline: routing and dedupe', () => {
         contradicts: [],
       }),
     );
-    expect(await pipeline.process(second)).toBe(true);
+    expect(await queue.process(second)).toBe(true);
     expect(await item(second)).toMatchObject({ status: 'merged', duplicateOf: first });
   });
 
@@ -1149,7 +1169,7 @@ describe('KB pipeline: routing and dedupe', () => {
         ],
       }),
     );
-    expect(await pipeline.process(id)).toBe(true);
+    expect(await queue.process(id)).toBe(true);
     expect(await item(id)).toMatchObject({
       status: 'open',
       processing: 'routed',
@@ -1171,7 +1191,7 @@ describe('KB pipeline: routing and dedupe', () => {
         contradicts: [],
       }),
     );
-    expect(await pipeline.process(covered)).toBe(true);
+    expect(await queue.process(covered)).toBe(true);
     expect(await item(covered)).toMatchObject({ status: 'open', possiblyCoveredBy: { quote: 'Run vitest' } });
   });
 
@@ -1182,7 +1202,7 @@ describe('KB pipeline: routing and dedupe', () => {
       toNewDoc('testing'),
       json({ fact: 'src/gen/ is generated', checked: classed('related topic only', 's1k77'), duplicateOf: claim(first), contradicts: [] }),
     );
-    expect(await pipeline.process(unlisted)).toBe(true);
+    expect(await queue.process(unlisted)).toBe(true);
     expect(await item(unlisted)).toMatchObject({ status: 'open', duplicateOf: null, possiblyCoveredBy: null });
     expect(await item(first)).toMatchObject({ occurrenceCount: 1 });
     // Nor does a short quote on it flag the item.
@@ -1191,7 +1211,7 @@ describe('KB pipeline: routing and dedupe', () => {
       toNewDoc('testing'),
       json({ checked: classed('related topic only', 's1k77'), duplicateOf: claim(first, 'Generated files', GEN_AGAIN), contradicts: [] }),
     );
-    expect(await pipeline.process(shortQuote)).toBe(true);
+    expect(await queue.process(shortQuote)).toBe(true);
     expect(await item(shortQuote)).toMatchObject({ status: 'open', duplicateOf: null, possiblyCoveredBy: null });
 
     const spelled = await submit({ sourceGlobId: otherGlobId, statement: 'src/gen/ holds generated code' });
@@ -1199,14 +1219,14 @@ describe('KB pipeline: routing and dedupe', () => {
       toNewDoc('testing'),
       json({ checked: [{ ref: ` ${first} `, relation: 'Same_Fact' }], duplicateOf: claim(first, GEN, 'src/gen/ holds generated code') }),
     );
-    expect(await pipeline.process(spelled)).toBe(true);
+    expect(await queue.process(spelled)).toBe(true);
     expect(await item(spelled)).toMatchObject({ status: 'merged', duplicateOf: first });
     const hyphenated = await submit({ sourceGlobId: otherGlobId, statement: 'Generated sources sit under src/gen/' });
     llm.answer(
       toNewDoc('testing'),
       json({ checked: [{ ref: first, relation: 'same-fact' }], duplicateOf: claim(first, GEN, 'Generated sources sit under src/gen/') }),
     );
-    expect(await pipeline.process(hyphenated)).toBe(true);
+    expect(await queue.process(hyphenated)).toBe(true);
     expect(await item(hyphenated)).toMatchObject({ status: 'merged' });
   });
 
@@ -1227,14 +1247,14 @@ describe('KB pipeline: routing and dedupe', () => {
       llmTimeoutMs: 20,
     });
     const id = await submit();
-    expect(await timed.processNext()).toBe(id);
+    expect(await new MemoryKbQueue(store, timed, { now: () => now }, notifier).processNext()).toBe(id);
     expect(await item(id)).toMatchObject({ processing: 'pending', processingAttempts: 0, processingError: 'AI unavailable: AWS sign-in expired' });
   });
 
   it('fails an item when the dedupe answer is unusable', async () => {
     const id = await submit();
     llm.answer(toDoc('build_test_lint', 'Test'), 'not json');
-    await pipeline.processNext();
+    await queue.processNext();
     expect(await item(id)).toMatchObject({ processing: 'pending', processingError: 'The dedupe answer was not usable JSON' });
   });
 
@@ -1258,22 +1278,26 @@ describe('KB pipeline: routing and dedupe', () => {
       },
     });
     expect(await item(replacing)).toMatchObject({ processing: 'drafted', target: { name: 'build_test_lint', newDocument: null } });
-    expect(await pipeline.processNext()).toBeNull();
+    expect(await queue.processNext()).toBeNull();
 
     // A document proposal from before routing (pending after the migration) is routed without the LLM...
     const legacy = await item(fresh);
-    await store.transaction((tx) => tx.updateKbItem({ ...legacy, processing: 'pending', target: null }, legacy.version));
-    expect(await pipeline.processNext()).toBe(fresh);
+    await store.transaction(async (tx) => {
+      await kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...legacy, processing: 'pending', target: null }, legacy.version);
+      // As the queue migration leaves it: a routing job.
+      await tx.enqueueEffects([{ kind: 'kb_route', globId: fresh }]);
+    });
+    expect(await queue.processNext()).toBe(fresh);
     expect(await item(fresh)).toMatchObject({ processing: 'drafted', target: { name: 'architecture' } });
-    // ...and one routed before drafting existed is marked drafted, also without it.
+    // ...and one routed before drafting existed reads as drafted, with nothing to run.
     const routed = await item(replacing);
-    await store.transaction((tx) => tx.updateKbItem({ ...routed, processing: 'routed' }, routed.version));
-    expect(await pipeline.processNext()).toBe(replacing);
+    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...routed, processing: 'routed' }, routed.version));
     expect(await item(replacing)).toMatchObject({ processing: 'drafted', draft: null });
+    expect(await queue.processNext()).toBeNull();
     expect(llm.calls).toHaveLength(0);
   });
 
-  it('claims an item exclusively while it is processed, and retries a crashed claim after the lease', async () => {
+  it('claims an item exclusively while it is processed, and retries a crashed claim after the backoff', async () => {
     const id = await submit();
     let release: (answer: string) => void = () => undefined;
     let called: () => void = () => undefined;
@@ -1288,8 +1312,8 @@ describe('KB pipeline: routing and dedupe', () => {
         }),
     };
     const clock = { now: () => now };
-    const first = new KbPipeline({ store, clock, catalog, notifier, route: slow, draft: slow });
-    const second = new KbPipeline({ store, clock, catalog, notifier, route: llm, draft: llm });
+    const first = new MemoryKbQueue(store, new KbPipeline({ store, clock, catalog, notifier, route: slow, draft: slow }), clock, notifier);
+    const second = new MemoryKbQueue(store, new KbPipeline({ store, clock, catalog, notifier, route: llm, draft: llm }), clock, notifier);
     const running = first.processNext();
     await reached;
     expect(await second.processNext()).toBeNull();
@@ -1298,14 +1322,12 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(await running).toBe(id);
     expect(await item(id)).toMatchObject({ processing: 'routed' });
 
-    // A worker that crashed mid-item leaves its lease; the item is retried once it ends.
+    // A worker that crashed mid-item leaves its claim: an attempt spent and a backoff; the job is retried once it ends.
     const crashed = await submit();
-    const held = await item(crashed);
-    await store.transaction((tx) =>
-      tx.updateKbItem({ ...held, processAfter: '2026-10-05T12:05:00.000Z', version: held.version + 1 }, held.version),
-    );
+    const job = queue.jobOf(crashed);
+    store.state.outboxJobs = store.state.outboxJobs.map((j) => (j.id === job?.id ? { ...j, attempts: 1, runAfter: '2026-10-05T12:00:05.000Z' } : j));
     expect(await second.process(crashed)).toBe(false);
-    advance(5 * 60_000);
+    advance(5_000);
     llm.answer(toNewDoc('testing'), NO_MATCH);
     expect(await second.process(crashed)).toBe(true);
   });
@@ -1319,15 +1341,16 @@ describe('KB pipeline: routing and dedupe', () => {
       },
     };
     const racing = new KbPipeline({ store, clock: { now: () => now }, catalog, notifier, route: deciding, draft: deciding });
-    await racing.processNext();
-    expect(await item(id)).toMatchObject({ status: 'rejected', processing: 'pending', target: null });
+    await new MemoryKbQueue(store, racing, { now: () => now }, notifier).processNext();
+    // The routing written against the open item was dropped; decided, it has left the pipeline.
+    expect(await item(id)).toMatchObject({ status: 'rejected', processing: 'none', target: null });
   });
 
   it('refuses to decide items the pipeline closed', async () => {
     const first = await routedAlone();
     const second = await submit();
     llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: claim(first, GEN, GEN) }));
-    await pipeline.process(second);
+    await queue.process(second);
     const merged = await item(second);
     expect(merged.status).toBe('merged');
     expect(errorCode(await knowledge.approve(ADMIN, second, merged.version, { as: 'learning' }))).toBe('invalid_input');

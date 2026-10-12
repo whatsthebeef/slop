@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService } from '@slop/core';
+import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -10,6 +10,7 @@ import { connect, PgStore, runMigrations } from './db/store.js';
 import { createApp } from './http/app.js';
 import { mountKnowledge } from './http/knowledge.js';
 import { OutboxRunner } from './jobs/outbox.js';
+import { kbExecutors } from './kb-executors.js';
 import { mountMcp } from './mcp/server.js';
 import { readyGate } from './ready-gate.js';
 import { GitHub } from './github/client.js';
@@ -47,6 +48,7 @@ import { CodeIndex } from './code-index.js';
 import { CodeIndexer } from './code-indexer.js';
 import { GitCodeView } from './code-view.js';
 import { mountDecisions } from './http/decisions.js';
+import { mountDecisionGlobs } from './http/decision-globs.js';
 import { mountInbox } from './http/inbox.js';
 import { mountSlack } from './http/slack.js';
 import { slackApi } from './slack.js';
@@ -170,10 +172,20 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
       })(glob, resolved),
       async (boardId) => (await boardOf(boardId))?.review.enabled !== false,
     ),
+  // The KB pipeline's routing and drafting (the `llm` lane); `kbPipeline` and the health tracker are built below and
+  // only called once a job runs. The pipeline pauses on its own models only: intake's model says nothing about them.
+  ...kbExecutors({ runStep: (itemId, step) => kbPipeline.runStep(itemId, step) }, { isDown: () => llmHealth.isDown(kbModels) }),
 };
-// `default` carries every effect today; `llm` is for slow model calls so they never hold up the others.
-const outbox = new OutboxRunner(db, { globs }, outboxExecutors, logError, 'default');
-const llmOutbox = new OutboxRunner(db, { globs }, outboxExecutors, logError, 'llm');
+// `default` carries every effect but the slow model calls, which go in `llm` so they never hold up the others.
+// `decisionGlobs` is built below, after the knowledge service it needs; it is only called once an effect runs.
+const outboxDeps: ConstructorParameters<typeof OutboxRunner>[1] = { globs, decisions: { linkedMerged: (mergedId, boardId) => decisionGlobs.linkedMerged(mergedId, boardId) } };
+const outbox = new OutboxRunner(db, outboxDeps, outboxExecutors, logError, 'default');
+// A KB job that failed, will retry, or waits for a new reason refreshes the board's Knowledge page; a finished one
+// already did (the pipeline publishes when it writes), and a dropped one changed nothing.
+const llmOutbox = new OutboxRunner(db, outboxDeps, outboxExecutors, logError, 'llm', (effect, state) => {
+  const hint = state === 'done' || state === 'dropped' ? null : kbJobHint(effect);
+  if (hint !== null) hub.publish(hint);
+});
 
 const clock = { now: () => new Date().toISOString() };
 const spend = new SpendService({ store, clock });
@@ -181,6 +193,7 @@ const reviewFeedback = new ReviewFeedbackService({ store });
 // Mining measures the board's signals: the weekly job, and the signal an admin picks to watch when approving.
 const mining = new MiningService({ store, notifier: hub });
 const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub, signals: mining });
+const decisionGlobs = new DecisionGlobService({ store, clock, notifier: hub, knowledge, globs });
 const findings = new FindingsService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
@@ -218,6 +231,7 @@ const kbRouteLlm = trackLlm(
   new BedrockLlm({ id: config.KB_ROUTE_MODEL, configKey: 'KB_ROUTE_MODEL' }, config.BEDROCK_REGION, logUsage, null),
   config.KB_ROUTE_MODEL,
 );
+const kbModels = [config.KB_ROUTE_MODEL, config.KB_DRAFT_MODEL];
 const kbPipeline = new KbPipeline({
   store,
   clock,
@@ -353,7 +367,7 @@ const subLimit = new SubLimitService({
   log: logError,
 });
 // Hourly: intake snapshots are embedded or rebuilt for older globs, and merged globs' outcomes recorded and refreshed at 14 days.
-const escalations = new EscalationLearningService({ store, clock, riskAreas });
+const escalations = new EscalationLearningService({ store, clock, riskAreas, notifier: hub });
 const typeLearning = new TypeLearningService({ store, clock });
 const intakeLearning = new IntakeLearningService({ store, clock, embedder, riskAreas, escalations });
 const learningJobs = new LearningJobService({
@@ -381,6 +395,7 @@ if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
 
 const app = createApp({
   auth,
+  decisions: decisionGlobs,
   readyGate: readyGate(github, globs, boards),
   links,
   boards,
@@ -422,7 +437,8 @@ mountSearch(app, { search });
 mountCode(app, { code });
 mountChat(app, { chat });
 mountDecisions(app, { decisions });
-mountInbox(app, { inbox });
+mountInbox(app, { inbox, decisionGlobs });
+mountDecisionGlobs(app, { decisions: decisionGlobs, globs });
 if (config.SLACK_SIGNING_SECRET !== undefined && config.SLACK_BOT_TOKEN !== undefined) {
   mountSlack(app, {
     signingSecret: config.SLACK_SIGNING_SECRET,
@@ -515,23 +531,25 @@ if (runs('catalog')) {
   }
 }
 
-if (runs('outbox')) {
-  outbox.start();
-  llmOutbox.start();
+if (runs('outbox')) outbox.start();
+/** Set once shutdown begins, so nothing started later (the `llm` runner after its self-healing pass) starts. */
+let stopping = false;
+// The `llm` lane has its own switch; `kb` (SLOP_SESSION_JOBS=kb) starts it too, since it carries the KB pipeline.
+if (runs('llm') || runs('kb')) {
+  // Self-healing: an open learning whose step has no job waiting (lost, or dropped by a bug) gets one queued.
+  void kbPipeline
+    .queueDueSteps()
+    .then((count) => count > 0 && console.log(`[kb-pipeline] queued ${String(count)} learning step(s) that had no job`))
+    .catch((error: unknown) => logError('kb-pipeline', error instanceof Error ? error.message : String(error)))
+    // A shutdown that began meanwhile has already stopped the runner: it must not start again.
+    .finally(() => {
+      if (!stopping) llmOutbox.start();
+    });
 }
 const runWatch = new RunWatch(store, globs, logError);
 if (runs('runs')) runWatch.start();
 const deployWatch = new DeployWatch(deploys, logError);
 if (runs('deploys')) deployWatch.start();
-// The pipeline pauses on its own models only: intake's model says nothing about them.
-const kbModels = [config.KB_ROUTE_MODEL, config.KB_DRAFT_MODEL];
-// One-off on start: items that failed only because Bedrock was busy (before that stopped spending attempts) go back to their stage.
-void kbPipeline
-  .requeueBusyFailed()
-  .then((count) => count > 0 && console.log(`[kb-pipeline] requeued ${String(count)} item(s) that failed while Bedrock was busy`))
-  .catch((error: unknown) => logError('kb-pipeline', error instanceof Error ? error.message : String(error)));
-const kbPipelineJob = new KbPipelineJob(kbPipeline, logError, { isDown: () => llmHealth.isDown(kbModels) });
-if (runs('kb')) kbPipelineJob.start();
 // Findings pause on the findings model only, like the KB pipeline on its own.
 const findingsJob = new KbPipelineJob(findingsPipeline, logError, { isDown: () => llmHealth.isDown([config.FINDINGS_MODEL]) }, Date.now, 'findings');
 if (runs('findings')) findingsJob.start();
@@ -570,12 +588,12 @@ const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
 });
 
 const shutdown = () => {
+  stopping = true;
   outbox.stop();
   llmOutbox.stop();
   runWatch.stop();
   reconcileWatch.stop();
   deployWatch.stop();
-  kbPipelineJob.stop();
   findingsJob.stop();
   searchSync.stop();
   codeSync.stop();

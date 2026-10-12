@@ -4,6 +4,8 @@ const ALLOWED: Record<Category, readonly SlopType[]> = {
   feature: ['sub', 'same', 'super'],
   task: ['sub', 'same', 'super'],
   bug: ['sub', 'same'],
+  /** Decisions never run, branch or merge: always a same, and the type can't change. */
+  decision: ['same'],
 };
 
 /** The type/category matrix: bugs are never supers. */

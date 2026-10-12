@@ -104,6 +104,16 @@ describe('exclusive paths', () => {
     await setPolicy(renderMergePolicy(POLICY));
   });
 
+  it('never holds a glob for a decision glob, even one that looks like it has a branch', async () => {
+    const decision = fixture({ id: 's1k1', boardId, category: 'decision', status: 'in_progress', implementer: ADMIN, provisioning: 'ok' });
+    await store.transaction((tx) => tx.insertGlob(decision, null));
+    branches.files.set(decision.id, [MIGRATION]);
+    const started = await create({ plan: 'Add a migration for the new column' });
+    expect(started.status).toBe('implementing');
+    expect(started.impliedAfter ?? []).toEqual([]);
+    expect(branches.reads).not.toContain(decision.id);
+  });
+
   it('starts a sub whose plan names a migration at once and records the open glob as an overlap', async () => {
     const open = await openGlob([MIGRATION, 'apps/server/src/a.ts']);
     const started = await create({ plan: 'Add a migration for the new column' });

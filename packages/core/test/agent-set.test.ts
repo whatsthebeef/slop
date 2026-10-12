@@ -1,3 +1,5 @@
+import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
@@ -286,9 +288,9 @@ describe('layered agent set on a board', () => {
     unwrap(await knowledge.approve(ADMIN, first, 1, { as: 'edit', target: { kind: 'agent', name: 'agents/tester.md' }, content: '- Rule one.\n' }));
     const id = await submit();
     await store.transaction(async (tx) => {
-      const item = await tx.getKbItem(id);
+      const item = await kbItems(tx).getKbItem(id);
       if (item === null) throw new Error('no item');
-      await tx.updateKbItem(
+      await kbItems(tx, TEST_KB_WRITES).updateKbItem(
         {
           ...item,
           target: { kind: 'agent', name: 'agents/tester.md', section: null, newDocument: null },

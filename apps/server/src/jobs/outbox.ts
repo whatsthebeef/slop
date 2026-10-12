@@ -1,22 +1,21 @@
-import type { Effect, EffectKind, Glob, GlobService, OutboxLane } from '@slop/core';
+import { claimLeaseMs, maxAttemptsOf, outboxBackoffMs } from '@slop/core';
+import type { DecisionGlobService, Effect, EffectKind, Glob, GlobService, OutboxLane, OutboxState, RetryLater } from '@slop/core';
 import { and, asc, eq, lte, sql } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/store.js';
 
 /**
  * What an executor did: done, or dropped because it no longer applies. Throwing means retry with backoff and spends an
- * attempt. `{ state: 'pending', retryAfterMs }` retries later without spending one (for "LLM busy").
+ * attempt. A `RetryLater` (`{ state: 'pending', retryAfterMs, reason? }`) retries later without spending one (for "LLM
+ * busy"); its reason is kept as the job's last error.
  */
 export type Outcome = 'done' | 'dropped';
-
-/** An executor's request to run again later without spending an attempt. */
-export interface RetryLater {
-  readonly state: 'pending';
-  readonly retryAfterMs: number;
-}
+export type { RetryLater };
 
 export interface ExecutorDeps {
   readonly globs: GlobService;
+  /** Moves the decision globs waiting on a merged work glob to Reviewing (absent: none are moved). */
+  readonly decisions?: Pick<DecisionGlobService, 'linkedMerged'>;
 }
 
 /** `final`: this attempt is the last, so a failure that is thrown will not be retried. */
@@ -29,10 +28,22 @@ export type Executor = (effect: Effect, glob: Glob | null, deps: ExecutorDeps, a
 /** An executor that never asks for a later retry (every one today). */
 export type SettledExecutor = (effect: Effect, glob: Glob | null, deps: ExecutorDeps, attempt?: AttemptInfo) => Promise<Outcome>;
 
-const MAX_ATTEMPTS = 8;
 const POLL_MS = 2_000;
 
-const backoffSeconds = (attempts: number) => Math.min(2 ** attempts * 5, 3_600);
+/** Effects that run with no glob behind them, or outlive its generation: never dropped as stale. */
+const NOT_GENERATION_CHECKED: readonly EffectKind[] = [
+  // Deploys outlive their glob's generation, and a deleted glob's deploy must still fail so its environment's queue
+  // moves on; the deploy executor handles both.
+  'delete_glob_data',
+  'start_deploy',
+  // Board-wide effects have no glob.
+  'refresh_base_checks',
+  'recheck_overlaps',
+  'check_environment',
+  // The KB pipeline's jobs name a KB item; the executor re-checks the item itself.
+  'kb_route',
+  'kb_draft',
+];
 
 /**
  * Executes outbox effects with retries. Every effect is re-checked against the glob's current
@@ -50,7 +61,12 @@ export class OutboxRunner {
     private readonly executors: Partial<Record<EffectKind, Executor>>,
     private readonly log: (task: string, message: string) => void,
     private readonly lane: OutboxLane = 'default',
+    private readonly onSettled?: (effect: Effect, state: OutboxState) => void,
   ) {}
+
+  private get maxAttempts(): number {
+    return maxAttemptsOf(this.lane);
+  }
 
   start(): void {
     this.timer = setInterval(() => void this.drain(), POLL_MS);
@@ -104,7 +120,8 @@ export class OutboxRunner {
         .update(schema.outbox)
         .set({
           attempts: sql`${schema.outbox.attempts} + 1`,
-          runAfter: new Date(Date.now() + backoffSeconds(job.attempts) * 1000),
+          // Held for the lane's lease: on `llm` a step can run for minutes, and a second runner must not take it meanwhile.
+          runAfter: new Date(Date.now() + claimLeaseMs(job.attempts, this.lane)),
         })
         .where(eq(schema.outbox.id, job.id));
       return job;
@@ -118,19 +135,12 @@ export class OutboxRunner {
       .from(schema.globs)
       .where(eq(schema.globs.id, effect.globId));
     const glob = row?.data ?? null;
-    // Deploys outlive their glob's generation, and a deleted glob's deploy must still fail so its
-    // environment's queue moves on; the deploy executor handles both. Board-wide effects have no glob.
-    const stale =
-      effect.kind !== 'delete_glob_data' &&
-      effect.kind !== 'start_deploy' &&
-      effect.kind !== 'refresh_base_checks' &&
-      effect.kind !== 'recheck_overlaps' &&
-      effect.kind !== 'check_environment' &&
-      (glob === null || ('generation' in effect && effect.generation < glob.generation));
+    const stale = !NOT_GENERATION_CHECKED.includes(effect.kind) && (glob === null || ('generation' in effect && effect.generation < glob.generation));
 
     let state: 'done' | 'dropped' | 'pending' | 'failed';
     let lastError: string | null = null;
     let retryAfterMs: number | null = null;
+    const final = job.attempts + 1 >= this.maxAttempts;
     if (stale) {
       state = 'dropped';
     } else {
@@ -141,27 +151,33 @@ export class OutboxRunner {
         lastError = `No executor for ${effect.kind} yet`;
       } else {
         try {
-          const outcome = await executor(effect, glob, this.deps, { final: job.attempts + 1 >= MAX_ATTEMPTS });
+          const outcome = await executor(effect, glob, this.deps, { final });
           if (typeof outcome === 'string') state = outcome;
           else {
             state = 'pending';
             retryAfterMs = outcome.retryAfterMs;
+            // Why it waits, or the error it had before when the executor gave no reason.
+            lastError = outcome.reason ?? job.lastError;
           }
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error);
-          state = job.attempts + 1 >= MAX_ATTEMPTS ? 'failed' : 'pending';
+          state = final ? 'failed' : 'pending';
           this.log(`outbox:${effect.kind}`, `${effect.globId}: ${lastError}`);
         }
       }
     }
+    // A thrown failure retries after the lane's backoff, not the claim's lease.
+    const thrown = retryAfterMs === null && state === 'pending';
     await this.db
       .update(schema.outbox)
       .set(
         retryAfterMs === null
-          ? { state, lastError }
+          ? { state, lastError, ...(thrown ? { runAfter: new Date(Date.now() + outboxBackoffMs(job.attempts, this.lane)) } : {}) }
           : // Claim spent an attempt and set a backoff; give the attempt back and use the executor's delay.
             { state, lastError, attempts: sql`${schema.outbox.attempts} - 1`, runAfter: new Date(Date.now() + retryAfterMs) },
       )
       .where(eq(schema.outbox.id, job.id));
+    // A wait that only repeats itself (the same reason) is no news.
+    if (state !== 'pending' || retryAfterMs === null || lastError !== job.lastError) this.onSettled?.(effect, state);
   }
 }

@@ -1,3 +1,5 @@
+import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { EffectCheckService } from '../src/app/effect-check-service.js';
@@ -234,12 +236,12 @@ describe('Effect checks', () => {
         version: 1,
         ...patch,
       };
-      await tx.insertKbItem(item);
+      await kbItems(tx, TEST_KB_WRITES).insertKbItem(item);
       return item;
     });
 
   const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -424,6 +426,8 @@ describe('Effect checks', () => {
     });
 
     const raised = await item(raisedId ?? '');
+    // The item is its decision glob (same ID).
+    expect(await store.transaction((tx) => tx.getGlob(raised.id))).toMatchObject({ category: 'decision', status: 'planning', attributes: { origin: { kind: 'mined' }, channel: 'mined' } });
     expect(raised).toMatchObject({
       status: 'open',
       type: 'gotcha',
@@ -465,7 +469,7 @@ describe('Effect checks', () => {
     });
     expect(await item(watched.id)).toEqual(settled);
     expect(
-      (await store.transaction((tx) => tx.listKbItems(boardId))).filter(
+      (await store.transaction((tx) => kbItems(tx).listKbItems(boardId))).filter(
         (i) => i.source === 'mined' && i.status === 'open',
       ),
     ).toHaveLength(1);
@@ -542,7 +546,7 @@ describe('Effect checks', () => {
     await series(3, 1, DAY);
     const watched = await approved();
     const [a, b] = await Promise.all([checks.check(boardId, now), checks.check(boardId, now)]);
-    const items = await store.transaction((tx) => tx.listKbItems(boardId));
+    const items = await store.transaction((tx) => kbItems(tx).listKbItems(boardId));
     const raised = items.filter((i) => i.signal?.key === `effect:${watched.id}`);
     expect(raised).toHaveLength(1);
     expect((await check(watched.id)).raisedItemId).toBe(raised[0]?.id);
@@ -911,7 +915,7 @@ describe('Effect checks', () => {
       const id = await submitted();
       const current = await item(id);
       await store.transaction((tx) =>
-        tx.updateKbItem({ ...current, signal: CI, version: current.version + 1 }, current.version),
+        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, signal: CI, version: current.version + 1 }, current.version),
       );
       const refused = await knowledge.approve(ADMIN, id, current.version + 1, {
         as: 'learning',
@@ -940,6 +944,8 @@ describe('Effect checks', () => {
           description: 'How tests run',
           content: '# Testing\n',
         },
+        // A document proposal names its own target when it is submitted.
+        target: { kind: 'doc', name: 'testing', section: null, newDocument: { area: 'testing', audience: [], description: 'How tests run' } },
       });
       for (const as of ['document', 'draft'] as const) {
         const refused = await knowledge.approve(ADMIN, proposal.id, proposal.version, {
@@ -992,7 +998,7 @@ describe('Effect checks', () => {
         const id = await submitted();
         const current = await item(id);
         await store.transaction((tx) =>
-          tx.updateKbItem(
+          kbItems(tx, TEST_KB_WRITES).updateKbItem(
             { ...current, signal: CI, version: current.version + 1 },
             current.version,
           ),
@@ -1078,7 +1084,7 @@ describe('Effect checks', () => {
       const id = await submitted();
       const current = await item(id);
       await store.transaction((tx) =>
-        tx.updateKbItem({ ...current, signal: CI, version: current.version + 1 }, current.version),
+        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, signal: CI, version: current.version + 1 }, current.version),
       );
       const versionBefore = unwrap(await boards.get(ADMIN, boardId)).board.agentSetVersion;
       const decided = unwrap(

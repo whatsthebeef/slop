@@ -1,5 +1,7 @@
 import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import { isKbGlob } from '../domain/kb-glob.js';
+import { validateScopeEdit } from '../domain/attributes.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
@@ -13,6 +15,10 @@ import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicit
 import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
+import { applicableDecisions, DECISIONS_LABEL, decisionsAttachment, scopedDecision } from '../domain/decision-glob.js';
+import type { ScopedDecision } from '../domain/decision-glob.js';
+import { addArtifact } from './artifact-service.js';
+import { DECISION_SYSTEM_ACTOR } from './decision-glob.js';
 import { findHolds } from './hold-service.js';
 import { recordTypeCorrection } from './type-learning-service.js';
 import type { DependencyLearningService } from './dependency-learning-service.js';
@@ -141,6 +147,8 @@ interface CommandOptions {
   readonly prepare?: (tx: Tx, glob: Glob) => Promise<Result<readonly string[]>>;
   /** A system step that starts a run on someone's behalf: the glob's creator triggers it. */
   readonly triggeredByCreator?: boolean;
+  /** Which globs the step applies to: work globs (the default), decision globs only, or either (pick-up, field edits). */
+  readonly applies?: 'work' | 'decision' | 'any';
 }
 
 /** How many globs a cycle check reads at most. */
@@ -148,6 +156,12 @@ const CLOSURE_LIMIT = 200;
 
 /** Integration events retry a few times on concurrent writes; they carry no client version. */
 const EVENT_RETRIES = 5;
+
+/** The accepted decisions that govern a work glob, as the `Decisions` attachment lists them. */
+const governingDecisions = async (tx: Tx, glob: Glob): Promise<ScopedDecision[]> =>
+  applicableDecisions(await tx.listGlobs(glob.boardId, { include: 'decisions' }), glob)
+    .map(scopedDecision)
+    .filter((d): d is ScopedDecision => d !== null);
 
 /**
  * Application service for globs. Every entry point (REST, MCP, webhooks, jobs) calls these
@@ -264,6 +278,8 @@ export class GlobService {
   // Commands from people (each carries the version the client read)
 
   async create(email: string, input: CreateGlobInput): Promise<Result<Glob>> {
+    // Decisions come from knowledge proposals, the inbox and the backfill: never through the work form.
+    if (input.category === 'decision') return invalidInput('A decision glob is created from a knowledge proposal or an inbox item, not directly');
     // A glob about to start waits for open globs that may change the same exclusive paths (read before the transaction:
     // it asks the code host).
     let holds: readonly ImpliedAfter[] = [];
@@ -342,6 +358,21 @@ export class GlobService {
             data: { kind: 'plan', label: '', version: artifact.version, commitSha: null, runId: null, agentSetVersion: null },
           },
         ]);
+      }
+      // Accepted decisions that govern the new glob travel with it as one attachment (IDs and one-line statements, not inline).
+      const governing = await governingDecisions(tx, glob);
+      if (governing.length > 0) {
+        await addArtifact(tx, this.deps.clock, glob, DECISION_SYSTEM_ACTOR, {
+          kind: 'attachment',
+          label: DECISIONS_LABEL,
+          content: decisionsAttachment(governing),
+          link: null,
+          commitSha: null,
+          runId: null,
+          agentSetVersion: null,
+          reviewStats: null,
+          by: 'sessionator',
+        });
       }
       return ok({ ...transition.value, glob, changed: true });
     });
@@ -530,6 +561,12 @@ export class GlobService {
         await addArtifact(globId, { kind: 'plan', label: '', content: planOf(index), link: null, commitSha: null });
         if (index > 0) {
           const copy = new Set(wanted[index]?.attachments ?? []);
+          // The new part is new work: the decisions that govern it travel with it like they do with a created glob.
+          const part = globs.find((g) => g.id === globId);
+          const governing = part === undefined || copy.has(DECISIONS_LABEL) ? [] : await governingDecisions(tx, part);
+          if (governing.length > 0) {
+            await addArtifact(globId, { kind: 'attachment', label: DECISIONS_LABEL, content: decisionsAttachment(governing), link: null, commitSha: null });
+          }
           for (const attachment of attachments) {
             if (attachment.link !== null || copy.has(attachment.label)) {
               await addArtifact(globId, { kind: 'attachment', label: attachment.label, content: attachment.content, link: attachment.link, commitSha: null });
@@ -555,6 +592,19 @@ export class GlobService {
 
   /** `changes.after` is checked here (IDs exist on the board, no cycle, merged ones dropped) before the machine sees it. */
   async update(email: string, id: string, version: number, changes: FieldChanges) {
+    // A scope on one glob must name a work glob of the board (the pure step cannot look it up; it reports other faults itself).
+    if (changes.attributes !== undefined) {
+      const checked = await this.deps.store.transaction(async (tx): Promise<Result<null>> => {
+        const decision = await tx.getGlob(id);
+        const scope = decision === null ? null : validateScopeEdit(decision.category, changes.attributes);
+        if (decision === null || scope === null || !scope.ok || scope.value.kind !== 'glob') return ok(null);
+        const governed = await tx.getGlob(scope.value.ref);
+        return governed?.boardId !== decision.boardId || governed.category === 'decision'
+          ? invalidInput(`No work glob ${scope.value.ref} on board ${String(decision.boardId)}`)
+          : ok(null);
+      });
+      if (!checked.ok) return checked;
+    }
     const wanted = changes.after;
     const wantedOverlaps = changes.overlaps;
     // A same becoming a sub is about to start: the merge policy may hold it.
@@ -577,6 +627,7 @@ export class GlobService {
         );
       },
       {
+        applies: 'any',
         dependencies: true,
         ...((wanted !== undefined || wantedOverlaps !== undefined || holds.length > 0) && {
           prepare: async (tx: Tx, glob: Glob): Promise<Result<readonly string[]>> => {
@@ -645,7 +696,7 @@ export class GlobService {
         warning = glob.status === 'planning' && dependencies !== undefined ? pickUpWarning(waitingFor(glob, dependencies)) : null;
         return machine.pickUp(glob, ctx, board, { takeOver, ...(environment === undefined ? {} : { environment }), ...(dependencies === undefined ? {} : { dependencies }) });
       },
-      { dependencies: true },
+      { dependencies: true, applies: 'any' },
     );
     return result.ok ? ok({ glob: result.value, warning }) : result;
   }
@@ -700,6 +751,16 @@ export class GlobService {
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel(email: string, id: string, version: number, name: LabelName, command: LabelCommand) {
     return this.command(email, id, version, (glob, ctx) => machine.reviewLabel(glob, name, command, ctx));
+  }
+
+  /** Decision globs: sign off an accepted decision (Reviewing to Signed off). */
+  signOffDecision(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.signOffDecision(glob, ctx), { applies: 'decision' });
+  }
+
+  /** Decision globs: take an accepted decision back to Doing, its outcome cleared. */
+  reopenDecision(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.reopenDecision(glob, ctx), { applies: 'decision' });
   }
 
   /** `mark_ready`: ask slop to mark the glob's draft PR ready for review. */
@@ -770,6 +831,9 @@ export class GlobService {
       if (board === null) return notFound(`No board ${glob.boardId}`);
       const transition = machine.remove(glob, await this.context(actor.value, board));
       if (!transition.ok) return transition;
+      // A learning an agent submitted or slop mined is a KB item: deleting it would lose the learning (and a rejected one
+      // suppresses repeats), so it is rejected instead. Decisions people made (inbox, extracted, manual) can go.
+      if (isKbGlob(glob)) return invalidInput('This decision is a knowledge item an agent submitted or slop mined; reject it instead of deleting it');
       await tx.deleteEvents(glob.id);
       await tx.deleteGlob(glob.id);
       // The deletion itself is logged without a glob, so reports lose the glob's time.
@@ -1004,6 +1068,16 @@ export class GlobService {
         }
         const board = await tx.getBoard(glob.boardId);
         if (board === null) return notFound(`No board ${glob.boardId}`);
+        // No work command (start, merge, labels, retrigger...) may run on a decision, and no decision step on work.
+        const applies = options.applies ?? 'work';
+        if (applies !== 'any' && (glob.category === 'decision') !== (applies === 'decision')) {
+          return err({
+            code: 'invalid_transition',
+            message: glob.category === 'decision' ? 'A decision glob has no such action' : 'Only a decision glob can do this',
+            status: glob.status,
+            allowedActions: actor === null ? [] : machine.allowedActions(glob, actor),
+          });
+        }
         let extraIds: readonly string[] = [];
         if (options.prepare !== undefined) {
           const prepared = await options.prepare(tx, glob);

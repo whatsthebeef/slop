@@ -1,3 +1,5 @@
+import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
@@ -142,7 +144,7 @@ describe('SearchIndexer', () => {
       processing: 'drafted',
       version: 2,
     };
-    await store.transaction((tx) => tx.insertKbItem(learning));
+    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(learning));
     await merge(task.id);
     return { task, sup };
   };
@@ -181,6 +183,15 @@ describe('SearchIndexer', () => {
     expect(chunksOf('artifact:s1t1:plan:')[0]?.header).toBe('[Plan · 2026-10-05 · "s1t1 Sync retries" · Approach]');
     // Chunks start without a vector.
     expect(store.state.searchChunks.every((c) => c.embedding === null)).toBe(true);
+  });
+
+  it('leaves decision globs and their artifacts out of the index (work listings exclude them by default)', async () => {
+    await populate();
+    const decision = await addGlob({ id: 's1k1', category: 'decision', title: 'Never edit generated files', summary: 'Never edit src/gen/.', pr: null, provisioning: 'none' });
+    await addArtifact(decision.id, 'plan', 'The proposal.');
+    await addArtifact(decision.id, 'assessment', '## Assessment');
+    expect(await indexer.syncBoard(boardId)).toEqual({ written: 10, removed: 0, queued: 1 });
+    expect(items().filter((i) => i.globIds.includes('s1k1'))).toEqual([]);
   });
 
   it('writes nothing when nothing changed', async () => {

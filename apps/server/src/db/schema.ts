@@ -19,26 +19,15 @@ import type {
   BoardJobResult,
   DeployIntegration,
   DomainEvent,
-  EffectCheck,
   Effect,
   Environment,
-  ExtraEvidence,
   Glob,
-  KbContradiction,
-  KbMergeNote,
-  KbPossibleCoverage,
-  KbCoverage,
-  KbDraft,
-  KbOutcome,
-  KbSignal,
-  KbTarget,
   Provenance,
-  ProposedDocument,
   InboxSuggestion,
   SignalFigures,
   TypeSignals,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
+import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -203,7 +192,11 @@ export const outbox = pgTable(
     lastError: text('last_error'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('outbox_lane_pending_idx').on(t.lane, t.state, t.runAfter)],
+  (t) => [
+    index('outbox_lane_pending_idx').on(t.lane, t.state, t.runAfter),
+    // A glob's newest job of a kind (the KB items' pipeline fields, and the one-unclaimed-job check on queueing).
+    index('outbox_glob_kind_idx').on(t.globId, t.kind, t.id),
+  ],
 );
 
 export const sessions = pgTable('sessions', {
@@ -290,70 +283,6 @@ export const artifacts = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
   (t) => [uniqueIndex('artifacts_version_idx').on(t.globId, t.kind, t.label, t.version)],
-);
-
-/** KB items (`s<board>k<n>`): learnings submitted by agents (later also mined), awaiting an admin's decision. */
-export const kbProposals = pgTable(
-  'kb_proposals',
-  {
-    id: text('id').primaryKey(),
-    boardId: integer('board_id')
-      .notNull()
-      .references(() => boards.id, { onDelete: 'cascade' }),
-    status: text('status', { enum: KB_ITEM_STATUSES }).notNull(),
-    type: text('type', { enum: LEARNING_TYPES }).notNull(),
-    statement: text('statement').notNull(),
-    evidence: text('evidence').notNull(),
-    suggestedTarget: text('suggested_target'),
-    sourceGlobIds: jsonb('source_glob_ids').$type<string[]>().notNull(),
-    source: text('source', { enum: ['submitted', 'mined'] }).notNull(),
-    /** Mined items: the signal that raised it, with its figures. */
-    signal: jsonb('signal').$type<KbSignal>(),
-    agentSetVersion: integer('agent_set_version'),
-    submittedBy: text('submitted_by').notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
-    decidedBy: text('decided_by'),
-    decidedAt: timestamp('decided_at', { withTimezone: true }),
-    decisionReason: text('decision_reason'),
-    /** A whole-document proposal (`/kb-bootstrap`). */
-    document: jsonb('document').$type<ProposedDocument>(),
-    /** What approving it did: kept as a learning, or applied to a document or agent file (with the version written). */
-    outcome: jsonb('outcome').$type<KbOutcome>(),
-    /** The background pipeline (routing and dedupe, then drafting): see `KbPipeline`. */
-    processing: text('processing', { enum: KB_PROCESSING_STATES }).notNull().default('pending'),
-    processingError: text('processing_error'),
-    processingAttempts: integer('processing_attempts').notNull().default(0),
-    /** Retry backoff, or a claimed item's lease. */
-    processAfter: timestamp('process_after', { withTimezone: true }),
-    target: jsonb('target').$type<KbTarget>(),
-    catalogCandidate: boolean('catalog_candidate').notNull().default(false),
-    catalogReason: text('catalog_reason'),
-    occurrenceCount: integer('occurrence_count').notNull().default(1),
-    extraEvidence: jsonb('extra_evidence').$type<ExtraEvidence[]>().notNull().default([]),
-    duplicateOf: text('duplicate_of'),
-    suppressedBy: text('suppressed_by'),
-    coveredBy: jsonb('covered_by').$type<KbCoverage>(),
-    possiblyCoveredBy: jsonb('possibly_covered_by').$type<KbPossibleCoverage>(),
-    contradicts: jsonb('contradicts').$type<KbContradiction[]>().notNull().default([]),
-    draft: jsonb('draft').$type<KbDraft>(),
-    draftedAgainstVersion: integer('drafted_against_version'),
-    rationale: text('rationale'),
-    /** Weekly consolidation: a stale flag (never a closure), and when an admin last kept the item. */
-    staleSince: timestamp('stale_since', { withTimezone: true }),
-    staleReason: text('stale_reason', { enum: KB_STALE_REASONS }),
-    staleDismissedAt: timestamp('stale_dismissed_at', { withTimezone: true }),
-    /** Items an admin separated from this one by reopening a merge. */
-    keptApartFrom: jsonb('kept_apart_from').$type<string[]>().notNull().default([]),
-    /** Merged (by weekly consolidation or intake) or suppressed (intake): the verified quotes it closed on. */
-    mergeNote: jsonb('merge_note').$type<KbMergeNote>(),
-    /** Approved with a signal: whether the change worked, refreshed daily while watching. */
-    effectCheck: jsonb('effect_check').$type<EffectCheck>(),
-    version: integer('version').notNull(),
-  },
-  (t) => [
-    index('kb_proposals_board_status_idx').on(t.boardId, t.status),
-    index('kb_proposals_processing_idx').on(t.processing, t.createdAt),
-  ],
 );
 
 /** Branch deploys: one row per request, queued per environment (one running, one waiting). */
