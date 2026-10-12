@@ -10,6 +10,11 @@ interface FilterBase {
   label: string;
   /** Hides the visible label (the control still carries it as its aria-label). */
   hideLabel?: boolean;
+  /**
+   * What the filter is when the URL has no parameter for it. Without one, empty means off. With one, empty means "show all",
+   * which the URL writes as `all` so it stays distinct from the default.
+   */
+  defaultValue?: string;
   /** Cleans a raw value (from the URL or the control); empty means the filter is off. */
   normalize: (raw: string) => string;
   /** True when the glob passes, given a non-empty normalised value. */
@@ -40,6 +45,7 @@ export const BOARD_FILTERS: BoardFilter[] = [
     key: 'category',
     label: 'Category',
     hideLabel: true,
+    defaultValue: 'feature,task,bug',
     control: 'chips',
     options: CATEGORIES.map((value) => ({ value, label: value })),
     // Kept in the options' order and without repeats, so equal selections give equal URLs.
@@ -59,11 +65,24 @@ export const BOARD_FILTERS: BoardFilter[] = [
   },
 ];
 
-/** The active filters in a URL query. */
+/** The URL text meaning "show all" for a filter that has a default. */
+const ALL = 'all';
+
+/** The filters' values with nothing chosen: each filter's default. */
+export const defaultFilters = (): FilterValues =>
+  Object.fromEntries(BOARD_FILTERS.flatMap((f) => (f.defaultValue === undefined ? [] : [[f.key, f.defaultValue] as const])));
+
+/** The active filters in a URL query. A filter with a default has it when the parameter is missing or unreadable. */
 export const parseFilters = (params: URLSearchParams): FilterValues =>
   Object.fromEntries(
     BOARD_FILTERS.flatMap((f) => {
-      const value = f.normalize(params.get(f.key) ?? '');
+      const raw = params.get(f.key) ?? '';
+      const value =
+        f.defaultValue === undefined
+          ? f.normalize(raw)
+          : raw.trim().toLowerCase() === ALL
+            ? ''
+            : f.normalize(raw) || f.defaultValue;
       return value === '' ? [] : [[f.key, value] as const];
     }),
   );
@@ -73,15 +92,15 @@ export const writeFilters = (params: URLSearchParams, values: FilterValues): URL
   const next = new URLSearchParams(params);
   for (const f of BOARD_FILTERS) {
     const value = f.normalize(values[f.key] ?? '');
-    if (value === '') next.delete(f.key);
-    else next.set(f.key, value);
+    if (value === (f.defaultValue ?? '')) next.delete(f.key);
+    else next.set(f.key, value === '' ? ALL : value);
   }
   return next;
 };
 
-/** How many filters are on. */
+/** How many filters differ from their defaults. */
 export const activeCount = (values: FilterValues): number =>
-  BOARD_FILTERS.filter((f) => f.normalize(values[f.key] ?? '') !== '').length;
+  BOARD_FILTERS.filter((f) => f.normalize(values[f.key] ?? '') !== (f.defaultValue ?? '')).length;
 
 /** True when the glob passes every active filter; with none active, every glob does. */
 export const matchesFilters = (glob: GlobView, values: FilterValues): boolean =>

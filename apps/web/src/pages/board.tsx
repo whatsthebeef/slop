@@ -1,4 +1,4 @@
-import { LISTS, bySignedOffNewest, latestSignedOff } from '@slop/core';
+import { LISTS, bySignedOffNewest, decisionOf, latestSignedOff } from '@slop/core';
 import type { Action, LabelCommand, LabelName, List } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
@@ -13,13 +13,10 @@ import type { CardMove } from '@/components/glob-card';
 import type { BoardShellContext } from '@/components/board-shell';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
-import { cn } from '@/lib/utils';
 import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
-import { VIEW_CHIPS, applyViewChips, loadChips, saveChips, toggleChip } from '@/lib/board-view-chips';
-import type { ViewChip } from '@/lib/board-view-chips';
 import { activeCount, matchesFilters, parseFilters, writeFilters } from '@/lib/board-filters';
 import type { FilterValues } from '@/lib/board-filters';
 import { withGlob } from '@/lib/glob-list';
@@ -245,17 +242,6 @@ export const BoardPage = () => {
     [globs.data],
   );
   const motion = useBoardMotion(shown, live);
-  // The Work / Decisions / Mine chips start from the role and are remembered per board.
-  const me = useQuery({ queryKey: ['me'], queryFn: () => api.me() });
-  const role = board.data?.role;
-  const [chosen, setChosen] = useState<readonly ViewChip[] | null>(null);
-  useEffect(() => setChosen(null), [boardId]);
-  const chips = chosen ?? (role === undefined ? [] : loadChips(boardId, role));
-  const toggle = (chip: ViewChip) => {
-    const next = toggleChip(chips, chip);
-    setChosen(next);
-    saveChips(boardId, next);
-  };
   // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens its page.
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -395,9 +381,8 @@ export const BoardPage = () => {
     return <p className='p-6 text-muted-foreground'>Loading…</p>;
   }
 
-  // An explicit category choice says which kinds to show, so it replaces the Work / Decisions chips; Mine still narrows.
-  const kindChips = filters['category'] === undefined ? chips : chips.filter((c) => c === 'mine');
-  const all = applyViewChips((shown ?? globs.data).filter((g) => matchesFilters(g, filters)), kindChips, me.data?.email ?? '');
+  // A rejected or closed decision (archived) never shows.
+  const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters));
   const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
 
   return (
@@ -422,23 +407,6 @@ export const BoardPage = () => {
           headerActions,
         )}
 
-      <div className='flex items-center gap-1.5 px-5 pt-1.5' role='group' aria-label='Show' data-testid='board-filters'>
-        {VIEW_CHIPS.map((chip) => (
-          <button
-            key={chip}
-            type='button'
-            aria-pressed={chips.includes(chip)}
-            data-testid={`filter-${chip}`}
-            className={cn(
-              'rounded-sm border px-2 py-0.5 font-mono text-[11px] capitalize',
-              chips.includes(chip) ? 'border-foreground bg-lcd text-lcd-foreground' : 'text-muted-foreground hover:bg-muted',
-            )}
-            onClick={() => toggle(chip)}
-          >
-            {chip}
-          </button>
-        ))}
-      </div>
       <FilterPane
         open={filterOpen}
         values={filters}
