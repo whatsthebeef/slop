@@ -15,7 +15,7 @@ import type { GlobReportFacts } from './domain/time-tracking.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
-import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from './domain/knowledge-page.js';
+import type { KnowledgePageFeedback, KnowledgePageHistoryEntry, KnowledgePageVersion } from './domain/knowledge-page.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ChoiceUsageRow } from './domain/choice-usage.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
@@ -229,6 +229,12 @@ export interface Tx {
   getKnowledgePageVersion(boardId: number, version: number): Promise<KnowledgePageVersion | null>;
   /** The board's versions without their sections, newest first, at most `limit`. */
   listKnowledgePageVersions(boardId: number, limit: number): Promise<KnowledgePageHistoryEntry[]>;
+  /** The board's Pin / Not key verdicts, newest first. */
+  listKnowledgePageFeedback(boardId: number): Promise<KnowledgePageFeedback[]>;
+  /** Records a verdict on a decision glob, replacing the one it had. */
+  saveKnowledgePageFeedback(feedback: KnowledgePageFeedback): Promise<void>;
+  /** Undoes a verdict. */
+  deleteKnowledgePageFeedback(boardId: number, globId: string): Promise<void>;
 
   getDeploy(id: string): Promise<Deploy | null>;
   /** Writes deploys (insert or replace by ID). */

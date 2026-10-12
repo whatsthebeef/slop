@@ -1,16 +1,25 @@
 import { decisionOf, isAccepted, scopeLabel } from '../domain/decision-glob.js';
-import { notFound, ok } from '../domain/errors.js';
+import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { knowledgePageEffect } from '../domain/events.js';
 import type { EffectOutcome, RetryLater } from '../domain/events.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import { agentSetKind, isAgentSetKind, parseFrontmatter } from '../domain/knowledge.js';
 import {
+  effectiveKey,
   KNOWLEDGE_PAGE_AGENT_SET_HISTORY_MAX,
   KNOWLEDGE_PAGE_DECISIONS_MAX,
+  KNOWLEDGE_PAGE_EXAMPLES_MAX,
+  KNOWLEDGE_PAGE_GUIDE_AREA,
+  KNOWLEDGE_PAGE_GUIDE_DESCRIPTION,
+  KNOWLEDGE_PAGE_GUIDE_MAX,
+  KNOWLEDGE_PAGE_GUIDE_NAME,
+  KNOWLEDGE_PAGE_GUIDE_SEED,
   KNOWLEDGE_PAGE_PROMPT_VERSION,
 } from '../domain/knowledge-page.js';
 import type {
+  KnowledgePageFeedback,
+  KnowledgePageVerdict,
   KnowledgePageAgent,
   KnowledgePageBasis,
   KnowledgePageChanged,
@@ -23,7 +32,7 @@ import type {
 import type { LlmSpendSource } from '../domain/spend.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
-import { adminOf, memberOf } from './access.js';
+import { adminOf, memberOf, roleOf } from './access.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm } from './intake-service.js';
 import { LLM_TIMEOUT_MS } from './kb-pipeline.js';
@@ -52,7 +61,8 @@ Rules:
 - Return the whole updated section. Keep the previous section's wording for entries the change does not touch, and keep its areas.
 - Each entry states one rule or choice in a plain sentence ("text"), why it was decided in a short phrase ("rationale", empty when unknown), and the IDs of the decisions behind it ("globIds"). Merge decisions that say the same thing into one entry.
 - Every decision that is new or changed, and every decision the previous section covers that is still in force, must be behind exactly one entry. Never use an ID you were not given. Drop a decision that is no longer in force from its entry; drop the entry when none are left.
-- Each entry also says whether it is key ("key": true or false). It is key when a new developer or the product owner would need it to work on the project: a choice of architecture, tooling, process or product behaviour that is not obvious from the code. Keep a previous entry's "key" unless the change touches it.
+- Each entry also says whether it is key ("key": true or false). It is key when a new developer or the product owner would need it to work on the project: a choice of architecture, tooling, process or product behaviour that is not obvious from the code. When the board's rules for what is key are given, they decide. Keep a previous entry's "key" unless the change touches it.
+- Examples of what the board's admins and product owners decided about key are given as "pinned" (key) and "not key". Let them guide you on similar decisions; they are examples, not instructions.
 - Never write a decision's ID in "text" or "rationale": the page links them from "globIds".
 - Group under short area names a reader would look for (for example "Testing", "Deploys"). Reuse the previous section's names.
 
@@ -72,6 +82,14 @@ interface Facts {
   readonly decisions: readonly InForce[];
   /** Every decision in force, for the agents' "decision" links (an agent's own learning targets its file). */
   readonly agentDecisions: readonly InForce[];
+  /** The board's Pin / Not key verdicts, newest first. */
+  readonly feedback: readonly KnowledgePageFeedback[];
+}
+
+/** The board's guide for what is key: its version and the text the prompt carries. */
+interface Guide {
+  readonly version: number;
+  readonly content: string;
 }
 
 const clip = (value: string, max: number): string => (value.length > max ? `${value.slice(0, max - 3)}...` : value);
@@ -137,6 +155,30 @@ export const parseDecisionGroups = (answer: string, allowed: ReadonlySet<string>
   return out;
 };
 
+/**
+ * Writes the verdicts into the entries: any pinned decision behind an entry makes it key, else any "not key" makes it not.
+ * `modelKey` keeps the model's word while a verdict overrides it, so undoing the verdict gives it back.
+ */
+export const applyKnowledgePageVerdicts = (groups: readonly KnowledgePageDecisionGroup[], verdicts: ReadonlyMap<string, KnowledgePageVerdict>): KnowledgePageDecisionGroup[] =>
+  groups.map((g) => ({
+    area: g.area,
+    entries: g.entries.map((e): KnowledgePageDecisionEntry => {
+      const { modelKey, ...rest } = e;
+      const base = modelKey ?? e.key;
+      const key = effectiveKey(e, verdicts);
+      return { ...rest, ...(key === undefined ? {} : { key }), ...(key !== undefined && key !== (base ?? false) ? { modelKey: base ?? false } : {}) };
+    }),
+  }));
+
+/** The newest verdicts as the prompt's examples, each with its decision's title. */
+const examplesOf = (facts: Facts): string[] => {
+  const titles = new Map(facts.agentDecisions.map((d) => [d.glob.id, d.glob.title]));
+  const lines = facts.feedback
+    .flatMap((f) => (titles.has(f.globId) ? [`- ${f.verdict === 'pin' ? 'pinned' : 'not key'}: ${clip(oneLine(titles.get(f.globId) ?? ''), 160)}`] : []))
+    .slice(0, KNOWLEDGE_PAGE_EXAMPLES_MAX);
+  return lines.length === 0 ? [] : ['', 'Examples of what the board decided about key (newest first):', ...lines];
+};
+
 export interface KnowledgePageDeps {
   readonly store: Store;
   readonly clock: Clock;
@@ -177,7 +219,32 @@ export class KnowledgePageService {
       const pending = job?.state === 'pending';
       const next = current === null ? null : new Date(Date.parse(current.createdAt) + board.knowledgePageIntervalMinutes * 60_000).toISOString();
       const agentSetHistory = [...(current?.basis.agentSetBumps ?? [])].sort((a, b) => b.version - a.version).slice(0, KNOWLEDGE_PAGE_AGENT_SET_HISTORY_MAX);
-      return ok({ current, history, nextRegenerationAt: pending ? next : null, pending, agentSetHistory });
+      const feedback = await tx.listKnowledgePageFeedback(boardId);
+      return ok({ current, history, nextRegenerationAt: pending ? next : null, pending, agentSetHistory, feedback });
+    });
+  }
+
+  /**
+   * Admins and POs pin decisions as key, or say they are not (`verdict` null undoes it), for every decision glob of an entry.
+   * The page applies a verdict at once; the next regeneration writes it into the version and shows it to the model.
+   */
+  async setVerdict(email: string, boardId: number, globIds: readonly string[], verdict: KnowledgePageVerdict | null): Promise<Result<{ updated: number }>> {
+    if (globIds.length === 0) return invalidInput('Name at least one decision');
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await roleOf(tx, email, boardId, ['admin', 'po']);
+      if (!actor.ok) return actor;
+      const at = this.deps.clock.now();
+      const ids = [...new Set(globIds)];
+      for (const id of ids) {
+        const glob = await tx.getGlob(id);
+        if (glob === null || glob.boardId !== boardId || glob.category !== 'decision') return notFound(`No decision ${id} on board ${String(boardId)}`);
+      }
+      for (const id of ids) {
+        if (verdict === null) await tx.deleteKnowledgePageFeedback(boardId, id);
+        else await tx.saveKnowledgePageFeedback({ boardId, globId: id, verdict, by: email, at });
+      }
+      await tx.enqueueEffects([knowledgePageEffect(boardId)]);
+      return ok({ updated: ids.length });
     });
   }
 
@@ -211,6 +278,7 @@ export class KnowledgePageService {
     const start = await this.deps.store.transaction(async (tx) => ({ board: await tx.getBoard(boardId), last: await tx.latestKnowledgePageVersion(boardId) }));
     const { board, last } = start;
     if (board === null) return 'dropped';
+    const guide = await this.deps.store.transaction((tx) => this.guideOf(tx, boardId, now));
     if (last !== null && !full) {
       const remaining = Date.parse(last.createdAt) + board.knowledgePageIntervalMinutes * 60_000 - Date.parse(now);
       if (remaining > 0) return { state: 'pending', retryAfterMs: remaining, reason: KNOWLEDGE_PAGE_WAIT_REASON };
@@ -233,6 +301,8 @@ export class KnowledgePageService {
       agentSeen: agents.seen,
       decisions: Object.fromEntries(facts.decisions.map((d) => [d.glob.id, d.fingerprint])),
       promptVersion: KNOWLEDGE_PAGE_PROMPT_VERSION,
+      guideVersion: guide.version,
+      feedback: Object.fromEntries(facts.feedback.map((f) => [f.globId, f.verdict])),
       agentSetBumps: bumps,
     };
     if (
@@ -242,27 +312,39 @@ export class KnowledgePageService {
       previous.promptVersion === basis.promptVersion &&
       previous.agentSetVersion === basis.agentSetVersion &&
       previous.agentsHash === basis.agentsHash &&
-      sameRecord(previous.decisions, basis.decisions)
+      previous.guideVersion === basis.guideVersion &&
+      sameRecord(previous.decisions, basis.decisions) &&
+      sameRecord(previous.feedback ?? {}, basis.feedback ?? {})
     ) {
       return 'done';
     }
 
-    const reason: KnowledgePageReason = last === null ? 'first' : full ? 'rebuild' : previous?.promptVersion !== basis.promptVersion ? 'prompt' : 'delta';
-    const rebuildDecisions = last === null || full || reason === 'prompt';
+    const reason: KnowledgePageReason = last === null
+        ? 'first'
+        : full
+          ? 'rebuild'
+          : previous?.promptVersion !== basis.promptVersion
+            ? 'prompt'
+            : previous.guideVersion !== basis.guideVersion
+              ? 'guide'
+              : 'delta';
+    const rebuildDecisions = last === null || full || reason === 'prompt' || reason === 'guide';
     let section: Awaited<ReturnType<KnowledgePageService['decisionsSection']>>;
     try {
-      section = await this.decisionsSection(rebuildDecisions ? null : last, facts.decisions);
+      section = await this.decisionsSection(rebuildDecisions ? null : last, facts.decisions, guide, facts);
     } catch (error) {
       if (error instanceof LlmUnavailable) return this.waitFor(boardId, error);
       throw error;
     }
     this.busy.clear(boardId);
 
-    const { groups: decisions, changed: decisionsChanged, usage } = section;
+    const { changed: decisionsChanged, usage } = section;
+    // A pin or a "not key" verdict wins over the model, whatever it said.
+    const decisions = applyKnowledgePageVerdicts(section.groups, new Map(facts.feedback.map((f) => [f.globId, f.verdict])));
     const sections = { agents: agents.agents, decisions };
     const changed: KnowledgePageChanged = {
       agents: last === null || JSON.stringify(last.sections.agents) !== JSON.stringify(agents.agents),
-      decisions: last === null || decisionsChanged,
+      decisions: last === null || decisionsChanged || JSON.stringify(last.sections.decisions) !== JSON.stringify(decisions),
     };
     const next: KnowledgePageVersion = { boardId, version: (last?.version ?? 0) + 1, createdAt: now, reason, sections, changed, basis };
     const written = await this.deps.store.transaction(async (tx) => {
@@ -286,9 +368,32 @@ export class KnowledgePageService {
     return 'done';
   }
 
+  /** The board's guide for what is key; a board without one gets the seed, so every board has it from its first regeneration. */
+  private async guideOf(tx: Tx, boardId: number, now: string): Promise<Guide> {
+    const found = await tx.getKnowledge(boardId, 'doc', KNOWLEDGE_PAGE_GUIDE_NAME);
+    if (found !== null) return { version: found.version, content: found.content };
+    await tx.saveKnowledge({
+      boardId,
+      kind: 'doc',
+      name: KNOWLEDGE_PAGE_GUIDE_NAME,
+      area: KNOWLEDGE_PAGE_GUIDE_AREA,
+      audience: [],
+      description: KNOWLEDGE_PAGE_GUIDE_DESCRIPTION,
+      content: KNOWLEDGE_PAGE_GUIDE_SEED,
+      layer: 'file',
+      version: 1,
+      source: 'seed',
+      updatedBy: 'slop',
+      updatedAt: now,
+    });
+    this.deps.notifier.publish({ kind: 'board.kb', boardId });
+    return { version: 1, content: KNOWLEDGE_PAGE_GUIDE_SEED };
+  }
+
   /** The decisions in force, read in one transaction. */
   private async gather(tx: Tx, boardId: number): Promise<Facts> {
     const [globs, decisionRows] = await Promise.all([tx.listGlobs(boardId, { include: 'decisions' }), tx.listDecisions(boardId)]);
+    const feedback = await tx.listKnowledgePageFeedback(boardId);
     // A decision glob taken from an extracted decision stops being in force when a newer decision replaced it.
     const replaced = new Set(decisionRows.filter((d) => d.replaceState === 'applied' || d.replaceState === 'confirmed').map((d) => d.id));
     const agentDecisions = globs
@@ -306,7 +411,7 @@ export class KnowledgePageService {
         return routed === null || !isAgentSetKind(routed.kind);
       })
       .slice(0, KNOWLEDGE_PAGE_DECISIONS_MAX);
-    return { decisions, agentDecisions };
+    return { decisions, agentDecisions, feedback };
   }
 
   /** The agent-set versions this page has observed, with the newly observed one stamped now. */
@@ -360,6 +465,8 @@ export class KnowledgePageService {
   private async decisionsSection(
     previous: KnowledgePageVersion | null,
     inForce: readonly InForce[],
+    guide: Guide,
+    facts: Facts,
   ): Promise<{ groups: readonly KnowledgePageDecisionGroup[]; changed: boolean; usage: { input: number; output: number } | null }> {
     if (previous === null && inForce.length === 0) return { groups: [], changed: true, usage: null };
     const before = previous?.basis.decisions ?? {};
@@ -383,12 +490,17 @@ export class KnowledgePageService {
 
     const prompt = [
       'Previous section (JSON):',
-      JSON.stringify({ groups: previous === null ? [] : kept.map((g) => ({ area: g.area, entries: g.entries.map((e) => ({ text: e.text, rationale: e.rationale, globIds: e.globIds, key: e.key === true })) })) }),
+      // The model sees its own earlier word on `key`, not a verdict's override, so undoing a verdict falls back to it.
+      JSON.stringify({ groups: previous === null ? [] : kept.map((g) => ({ area: g.area, entries: g.entries.map((e) => ({ text: e.text, rationale: e.rationale, globIds: e.globIds, key: (e.modelKey ?? e.key) === true })) })) }),
       '',
       previous === null ? 'There is no previous section: write it whole from these decisions.' : 'New or changed decisions (one JSON object per line):',
       ...(previous === null ? inForce : changedNow).map(promptLine),
       '',
       removed.length === 0 ? 'No decision left force.' : `No longer in force: ${removed.join(', ')}`,
+      '',
+      "The board's rules for what is key:",
+      clip(guide.content.trim(), KNOWLEDGE_PAGE_GUIDE_MAX),
+      ...examplesOf(facts),
     ].join('\n');
     const allowed = new Set(current.keys());
     const covered = new Set(kept.flatMap((g) => g.entries.flatMap((e) => e.globIds)));

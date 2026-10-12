@@ -500,7 +500,7 @@ export interface KnowledgePageVersion {
   readonly boardId?: number;
   readonly version: number;
   readonly createdAt: string;
-  readonly reason?: 'first' | 'delta' | 'rebuild' | 'prompt';
+  readonly reason?: 'first' | 'delta' | 'rebuild' | 'prompt' | 'guide';
   readonly sections?: {
     readonly agents?: readonly KnowledgePageAgent[];
     readonly decisions?: readonly KnowledgePageDecisionGroup[];
@@ -519,6 +519,16 @@ export interface KnowledgePageAgentSetVersion {
   readonly changedPaths?: readonly string[];
 }
 
+export type KnowledgePageVerdict = 'pin' | 'hide';
+
+/** A Pin / Not key verdict on a decision glob. */
+export interface KnowledgePageFeedback {
+  readonly globId: string;
+  readonly verdict: KnowledgePageVerdict;
+  readonly by: string;
+  readonly at: string;
+}
+
 export interface KnowledgePageView {
   readonly current: KnowledgePageVersion | null;
   readonly history?: readonly KnowledgePageHistoryItem[];
@@ -526,6 +536,8 @@ export interface KnowledgePageView {
   readonly pending?: boolean;
   /** The last agent-set versions the page observed, newest first; absent on an older API. */
   readonly agentSetHistory?: readonly KnowledgePageAgentSetVersion[];
+  /** Verdicts in force, newest first; absent on an older API. */
+  readonly feedback?: readonly KnowledgePageFeedback[];
 }
 
 export const api = {
@@ -614,6 +626,9 @@ export const api = {
     request<KnowledgePageVersion>('GET', `/api/boards/${boardId}/knowledge-page/versions/${version}`),
   rebuildKnowledgePage: (boardId: number) =>
     request<{ queued?: boolean }>('POST', `/api/boards/${boardId}/knowledge-page/rebuild`),
+  /** Pins the decisions as key, marks them not key, or undoes the verdict (null). */
+  knowledgePageFeedback: (boardId: number, globIds: readonly string[], verdict: KnowledgePageVerdict | null) =>
+    request<{ updated: number }>('POST', `/api/boards/${boardId}/knowledge-page/feedback`, { globIds, verdict }),
   knowledgeDoc: (boardId: number, name: string) =>
     request<{ name: string; content: string; version: number }[]>('GET', `/api/boards/${boardId}/kb/docs/${encodeURIComponent(name)}`),
   catalog: () => request<CatalogEntry[]>('GET', '/api/catalog/kb'),

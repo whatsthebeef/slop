@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decisionLinks, decisionsHref, globHref, keyDecisions, recentAgentSetVersions, relativeTime } from '../src/lib/knowledge-page';
+import { decisionLinks, decisionsHref, entryVerdict, globHref, keyDecisions, recentAgentSetVersions, relativeTime, verdictMap } from '../src/lib/knowledge-page';
 
 const NOW = Date.parse('2026-10-12T12:00:00.000Z');
 
@@ -70,6 +70,33 @@ describe('keyDecisions', () => {
   it('has nothing to count when every entry is key', () => {
     const result = keyDecisions([{ area: 'A', entries: [entry('a', true, '2026-01-01')] }]);
     expect(result).toMatchObject({ flagged: true, more: [], moreCount: 0 });
+  });
+});
+
+describe('keyDecisions with verdicts (s15f63)', () => {
+  const entry = (text: string, key: boolean | undefined, at?: string) => ({ text, globIds: [text], ...(key === undefined ? {} : { key }), ...(at === undefined ? {} : { at }) });
+  const texts = (groups: readonly { entries?: readonly { text: string }[] }[]) => groups.flatMap((g) => (g.entries ?? []).map((e) => e.text));
+  const fb = (globId: string, verdict: 'pin' | 'hide') => ({ globId, verdict, by: 'a@b.c', at: '2026-10-01T00:00:00.000Z' });
+
+  it('lets a pin make an entry key and a not key hide one, whatever the stored flag says', () => {
+    const verdicts = verdictMap([fb('plain', 'pin'), fb('key', 'hide')]);
+    const result = keyDecisions([{ area: 'A', entries: [entry('key', true, '2026-09-01'), entry('plain', false, '2026-01-01')] }], 20, verdicts);
+    expect(texts(result.shown)).toEqual(['plain']);
+    expect(texts(result.more)).toEqual(['key']);
+  });
+
+  it('counts pinned entries first toward the cap, however old', () => {
+    const entries = [entry('new1', true, '2026-09-03'), entry('new2', true, '2026-09-02'), entry('old pinned', false, '2025-01-01')];
+    const result = keyDecisions([{ area: 'A', entries }], 2, verdictMap([fb('old pinned', 'pin')]));
+    expect(texts(result.shown)).toEqual(['new1', 'old pinned']);
+    expect(texts(result.more)).toEqual(['new2']);
+  });
+
+  it('reads an entry\'s verdict from any of its decisions, a pin first', () => {
+    const verdicts = verdictMap([fb('a', 'hide'), fb('b', 'pin')]);
+    expect(entryVerdict({ text: 't', globIds: ['a', 'b'] }, verdicts)).toBe('pin');
+    expect(entryVerdict({ text: 't', globIds: ['a'] }, verdicts)).toBe('hide');
+    expect(entryVerdict({ text: 't', globIds: ['c'] }, verdicts)).toBeNull();
   });
 });
 

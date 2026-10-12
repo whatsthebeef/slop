@@ -98,6 +98,35 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     });
   });
 
+  describe('knowledge page verdicts (s15f63)', () => {
+    const give = async (ids: string[], verdict: 'pin' | 'hide', at: string) => {
+      for (const id of ids) {
+        await store.transaction(async (tx) => {
+          await tx.insertGlob(glob({ id, boardId: board.id, status: 'signed_off', title: `Title ${id}` }), null);
+          await tx.saveKnowledgePageFeedback({ boardId: board.id, globId: id, verdict, by: ADMIN, at });
+        });
+      }
+    };
+
+    it('raises a learning against the guide at 3 verdicts the same way, and not at 2', async () => {
+      await give(['s15k1', 's15k2'], 'hide', later(-3 * DAY));
+      expect((await mining.mine(board.id, START)).raised).toEqual([]);
+
+      await give(['s15k3'], 'hide', later(-2 * DAY));
+      const result = await mining.mine(board.id, later(WEEK));
+      expect(result.raised).toHaveLength(1);
+      const raised = await item(result.raised[0] ?? '');
+      expect(raised).toMatchObject({ type: 'pattern', source: 'mined', signal: { key: 'knowledge_page:scope project:hide' } });
+      expect(raised.statement).toContain('3 decisions about scope project as not key');
+      expect(raised.suggestedTarget).toBe('knowledge-page-guide');
+    });
+
+    it('ignores verdicts older than 30 days', async () => {
+      await give(['s15k1', 's15k2', 's15k3'], 'pin', later(-31 * DAY));
+      expect((await mining.mine(board.id, START)).raised).toEqual([]);
+    });
+  });
+
   describe('missing core documents', () => {
     const mergedGlobs = async (count: number, createdAt: string) => {
       for (let i = 0; i < count; i++) {

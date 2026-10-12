@@ -12,7 +12,7 @@ import type { ChatMessage, ChatThread } from '../domain/chat.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import { KNOWLEDGE_PAGE_INTERVAL_DEFAULT } from '../domain/knowledge-page.js';
-import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from '../domain/knowledge-page.js';
+import type { KnowledgePageFeedback, KnowledgePageHistoryEntry, KnowledgePageVersion } from '../domain/knowledge-page.js';
 import { DEFAULT_REVIEW_BOARD_SETTINGS } from '../domain/review-settings.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import { NO_GLOB } from '../domain/choice-usage.js';
@@ -75,6 +75,7 @@ interface State {
   subLimitChanges: SubLimitChange[];
   llmSpend: LlmSpend[];
   knowledgePages: KnowledgePageVersion[];
+  knowledgePageFeedback: KnowledgePageFeedback[];
   reviewFeedback: ReviewFeedback[];
   dependencyRules: DependencyRule[];
   dependencyRuleChanges: DependencyRuleChange[];
@@ -168,6 +169,7 @@ const clone = (state: State): State => ({
   subLimitChanges: [...state.subLimitChanges],
   llmSpend: [...state.llmSpend],
   knowledgePages: [...state.knowledgePages],
+  knowledgePageFeedback: [...state.knowledgePageFeedback],
   reviewFeedback: [...state.reviewFeedback],
   dependencyRules: [...state.dependencyRules],
   dependencyRuleChanges: [...state.dependencyRuleChanges],
@@ -226,6 +228,7 @@ export class MemoryStore implements Store {
     subLimitChanges: [],
     llmSpend: [],
     knowledgePages: [],
+    knowledgePageFeedback: [],
     reviewFeedback: [],
     dependencyRules: [],
     dependencyRuleChanges: [],
@@ -952,6 +955,16 @@ export class MemoryStore implements Store {
             .slice(0, limit)
             .map((v) => ({ version: v.version, createdAt: v.createdAt, reason: v.reason })),
         ),
+      listKnowledgePageFeedback: (boardId) =>
+        Promise.resolve(s.knowledgePageFeedback.filter((f) => f.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || a.globId.localeCompare(b.globId))),
+      saveKnowledgePageFeedback: (feedback) => {
+        s.knowledgePageFeedback = [...s.knowledgePageFeedback.filter((f) => !(f.boardId === feedback.boardId && f.globId === feedback.globId)), feedback];
+        return Promise.resolve();
+      },
+      deleteKnowledgePageFeedback: (boardId, globId) => {
+        s.knowledgePageFeedback = s.knowledgePageFeedback.filter((f) => !(f.boardId === boardId && f.globId === globId));
+        return Promise.resolve();
+      },
       latestOutboxJobs: (globIds, kinds) => {
         const latest = new Map<string, OutboxJob>();
         for (const j of s.outboxJobs) {
