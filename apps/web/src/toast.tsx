@@ -1,16 +1,18 @@
 import { createContext, useCallback, useContext, useState } from 'react';
 import type { ReactNode } from 'react';
 
-const ToastContext = createContext<(message: string) => void>(() => undefined);
+type Show = (message: ReactNode, ms?: number) => void;
+
+const ToastContext = createContext<Show>(() => undefined);
 
 export const useToast = () => useContext(ToastContext);
 
 export const ToastProvider = ({ children }: { children: ReactNode }) => {
-  const [messages, setMessages] = useState<{ id: number; text: string }[]>([]);
-  const show = useCallback((text: string) => {
+  const [messages, setMessages] = useState<{ id: number; content: ReactNode }[]>([]);
+  const show = useCallback<Show>((content, ms = 5000) => {
     const id = Date.now() + Math.random();
-    setMessages((m) => [...m, { id, text }]);
-    setTimeout(() => setMessages((m) => m.filter((x) => x.id !== id)), 5000);
+    setMessages((m) => [...m, { id, content }]);
+    setTimeout(() => setMessages((m) => m.filter((x) => x.id !== id)), ms);
   }, []);
   return (
     <ToastContext.Provider value={show}>
@@ -18,7 +20,7 @@ export const ToastProvider = ({ children }: { children: ReactNode }) => {
       <div className='fixed right-4 bottom-4 z-50 grid max-w-sm gap-2' role='status' aria-live='polite'>
         {messages.map((m) => (
           <div key={m.id} className='rounded-md border bg-card px-3 py-2 text-sm shadow-lg'>
-            {m.text}
+            {m.content}
           </div>
         ))}
       </div>
