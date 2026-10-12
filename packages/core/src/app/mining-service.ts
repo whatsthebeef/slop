@@ -84,7 +84,8 @@ export class MiningService {
       findings,
       reviewFeedback,
       manifestChanges,
-      documents: knowledge.map((d) => ({ name: d.name, content: d.content })),
+      documents: knowledge.map((d) => ({ name: d.name, area: d.area, content: d.content })),
+      documentAreasKnown: true,
       learnings: learnings.flatMap(({ glob }) => {
         const facts = learningFacts(glob);
         return facts.source === 'submitted' ? [{ globIds: facts.sourceGlobIds, agentSetVersion: facts.agentSetVersion }] : [];
@@ -172,8 +173,9 @@ export class MiningService {
             (original === null ? undefined : learningFacts(original.glob).signal?.figures.rate) ??
             row?.lastFigures?.rate ??
             0;
-          const quiet = Date.parse(now) - Date.parse(quietSince) >= SIGNAL_QUIET_MS;
-          if (quiet && m.figures.rate >= rateThen * SIGNAL_RERAISE_FACTOR) {
+          const definition = signalDefinition(m.key);
+          const quiet = Date.parse(now) - Date.parse(quietSince) >= (definition?.quietMs ?? SIGNAL_QUIET_MS);
+          if (quiet && m.figures.rate >= rateThen * (definition?.reraiseFactor ?? SIGNAL_RERAISE_FACTOR)) {
             await record(m.key, { ...measured, itemId: await raise(m), raisedAt: now, belowThresholdRuns: 0 });
             continue;
           }

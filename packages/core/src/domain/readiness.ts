@@ -1,4 +1,6 @@
 import { failureSummary } from './checks.js';
+import { missingCoreDocNotice } from './core-docs.js';
+import type { CoreDocArea } from './core-docs.js';
 import type { RaisedNotification } from './notifications.js';
 import type { Board, Glob } from './types.js';
 
@@ -13,6 +15,8 @@ export const READINESS_KEYS = [
   'app_events',
   'agent_set',
   'build_doc',
+  'conventions_doc',
+  'architecture_doc',
   'environments',
   'routines',
   'routine_repo',
@@ -66,7 +70,8 @@ export interface ReadinessFacts {
    * the file is absent, 'unreadable' when it isn't valid, 'unknown' when slop couldn't read the repo.
    */
   readonly committedAgentSetVersion: number | null | 'unreadable' | 'unknown';
-  readonly hasBuildDoc: boolean;
+  /** The core areas no knowledge document has (see `missingCoreAreas`). */
+  readonly missingCoreAreas: readonly CoreDocArea[];
   readonly ticks: ReadinessTicks;
   /** Recent routine failures on the board's globs, newest first. */
   readonly recentFailures: readonly { readonly globId: string; readonly reason: string }[];
@@ -223,13 +228,18 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
         : item('agent_set', 'Agent set in the repo', 'ok', `Version ${String(committed)}`, null),
   );
 
+  const knowledge: ReadinessFix = { kind: 'knowledge', label: 'Knowledge' };
+  const missing = (area: CoreDocArea) => facts.missingCoreAreas.includes(area);
   items.push(
-    facts.hasBuildDoc
-      ? item('build_doc', 'Build doc', 'ok', 'Agents get the build, test and lint commands', null)
-      : item('build_doc', 'Build doc', 'missing', 'Agents have to guess the build, test and lint commands: import the build doc template or run /kb-bootstrap', {
-          kind: 'knowledge',
-          label: 'Knowledge',
-        }),
+    missing('build')
+      ? item('build_doc', 'Build doc', 'missing', `Agents have to guess the build, test and lint commands. ${missingCoreDocNotice('build', board.id)}`, knowledge)
+      : item('build_doc', 'Build doc', 'ok', 'Agents get the build, test and lint commands', null),
+    missing('conventions')
+      ? item('conventions_doc', 'Conventions doc', 'missing', missingCoreDocNotice('conventions', board.id), knowledge)
+      : item('conventions_doc', 'Conventions doc', 'ok', 'Agents get the conventions as practised', null),
+    missing('architecture')
+      ? item('architecture_doc', 'Architecture doc', 'missing', missingCoreDocNotice('architecture', board.id), knowledge)
+      : item('architecture_doc', 'Architecture doc', 'ok', 'Agents get an overview of how the code is laid out', null),
   );
 
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
