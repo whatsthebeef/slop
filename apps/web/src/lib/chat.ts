@@ -18,11 +18,8 @@ export const stateLabel = (c: ChatCitation): string | null => {
   return 'current';
 };
 
-/** Widths from this up are "wide": the chat docks beside the board and Signed Off steps aside for it. */
+/** Widths from this up are "wide": the chat docks beside the board and the board's columns narrow for it. */
 export const WIDE_QUERY = '(min-width: 1024px)';
-
-/** The Signed Off column is hidden while the chat is open on a wide screen, so the other three keep their width. */
-export const hideSignedOff = (chatOpen: boolean, wide: boolean): boolean => chatOpen && wide;
 
 /** `/` or ⌘K / Ctrl+K opens the chat; `/` is left alone while someone is typing. */
 export const isChatShortcut = (e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; target: unknown }): boolean => {

@@ -486,7 +486,7 @@ export const GlobCard = ({
           <CategoryIcon category={glob.category} />
         </span>
       </div>
-      <div className='mt-1 leading-snug font-medium'>{glob.title}</div>
+      <div className='mt-1 leading-snug font-medium break-words'>{glob.title}</div>
       <div className='mt-2 flex flex-wrap items-center gap-1.5'>
         {glob.group !== null && <GroupChip name={glob.group} />}
         <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />

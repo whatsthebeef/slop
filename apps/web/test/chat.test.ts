@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RequestError } from '../src/lib/api';
 import type { ChatCitation } from '../src/lib/api';
-import { actionsFor, citedGlobs, globScope, hideSignedOff, isChatShortcut, MESSAGE_LIST, mentionedGlobs, openGlobOf, saveLabel, scopeLabel, scopeName, scopeOf, showScopeChip, sourceTone, stateLabel, suggestionsFor, unavailableNotice, WRAP_LONG, withCiteLinks } from '../src/lib/chat';
+import { actionsFor, citedGlobs, globScope, isChatShortcut, MESSAGE_LIST, mentionedGlobs, openGlobOf, saveLabel, scopeLabel, scopeName, scopeOf, showScopeChip, sourceTone, stateLabel, suggestionsFor, unavailableNotice, WRAP_LONG, withCiteLinks } from '../src/lib/chat';
 import { takeSseEvents } from '../src/lib/sse';
 
 const cite = (patch: Partial<ChatCitation>): ChatCitation => ({
@@ -41,11 +41,6 @@ describe('opening the chat', () => {
     expect(isChatShortcut(key('a'))).toBe(false);
   });
 
-  it('hides Signed Off only while the chat is open on a wide screen', () => {
-    expect(hideSignedOff(true, true)).toBe(true);
-    expect(hideSignedOff(false, true)).toBe(false);
-    expect(hideSignedOff(true, false)).toBe(false);
-  });
 });
 
 describe('the scope chip', () => {
