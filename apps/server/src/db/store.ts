@@ -1599,9 +1599,11 @@ export class PgStore implements Store {
       recordContextRetrievals: async (boardId, day, rows) => {
         if (rows.length === 0) return;
         const r = schema.contextRetrievals;
+        // A fixed order, so two searches touching the same pairs take their row locks the same way and can't deadlock.
+        const ordered = [...rows].sort((a, b) => a.sourceType.localeCompare(b.sourceType) || a.tier.localeCompare(b.tier));
         await t
           .insert(r)
-          .values(rows.map((row) => ({ boardId, day, sourceType: row.sourceType, tier: row.tier, count: row.count })))
+          .values(ordered.map((row) => ({ boardId, day, sourceType: row.sourceType, tier: row.tier, count: row.count })))
           .onConflictDoUpdate({ target: [r.boardId, r.day, r.sourceType, r.tier], set: { count: sql`${r.count} + excluded.count` } });
       },
       listContextRetrievals: async (boardId, fromDay) => {

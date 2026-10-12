@@ -41,7 +41,7 @@ export const jobSummary = (result: BoardJobResult): string => {
       return `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts, ${result.changes.length} outcomes recorded (${moved} moved it)`;
     }
     case 'context_tuning':
-      return `${result.moves.length} settings moved, ${result.held} left as they were`;
+      return `${result.moves.length} ${result.moves.length === 1 ? 'setting' : 'settings'} moved, ${result.held} left as they were`;
     case 'intake_outcome':
       return `${result.recorded} outcomes recorded, ${result.refreshed} refreshed${result.backfilled > 0 ? `, ${result.backfilled} snapshots backfilled` : ''}`;
     case 'effect_check':

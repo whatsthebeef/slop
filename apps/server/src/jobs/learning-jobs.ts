@@ -36,7 +36,7 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
       ].join('; ');
     case 'context_tuning':
       return [
-        result.moves.length === 0 ? 'no setting moved' : `${result.moves.length} settings moved`,
+        result.moves.length === 0 ? 'no setting moved' : `${result.moves.length} ${result.moves.length === 1 ? 'setting' : 'settings'} moved`,
         ...result.moves.map((m) => `${m.key} ${m.outcome.replace(/_/g, ' ')}: ${m.before} to ${m.after}`),
         `${result.held} left as they were`,
       ].join('; ');

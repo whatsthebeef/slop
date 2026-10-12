@@ -108,6 +108,18 @@ describe('Context report in Postgres', () => {
     expect(await store.transaction((tx) => tx.listContextRetrievals(boardId, '2026-01-01'))).toHaveLength(2);
   });
 
+  it('counts concurrent searches that list the same pairs in opposite orders without deadlocking', async () => {
+    const a = { sourceType: 'decision', tier: 'decision', count: 1 } as const;
+    const b = { sourceType: 'doc', tier: 'discussion', count: 1 } as const;
+    const day = '2026-06-01';
+    const before = (await store.transaction((tx) => tx.listContextRetrievals(boardId, day))).reduce((n, r) => n + r.count, 0);
+    await Promise.all(
+      Array.from({ length: 10 }, (_, i) => store.transaction((tx) => tx.recordContextRetrievals(boardId, day, i % 2 === 0 ? [a, b] : [b, a]))),
+    );
+    const after = (await store.transaction((tx) => tx.listContextRetrievals(boardId, day))).reduce((n, r) => n + r.count, 0);
+    expect(after - before).toBe(20);
+  });
+
   it('serves the report to members, with the retrievals and the settings', async () => {
     const res = await request('GET', `/api/boards/${String(boardId)}/context-report`, DEV);
     expect(res.status).toBe(200);
