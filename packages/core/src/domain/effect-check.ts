@@ -42,9 +42,14 @@ export const EFFECT_WORSE_MIN_RISE: readonly [number, number] = [1, 5];
 
 /**
  * Whether the effect check measures a signal key. A `dependency:` key isn't: the check doesn't fetch manifests, and a
- * dependency is fixed once documented, so it isn't offered under Watch signal and its approval starts no check.
+ * dependency is fixed once documented, so it isn't offered under Watch signal and its approval starts no check. A
+ * `choice_in_use:` key isn't either: once its document says the choice the signal stops by definition, which is not
+ * an effect to measure.
  */
-export const isEffectMeasured = (key: string): boolean => signalKindOf(key) !== 'dependency';
+export const isEffectMeasured = (key: string): boolean => {
+  const kind = signalKindOf(key);
+  return kind !== 'dependency' && kind !== 'choice_in_use';
+};
 
 /**
  * Which globs ran with the change: an agent-file change by the board's agent-set version (the glob's

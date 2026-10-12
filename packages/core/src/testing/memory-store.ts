@@ -15,6 +15,8 @@ import { KNOWLEDGE_PAGE_INTERVAL_DEFAULT } from '../domain/knowledge-page.js';
 import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from '../domain/knowledge-page.js';
 import { DEFAULT_REVIEW_BOARD_SETTINGS } from '../domain/review-settings.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
+import { NO_GLOB } from '../domain/choice-usage.js';
+import type { ChoiceUsageRow } from '../domain/choice-usage.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
 import { isClearedAttachment } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
@@ -67,6 +69,7 @@ interface State {
   reviewSources: ReviewSource[];
   findings: ReviewFinding[];
   kbSignals: Map<string, KbSignalState>;
+  choiceUsage: (ChoiceUsageRow & { boardId: number })[];
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
@@ -159,6 +162,7 @@ const clone = (state: State): State => ({
   reviewSources: [...state.reviewSources],
   findings: [...state.findings],
   kbSignals: new Map(state.kbSignals),
+  choiceUsage: state.choiceUsage.map((r) => ({ ...r })),
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
@@ -216,6 +220,7 @@ export class MemoryStore implements Store {
     reviewSources: [],
     findings: [],
     kbSignals: new Map(),
+    choiceUsage: [],
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
@@ -820,6 +825,30 @@ export class MemoryStore implements Store {
       listKbSignals: (boardId) => Promise.resolve([...s.kbSignals.values()].filter((k) => k.boardId === boardId)),
       upsertKbSignal: (state) => {
         s.kbSignals.set(`${state.boardId}:${state.key}`, state);
+        return Promise.resolve();
+      },
+      recordChoiceUsage: (boardId, itemIds, globId, day) => {
+        const wanted = new Set(itemIds);
+        const at = globId ?? NO_GLOB;
+        for (const d of s.decisions) {
+          if (d.boardId !== boardId || !wanted.has(d.itemId)) continue;
+          const i = s.choiceUsage.findIndex((r) => r.decisionId === d.id && r.day === day && r.globId === at);
+          const row = s.choiceUsage[i];
+          if (row === undefined) s.choiceUsage.push({ boardId, decisionId: d.id, day, globId: at, count: 1 });
+          else s.choiceUsage[i] = { ...row, count: row.count + 1 };
+        }
+        return Promise.resolve();
+      },
+      listChoiceUsage: (boardId, fromDay) => {
+        const alive = new Set(s.decisions.map((d) => d.id));
+        return Promise.resolve(
+          s.choiceUsage
+            .filter((r) => r.boardId === boardId && r.day >= fromDay && alive.has(r.decisionId))
+            .map(({ decisionId, day, globId, count }) => ({ decisionId, day, globId, count })),
+        );
+      },
+      pruneChoiceUsage: (boardId, beforeDay) => {
+        s.choiceUsage = s.choiceUsage.filter((r) => r.boardId !== boardId || r.day >= beforeDay);
         return Promise.resolve();
       },
       getBoardJob: (boardId, job) => Promise.resolve(s.boardJobs.get(`${boardId}:${job}`) ?? null),

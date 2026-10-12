@@ -1,4 +1,5 @@
 import { hash } from '../app/text-hash.js';
+import type { ChoiceUsage } from './choice-usage.js';
 import type { AuthorityTier } from './search.js';
 
 /**
@@ -186,6 +187,8 @@ export interface DecisionView {
   readonly replacedBy: DecisionRelation | null;
   /** The older decisions this one replaced or proposes to replace. */
   readonly replaces: readonly DecisionRelation[];
+  /** How often agents and chat were given it in the last `CHOICE_USAGE_WINDOW_DAYS` days; only the glob view's list sets it. */
+  readonly usage?: ChoiceUsage;
 }
 
 const relationOf = (
@@ -214,7 +217,12 @@ const shown = (d: Decision): ReplaceState | null => (d.replaceState === null || 
  * `chosen` as views, with their relations resolved against every decision of the board (`all`), newest first. `cards` maps
  * an older choice to the decision glob waiting on a person to confirm or dismiss its proposed replacement.
  */
-export const decisionViews = (chosen: readonly Decision[], all: readonly Decision[], cards: ReadonlyMap<number, string> = new Map()): DecisionView[] => {
+export const decisionViews = (
+  chosen: readonly Decision[],
+  all: readonly Decision[],
+  cards: ReadonlyMap<number, string> = new Map(),
+  usage?: ReadonlyMap<number, ChoiceUsage>,
+): DecisionView[] => {
   const byId = new Map(all.map((d) => [d.id, d]));
   return [...chosen]
     .sort((a, b) => b.decidedAt.localeCompare(a.decidedAt) || b.id - a.id)
@@ -236,6 +244,7 @@ export const decisionViews = (chosen: readonly Decision[], all: readonly Decisio
         replaces: all
           .filter((o) => o.replacedBy === d.id && shown(o) !== null)
           .map((o) => relationOf(o, shown(o) ?? 'hint', o, cards.get(o.id) ?? null)),
+        ...(usage === undefined ? {} : { usage: usage.get(d.id) ?? { returns: 0, globs: 0 } }),
       };
     });
 };

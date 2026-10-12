@@ -1,6 +1,8 @@
 import type { EffectState } from './effect-check.js';
 import { isInvestigateEvent } from './events.js';
 import type { DomainEvent, JsonValue } from './events.js';
+import { CHOICE_DISCUSSION_MIN_RETURNS, CHOICE_MIN_GLOBS, CHOICE_MIN_RETURNS, CHOICE_USAGE_WINDOW_DAYS } from './choice-usage.js';
+import type { ChoiceActivity } from './choice-usage.js';
 import { REVIEW_GUIDE_AREA } from './code-review.js';
 import { missingCoreAreas, MISSING_DOC_MIN_DAYS, MISSING_DOC_MIN_MERGED_GLOBS, MISSING_DOC_RERAISE_DAYS } from './core-docs.js';
 import { FINDING_CLASS_DESCRIPTIONS } from './findings.js';
@@ -37,6 +39,7 @@ export const SIGNAL_KINDS = [
   'dependency',
   'review_false_positive',
   'missing_doc',
+  'choice_in_use',
 ] as const;
 export type SignalKind = (typeof SIGNAL_KINDS)[number];
 
@@ -128,6 +131,8 @@ export interface BoardActivity {
   readonly learnings: readonly { readonly globIds: readonly string[]; readonly agentSetVersion: number | null }[];
   /** The window's end is `window.to`; absent (no way to read the documents' areas): `missing_doc` isn't measured. */
   readonly documentAreasKnown?: boolean;
+  /** The board's choices with what usage recording counted over `CHOICE_USAGE_WINDOW_DAYS`; absent: `choice_in_use` isn't measured. */
+  readonly choices?: readonly ChoiceActivity[];
 }
 
 /** One signal key's figures for a window, before the thresholds are applied. */
@@ -173,6 +178,8 @@ export interface SignalDefinition {
   readonly quietMs?: number;
   /** How much its rate must grow to be raised again after that (default `SIGNAL_RERAISE_FACTOR`). */
   readonly reraiseFactor?: number;
+  /** Raised once per key: never again whatever became of its item (a rejected one stays rejected). */
+  readonly once?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +355,7 @@ interface Spec {
   readonly statement: (measurement: Measurement) => string;
   readonly quietMs?: number;
   readonly reraiseFactor?: number;
+  readonly once?: boolean;
 }
 
 const define = (spec: Spec): SignalDefinition => {
@@ -362,6 +370,7 @@ const define = (spec: Spec): SignalDefinition => {
     statement: spec.statement,
     ...(spec.quietMs !== undefined && { quietMs: spec.quietMs }),
     ...(spec.reraiseFactor !== undefined && { reraiseFactor: spec.reraiseFactor }),
+    ...(spec.once === true && { once: true }),
     measure: (activity) =>
       tallies(activity).map((t) => ({
         key: t.key,
@@ -879,6 +888,40 @@ const missingDoc = define({
   statement: (m) => `This board has no ${m.context ?? 'core'} document; run /kb-bootstrap to propose one.`,
 });
 
+/** A choice's statement as a label, cut to one short line. */
+const choiceLabel = (statement: string): string => cut(statement, 120);
+
+const choiceInUseSignal = define({
+  kind: 'choice_in_use',
+  agent: null,
+  type: 'pattern',
+  suggestedTarget: 'the document area closest to the choice (routing decides)',
+  threshold: `a current choice returned at least ${String(CHOICE_MIN_RETURNS)} times (${String(CHOICE_DISCUSSION_MIN_RETURNS)} from discussion) on at least ${String(CHOICE_MIN_GLOBS)} globs in ${String(CHOICE_USAGE_WINDOW_DAYS)} days that no document covers`,
+  // The rate's denominator: the globs that were handed any choice.
+  eligibleGlobs: (activity) => new Set((activity.choices ?? []).flatMap((c) => c.globIds)),
+  tallies: (activity) => {
+    const eligible = new Set((activity.choices ?? []).flatMap((c) => c.globIds)).size;
+    return (activity.choices ?? [])
+      .filter((c) => c.current && !c.covered && c.sourceKind !== 'kb_item' && c.returns > 0)
+      .map((c): Tally => ({
+        key: `choice_in_use:${String(c.id)}`,
+        label: choiceLabel(c.statement),
+        eligible,
+        affected: c.globIds.length,
+        count: c.returns,
+        affectedGlobs: new Set(c.globIds),
+        examples: [`Quote: "${cut(c.quote, 200)}" (${c.sourceLabel})`, `Returned ${String(c.returns)} times on ${String(c.globIds.length)} globs.`],
+        context: c.sourceKind,
+      }));
+  },
+  crosses: (t) => {
+    const needed = t.context === 'inbox' ? CHOICE_DISCUSSION_MIN_RETURNS : CHOICE_MIN_RETURNS;
+    return t.count >= needed && t.affected >= CHOICE_MIN_GLOBS;
+  },
+  statement: (m) => `A choice agents keep relying on is in no document: "${m.label}" (used by ${m.globIds.join(', ')}). Make it standing guidance.`,
+  once: true,
+});
+
 /** Every mined signal, in the order the spec lists them. */
 export const SIGNALS: readonly SignalDefinition[] = [
   finding,
@@ -893,6 +936,7 @@ export const SIGNALS: readonly SignalDefinition[] = [
   dependency,
   reviewFalsePositive,
   missingDoc,
+  choiceInUseSignal,
 ];
 
 export const signalKindOf = (key: string): SignalKind | null => {

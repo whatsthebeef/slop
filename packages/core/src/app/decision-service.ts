@@ -1,4 +1,5 @@
 import { replacementOf } from '../domain/decision-glob.js';
+import { CHOICE_USAGE_WINDOW_DAYS, summariseUsage, usageFrom } from '../domain/choice-usage.js';
 import { decisionViews, isSuperseded } from '../domain/decisions.js';
 import type { Decision, DecisionView } from '../domain/decisions.js';
 import { invalidInput, notFound, ok } from '../domain/errors.js';
@@ -43,6 +44,9 @@ export class DecisionService {
           all.filter((d) => d.globId === globId),
           all,
           await this.cardsOf(tx, boardId, all),
+          new Map(
+            [...summariseUsage(await tx.listChoiceUsage(boardId, usageFrom(this.deps.clock.now(), CHOICE_USAGE_WINDOW_DAYS)))].map(([id, u]) => [id, { returns: u.returns, globs: u.globs }]),
+          ),
         ),
       );
     });
