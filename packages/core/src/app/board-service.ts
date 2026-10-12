@@ -2,7 +2,7 @@ import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js'
 import type { Result } from '../domain/errors.js';
 import { KNOWLEDGE_PAGE_INTERVAL_MAX, KNOWLEDGE_PAGE_INTERVAL_MIN } from '../domain/knowledge-page.js';
 import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN } from '../domain/effect-check.js';
-import { appendSession, displaySessions, isContiguous, removeSession, sessionOrder } from '../domain/board-sessions.js';
+import { nextFreePosition } from '../domain/board-sessions.js';
 import type { BoardSession } from '../domain/board-sessions.js';
 import { recordBaseChecks } from '../domain/checks.js';
 import type { BaseChecksChange } from '../domain/checks.js';
@@ -163,7 +163,7 @@ export class BoardService {
   async memberships(email: string): Promise<Membership[]> {
     return this.deps.store.transaction(async (tx) => {
       const boards = await tx.listBoards(email);
-      const sessions = new Map(displaySessions(await tx.listBoardSessions(email)).map((s) => [s.boardId, s]));
+      const sessions = new Map((await tx.listBoardSessions(email)).map((s) => [s.boardId, s]));
       const result: Membership[] = [];
       for (const board of boards) {
         const member = await tx.getMember(board.id, email);
@@ -217,20 +217,18 @@ export class BoardService {
     });
   }
 
-  /** Adds the board to the end of the person's bar. Idempotent: a board already in it stays where it is. */
+  /** Adds the board to the person's bar at the lowest free number. Idempotent: a board already in it keeps its number. */
   async addSession(email: string, boardId: number): Promise<Result<BoardSession[]>> {
     return this.writeSessions(email, boardId, async (tx, sessions) => {
-      const order = sessionOrder(sessions);
-      if (!order.includes(boardId)) await tx.setBoardSessionOrder(email, appendSession(order, boardId));
+      if (sessions.some((s) => s.boardId === boardId && s.position !== null)) return;
+      await tx.setBoardSessionPosition(email, boardId, nextFreePosition(sessions.map((s) => s.position)));
     });
   }
 
-  /** Takes the board out of the person's bar; the rest renumber 1..n. Idempotent. */
+  /** Takes the board out of the person's bar; the other sessions keep their numbers, so a gap stays. Idempotent. */
   async removeSession(email: string, boardId: number): Promise<Result<BoardSession[]>> {
     return this.writeSessions(email, boardId, async (tx, sessions) => {
-      const order = sessionOrder(sessions);
-      // Also renumbers a bar left with a gap by a membership that went.
-      if (order.includes(boardId) || !isContiguous(sessions)) await tx.setBoardSessionOrder(email, removeSession(order, boardId));
+      if (sessions.some((s) => s.boardId === boardId && s.position !== null)) await tx.setBoardSessionPosition(email, boardId, null);
     });
   }
 
@@ -246,7 +244,7 @@ export class BoardService {
       if (!member.ok) return member;
       await tx.lockBoardSessions(email);
       await write(tx, await tx.listBoardSessions(email));
-      return ok(displaySessions(await tx.listBoardSessions(email)));
+      return ok(await tx.listBoardSessions(email));
     });
   }
 

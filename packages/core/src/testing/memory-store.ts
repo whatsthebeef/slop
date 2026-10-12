@@ -557,15 +557,13 @@ export class MemoryStore implements Store {
         if (s.members.has(key)) s.boardSessions.set(key, { position: s.boardSessions.get(key)?.position ?? null, lastViewedAt: at });
         return Promise.resolve();
       },
-      setBoardSessionOrder: (email, boardIds) => {
-        for (const m of s.members.values()) {
-          if (m.email !== email) continue;
-          const key = memberKey(m.boardId, email);
-          const index = boardIds.indexOf(m.boardId);
-          const session = s.boardSessions.get(key);
-          if (index !== -1) s.boardSessions.set(key, { position: index + 1, lastViewedAt: session?.lastViewedAt ?? null });
-          else if (session !== undefined) s.boardSessions.set(key, { ...session, position: null });
+      setBoardSessionPosition: (email, boardId, position) => {
+        const key = memberKey(boardId, email);
+        if (!s.members.has(key)) throw new Error(`${email} is not a member of board ${boardId}`);
+        if (position !== null && [...s.members.values()].some((m) => m.email === email && m.boardId !== boardId && s.boardSessions.get(memberKey(m.boardId, email))?.position === position)) {
+          throw new Error(`${email} already has a session at ${position}`);
         }
+        s.boardSessions.set(key, { position, lastViewedAt: s.boardSessions.get(key)?.lastViewedAt ?? null });
         return Promise.resolve();
       },
       getUser: (email) => Promise.resolve(s.users.get(email) ?? null),
