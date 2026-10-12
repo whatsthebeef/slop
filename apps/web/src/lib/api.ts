@@ -706,6 +706,9 @@ export const api = {
   findings: (id: string) => request<GlobFindings>('GET', `/api/globs/${id}/findings`),
   /** The decisions taken on a glob, newest first, with what replaced them. */
   decisions: (boardId: number, id: string) => request<{ decisions: DecisionView[] }>('GET', `/api/boards/${boardId}/globs/${id}/decisions`),
+  /** A replacement card (a decision glob asking "did X replace Y?"): Confirm applies the replacement, Dismiss keeps both and blocks the pair. */
+  decideReplacement: (boardId: number, globId: string, outcome: 'confirm' | 'dismiss', reason?: string) =>
+    request<unknown>('POST', `/api/boards/${boardId}/globs/${globId}/replacement`, { outcome, ...(reason === undefined ? {} : { reason }) }),
   /** Confirms a proposed replacement (the older decision becomes superseded). */
   confirmDecision: (boardId: number, id: number) => request<DecisionView>('POST', `/api/boards/${boardId}/decisions/${id}/confirm`),
   /** Undoes a replacement, or dismisses a proposed one. */

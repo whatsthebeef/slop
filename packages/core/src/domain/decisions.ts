@@ -161,6 +161,8 @@ export interface DecisionRelation {
   readonly state: ReplaceState;
   readonly sourceLabel: string;
   readonly sourceUrl: string | null;
+  /** The decision glob waiting on a person for this proposed replacement, when there is one (on a `hint`). */
+  readonly cardGlobId?: string | null;
   /** The quotes and reason behind the relation (on `replacedBy`; empty on `replaces`, whose own row holds them). */
   readonly oldQuote: string | null;
   readonly newQuote: string | null;
@@ -186,7 +188,12 @@ export interface DecisionView {
   readonly replaces: readonly DecisionRelation[];
 }
 
-const relationOf = (d: Decision, state: ReplaceState, quotes: Pick<Decision, 'replaceOldQuote' | 'replaceNewQuote' | 'replaceReason'>): DecisionRelation => ({
+const relationOf = (
+  d: Decision,
+  state: ReplaceState,
+  quotes: Pick<Decision, 'replaceOldQuote' | 'replaceNewQuote' | 'replaceReason'>,
+  cardGlobId: string | null,
+): DecisionRelation => ({
   id: d.id,
   globId: d.globId,
   statement: d.statement,
@@ -197,13 +204,17 @@ const relationOf = (d: Decision, state: ReplaceState, quotes: Pick<Decision, 're
   oldQuote: quotes.replaceOldQuote,
   newQuote: quotes.replaceNewQuote,
   reason: quotes.replaceReason,
+  cardGlobId,
 });
 
 /** A relation a person can still see: undone ones are gone. */
 const shown = (d: Decision): ReplaceState | null => (d.replaceState === null || d.replaceState === 'undone' ? null : d.replaceState);
 
-/** `chosen` as views, with their relations resolved against every decision of the board (`all`), newest first. */
-export const decisionViews = (chosen: readonly Decision[], all: readonly Decision[]): DecisionView[] => {
+/**
+ * `chosen` as views, with their relations resolved against every decision of the board (`all`), newest first. `cards` maps
+ * an older choice to the decision glob waiting on a person to confirm or dismiss its proposed replacement.
+ */
+export const decisionViews = (chosen: readonly Decision[], all: readonly Decision[], cards: ReadonlyMap<number, string> = new Map()): DecisionView[] => {
   const byId = new Map(all.map((d) => [d.id, d]));
   return [...chosen]
     .sort((a, b) => b.decidedAt.localeCompare(a.decidedAt) || b.id - a.id)
@@ -221,10 +232,10 @@ export const decisionViews = (chosen: readonly Decision[], all: readonly Decisio
         sourceLabel: d.sourceLabel,
         sourceUrl: d.sourceUrl,
         status: isSuperseded(d) ? 'superseded' : 'current',
-        replacedBy: state === null || newer === undefined ? null : relationOf(newer, state, d),
+        replacedBy: state === null || newer === undefined ? null : relationOf(newer, state, d, cards.get(d.id) ?? null),
         replaces: all
           .filter((o) => o.replacedBy === d.id && shown(o) !== null)
-          .map((o) => relationOf(o, shown(o) ?? 'hint', o)),
+          .map((o) => relationOf(o, shown(o) ?? 'hint', o, cards.get(o.id) ?? null)),
       };
     });
 };

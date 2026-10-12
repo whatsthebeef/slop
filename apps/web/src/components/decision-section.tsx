@@ -1,6 +1,6 @@
 import { decisionOf, isAgentSetKind, KNOWLEDGE_KINDS, SCOPE_KINDS, scopeLabel } from '@slop/core';
 import type { DecisionAttributes, DecisionLearning, DecisionOutcomeKind, DecisionScope, EditFailure, KbTarget, KnowledgeKind, ScopeKind } from '@slop/core';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { DiffView } from '@/components/diff-view';
@@ -20,10 +20,11 @@ import {
 import { MarkdownView } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
-import { api } from '@/lib/api';
+import { api, RequestError } from '@/lib/api';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
-import { artifactKey, globDiffKey } from '@/lib/live';
+import { artifactKey, globDecisionsKey, globDiffKey } from '@/lib/live';
+import { useToast } from '@/toast';
 import { Tip } from './ui/tip';
 
 /** A learning an agent submitted or slop mined: the decision is a KB item (same ID), with a knowledge change to apply. */
@@ -377,6 +378,122 @@ export const DecisionAssessment = ({ glob }: { glob: GlobView }) => {
   );
 };
 
+const day = (iso: string) => iso.slice(0, 10);
+
+/** One of the two choices a replacement card compares: what was chosen, where, when and by whom, and the words it rests on. */
+const ChoiceColumn = ({ heading, statement, quote, sourceLabel, sourceUrl, decidedAt, decidedBy, matched }: {
+  heading: string;
+  statement: string;
+  quote?: string;
+  sourceLabel: string;
+  sourceUrl: string | null;
+  decidedAt: string;
+  decidedBy?: string | null;
+  matched: string | null;
+}) => (
+  <div className='grid content-start gap-1 rounded border p-2 text-xs' data-testid='replacement-choice'>
+    <h4 className='font-semibold text-muted-foreground'>{heading}</h4>
+    <p className='whitespace-pre-wrap break-words'>{statement}</p>
+    <p className='text-[11px] text-muted-foreground'>
+      {sourceUrl === null ? sourceLabel : <Link className='underline' to={sourceUrl}>{sourceLabel}</Link>} · {day(decidedAt)}
+      {decidedBy == null ? '' : ` · ${decidedBy}`}
+    </p>
+    {quote !== undefined && <blockquote className='whitespace-pre-wrap break-words border-l-2 pl-2 text-[11px] text-muted-foreground'>{quote}</blockquote>}
+    {matched !== null && matched !== '' && <p className='text-[11px] text-muted-foreground'>Slop matched: “{matched}”</p>}
+  </div>
+);
+
+/**
+ * A replacement card: "did this newer choice replace that older one?". The two choices side by side (with their sources,
+ * dates and quotes) and the model's reason, with Confirm and Dismiss for an admin or PO until it is decided. Choice text
+ * comes from documents and models, so it is plain text.
+ */
+const ReplacementCard = ({ board, glob, attributes }: { board: BoardView; glob: GlobView; attributes: DecisionAttributes }) => {
+  const client = useQueryClient();
+  const toast = useToast();
+  const origin = attributes.origin.kind === 'replacement' ? attributes.origin : null;
+  const scopeGlob = attributes.scope.kind === 'glob' ? attributes.scope.ref : null;
+  // The older choice's glob lists both choices; a project-scope one (older choice from an approved learning) has no glob to read them from.
+  const choices = useQuery({
+    queryKey: globDecisionsKey(scopeGlob ?? ''),
+    queryFn: () => api.decisions(glob.boardId, scopeGlob ?? ''),
+    enabled: scopeGlob !== null,
+  });
+  const older = choices.data?.decisions.find((d) => d.id === origin?.oldId);
+  const newer = older?.replacedBy ?? null;
+  const decide = useMutation({
+    mutationFn: (outcome: 'confirm' | 'dismiss') => api.decideReplacement(glob.boardId, glob.id, outcome),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['globs', glob.boardId] });
+      void client.invalidateQueries({ queryKey: globDecisionsKey(scopeGlob ?? '') });
+    },
+    onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not save'),
+  });
+  const open = glob.status !== 'signed_off';
+  const deciders = board.role === 'admin' || board.role === 'po';
+  const outcome = attributes.outcome;
+  return (
+    <section className='grid gap-3 rounded border border-edge p-3' data-testid='decision-section'>
+      <div className='flex flex-wrap items-center gap-2 text-xs'>
+        <span className='rounded bg-muted px-2 py-0.5' data-testid='decision-scope'>
+          Applies to {scopeLabel(attributes.scope)}
+        </span>
+        <span className='text-muted-foreground'>an unverified replacement</span>
+      </div>
+      {older !== undefined && newer !== null ? (
+        <div className='grid gap-2 sm:grid-cols-2' data-testid='replacement-choices'>
+          <ChoiceColumn
+            heading='Older choice'
+            statement={older.statement}
+            quote={older.quote}
+            sourceLabel={older.sourceLabel}
+            sourceUrl={older.sourceUrl}
+            decidedAt={older.decidedAt}
+            decidedBy={older.decidedBy}
+            matched={newer.oldQuote}
+          />
+          <ChoiceColumn
+            heading='Newer choice'
+            statement={newer.statement}
+            sourceLabel={newer.sourceLabel}
+            sourceUrl={newer.sourceUrl}
+            decidedAt={newer.decidedAt}
+            matched={newer.newQuote}
+          />
+        </div>
+      ) : (
+        <p className='text-xs text-muted-foreground'>The two choices are in the proposal above.</p>
+      )}
+      {newer?.reason != null && newer.reason !== '' && (
+        <p className='text-xs' data-testid='replacement-reason'>
+          <span className='font-medium'>Why slop thinks so:</span> {newer.reason}
+        </p>
+      )}
+      {outcome !== null && (
+        <p className='text-sm' data-testid='decision-outcome'>
+          <span className='font-medium'>{outcome.kind === 'accept' ? 'Confirmed' : outcome.kind === 'reject' ? 'Dismissed' : 'Closed: no longer relevant'}</span>
+          {outcome.kind !== 'closed' && <> by {outcome.by}</>} on {when(outcome.at)}
+          {outcome.reason !== undefined && outcome.kind !== 'closed' && <>: {outcome.reason}</>}
+        </p>
+      )}
+      {open && deciders && (
+        <div className='flex flex-wrap gap-2' data-testid='replacement-outcomes'>
+          <Tip text='The newer choice replaces the older one: the older one stops being in force'>
+            <Button size='sm' disabled={decide.isPending} data-testid='replacement-confirm' onClick={() => decide.mutate('confirm')}>
+              Confirm
+            </Button>
+          </Tip>
+          <Tip text='Keep both choices in force; this pair is never proposed again'>
+            <Button size='sm' variant='outline' disabled={decide.isPending} data-testid='replacement-dismiss' onClick={() => decide.mutate('dismiss')}>
+              Dismiss
+            </Button>
+          </Tip>
+        </div>
+      )}
+    </section>
+  );
+};
+
 /** What a learning is: its kind, target and evidence, how the pipeline closed it, and how it relates to other learnings. */
 const LearningFacts = ({ glob, attributes, deciders }: { glob: GlobView; attributes: DecisionAttributes; deciders: boolean }) => {
   const target = targetText(attributes);
@@ -440,6 +557,7 @@ export const DecisionSection = ({
     },
   });
   if (attributes === null) return null;
+  if (attributes.origin.kind === 'replacement') return <ReplacementCard board={board} glob={glob} attributes={attributes} />;
   const admin = board.role === 'admin';
   const deciders = admin || board.role === 'po';
   const learning: DecisionLearning | null = diff.data?.learning ?? null;

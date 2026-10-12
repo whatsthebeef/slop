@@ -695,7 +695,7 @@ export const GlobDetail = ({
 
           <GlobDecisions boardId={glob.boardId} globId={glob.id} />
 
-          {decision ? <DecisionAssessment glob={glob} /> : <ReviewFindings globId={glob.id} />}
+          {decision ? decisionOf(glob)?.origin.kind !== 'replacement' && <DecisionAssessment glob={glob} /> : <ReviewFindings globId={glob.id} />}
 
           <dl className='grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground'>
             <dt>Planner</dt>

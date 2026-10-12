@@ -16,9 +16,10 @@ import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import { sameHeading, sectionText } from '../domain/sections.js';
 import { MAX_QUERY_LENGTH } from '../domain/search.js';
 import type { Candidate } from '../domain/search.js';
-import type { Clock, Embedder, Notifier, Store, Tx } from '../ports.js';
+import type { Clock, Embedder, Hint, Notifier, Store, Tx } from '../ports.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm } from './intake-service.js';
+import { closeStaleReplacements, createDecisionForReplacement, raiseReplacementCards } from './decision-glob.js';
 import { longEnoughQuote, verifiedQuote } from './kb-dedupe.js';
 import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
@@ -233,7 +234,7 @@ export class DecisionPipeline {
     const now = this.deps.clock.now();
     const result = await this.deps.store.transaction(async (tx) => {
       const board = await tx.getBoard(boardId);
-      if (board === null) return { queued: 0, written: 0, removed: 0, globs: new Set<string>() };
+      if (board === null) return { queued: 0, written: 0, removed: 0, globs: new Set<string>(), hints: [] as Hint[] };
       const sources = await this.discover(tx, boardId);
       const rows = new Map((await tx.listDecisionSources(boardId)).map((r) => [r.sourceRef, r]));
       const all = await tx.listDecisions(boardId);
@@ -266,9 +267,16 @@ export class DecisionPipeline {
         removed++;
         if (decision.globId !== null) globs.add(decision.globId);
       }
-      return { queued, written: 0, removed, globs };
+      // Proposed replacements are decision globs: the ones proposed before cards existed get theirs here, and cards whose pair changed close.
+      const remaining = removed > 0 ? await tx.listDecisions(boardId) : all;
+      const hints = [
+        ...(await closeStaleReplacements(tx, this.cardDeps, boardId, remaining)),
+        ...(await raiseReplacementCards(tx, this.cardDeps, remaining)),
+      ];
+      return { queued, written: 0, removed, globs, hints };
     });
     for (const globId of result.globs) this.deps.notifier.publish({ kind: 'glob.decisions', boardId, globId });
+    for (const hint of result.hints) this.deps.notifier.publish(hint);
     return { queued: result.queued, written: result.written, removed: result.removed };
   }
 
@@ -408,9 +416,14 @@ export class DecisionPipeline {
       if (row?.contentHash !== source.contentHash) return null;
       const written = await this.store(tx, source.boardId, found, decisions, now, await tx.listDecisions(source.boardId));
       await tx.upsertDecisionSource({ ...row, state: 'done', attempts: 0, processAfter: null, lastError: null, updatedAt: now });
-      return written.changed ? new Set(found.globId === null ? [] : [found.globId]) : new Set<string>();
+      // A choice that went may leave a card asking about it.
+      const hints = written.removed > 0 ? await closeStaleReplacements(tx, this.cardDeps, source.boardId, await tx.listDecisions(source.boardId)) : [];
+      return { globs: written.changed ? new Set(found.globId === null ? [] : [found.globId]) : new Set<string>(), hints };
     });
-    if (globs !== null) for (const globId of globs) this.deps.notifier.publish({ kind: 'glob.decisions', boardId: source.boardId, globId });
+    if (globs !== null) {
+      for (const globId of globs.globs) this.deps.notifier.publish({ kind: 'glob.decisions', boardId: source.boardId, globId });
+      for (const hint of globs.hints) this.deps.notifier.publish(hint);
+    }
   }
 
   private async ask(boardId: number, source: SourceText): Promise<Outcome<Found[]>> {
@@ -590,22 +603,35 @@ export class DecisionPipeline {
     }
     this.busy.clear(next.id);
     const now = this.deps.clock.now();
-    const globs = await this.deps.store.transaction(async (tx) => {
+    const done = await this.deps.store.transaction(async (tx) => {
       const current = await tx.getDecision(next.id);
       if (current === null) return null;
       const touched = new Set<string>();
+      const hints: Hint[] = [];
       for (const r of replaces) {
-        if (await this.applyReplacement(tx, current, r)) if (r.old.globId !== null) touched.add(r.old.globId);
+        if (await this.applyReplacement(tx, current, r, hints)) if (r.old.globId !== null) touched.add(r.old.globId);
       }
       await tx.updateDecision(next.id, { checkedAt: now, attempts: 0, processAfter: null, lastError: null });
+      // An applied replacement may leave a card asking about a choice that is no longer in force.
+      if (replaces.length > 0) hints.push(...(await closeStaleReplacements(tx, this.cardDeps, next.boardId, await tx.listDecisions(next.boardId))));
       if (touched.size > 0 && current.globId !== null) touched.add(current.globId);
-      return touched;
+      return { touched, hints };
     });
-    if (globs !== null) for (const globId of globs) this.deps.notifier.publish({ kind: 'glob.decisions', boardId: next.boardId, globId });
+    if (done !== null) {
+      for (const globId of done.touched) this.deps.notifier.publish({ kind: 'glob.decisions', boardId: next.boardId, globId });
+      for (const hint of done.hints) this.deps.notifier.publish(hint);
+    }
   }
 
-  /** Records one replacement in the transaction (applied when it is checked and allowed by `mayApply`, else a proposal); false when nothing was written. */
-  private async applyReplacement(tx: Tx, next: Decision, r: Replacement): Promise<boolean> {
+  private get cardDeps(): { clock: Clock } {
+    return { clock: this.deps.clock };
+  }
+
+  /**
+   * Records one replacement in the transaction: applied when it is checked and allowed by `mayApply`, else a proposal that
+   * raises a decision glob for a person (its hints are added to `hints`). False when nothing was written.
+   */
+  private async applyReplacement(tx: Tx, next: Decision, r: Replacement, hints: Hint[]): Promise<boolean> {
     const old = await tx.getDecision(r.old.id);
     // Both sides are read again: either may have changed while the model worked.
     if (old === null || isSuperseded(old) || isSuperseded(next) || old.id === next.id || sameSource(old, next)) return false;
@@ -623,6 +649,11 @@ export class DecisionPipeline {
     // A proposal doesn't replace one a person hasn't answered yet.
     if (old.replaceState === 'hint') return false;
     await tx.updateDecision(old.id, { ...fields, replaceState: 'hint' });
+    const proposed = await tx.getDecision(old.id);
+    if (proposed !== null) {
+      const card = await createDecisionForReplacement(tx, this.cardDeps, proposed, next);
+      if (card.ok) hints.push(...card.value.hints);
+    }
     return true;
   }
 

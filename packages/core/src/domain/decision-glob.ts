@@ -48,6 +48,18 @@ export const scopeLabel = (scope: DecisionScope): string => {
 export const learningKey = (itemId: string): string => `kb:${itemId}`;
 export const inboxKey = (inboxId: number): string => `inbox:${String(inboxId)}`;
 export const extractedKey = (decisionId: number): string => `decision:${String(decisionId)}`;
+/** One card per pair of choices: did `newId` replace `oldId`? */
+export const replacementKey = (oldId: number, newId: number): string => `replacement:${String(oldId)}:${String(newId)}`;
+
+/** The replacement a decision glob asks about, or null for any other glob. */
+export const replacementOf = (glob: Glob): { readonly oldId: number; readonly newId: number } | null => {
+  const origin = decisionOf(glob)?.origin;
+  return origin?.kind === 'replacement' ? { oldId: origin.oldId, newId: origin.newId } : null;
+};
+
+/** "Did "<new choice>" replace "<old choice>"?", each choice cut to its first line and 40 characters. */
+export const replacementTitle = (oldStatement: string, newStatement: string): string =>
+  `Did "${firstLine(newStatement, 40)}" replace "${firstLine(oldStatement, 40)}"?`;
 
 /** Where a submitted learning applies unless an admin says otherwise: the work that comes after it. Editable afterwards. */
 export const defaultScope = (): DecisionScope => ({ kind: 'future_work', ref: null });
