@@ -54,6 +54,7 @@ export type { Action, ActionFacts, Context, DecideInput, FieldChanges, LabelComm
 export * from './ports.js';
 export * from './app/glob-service.js';
 export * from './app/hold-service.js';
+export * from './app/agent-set-commit-service.js';
 export * from './app/board-service.js';
 export * from './app/notification-service.js';
 export * from './domain/notifications.js';

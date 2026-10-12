@@ -87,6 +87,8 @@ export interface Tx {
    */
   deleteGlob(id: string): Promise<void>;
   findGlobByCreationKey(boardId: number, key: string): Promise<Glob | null>;
+  /** The board's globs whose creation key starts with `prefix`, in no particular order. */
+  findGlobsByCreationKeyPrefix(boardId: number, prefix: string): Promise<Glob[]>;
   listGlobs(boardId: number, filter: GlobFilter): Promise<Glob[]>;
   /** Atomically returns the next number for a board's ID letter. */
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
@@ -543,6 +545,12 @@ export interface ChangeSource {
 export interface BranchFiles {
   /** Null when unknown: the glob has no branch yet, or the code host couldn't say. Never throws. */
   filesOf(board: Board, glob: Glob): Promise<readonly string[] | null>;
+}
+
+/** What the board's repo holds of the agent set, read from its base branch. */
+export interface AgentSetRepo {
+  /** The version in `.claude/slop-agent-set.json`; null when the file is missing or isn't valid. Throws when the host can't be read. */
+  committedVersion(board: Board): Promise<number | null>;
 }
 
 export interface Clock {

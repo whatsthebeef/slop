@@ -2,7 +2,7 @@ import { missingCoreAreas, missingCoreDocNotice } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { useParams } from 'react-router';
+import { Link, useParams } from 'react-router';
 import { AgentSetFiles, LineDiff } from '@/components/agent-set-files';
 import { KnowledgePageView } from '@/components/knowledge-page-view';
 import { Button } from '@/components/ui/button';
@@ -174,9 +174,20 @@ export const KnowledgePage = () => {
 
       <section className='grid gap-2'>
         <h2 className='text-sm font-semibold'>Agent set · version {kb.data.agentSet.version}</h2>
+        <p className='text-xs text-muted-foreground' data-testid='agent-set-committed'>
+          {kb.data.agentSet.committedVersion != null && <>Committed in the repo: v{kb.data.agentSet.committedVersion}. </>}
+          {kb.data.agentSet.openGlobId != null && (
+            <>
+              <Link className='underline' to={`/boards/${boardId}?glob=${encodeURIComponent(kb.data.agentSet.openGlobId)}`}>
+                {kb.data.agentSet.openGlobId}
+              </Link>{' '}
+              brings it to the board's version.{' '}
+            </>
+          )}
+        </p>
         <p className='text-xs text-muted-foreground'>
-          Written into each checkout by <code>sstor init</code>, and refreshed by routines at the start of a run. Each file is
-          slop's catalog version plus this board's rules, so catalog updates arrive on their own.
+          Slop commits each new version to the repo through an "Agent set vN" glob; <code>sstor init</code> installs one in a
+          checkout, and alone installs <code>settings.json</code>, <code>.mcp.json</code> and CLAUDE.md (slop doesn't commit those). Each file is slop's catalog version plus this board's rules, so catalog updates arrive on their own.
         </p>
         <AgentSetFiles boardId={boardId} admin={admin} entries={kb.data.agentSet.entries} />
       </section>

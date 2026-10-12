@@ -1,5 +1,5 @@
 import type { KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { NO_GLOB, laneOf, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
+import { AGENT_SET_COMMIT_DELAY_MS, NO_GLOB, laneOf, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -612,6 +612,13 @@ export class PgStore implements Store {
           .from(schema.globs)
           .where(and(eq(schema.globs.boardId, boardId), eq(schema.globs.creationKey, key)));
         return row?.data ?? null;
+      },
+      findGlobsByCreationKeyPrefix: async (boardId, prefix) => {
+        const rows = await t
+          .select({ data: schema.globs.data })
+          .from(schema.globs)
+          .where(and(eq(schema.globs.boardId, boardId), sql`starts_with(${schema.globs.creationKey}, ${prefix})`));
+        return rows.map((r) => r.data);
       },
       listGlobs: async (boardId, filter: GlobFilter) => {
         const conditions = [eq(schema.globs.boardId, boardId)];
@@ -2177,6 +2184,19 @@ export class PgStore implements Store {
               .limit(1);
             if (pending !== undefined || rows.some((r) => r.kind === 'recheck_overlaps' && r.globId === effect.globId)) continue;
             rows.push({ kind: effect.kind, lane: laneOf(effect.kind), globId: effect.globId, effect, runAfter: new Date(Date.now() + RECHECK_DELAY_MS) });
+            continue;
+          }
+          if (effect.kind === 'commit_agent_set') {
+            // One unclaimed commit job per board, and every bump pushes it out again: the commit follows the last bump of a batch.
+            const jobs = schema.outbox;
+            const runAfter = new Date(Date.now() + AGENT_SET_COMMIT_DELAY_MS);
+            const updated = await t
+              .update(jobs)
+              .set({ runAfter })
+              .where(and(eq(jobs.kind, effect.kind), eq(jobs.globId, effect.globId), eq(jobs.state, 'pending'), eq(jobs.attempts, 0)))
+              .returning({ id: jobs.id });
+            if (updated.length > 0 || rows.some((r) => r.kind === effect.kind && r.globId === effect.globId)) continue;
+            rows.push({ kind: effect.kind, lane: laneOf(effect.kind), globId: effect.globId, effect, runAfter });
             continue;
           }
           if (effect.kind === 'regenerate_knowledge_page') {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, kbJobHint } from '@slop/core';
+import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -12,6 +12,7 @@ import { mountKnowledge } from './http/knowledge.js';
 import { OutboxRunner } from './jobs/outbox.js';
 import { kbExecutors } from './kb-executors.js';
 import { knowledgePageExecutors } from './knowledge-page-executors.js';
+import { agentSetExecutors, readCommittedAgentSetVersion } from './agent-set-executors.js';
 import { mountMcp } from './mcp/server.js';
 import { readyGate } from './ready-gate.js';
 import { GitHub } from './github/client.js';
@@ -178,6 +179,8 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
   ...kbExecutors({ runStep: (itemId, step) => kbPipeline.runStep(itemId, step) }, { isDown: () => llmHealth.isDown(kbModels) }),
   // The knowledge page's regeneration (the `llm` lane); `knowledgePage` is built below and only called once a job runs.
   ...knowledgePageExecutors({ regenerate: (boardId, full) => knowledgePage.regenerate(boardId, full) }),
+  // The agent set's commit to its glob's branch; `agentSetCommit` is built below and only called once a job runs.
+  ...agentSetExecutors({ prepare: (boardId) => agentSetCommit.prepare(boardId) }, github, (id) => store.transaction((tx) => tx.getGlob(id))),
 };
 // `default` carries every effect but the slow model calls, which go in `llm` so they never hold up the others.
 // `decisionGlobs` is built below, after the knowledge service it needs; it is only called once an effect runs.
@@ -197,6 +200,7 @@ const reviewFeedback = new ReviewFeedbackService({ store });
 const mining = new MiningService({ store, notifier: hub });
 const knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub, signals: mining });
 const decisionGlobs = new DecisionGlobService({ store, clock, notifier: hub, knowledge, globs });
+const agentSetCommit = new AgentSetCommitService({ store, clock, notifier: hub, knowledge, repo: { committedVersion: (board) => readCommittedAgentSetVersion(github, board) } });
 const findings = new FindingsService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
@@ -421,7 +425,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
-mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, knowledgePage, logError });
+mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, knowledgePage, agentSetCommit, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
 const awsSignIn =

@@ -200,7 +200,13 @@ export type Effect =
    * unclaimed job per board. `full` (an admin's Rebuild) skips the minimum interval and rewrites every section; a
    * `full` request upgrades the job already waiting instead of queueing another.
    */
-  | { readonly kind: 'regenerate_knowledge_page'; readonly globId: string; readonly boardId: number; readonly full?: true };
+  | { readonly kind: 'regenerate_knowledge_page'; readonly globId: string; readonly boardId: number; readonly full?: true }
+  /**
+   * Commit the board's current agent set to the branch of its open "Agent set vN" glob (creating the glob if there is none).
+   * Board-wide like `recheck_overlaps` (`globId` is `board-<id>`, not generation-checked); the outbox keeps one unclaimed job
+   * per board and pushes its `runAfter` out on every bump (a trailing debounce), so a batch of approvals makes one commit.
+   */
+  | { readonly kind: 'commit_agent_set'; readonly globId: string; readonly boardId: number };
 
 export type ReviewStage = 'pre_merge' | 'post_merge';
 
@@ -285,3 +291,9 @@ export const knowledgePageEffect = (boardId: number, full = false): Effect => ({
   boardId,
   ...(full ? { full: true as const } : {}),
 });
+
+/** How long after the last agent-set bump the board's agent set is committed (a batch of approvals makes one commit). */
+export const AGENT_SET_COMMIT_DELAY_MS = 10 * 60_000;
+
+/** Commit the board's agent set through its "Agent set vN" glob once bumps have settled. */
+export const agentSetCommitEffect = (boardId: number): Effect => ({ kind: 'commit_agent_set', globId: `board-${String(boardId)}`, boardId });
