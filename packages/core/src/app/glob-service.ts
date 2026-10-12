@@ -1,6 +1,6 @@
 import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
-import { isKbGlob } from '../domain/kb-glob.js';
+import { isLearning } from '../domain/learning.js';
 import { validateScopeEdit } from '../domain/attributes.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
@@ -833,7 +833,7 @@ export class GlobService {
       if (!transition.ok) return transition;
       // A learning an agent submitted or slop mined is a KB item: deleting it would lose the learning (and a rejected one
       // suppresses repeats), so it is rejected instead. Decisions people made (inbox, extracted, manual) can go.
-      if (isKbGlob(glob)) return invalidInput('This decision is a knowledge item an agent submitted or slop mined; reject it instead of deleting it');
+      if (isLearning(glob)) return invalidInput('This decision is a knowledge item an agent submitted or slop mined; reject it instead of deleting it');
       await tx.deleteEvents(glob.id);
       await tx.deleteGlob(glob.id);
       // The deletion itself is logged without a glob, so reports lose the glob's time.

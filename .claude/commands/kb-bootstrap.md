@@ -40,4 +40,3 @@ Some knowledge only lives in the code: how to build and test it, the conventions
 7. **Report** to the developer: each document submitted with its KB item ID (`s<board>k<n>`), each candidate skipped and why (which existing document covers it), and any partial coverage worth a follow-up. Remind them that a board admin approves the proposals on the board's Knowledge page.
 
 If a submission fails, report the error and continue with the next document; don't retry by other means.
-

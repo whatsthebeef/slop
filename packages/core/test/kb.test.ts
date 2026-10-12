@@ -447,6 +447,21 @@ describe('KB review', () => {
     expect(await agentSetVersion()).toBe((before ?? 0) + 1);
   });
 
+  it("queues the knowledge page's regeneration when an approval changes an agent file (s15t72)", async () => {
+    const queued = () => store.state.outbox.filter((e) => e.kind === 'regenerate_knowledge_page');
+    const before = queued().length;
+    const id = await submit({ type: 'agent-behaviour', statement: 'Write the regression test first' });
+    expect(queued()).toHaveLength(before);
+    unwrap(
+      await knowledge.approve(ADMIN, id, 1, {
+        as: 'edit',
+        target: { kind: 'agent', name: 'agents/implementer.md' },
+        content: 'Implement the plan.\nWrite the regression test before the fix.\n',
+      }),
+    );
+    expect(queued()).toEqual([{ kind: 'regenerate_knowledge_page', globId: `board-${String(boardId)}`, boardId }]);
+  });
+
   it('refuses edits to a target that does not exist, or with empty content, and writes nothing', async () => {
     const id = await submit();
     expect(

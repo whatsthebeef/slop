@@ -1,27 +1,20 @@
-import { broaderConflicts, decisionGlobTitle, decisionOf, defaultScope, kbItemKey } from '../domain/decision-glob.js';
+import { decisionGlobTitle, decisionOf, defaultScope, kbItemKey } from '../domain/decision-glob.js';
 import type { DecisionAttributes } from '../domain/attributes.js';
 import type { DomainEvent, Effect, OutboxJob } from '../domain/events.js';
 import { parseId } from '../domain/ids.js';
-import { KB_STEP_KIND, KB_STEP_KINDS, kbEffectsFor, kbStepOf, withProcessing } from '../domain/kb.js';
+import { KB_STEP_KIND, KB_STEP_KINDS, kbEffectsFor, kbStepOf } from '../domain/kb.js';
 import type { DraftPreview, KbItem, KbItemStatus } from '../domain/kb.js';
-import {
-  DOCUMENT_EVIDENCE_LABEL,
-  EVIDENCE_PREFIX,
-  MERGE_NOTE_LABEL,
-  isKbGlob,
-  kbAttributesOf,
-  kbItemOf,
-  kbLinksOf,
-  mergeNoteText,
-  proposalText,
-} from '../domain/kb-glob.js';
-import type { ArtifactKind, Provenance } from '../domain/knowledge.js';
+import { kbAttributesOf, kbLinksOf, proposalText } from '../domain/kb-glob.js';
+import { learningWire } from '../domain/learning-wire.js';
 import * as machine from '../domain/machine.js';
 import type { Transition } from '../domain/machine.js';
 import type { Result } from '../domain/errors.js';
 import type { Actor, Glob, GlobLink } from '../domain/types.js';
-import type { Clock, Hint, Tx } from '../ports.js';
-import { applyDecisionStep, DECISION_SYSTEM_ACTOR, decisionContext, writeAssessment } from './decision-glob.js';
+import type { Hint, Tx } from '../ports.js';
+import { DECISION_SYSTEM_ACTOR, decisionContext } from './decision-glob.js';
+import { boardLearnings, readLearnings } from './learning-reads.js';
+import { assessLearning, assessmentDue, learningConflicts, refreshOnApproval, writeLearningArtifacts } from './learning-writes.js';
+import type { LearningArtifactState, LearningWriteContext } from './learning-writes.js';
 
 /**
  * KB items as the pipeline, the Knowledge page and the services read and write them. A KB item *is* its decision glob
@@ -36,8 +29,6 @@ export interface KbItems {
   getKbItem(id: string): Promise<KbItem | null>;
   /** A board's items, oldest first, optionally with one status. */
   listKbItems(boardId: number, status?: KbItemStatus): Promise<KbItem[]>;
-  /** A board's newest `limit` items with one of `statuses`, newest first by decision (else submission), and how many there are. */
-  listRecentKbItems(boardId: number, statuses: readonly KbItemStatus[], limit: number): Promise<{ items: KbItem[]; total: number }>;
   /** Inserts a new item as its decision glob (row D1, then the row its status needs) and queues its first step; false if the ID is taken. */
   insertKbItem(item: KbItem): Promise<boolean>;
   /**
@@ -45,8 +36,6 @@ export interface KbItems {
    * change makes due; false otherwise.
    */
   updateKbItem(item: KbItem, expectedVersion: number, options?: KbWriteOptions): Promise<boolean>;
-  /** Queues the item's step again (an admin's Retry after it failed); the item as it reads afterwards. */
-  retryStep(item: KbItem): Promise<KbItem>;
   /**
    * Self-healing: queues the due step of every open learning on the board whose step has no job waiting (none, or the
    * newest finished or was dropped). A failed one is left for an admin's Retry. Returns how many it queued.
@@ -64,12 +53,7 @@ export interface KbWriteOptions {
 }
 
 /** What writes need: the time, and where to raise live hints (published after the caller's commit). */
-export interface KbWriteContext {
-  readonly clock: Clock;
-  readonly raise?: (hint: Hint) => void;
-}
-
-const KB_ARTIFACT_KINDS: readonly ArtifactKind[] = ['plan', 'draft', 'outcome', 'effect_check', 'attachment'];
+export type KbWriteContext = LearningWriteContext;
 
 /** Channels whose assessments slop writes by itself as the pipeline works. */
 const channelOf = (item: KbItem): 'agent' | 'mined' => (item.source === 'mined' ? 'mined' : 'agent');
@@ -89,110 +73,45 @@ const closingLink = (item: KbItem): GlobLink | null =>
         ? { id: item.coveredBy.id, kind: 'covered_by', source: 'pipeline' }
         : null;
 
-export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
-  const raise = (hint: Hint) => context?.raise?.(hint);
-  const clockOf = (): Clock => {
-    if (context === undefined) throw new Error('KB item writes need a clock (kbItems(tx, { clock }))');
-    return context.clock;
-  };
+/** An item's artifact state, for `writeLearningArtifacts`. */
+const artifactStateOf = (item: KbItem): LearningArtifactState => ({
+  origin: { id: item.id, createdAt: item.createdAt, submittedBy: item.submittedBy, source: item.source, agentSetVersion: item.agentSetVersion },
+  payload: proposalText(item),
+  documentEvidence: item.document === null ? null : item.evidence,
+  draft: item.draft,
+  draftedAgainstVersion: item.draftedAgainstVersion,
+  rationale: item.rationale,
+  target: item.target,
+  outcome: item.outcome,
+  decidedBy: item.decidedBy,
+  decidedAt: item.decidedAt,
+  effectCheck: item.effectCheck,
+  extraEvidence: item.extraEvidence,
+  mergeNote: item.mergeNote,
+});
 
-  /** Items from their globs, with artifacts and (for open ones) jobs read in one query each. */
-  const itemsOf = async (globs: readonly Glob[]): Promise<KbItem[]> => {
-    const kb = globs.filter(isKbGlob);
-    if (kb.length === 0) return [];
-    const ids = kb.map((g) => g.id);
-    const [artifacts, jobs] = await Promise.all([tx.latestArtifacts(ids, KB_ARTIFACT_KINDS), tx.latestOutboxJobs(ids, KB_STEP_KINDS)]);
-    return kb.flatMap((g) => {
-      const item = kbItemOf(g, artifacts);
-      return item === null ? [] : [withProcessing(item, jobs)];
-    });
+export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
+  const writes = (): LearningWriteContext => {
+    if (context === undefined) throw new Error('KB item writes need a clock (kbItems(tx, { clock }))');
+    return context;
   };
-  const boardItems = async (boardId: number): Promise<KbItem[]> =>
-    (await itemsOf(await tx.listGlobs(boardId, { include: 'decisions', origins: ['submitted', 'mined'] }))).sort(
-      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-    );
+  const clockOf = () => writes().clock;
+  const raise = (hint: Hint) => context?.raise?.(hint);
+
+  /** Items from their globs, with artifacts and (for open ones) jobs read in one query each (`readLearnings`). */
+  const itemsOf = async (globs: readonly Glob[]): Promise<KbItem[]> => (await readLearnings(tx, globs)).map(learningWire);
+  const boardItems = async (boardId: number): Promise<KbItem[]> => (await boardLearnings(tx, boardId)).map(learningWire);
   const read = async (id: string): Promise<KbItem | null> => {
     const glob = await tx.getGlob(id);
     return glob === null ? null : ((await itemsOf([glob]))[0] ?? null);
   };
 
-  /** A new artifact version on the learning's glob. */
-  const put = async (glob: Glob, kind: ArtifactKind, label: string, content: string, at: string, extra: Partial<Provenance> & { actor?: string } = {}): Promise<void> => {
-    const provenance: Provenance = { by: 'sessionator', actor: DECISION_SYSTEM_ACTOR, runId: null, agentSetVersion: null, ...extra };
-    await tx.insertArtifact({ globId: glob.id, kind, label, content, link: null, commitSha: null, provenance, createdAt: at });
-  };
-
-  /** The artifact versions a change needs: only what changed, with empty content where a value was cleared. */
-  const writeArtifacts = async (glob: Glob, before: KbItem | null, after: KbItem, at: string): Promise<boolean> => {
-    let wrote = false;
-    const payload = proposalText(after);
-    if (before === null || proposalText(before) !== payload) {
-      await put(glob, 'plan', '', payload, before === null ? after.createdAt : at, {
-        by: before === null ? (after.source === 'mined' ? 'sessionator' : 'routine') : 'sessionator',
-        actor: before === null ? after.submittedBy : DECISION_SYSTEM_ACTOR,
-        agentSetVersion: before === null ? after.agentSetVersion : null,
-      });
-      wrote = true;
-    }
-    if (after.document !== null && (before === null || before.evidence !== after.evidence)) {
-      await put(glob, 'attachment', DOCUMENT_EVIDENCE_LABEL, after.evidence, before === null ? after.createdAt : at, { actor: after.submittedBy });
-      wrote = true;
-    }
-    const draftOf = (i: KbItem | null) => (i === null ? null : [i.draft, i.rationale, i.draftedAgainstVersion]);
-    if (!(before === null && after.draft === null) && !same(draftOf(before), draftOf(after))) {
-      await put(glob, 'draft', '', after.draft?.content ?? '', at, {
-        ...(after.draft === null
-          ? {}
-          : { draft: { section: after.draft.section, targetVersion: after.draftedAgainstVersion, target: after.target, rationale: after.rationale } }),
-      });
-      wrote = true;
-    }
-    if (!(before === null && after.outcome === null) && !same(before?.outcome ?? null, after.outcome)) {
-      await put(glob, 'outcome', '', after.outcome === null ? '' : JSON.stringify(after.outcome), after.decidedAt ?? at, {
-        by: 'human',
-        actor: after.decidedBy ?? DECISION_SYSTEM_ACTOR,
-        ...(after.outcome === null ? {} : { kbOutcome: after.outcome }),
-      });
-      wrote = true;
-    }
-    if (!(before === null && after.effectCheck === null) && !same(before?.effectCheck ?? null, after.effectCheck)) {
-      await put(glob, 'effect_check', '', after.effectCheck === null ? '' : JSON.stringify(after.effectCheck), at, {
-        ...(after.effectCheck === null ? {} : { effectCheck: after.effectCheck }),
-      });
-      wrote = true;
-    }
-    const had = before?.extraEvidence ?? [];
-    if (after.extraEvidence.length < had.length || !same(after.extraEvidence.slice(0, had.length), had)) {
-      throw new Error(`${after.id}: evidence merged into a learning is never taken away`);
-    }
-    const labels = new Set(had.map((e) => `${EVIDENCE_PREFIX}${e.itemId}`));
-    for (const e of after.extraEvidence.slice(had.length)) {
-      let label = `${EVIDENCE_PREFIX}${e.itemId}`;
-      for (let n = 2; labels.has(label); n++) label = `${EVIDENCE_PREFIX}${e.itemId}#${String(n)}`;
-      labels.add(label);
-      await put(glob, 'attachment', label, e.evidence, e.at, { actor: e.submittedBy, evidence: { itemId: e.itemId, globIds: e.globIds } });
-      wrote = true;
-    }
-    if (!(before === null && after.mergeNote === null) && !same(before?.mergeNote ?? null, after.mergeNote)) {
-      await put(glob, 'attachment', MERGE_NOTE_LABEL, after.mergeNote === null ? '' : mergeNoteText(after.mergeNote), at, {
-        ...(after.mergeNote === null ? {} : { mergeNote: after.mergeNote }),
-      });
-      wrote = true;
-    }
-    return wrote;
-  };
+  /** The artifact versions a change needs (`writeLearningArtifacts`). */
+  const writeArtifacts = (glob: Glob, before: KbItem | null, after: KbItem, at: string): Promise<boolean> =>
+    writeLearningArtifacts(tx, glob, before === null ? null : artifactStateOf(before), artifactStateOf(after), at);
 
   /** The broader decisions an open learning contradicts (by scope rank). */
-  const conflictsOf = async (scope: DecisionAttributes['scope'], item: KbItem): Promise<string[]> => {
-    if (item.status !== 'open') return [];
-    const others = new Map<string, Glob>();
-    for (const c of item.contradicts) {
-      if (c.kind !== 'item') continue;
-      const other = await tx.getGlob(c.ref);
-      if (other !== null) others.set(c.ref, other);
-    }
-    return broaderConflicts(scope, item, (id) => others.get(id));
-  };
+  const conflictsOf = (scope: DecisionAttributes['scope'], item: KbItem): Promise<string[]> => learningConflicts(tx, scope, item.status, item.contradicts);
 
   /** The decision row a status change needs, if any. */
   const statusStep = (glob: Glob, before: KbItem | null, after: KbItem, options: KbWriteOptions, at: string): Result<Transition> | null => {
@@ -245,35 +164,12 @@ export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
     };
   };
 
-  /** After an approval, the open learnings that contradict it may now conflict with a broader decision. */
-  const refreshContradicting = async (approved: KbItem): Promise<void> => {
-    for (const other of await boardItems(approved.boardId)) {
-      if (other.status !== 'open' || !other.contradicts.some((c) => c.kind === 'item' && c.ref === approved.id)) continue;
-      const glob = await tx.getGlob(other.id);
-      const attributes = glob === null ? null : decisionOf(glob);
-      if (glob === null || attributes === null) continue;
-      const ids = await conflictsOf(attributes.scope, other);
-      const result = await applyDecisionStep(tx, glob.id, (g) => machine.decisionConflicts(g, ids, decisionContext(clockOf(), null)));
-      if (result.ok && result.value.changed) raise({ kind: 'glob.changed', boardId: glob.boardId, globId: glob.id, version: result.value.glob.version });
-    }
-  };
-
   /** Writes the assessment of an automated channel's open learning: at creation, when drafted, and when its conflict flags move. */
-  const assess = async (glob: Glob, item: KbItem, preview: DraftPreview | null, due: boolean): Promise<void> => {
-    if (item.status !== 'open' || !due) return;
-    if (await writeAssessment(tx, { clock: clockOf() }, glob, item, preview)) raise({ kind: 'glob.artifacts', boardId: glob.boardId, globId: glob.id });
-  };
+  const assess = (glob: Glob, item: KbItem, preview: DraftPreview | null, due: boolean): Promise<void> => assessLearning(tx, writes(), glob, item, preview, due);
 
   return {
     getKbItem: read,
     listKbItems: async (boardId, status) => (await boardItems(boardId)).filter((i) => status === undefined || i.status === status),
-    listRecentKbItems: async (boardId, statuses, limit) => {
-      // Newest by decision (an item joins the decided group when decided); closed items have none.
-      const all = (await boardItems(boardId))
-        .filter((i) => statuses.includes(i.status))
-        .sort((a, b) => (b.decidedAt ?? b.createdAt).localeCompare(a.decidedAt ?? a.createdAt) || b.id.localeCompare(a.id));
-      return { items: all.slice(0, limit), total: all.length };
-    },
     insertKbItem: async (item) => {
       const clock = clockOf();
       const board = await tx.getBoard(item.boardId);
@@ -319,9 +215,16 @@ export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
       if (!(await tx.updateGlob(written.glob, expectedVersion))) return false;
       await tx.appendEvents(written.events);
       const artifacts = await writeArtifacts(written.glob, before, item, now);
-      if (item.status === 'approved' && before.status !== 'approved') await refreshContradicting(item);
-      const conflictsMoved = !same(decisionOf(glob)?.conflictsWith ?? [], decisionOf(written.glob)?.conflictsWith ?? []);
-      await assess(written.glob, item, options.preview ?? null, !same(before.draft, item.draft) || conflictsMoved || before.status !== 'open');
+      await refreshOnApproval(tx, writes(), item, before.status, item.status);
+      const due = assessmentDue({
+        statusBefore: before.status,
+        statusAfter: item.status,
+        draftBefore: before.draft,
+        draftAfter: item.draft,
+        conflictsBefore: decisionOf(glob)?.conflictsWith ?? [],
+        conflictsAfter: decisionOf(written.glob)?.conflictsWith ?? [],
+      });
+      await assess(written.glob, item, options.preview ?? null, due);
       await tx.enqueueEffects([...written.effects, ...kbEffectsFor(before, item)]);
       if (!same(glob, written.glob)) raise({ kind: 'glob.changed', boardId: glob.boardId, globId: glob.id, version: written.glob.version });
       if (artifacts) raise({ kind: 'glob.artifacts', boardId: glob.boardId, globId: glob.id });
@@ -343,14 +246,6 @@ export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
       }
       await tx.enqueueEffects(due);
       return due.length;
-    },
-    retryStep: async (item) => {
-      const step = kbStepOf(item);
-      if (step !== null) {
-        const effect: Effect = { kind: KB_STEP_KIND[step], globId: item.id };
-        await tx.enqueueEffects([effect]);
-      }
-      return (await read(item.id)) ?? item;
     },
   };
 };

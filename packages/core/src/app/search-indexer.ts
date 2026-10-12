@@ -1,6 +1,7 @@
 import { chunkDocument, contentHash } from '../domain/chunking.js';
 import type { ChunkInput } from '../domain/chunking.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
+import { learningDecision, learningDocument, learningEvidence, learningFacts, learningStatus } from '../domain/learning.js';
 import { parseFrontmatter } from '../domain/knowledge.js';
 import type { Artifact, ArtifactKind } from '../domain/knowledge.js';
 import { PIPELINE_OWNED_SOURCES, SOURCE_TYPES } from '../domain/search.js';
@@ -12,7 +13,7 @@ import type { Llm } from './intake-service.js';
 import { LLM_TIMEOUT_MS, LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { hash } from './text-hash.js';
-import { kbItems } from './kb-items.js';
+import { boardLearnings } from './learning-reads.js';
 
 /** Chunks embedded per call to the embedder (and per `processNext` step). */
 export const EMBED_BATCH = 32;
@@ -289,22 +290,24 @@ export class SearchIndexer {
         text: parseFrontmatter(doc.content).body,
       });
     }
-    for (const item of await kbItems(tx).listKbItems(board.id, 'approved')) {
+    for (const { glob, artifacts } of await boardLearnings(tx, board.id)) {
+      if (learningStatus(glob, artifacts) !== 'approved') continue;
       // A whole-document proposal became a knowledge document; its text is indexed as that.
-      if (item.document !== null) continue;
+      if (learningDocument(glob, artifacts) !== null) continue;
+      const facts = learningFacts(glob);
       // A decision learning is indexed as a decision (DecisionPipeline), so search doesn't return it twice.
-      if (item.type === 'decision') continue;
+      if (facts.kind === 'decision') continue;
       push({
         sourceType: 'learning',
-        externalRef: `learning:${item.id}`,
-        title: firstLine(item.statement, 80),
-        occurredAt: item.decidedAt ?? item.createdAt,
+        externalRef: `learning:${glob.id}`,
+        title: firstLine(glob.summary, 80),
+        occurredAt: learningDecision(glob, artifacts).at ?? glob.createdAt,
         authority: authorityOf('learning'),
         // Only globs still on the board: a deleted glob's link is dropped with it.
-        globIds: item.sourceGlobIds.filter((id) => byId.has(id)),
+        globIds: facts.sourceGlobIds.filter((id) => byId.has(id)),
         globGroup: null,
         externalUrl: `/boards/${String(board.id)}/knowledge`,
-        text: `${item.statement}\n\nEvidence: ${item.evidence}`,
+        text: `${glob.summary}\n\nEvidence: ${learningEvidence(glob, artifacts)}`,
       });
     }
     return out;
