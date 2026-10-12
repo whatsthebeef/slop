@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { InboxItemView } from '../src/lib/api';
 import {
   attachableGlobs,
+  filterImported,
+  importedPage,
   isInboxLink,
   newCount,
   pendingCount,
@@ -35,6 +37,25 @@ describe('the inbox', () => {
     const items = [item(1), item(2, { status: 'kept' }), item(3, { status: 'discarded' })];
     expect(visibleItems(items, false).map((i) => i.id)).toEqual([1, 2]);
     expect(visibleItems(items, true).map((i) => i.id)).toEqual([1]);
+  });
+
+  it('filters imported items by every word, in any case, over title, source and text', () => {
+    const items = [
+      item(1, { status: 'archived', title: 'N2-12 Login fails', source: 'jira', excerpt: 'Safari only' }),
+      item(2, { status: 'archived', title: 'Roadmap', source: 'gdoc', sourceLabel: 'Q4 plan' }),
+    ];
+    expect(filterImported(items, '').map((i) => i.id)).toEqual([1, 2]);
+    expect(filterImported(items, 'login SAFARI').map((i) => i.id)).toEqual([1]);
+    expect(filterImported(items, 'q4 gdoc').map((i) => i.id)).toEqual([2]);
+    expect(filterImported(items, 'login q4')).toEqual([]);
+  });
+
+  it('pages the imported list, keeping a linked item visible past the page', () => {
+    const items = Array.from({ length: 10 }, (_, n) => item(n + 1, { status: 'archived' }));
+    expect(importedPage(items, 3, null).map((i) => i.id)).toEqual([1, 2, 3]);
+    expect(importedPage(items, 3, 2).map((i) => i.id)).toEqual([1, 2, 3]);
+    expect(importedPage(items, 3, 9).map((i) => i.id)).toEqual([9, 1, 2, 3]);
+    expect(importedPage(items, 3, 99).map((i) => i.id)).toEqual([1, 2, 3]);
   });
 
   it('offers open globs the item is not on yet, in ID order', () => {

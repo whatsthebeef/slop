@@ -4,7 +4,7 @@ import { DEFAULT_CONTEXT_SETTINGS } from './context-settings.js';
 import { chunkDocument, contentHash } from './chunking.js';
 import type { ChunkInput } from './chunking.js';
 import { BUSY_WAITING_PREFIX, LLM_WAITING_PREFIX } from './kb.js';
-import type { NewChunk, NewKnowledgeItem, SourceType } from './search.js';
+import type { AuthorityTier, NewChunk, NewKnowledgeItem, SourceType } from './search.js';
 import type { Glob } from './types.js';
 
 /**
@@ -129,6 +129,11 @@ export const inboxContentHash = (text: string): string => hash(text.replace(/\s+
 /** The sources an import delivers (`paste` is the other one). */
 export const IMPORT_SOURCES = ['jira', 'gdoc'] as const;
 export type ImportSource = (typeof IMPORT_SOURCES)[number];
+export const isImportSource = (value: unknown): value is ImportSource => IMPORT_SOURCES.some((s) => s === value);
+
+/** What an item weighs in search: imported history (Jira, Google Docs) is legacy and stays so once attached; the rest is discussion. */
+export const inboxAuthority = (item: Pick<InboxItem, 'source'>): AuthorityTier =>
+  isImportSource(item.source) ? 'legacy' : 'discussion';
 
 export const inboxRef = (id: number): string => `inbox:${String(id)}`;
 
@@ -171,7 +176,7 @@ export const inboxItemOf = (
   externalRef: inboxRef(item.id),
   title: inboxTitle(item),
   occurredAt: item.occurredAt,
-  authority: 'discussion',
+  authority: inboxAuthority(item),
   status: 'active',
   supersededBy: null,
   globIds,
