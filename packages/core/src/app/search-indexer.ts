@@ -389,6 +389,7 @@ export class SearchIndexer {
           system: CHANGE_SUMMARY_SYSTEM,
           prompt: summaryPrompt(item.title, context.glob?.summary ?? '', context.plan, diff),
           maxTokens: SUMMARY_MAX_TOKENS,
+          spend: { boardId: item.boardId, source: 'search_index', globId: item.globIds[0] ?? null },
         },
         this.deps.llmTimeoutMs ?? LLM_TIMEOUT_MS,
       );

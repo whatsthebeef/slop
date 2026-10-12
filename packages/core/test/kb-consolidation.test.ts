@@ -50,13 +50,13 @@ type Answer = string | Error | (() => Promise<string>);
 
 /** A fake LLM answering from a queue of canned answers, errors or functions (run during the call), recording each request. */
 class FakeLlm implements Llm {
-  readonly calls: { system: string; prompt: string }[] = [];
+  readonly calls: Pick<LlmRequest, 'system' | 'prompt' | 'spend'>[] = [];
   constructor(private readonly answers: Answer[] = []) {}
   answer(...answers: Answer[]): void {
     this.answers.push(...answers);
   }
   complete(request: LlmRequest): Promise<string> {
-    this.calls.push({ system: request.system, prompt: request.prompt });
+    this.calls.push({ system: request.system, prompt: request.prompt, spend: request.spend });
     const next = this.answers.shift();
     if (next === undefined) return Promise.reject(new Error('No canned answer'));
     if (next instanceof Error) return Promise.reject(next);
@@ -239,6 +239,7 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
     expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
     // The pair call sees every candidate; the verification call sees both statements.
     expect(llm.calls.map((c) => c.system)).toEqual([PAIRS_SYSTEM, VERIFY_SYSTEM]);
+    expect(llm.calls.map((c) => c.spend)).toEqual([1, 2].map(() => ({ boardId, source: 'kb_consolidate' })));
     expect(llm.calls[0]?.prompt).toContain(
       json({
         id: older.id,

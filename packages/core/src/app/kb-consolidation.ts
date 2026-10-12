@@ -282,7 +282,7 @@ export class KbConsolidation {
         ? { pairs: [], alreadyChecked: 0 }
         : unchanged
           ? { pairs: [], alreadyChecked: memory.notSame.filter(([x, y]) => keys.has(x) && keys.has(y)).length }
-          : await this.proposePairs(candidates, new Set(notSame.keys()));
+          : await this.proposePairs(boardId, candidates, new Set(notSame.keys()));
     for (const [proposedA, proposedB] of pairs) {
       // An item an earlier pair of this run merged away is asked about as its survivor: "merged away" is no answer
       // about the other item.
@@ -303,7 +303,7 @@ export class KbConsolidation {
         continue;
       }
       asked.add(askedKey);
-      const verdict = await this.verify(a, b);
+      const verdict = await this.verify(boardId, a, b);
       if (verdict === 'unusable') {
         skipped++;
         answered = false;
@@ -370,6 +370,7 @@ export class KbConsolidation {
    * ignored; an answer that isn't JSON fails the run.
    */
   private async proposePairs(
+    boardId: number,
     candidates: readonly OpenLearning[],
     notSame: ReadonlySet<string>,
   ): Promise<{ pairs: [string, string][]; alreadyChecked: number }> {
@@ -380,6 +381,7 @@ export class KbConsolidation {
       system: PAIRS_SYSTEM,
       prompt: pairsPrompt(candidates, checked),
       maxTokens: 1_500,
+      spend: { boardId, source: 'kb_consolidate' },
     });
     const parsed = parseJson(answer);
     if (!isObject(parsed)) throw new Error('The candidate-pair answer was not usable JSON');
@@ -410,13 +412,18 @@ export class KbConsolidation {
    * else, `unverified` when it says the same fact without such quotes (both stay open either way); `unusable` when
    * the call failed or the answer isn't JSON. An `LlmUnavailable` propagates.
    */
-  private async verify(a: OpenLearning, b: OpenLearning): Promise<Verified | 'different' | 'unverified' | 'unusable'> {
+  private async verify(
+    boardId: number,
+    a: OpenLearning,
+    b: OpenLearning,
+  ): Promise<Verified | 'different' | 'unverified' | 'unusable'> {
     let answer: string;
     try {
       answer = await this.complete({
         system: VERIFY_SYSTEM,
         prompt: verifyPrompt(a, b),
         maxTokens: 600,
+        spend: { boardId, source: 'kb_consolidate' },
       });
     } catch (error) {
       if (error instanceof LlmUnavailable) throw error;

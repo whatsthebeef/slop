@@ -239,7 +239,12 @@ export class FindingsPipeline {
     try {
       const answer = await completeWithDeadline(
         this.deps.llm,
-        { system: SPLIT_SYSTEM, prompt: `Review:\n<<<\n${shown}\n>>>`, maxTokens: SPLIT_MAX_TOKENS },
+        {
+          system: SPLIT_SYSTEM,
+          prompt: `Review:\n<<<\n${shown}\n>>>`,
+          maxTokens: SPLIT_MAX_TOKENS,
+          spend: { boardId: source.boardId, source: 'findings', globId: source.globId },
+        },
         this.deps.splitTimeoutMs ?? SPLIT_LLM_TIMEOUT_MS,
       );
       const findings = parseSplit(answer, shown);
@@ -256,7 +261,12 @@ export class FindingsPipeline {
       answer = parseClass(
         await completeWithDeadline(
           this.deps.llm,
-          { system: CLASSIFY_SYSTEM, prompt: classifyPrompt(finding), maxTokens: 200 },
+          {
+            system: CLASSIFY_SYSTEM,
+            prompt: classifyPrompt(finding),
+            maxTokens: 200,
+            spend: { boardId: finding.boardId, source: 'findings', globId: finding.globId },
+          },
           this.deps.llmTimeoutMs ?? FINDINGS_LLM_TIMEOUT_MS,
         ),
       );

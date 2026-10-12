@@ -399,6 +399,7 @@ describe('SearchIndexer', () => {
       expect(changes.calls).toEqual([SHA]);
       expect(llm.calls[0]?.prompt).toContain('Retry failed syncs because the queue stalled.');
       expect(llm.calls[0]?.prompt).toContain('src/sync/retry.ts');
+      expect(llm.calls[0]?.spend).toEqual({ boardId, source: 'search_index', globId: 's1t1' });
       expect(byRef(`change:${SHA}`)).toMatchObject({ state: 'ready', attempts: 0, lastError: null });
       expect(chunksOf(`change:${SHA}`)).toMatchObject([
         { text: 'Files: src/sync/retry.ts, src/sync/queue.ts\n\nIt retries failed syncs so the queue no longer stalls.', embedding: null },

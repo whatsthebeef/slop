@@ -65,10 +65,13 @@ describe('size forecast', () => {
   let judged: string;
   const MANY = '{"independentParts": 5, "parallelParts": 2, "reason": "many"}';
 
+  /** The spend tag of each forecast turn. */
+  const footprintSpends: LlmRequest['spend'][] = [];
   const llm: Llm = {
     complete: (request: LlmRequest) => {
       if (llmDown) return Promise.reject(new LlmUnavailable('down', 'wait'));
       if (request.system.startsWith('You predict')) {
+        footprintSpends.push(request.spend);
         const step = script[Math.min(turns++, script.length - 1)];
         return Promise.resolve(JSON.stringify(step));
       }
@@ -230,7 +233,11 @@ describe('size forecast', () => {
       const actual = ['apps/server/src/a.ts', 'apps/server/src/b.ts', 'apps/server/src/c.ts', 'apps/server/src/e.ts'];
       await seedChange('s1f1', `Files: ${actual.join(', ')}`);
       script = [{ action: 'tree', path: '' }, { action: 'grep', pattern: 'badge' }, ...done(...actual.slice(0, 3), 'apps/server/src/d.ts')];
+      footprintSpends.length = 0;
       const footprint = await forecaster.footprint(boardId, THREE);
+      // Every turn of the loop goes to the board's ledger as the size check.
+      expect(footprintSpends.length).toBeGreaterThanOrEqual(3);
+      for (const spend of footprintSpends) expect(spend).toEqual({ boardId, source: 'size_check' });
       const changed = await store.transaction((tx) => tx.changeCandidates({ boardId, query: '', mode: 'all_time', globId: 's1f1' }, 3));
       const real = parseFilesLine(changed[0]?.text ?? '')?.paths ?? [];
       const hit = (footprint?.files ?? []).filter((f) => real.includes(f)).length;

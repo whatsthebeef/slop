@@ -1,10 +1,56 @@
-/** USD per million tokens, input then output. Kept by hand (check them against the provider's price list). */
+/**
+ * USD per million tokens, input then output. Kept by hand (check them against the provider's price list).
+ * Claude: Anthropic's pricing page (platform.claude.com/docs/en/about-claude/pricing), checked 2026-10-12.
+ * `global.` profiles pay the base price; regional and geographic profiles (`us.`, `eu.`, `apac.`) and
+ * in-region IDs carry Anthropic's documented 10% Bedrock premium, so the shorter `anthropic.…` keys hold
+ * base + 10% and the longest match picks the `global.` key for global profiles. TO VERIFY against
+ * Bedrock's own price table (its Anthropic section didn't render when checked).
+ */
 export const PRICE_PER_MTOK: Readonly<
   Record<string, { readonly input: number; readonly output: number }>
 > = {
   'openai.gpt-oss-120b': { input: 0.15, output: 0.6 },
   'openai.gpt-oss-20b': { input: 0.07, output: 0.3 },
+  'anthropic.claude-haiku-4-5': { input: 1.1, output: 5.5 },
+  'anthropic.claude-sonnet-5-5': { input: 2.2, output: 11 },
+  'anthropic.claude-opus-5-5': { input: 4.4, output: 22 },
+  'global.anthropic.claude-haiku-4-5': { input: 1, output: 5 },
+  'global.anthropic.claude-sonnet-5-5': { input: 2, output: 10 },
+  'global.anthropic.claude-opus-5-5': { input: 4, output: 20 },
 };
+
+/**
+ * Every source the spend ledger knows. Tagged model calls use all but `review` and `knowledge_page`, whose rows
+ * are written by their own services (their calls are untagged, so they aren't counted twice).
+ */
+export const LLM_SPEND_SOURCES = [
+  'review',
+  'kb_route',
+  'kb_draft',
+  'kb_consolidate',
+  'findings',
+  'intake',
+  'size_check',
+  'search',
+  'search_index',
+  'decisions',
+  'inbox',
+  'sub_limit',
+  'chat',
+  'knowledge_page',
+] as const;
+
+export type LlmSpendSource = (typeof LLM_SPEND_SOURCES)[number];
+
+/**
+ * What a model call is for, so the server's usage callback can write it to the board's ledger. Embeddings
+ * report no usage and aren't counted.
+ */
+export interface LlmSpendTag {
+  readonly boardId: number;
+  readonly source: LlmSpendSource;
+  readonly globId?: string | null;
+}
 
 /** The cost of one call's tokens; null when the model has no price (the tokens are still recorded). */
 export const costOf = (model: string, input: number, output: number): number | null => {
@@ -60,6 +106,8 @@ export interface SpendSummary {
   /** Calls whose model had no price: their tokens are recorded, their cost is not in `usd`. */
   readonly unpricedCalls: number;
   readonly bySource: Readonly<Record<string, number>>;
+  /** Unpriced calls per source; a source with none is left out, so a source that lost its price still shows. */
+  readonly unpricedBySource: Readonly<Record<string, number>>;
 }
 
 /** One LLM call's (or one review's) tokens and cost, as the ledger stores them. */
@@ -78,19 +126,27 @@ export interface LlmSpend {
   readonly createdAt: string;
 }
 
-export const emptySpend = (): SpendSummary => ({ usd: 0, unpricedCalls: 0, bySource: {} });
+export const emptySpend = (): SpendSummary => ({
+  usd: 0,
+  unpricedCalls: 0,
+  bySource: {},
+  unpricedBySource: {},
+});
 
 /** Totals the ledger rows (used by the in-memory store; Postgres sums in SQL). */
 export const summariseSpend = (rows: readonly LlmSpend[]): SpendSummary => {
   const bySource: Record<string, number> = {};
+  const unpricedBySource: Record<string, number> = {};
   let usd = 0;
   let unpricedCalls = 0;
   for (const r of rows) {
-    if (r.costUsd === null) unpricedCalls += 1;
-    else {
+    if (r.costUsd === null) {
+      unpricedCalls += 1;
+      unpricedBySource[r.source] = (unpricedBySource[r.source] ?? 0) + 1;
+    } else {
       usd += r.costUsd;
       bySource[r.source] = (bySource[r.source] ?? 0) + r.costUsd;
     }
   }
-  return { usd, unpricedCalls, bySource };
+  return { usd, unpricedCalls, bySource, unpricedBySource };
 };

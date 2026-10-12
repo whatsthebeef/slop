@@ -363,7 +363,7 @@ export const createApp = (deps: AppDeps) => {
     return send(c, await boards.updateSettings(c.get('email'), Number(c.req.param('b')), version, settings));
   });
 
-  // This month's LLM spend (review spend so far), for the line on the board.
+  // This month's LLM spend (every board model call, by source), for the line on the board.
   app.get('/api/boards/:b/spend', async (c) => {
     const { spend } = deps;
     if (spend === undefined) return c.json({ code: 'not_found', message: 'Spend is not tracked' }, 404);

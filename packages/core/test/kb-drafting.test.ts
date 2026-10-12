@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import { LlmUnavailable } from '../src/app/intake-service.js';
-import type { Llm } from '../src/app/intake-service.js';
+import type { Llm, LlmRequest } from '../src/app/intake-service.js';
 import {
   DRAFT_SYSTEM,
   KbPipeline,
@@ -45,12 +45,12 @@ const catalog: Catalog = {
 
 /** A fake LLM answering from a queue of canned answers (or errors, or functions), recording each request. */
 class FakeLlm implements Llm {
-  readonly calls: { system: string; prompt: string; maxTokens: number }[] = [];
+  readonly calls: LlmRequest[] = [];
   constructor(private readonly answers: (string | Error | (() => Promise<string>))[] = []) {}
   answer(...answers: (string | Error | (() => Promise<string>))[]): void {
     this.answers.push(...answers);
   }
-  complete(request: { system: string; prompt: string; maxTokens: number }): Promise<string> {
+  complete(request: LlmRequest): Promise<string> {
     this.calls.push(request);
     const next = this.answers.shift();
     if (next === undefined) return Promise.reject(new Error('No canned answer'));
@@ -189,6 +189,8 @@ describe('KB pipeline: drafting and approving drafts', () => {
   it("appends a draft that names the document's title as its section instead of replacing the whole document", async () => {
     const id = await drafted({ kind: 'doc', name: 'build_test_lint', section: null }, draftAnswer('Build', '## Reporters\n\nUse dot.'));
     expect((await item(id)).draft).toEqual({ section: null, content: '## Reporters\n\nUse dot.' });
+    // The draft call goes to the board's ledger as KB drafting, against the learning.
+    expect(drafter.calls[0]?.spend).toEqual({ boardId, source: 'kb_draft', globId: id });
     unwrap(await approveDraft(id));
     expect(await doc('build_test_lint')).toBe('# Build\n\n## Test\n\nRun vitest.\n\n## Lint\n\nRun eslint.\n\n## Reporters\n\nUse dot.\n');
   });

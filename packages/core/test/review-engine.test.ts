@@ -56,6 +56,13 @@ describe('ReviewEngine', () => {
     expect(llm.calls[1]?.prompt).toContain('Findings to verify');
   });
 
+  it('leaves its model calls untagged, since the review runner records its own spend row (s15f60)', async () => {
+    const llm = new FakeLlm([review([finding()]), JSON.stringify({ verdicts: [{ index: 0, keep: true, reason: 'Shown.' }] })]);
+    await new ReviewEngine({ llm }).reviewChange(input);
+    expect(llm.calls).toHaveLength(2);
+    expect(llm.calls.map((c) => c.spend)).toEqual([undefined, undefined]);
+  });
+
   it('skips verification when there are no findings', async () => {
     const llm = new FakeLlm([review([])]);
     const outcome = await new ReviewEngine({ llm }).reviewChange(input);

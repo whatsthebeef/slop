@@ -10,6 +10,24 @@ describe('spend (domain)', () => {
     expect(costOf('some.other-model', 10, 10)).toBeNull();
   });
 
+  it('prices the Claude models: us. profiles with the regional premium, global. profiles at the base price', () => {
+    const million = (model: string) => costOf(model, 1_000_000, 1_000_000);
+    // The config defaults (us. cross-region profiles): base + 10%.
+    expect(million('us.anthropic.claude-haiku-4-5-20251001-v1:0')).toBeCloseTo(6.6);
+    expect(million('us.anthropic.claude-sonnet-5-5')).toBeCloseTo(13.2);
+    expect(million('us.anthropic.claude-opus-5-5')).toBeCloseTo(26.4);
+    // The longest match picks the global key.
+    expect(million('global.anthropic.claude-haiku-4-5-20251001-v1:0')).toBeCloseTo(6);
+    expect(million('global.anthropic.claude-sonnet-5-5')).toBeCloseTo(12);
+    expect(million('global.anthropic.claude-opus-5-5')).toBeCloseTo(24);
+    // Input and output are priced separately.
+    expect(costOf('us.anthropic.claude-opus-5-5', 1_000_000, 0)).toBeCloseTo(4.4);
+    expect(costOf('global.anthropic.claude-opus-5-5', 0, 1_000_000)).toBeCloseTo(20);
+    // An in-region ID pays the regional price; another Claude model is unpriced.
+    expect(million('anthropic.claude-sonnet-5-5')).toBeCloseTo(13.2);
+    expect(costOf('us.anthropic.claude-3-haiku-20240307-v1:0', 10, 10)).toBeNull();
+  });
+
   it('starts the month in the board time zone', () => {
     expect(monthStart('2026-10-15T12:00:00.000Z', 'UTC')).toEqual({
       from: '2026-10-01T00:00:00.000Z',
@@ -53,6 +71,7 @@ describe('spend (domain)', () => {
       usd: 1.75,
       unpricedCalls: 1,
       bySource: { review: 0.75, kb: 1 },
+      unpricedBySource: { review: 1 },
     });
   });
 });
@@ -113,6 +132,8 @@ describe('SpendService', () => {
     const month = await service.monthToDate(boardId);
     expect(month.ok && month.value.unpricedCalls).toBe(1);
     expect(month.ok && Object.keys(month.value.bySource)).toEqual(['kb']);
+    // The unpriced source is still named, with its count.
+    expect(month.ok && month.value.unpricedBySource).toEqual({ review: 1 });
   });
 
   it('records nothing for a review that made no model call, and is not found for an unknown board', async () => {

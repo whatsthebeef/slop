@@ -300,7 +300,7 @@ export class ChatService {
 
     const tools: string[] = [];
     // Obvious small talk skips the rewrite call too; anything else lets that one call classify the message.
-    const rewritten = isSmallTalk(question) ? { query: question, smallTalk: true } : await this.rewrite(question, recent);
+    const rewritten = isSmallTalk(question) ? { query: question, smallTalk: true } : await this.rewrite(request.boardId, question, recent);
     if (rewritten.smallTalk) return this.smallTalk(question, request, onText);
     const query = rewritten.query;
     if (query !== question) tools.push('Rewrote the question for search');
@@ -345,7 +345,7 @@ export class ChatService {
       const deep = request.thinkHarder === true && this.deps.deepLlm !== undefined;
       if (deep) tools.push('Thought harder (stronger model)');
       const llm = deep && this.deps.deepLlm !== undefined ? this.deps.deepLlm : this.deps.llm;
-      const llmRequest = { system: SYSTEM + (codeOn ? codeInstructions(CHAT_CODE_MAX_CALLS) : NO_CODE_INSTRUCTIONS), prompt: this.prompt(question, hits, state, recent, page), maxTokens: CHAT_MAX_TOKENS };
+      const llmRequest: Omit<LlmRequest, 'signal'> = { system: SYSTEM + (codeOn ? codeInstructions(CHAT_CODE_MAX_CALLS) : NO_CODE_INSTRUCTIONS), prompt: this.prompt(question, hits, state, recent, page), maxTokens: CHAT_MAX_TOKENS, spend: { boardId: request.boardId, source: 'chat' } };
       const timeout = deep ? (this.deps.deepTimeoutMs ?? CHAT_THINK_TIMEOUT_MS) : (this.deps.llmTimeoutMs ?? CHAT_LLM_TIMEOUT_MS);
       let raw: string;
       const read: CodeSource[] = [];
@@ -509,7 +509,7 @@ export class ChatService {
     const prompt = `${question}${page === '' ? '' : `\n\n${page}`}`;
     let raw: string;
     try {
-      raw = await this.generate(this.deps.llm, { system: SMALL_TALK_SYSTEM, prompt, maxTokens: SMALL_TALK_MAX_TOKENS }, this.deps.llmTimeoutMs ?? CHAT_LLM_TIMEOUT_MS, onText, request.signal);
+      raw = await this.generate(this.deps.llm, { system: SMALL_TALK_SYSTEM, prompt, maxTokens: SMALL_TALK_MAX_TOKENS, spend: { boardId: request.boardId, source: 'chat' } }, this.deps.llmTimeoutMs ?? CHAT_LLM_TIMEOUT_MS, onText, request.signal);
     } catch (error) {
       if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
       if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
@@ -556,14 +556,19 @@ export class ChatService {
    * The question as search should see it: typos fixed and follow-ups resolved from the recent turns. Any failure
    * (no model, a timeout, an unreadable reply) searches the question as typed; a rewrite never fails a question.
    */
-  private async rewrite(question: string, recent: readonly ChatMessage[]): Promise<{ query: string; smallTalk: boolean }> {
+  private async rewrite(boardId: number, question: string, recent: readonly ChatMessage[]): Promise<{ query: string; smallTalk: boolean }> {
     const llm = this.deps.rewriteLlm;
     if (llm === undefined) return { query: question, smallTalk: false };
     try {
       const turns = recent.map((m) => `${m.role === 'user' ? 'Asker' : 'Assistant'}: ${clip(m.content)}`).join('\n');
       const raw = await completeWithDeadline(
         llm,
-        { system: REWRITE_SYSTEM, prompt: `${turns === '' ? '' : `Earlier in this conversation:\n${turns}\n\n`}Question: ${question}`, maxTokens: REWRITE_MAX_TOKENS },
+        {
+          system: REWRITE_SYSTEM,
+          prompt: `${turns === '' ? '' : `Earlier in this conversation:\n${turns}\n\n`}Question: ${question}`,
+          maxTokens: REWRITE_MAX_TOKENS,
+          spend: { boardId, source: 'search' },
+        },
         this.deps.rewriteTimeoutMs ?? REWRITE_TIMEOUT_MS,
       );
       const json = parseJson(raw);
