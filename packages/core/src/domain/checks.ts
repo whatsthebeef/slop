@@ -44,6 +44,11 @@ const MAX_LINES = 6;
 const MAX_LINE_LENGTH = 240;
 const ERROR_LINE = /error|fail|✖|✘|✗|not ok|assertion|cannot find|is missing|exception|exit code [1-9]/i;
 
+/** A passing test line (vitest/jest `✓ file (n tests) 12ms`), possibly after a pnpm `workspace script:` prefix. It can match ERROR_LINE by name alone ("provision-failure"). */
+const PASS_LINE = /^(?:.{0,80}?:\s+)?[✓✔]/;
+/** A vitest/jest failure line: `FAIL  file > test name`, possibly after a pnpm `workspace script:` prefix. */
+const FAIL_LINE = /^(?:.{0,80}?:\s+)?FAIL\s+\S/;
+
 const POST_JOB_CLEANUP = /Post job cleanup\.\s*$/;
 const PROCESS_COMPLETED = /^Process completed with exit code \d+\.?$/i;
 
@@ -55,6 +60,12 @@ export const jobOwnLog = (log: string): string => {
   const lines = log.split('\n');
   const cleanup = lines.findIndex((line) => POST_JOB_CLEANUP.test(line.trim()));
   return cleanup === -1 ? log : lines.slice(0, cleanup).join('\n');
+};
+
+/** Starts at the first `FAIL` line, dropping the passing-test noise and separators printed before it. */
+const leadWithFailure = <T extends {text: string}>(lines: T[]): T[] => {
+  const fail = lines.findIndex((line) => FAIL_LINE.test(line.text));
+  return fail === -1 ? lines : lines.slice(fail);
 };
 
 /**
@@ -78,7 +89,7 @@ export const failureLines = (log: string): string[] => {
   const completed = clean.filter((line) => PROCESS_COMPLETED.test(line.text));
   const rest = clean.filter((line) => !PROCESS_COMPLETED.test(line.text));
   const marked = rest.filter((line) => line.marked);
-  const errors = marked.length > 0 ? marked : rest.filter((line) => ERROR_LINE.test(line.text));
+  const errors = marked.length > 0 ? marked : leadWithFailure(rest.filter((line) => ERROR_LINE.test(line.text) && !PASS_LINE.test(line.text)));
   const picked =
     errors.length + completed.length > 0
       ? [...errors, ...completed].slice(0, MAX_LINES)
@@ -90,7 +101,11 @@ export const failureLines = (log: string): string[] => {
 export const failureSummary = (failure: CheckFailure): string => {
   const step = failure.step === null || failure.step === failure.name ? '' : ` (${failure.step})`;
   const first = failure.lines[0];
-  return first === undefined ? `${failure.name}${step} failed` : `${failure.name}${step}: ${first}`;
+  if (first === undefined) return `${failure.name}${step} failed`;
+  const next = failure.lines[1];
+  // A test failure is named by its FAIL line; the assertion after it says what went wrong.
+  const detail = next !== undefined && FAIL_LINE.test(first) ? ` — ${next.replace(/^.{0,80}?:\s+(?=\S+Error\b)/, '')}` : '';
+  return `${failure.name}${step}: ${first}${detail}`;
 };
 
 /** What a base-branch check result changed. */
