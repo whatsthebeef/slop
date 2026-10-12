@@ -139,7 +139,6 @@ export const ContextSection = ({ boardId, admin }: { boardId: number; admin: boo
           ['Replaced and applied automatically', r.choices.replaced.autoApplied],
           ['Replaced after a person confirmed', r.choices.replaced.confirmed],
           ['Replacement undone', r.choices.replaced.undone],
-          ['Unverified replacement cards still open', r.choices.replaced.unverifiedOpen],
           [`Replacement cards confirmed (${r.windowDays} days)`, r.choices.cards.confirmed],
           [`Replacement cards dismissed (${r.windowDays} days)`, r.choices.cards.dismissed],
           [`Learnings raised from choices in use (${r.windowDays} days)`, r.choices.promoted.raised],

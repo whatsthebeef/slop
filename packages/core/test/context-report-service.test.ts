@@ -91,7 +91,7 @@ describe('ContextReportService', () => {
       windowDays: 30,
       retrievals: { total: 0, bySource: [], byTier: [] },
       topRetrieved: [],
-      choices: { total: 0, newThisWeek: 0, replaced: { autoApplied: 0, confirmed: 0, undone: 0, unverifiedOpen: 0 } },
+      choices: { total: 0, newThisWeek: 0, replaced: { autoApplied: 0, confirmed: 0, undone: 0 } },
       inbox: { attachedViaSuggestion: 0, attachedElsewhere: 0, kept: 0, discarded: 0 },
       conflicts: [],
     });
@@ -184,7 +184,7 @@ describe('ContextReportService', () => {
       { key: 'inbox', count: 1, share: 0.25 },
     ]);
     expect(r.choices.newThisWeek).toBe(1);
-    expect(r.choices.replaced).toEqual({ autoApplied: 1, confirmed: 0, undone: 1, unverifiedOpen: 1 });
+    expect(r.choices.replaced).toEqual({ autoApplied: 1, confirmed: 0, undone: 1 });
     expect(r.choices.cards).toEqual({ confirmed: 0, dismissed: 1 });
     expect(r.choices.promoted).toEqual({ raised: 3, accepted: 1, rejected: 1 });
   });

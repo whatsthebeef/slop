@@ -3,7 +3,7 @@ import type { Result } from '../domain/errors.js';
 import { formatId, parseId } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import type { Context, Transition } from '../domain/machine.js';
-import { assessmentOf, decisionOf, decisionGlobTitle, extractedKey, inboxKey, replacementKey, replacementOf, replacementTitle } from '../domain/decision-glob.js';
+import { assessmentOf, decisionOf, decisionGlobTitle, extractedKey, inboxKey, replacementOf } from '../domain/decision-glob.js';
 import type { LearningAssessmentFacts } from '../domain/decision-glob.js';
 import type { DecisionAttributes, DecisionChannel, DecisionScope } from '../domain/attributes.js';
 import { isSuperseded } from '../domain/decisions.js';
@@ -255,54 +255,7 @@ export const applyDecisionStep = async (
   throw new Error(`Could not update decision ${id} after ${String(WRITE_RETRIES)} tries`);
 };
 
-const choiceBlock = (heading: string, d: Decision, quote: string | null): string =>
-  [
-    `## ${heading}`,
-    '',
-    d.statement.trim(),
-    '',
-    `${d.sourceLabel} · ${d.decidedAt.slice(0, 10)}${d.decidedBy === null ? '' : ` · ${d.decidedBy}`}`,
-    '',
-    `> ${d.quote.replace(/\n/g, '\n> ')}`,
-    ...(quote === null || quote === '' ? [] : ['', `The words slop matched: "${quote}"`]),
-    '',
-  ].join('\n');
-
-/**
- * Creates the decision glob that asks whether choice `next` replaced the older choice `old` (creation key
- * `replacement:<old>:<new>`, so a repeat finds the same card), for a replacement slop could not verify. It governs the
- * older choice's glob, else the whole project. Its plan sets the two choices side by side with the model's reason.
- */
-export const createDecisionForReplacement = async (
-  tx: Tx,
-  deps: DecisionDeps,
-  old: Decision,
-  next: Decision,
-): Promise<Result<CreatedDecision>> =>
-  createDecisionInTx(tx, deps, {
-    boardId: old.boardId,
-    actor: { email: DECISION_SYSTEM_ACTOR, role: 'admin' },
-    title: replacementTitle(old.statement, next.statement),
-    summary: `A newer choice may replace an older one, but slop could not verify the quotes: "${next.statement.trim()}" and "${old.statement.trim()}".`,
-    payload: [
-      'Slop thinks the newer choice replaces the older one but could not verify the quotes. Confirm to apply the replacement (the older choice stops being in force); dismiss to keep both and never propose this pair again.',
-      '',
-      choiceBlock('Older choice', old, old.replaceOldQuote),
-      choiceBlock('Newer choice', next, old.replaceNewQuote),
-      '## Why slop thinks so',
-      '',
-      old.replaceReason === null || old.replaceReason === '' ? 'No reason given.' : old.replaceReason,
-      '',
-    ].join('\n'),
-    attributes: {
-      scope: old.globId === null ? { kind: 'project', ref: null } : { kind: 'glob', ref: old.globId },
-      origin: { kind: 'replacement', oldId: old.id, newId: next.id },
-      channel: 'mined',
-      outcome: null,
-    },
-    creationKey: replacementKey(old.id, next.id),
-    group: old.group,
-  });
+const RETIRED_REASON = 'Replacement cards retired';
 
 /** Whether the older choice still has this proposal waiting for a person: neither choice was replaced, deleted or decided since. */
 export const replacementOpen = (old: Decision | undefined, next: Decision | undefined): old is Decision & { replacedBy: number } =>
@@ -325,15 +278,21 @@ export const closeStaleReplacements = async (tx: Tx, deps: DecisionDeps, boardId
   return hints;
 };
 
-/** Raises the card of every proposed replacement that has none yet (once each: the creation key makes a repeat find it). */
-export const raiseReplacementCards = async (tx: Tx, deps: DecisionDeps, all: readonly Decision[]): Promise<Hint[]> => {
-  const byId = new Map(all.map((d) => [d.id, d]));
+/**
+ * Retires the replacement cards of a board: slop no longer asks a person about a replacement it can't verify. Every open
+ * card is closed ("Replacement cards retired") and every choice still carrying a proposal (`hint`) stands again. A repeat
+ * finds nothing to do. Returns the hints to publish.
+ */
+export const retireReplacementCards = async (tx: Tx, deps: DecisionDeps, boardId: number, all: readonly Decision[]): Promise<Hint[]> => {
   const hints: Hint[] = [];
-  for (const old of all) {
-    const next = old.replacedBy === null ? undefined : byId.get(old.replacedBy);
-    if (!replacementOpen(old, next) || next === undefined) continue;
-    const created = await createDecisionForReplacement(tx, deps, old, next);
-    if (created.ok) hints.push(...created.value.hints);
+  for (const d of all) {
+    if (d.replaceState !== 'hint') continue;
+    await tx.updateDecision(d.id, { replacedBy: null, replaceState: null, replaceOldQuote: null, replaceNewQuote: null, replaceReason: null });
+  }
+  const cards = await tx.listGlobs(boardId, { include: 'decisions', origins: ['replacement'], status: ['planning', 'in_progress'] });
+  for (const card of cards) {
+    const closed = await applyDecisionStep(tx, card.id, (glob) => machine.closeReplacement(glob, decisionContext(deps.clock, null), RETIRED_REASON));
+    if (closed.ok && closed.value.changed) hints.push({ kind: 'glob.changed', boardId, globId: card.id, version: closed.value.glob.version });
   }
   return hints;
 };

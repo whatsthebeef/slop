@@ -2239,11 +2239,11 @@ export const decideReplacement = (glob: Glob, input: { readonly confirm: boolean
 };
 
 /** The pair a replacement asks about changed before anyone decided (a choice was replaced or deleted): the card closes itself, archived. */
-export const closeReplacement = (glob: Glob, ctx: Context): Result<Transition> => {
+export const closeReplacement = (glob: Glob, ctx: Context, reason = 'No longer relevant: one of the choices was replaced or deleted'): Result<Transition> => {
   if (glob.category !== 'decision' || glob.status === 'signed_off') return unchanged(glob);
   const attributes = decisionAttributesOf(glob);
   if (attributes.origin.kind !== 'replacement') return unchanged(glob);
-  const outcome: DecisionOutcome = { kind: 'closed', by: 'slop', at: ctx.now, reason: 'No longer relevant: one of the choices was replaced or deleted' };
+  const outcome: DecisionOutcome = { kind: 'closed', by: 'slop', at: ctx.now, reason };
   return new Builder(glob, ctx)
     .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
     .status('signed_off')

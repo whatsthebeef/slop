@@ -81,7 +81,7 @@ export class ContextReportService {
           total: decisions.length,
           bySource: countShares(decisions.map((d) => d.sourceKind)),
           newThisWeek: decisions.filter((d) => d.createdAt >= weekAgo).length,
-          replaced: { autoApplied: state('applied'), confirmed: state('confirmed'), undone: state('undone'), unverifiedOpen: state('hint') },
+          replaced: { autoApplied: state('applied'), confirmed: state('confirmed'), undone: state('undone') },
           cards: { confirmed: cards.filter((c) => c.accepted).length, dismissed: cards.filter((c) => !c.accepted).length },
           promoted: { raised, accepted: promotions.filter((p) => p.accepted).length, rejected: promotions.filter((p) => !p.accepted).length },
         },

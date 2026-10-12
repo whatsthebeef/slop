@@ -51,7 +51,7 @@ export interface ContextReport {
     readonly bySource: readonly Counted<DecisionSourceKind>[];
     readonly newThisWeek: number;
     /** Replaced by a newer choice, as they stand now. */
-    readonly replaced: { readonly autoApplied: number; readonly confirmed: number; readonly undone: number; readonly unverifiedOpen: number };
+    readonly replaced: { readonly autoApplied: number; readonly confirmed: number; readonly undone: number };
     /** Replacement cards a person decided within the window. */
     readonly cards: { readonly confirmed: number; readonly dismissed: number };
     /** Learnings raised from choices in use, and how people decided them, within the window. */

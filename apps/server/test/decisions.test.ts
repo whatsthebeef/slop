@@ -1,4 +1,4 @@
-import { DecisionPipeline, DecisionService, FakeEmbedder, GlobService, SearchService } from '@slop/core';
+import { createDecisionInTx, DecisionPipeline, DecisionService, FakeEmbedder, GlobService, SearchService } from '@slop/core';
 import type { Llm, LlmRequest } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -144,5 +144,31 @@ describe('decisions store', () => {
     expect(await count(schema.decisionSources)).toBe(1);
     const item = await database.db.select().from(schema.knowledgeItems).where(sql`id = ${only?.itemId ?? 0}`);
     expect(item[0]).toMatchObject({ status: 'active', supersededBy: null });
+  });
+
+  it('retires a replacement card and hint left by the old pipeline, on the next sync', async () => {
+    const [only] = await store.transaction((tx) => tx.listDecisions(boardId));
+    const governed = only?.globId ?? '';
+    // The old pipeline proposed a replacement and raised a card for it.
+    await store.transaction(async (tx) => {
+      await tx.updateDecision(only?.id ?? 0, { replacedBy: only?.id ?? 0, replaceState: 'hint', replaceReason: 'Looks like it.' });
+      const card = await createDecisionInTx(tx, { clock }, {
+        boardId,
+        actor: { email: 'slop', role: 'admin' },
+        title: 'Did X replace Y?',
+        summary: 'Unverified.',
+        payload: 'Unverified.',
+        attributes: { scope: { kind: 'glob', ref: governed }, origin: { kind: 'replacement', oldId: only?.id ?? 0, newId: only?.id ?? 0 }, channel: 'mined', outcome: null },
+        creationKey: 'replacement:test',
+        group: null,
+      });
+      if (!card.ok) throw new Error(card.error.message);
+    });
+    await pipeline.syncBoard(boardId);
+    const [after] = await store.transaction((tx) => tx.listDecisions(boardId));
+    expect(after).toMatchObject({ replaceState: null, replacedBy: null });
+    const cards = await store.transaction((tx) => tx.listGlobs(boardId, { include: 'decisions', origins: ['replacement'] }));
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ status: 'signed_off', attributes: { archived: true, outcome: { kind: 'closed', reason: 'Replacement cards retired' } } });
   });
 });
