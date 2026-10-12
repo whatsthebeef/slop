@@ -4,7 +4,7 @@ import type { DomainEvent, JsonValue } from './events.js';
 import { CHOICE_DISCUSSION_MIN_RETURNS, CHOICE_MIN_GLOBS, CHOICE_MIN_RETURNS, CHOICE_USAGE_WINDOW_DAYS } from './choice-usage.js';
 import type { ChoiceActivity } from './choice-usage.js';
 import { DEFAULT_CONTEXT_SETTINGS } from './context-settings.js';
-import type { ContextSettings } from './context-settings.js';
+import type { ContextSettingKey, ContextSettings } from './context-settings.js';
 import { REVIEW_GUIDE_AREA } from './code-review.js';
 import { missingCoreAreas, MISSING_DOC_MIN_DAYS, MISSING_DOC_MIN_MERGED_GLOBS, MISSING_DOC_RERAISE_DAYS } from './core-docs.js';
 import { FINDING_CLASS_DESCRIPTIONS } from './findings.js';
@@ -983,7 +983,7 @@ export const SIGNAL_QUIET_MS = 12 * 7 * 24 * 60 * 60 * 1000;
 export const SIGNAL_RERAISE_FACTOR = 1.5;
 
 /** Per-board background jobs of the self-improvement pipeline (`board_jobs`). */
-export const BOARD_JOBS = ['mining', 'consolidation', 'effect_check', 'sub_limit', 'intake_outcome', 'size_threshold'] as const;
+export const BOARD_JOBS = ['mining', 'consolidation', 'effect_check', 'sub_limit', 'intake_outcome', 'size_threshold', 'context_tuning'] as const;
 export type BoardJobName = (typeof BOARD_JOBS)[number];
 
 export type BoardJobResult =
@@ -1060,6 +1060,13 @@ export type BoardJobResult =
       readonly changes: readonly { readonly globId: string; readonly outcome: SizeOutcome; readonly from: SizeThreshold; readonly to: SizeThreshold }[];
       /** Size records written this run and the calibration moves they made (absent when none). */
       readonly calibration?: { readonly records: number; readonly moves: readonly { readonly globId: string; readonly cause: string }[] };
+    }
+  | {
+      readonly kind: 'context_tuning';
+      /** Settings moved this run, with the outcome that moved each. */
+      readonly moves: readonly { readonly key: ContextSettingKey; readonly before: number; readonly after: number; readonly outcome: string }[];
+      /** Settings checked and left as they were (a short sample, a recent change, a bound). */
+      readonly held: number;
     }
   /**
    * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.

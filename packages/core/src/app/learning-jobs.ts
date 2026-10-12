@@ -14,6 +14,7 @@ import type { EffectCheckService } from './effect-check-service.js';
 import type { SubLimitService } from './sub-limit-service.js';
 import type { IntakeLearningService } from './intake-learning-service.js';
 import type { SizeCheckService } from './size-check-service.js';
+import type { ContextTuningService } from './context-tuning-service.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -29,6 +30,9 @@ export const EFFECT_CHECK_INTERVAL_MS = 24 * HOUR_MS;
  */
 export const SUB_LIMIT_INTERVAL_MS = 55 * 60 * 1000;
 
+/** Context tuning runs weekly: its rules need a week's evidence, and a setting moves at most once in 7 days. */
+export const CONTEXT_TUNING_INTERVAL_MS = 7 * 24 * HOUR_MS;
+
 /** How often each job runs, in the order a board's due jobs run. */
 const INTERVALS: readonly (readonly [BoardJobName, number])[] = [
   ['mining', MINING_INTERVAL_MS],
@@ -37,6 +41,7 @@ const INTERVALS: readonly (readonly [BoardJobName, number])[] = [
   ['sub_limit', SUB_LIMIT_INTERVAL_MS],
   ['intake_outcome', SUB_LIMIT_INTERVAL_MS],
   ['size_threshold', SUB_LIMIT_INTERVAL_MS],
+  ['context_tuning', CONTEXT_TUNING_INTERVAL_MS],
 ];
 /** A board job's lease: another server doesn't start the same job meanwhile. */
 export const BOARD_JOB_LEASE_MS = 30 * 60 * 1000;
@@ -108,6 +113,8 @@ export class LearningJobService {
       intakeLearning?: IntakeLearningService;
       /** Absent: the size threshold isn't learned. */
       sizeCheck?: SizeCheckService;
+      /** Absent: the context settings aren't tuned. */
+      contextTuning?: ContextTuningService;
       /** Null without a code host: the dependency signal isn't measured. */
       manifests: ManifestSource | null;
       /** Runs just before mining reads the board's activity (the server collects review feedback from the code host); best effort. */
@@ -126,6 +133,7 @@ export class LearningJobService {
       ...(this.deps.subLimit === undefined ? [] : ['sub_limit' as const]),
       ...(this.deps.intakeLearning === undefined ? [] : ['intake_outcome' as const]),
       ...(this.deps.sizeCheck === undefined ? [] : ['size_threshold' as const]),
+      ...(this.deps.contextTuning === undefined ? [] : ['context_tuning' as const]),
     ];
   }
 
@@ -240,6 +248,11 @@ export class LearningJobService {
       const { sizeCheck } = this.deps;
       if (sizeCheck === undefined) throw new Error('The size-threshold job is not wired');
       return sizeCheck.learn(board.id);
+    }
+    if (job === 'context_tuning') {
+      const { contextTuning } = this.deps;
+      if (contextTuning === undefined) throw new Error('The context-tuning job is not wired');
+      return contextTuning.tune(board.id, started);
     }
     try {
       await this.deps.beforeMining?.(board, started);
