@@ -4,7 +4,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { GroupChip } from '@/components/glob-card';
-import { JobStatus } from '@/components/kb-proposals';
+import { JobStatus } from '@/components/job-status';
 import { ReadinessChecklist } from '@/components/readiness';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
@@ -346,6 +346,7 @@ export const SettingsPage = () => {
           />
           Agents may approve agent-file and contradicting items
         </label>
+        <KnowledgeJobs boardId={boardId} admin={admin} />
         <SubLimit boardId={boardId} admin={admin} />
         <DependencyRules boardId={boardId} admin={admin} />
         <RiskAreas boardId={boardId} admin={admin} />
@@ -421,6 +422,21 @@ export const SettingsPage = () => {
 
 const CODEBUILD_DEFAULT: DeployIntegration = { provider: 'codebuild', region: 'us-east-1', defaultProject: '', projects: {} };
 const GITHUB_DEFAULT: DeployIntegration = { provider: 'github_actions', workflow: 'slop-deploy.yml' };
+
+/** The board's self-improvement jobs over its learnings: when each last ran and what it did, with Run now for admins. */
+const KnowledgeJobs = ({ boardId, admin }: { boardId: number; admin: boolean }) => (
+  <div className='grid gap-1' data-testid='kb-jobs'>
+    <h3 className='text-xs font-semibold text-muted-foreground'>Learning jobs</h3>
+    <p className='text-xs text-muted-foreground'>
+      Each week slop mines its own data for signals worth a learning, merges open learnings that state the same fact (only on
+      quotes it checks) and flags stale ones; each day it checks whether approved changes with a signal worked, and proposes
+      revising or reverting one that didn't. What they raise shows on the board as decisions.
+    </p>
+    <JobStatus boardId={boardId} admin={admin} job='mining' />
+    <JobStatus boardId={boardId} admin={admin} job='consolidation' />
+    <JobStatus boardId={boardId} admin={admin} job='effect_check' />
+  </div>
+);
 
 const lines = (n: number) => n.toLocaleString('en');
 

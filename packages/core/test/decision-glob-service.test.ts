@@ -329,6 +329,33 @@ describe('decision globs', () => {
       expect(queued()).toEqual([{ kind: 'regenerate_knowledge_page', globId: `board-${String(boardId)}`, boardId }]);
     });
 
+    it('watchSignal is for accepting only', async () => {
+      const id = await inDoing(await drafted());
+      expect(errorCode(await decide(id, { outcome: 'reject', reason: 'No', watchSignal: 'any' }))).toBe('invalid_input');
+      expect(errorCode(await decide(id, { outcome: 'accept', watchSignal: 'no-such-signal' }))).toBe('invalid_input');
+      expect((await glob(id)).status).toBe('in_progress');
+    });
+
+    it('refuses a PO a watched signal: an admin chooses it', async () => {
+      const id = await inDoing(await drafted(), PO);
+      expect(errorCode(await decide(id, { outcome: 'accept', watchSignal: 'any' }, PO))).toBe('forbidden');
+      expect((await glob(id)).status).toBe('in_progress');
+    });
+
+    it('the diff carries the learning\'s pipeline state', async () => {
+      const made = await drafted();
+      expect(unwrap(await decisions.diff(ADMIN, made.globId)).learning).toEqual({
+        status: 'open',
+        processing: 'drafted',
+        processingError: null,
+        processingAttempts: 0,
+        processAfter: null,
+        effectCheck: null,
+      });
+      unwrap(await decide(await inDoing(made), { outcome: 'accept' }));
+      expect(unwrap(await decisions.diff(ADMIN, made.globId)).learning).toMatchObject({ status: 'approved', processing: 'none' });
+    });
+
     it('accept with edits applies the edited draft instead', async () => {
       const made = await drafted();
       const id = await inDoing(made);

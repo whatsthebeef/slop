@@ -32,6 +32,8 @@ const decideSchema = z.object({
     })
     .optional(),
   linkedGlobId: z.string().min(1).optional(),
+  /** Accept: the key of a measured signal for the effect check to watch. */
+  watchSignal: z.string().min(1).max(200).optional(),
 });
 
 /** The routes of decision globs beyond the shared glob routes: the outcome, the diff and the assessment. */

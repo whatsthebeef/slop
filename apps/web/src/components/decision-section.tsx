@@ -1,9 +1,22 @@
-import { decisionOf, KNOWLEDGE_KINDS, SCOPE_KINDS, scopeLabel } from '@slop/core';
-import type { DecisionAttributes, DecisionOutcomeKind, DecisionScope, EditFailure, KnowledgeKind, ScopeKind } from '@slop/core';
+import { decisionOf, isAgentSetKind, KNOWLEDGE_KINDS, SCOPE_KINDS, scopeLabel } from '@slop/core';
+import type { DecisionAttributes, DecisionLearning, DecisionOutcomeKind, DecisionScope, EditFailure, KbTarget, KnowledgeKind, ScopeKind } from '@slop/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { DiffView } from '@/components/diff-view';
+import {
+  canWatch,
+  DocumentProposal,
+  EffectCheckView,
+  inPipeline,
+  KeepAsLearning,
+  PIPELINE_POLL_MS,
+  ProcessingState,
+  SignalFigures,
+  StaleNote,
+  WatchSignal,
+  watching,
+} from '@/components/decision-learning';
 import { MarkdownView } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
@@ -48,6 +61,23 @@ const REF_HINT: Record<ScopeKind, string | null> = {
   future_work: 'Group (optional)',
   area_group: 'Group name',
   project: null,
+};
+
+/** What Accept is called for this proposal, and what it does. */
+const acceptText = (document: boolean, target: KbTarget | null): { label: string; tip: string } => {
+  if (document) return { label: 'Approve document', tip: 'Create or update the proposed document (whole documents always need a person)' };
+  if (target?.kind === 'merge_policy') return { label: 'Approve merge policy', tip: 'Replace the merge policy with the proposed one' };
+  if (target?.kind === 'local_run') return { label: 'Approve local-run spec', tip: 'Replace the local-run spec with the proposed one' };
+  return { label: 'Accept', tip: 'Apply the proposed change as drafted' };
+};
+
+/** Why a PO may not decide a change to this target (as core refuses it), or null. Agent behaviour and what slop runs or enforces are for admins. */
+const adminOnlyReason = (kind: KnowledgeKind | undefined): string | null => {
+  if (kind === undefined) return null;
+  if (isAgentSetKind(kind)) return 'changes an agent-set file, which changes how agents behave';
+  if (kind === 'local_run') return "changes the local-run spec, which sstor runs on developers' machines";
+  if (kind === 'merge_policy') return 'changes the merge policy, which decides which globs wait for each other';
+  return null;
 };
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -133,15 +163,23 @@ const ScopeEditor = ({
 const OutcomeForm = ({
   choice,
   attributes,
+  boardId,
   busy,
   draftText,
+  target,
+  watchable,
   onCancel,
   onDecide,
 }: {
   choice: Choice;
   attributes: DecisionAttributes;
+  boardId: number;
   busy: boolean;
   draftText: string;
+  /** Where the change goes: a spec (merge policy, local-run) is replaced whole, a new document's body is its content. */
+  target: KbTarget | null;
+  /** The learning can be given a signal to watch on approval. */
+  watchable: boolean;
   onCancel: () => void;
   onDecide: (input: DecideInput) => Promise<boolean>;
 }) => {
@@ -151,6 +189,7 @@ const OutcomeForm = ({
   const [kind, setKind] = useState<KnowledgeKind>('doc');
   const [name, setName] = useState('');
   const [section, setSection] = useState('');
+  const [watch, setWatch] = useState('');
   // The draft arrives after the form opens when the pipeline is still working; fill it in until the person types.
   const [touched, setTouched] = useState(false);
   useEffect(() => {
@@ -161,7 +200,7 @@ const OutcomeForm = ({
   const inputFor = (): DecideInput => {
     switch (choice) {
       case 'accept_with_edits':
-        return { outcome: choice, editedDraft: edited };
+        return { outcome: choice, editedDraft: edited, ...watching(watch) };
       case 'retarget':
         return { outcome: choice, target: { kind, name: name.trim(), section: section.trim() === '' ? null : section.trim() } };
       case 'needs_work':
@@ -169,9 +208,17 @@ const OutcomeForm = ({
       case 'reject':
         return { outcome: choice, reason: trimmed };
       case 'accept':
-        return { outcome: choice };
+        return { outcome: choice, ...watching(watch) };
     }
   };
+  const whole = target?.kind === 'local_run' || target?.kind === 'merge_policy';
+  const editLabel = whole
+    ? target.kind === 'merge_policy'
+      ? 'Merge policy (JSON, the whole spec)'
+      : 'Local-run spec (JSON, the whole spec)'
+    : target?.newDocument != null || attributes.document !== undefined
+      ? "Edited text (the new document's whole body)"
+      : "Edited text (a section's new text)";
   return (
     <div className='grid gap-2 rounded border p-3' data-testid={`outcome-form-${choice}`}>
       {choice === 'accept' && (
@@ -183,7 +230,7 @@ const OutcomeForm = ({
       )}
       {choice === 'accept_with_edits' && (
         <Label>
-          Edited text (a section's new text, or a new document's body)
+          {editLabel}
           <Textarea
             className='min-h-40 font-mono text-xs'
             value={edited}
@@ -194,6 +241,7 @@ const OutcomeForm = ({
           />
         </Label>
       )}
+      {(choice === 'accept' || choice === 'accept_with_edits') && watchable && <WatchSignal boardId={boardId} value={watch} onChange={setWatch} />}
       {choice === 'retarget' && (
         <div className='grid grid-cols-3 gap-2'>
           <Label>
@@ -382,9 +430,23 @@ export const DecisionSection = ({
   const attributes = decisionOf(glob);
   const [choice, setChoice] = useState<Choice | null>(null);
   useEffect(() => setChoice(null), [glob.id, glob.version]);
-  const diff = useQuery({ queryKey: globDiffKey(glob.id), queryFn: () => api.globDiff(glob.id) });
+  const diff = useQuery({
+    queryKey: globDiffKey(glob.id),
+    queryFn: () => api.globDiff(glob.id),
+    // Routing and drafting run in the background and hints report each step; while one is due, also check now and then in case a hint was lost.
+    refetchInterval: (query) => {
+      const state = query.state.data?.learning;
+      return state !== undefined && state !== null && inPipeline(state) ? PIPELINE_POLL_MS : false;
+    },
+  });
   if (attributes === null) return null;
-  const deciders = board.role === 'admin' || board.role === 'po';
+  const admin = board.role === 'admin';
+  const deciders = admin || board.role === 'po';
+  const learning: DecisionLearning | null = diff.data?.learning ?? null;
+  const target = diff.data?.target ?? null;
+  const isDocument = attributes.document !== undefined;
+  const accept = acceptText(isDocument, target);
+  const adminOnly = board.role === 'po' ? adminOnlyReason(target?.kind) : null;
   const canDecide = (glob.allowedActions ?? []).includes('decide');
   const conflicts = attributes.conflictsWith ?? [];
   const outcome = attributes.outcome;
@@ -396,11 +458,6 @@ export const DecisionSection = ({
           Applies to {scopeLabel(attributes.scope)}
         </span>
         <span className='text-muted-foreground'>via {attributes.channel}</span>
-        {hasItem && (
-          <Link className='underline-offset-2 hover:underline' to={`/boards/${String(glob.boardId)}/knowledge`}>
-            on the Knowledge page
-          </Link>
-        )}
         {conflicts.length > 0 && (
           <Tip text='This decision contradicts a decision with a broader scope, which wins where they disagree'>
             <span className='rounded bg-amber-500/15 px-1.5 text-amber-800 dark:text-amber-200' data-testid='conflicts-chip'>
@@ -422,6 +479,10 @@ export const DecisionSection = ({
       {deciders && glob.status !== 'signed_off' && <ScopeEditor glob={glob} attributes={attributes} busy={busy} onUpdate={onUpdate} />}
 
       {hasItem && <LearningFacts glob={glob} attributes={attributes} deciders={deciders} />}
+      {hasItem && attributes.signal !== undefined && <SignalFigures signal={attributes.signal} />}
+      {hasItem && learning !== null && <ProcessingState glob={glob} learning={learning} routed={target !== null} admin={admin} />}
+      {hasItem && learning?.status === 'open' && <StaleNote glob={glob} attributes={attributes} admin={admin} />}
+      {learning?.effectCheck != null && <EffectCheckView boardId={glob.boardId} check={learning.effectCheck} />}
 
       {outcome !== null && (
         <p className='text-sm' data-testid='decision-outcome'>
@@ -440,20 +501,27 @@ export const DecisionSection = ({
         </p>
       )}
 
-      <ProposedChange globId={glob.id} />
+      {attributes.document !== undefined && diff.data?.draft != null ? (
+        <DocumentProposal boardId={glob.boardId} document={attributes.document} content={diff.data.draft.content} />
+      ) : (
+        <ProposedChange globId={glob.id} />
+      )}
 
       {canDecide && (
         <div className='grid gap-2' data-testid='outcomes'>
           <h3 className='text-xs font-semibold text-muted-foreground'>Decide</h3>
           <div className='flex flex-wrap gap-2'>
-            {CHOICES.map(({ outcome: key, label, tip }) => {
+            {CHOICES.map(({ outcome: key, label: plain, tip: plainTip }) => {
+              const label = key === 'accept' ? accept.label : plain;
+              const tip = key === 'accept' ? accept.tip : plainTip;
               const unavailable = !hasItem && (key === 'accept_with_edits' || key === 'retarget');
+              const kept = adminOnly !== null && (key === 'accept' || key === 'accept_with_edits');
               return (
-                <Tip key={key} text={unavailable ? 'This decision has no knowledge item to edit or retarget' : tip}>
+                <Tip key={key} text={unavailable ? 'This decision has no knowledge item to edit or retarget' : kept ? `An admin decides it: it ${adminOnly}` : tip}>
                   <Button
                     size='sm'
                     variant={choice === key ? 'default' : key === 'reject' ? 'danger' : 'outline'}
-                    disabled={busy || unavailable}
+                    disabled={busy || unavailable || kept}
                     aria-pressed={choice === key}
                     data-testid={`outcome-${key}`}
                     onClick={() => setChoice(choice === key ? null : key)}
@@ -464,13 +532,19 @@ export const DecisionSection = ({
               );
             })}
           </div>
+          {admin && hasItem && learning?.status === 'open' && !isDocument && (
+            <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={learning} busy={busy} />
+          )}
           {choice !== null && (
             <OutcomeForm
               key={choice}
               choice={choice}
               attributes={attributes}
+              boardId={glob.boardId}
               busy={busy}
               draftText={diff.data?.draft?.content ?? ''}
+              target={target}
+              watchable={admin && canWatch(learning, attributes)}
               onCancel={() => setChoice(null)}
               onDecide={onDecide}
             />

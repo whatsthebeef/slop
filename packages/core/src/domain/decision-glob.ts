@@ -203,7 +203,7 @@ export const assessmentOf = (input: AssessmentInput): Assessment => {
     if (item.catalogCandidate) flags.push('Would hold for any project: a candidate for the catalog.');
     if (preview?.stale === true) flags.push('Stale draft: the target changed since it was drafted; it is drafted again before it can be accepted.');
     if (item.staleSince !== null) flags.push('No recent evidence: weekly consolidation flagged it stale.');
-    if (item.processing === 'failed') flags.push('The pipeline gave up on it; decide by hand or retry it on the Knowledge page.');
+    if (item.processing === 'failed') flags.push('The pipeline gave up on it; decide by hand, or an admin can retry it.');
   }
   for (const id of conflicts) flags.push(`Conflicts with ${id} (broader scope).`);
 

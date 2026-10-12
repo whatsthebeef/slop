@@ -1,5 +1,5 @@
 import { BUSY_WAITING_PREFIX, outboxBackoffMs } from '@slop/core';
-import type { KbItem } from '@slop/core';
+import type { DecisionLearning } from '@slop/core';
 
 /**
  * When an item waiting in the pipeline is tried next: `shortly` (queued, due now), `running` (its job is claimed and the
@@ -8,7 +8,7 @@ import type { KbItem } from '@slop/core';
  * set can only be the lease.
  */
 export const nextTry = (
-  item: Pick<KbItem, 'processAfter' | 'processingAttempts' | 'processingError'>,
+  item: Pick<DecisionLearning, 'processAfter' | 'processingAttempts' | 'processingError'>,
   now: number,
 ): 'shortly' | 'running' | Date => {
   if (item.processAfter === null) return 'shortly';
