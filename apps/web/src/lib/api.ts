@@ -4,7 +4,6 @@ import type {
   BlockedBy,
   AgentSetEntry,
   AgentSetFileView,
-  Approval,
   ArtifactKind,
   ArtifactSummary,
   Board,
@@ -20,6 +19,7 @@ import type {
   IntakeAccuracy,
   IntakeExample,
   DecisionDiff,
+  DecisionLearning,
   DecisionOutcomeKind,
   DecisionScope,
   DecisionView,
@@ -34,8 +34,6 @@ import type {
   Glob,
   GlobFindings,
   InboxStatus,
-  KbItem,
-  KbProposalList,
   KbSignal,
   LabelCommand,
   LocalRunView,
@@ -163,8 +161,6 @@ export interface ApiError {
   readonly code: string;
   readonly message: string;
   readonly current?: GlobView;
-  /** A KB item's version conflict carries the item as it is now. */
-  readonly currentItem?: KbItem;
   readonly allowedActions?: readonly string[];
   /** `llm_unavailable` only: what is wrong with the model, and what to do. */
   readonly reason?: string;
@@ -373,7 +369,12 @@ export interface DecideInput {
   readonly editedDraft?: string;
   readonly target?: TargetChange;
   readonly linkedGlobId?: string;
+  /** Accept: the key of a measured signal for the effect check to watch. */
+  readonly watchSignal?: string;
 }
+
+/** A decision's diff as the API answers it; `learning` is optional because an older API omits it. */
+export type GlobDiff = Omit<DecisionDiff, 'learning'> & { readonly learning?: DecisionLearning | null };
 
 export type ActionPath =
   | 'start'
@@ -614,17 +615,19 @@ export const api = {
     request<AgentSetFileView>('GET', `/api/boards/${boardId}/kb/agent-set/file?path=${encodeURIComponent(path)}`),
   useCatalogVersion: (boardId: number, path: string, overlay = '') =>
     request<{ version: number }>('POST', `/api/boards/${boardId}/kb/agent-set/use-catalog`, { path, overlay }),
-  proposals: (boardId: number, limit: number) =>
-    request<KbProposalList>('GET', `/api/boards/${boardId}/kb/proposals?limit=${limit}`),
-  approveProposal: (id: string, version: number, approval: Approval) =>
-    request<KbItem>('POST', `/api/kb/${id}/approve`, { ...approval, version }),
-  changeProposalTarget: (id: string, version: number, target: TargetChange) =>
-    request<KbItem>('POST', `/api/kb/${id}/target`, { version, target }),
-  retryProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/retry`, { version }),
-  reopenProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/reopen`, { version }),
-  keepProposal: (id: string, version: number) => request<KbItem>('POST', `/api/kb/${id}/keep`, { version }),
-  rejectProposal: (id: string, version: number, reason: string) =>
-    request<KbItem>('POST', `/api/kb/${id}/reject`, { version, reason }),
+  /** Keeps an open learning's statement as an approved learning, without applying it to any document (admins). */
+  // The /api/kb/* calls take the item's version, which is the decision glob's version.
+  keepAsLearning: (id: string, version: number, statement: string, watchSignal?: string) =>
+    request<unknown>('POST', `/api/kb/${id}/approve`, {
+      as: 'learning',
+      version,
+      statement,
+      ...(watchSignal === undefined ? {} : { watchSignal }),
+    }),
+  /** Sends a learning the pipeline gave up on back to routing or drafting (admins). */
+  retryProposal: (id: string, version: number) => request<unknown>('POST', `/api/kb/${id}/retry`, { version }),
+  /** Marks a learning weekly consolidation flagged stale as not stale (admins). */
+  keepProposal: (id: string, version: number) => request<unknown>('POST', `/api/kb/${id}/keep`, { version }),
   boardJobs: (boardId: number) => request<BoardJobStatus[]>('GET', `/api/boards/${boardId}/kb/jobs`),
   runBoardJob: (boardId: number, job: BoardJob['job']) => request<BoardJob>('POST', `/api/boards/${boardId}/kb/jobs/${job}/run`),
   /** The board's signals as measured now: what an approval of a submitted item can watch (admins). */
@@ -684,7 +687,7 @@ export const api = {
   /** Decision globs: the outcome of a decision in Doing. */
   decide: (id: string, version: number, input: DecideInput) => request<GlobView>('POST', `/api/globs/${id}/decision`, { ...input, version }),
   /** Decision globs: the proposed change against the target as it is now. */
-  globDiff: (id: string) => request<DecisionDiff>('GET', `/api/globs/${id}/diff`),
+  globDiff: (id: string) => request<GlobDiff>('GET', `/api/globs/${id}/diff`),
   /** Decision globs: writes or refreshes the assessment. */
   assess: (id: string) => request<{ kind: ArtifactKind; version: number; content: string }>('POST', `/api/globs/${id}/assessment`, {}),
   /** Inbox: promotes an item to a decision glob in Planning (idempotent). */

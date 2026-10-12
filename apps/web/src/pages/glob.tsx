@@ -7,15 +7,13 @@ import { GlobDetail } from '@/components/glob-dialog';
 import { ACTION_PATHS, api, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView } from '@/lib/api';
 import { withGlob } from '@/lib/glob-list';
-import { globsKey, useLiveBoard } from '@/lib/live';
+import { globKey, globsKey, useLiveBoard } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
 import { useSstorCopy } from '@/components/sstor-notice';
 import { useToast } from '@/toast';
 
 /** How often the glob is read again; the board's live hints refresh the cards, not this page's glob. */
 const REFRESH_MS = 10_000;
-
-const globKey = (id: string) => ['glob', id] as const;
 
 /** One glob as a page in the main area, at its own URL (`/boards/:b/globs/:id`, `?artifact=<kind>` shows an artifact first). */
 export const GlobPage = () => {

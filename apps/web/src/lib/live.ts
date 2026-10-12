@@ -26,6 +26,9 @@ interface Hint {
 export type LiveState = 'connecting' | 'live' | 'reconnecting' | 'paused';
 
 export const globsKey = (boardId: number) => ['globs', boardId] as const;
+
+/** One glob in the glob view. */
+export const globKey = (id: string) => ['glob', id] as const;
 export const signedOffCountKey = (boardId: number) => ['signed-off-count', boardId] as const;
 
 /** The board's deploy indicators and running environments; invalidated by `glob.deploys` hints. */
@@ -56,11 +59,11 @@ export const globDiffKey = (globId: string) => ['glob-diff', globId] as const;
 export const artifactKey = (globId: string, kind: string, label: string) => ['artifact', globId, kind, label] as const;
 
 /**
- * Everything the Knowledge page reads: KB items, documents, agent-set files and draft targets.
+ * Everything the Knowledge page and the board's job statuses read: documents, agent-set files and the KB jobs.
  * Invalidated by `board.kb` (and `board.changed`) hints, on reconnect, and after the page's own writes.
  */
 export const invalidateKnowledge = (client: QueryClient, boardId: number) => {
-  for (const key of ['kb-proposals', 'kb', 'knowledge-page', 'kb-doc', 'kb-agent-file', 'kb-target-text', 'kb-jobs', 'sub-limit', 'dependency-rules']) {
+  for (const key of ['kb', 'knowledge-page', 'kb-doc', 'kb-agent-file', 'kb-jobs', 'sub-limit', 'dependency-rules']) {
     void client.invalidateQueries({ queryKey: [key, boardId] });
   }
 };

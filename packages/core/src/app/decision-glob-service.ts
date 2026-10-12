@@ -3,10 +3,11 @@ import type { Result } from '../domain/errors.js';
 import * as machine from '../domain/machine.js';
 import type { Context } from '../domain/machine.js';
 import { decisionOf } from '../domain/decision-glob.js';
+import type { EffectCheck } from '../domain/effect-check.js';
 import { knowledgePageEffect } from '../domain/events.js';
 import type { DecisionOutcomeKind } from '../domain/attributes.js';
-import type { DraftPreview, KbDraft, KbTarget } from '../domain/kb.js';
-import { isLearning, learningAssessmentFacts, learningDocument, learningDraft, learningStatus, learningTarget, pipelineState } from '../domain/learning.js';
+import type { DraftPreview, KbDraft, KbItemStatus, KbProcessing, KbTarget } from '../domain/kb.js';
+import { isLearning, learningAssessmentFacts, learningDocument, learningDraft, learningEffectCheck, learningStatus, learningTarget, pipelineState } from '../domain/learning.js';
 import type { LearningRead } from '../domain/learning.js';
 import { isAgentSetKind } from '../domain/knowledge.js';
 import type { Artifact, KnowledgeKind } from '../domain/knowledge.js';
@@ -32,6 +33,8 @@ export interface DecideRequest {
   readonly target?: TargetChange | undefined;
   /** Needs work: an existing board glob that will make the change; without one, a work glob is created. */
   readonly linkedGlobId?: string | undefined;
+  /** Accept (with or without edits) a learning without a signal: the key of a measured signal for the effect check to watch. */
+  readonly watchSignal?: string | undefined;
 }
 
 /** What a decision would change: the item's target and the diff against the target's current text (null: no item or no draft yet). */
@@ -41,6 +44,19 @@ export interface DecisionDiff {
   readonly preview: DraftPreview | null;
   /** The drafted text (what Accept with edits starts from): a section's new text, or a new document's whole body. */
   readonly draft: KbDraft | null;
+  /** The learning's own state, which the decision view shows beside the change (null: no learning). */
+  readonly learning: DecisionLearning | null;
+}
+
+/** Where a learning is: whether it is still open, the pipeline's step and its failures, and the effect check of an approved change. */
+export interface DecisionLearning {
+  readonly status: KbItemStatus;
+  readonly processing: KbProcessing;
+  readonly processingError: string | null;
+  readonly processingAttempts: number;
+  /** When the pipeline's next try is due (while retrying, the claim's lease once a try is running). */
+  readonly processAfter: string | null;
+  readonly effectCheck: EffectCheck | null;
 }
 
 /** The glob's conditional write lost to a concurrent one: thrown so the KB writes made beside it roll back too. */
@@ -197,6 +213,7 @@ export class DecisionGlobService {
     if (input.outcome !== 'retarget' && input.target !== undefined) return invalidInput('target is for retarget');
     if (input.outcome === 'reject' && (input.reason ?? '').trim() === '') return invalidInput('Rejecting needs a reason');
     if (input.outcome !== 'needs_work' && input.linkedGlobId !== undefined) return invalidInput('linkedGlobId is for needs work');
+    if (input.watchSignal !== undefined && input.outcome !== 'accept' && input.outcome !== 'accept_with_edits') return invalidInput('watchSignal is for accepting');
     return ok(null);
   }
 
@@ -231,6 +248,7 @@ export class DecisionGlobService {
       return invalidInput(`${itemId} is already ${status}: change it on the Knowledge page first`);
     }
     if (role === 'po') {
+      if (input.watchSignal !== undefined) return forbidden(`${itemId}: an admin chooses the signal an approval watches`);
       const refusal = keptForAdmins(input.outcome === 'retarget' ? input.target?.kind : learningTarget(learning.glob).routed?.kind);
       if (refusal !== null && input.outcome !== 'reject') return forbidden(`${itemId} ${refusal}: an admin decides it`);
     }
@@ -257,12 +275,13 @@ export class DecisionGlobService {
 
   /** Accept applies the draft; a learning the pipeline never drafted (routing gave up) is kept as a learning; one still routing waits. */
   private approvalFor(learning: LearningRead, input: DecideRequest): Result<Approval> {
-    if (input.outcome === 'accept_with_edits') return ok({ as: 'draft', content: input.editedDraft ?? '' });
+    const watch = input.watchSignal === undefined ? {} : { watchSignal: input.watchSignal };
+    if (input.outcome === 'accept_with_edits') return ok({ as: 'draft', content: input.editedDraft ?? '', ...watch });
     const { glob, artifacts } = learning;
-    if (learningDocument(glob, artifacts) !== null || learningDraft(artifacts) !== null) return ok({ as: 'draft' });
+    if (learningDocument(glob, artifacts) !== null || learningDraft(artifacts) !== null) return ok({ as: 'draft', ...watch });
     const { processing } = pipelineState(glob, artifacts, learning.jobs);
     if (processing === 'pending' || processing === 'routed') return invalidInput(`${glob.id} is not drafted yet: wait for the pipeline, or retarget it`);
-    return ok({ as: 'learning' });
+    return ok({ as: 'learning', ...watch });
   }
 
   /**
@@ -313,11 +332,25 @@ export class DecisionGlobService {
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
       const learning = isLearning(glob) ? await readLearning(tx, glob.id) : null;
-      if (learning === null) return ok({ target: null, currentVersion: null, preview: null, draft: null });
+      if (learning === null) return ok({ target: null, currentVersion: null, preview: null, draft: null, learning: null });
       const preview = await this.deps.knowledge.previewFor(tx, learning);
       const document = learningDocument(learning.glob, learning.artifacts);
       const draft = document === null ? (learningDraft(learning.artifacts)?.draft ?? null) : { section: null, content: document.content };
-      return ok({ target: learningTarget(learning.glob).routed, currentVersion: preview?.version ?? null, preview, draft });
+      const state = pipelineState(learning.glob, learning.artifacts, learning.jobs);
+      return ok({
+        target: learningTarget(learning.glob).routed,
+        currentVersion: preview?.version ?? null,
+        preview,
+        draft,
+        learning: {
+          status: learningStatus(learning.glob, learning.artifacts),
+          processing: state.processing,
+          processingError: state.error,
+          processingAttempts: state.attempts,
+          processAfter: state.runAfter,
+          effectCheck: learningEffectCheck(learning.artifacts),
+        },
+      });
     });
   }
 

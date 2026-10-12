@@ -4,7 +4,6 @@ import type { ChangeEvent } from 'react';
 import { useParams } from 'react-router';
 import { AgentSetFiles, LineDiff } from '@/components/agent-set-files';
 import { KnowledgePageView } from '@/components/knowledge-page-view';
-import { KbProposals } from '@/components/kb-proposals';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { api, RequestError } from '@/lib/api';
@@ -24,12 +23,12 @@ const summary = (r: ImportResult) =>
     .filter((s) => s !== '')
     .join(', ');
 
-/** The board's knowledge base: its documents, proposals for it, its agent set, and the ways to add to them. */
+/** The board's knowledge base: its documents, its agent set, and the ways to add to them. Proposals for it are decision globs on the board. */
 export const KnowledgePage = () => {
   const boardId = Number(useParams().boardId);
   const client = useQueryClient();
   const toast = useToast();
-  // Proposals move through the pipeline and other admins decide them: follow the board's KB hints.
+  // Documents and the agent set change as proposals are approved: follow the board's KB hints.
   const live = useLiveKnowledge(boardId);
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
   const kb = useQuery({ queryKey: ['kb', boardId], queryFn: () => api.knowledge(boardId) });
@@ -130,17 +129,6 @@ export const KnowledgePage = () => {
           </label>
         )}
       </section>
-
-      {/* Keyed by board: another board's proposals (or its history limit) must never show here. */}
-      <KbProposals
-        key={boardId}
-        boardId={boardId}
-        admin={admin}
-        documents={kb.data.documents}
-        agentEntries={kb.data.agentSet.entries}
-        onOpenDocument={setViewing}
-        live={live}
-      />
 
       {admin && catalog.data !== undefined && (
         <section className='grid gap-2'>

@@ -660,12 +660,24 @@ describe('the KB wire contract', () => {
     const { boardId, sourceGlobId } = await newBoard();
     const id = await submit(boardId, sourceGlobId, 'Generated files live in src/gen/');
     const before: unknown = await (await get(`/api/globs/${id}/diff`)).json();
-    expect(before).toEqual({ target: null, currentVersion: null, preview: null, draft: null });
+    expect(before).toEqual({
+      target: null,
+      currentVersion: null,
+      preview: null,
+      draft: null,
+      learning: { status: 'open', processing: 'pending', processingError: null, processingAttempts: 0, processAfter: null, effectCheck: null },
+    });
     await drafted(id);
     const response = await get(`/api/globs/${id}/diff`);
     expect(response.status).toBe(200);
     const body: unknown = await response.json();
-    expect(body).toEqual({ target: TARGET, currentVersion: 1, preview: PREVIEW, draft: DRAFT });
-    expect(keysOf(body)).toEqual(['target', 'currentVersion', 'preview', 'draft']);
+    expect(body).toEqual({
+      target: TARGET,
+      currentVersion: 1,
+      preview: PREVIEW,
+      draft: DRAFT,
+      learning: { status: 'open', processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, effectCheck: null },
+    });
+    expect(keysOf(body)).toEqual(['target', 'currentVersion', 'preview', 'draft', 'learning']);
   });
 });
