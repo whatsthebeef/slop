@@ -6,7 +6,7 @@ import { ChatDock } from '@/components/chat-dock';
 import { NotificationBar } from '@/components/notification-bar';
 import { AppSettings, BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
-import { hideSignedOff, isChatShortcut, WIDE_QUERY } from '@/lib/chat';
+import { isChatShortcut, WIDE_QUERY } from '@/lib/chat';
 import { spendLine } from '@/lib/review-settings';
 import { newCount } from '@/lib/inbox';
 import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
@@ -15,10 +15,9 @@ import { inboxKey } from '@/lib/live';
 import { activeTab, BOARD_TABS, pollInterval } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
 
-/** What the shell gives its pages: the slot for a page's own tab-row icon (the board's ＋ New glob), and whether the docked chat has pushed Signed Off aside. */
+/** What the shell gives its pages: the slot for a page's own tab-row icon (the board's ＋ New glob). */
 export interface BoardShellContext {
   headerActions: HTMLElement | null;
-  hideSignedOff: boolean;
 }
 
 /** Board, Inbox, Signed off, Knowledge and Settings as tabs on a thin line; the active one is underlined on it. The ＋, chat and settings icons sit at its right. */
@@ -147,7 +146,7 @@ export const BoardShell = () => {
       {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={toggleChat} chatOpen={showChat} />}
       <div className='flex min-h-0 flex-1'>
         <div className='min-h-0 min-w-0 flex-1 overflow-auto' inert={showChat && fullScreen} data-testid='main-area'>
-          <Outlet context={{ headerActions, hideSignedOff: hideSignedOff(mounted, wide) } satisfies BoardShellContext} />
+          <Outlet context={{ headerActions } satisfies BoardShellContext} />
         </div>
         {isBoard && mounted && (
           <ChatDock
