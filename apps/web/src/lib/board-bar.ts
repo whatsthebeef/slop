@@ -4,7 +4,7 @@ import type { BoardView, Me } from '@/lib/api';
 export interface BarRows {
   /** False against an older API that doesn't send sessions: the bar can't add or remove then. */
   readonly managed: boolean;
-  /** Your sessions, in bar order. */
+  /** Your sessions, in number order (each with its own `position`). */
   readonly sessions: readonly BoardView[];
   /** The current board when it isn't a session (opened from a link, or just removed): shown with an add button. */
   readonly loose: BoardView | undefined;
@@ -19,7 +19,7 @@ const inEditable = (el: unknown): boolean => {
 };
 
 /**
- * The board a number key opens: key 1–9 is the session in that place of the bar. Null for anything but a plain press
+ * The board a number key opens: key 1–9 is the session whose stored number it is (gaps stay, so key 2 can open a session while 1 is empty). Null for anything but a plain press
  * (modifiers, a held key, IME composition), while typing (the target or the focused element is, or is inside, an input,
  * textarea, select or contenteditable), for a number with no session, and for the board already shown.
  */
@@ -41,7 +41,7 @@ export const sessionForKey = (
   if (!/^[1-9]$/.test(e.key)) return null;
   if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat === true || e.isComposing === true) return null;
   if (inEditable(e.target) || inEditable(active)) return null;
-  const board = sessions[Number(e.key) - 1];
+  const board = sessions.find((b) => b.position === Number(e.key));
   return board === undefined || board.id === current ? null : board;
 };
 
