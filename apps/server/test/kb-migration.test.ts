@@ -215,6 +215,15 @@ describe('KB items become decision globs (migration 0049)', () => {
     ).id;
     // The old table's rows, and what else referred to them by ID.
     await database.db.insert(kbProposals).values(rows().map(kbProposalRow));
+    // Rows the old schema allowed but the pipeline never wrote: a decision without its time, evidence entries missing
+    // their time or text, a merge note whose time doesn't parse.
+    await database.db.insert(kbProposals).values([
+      kbProposalRow(drafted(40, { status: 'approved', decidedBy: ADMIN, decidedAt: null, outcome: { kind: 'learning' } })),
+      kbProposalRow(base(41)),
+      kbProposalRow(base(42, { status: 'merged', target, duplicateOf: id(3) })),
+    ]);
+    await database.db.execute(sql`update kb_proposals set extra_evidence = ${JSON.stringify([{ itemId: id(30) }, { evidence: 'No time', submittedBy: 'c@example.com', at: 'some time last week' }])}::jsonb where id = ${id(41)}`);
+    await database.db.execute(sql`update kb_proposals set merge_note = ${JSON.stringify({ by: 'intake', quote: 'a', survivorQuote: 'b', at: 'not a time' })}::jsonb where id = ${id(42)}`);
     await database.db.execute(sql`insert into id_counters (board_id, letter, n) values (${boardId}, 'k', 5) on conflict (board_id, letter) do update set n = 5`);
     await store.transaction((tx) =>
       tx.saveKnowledge({ boardId, kind: 'doc', name: 'build', area: 'build', audience: [], description: 'Build', content: '# Build\n\n## Test\n\nRun vitest.\n', layer: 'file', version: 1, source: `kb:${id(8)}`, updatedBy: ADMIN, updatedAt: ago(3) }),
@@ -250,7 +259,7 @@ describe('KB items become decision globs (migration 0049)', () => {
     }
     // One glob per learning, on its own board, with the creation key and no other.
     const counted = await database.db.execute(sql`select count(*)::int as n from globs where data->>'category' = 'decision'`);
-    expect(counted[0]?.n).toBe(rows().length);
+    expect(counted[0]?.n).toBe(rows().length + 3);
     expect(await glob(1, otherBoard)).toMatchObject({ boardId: otherBoard });
     // The wrapper glob that stood in front of an item is replaced, its old artifacts gone.
     expect((await artifacts(1)).map((a) => a.content)).toEqual([proposalText(base(1))]);
@@ -316,7 +325,8 @@ describe('KB items become decision globs (migration 0049)', () => {
     expect(old).toMatchObject({ status: 'signed_off', attributes: { archived: true } });
     expect(await item(9)).toMatchObject({ status: 'approved' });
     const approved = await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'approved'));
-    expect(approved.map((i) => i.id)).toEqual([id(8), id(9)]);
+    // (s1k40 is an approval that lost its time, below.)
+    expect(approved.map((i) => i.id)).toEqual([id(40), id(8), id(9)]);
   });
 
   it('archives rejections with their reason, and closures with closedAs and the link to what closed them', async () => {
@@ -359,12 +369,12 @@ describe('KB items become decision globs (migration 0049)', () => {
 
   it('keeps the k counter ahead of every item, and leaves what referred to items by ID alone', async () => {
     const [counter] = await database.db.execute(sql`select n from id_counters where board_id = ${boardId} and letter = 'k'`);
-    // The highest item number on the board (k23), over a counter left behind at 5.
-    expect(counter?.n).toBe(23);
+    // The highest item number on the board (k42), over a counter left behind at 5.
+    expect(counter?.n).toBe(42);
     expect((await store.transaction((tx) => tx.getKnowledge(boardId, 'doc', 'build')))?.source).toBe(`kb:${id(8)}`);
     const knowledge = new KnowledgeService({ store, clock: { now: () => new Date().toISOString() }, catalog: { kbEntries: () => Promise.resolve([]), agentSet: () => Promise.resolve({ hash: 'h', files: [] }) }, notifier: { publish: () => undefined } });
     const next = unwrap(await knowledge.submitLearning(DEV, boardId, { sourceGlobId: workGlob, type: 'gotcha', statement: 'After the move', evidence: 'x' }));
-    expect(next.id).toBe(id(24));
+    expect(next.id).toBe(id(43));
   });
 
   it('approves a migrated drafted learning end to end, and reopens a merged one with the pair kept apart', async () => {
@@ -383,5 +393,23 @@ describe('KB items become decision globs (migration 0049)', () => {
     expect(await glob(11)).toMatchObject({ status: 'planning', links: [{ id: id(3), kind: 'kept_apart_from', source: 'explicit' }] });
     expect((await item(3))?.keptApartFrom).toContain(id(11));
     expect((await jobs(11)).at(-1)).toMatchObject({ kind: 'kb_draft', state: 'pending' });
+  });
+
+  it('moves rows the old schema allowed but the pipeline never wrote, dating what has no usable time by the submission', async () => {
+    const created = base(40).createdAt;
+    expect(await glob(40)).toMatchObject({ status: 'signed_off', signedOffAt: created, attributes: { outcome: { kind: 'accept', at: created } } });
+    expect(await item(40)).toMatchObject({ status: 'approved', decidedBy: ADMIN, decidedAt: created });
+    const evidence = (await artifacts(41)).filter((a) => String(a.label).startsWith('evidence:'));
+    expect(evidence.map((a) => [a.label, a.content, new Date(String(a.created_at)).toISOString()])).toEqual([
+      [`evidence:${id(30)}`, '', created],
+      ['evidence:', 'No time', created],
+    ]);
+    expect((await item(41))?.extraEvidence).toMatchObject([{ itemId: id(30), evidence: '' }, { itemId: '', evidence: 'No time', submittedBy: 'c@example.com' }]);
+    expect(await glob(42)).toMatchObject({ status: 'signed_off', signedOffAt: created, attributes: { closedAs: 'merged' } });
+    const events = await store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['DecisionDecided'], [id(42)]));
+    // The shape `closeDecision` writes.
+    expect(events.map((e) => e.data)).toEqual([
+      { outcome: { kind: 'closed', reason: 'The knowledge pipeline closed the item as merged' }, closedAs: 'merged', link: { id: id(3), kind: 'duplicate_of', source: 'pipeline' } },
+    ]);
   });
 });

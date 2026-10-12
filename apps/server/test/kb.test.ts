@@ -154,7 +154,7 @@ describe('KB items in Postgres', () => {
     expect(await store.transaction((tx) => kbItems(tx, KB_WRITES).updateKbItem(decided, 2))).toBe(false);
     expect(await store.transaction((tx) => kbItems(tx, KB_WRITES).updateKbItem(decided, 1))).toBe(true);
     // Decided, it reads as out of the pipeline.
-    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toEqual({ ...decided, processing: 'drafted' });
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toEqual({ ...decided, processing: 'none' });
     expect(await store.transaction((tx) => kbItems(tx, KB_WRITES).updateKbItem({ ...decided, version: 3 }, 1))).toBe(false);
     expect((await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'rejected'))).map((i) => i.id)).toContain(id);
   });

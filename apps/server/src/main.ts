@@ -180,9 +180,10 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
 // `decisionGlobs` is built below, after the knowledge service it needs; it is only called once an effect runs.
 const outboxDeps: ConstructorParameters<typeof OutboxRunner>[1] = { globs, decisions: { linkedMerged: (mergedId, boardId) => decisionGlobs.linkedMerged(mergedId, boardId) } };
 const outbox = new OutboxRunner(db, outboxDeps, outboxExecutors, logError, 'default');
-// A settled KB job (failed, retrying, waiting with a new reason) refreshes the board's Knowledge page.
-const llmOutbox = new OutboxRunner(db, outboxDeps, outboxExecutors, logError, 'llm', (effect) => {
-  const hint = kbJobHint(effect);
+// A KB job that failed, will retry, or waits for a new reason refreshes the board's Knowledge page; a finished one
+// already did (the pipeline publishes when it writes), and a dropped one changed nothing.
+const llmOutbox = new OutboxRunner(db, outboxDeps, outboxExecutors, logError, 'llm', (effect, state) => {
+  const hint = state === 'done' || state === 'dropped' ? null : kbJobHint(effect);
   if (hint !== null) hub.publish(hint);
 });
 
@@ -530,8 +531,15 @@ if (runs('catalog')) {
 }
 
 if (runs('outbox')) outbox.start();
-// The `llm` lane carries the KB pipeline, so `kb` (SLOP_SESSION_JOBS=kb) still means KB processing.
-if (runs('kb')) llmOutbox.start();
+// The `llm` lane has its own switch; `kb` (SLOP_SESSION_JOBS=kb) starts it too, since it carries the KB pipeline.
+if (runs('llm') || runs('kb')) {
+  // Self-healing: an open learning whose step has no job waiting (lost, or dropped by a bug) gets one queued.
+  void kbPipeline
+    .queueDueSteps()
+    .then((count) => count > 0 && console.log(`[kb-pipeline] queued ${String(count)} learning step(s) that had no job`))
+    .catch((error: unknown) => logError('kb-pipeline', error instanceof Error ? error.message : String(error)))
+    .finally(() => llmOutbox.start());
+}
 const runWatch = new RunWatch(store, globs, logError);
 if (runs('runs')) runWatch.start();
 const deployWatch = new DeployWatch(deploys, logError);

@@ -24,10 +24,11 @@ export type KbItemStatus = (typeof KB_ITEM_STATUSES)[number];
  * (`pending`), routed and waiting for its draft (`routed`), drafted, or given up on after repeated
  * LLM failures (`failed`: routing failed when it has no target, drafting failed when it has one;
  * the item stays open and can still be decided by hand). A drafted item whose target changes goes
- * back to `routed` to be drafted again. Derived, never stored: from the item's next step (`kbStepOf`)
- * and that step's newest outbox job (`withProcessing`).
+ * back to `routed` to be drafted again. An item that is no longer open (decided, or closed by the
+ * pipeline) is out of the pipeline: `none`. Derived, never stored: from the item's next step
+ * (`kbStepOf`) and that step's newest outbox job (`withProcessing`).
  */
-export const KB_PROCESSING_STATES = ['pending', 'routed', 'drafted', 'failed'] as const;
+export const KB_PROCESSING_STATES = ['pending', 'routed', 'drafted', 'failed', 'none'] as const;
 export type KbProcessing = (typeof KB_PROCESSING_STATES)[number];
 
 /** The frontmatter proposed for a new document a learning is routed to (its content comes with the draft). */
@@ -484,13 +485,16 @@ export const kbEffectsFor = (before: KbItem | null, after: KbItem): Effect[] => 
 /**
  * The item with its pipeline fields read from the outbox: its next step's newest job says whether it is waiting
  * (`pending` or `routed`, with the attempts spent, the last error or why it waits, and when it runs next) or `failed`.
- * An item with no step (drafted, a document proposal, or no longer open) reads as out of the pipeline: `drafted`, with no
- * error. `jobs` may hold other items' jobs.
+ * An open item with no step (drafted, or a document proposal) reads `drafted`; one no longer open reads `none`; neither
+ * has an error. `jobs` may hold other items' jobs.
  */
 export const withProcessing = (item: KbItem, jobs: readonly OutboxJob[]): KbItem => {
+  const idle = { processingError: null, processingAttempts: 0, processAfter: null };
+  // Decided or closed: out of the pipeline.
+  if (item.status !== 'open') return { ...item, ...idle, processing: 'none' };
   const step = kbStepOf(item);
-  // Not open (decided or closed) or drafted: out of the pipeline.
-  if (step === null) return { ...item, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null };
+  // Drafted, or a document proposal (its own draft).
+  if (step === null) return { ...item, ...idle, processing: 'drafted' };
   const kind = KB_STEP_KIND[step];
   const job = jobs.reduce<OutboxJob | null>((newest, j) => (j.globId === item.id && j.kind === kind && (newest === null || j.id > newest.id) ? j : newest), null);
   const waiting: KbProcessing = step === 'route' ? 'pending' : 'routed';

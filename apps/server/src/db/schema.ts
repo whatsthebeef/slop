@@ -192,7 +192,11 @@ export const outbox = pgTable(
     lastError: text('last_error'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('outbox_lane_pending_idx').on(t.lane, t.state, t.runAfter)],
+  (t) => [
+    index('outbox_lane_pending_idx').on(t.lane, t.state, t.runAfter),
+    // A glob's newest job of a kind (the KB items' pipeline fields, and the one-unclaimed-job check on queueing).
+    index('outbox_glob_kind_idx').on(t.globId, t.kind, t.id),
+  ],
 );
 
 export const sessions = pgTable('sessions', {

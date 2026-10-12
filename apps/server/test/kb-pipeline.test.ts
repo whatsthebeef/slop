@@ -166,7 +166,8 @@ describe('KB pipeline in Postgres', () => {
       version: 2,
     };
     expect(await store.transaction((tx) => kbItems(tx, writes).updateKbItem(closed, 1))).toBe(true);
-    expect(await get(id)).toEqual(closed);
+    // Closed, it reads as out of the pipeline.
+    expect(await get(id)).toEqual({ ...closed, processing: 'none' });
     const glob = await store.transaction((tx) => tx.getGlob(id));
     expect(glob).toMatchObject({ category: 'decision', status: 'signed_off', version: 2, attributes: { closedAs: 'covered', archived: true, coveredByText: { name: 'build' } } });
     // A stale version writes nothing.
@@ -224,8 +225,14 @@ describe('KB pipeline in Postgres', () => {
     const otherRunnerDone = new Promise<void>((resolve) => {
       release = resolve;
     });
+    // When the claim holds the job until, read while the step is inside its model call.
+    let heldUntil: number | null = null;
     const route: Llm = {
       complete: async (request) => {
+        if (request.system === ROUTE_SYSTEM && heldUntil === null) {
+          const [claimed] = await jobs(first);
+          heldUntil = new Date(String(claimed?.runAfter)).getTime();
+        }
         await otherRunnerDone;
         // Routing, then dedupe against the open items earlier tests left.
         if (request.system === ROUTE_SYSTEM) routeCalls++;
@@ -240,6 +247,8 @@ describe('KB pipeline in Postgres', () => {
     release();
     await Promise.all(drained);
     expect(routeCalls).toBe(1);
+    // The claim holds the job for the llm lane's lease, not a few seconds: no runner takes it again mid-call.
+    expect(heldUntil).toBeGreaterThan(Date.now() + 4 * 60_000);
     expect(await jobs(first)).toMatchObject([
       { kind: 'kb_route', state: 'done', attempts: 1 },
       { kind: 'kb_draft', state: 'pending', attempts: 1, lastError: 'Sonnet is down' },
@@ -385,6 +394,32 @@ describe('KB pipeline in Postgres', () => {
     expect(await get(second)).toMatchObject({ status: 'open', processing: 'routed', draft: null, draftedAgainstVersion: null });
     // The approval queued its draft again.
     expect((await jobs(second)).at(-1)).toMatchObject({ kind: 'kb_draft', state: 'pending', attempts: 0 });
+  });
+
+  it('queues a fresh draft when the item is retargeted after its draft committed but before the job settled', async () => {
+    await clearQueue();
+    const id = await submit('Retargeted while drafted');
+    unwrap(await knowledge.changeTarget(ADMIN, id, (await get(id)).version, { kind: 'doc', name: 'build', section: 'Test' }));
+    let retargeted = false;
+    const pipeline = new KbPipeline({ store, clock, catalog, notifier, route: answers(), draft: answers(JSON.stringify({ section: 'Test', content: '## Test\n\nRun vitest --run.', rationale: 'CI' }), new Error('Sonnet is down')) });
+    // The retarget lands after the step's commit and before the runner marks the job done.
+    const late = {
+      runStep: async (itemId: string, step: 'route' | 'draft') => {
+        const outcome = await pipeline.runStep(itemId, step);
+        if (step === 'draft' && !retargeted) {
+          retargeted = true;
+          unwrap(await knowledge.changeTarget(ADMIN, id, (await get(id)).version, { kind: 'doc', name: 'build', section: 'Lint' }));
+        }
+        return outcome;
+      },
+    };
+    await new OutboxRunner(database.db, deps, kbExecutors(late, { isDown: () => false }), () => undefined, 'llm').drain(id);
+    // The first draft job finished; the retarget got a job of its own, which ran (and failed once here).
+    expect((await jobs(id)).filter((j) => j.kind === 'kb_draft')).toMatchObject([
+      { state: 'done', attempts: 1 },
+      { state: 'pending', attempts: 1, lastError: 'Sonnet is down' },
+    ]);
+    expect(await get(id)).toMatchObject({ processing: 'routed', draft: null, target: { section: 'Lint' } });
   });
 
 });

@@ -240,6 +240,21 @@ export class KbPipeline {
   }
 
   /**
+   * Self-healing, run when the `llm` runner starts: every board's open learnings whose step has no job waiting get one
+   * (`KbItems.queueDueSteps`). Idempotent: a step already queued is not queued again. Returns how many it queued.
+   */
+  async queueDueSteps(): Promise<number> {
+    const boards = await this.deps.store.transaction((tx) => tx.listAllBoards());
+    let queued = 0;
+    for (const board of boards) {
+      const n = await this.deps.store.transaction((tx) => kbItems(tx).queueDueSteps(board.id));
+      if (n > 0) this.deps.notifier.publish({ kind: 'board.kb', boardId: board.id });
+      queued += n;
+    }
+    return queued;
+  }
+
+  /**
    * Runs one step of one item, as the outbox's `kb_route` and `kb_draft` jobs ask: re-reads the item and drops the job
    * when that step is no longer its next (decided, closed, already routed or drafted). A failure (an LLM error, an
    * unusable answer) throws with a readable reason, spending one of the job's attempts; an unavailable or busy LLM, or

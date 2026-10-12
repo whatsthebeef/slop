@@ -616,6 +616,9 @@ export class PgStore implements Store {
           const person = or(eq(schema.globs.planner, filter.person), eq(schema.globs.implementer, filter.person));
           if (person !== undefined) conditions.push(person);
         }
+        if (filter.origins !== undefined) {
+          conditions.push(inArray(sql`${schema.globs.data}->'attributes'->'origin'->>'kind'`, [...filter.origins]));
+        }
         const rows = await t
           .select({ data: schema.globs.data })
           .from(schema.globs)
@@ -2104,12 +2107,13 @@ export class PgStore implements Store {
             continue;
           }
           if (effect.kind === 'kb_route' || effect.kind === 'kb_draft') {
-            // One pending KB pipeline job per item and kind (claimed or not): it re-reads the item when it runs, and a
-            // claimed one whose item changed under it runs again.
+            // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running,
+            // or backing off after a failure) gets a sibling: it may have committed its step before this change, and
+            // would then finish without it.
             const [pending] = await t
               .select({ id: schema.outbox.id })
               .from(schema.outbox)
-              .where(and(eq(schema.outbox.kind, effect.kind), eq(schema.outbox.globId, effect.globId), eq(schema.outbox.state, 'pending')))
+              .where(and(eq(schema.outbox.kind, effect.kind), eq(schema.outbox.globId, effect.globId), eq(schema.outbox.state, 'pending'), eq(schema.outbox.attempts, 0)))
               .limit(1);
             if (pending !== undefined || rows.some((r) => r.kind === effect.kind && r.globId === effect.globId)) continue;
           }

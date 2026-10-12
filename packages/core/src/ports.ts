@@ -1,6 +1,7 @@
 import type { BoardSession } from './domain/board-sessions.js';
 import type { Deploy, DeployState } from './domain/deploys.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
+import type { DecisionOrigin } from './domain/attributes.js';
 import type { DomainEvent, DomainEventType, Effect, EffectKind, OutboxJob } from './domain/events.js';
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
 import type { BoardNotification } from './domain/notifications.js';
@@ -39,6 +40,8 @@ export interface GlobFilter {
   readonly type?: SlopType;
   readonly group?: string;
   readonly person?: string;
+  /** Decision globs whose proposal came from one of these (`submitted` and `mined`: the KB items). */
+  readonly origins?: readonly DecisionOrigin['kind'][];
 }
 
 export interface DeployFilter {

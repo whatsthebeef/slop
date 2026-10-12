@@ -2,7 +2,7 @@ import { isValidTimeZone } from '@slop/core';
 import { z } from 'zod';
 
 /** The background jobs a server starts; `SLOP_JOBS` picks them. */
-export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'findings', 'search', 'decisions', 'inbox', 'learning', 'tunnel', 'follow', 'readiness', 'reconcile', 'code'] as const;
+export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'llm', 'findings', 'search', 'decisions', 'inbox', 'learning', 'tunnel', 'follow', 'readiness', 'reconcile', 'code'] as const;
 export type Job = (typeof JOBS)[number];
 const isJob = (name: string): name is Job => JOBS.some((job) => job === name);
 

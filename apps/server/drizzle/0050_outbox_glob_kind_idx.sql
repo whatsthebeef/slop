@@ -1,0 +1,1 @@
+CREATE INDEX "outbox_glob_kind_idx" ON "outbox" USING btree ("glob_id","kind","id");

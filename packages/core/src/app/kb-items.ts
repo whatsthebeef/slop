@@ -1,6 +1,6 @@
 import { broaderConflicts, decisionGlobTitle, decisionOf, defaultScope, kbItemKey } from '../domain/decision-glob.js';
 import type { DecisionAttributes } from '../domain/attributes.js';
-import type { DomainEvent, Effect } from '../domain/events.js';
+import type { DomainEvent, Effect, OutboxJob } from '../domain/events.js';
 import { parseId } from '../domain/ids.js';
 import { KB_STEP_KIND, KB_STEP_KINDS, kbEffectsFor, kbStepOf, withProcessing } from '../domain/kb.js';
 import type { DraftPreview, KbItem, KbItemStatus } from '../domain/kb.js';
@@ -47,6 +47,11 @@ export interface KbItems {
   updateKbItem(item: KbItem, expectedVersion: number, options?: KbWriteOptions): Promise<boolean>;
   /** Queues the item's step again (an admin's Retry after it failed); the item as it reads afterwards. */
   retryStep(item: KbItem): Promise<KbItem>;
+  /**
+   * Self-healing: queues the due step of every open learning on the board whose step has no job waiting (none, or the
+   * newest finished or was dropped). A failed one is left for an admin's Retry. Returns how many it queued.
+   */
+  queueDueSteps(boardId: number): Promise<number>;
 }
 
 export interface KbWriteOptions {
@@ -103,7 +108,7 @@ export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
     });
   };
   const boardItems = async (boardId: number): Promise<KbItem[]> =>
-    (await itemsOf(await tx.listGlobs(boardId, { include: 'decisions' }))).sort(
+    (await itemsOf(await tx.listGlobs(boardId, { include: 'decisions', origins: ['submitted', 'mined'] }))).sort(
       (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
     );
   const read = async (id: string): Promise<KbItem | null> => {
@@ -321,6 +326,23 @@ export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
       if (!same(glob, written.glob)) raise({ kind: 'glob.changed', boardId: glob.boardId, globId: glob.id, version: written.glob.version });
       if (artifacts) raise({ kind: 'glob.artifacts', boardId: glob.boardId, globId: glob.id });
       return true;
+    },
+    queueDueSteps: async (boardId) => {
+      const open = (await boardItems(boardId)).filter((i) => i.status === 'open');
+      const jobs = await tx.latestOutboxJobs(
+        open.map((i) => i.id),
+        KB_STEP_KINDS,
+      );
+      const due: Effect[] = [];
+      for (const item of open) {
+        const step = kbStepOf(item);
+        if (step === null) continue;
+        const kind = KB_STEP_KIND[step];
+        const newest = jobs.filter((j) => j.globId === item.id && j.kind === kind).reduce<OutboxJob | null>((a, j) => (a === null || j.id > a.id ? j : a), null);
+        if (newest === null || newest.state === 'done' || newest.state === 'dropped') due.push({ kind, globId: item.id });
+      }
+      await tx.enqueueEffects(due);
+      return due.length;
     },
     retryStep: async (item) => {
       const step = kbStepOf(item);

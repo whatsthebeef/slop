@@ -414,8 +414,8 @@ describe('KB pipeline: drafting and approving drafts', () => {
       processing: 'routed',
       processingAttempts: 1,
       processingError: 'The draft answer was not usable JSON',
-      // The outbox's backoff after a first failed attempt.
-      processAfter: '2026-10-05T12:00:05.000Z',
+      // The llm lane's backoff after a first failed attempt.
+      processAfter: '2026-10-05T12:00:30.000Z',
     });
     expect(await queue.processNext()).toBeNull();
     for (let attempt = 2; attempt <= MAX_PROCESSING_ATTEMPTS; attempt++) {
@@ -569,7 +569,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
     );
 
     unwrap(await approveDraft(first));
-    expect(await item(first)).toMatchObject({ status: 'approved', processing: 'drafted' });
+    expect(await item(first)).toMatchObject({ status: 'approved', processing: 'none' });
     expect(await item(second)).toMatchObject({ status: 'open', processing: 'routed', draft: null });
     expect(await item(elsewhere)).toMatchObject({ processing: 'drafted' });
 
@@ -616,6 +616,31 @@ describe('KB pipeline: drafting and approving drafts', () => {
       draftedAgainstVersion: 2,
       draft: { content: '## Test\n\nFresh' },
     });
+  });
+
+  it('queues a fresh draft when the item is retargeted after its draft committed but before its job settled', async () => {
+    const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: 'Test' });
+    drafter.answer(draftAnswer('Test', '## Test\n\nRun vitest --reporter=dot.'));
+    // The retarget lands in the window between the step's commit and the runner marking the job done.
+    const late = new MemoryKbQueue(
+      store,
+      {
+        runStep: async (itemId, step) => {
+          const outcome = await pipeline.runStep(itemId, step);
+          unwrap(await knowledge.changeTarget(ADMIN, id, (await item(id)).version, { kind: 'doc', name: 'build_test_lint', section: 'Lint' }));
+          return outcome;
+        },
+      },
+      { now: () => now },
+      notifier,
+    );
+    expect(await late.process(id)).toBe(true);
+    const drafts = store.state.outboxJobs.filter((j) => j.globId === id && j.kind === 'kb_draft');
+    expect(drafts.map((j) => [j.state, j.attempts])).toEqual([['done', 1], ['pending', 0]]);
+    expect(await item(id)).toMatchObject({ processing: 'routed', draft: null, target: { section: 'Lint' } });
+    drafter.answer(draftAnswer('Lint', '## Lint\n\nRun eslint --max-warnings 0.'));
+    expect(await queue.process(id)).toBe(true);
+    expect(await item(id)).toMatchObject({ processing: 'drafted', draft: { section: 'Lint' } });
   });
 
   it('changes the target as an admin: the draft is cleared and drafted again without routing', async () => {

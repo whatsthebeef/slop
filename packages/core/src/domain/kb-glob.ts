@@ -172,7 +172,7 @@ const kbArtifactsOf = (globId: string, artifacts: readonly Artifact[]): KbArtifa
     mergeNote: one('attachment', MERGE_NOTE_LABEL),
     documentEvidence: one('attachment', DOCUMENT_EVIDENCE_LABEL),
     // Each evidence label is written once, so its ID says when it was added.
-    extra: own.filter((a) => a.kind === 'attachment' && a.label.startsWith(EVIDENCE_PREFIX) && a.content !== '').sort((a, b) => a.id - b.id),
+    extra: own.filter((a) => a.kind === 'attachment' && a.label.startsWith(EVIDENCE_PREFIX)).sort((a, b) => a.id - b.id),
   };
 };
 
@@ -192,8 +192,8 @@ export const kbStatusOf = (attributes: DecisionAttributes, approvalRecorded: boo
 };
 
 /**
- * The KB item a decision glob is, from the glob and its artifacts (null for any other glob). Its pipeline fields read as
- * out of the pipeline (`drafted`, no error): `withProcessing` fills them in from the outbox for an open item.
+ * The KB item a decision glob is, from the glob and its artifacts (null for any other glob). Its pipeline fields are
+ * placeholders: `withProcessing` fills them in from its status and its jobs.
  */
 export const kbItemOf = (glob: Glob, artifacts: readonly Artifact[]): KbItem | null => {
   const attributes = decisionOf(glob);

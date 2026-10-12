@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { kbItems, kbJobHint } from '../src/app/kb-items.js';
 import { MAX_PROCESSING_ATTEMPTS } from '../src/app/kb-pipeline.js';
-import { laneOf, maxAttemptsOf, outboxBackoffMs } from '../src/domain/events.js';
+import { claimLeaseMs, laneOf, LLM_CLAIM_LEASE_MS, maxAttemptsOf, outboxBackoffMs } from '../src/domain/events.js';
 import type { OutboxJob } from '../src/domain/events.js';
 import { kbEffectsFor, kbStepOf, kbStepOfKind, UNPROCESSED, withProcessing } from '../src/domain/kb.js';
 import type { KbItem, KbTarget } from '../src/domain/kb.js';
@@ -55,7 +55,11 @@ describe('the KB pipeline steps on the outbox', () => {
     expect([laneOf('kb_route'), laneOf('kb_draft')]).toEqual(['llm', 'llm']);
     expect(maxAttemptsOf('llm')).toBe(MAX_PROCESSING_ATTEMPTS);
     expect(maxAttemptsOf('default')).toBe(8);
-    expect([0, 1, 2, 20].map(outboxBackoffMs)).toEqual([5_000, 10_000, 20_000, 3_600_000]);
+    expect([0, 1, 2, 20].map((n) => outboxBackoffMs(n))).toEqual([5_000, 10_000, 20_000, 3_600_000]);
+    // The llm lane's three attempts span minutes; a claim there holds the job for at least the lease.
+    expect([0, 1, 2].map((n) => outboxBackoffMs(n, 'llm'))).toEqual([30_000, 60_000, 120_000]);
+    expect([0, 1, 7].map((n) => claimLeaseMs(n, 'llm'))).toEqual([LLM_CLAIM_LEASE_MS, LLM_CLAIM_LEASE_MS, 3_600_000]);
+    expect(claimLeaseMs(1)).toBe(10_000);
     expect([kbStepOfKind('kb_route'), kbStepOfKind('kb_draft'), kbStepOfKind('reconcile_pr')]).toEqual(['route', 'draft', null]);
   });
 
@@ -110,7 +114,7 @@ describe('the KB pipeline steps on the outbox', () => {
     expect(withProcessing(drafted(), [failed])).toMatchObject({ processing: 'drafted', processingError: null });
     // A decided item has left the pipeline, whatever its jobs say.
     const decided = routed({ status: 'approved', processing: 'failed', processingError: 'x', processingAttempts: 3 });
-    expect(withProcessing(decided, [failed])).toMatchObject({ processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null });
+    expect(withProcessing(decided, [failed])).toMatchObject({ processing: 'none', processingError: null, processingAttempts: 0, processAfter: null });
   });
 
   it('writes through the adapter queue the step a change makes due, once per item and kind, and retries on request', async () => {

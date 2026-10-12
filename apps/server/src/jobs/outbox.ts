@@ -1,5 +1,5 @@
-import { maxAttemptsOf, outboxBackoffMs } from '@slop/core';
-import type { DecisionGlobService, Effect, EffectKind, Glob, GlobService, OutboxLane, RetryLater } from '@slop/core';
+import { claimLeaseMs, maxAttemptsOf, outboxBackoffMs } from '@slop/core';
+import type { DecisionGlobService, Effect, EffectKind, Glob, GlobService, OutboxLane, OutboxState, RetryLater } from '@slop/core';
 import { and, asc, eq, lte, sql } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/store.js';
@@ -61,7 +61,7 @@ export class OutboxRunner {
     private readonly executors: Partial<Record<EffectKind, Executor>>,
     private readonly log: (task: string, message: string) => void,
     private readonly lane: OutboxLane = 'default',
-    private readonly onSettled?: (effect: Effect) => void,
+    private readonly onSettled?: (effect: Effect, state: OutboxState) => void,
   ) {}
 
   private get maxAttempts(): number {
@@ -120,7 +120,8 @@ export class OutboxRunner {
         .update(schema.outbox)
         .set({
           attempts: sql`${schema.outbox.attempts} + 1`,
-          runAfter: new Date(Date.now() + outboxBackoffMs(job.attempts)),
+          // Held for the lane's lease: on `llm` a step can run for minutes, and a second runner must not take it meanwhile.
+          runAfter: new Date(Date.now() + claimLeaseMs(job.attempts, this.lane)),
         })
         .where(eq(schema.outbox.id, job.id));
       return job;
@@ -165,16 +166,18 @@ export class OutboxRunner {
         }
       }
     }
+    // A thrown failure retries after the lane's backoff, not the claim's lease.
+    const thrown = retryAfterMs === null && state === 'pending';
     await this.db
       .update(schema.outbox)
       .set(
         retryAfterMs === null
-          ? { state, lastError }
+          ? { state, lastError, ...(thrown ? { runAfter: new Date(Date.now() + outboxBackoffMs(job.attempts, this.lane)) } : {}) }
           : // Claim spent an attempt and set a backoff; give the attempt back and use the executor's delay.
             { state, lastError, attempts: sql`${schema.outbox.attempts} - 1`, runAfter: new Date(Date.now() + retryAfterMs) },
       )
       .where(eq(schema.outbox.id, job.id));
     // A wait that only repeats itself (the same reason) is no news.
-    if (state !== 'pending' || retryAfterMs === null || lastError !== job.lastError) this.onSettled?.(effect);
+    if (state !== 'pending' || retryAfterMs === null || lastError !== job.lastError) this.onSettled?.(effect, state);
   }
 }

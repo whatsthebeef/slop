@@ -4,6 +4,11 @@
 -- processing columns stay behind, unread. Items that failed carry over as failed jobs (an admin's Retry queues a fresh
 -- one), except those that failed only because Bedrock was busy, which start again with no attempts spent (what the
 -- startup requeue did). A claimed or backing-off item is due at once: every step is idempotent.
+
+-- Held until the deploy's migrations commit (drizzle runs them in one transaction, through 0049's move): an old server's
+-- KB writes wait here, then fail, rather than route an item after its job was derived from the row.
+LOCK TABLE "kb_proposals" IN ACCESS EXCLUSIVE MODE;
+--> statement-breakpoint
 INSERT INTO "outbox" ("kind", "lane", "glob_id", "effect", "state", "attempts", "run_after", "last_error", "created_at")
 SELECT
   q.kind,

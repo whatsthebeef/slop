@@ -294,7 +294,7 @@ describe('KB pipeline: routing and dedupe', () => {
       status: 'merged',
       duplicateOf: first,
       // Closed, it has left the pipeline.
-      processing: 'drafted',
+      processing: 'none',
       mergeNote: { by: 'intake', quote: GEN_AGAIN, survivorQuote: GEN, at: START },
     });
     const merged = await item(first);
@@ -354,7 +354,7 @@ describe('KB pipeline: routing and dedupe', () => {
     drafter.answer(new Error('Bedrock is down'));
     expect(await queue.process(first)).toBe(true);
     const backingOff = await item(first);
-    expect(backingOff).toMatchObject({ processingAttempts: 1, processingError: 'Bedrock is down', processAfter: '2026-10-05T12:00:05.000Z' });
+    expect(backingOff).toMatchObject({ processingAttempts: 1, processingError: 'Bedrock is down', processAfter: '2026-10-05T12:00:30.000Z' });
     const third = await submit({ statement: 'Generated code is kept in src/gen/' });
     llm.answer(
       toNewDoc('testing'),
@@ -362,6 +362,26 @@ describe('KB pipeline: routing and dedupe', () => {
     );
     expect(await queue.process(third)).toBe(true);
     expect(await item(first)).toMatchObject({ occurrenceCount: 2, processingAttempts: 1, processAfter: backingOff.processAfter });
+  });
+
+  it('heals a learning whose step lost its job: queues it once, and leaves a failed one for an admin', async () => {
+    const lost = await submit();
+    const failed = await submit({ statement: 'Code in src/gen/ is generated' });
+    // The routing job of one was lost (marked done without routing); the other's failed for good.
+    store.state.outboxJobs = store.state.outboxJobs.map((j) => (j.globId === lost ? { ...j, state: 'done', attempts: 1 } : j));
+    queue.fail(failed, 'The routing answer was not usable JSON');
+    expect(await pipeline.queueDueSteps()).toBe(1);
+    expect(queue.jobOf(lost)).toMatchObject({ kind: 'kb_route', state: 'pending', attempts: 0 });
+    expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
+    // Idempotent: nothing more to queue.
+    expect(await pipeline.queueDueSteps()).toBe(0);
+    // A routed learning whose draft job is missing gets its draft queued.
+    llm.answer(toNewDoc('testing'), NO_MATCH);
+    expect(await queue.process(lost)).toBe(true);
+    store.state.outboxJobs = store.state.outboxJobs.filter((j) => !(j.globId === lost && j.kind === 'kb_draft'));
+    expect(await pipeline.queueDueSteps()).toBe(1);
+    expect(queue.jobOf(lost)).toMatchObject({ kind: 'kb_draft', state: 'pending' });
+    expect(await item(failed)).toMatchObject({ processing: 'failed' });
   });
 
   it('suppresses an item matching a rejected one', async () => {
@@ -875,7 +895,7 @@ describe('KB pipeline: routing and dedupe', () => {
     );
     const refused = await knowledge.reopen(ADMIN, id, current.version + 1);
     expect(errorCode(refused)).toBe('invalid_input');
-    expect(await item(id)).toMatchObject({ status: 'merged', processing: 'drafted', target: null });
+    expect(await item(id)).toMatchObject({ status: 'merged', processing: 'none', target: null });
   });
 
   it('keeps an item open and flags it when the target text may already say it, never closing it', async () => {
@@ -979,8 +999,8 @@ describe('KB pipeline: routing and dedupe', () => {
       processing: 'pending',
       processingAttempts: 1,
       processingError: 'The routing answer was not usable JSON',
-      // The outbox's backoff after a first failed attempt.
-      processAfter: '2026-10-05T12:00:05.000Z',
+      // The llm lane's backoff after a first failed attempt.
+      processAfter: '2026-10-05T12:00:30.000Z',
     });
     // The page shows the error while it retries.
     expect(notifier.hints).toEqual([{ kind: 'board.kb', boardId }]);
@@ -1030,8 +1050,8 @@ describe('KB pipeline: routing and dedupe', () => {
       processing: 'pending',
       processingAttempts: 1,
       processingError: 'The model did not answer within 0.02 s',
-      // The outbox's backoff after a first failed attempt.
-      processAfter: '2026-10-05T12:00:05.000Z',
+      // The llm lane's backoff after a first failed attempt.
+      processAfter: '2026-10-05T12:00:30.000Z',
     });
     // The worker is free again: the next due item is processed.
     advance(30_000);
@@ -1323,7 +1343,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const racing = new KbPipeline({ store, clock: { now: () => now }, catalog, notifier, route: deciding, draft: deciding });
     await new MemoryKbQueue(store, racing, { now: () => now }, notifier).processNext();
     // The routing written against the open item was dropped; decided, it has left the pipeline.
-    expect(await item(id)).toMatchObject({ status: 'rejected', processing: 'drafted', target: null });
+    expect(await item(id)).toMatchObject({ status: 'rejected', processing: 'none', target: null });
   });
 
   it('refuses to decide items the pipeline closed', async () => {

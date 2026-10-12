@@ -333,7 +333,9 @@ export class MemoryStore implements Store {
                 (filter.group === undefined || g.group === filter.group) &&
                 (filter.person === undefined ||
                   g.planner === filter.person ||
-                  g.implementer === filter.person),
+                  g.implementer === filter.person) &&
+                (filter.origins === undefined ||
+                  (g.attributes !== undefined && 'origin' in g.attributes && filter.origins.includes(g.attributes.origin.kind))),
             ),
         ),
       nextNumber: (boardId, letter) => {
@@ -1147,8 +1149,9 @@ export class MemoryStore implements Store {
         for (const effect of effects) {
           // One pending recheck per board is enough: it reads the board as it is when it runs.
           if (effect.kind === 'recheck_overlaps' && s.outbox.some((e) => e.kind === 'recheck_overlaps' && e.globId === effect.globId)) continue;
-          // One pending KB pipeline job per item and kind: it re-reads the item when it runs.
-          if ((effect.kind === 'kb_route' || effect.kind === 'kb_draft') && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending')) continue;
+          // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running, or
+          // backing off) gets a sibling, so a change it may not have seen still gets its step.
+          if ((effect.kind === 'kb_route' || effect.kind === 'kb_draft') && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;
           // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
           if (effect.kind === 'review_change' && effect.requestId === undefined) {
             const same = (e: Effect) => e.kind === 'review_change' && e.requestId === undefined && e.globId === effect.globId && e.stage === effect.stage;

@@ -6,8 +6,24 @@
 -- `decisionGlobTitle`; the payload, `proposalText`; the attribute and link layout, `kbAttributesOf` / `kbLinksOf`) are
 -- held equal by the migration test.
 
--- An old server's KB writes wait here, then fail once the table is gone, rather than write into a table being copied.
+-- The lock is taken by 0048, in the same transaction; taking it again is harmless, and holds when 0049 runs alone.
 LOCK TABLE "kb_proposals" IN ACCESS EXCLUSIVE MODE;
+--> statement-breakpoint
+
+-- The old table enforced little inside its JSON: a timestamp that doesn't parse reads as missing (and falls back to the
+-- row's own time) instead of aborting the deploy.
+CREATE FUNCTION pg_temp.kb_ts(value text) RETURNS timestamptz LANGUAGE plpgsql AS $$
+BEGIN
+  RETURN value::timestamptz;
+EXCEPTION WHEN others THEN
+  RETURN NULL;
+END
+$$;
+--> statement-breakpoint
+-- A JSON array, or an empty one in its place.
+CREATE FUNCTION pg_temp.kb_array(value jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE WHEN jsonb_typeof(value) = 'array' THEN value ELSE '[]'::jsonb END
+$$;
 --> statement-breakpoint
 
 -- Development databases only (production never had decision globs before this): the wrapper globs earlier builds of
@@ -40,7 +56,7 @@ SELECT
   to_char(coalesce(q.signed_off_at, p.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_ts,
   CASE WHEN p.status = 'open' THEN 'planning' ELSE 'signed_off' END AS glob_status,
   -- Decided or closed learnings leave the board; an approval stays in Signed Off for 30 days.
-  (p.status IN ('rejected', 'merged', 'suppressed', 'covered') OR (p.status = 'approved' AND p.decided_at < now() - interval '30 days')) AS archived,
+  (p.status IN ('rejected', 'merged', 'suppressed', 'covered') OR (p.status = 'approved' AND coalesce(p.decided_at, p.created_at) < now() - interval '30 days')) AS archived,
   CASE
     WHEN t.line = '' THEN 'Untitled decision'
     WHEN length(t.line) > 120 THEN left(t.line, 117) || '...'
@@ -49,8 +65,9 @@ SELECT
 FROM "kb_proposals" p
 CROSS JOIN LATERAL (
   SELECT CASE
-    WHEN p.status IN ('approved', 'rejected') THEN p.decided_at
-    WHEN p.status IN ('merged', 'suppressed', 'covered') THEN coalesce((p.merge_note->>'at')::timestamptz, p.created_at)
+    -- A decision without its time (never written so, but not enforced) is dated as its submission.
+    WHEN p.status IN ('approved', 'rejected') THEN coalesce(p.decided_at, p.created_at)
+    WHEN p.status IN ('merged', 'suppressed', 'covered') THEN coalesce(pg_temp.kb_ts(p.merge_note->>'at'), p.created_at)
   END AS signed_off_at
 ) q
 -- The first non-blank line of the statement, trimmed (`decisionGlobTitle`).
@@ -147,7 +164,7 @@ CROSS JOIN LATERAL (
     END
     || coalesce((
       SELECT jsonb_build_object('contradictsText', jsonb_agg(c.value ORDER BY c.n))
-      FROM jsonb_array_elements(m.contradicts) WITH ORDINALITY c(value, n)
+      FROM jsonb_array_elements(pg_temp.kb_array(m.contradicts)) WITH ORDINALITY c(value, n)
       WHERE c.value->>'kind' = 'knowledge'
       HAVING count(*) > 0
     ), '{}'::jsonb) AS attributes
@@ -163,15 +180,25 @@ CROSS JOIN LATERAL (
     UNION ALL
     SELECT 3, 0, jsonb_build_object('id', m.covered_by->>'id', 'kind', 'covered_by', 'source', 'pipeline') WHERE m.covered_by->>'kind' = 'item'
     UNION ALL
-    SELECT 4, 0, jsonb_build_object('id', m.possibly_covered_by->>'id', 'kind', 'possibly_covered_by', 'source', 'pipeline', 'detail', (m.possibly_covered_by - 'kind' - 'id') || '{"shortQuote": true}'::jsonb)
-    WHERE m.possibly_covered_by->>'kind' = 'item'
+    -- The hint's own keys only (`hintDetail`): its quotes, claim, which quote was short, a target hint, and `via`.
+    SELECT 4, 0, jsonb_build_object('id', m.possibly_covered_by->>'id', 'kind', 'possibly_covered_by', 'source', 'pipeline', 'detail', jsonb_strip_nulls(jsonb_build_object(
+      'quote', coalesce(m.possibly_covered_by->>'quote', ''),
+      'shortQuote', true,
+      'claim', m.possibly_covered_by->'claim',
+      'ownQuote', m.possibly_covered_by->'ownQuote',
+      'tooShort', m.possibly_covered_by->'tooShort',
+      'alsoTarget', CASE WHEN jsonb_typeof(m.possibly_covered_by->'alsoTarget') = 'object'
+        THEN jsonb_build_object('quote', coalesce(m.possibly_covered_by->'alsoTarget'->>'quote', ''), 'reason', coalesce(m.possibly_covered_by->'alsoTarget'->>'reason', '')) END,
+      'via', m.possibly_covered_by->'via'
+    )))
+    WHERE m.possibly_covered_by->>'kind' = 'item' AND m.possibly_covered_by->>'id' IS NOT NULL
     UNION ALL
     SELECT 5, c.n, jsonb_build_object('id', c.value->>'ref', 'kind', 'contradicts', 'source', 'pipeline', 'detail', jsonb_build_object('note', c.value->'note', 'position', c.n - 1))
-    FROM jsonb_array_elements(m.contradicts) WITH ORDINALITY c(value, n)
-    WHERE c.value->>'kind' = 'item'
+    FROM jsonb_array_elements(pg_temp.kb_array(m.contradicts)) WITH ORDINALITY c(value, n)
+    WHERE c.value->>'kind' = 'item' AND c.value->>'ref' IS NOT NULL
     UNION ALL
     SELECT 6, k.n, jsonb_build_object('id', k.value, 'kind', 'kept_apart_from', 'source', 'explicit')
-    FROM jsonb_array_elements_text(m.kept_apart_from) WITH ORDINALITY k(value, n)
+    FROM jsonb_array_elements_text(pg_temp.kb_array(m.kept_apart_from)) WITH ORDINALITY k(value, n)
   ) x
 ) l;
 --> statement-breakpoint
@@ -248,16 +275,18 @@ INSERT INTO "artifacts" ("glob_id", "kind", "label", "version", "content", "prov
 SELECT
   e.id,
   'attachment',
-  'evidence:' || (e.value->>'itemId') || CASE WHEN e.repeat > 1 THEN '#' || e.repeat ELSE '' END,
+  'evidence:' || e.item_id || CASE WHEN e.repeat > 1 THEN '#' || e.repeat ELSE '' END,
   1,
-  e.value->>'evidence',
-  jsonb_build_object('by', 'backfill', 'actor', e.value->>'submittedBy', 'runId', NULL, 'agentSetVersion', NULL,
-    'evidence', jsonb_build_object('itemId', e.value->>'itemId', 'globIds', coalesce(e.value->'globIds', '[]'::jsonb))),
-  (e.value->>'at')::timestamptz
+  coalesce(e.value->>'evidence', ''),
+  jsonb_build_object('by', 'backfill', 'actor', coalesce(e.value->>'submittedBy', e.submitted_by), 'runId', NULL, 'agentSetVersion', NULL,
+    'evidence', jsonb_build_object('itemId', e.item_id, 'globIds', pg_temp.kb_array(e.value->'globIds'))),
+  -- An entry without a usable time is dated as the learning's submission.
+  coalesce(pg_temp.kb_ts(e.value->>'at'), e.created_at)
 FROM (
-  SELECT m.id, x.value, x.n, row_number() OVER (PARTITION BY m.id, x.value->>'itemId' ORDER BY x.n) AS repeat
+  SELECT m.id, m.submitted_by, m.created_at, x.value, x.n, coalesce(x.value->>'itemId', '') AS item_id,
+    row_number() OVER (PARTITION BY m.id, coalesce(x.value->>'itemId', '') ORDER BY x.n) AS repeat
   FROM "kb_move" m
-  CROSS JOIN LATERAL jsonb_array_elements(m.extra_evidence) WITH ORDINALITY x(value, n)
+  CROSS JOIN LATERAL jsonb_array_elements(pg_temp.kb_array(m.extra_evidence)) WITH ORDINALITY x(value, n)
 ) e
 ORDER BY e.id, e.n;
 --> statement-breakpoint
@@ -269,7 +298,7 @@ SELECT
   'attachment',
   'merge_note',
   1,
-  'Closed by ' || (m.merge_note->>'by') || ' at ' || (m.merge_note->>'at') || ': this learning says "' || (m.merge_note->>'quote') || '"; the other says "' || (m.merge_note->>'survivorQuote') || '".',
+  'Closed by ' || coalesce(m.merge_note->>'by', '') || ' at ' || coalesce(m.merge_note->>'at', '') || ': this learning says "' || coalesce(m.merge_note->>'quote', '') || '"; the other says "' || coalesce(m.merge_note->>'survivorQuote', '') || '".',
   jsonb_build_object('by', 'backfill', 'actor', 'slop', 'runId', NULL, 'agentSetVersion', NULL, 'mergeNote', m.merge_note),
   coalesce(m.signed_off_at, m.created_at)
 FROM "kb_move" m
@@ -291,15 +320,22 @@ FROM (
   FROM "kb_move" m WHERE m.status <> 'open'
   UNION ALL
   SELECT m.id, 2, 'DecisionDecided', CASE WHEN m.status IN ('approved', 'rejected') THEN m.decided_by END, m.signed_off_at,
-    jsonb_build_object(
-      'outcome', jsonb_build_object('kind', CASE m.status WHEN 'approved' THEN 'accept' WHEN 'rejected' THEN 'reject' ELSE 'closed' END)
-        || CASE
-          WHEN m.status IN ('approved', 'rejected') AND m.decision_reason IS NOT NULL THEN jsonb_build_object('reason', m.decision_reason)
-          WHEN m.status IN ('merged', 'suppressed', 'covered') THEN jsonb_build_object('reason', 'The knowledge pipeline closed the item as ' || m.status)
-          ELSE '{}'::jsonb
-        END,
+    -- The shapes the decision rows write: `decisionApproved`/`decisionRejected` ({outcome, via}) and `closeDecision`
+    -- ({outcome, closedAs, link}).
+    CASE WHEN m.status IN ('approved', 'rejected') THEN jsonb_build_object(
+      'outcome', jsonb_build_object('kind', CASE m.status WHEN 'approved' THEN 'accept' ELSE 'reject' END)
+        || CASE WHEN m.decision_reason IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('reason', m.decision_reason) END,
       'via', 'migration'
-    ) || CASE WHEN m.status IN ('merged', 'suppressed', 'covered') THEN jsonb_build_object('closedAs', m.status) ELSE '{}'::jsonb END
+    ) ELSE jsonb_build_object(
+      'outcome', jsonb_build_object('kind', 'closed', 'reason', 'The knowledge pipeline closed the item as ' || m.status),
+      'closedAs', m.status,
+      'link', CASE
+        WHEN m.duplicate_of IS NOT NULL THEN jsonb_build_object('id', m.duplicate_of, 'kind', 'duplicate_of', 'source', 'pipeline')
+        WHEN m.suppressed_by IS NOT NULL THEN jsonb_build_object('id', m.suppressed_by, 'kind', 'suppressed_by', 'source', 'pipeline')
+        WHEN m.covered_by->>'kind' = 'item' THEN jsonb_build_object('id', m.covered_by->>'id', 'kind', 'covered_by', 'source', 'pipeline')
+        ELSE 'null'::jsonb
+      END
+    ) END
   FROM "kb_move" m WHERE m.status <> 'open'
 ) e
 ORDER BY e.at, e.id, e.step;

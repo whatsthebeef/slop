@@ -206,7 +206,8 @@ export const OUTBOX_LANES: readonly OutboxLane[] = ['default', 'llm'];
 
 /**
  * The one place an effect kind is assigned its lane. Every kind is `default` except the slow LLM effects, which go in
- * `llm`: the KB pipeline's routing and drafting.
+ * `llm`: the KB pipeline's routing and drafting. The `llm` runner starts with the `llm` job switch (or `kb`), so a new
+ * llm-lane kind runs wherever those are on.
  */
 const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm' };
 
@@ -220,8 +221,22 @@ const MAX_ATTEMPTS_OF_LANE: Readonly<Record<OutboxLane, number>> = { default: 8,
 
 export const maxAttemptsOf = (lane: OutboxLane): number => MAX_ATTEMPTS_OF_LANE[lane];
 
-/** How long a claimed job waits before it may run again (a crash mid-job, or a thrown failure): 5 s doubling, capped at an hour. */
-export const outboxBackoffMs = (attempts: number): number => Math.min(2 ** attempts * 5, 3_600) * 1000;
+/**
+ * How long a job waits after a thrown failure before it runs again: 5 s doubling on `default`; 30 s doubling on `llm`,
+ * so its three attempts span minutes rather than seconds (a model's bad minute passes). Capped at an hour.
+ */
+export const outboxBackoffMs = (attempts: number, lane: OutboxLane = 'default'): number =>
+  Math.min(2 ** attempts * (lane === 'llm' ? 30 : 5), 3_600) * 1000;
+
+/** How long a step on the `llm` lane may take before another runner may claim it again: above two model calls' deadlines. */
+export const LLM_CLAIM_LEASE_MS = 5 * 60_000;
+
+/**
+ * How long a claim holds a job: its backoff on `default` (a crash mid-job retries after it); on `llm` at least the
+ * lease, because a step can run for minutes and a second runner must not take it meanwhile.
+ */
+export const claimLeaseMs = (attempts: number, lane: OutboxLane = 'default'): number =>
+  lane === 'llm' ? Math.max(outboxBackoffMs(attempts, lane), LLM_CLAIM_LEASE_MS) : outboxBackoffMs(attempts, lane);
 
 /**
  * An executor's request to run again later without spending an attempt (an LLM that is busy or unavailable, or a record

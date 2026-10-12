@@ -329,10 +329,6 @@ export const DecisionAssessment = ({ glob }: { glob: GlobView }) => {
   );
 };
 
-/**
- * What a decision glob shows in place of a work glob's branch, PR and runs: its scope, the proposed change with its diff, the
- * conflict flag, the outcome so far and (for an admin or PO with it in Doing) the five outcomes.
- */
 /** What a learning is: its kind, target and evidence, how the pipeline closed it, and how it relates to other learnings. */
 const LearningFacts = ({ glob, attributes, deciders }: { glob: GlobView; attributes: DecisionAttributes; deciders: boolean }) => {
   const target = targetText(attributes);
@@ -366,6 +362,10 @@ const LearningFacts = ({ glob, attributes, deciders }: { glob: GlobView; attribu
   );
 };
 
+/**
+ * What a decision glob shows in place of a work glob's branch, PR and runs: its scope, the proposed change with its diff, the
+ * conflict flag, the outcome so far and (for an admin or PO with it in Doing) the five outcomes.
+ */
 export const DecisionSection = ({
   board,
   glob,

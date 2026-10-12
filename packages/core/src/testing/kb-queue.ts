@@ -1,6 +1,6 @@
 import { kbItems, kbJobHint } from '../app/kb-items.js';
 import type { KbPipeline } from '../app/kb-pipeline.js';
-import { laneOf, maxAttemptsOf, outboxBackoffMs } from '../domain/events.js';
+import { claimLeaseMs, laneOf, maxAttemptsOf, outboxBackoffMs } from '../domain/events.js';
 import type { OutboxState } from '../domain/events.js';
 import { KB_STEP_KIND, kbStepOfKind } from '../domain/kb.js';
 import type { KbItem, KbStep } from '../domain/kb.js';
@@ -82,7 +82,8 @@ export class MemoryKbQueue {
     const step = kbStepOfKind(job.kind);
     if (step === null) return 'dropped';
     const attempts = job.attempts + 1;
-    this.set(job.id, { attempts, runAfter: this.later(outboxBackoffMs(job.attempts)) });
+    const lane = laneOf(job.kind);
+    this.set(job.id, { attempts, runAfter: this.later(claimLeaseMs(job.attempts, lane)) });
     let state: OutboxState = 'pending';
     let lastError: string | null = null;
     let retry = false;
@@ -96,11 +97,15 @@ export class MemoryKbQueue {
       }
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
-      state = attempts >= maxAttemptsOf(laneOf(job.kind)) ? 'failed' : 'pending';
+      state = attempts >= maxAttemptsOf(lane) ? 'failed' : 'pending';
+      // Retried after the lane's backoff, not the claim's lease.
+      if (state === 'pending') this.set(job.id, { runAfter: this.later(outboxBackoffMs(job.attempts, lane)) });
     }
     this.set(job.id, { state, lastError });
     const hint = kbJobHint(job.effect);
-    if (hint !== null && (state !== 'pending' || !retry || lastError !== job.lastError)) this.notifier?.publish(hint);
+    // A finished job's write already told the page, and a dropped one changed nothing.
+    const news = state === 'failed' || (state === 'pending' && (!retry || lastError !== job.lastError));
+    if (hint !== null && news) this.notifier?.publish(hint);
     return state;
   }
 }
