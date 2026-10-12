@@ -193,7 +193,8 @@ export const assessmentOf = (input: AssessmentInput): Assessment => {
 
   if (item !== null && (item.coveredBy !== null || item.possiblyCoveredBy !== null || item.status === 'covered')) suggested = 'reject';
   else if ((item !== null && item.contradicts.length > 0) || conflicts.length > 0) suggested = 'needs_work';
-  else if (item !== null && flags.length === 0 && (item.document !== null || (item.processing === 'drafted' && item.draft !== null))) suggested = 'accept';
+  // Only an open learning can be accepted: a decided or closed one has nothing left to accept, whatever its fields say.
+  else if (item?.status === 'open' && flags.length === 0 && (item.document !== null || (item.processing === 'drafted' && item.draft !== null))) suggested = 'accept';
 
   const lines = [
     '## Assessment',

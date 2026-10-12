@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Effect, GlobService } from '@slop/core';
-import { laneOf } from '@slop/core';
+import { laneOf, LLM_CLAIM_LEASE_MS } from '@slop/core';
 import * as schema from '../src/db/schema.js';
 import type { Database } from '../src/db/store.js';
 import { OutboxRunner } from '../src/jobs/outbox.js';
@@ -118,5 +118,26 @@ describe('outbox lanes', () => {
     }
     expect(await row(waitingId)).toMatchObject({ state: 'pending', attempts: 0, lastError: 'AI unavailable: no access' });
     expect(heard).toEqual([waiting]);
+  });
+
+  it('holds a claimed llm-lane job for the lease, then backs a thrown failure off by the lane\'s backoff (30 s), one attempt spent', async () => {
+    const effect: Effect = { kind: 'kb_route', globId: 's9k7' };
+    const id = await insert(effect, 'llm');
+    const seen: { leased: Date | null } = { leased: null };
+    const executors: Partial<Record<Effect['kind'], Executor>> = {
+      kb_route: async () => {
+        // Inside the step: the claim holds the job for the lane's lease.
+        seen.leased = (await row(id)).runAfter;
+        throw new Error('Unusable answer');
+      },
+    };
+    const before = Date.now();
+    await new OutboxRunner(database.db, deps, executors, () => undefined, 'llm').drain(effect.globId);
+    const after = await row(id);
+    expect(seen.leased).not.toBeNull();
+    expect((seen.leased ?? new Date(0)).getTime()).toBeGreaterThanOrEqual(before + LLM_CLAIM_LEASE_MS - 1_000);
+    expect(after).toMatchObject({ state: 'pending', attempts: 1, lastError: 'Unusable answer' });
+    expect(after.runAfter.getTime()).toBeGreaterThanOrEqual(before + 29_000);
+    expect(after.runAfter.getTime()).toBeLessThan(Date.now() + 31_000);
   });
 });

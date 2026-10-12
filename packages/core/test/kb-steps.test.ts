@@ -7,6 +7,7 @@ import { kbEffectsFor, kbStepOf, kbStepOfKind, UNPROCESSED, withProcessing } fro
 import type { KbItem, KbTarget } from '../src/domain/kb.js';
 import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 import { MemoryStore } from '../src/testing/memory-store.js';
+import { assessmentOf } from '../src/domain/decision-glob.js';
 import { NOW } from './fixtures.js';
 
 const TARGET: KbTarget = { kind: 'doc', name: 'build_test_lint', section: 'Test', newDocument: null };
@@ -258,6 +259,21 @@ describe('the KB pipeline steps on the outbox', () => {
       if (again === null) throw new Error('missing');
       await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...again, statement: 'A new statement', version: again.version + 1 }, again.version));
       expect((await store.transaction((tx) => tx.getGlob(open)))?.title).toBe('A new statement');
+    });
+  });
+
+  describe('the assessment of a learning', () => {
+    const attributes = { scope: { kind: 'project' as const, ref: null }, origin: { kind: 'submitted' as const }, channel: 'agent' as const, outcome: null };
+
+    it('suggests accepting an open, drafted learning with no flags', () => {
+      expect(assessmentOf({ attributes, item: drafted(), preview: null, conflicts: [] }).suggested).toBe('accept');
+    });
+
+    it('never suggests accepting a learning that is no longer open, whatever its fields say', () => {
+      for (const status of ['approved', 'rejected', 'merged', 'suppressed'] as const) {
+        const item = drafted({ status, processing: 'drafted' });
+        expect(assessmentOf({ attributes, item, preview: null, conflicts: [] }).suggested, status).not.toBe('accept');
+      }
     });
   });
 });

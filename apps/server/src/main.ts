@@ -531,6 +531,8 @@ if (runs('catalog')) {
 }
 
 if (runs('outbox')) outbox.start();
+/** Set once shutdown begins, so nothing started later (the `llm` runner after its self-healing pass) starts. */
+let stopping = false;
 // The `llm` lane has its own switch; `kb` (SLOP_SESSION_JOBS=kb) starts it too, since it carries the KB pipeline.
 if (runs('llm') || runs('kb')) {
   // Self-healing: an open learning whose step has no job waiting (lost, or dropped by a bug) gets one queued.
@@ -538,7 +540,10 @@ if (runs('llm') || runs('kb')) {
     .queueDueSteps()
     .then((count) => count > 0 && console.log(`[kb-pipeline] queued ${String(count)} learning step(s) that had no job`))
     .catch((error: unknown) => logError('kb-pipeline', error instanceof Error ? error.message : String(error)))
-    .finally(() => llmOutbox.start());
+    // A shutdown that began meanwhile has already stopped the runner: it must not start again.
+    .finally(() => {
+      if (!stopping) llmOutbox.start();
+    });
 }
 const runWatch = new RunWatch(store, globs, logError);
 if (runs('runs')) runWatch.start();
@@ -582,6 +587,7 @@ const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
 });
 
 const shutdown = () => {
+  stopping = true;
   outbox.stop();
   llmOutbox.stop();
   runWatch.stop();

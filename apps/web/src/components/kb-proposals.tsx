@@ -36,6 +36,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
+import { nextTry } from '@/lib/kb-processing';
 import { DiffView } from '@/components/diff-view';
 import { MarkdownView } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
@@ -346,13 +347,15 @@ const ProcessingState = ({ item, admin, onRetry, retrying }: { item: KbItem; adm
     );
   }
   const working = item.processing === 'pending' ? 'Routing…' : 'Drafting…';
-  // While retrying, `processAfter` is the backoff's end (or, while its job runs, the claim's backoff).
-  const next = item.processAfter === null ? 'shortly' : `by ${new Date(item.processAfter).toLocaleTimeString()}`;
+  // After a failed attempt, `processAfter` is the backoff's end; while the job runs again it is the claim's 5-minute
+  // lease, which says nothing about when the step finishes, so the card says it is trying again now.
+  const next = nextTry(item, Date.now());
+  const when = next === 'running' ? 'now' : next === 'shortly' ? 'shortly' : `by ${next.toLocaleTimeString()}`;
   return (
     <p className='text-xs text-muted-foreground' data-testid='processing'>
       {working}
       {item.processingError !== null &&
-        ` Attempt ${item.processingAttempts} of ${MAX_PROCESSING_ATTEMPTS} failed: ${item.processingError}. Trying again ${next}.`}
+        ` Attempt ${item.processingAttempts} of ${MAX_PROCESSING_ATTEMPTS} failed: ${item.processingError}. ${next === 'running' ? 'Trying again now' : `Trying again ${when}`}.`}
     </p>
   );
 };
