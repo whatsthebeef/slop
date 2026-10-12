@@ -5,6 +5,7 @@ import {
   barRows,
   lastViewedBoard,
   lastViewedLabel,
+  sessionForKey,
   withSessions,
   writeSequence,
 } from '../src/lib/board-bar';
@@ -184,5 +185,47 @@ describe('opening a board not in the bar (s15t46)', () => {
     const rows = barRows(next.boards, 2);
     expect(ids(rows.sessions)).toEqual([1]);
     expect(rows.loose?.id).toBe(2);
+  });
+});
+
+describe('sessionForKey', () => {
+  const sessions = [board(1, 0), board(2, 1), board(3, 2)];
+  const key = (k: string, patch: Record<string, unknown> = {}) => ({
+    key: k,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    shiftKey: false,
+    target: null,
+    ...patch,
+  });
+  const editable = { closest: (sel: string) => (sel.includes('input') ? {} : null) };
+  const plain = { closest: () => null };
+
+  it('opens the session in that place of the bar', () => {
+    expect(sessionForKey(key('1'), sessions, undefined, null)?.id).toBe(1);
+    expect(sessionForKey(key('2'), sessions, 1, null)?.id).toBe(2);
+    expect(sessionForKey(key('3'), sessions, 1, null)?.id).toBe(3);
+  });
+
+  it('ignores digits with no session, other keys, and the board already shown', () => {
+    expect(sessionForKey(key('4'), sessions, undefined, null)).toBeNull();
+    expect(sessionForKey(key('9'), sessions, undefined, null)).toBeNull();
+    expect(sessionForKey(key('0'), sessions, undefined, null)).toBeNull();
+    expect(sessionForKey(key('a'), sessions, undefined, null)).toBeNull();
+    expect(sessionForKey(key('2'), sessions, 2, null)).toBeNull();
+  });
+
+  it('needs a plain press', () => {
+    for (const mod of ['ctrlKey', 'metaKey', 'altKey', 'shiftKey', 'repeat', 'isComposing']) {
+      expect(sessionForKey(key('2', { [mod]: true }), sessions, 1, null)).toBeNull();
+    }
+  });
+
+  it('ignores the key while typing, by target or focused element', () => {
+    expect(sessionForKey(key('2', { target: editable }), sessions, 1, null)).toBeNull();
+    expect(sessionForKey(key('2', { target: { isContentEditable: true } }), sessions, 1, null)).toBeNull();
+    expect(sessionForKey(key('2', { target: plain }), sessions, 1, editable)).toBeNull();
+    expect(sessionForKey(key('2', { target: plain }), sessions, 1, plain)?.id).toBe(2);
   });
 });
