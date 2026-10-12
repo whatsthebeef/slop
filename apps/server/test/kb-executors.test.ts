@@ -1,6 +1,7 @@
 import type { Effect, GlobService } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { kbExecutors, PROBE_MS } from '../src/kb-executors.js';
+import { llmWaitingReason } from '@slop/core';
+import { kbExecutors, PROBE_MS, PROBE_WAIT_REASON } from '../src/kb-executors.js';
 
 const deps = { globs: {} as GlobService };
 const route: Effect = { kind: 'kb_route', globId: 's1k1' };
@@ -39,9 +40,13 @@ describe('KB executors', () => {
     // The first job is the probe; its call finds them down again.
     expect(await executors.kb_route?.(route, null, deps)).toBe('done');
     expect(p.steps).toHaveLength(1);
-    // Jobs within the minute wait for the rest of it, keeping their reason (none is given).
+    // Jobs within the minute wait for the rest of it, with the waiting reason the Knowledge page shows.
     now += 10_000;
-    expect(await executors.kb_draft?.(draft, null, deps)).toEqual({ state: 'pending', retryAfterMs: PROBE_MS - 10_000 });
+    const waiting = await executors.kb_draft?.(draft, null, deps);
+    expect(waiting).toEqual({ state: 'pending', retryAfterMs: PROBE_MS - 10_000, reason: PROBE_WAIT_REASON });
+    // An item whose last attempt failed reads as waiting for the AI, not as retrying now.
+    const reason = typeof waiting === 'object' ? (waiting.reason ?? null) : null;
+    expect(llmWaitingReason({ processing: 'routed', processingError: reason })).toBe('the KB models are down; trying again once a probe gets through');
     expect(p.steps).toHaveLength(1);
     // A minute after the last call, the next probe.
     now += PROBE_MS - 10_000;
