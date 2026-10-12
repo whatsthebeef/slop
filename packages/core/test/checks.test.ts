@@ -69,6 +69,30 @@ describe('failure lines', () => {
     expect(failureLines('Process completed with exit code 3.')).toEqual(['Process completed with exit code 3.']);
   });
 
+  it('leads with the FAIL line and its assertion, not a passing test line', () => {
+    const log = [
+      'apps/server test:  ✓ test/provision-failure.test.ts (4 tests) 480ms',
+      'apps/server test: ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯',
+      'apps/server test:  FAIL  test/outbox-lanes.test.ts > outbox lanes > holds a claimed llm-lane job',
+      'apps/server test: AssertionError: expected null not to be null',
+      ' Test Files  1 failed | 82 passed (83)',
+      '##[error]Process completed with exit code 1.',
+    ].join('\n');
+    const lines = failureLines(log);
+    expect(lines[0]).toBe('apps/server test:  FAIL  test/outbox-lanes.test.ts > outbox lanes > holds a claimed llm-lane job');
+    expect(lines[1]).toBe('apps/server test: AssertionError: expected null not to be null');
+    expect(lines.join('\n')).not.toContain('✓');
+    const summary = failureSummary({ name: 'Test', step: 'Test', lines, url: null });
+    expect(summary).toContain('outbox-lanes.test.ts > outbox lanes');
+    expect(summary).toContain('AssertionError: expected null not to be null');
+  });
+
+  it('keeps tsc and eslint errors first and falls back to the first line when nothing is recognisable', () => {
+    expect(failureLines('> tsc\nsrc/a.ts(1,2): error TS2322: bad\nFound 1 error.')[0]).toBe('src/a.ts(1,2): error TS2322: bad');
+    expect(failureLines('/src/a.ts\n  3:1  error  no-unused-vars\n✖ 1 problem (1 error, 0 warnings)')[0]).toBe('3:1  error  no-unused-vars');
+    expect(failureLines('alpha\nbeta')[0]).toBe('alpha');
+  });
+
   it('falls back to the last lines when none look like errors, and truncates long lines', () => {
     expect(failureLines('a\nb\n\nc')).toEqual(['a', 'b', 'c']);
     expect(failureLines('x'.repeat(500))[0]).toHaveLength(240);

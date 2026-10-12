@@ -20,6 +20,7 @@ import type {
   KbItemStatus,
   KbMergeNote,
   KbOutcome,
+  KbStaleReason,
   KbTarget,
   LearningType,
   ProposedDocument,
@@ -525,6 +526,10 @@ interface LearningEdit {
   /** Back to drafting: the draft is cleared (a document proposal is its own draft, and keeps it). */
   readonly requeue?: true;
   readonly clearMergeNote?: true;
+  /** The verified quotes a closure rests on (a merge's note). */
+  readonly mergeNote?: KbMergeNote;
+  /** Evidence merged in from near-duplicates, after what it has. */
+  readonly addEvidence?: readonly ExtraEvidence[];
   /** The outcome artifact (null clears it), by whom (slop when absent) and when (the edit's time when absent). */
   readonly outcome?: {
     readonly value: KbOutcome | null;
@@ -598,6 +603,10 @@ const editLearning = async (
       : { outcome: outcome.value, decidedBy: outcome.by ?? null, decidedAt: outcome.at ?? null }),
     ...(edit.effectCheck === undefined ? {} : { effectCheck: edit.effectCheck }),
     ...(edit.clearMergeNote === true ? { mergeNote: null } : {}),
+    ...(edit.mergeNote === undefined ? {} : { mergeNote: edit.mergeNote }),
+    ...(edit.addEvidence === undefined
+      ? {}
+      : { extraEvidence: [...stateBefore.extraEvidence, ...edit.addEvidence] }),
   };
   const wrote = await writeLearningArtifacts(tx, next, stateBefore, stateAfter, now);
   await refreshOnApproval(tx, ctx, { id, boardId: glob.boardId }, statusBefore, status);
@@ -735,6 +744,97 @@ export const dismissLearningStale = (
   editLearning(tx, ctx, id, expectedVersion, {
     attributes: (a) => ({ ...a, stale: { since: null, reason: null, dismissedAt: at } }),
   });
+
+/** `attributes` with its stale flag set (or removed once nothing is flagged or dismissed); an admin's Keep stays. */
+const withStale = (
+  attributes: DecisionAttributes,
+  since: string | null,
+  reason: KbStaleReason | null,
+): DecisionAttributes => {
+  const dismissedAt = attributes.stale?.dismissedAt ?? null;
+  const next: MutableAttributes = { ...attributes };
+  delete next.stale;
+  return since === null && reason === null && dismissedAt === null
+    ? next
+    : { ...next, stale: { since, reason, dismissedAt } };
+};
+
+/** Weekly consolidation's flag on an open learning: stale since `since` for `reason`, or cleared (both null). */
+export const flagLearningStale = (
+  tx: Tx,
+  ctx: LearningWriteContext,
+  id: string,
+  expectedVersion: number,
+  since: string | null,
+  reason: KbStaleReason | null,
+): Promise<boolean> =>
+  editLearning(tx, ctx, id, expectedVersion, {
+    attributes: (a) => withStale(a, since, reason),
+  });
+
+/**
+ * Merges `loser` into `survivor` (both as read in this transaction), each write conditional on the version read:
+ * the survivor gains the loser's evidence, source globs, count and kept-apart links, and its signal when it has
+ * none (new evidence clears its stale flag); the loser is closed as merged into the survivor (row D10′, a
+ * `duplicate_of` link) with the verified quotes. False when either changed, and the caller must roll the
+ * transaction back (the first write may have landed).
+ */
+export const mergeLearnings = async (
+  tx: Tx,
+  ctx: LearningWriteContext,
+  survivor: LearningRead,
+  loser: LearningRead,
+  note: KbMergeNote,
+): Promise<boolean> => {
+  const into = learningFacts(survivor.glob);
+  const from = learningFacts(loser.glob);
+  const fromLinks = learningLinks(loser.glob);
+  const added: ExtraEvidence = {
+    itemId: loser.glob.id,
+    globIds: from.sourceGlobIds,
+    evidence: learningEvidence(loser.glob, loser.artifacts),
+    submittedBy: loser.glob.creator,
+    at: loser.glob.createdAt,
+  };
+  const signal = into.signal === null ? from.signal : null;
+  const keptApart = fromLinks.keptApartFrom.filter(
+    (other) => other !== survivor.glob.id && !learningLinks(survivor.glob).keptApartFrom.includes(other),
+  );
+  const took = await editLearning(tx, ctx, survivor.glob.id, survivor.glob.version, {
+    // The loser's own evidence comes first, then what was merged into it.
+    addEvidence: [added, ...learningExtraEvidence(loser.artifacts)],
+    attributes: (a) =>
+      withStale(
+        {
+          ...a,
+          evidenceCount: into.occurrenceCount + from.occurrenceCount,
+          sourceGlobs: [...new Set([...into.sourceGlobIds, ...from.sourceGlobIds])],
+          ...(signal === null ? {} : { signal }),
+        },
+        null,
+        null,
+      ),
+    links: (links) => [
+      ...links,
+      ...[...new Set(keptApart)].map(
+        (id): GlobLink => ({ id, kind: 'kept_apart_from', source: 'explicit' }),
+      ),
+    ],
+  });
+  if (!took) return false;
+  return editLearning(tx, ctx, loser.glob.id, loser.glob.version, {
+    row: (glob, at) =>
+      machine.closeDecision(
+        glob,
+        'merged',
+        { id: survivor.glob.id, kind: 'duplicate_of', source: 'pipeline' },
+        decisionContext(ctx.clock, null, at),
+      ),
+    // A closed learning isn't flagged; reopened, the next run flags it again if the rule still holds.
+    attributes: (a) => withStale(a, null, null),
+    mergeNote: note,
+  });
+};
 
 /** A decision on an open learning, by `by` at `at`. */
 export type LearningDecisionRecord =

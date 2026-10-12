@@ -6,7 +6,7 @@ import { reducedMotion, stepMotion } from '@/lib/card-motion';
 import { clampChatWidth, DEFAULT_CHAT_WIDTH, readChatWidth, writeChatWidth } from '@/lib/chat-width';
 
 /** The dock steps open and shut this much slower than the cards' own motion (same steps and easing, each one longer). */
-const DOCK_SLOWDOWN = 1.5;
+const DOCK_SLOWDOWN = 1.2;
 
 /**
  * Where the chat sits beside the board. The dock's own width steps open and shut in the cards' motion, so the panel's edge and the board's
