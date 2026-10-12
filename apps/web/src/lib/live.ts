@@ -3,7 +3,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { api, healthKey, notificationsKey, RequestError } from './api';
 import type { GlobView } from './api';
-import { withGlob } from './glob-list';
+import { putGlob } from './glob-list';
 
 interface Hint {
   readonly kind:
@@ -245,9 +245,8 @@ export const useLiveBoard = (boardId: number): LiveState => {
 
   const replace = (glob: GlobView | null, id: string) => {
     const was = client.getQueryData<GlobView[]>(globsKey(boardId))?.find((g) => g.id === id);
-    client.setQueryData<GlobView[]>(globsKey(boardId), (list) =>
-      glob === null ? list?.filter((g) => g.id !== id) : withGlob(list, glob, boardId),
-    );
+    if (glob === null) client.setQueryData<GlobView[]>(globsKey(boardId), (list) => list?.filter((g) => g.id !== id));
+    else putGlob(client, globsKey(boardId), glob, boardId);
     // The signed-off total changes when a glob is signed off, or leaves that list (started again, deleted).
     if (glob?.list === 'signed_off' || was?.list === 'signed_off') void client.invalidateQueries({ queryKey: signedOffCountKey(boardId) });
   };
@@ -318,6 +317,8 @@ export const useLiveBoard = (boardId: number): LiveState => {
       .then((glob) => replace(glob, id))
       .catch((error: unknown) => {
         if (error instanceof RequestError && error.status === 404) replace(null, id);
+        // Any other failure would leave a new glob off the board until a refresh: read the whole list instead.
+        else void client.invalidateQueries({ queryKey: globsKey(boardId) });
       });
   };
 
