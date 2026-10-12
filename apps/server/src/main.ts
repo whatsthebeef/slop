@@ -295,6 +295,8 @@ const chat = new ChatService({
   search,
   // Haiku rewrites the question for search, so typos and follow-ups still find their records.
   rewriteLlm: searchLlm,
+  // Questions about the code go through the code view (base branch, a capped loop of calls), counted as consumer `chat`.
+  code,
   warn: (message) => console.warn(`[chat] ${message}`),
   llm: trackLlm(new BedrockLlm({ id: config.CHAT_MODEL, configKey: 'CHAT_MODEL' }, config.BEDROCK_REGION, logUsage, null), config.CHAT_MODEL),
   // "Think harder" answers one question with Opus.

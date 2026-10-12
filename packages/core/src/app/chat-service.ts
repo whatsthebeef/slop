@@ -1,5 +1,5 @@
-import { CHAT_DONT_KNOW, CHAT_HISTORY_LIMIT, CHAT_LIST_LIMIT, CHAT_TITLE_MAX, impliesHistory, isSmallTalk, parseActions, withoutActionsTag } from '../domain/chat.js';
-import type { ChatAction, ChatCitation, ChatMessage, ChatThread, PageContext } from '../domain/chat.js';
+import { CHAT_CODE_MAX_CALLS, CHAT_DONT_KNOW, CHAT_HISTORY_LIMIT, CHAT_LIST_LIMIT, CHAT_NO_CODE, CHAT_TITLE_MAX, impliesHistory, isSmallTalk, parseActions, parseCodeCall, withoutActionsTag, withoutCodeRequests } from '../domain/chat.js';
+import type { ChatAction, ChatCitation, ChatCodeCall, ChatMessage, ChatThread, PageContext } from '../domain/chat.js';
 import { invalidInput, llmUnavailable, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { listOf } from '../domain/matrix.js';
@@ -9,6 +9,7 @@ import type { BoardNotification } from '../domain/notifications.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
+import type { CodeViewService } from './code-view.js';
 import { LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
 import { completeWithDeadline } from './llm-call.js';
@@ -30,6 +31,10 @@ export const BOARD_STATE_MAX_CHARS = 4000;
 const BOARD_STATE_TITLE = 'Board state (now)';
 /** What the log keeps of a reply the chat could not use. */
 const LOG_REPLY_CHARS = 200;
+/** What one code-view result may put in front of the model; the rest is cut. */
+const CODE_OBSERVATION_CHARS = 6000;
+const CODE_LIST_LINES = 80;
+const CODE_CONSUMER = 'chat';
 /** Earlier turns shown to the model so a follow-up ("and why not X?") makes sense. */
 const RECENT_TURNS = 6;
 /** A long earlier answer would crowd out the sources. */
@@ -49,6 +54,20 @@ After the answer, you may add one last line naming the buttons worth showing und
 - create_glob only when the answer points at work that is not on the board yet (a gap, a bug, a follow-up) or the person asked for something to be done;
 - save only when the answer states something durable and cited (a convention, a decision, a how-to).
 Most answers need neither: leave the line out.`;
+
+const codeInstructions = (calls: number): string => `
+
+You may also look at the board's code (its base branch, read-only) before you answer, when the question is about the code: where something is implemented, how it works, what calls it. Records that already answer the question need no code looks. To look, reply with one JSON object and nothing else (at most ${String(calls)} looks in all):
+{"tool": "tree", "path": "<directory, empty for the root>"}
+{"tool": "grep", "pattern": "<regular expression>", "path": "<optional folder or file to search under>"}
+{"tool": "read", "path": "<file>", "start": <first line>, "end": <last line>}   start and end are optional; read the part you need
+{"tool": "history", "path": "<file or folder>"}   the commits that changed it
+{"tool": "imports", "path": "<file>", "direction": "imports" or "importedBy"}
+Each file you read becomes a numbered source after the others, shown with its path and line range: cite it like any source, [n]. Grep, tree, history and imports results are for finding your way and cannot be cited. When you are ready to answer, write the answer (it never starts with "{").`;
+
+const NO_CODE_INSTRUCTIONS = `
+
+If the question needs the board's code to be answered (where something is implemented, how it works) and you cannot read the code, reply with exactly: ${CHAT_NO_CODE}`;
 
 const SMALL_TALK_SYSTEM = `You are the chat of a software board. The person's message is not a question about the board's records (a greeting, thanks, or a question about the chat itself), so answer it like a friendly colleague in one or two short sentences.
 If they ask what you can do: you answer questions about the board's plans, decisions, implementation records, reviews and knowledge, with their sources; you know what is open on the board right now; and answers can lead to creating a glob, saving something to the knowledge base or opening a glob. Mention what fits the page they are on.
@@ -165,6 +184,25 @@ const boardStateCitation = (boardId: number, now: string, n: number): ChatCitati
   supersededBy: null,
 });
 
+/** A file the model read through the code view; its source number follows the records' and the board state's. */
+interface CodeSource {
+  readonly path: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+const codeCitation = (file: CodeSource, n: number, now: string): ChatCitation => ({
+  n,
+  source: 'code',
+  sourceLabel: 'Code',
+  title: `${file.path}:${String(file.start)}-${String(file.end)}`,
+  date: now,
+  link: null,
+  globId: null,
+  status: 'active',
+  supersededBy: null,
+});
+
 const clip = (s: string): string => (s.length > TURN_CHARS ? `${s.slice(0, TURN_CHARS)}...` : s);
 
 /** The source numbers an answer cites, as `[n]` markers, in order of first use. */
@@ -192,6 +230,8 @@ export class ChatService {
       /** A cheap model that rewrites the question for search; without one the question is searched as typed. */
       rewriteLlm?: Llm;
       rewriteTimeoutMs?: number;
+      /** The board's code, read through a capped loop of model-chosen calls; without one chat answers from records alone. */
+      code?: Pick<CodeViewService, 'tree' | 'read' | 'grep' | 'history' | 'imports'>;
       /** Sends an answer to the board's proposal queue (the knowledge service's `submitLearning`). */
       submitLearning?: (email: string, boardId: number, learning: NewLearning) => Promise<Result<{ id: string }>>;
       /** Where a reply the chat could not use is logged. */
@@ -296,18 +336,23 @@ export class ChatService {
     if (stateN > 0) tools.push('Read the board\'s live state');
     const page = await this.pageLine(request.boardId, request.page);
 
+    // Chat reads the code only for a board with a repository.
+    const codeOn = await this.codeReadable(request.boardId);
     let answer = CHAT_DONT_KNOW;
     let actions: ChatAction[] = [];
     const citations: ChatCitation[] = [];
-    if (hits.length > 0 || stateN > 0) {
+    if (hits.length > 0 || stateN > 0 || codeOn) {
       const deep = request.thinkHarder === true && this.deps.deepLlm !== undefined;
       if (deep) tools.push('Thought harder (stronger model)');
       const llm = deep && this.deps.deepLlm !== undefined ? this.deps.deepLlm : this.deps.llm;
-      const llmRequest = { system: SYSTEM, prompt: this.prompt(question, hits, state, recent, page), maxTokens: CHAT_MAX_TOKENS };
+      const llmRequest = { system: SYSTEM + (codeOn ? codeInstructions(CHAT_CODE_MAX_CALLS) : NO_CODE_INSTRUCTIONS), prompt: this.prompt(question, hits, state, recent, page), maxTokens: CHAT_MAX_TOKENS };
       const timeout = deep ? (this.deps.deepTimeoutMs ?? CHAT_THINK_TIMEOUT_MS) : (this.deps.llmTimeoutMs ?? CHAT_LLM_TIMEOUT_MS);
       let raw: string;
+      const read: CodeSource[] = [];
       try {
-        raw = await this.generate(llm, llmRequest, timeout, onText === undefined ? undefined : withoutActionsTag(onText), request.signal);
+        raw = codeOn
+          ? await this.generateWithCode(email, request, llm, llmRequest, timeout, hits.length + (stateN > 0 ? 1 : 0), read, tools, onText)
+          : await this.generate(llm, llmRequest, timeout, onText === undefined ? undefined : withoutActionsTag(onText), request.signal);
       } catch (error) {
         if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
         if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
@@ -317,8 +362,13 @@ export class ChatService {
       const parsed = parseActions(raw);
       const text = parsed.text;
       // A number outside 1..n is the model's invention: dropped, never linked.
-      const total = hits.length + (stateN > 0 ? 1 : 0);
+      const total = hits.length + (stateN > 0 ? 1 : 0) + read.length;
       const used = citedNumbers(text).filter((n) => n >= 1 && n <= total);
+      if (text.startsWith(CHAT_NO_CODE)) {
+        // The question needed the code and it could not be read: said as it is, with no sources.
+        tools.push("Couldn't read the code");
+        return ok({ question, answer: CHAT_NO_CODE, citations: [], tools, actions: [] });
+      }
       if (text === '' || (used.length === 0 && !text.startsWith(CHAT_DONT_KNOW))) {
         this.deps.warn?.(
           `chat: unusable reply on board ${String(request.boardId)} (${String(hits.length)} hits, ${text === '' ? 'empty' : 'no source used'}): ${raw.slice(0, LOG_REPLY_CHARS)}`,
@@ -334,6 +384,11 @@ export class ChatService {
             citations.push(boardStateCitation(request.boardId, this.deps.clock.now(), n));
             continue;
           }
+          const file = read[n - hits.length - (stateN > 0 ? 1 : 0) - 1];
+          if (file !== undefined) {
+            citations.push(codeCitation(file, n, this.deps.clock.now()));
+            continue;
+          }
           const hit = hits[n - 1];
           if (hit === undefined || seen.has(hit.itemId)) continue;
           seen.add(hit.itemId);
@@ -343,6 +398,105 @@ export class ChatService {
     }
     if (citations.length === 0) actions = [];
     return ok({ question, answer, citations, tools, actions });
+  }
+
+  /** True when the board has a repository and chat has a code view to read it with. */
+  private async codeReadable(boardId: number): Promise<boolean> {
+    if (this.deps.code === undefined) return false;
+    try {
+      const board = await this.deps.store.transaction((tx) => tx.getBoard(boardId));
+      return board?.repo != null && board.repo !== '';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The answering call with a capped code loop: the model may ask for code-view calls (`parseCodeCall`), each result is
+   * fed back with the others, and the loop ends on an answer or after `CHAT_CODE_MAX_CALLS` calls. One deadline covers the
+   * whole loop and the person's stop ends it; only a turn that is an answer streams. Files read are added to `read`.
+   */
+  private async generateWithCode(
+    email: string,
+    request: ChatRequest,
+    llm: Llm,
+    base: Omit<LlmRequest, 'signal'>,
+    timeoutMs: number,
+    sourceCount: number,
+    read: CodeSource[],
+    tools: string[],
+    onText?: ChatDelta,
+  ): Promise<string> {
+    const started = Date.now();
+    const looked: string[] = [];
+    for (let calls = 0; ; calls++) {
+      const spent = calls >= CHAT_CODE_MAX_CALLS;
+      const prompt = [
+        base.prompt,
+        looked.length === 0 ? '' : `Code you have looked at:\n${looked.join('\n\n')}`,
+        spent ? 'You may not look at the code any more: answer now.' : '',
+      ]
+        .filter((part) => part !== '')
+        .join('\n\n');
+      const remaining = Math.max(1, timeoutMs - (Date.now() - started));
+      const raw = await this.generate(llm, { ...base, prompt }, remaining, onText === undefined ? undefined : withoutCodeRequests(withoutActionsTag(onText)), request.signal);
+      const call = spent ? null : parseCodeCall(raw);
+      if (call === null) return raw;
+      if ('problem' in call) {
+        looked.push(`That request could not be made: ${call.problem}`);
+        continue;
+      }
+      looked.push(await this.lookAtCode(email, request.boardId, call, sourceCount, read, tools));
+    }
+  }
+
+  /** One code-view call for the loop: what the model sees of it, and the line for the answer's steps. */
+  private async lookAtCode(email: string, board: number, call: ChatCodeCall, sourceCount: number, read: CodeSource[], tools: string[]): Promise<string> {
+    const code = this.deps.code;
+    if (code === undefined) return 'The code is not available.';
+    const cut = (s: string): string => (s.length > CODE_OBSERVATION_CHARS ? `${s.slice(0, CODE_OBSERVATION_CHARS)}\n(cut)` : s);
+    const where = (path: string): string => (path === '' ? '(root)' : path);
+    try {
+      switch (call.tool) {
+        case 'tree': {
+          const found = await code.tree(email, { board, path: call.path, consumer: CODE_CONSUMER });
+          if (!found.ok) return `tree ${where(call.path)}: ${found.error.message}`;
+          const { entries } = found.value;
+          tools.push(`Listed ${where(call.path)}: ${String(entries.length)} entries`);
+          return cut(`tree ${where(call.path)}:\n${entries.slice(0, CODE_LIST_LINES).map((e) => (e.type === 'dir' ? `${e.name}/` : e.name)).join('\n')}`);
+        }
+        case 'grep': {
+          const found = await code.grep(email, { board, pattern: call.pattern, paths: call.paths, limit: 30, consumer: CODE_CONSUMER });
+          if (!found.ok) return `grep ${call.pattern}: ${found.error.message}`;
+          const { hits } = found.value;
+          tools.push(`Searched the code for ${oneLine(call.pattern, 60)}: ${String(hits.length)} hits`);
+          return cut(`grep ${call.pattern}:\n${hits.map((h) => `${h.path}:${String(h.line)}:${h.text.slice(0, 160)}`).join('\n') || 'no matches'}`);
+        }
+        case 'read': {
+          const found = await code.read(email, { board, path: call.path, ...(call.start === undefined ? {} : { start: call.start }), ...(call.end === undefined ? {} : { end: call.end }), consumer: CODE_CONSUMER });
+          if (!found.ok) return `read ${call.path}: ${found.error.message}`;
+          const file = found.value;
+          if (file.binary) return `read ${call.path}: a binary file`;
+          read.push({ path: file.path, start: file.startLine, end: file.endLine });
+          tools.push(`Read ${file.path}:${String(file.startLine)}-${String(file.endLine)}`);
+          return cut(`[${String(sourceCount + read.length)}] ${file.path}:${String(file.startLine)}-${String(file.endLine)} of ${String(file.totalLines)} lines${file.truncated ? ' (cut)' : ''}\n${file.content}`);
+        }
+        case 'history': {
+          const found = await code.history(email, { board, path: call.path, limit: 10, consumer: CODE_CONSUMER });
+          if (!found.ok) return `history ${call.path}: ${found.error.message}`;
+          tools.push(`Looked up the history of ${call.path}: ${String(found.value.length)} commits`);
+          return cut(`history ${call.path}:\n${found.value.map((c) => `${c.sha.slice(0, 7)} ${c.date.slice(0, 10)} ${oneLine(c.subject, 100)}${c.globId === null ? '' : ` (${c.globId})`}`).join('\n') || 'no commits'}`);
+        }
+        case 'imports': {
+          const found = await code.imports(email, { board, path: call.path, direction: call.direction, consumer: CODE_CONSUMER });
+          if (!found.ok) return `imports ${call.path}: ${found.error.message}`;
+          tools.push(`Looked up ${call.direction === 'importedBy' ? 'what imports' : 'what is imported by'} ${call.path}: ${String(found.value.length)} files`);
+          return cut(`${call.direction} ${call.path}:\n${found.value.map((r) => r.path).join('\n') || 'none'}`);
+        }
+      }
+    } catch {
+      return `${call.tool}: the code could not be read.`;
+    }
   }
 
   /** A greeting or a question about the chat: one short model call with no search, no sources and no actions. */
