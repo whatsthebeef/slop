@@ -1,7 +1,7 @@
 import { ListFilter, X } from 'lucide-react';
 import { useState } from 'react';
 import { CATEGORY_ICON } from '@/components/glob-card';
-import { activeCount, BOARD_FILTERS, selectedOptions, toggleOption } from '@/lib/board-filters';
+import { activeCount, BOARD_FILTERS, defaultFilters, selectedOptions, toggleOption } from '@/lib/board-filters';
 import type { BoardFilter, FilterValues } from '@/lib/board-filters';
 import { cn } from '@/lib/utils';
 
@@ -170,7 +170,7 @@ export const FilterPane = ({
             type="button"
             className="ml-auto text-xs text-muted-foreground underline hover:text-foreground"
             data-testid="filter-clear"
-            onClick={() => onChange({})}
+            onClick={() => onChange(defaultFilters())}
           >
             Clear
           </button>
