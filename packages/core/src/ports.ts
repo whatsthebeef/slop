@@ -18,6 +18,7 @@ import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
 import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from './domain/knowledge-page.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ChoiceUsageRow } from './domain/choice-usage.js';
+import type { ContextSettingChange, ContextSettingKey, ContextSettings, NewContextSettingChange } from './domain/context-settings.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
 import type { NewSizeCalibrationChange, SizeCalibration, SizeCalibrationChange, SizeRecord } from './domain/size-forecast.js';
 import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdChange } from './domain/size-check.js';
@@ -313,6 +314,15 @@ export interface Tx {
   listChoiceUsage(boardId: number, fromDay: string): Promise<ChoiceUsageRow[]>;
   /** Deletes a board's usage rows before `day`. */
   pruneChoiceUsage(boardId: number, beforeDay: string): Promise<void>;
+  /** The board's context settings: stored values clamped to their bounds, the default where nothing is stored. */
+  getContextSettings(boardId: number): Promise<ContextSettings>;
+  /** Stores one setting's value for the board (the caller keeps it within bounds; reads clamp anyway). */
+  setContextSetting(boardId: number, key: ContextSettingKey, value: number, at: string): Promise<void>;
+  /** Drops the board's stored value: the default applies again. */
+  resetContextSetting(boardId: number, key: ContextSettingKey): Promise<void>;
+  insertContextSettingChange(change: NewContextSettingChange): Promise<ContextSettingChange>;
+  /** A board's recorded setting moves, newest first. */
+  listContextSettingChanges(boardId: number): Promise<ContextSettingChange[]>;
   getBoardJob(boardId: number, job: BoardJobName): Promise<BoardJob | null>;
   /**
    * Takes a board job's lease until `now + leaseMs` unless another server holds it (its `runningUntil` is after

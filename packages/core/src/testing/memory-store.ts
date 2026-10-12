@@ -17,6 +17,8 @@ import { DEFAULT_REVIEW_BOARD_SETTINGS } from '../domain/review-settings.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import { NO_GLOB } from '../domain/choice-usage.js';
 import type { ChoiceUsageRow } from '../domain/choice-usage.js';
+import { resolveContextSettings } from '../domain/context-settings.js';
+import type { ContextSettingChange } from '../domain/context-settings.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
 import { isClearedAttachment } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
@@ -70,6 +72,8 @@ interface State {
   findings: ReviewFinding[];
   kbSignals: Map<string, KbSignalState>;
   choiceUsage: (ChoiceUsageRow & { boardId: number })[];
+  contextSettings: Map<string, number>;
+  contextSettingChanges: ContextSettingChange[];
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
@@ -163,6 +167,8 @@ const clone = (state: State): State => ({
   findings: [...state.findings],
   kbSignals: new Map(state.kbSignals),
   choiceUsage: state.choiceUsage.map((r) => ({ ...r })),
+  contextSettings: new Map(state.contextSettings),
+  contextSettingChanges: [...state.contextSettingChanges],
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
@@ -221,6 +227,8 @@ export class MemoryStore implements Store {
     findings: [],
     kbSignals: new Map(),
     choiceUsage: [],
+    contextSettings: new Map(),
+    contextSettingChanges: [],
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
@@ -851,6 +859,27 @@ export class MemoryStore implements Store {
         s.choiceUsage = s.choiceUsage.filter((r) => r.boardId !== boardId || r.day >= beforeDay);
         return Promise.resolve();
       },
+      getContextSettings: (boardId) => {
+        const prefix = `${boardId}:`;
+        const stored: Record<string, number> = {};
+        for (const [k, v] of s.contextSettings) if (k.startsWith(prefix)) stored[k.slice(prefix.length)] = v;
+        return Promise.resolve(resolveContextSettings(stored));
+      },
+      setContextSetting: (boardId, key, value) => {
+        s.contextSettings.set(`${boardId}:${key}`, value);
+        return Promise.resolve();
+      },
+      resetContextSetting: (boardId, key) => {
+        s.contextSettings.delete(`${boardId}:${key}`);
+        return Promise.resolve();
+      },
+      insertContextSettingChange: (change) => {
+        const row = { ...change, id: this.nextRowId++ };
+        s.contextSettingChanges.push(row);
+        return Promise.resolve(row);
+      },
+      listContextSettingChanges: (boardId) =>
+        Promise.resolve(s.contextSettingChanges.filter((c) => c.boardId === boardId).sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)),
       getBoardJob: (boardId, job) => Promise.resolve(s.boardJobs.get(`${boardId}:${job}`) ?? null),
       claimBoardJob: (boardId, job, now, leaseMs) => {
         const key = `${boardId}:${job}`;

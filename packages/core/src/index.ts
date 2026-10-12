@@ -89,6 +89,7 @@ export * from './app/integration-health.js';
 export * from './domain/search.js';
 export * from './domain/decisions.js';
 export * from './domain/choice-usage.js';
+export * from './domain/context-settings.js';
 export * from './domain/chat.js';
 export * from './domain/inbox.js';
 export * from './domain/integration-tokens.js';

@@ -81,6 +81,7 @@ export class MiningService {
     const knowledge = await tx.listKnowledge(boardId, ['doc']);
     const learnings = await boardLearnings(tx, boardId);
     const choices = await this.choices(tx, boardId, now, knowledge);
+    const settings = await tx.getContextSettings(boardId);
     return {
       window: { from, to: now },
       globs: globs.map((g) => ({ id: g.id, type: g.type, status: g.status, createdAt: g.createdAt })),
@@ -92,6 +93,7 @@ export class MiningService {
       documents: knowledge.map((d) => ({ name: d.name, area: d.area, content: d.content })),
       documentAreasKnown: true,
       choices,
+      settings,
       learnings: learnings.flatMap(({ glob }) => {
         const facts = learningFacts(glob);
         return facts.source === 'submitted' ? [{ globIds: facts.sourceGlobIds, agentSetVersion: facts.agentSetVersion }] : [];

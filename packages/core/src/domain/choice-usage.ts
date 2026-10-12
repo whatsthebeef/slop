@@ -1,3 +1,5 @@
+import { DEFAULT_CONTEXT_SETTINGS } from './context-settings.js';
+import type { ContextSettings } from './context-settings.js';
 import type { DecisionSourceKind } from './decisions.js';
 
 /**
@@ -6,13 +8,13 @@ import type { DecisionSourceKind } from './decisions.js';
  */
 
 /** A choice is only worth a person's attention once it has been returned this many times… */
-export const CHOICE_MIN_RETURNS = 5;
+export const CHOICE_MIN_RETURNS = DEFAULT_CONTEXT_SETTINGS.promotion_min_returns;
 /** …on at least this many different globs… */
-export const CHOICE_MIN_GLOBS = 3;
+export const CHOICE_MIN_GLOBS = DEFAULT_CONTEXT_SETTINGS.promotion_min_globs;
 /** …within this many days. */
 export const CHOICE_USAGE_WINDOW_DAYS = 30;
 /** A choice from pasted discussion (not a record or plan) must be returned this many times. */
-export const CHOICE_DISCUSSION_MIN_RETURNS = 10;
+export const CHOICE_DISCUSSION_MIN_RETURNS = DEFAULT_CONTEXT_SETTINGS.promotion_discussion_min_returns;
 /** Usage rows older than this are pruned. */
 export const CHOICE_USAGE_RETENTION_DAYS = 90;
 
@@ -71,11 +73,14 @@ export interface ChoiceActivity {
 
 /**
  * Whether a choice has returned often enough, on enough globs, for a person to look at it: a choice from a record or
- * plan needs `CHOICE_MIN_RETURNS` returns, one from discussion `CHOICE_DISCUSSION_MIN_RETURNS`, both on at least
- * `CHOICE_MIN_GLOBS` globs. Choices from accepted learnings are already knowledge and never count.
+ * plan needs the board's `promotion_min_returns` returns, one from discussion `promotion_discussion_min_returns`,
+ * both on at least `promotion_min_globs` globs. Choices from accepted learnings are already knowledge and never count.
  */
-export const choiceInUse = (c: Pick<ChoiceActivity, 'sourceKind' | 'current' | 'covered' | 'returns' | 'globIds'>): boolean => {
+export const choiceInUse = (
+  c: Pick<ChoiceActivity, 'sourceKind' | 'current' | 'covered' | 'returns' | 'globIds'>,
+  settings: ContextSettings = DEFAULT_CONTEXT_SETTINGS,
+): boolean => {
   if (!c.current || c.covered || c.sourceKind === 'kb_item') return false;
-  const needed = c.sourceKind === 'inbox' ? CHOICE_DISCUSSION_MIN_RETURNS : CHOICE_MIN_RETURNS;
-  return c.returns >= needed && c.globIds.length >= CHOICE_MIN_GLOBS;
+  const needed = c.sourceKind === 'inbox' ? settings.promotion_discussion_min_returns : settings.promotion_min_returns;
+  return c.returns >= needed && c.globIds.length >= settings.promotion_min_globs;
 };

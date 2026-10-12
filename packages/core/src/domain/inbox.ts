@@ -1,5 +1,6 @@
 import { field, isObject, list, parseJson } from '../app/llm-json.js';
 import { hash } from '../app/text-hash.js';
+import { DEFAULT_CONTEXT_SETTINGS } from './context-settings.js';
 import { chunkDocument, contentHash } from './chunking.js';
 import type { ChunkInput } from './chunking.js';
 import { BUSY_WAITING_PREFIX, LLM_WAITING_PREFIX } from './kb.js';
@@ -39,7 +40,7 @@ export const INBOX_TEXT_LIMIT = 100_000;
 /** What the summary model reads. */
 export const INBOX_PROMPT_LIMIT = 30_000;
 /** The most globs one item is suggested for, and the most one attach call takes. */
-export const MAX_SUGGESTIONS = 3;
+export const MAX_SUGGESTIONS = DEFAULT_CONTEXT_SETTINGS.inbox_suggestions;
 export const MAX_ATTACH_GLOBS = 10;
 const REASON_LIMIT = 300;
 const TITLE_LIMIT = 120;
@@ -274,11 +275,12 @@ const oneLine = (value: unknown, limit: number): string => {
 
 /**
  * The model's answer as a summary: null unless it is a JSON object with a non-empty summary. A suggested glob that
- * isn't among `candidates` (or is repeated) is dropped, and at most three are kept.
+ * isn't among `candidates` (or is repeated) is dropped, and at most `maxSuggestions` are kept.
  */
 export const parseSummary = (
   answer: string,
   candidates: ReadonlySet<string>,
+  maxSuggestions: number = MAX_SUGGESTIONS,
 ): ParsedSummary | null => {
   const parsed = parseJson(answer);
   if (!isObject(parsed)) return null;
@@ -296,7 +298,7 @@ export const parseSummary = (
     )
       continue;
     suggestions.push({ globId, reason: oneLine(field(entry, 'reason'), REASON_LIMIT) });
-    if (suggestions.length >= MAX_SUGGESTIONS) break;
+    if (suggestions.length >= maxSuggestions) break;
   }
   return {
     title: oneLine(field(parsed, 'title'), TITLE_LIMIT),

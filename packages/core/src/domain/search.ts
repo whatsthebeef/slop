@@ -3,6 +3,8 @@
  * source is trusted, and how candidates from SQL are turned into the few cited results a caller reads. Pure: the
  * database only fetches and filters candidates, every weighting happens here.
  */
+import { DEFAULT_CONTEXT_SETTINGS } from './context-settings.js';
+import type { ContextSettings } from './context-settings.js';
 
 /** The longest query (or path) a search accepts; the embedding model rejects oversized input. */
 export const MAX_QUERY_LENGTH = 2000;
@@ -70,7 +72,7 @@ export const AUTHORITY_WEIGHTS: Readonly<Record<AuthorityTier, number>> = {
   merged_code: 1,
   decision: 0.95,
   approved_plan: 0.9,
-  discussion: 0.6,
+  discussion: DEFAULT_CONTEXT_SETTINGS.discussion_weight,
   legacy: 0.3,
 };
 
@@ -184,8 +186,8 @@ export interface SearchHit {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-export const RECENCY_HALF_LIFE_DAYS = 90;
-export const SUPERSEDED_FACTOR = 0.15;
+export const RECENCY_HALF_LIFE_DAYS = DEFAULT_CONTEXT_SETTINGS.recency_half_life_days;
+export const SUPERSEDED_FACTOR = DEFAULT_CONTEXT_SETTINGS.replaced_factor;
 export const RRF_K = 60;
 export const MAX_RESULT_CHUNKS = 10;
 export const MAX_RESULT_TOKENS = 8000;
@@ -194,17 +196,21 @@ export const estimateTokens = (text: string): number => Math.ceil(text.length / 
 
 const isLegacy = (c: Pick<Candidate, 'status' | 'authority'>): boolean => c.status === 'legacy' || c.authority === 'legacy';
 
-/** 1 for something that happened now, halving every `RECENCY_HALF_LIFE_DAYS`; a future date counts as now. */
-export const recency = (occurredAt: string, now: string): number => {
+/** 1 for something that happened now, halving every `halfLifeDays` (the board's setting); a future date counts as now. */
+export const recency = (occurredAt: string, now: string, halfLifeDays: number = RECENCY_HALF_LIFE_DAYS): number => {
   const ageDays = Math.max(0, Date.parse(now) - Date.parse(occurredAt)) / DAY_MS;
-  return 0.5 ** (ageDays / RECENCY_HALF_LIFE_DAYS);
+  return 0.5 ** (ageDays / halfLifeDays);
 };
 
+/** A tier's weight; only the discussion tier is a board setting, the others are the spec's fixed order. */
+export const authorityWeight = (tier: AuthorityTier, settings: ContextSettings = DEFAULT_CONTEXT_SETTINGS): number =>
+  tier === 'discussion' ? settings.discussion_weight : AUTHORITY_WEIGHTS[tier];
+
 /** `relevance × authority × recency × status`; `all_time` drops recency and the superseded penalty. */
-export const scoreOf = (c: Candidate, mode: SearchMode, now: string): number => {
-  const authority = AUTHORITY_WEIGHTS[c.authority];
+export const scoreOf = (c: Candidate, mode: SearchMode, now: string, settings: ContextSettings = DEFAULT_CONTEXT_SETTINGS): number => {
+  const authority = authorityWeight(c.authority, settings);
   if (mode === 'all_time') return c.relevance * authority;
-  return c.relevance * authority * recency(c.occurredAt, now) * (c.status === 'superseded' ? SUPERSEDED_FACTOR : 1);
+  return c.relevance * authority * recency(c.occurredAt, now, settings.recency_half_life_days) * (c.status === 'superseded' ? settings.replaced_factor : 1);
 };
 
 const labelOf = (c: Candidate): string | null => {
@@ -233,8 +239,13 @@ const isSupersededDecision = (c: Candidate): boolean => c.sourceType === 'decisi
  * matches, and a superseded decision ranks after every current one (the current decision comes first, its replaced
  * predecessors follow labelled); ties go to the newer item. `all_time` ranks on relevance and authority alone.
  */
-export const rankCandidates = (candidates: readonly Candidate[], mode: SearchMode, now: string): SearchHit[] => {
-  const scored = candidates.map((c) => ({ c, score: scoreOf(c, mode, now) }));
+export const rankCandidates = (
+  candidates: readonly Candidate[],
+  mode: SearchMode,
+  now: string,
+  settings: ContextSettings = DEFAULT_CONTEXT_SETTINGS,
+): SearchHit[] => {
+  const scored = candidates.map((c) => ({ c, score: scoreOf(c, mode, now, settings) }));
   scored.sort((a, b) => {
     if (mode === 'current' && isLegacy(a.c) !== isLegacy(b.c)) return isLegacy(a.c) ? 1 : -1;
     if (mode === 'current' && isSupersededDecision(a.c) !== isSupersededDecision(b.c)) return isSupersededDecision(a.c) ? 1 : -1;
