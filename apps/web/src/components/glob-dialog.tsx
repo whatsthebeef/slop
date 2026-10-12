@@ -108,7 +108,7 @@ export const GlobDetail = ({
     const timer = setTimeout(() => setNow(Date.now()), PENDING_TIMEOUT_MS - (Date.now() - pending.at) + 50);
     return () => clearTimeout(timer);
   }, [pending]);
-  const pendingNow = isPending(pending, glob.version, Math.max(now, pending?.at ?? 0));
+  const pendingNow = isPending(pending, glob, Math.max(now, pending?.at ?? 0));
   const busy = running || pendingNow;
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
   const [failure, setFailure] = useState<EditFailure | null>(null);
@@ -224,6 +224,7 @@ export const GlobDetail = ({
                           pending,
                           running,
                           { action, version: glob.version, at: Date.now() },
+                          glob,
                           () => onAction(action),
                           setPending,
                         );
