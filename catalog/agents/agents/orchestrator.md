@@ -59,7 +59,7 @@ In an interactive session, call `pick_up(id, version)` before Phase 1. If you ar
 
 Everything specific to the board and its project (build commands, conventions, review checklists, architecture, approved learnings) lives in the board's knowledge base in slop. Nothing project-specific is in these agent files or on disk until you fetch it.
 
-1. In Phase 1, call `get_conventions(board)` with no area. It returns the board's knowledge index: each document's title, area, description and **audience** (the agents it must always be given), plus the approved decisions, gotchas and patterns from earlier globs.
+1. In Phase 1, call `get_conventions(board)` with no area. It returns the board's knowledge index: each document's title, area, description and **audience** (the agents it must always be given), plus the approved gotchas and patterns from earlier globs.
 2. Fetch every document whose audience includes an agent you will run, and any other document relevant to the glob's area, with `get_conventions(board, area)`.
 3. Save each fetched document as `.reviews/<id>-docs/<name>.md` (never committed) and the approved learnings as `.reviews/<id>-docs/learnings.md`. Pass the paths to sub-agents, so they don't fetch the same knowledge again.
 
@@ -67,7 +67,7 @@ Everything specific to the board and its project (build commands, conventions, r
 
 - Give each sub-agent every document whose audience includes it.
 - Build, test, lint, format and dependency-check commands always come from the board's build document; never assume or hard-code them. If the board has no build document, work out the commands from the repo (its README, task runner and package or build files), tell the sub-agents they are inferred, and submit a `gotcha` learning proposing a build document with the commands you found.
-- Give the learnings file to every sub-agent, telling it these are approved decisions, gotchas and patterns from earlier globs.
+- Give the learnings file to every sub-agent, telling it these are approved gotchas and patterns from earlier globs.
 
 Use `search_text(board, query, mode?, from?, to?, glob?, group?, sourceTypes?)` for exact words, names and file paths, `search_semantic` (same parameters) when you don't know the words used, `search_changes(board, query or path, from?, to?)` for why a file or area changed, and `ask_board(board, question, globId?)` for a plain-words question answered from the board's records with citations ("why did we decide X"); `mode` is `current` (default) or `all_time`. Results are cited and labelled when superseded or legacy. `get_context` also returns a `related` section: the board's existing material on the glob's title and summary.
 
@@ -114,7 +114,7 @@ Spend agent effort where it finds problems: reading the change. Don't repeat wor
 - **Checks.** If the board's build doc separates fast and full checks, sub-agents run the fast checks on every round, and the full checks run once, before the Phase 6 commit (or are left to CI where the build doc says so). Without that split, treat the targeted tests for the changed code plus lint and type checks as fast. Every agent records the exact commands it ran and the pass counts, not logs, and uses quiet reporters, reading output only on failure.
 - **No re-running.** The tester and change_reviewer rely on the results the implementer (and tester) recorded. They re-run a check only when a result looks wrong or a finding depends on it.
 - **No new end-to-end or browser tests** unless the board's docs or the developer ask for one. Cover behaviour with unit and integration tests.
-- **Precise briefs.** Give sub-agents the files and functions to start from, the acceptance criteria and the decisions already made, so they don't explore what you already know.
+- **Precise briefs.** Give sub-agents the files and functions to start from, the acceptance criteria and the choices already made, so they don't explore what you already know.
 
 ## Implementation record
 
@@ -125,7 +125,7 @@ Keep it in `.reviews/<id>-record.md` and use this format:
 ```
 # Implementation record: <id> — <title>
 ## Approach         what we're doing and why (the chosen proposal; for supers, as agreed so far)
-## Decisions        each: **Decision.** Why … Rejected: … Trade-off: … (who decided, when a person did)
+## Decisions        (slop extracts these as the glob's choices) each: **Decision.** Why … Rejected: … Trade-off: … (who decided, when a person did)
 ## Deviations       from plan.md, with reasons
 ## What was built   by area, with commits
 ## Traps            what went wrong or would surprise the next person, and how it was handled
@@ -162,7 +162,7 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 ### Phase 1: Context
 
-1. Call `get_context(id)`. It returns a cited bundle: plan.md, attachments, active decisions, linked meeting excerpts, related past globs with change summaries, current test results and relevant conventions.
+1. Call `get_context(id)`. It returns a cited bundle: plan.md, attachments, active choices, linked meeting excerpts, related past globs with change summaries, current test results and relevant conventions.
    - The bundle carries plan.md, the implementation record (once one exists) and any Clarifications or Assumptions attachments in full, and only **lists** the other artifacts (local reviews, other attachments) with kind, label, version, commitSha, size and a one-line description. Don't fetch them by default.
    - **Resuming** (`--from`) **or revisiting** a glob that already has work on it: the record is already in the bundle: save it as `.reviews/<id>-record.md` and carry on from it. Fetch any other listed artifact you need (`attachment:<label>`, `local_review`) with `get_context(id, include: [...])` or `get_artifact`. Add what you fetch to the context file.
 2. If the glob has a group, call `list_globs(board, group)` for its siblings (key, title, status, type). The group replaces the old epic; siblings replace sibling tasks.
@@ -194,14 +194,14 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 - `validation` is null (the block parsed);
 - `planHash` equals the `sha256sum` of the plan text in `.reviews/<id>-context.md`'s plan section (computed as in step 2) — a changed plan means a different task;
 - the base moved little in the investigation's relevant files: after `git fetch origin <base>`, `git diff --stat <investigation.baseCommit> origin/<base> -- <files from investigation.files>` shows none of those files deleted or renamed and fewer than about 30 changed lines in total (a commit that is not in the base's history counts as moved a lot);
-- its `needsHuman` is not `true` unless a person has since answered it (an Assumptions or Clarifications attachment, or a decision, that addresses its reason).
+- its `needsHuman` is not `true` unless a person has since answered it (an Assumptions or Clarifications attachment, or a decision glob, that addresses its reason).
 
 *Reuse:* fetch the investigation text (`get_artifact(id, 'investigation')`), write it to `.reviews/<id>-plan.md`, skip the investigator and the push (step 4), go to step 5 with the investigation's recommended proposal and note "investigation reused (version N)" in the plan file. *Refresh:* run the investigator as below, giving it the earlier investigation as a starting point (it must still read the code), and push the new one in step 4: it becomes the latest version and supersedes the old. Either way, say which and why (plan hash changed / these files changed by N lines / reused with no relevant change) in the plan file and, when you start the record in step 7, in its `## Decisions` ("Investigation reused" or "Investigation refreshed: …"), so reuse vs refresh is recorded.
 
 1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 6.
 2. Invoke the **investigator** with:
    - plan.md (acceptance criteria, or the bug fields for bugs);
-   - the `## Context` section, with the reminder: "Decisions in the context bundle are team decisions. If they settle an approach, recommend it rather than proposing alternatives";
+   - the `## Context` section, with the reminder: "Choices in the context bundle are team choices. If they settle an approach, recommend it rather than proposing alternatives";
    - the group siblings, so it builds on what exists and avoids duplication;
    - clarifications or assumptions, verbatim (they override conflicting assumptions);
    - the learnings file path and the relevant board doc paths;
@@ -223,8 +223,8 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 1. Read the context file, the plan file (with the selected proposal) and the record so far.
 2. Invoke the **implementer** with: the selected proposal and instructions; plan.md's acceptance criteria (or bug fields, stating this is a bug fix and the root cause must be fixed, not the symptom); the context section; group siblings; clarifications or assumptions verbatim; the learnings file path; the board's build doc and relevant board doc paths; the output path `.reviews/<id>-implementation.md`.
-3. The implementer writes its summary (files changed, root cause for bugs, decisions made).
-4. **Update the record:** add the implementer's decisions (with rejected alternatives and trade-offs), deviations and traps to `.reviews/<id>-record.md` (`## Decisions`, `## Deviations`, `## Traps`). Condense; don't paste the summary.
+3. The implementer writes its summary (files changed, root cause for bugs, choices made).
+4. **Update the record:** add the implementer's choices (with rejected alternatives and trade-offs), deviations and traps to `.reviews/<id>-record.md` (`## Decisions`, `## Deviations`, `## Traps`). Condense; don't paste the summary.
 
 ### Phase 4: Testing
 
@@ -244,7 +244,7 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
 2. The reviewer reviews all changes on the branch against `origin/<base>` (after `git fetch origin <base>`), classifies each finding as `IN-SCOPE` or `SUGGESTION`, appends to the review document and returns its verdict.
 3. If the reviewer's verdict names an escalation, or in-scope items are still open after the last round, call `escalate_to_same` (see Escalating a sub). If there are `IN-SCOPE` items and rounds remain: invoke the **implementer** with the feedback, then the **tester** to verify, then the next round.
 4. Otherwise the cycle ends.
-5. After each round, fold in what the reviewer's findings and the implementer's fixes changed: a decision the review overturned goes in `## Decisions` or `## Deviations`, a surprise in `## Traps`.
+5. After each round, fold in what the reviewer's findings and the implementer's fixes changed: a choice the review overturned goes in `## Decisions` or `## Deviations`, a surprise in `## Traps`.
 
 ### Phase 6: Finalise
 
@@ -271,7 +271,8 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
 6. **Full checks**: run the board's full checks once on the merged result (or the fast checks where its build doc leaves full checks to CI). If something fails, hand it to the implementer, re-run the failed check, note it in the review document and commit the fix as `<id>: <what was fixed>`.
 7. **Local review:** push `.reviews/<id>-review.md` followed by `.reviews/<id>-tests.md` as one artifact: `put_artifact(id, kind: 'local_review', content, commitSha: <HEAD sha>, reviewStats: { riskTier, reviewRounds, maxReviewRounds, testFailRounds })`, with the run ID if unattended. `reviewStats` gives the risk tier, the Phase 5 rounds run and allowed, and how many Phase 4 FAIL → fix loops there were. Slop stores it verbatim and shows it under the card's local review icon.
 8. **Learnings:** extract what a developer working on related code should know, from the implementation summary, review document and test report:
-   - `decision` — a choice made and why;
+   Learning types are only `gotcha`, `pattern` and `agent-behaviour`; there is no `decision` type. Choices made in the work (with rejected alternatives) belong in the record's `## Decisions` section, which slop extracts as the glob's "choices"; learnings are guidance for future work.
+
    - `gotcha` — an unexpected issue and how it was resolved;
    - `pattern` — a new pattern future work should follow;
    - `agent-behaviour` — something an instruction would have prevented or should keep doing: a review finding the implementer should never have produced, a test pass that failed because of how the code was written, a plan that needed heavy amendment, and above all **any time the developer corrected you or a sub-agent** in the session (quote the correction). Name the agent concerned.

@@ -478,6 +478,8 @@ describe('mined signals: a glob\'s agent-set version', () => {
       ['ci_after_local', 'orchestrator'],
       ['dependency', null],
       ['review_false_positive', null],
+      ['missing_doc', null],
+      ['choice_in_use', null],
     ]);
     expect(SIGNALS.every((s) => s.threshold !== '')).toBe(true);
   });
@@ -724,5 +726,25 @@ describe('manifests: more formats and exclusions (s15f8)', () => {
 
   it('names nothing for a deleted manifest', () => {
     expect(addedDependencies('package.json', '{"dependencies":{"a":"1"}}', null)).toEqual([]);
+  });
+});
+
+describe('mined signals: missing_doc', () => {
+  const old = (n: number) => ({
+    globs: Array.from({ length: n }, (_, i) => ({ id: `s1t${String(i + 1)}`, type: 'sub' as const, status: 'signed_off' as const, createdAt: '2026-09-01T12:00:00.000Z' })),
+    documentAreasKnown: true,
+  });
+
+  it('measures each missing core area on an old board with 5 merged globs', () => {
+    const keys = measureSignals(activity({ ...old(5), documents: [{ name: 'b', area: 'build', content: '' }] })).map((m) => m.key);
+    expect(keys).toEqual(['missing_doc:conventions', 'missing_doc:architecture']);
+    expect(measureSignals(activity({ ...old(5) })).every((m) => m.crosses)).toBe(true);
+  });
+
+  it('measures nothing with fewer than 5 merged globs, on a young board, or without the documents read', () => {
+    expect(measureSignals(activity({ ...old(4) }))).toEqual([]);
+    const young = old(5);
+    expect(measureSignals(activity({ ...young, globs: young.globs.map((g) => ({ ...g, createdAt: '2026-10-01T12:00:00.000Z' })) }))).toEqual([]);
+    expect(measureSignals(activity({ globs: old(5).globs }))).toEqual([]);
   });
 });

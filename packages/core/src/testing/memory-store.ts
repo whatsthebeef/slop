@@ -15,7 +15,10 @@ import { KNOWLEDGE_PAGE_INTERVAL_DEFAULT } from '../domain/knowledge-page.js';
 import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from '../domain/knowledge-page.js';
 import { DEFAULT_REVIEW_BOARD_SETTINGS } from '../domain/review-settings.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
+import { NO_GLOB } from '../domain/choice-usage.js';
+import type { ChoiceUsageRow } from '../domain/choice-usage.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
+import { isClearedAttachment } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
 import { GLOB_OWNED_SOURCES, matchesFilters } from '../domain/search.js';
 import type { Candidate, KnowledgeItem } from '../domain/search.js';
@@ -66,6 +69,7 @@ interface State {
   reviewSources: ReviewSource[];
   findings: ReviewFinding[];
   kbSignals: Map<string, KbSignalState>;
+  choiceUsage: (ChoiceUsageRow & { boardId: number })[];
   boardJobs: Map<string, BoardJob>;
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
@@ -158,6 +162,7 @@ const clone = (state: State): State => ({
   reviewSources: [...state.reviewSources],
   findings: [...state.findings],
   kbSignals: new Map(state.kbSignals),
+  choiceUsage: state.choiceUsage.map((r) => ({ ...r })),
   boardJobs: new Map(state.boardJobs),
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
@@ -215,6 +220,7 @@ export class MemoryStore implements Store {
     reviewSources: [],
     findings: [],
     kbSignals: new Map(),
+    choiceUsage: [],
     boardJobs: new Map(),
     boardJobStates: new Map(),
     subLimitChanges: [],
@@ -597,16 +603,19 @@ export class MemoryStore implements Store {
         for (const a of s.artifacts) {
           if (a.globId === globId && (kind === undefined || a.kind === kind)) latest.set(`${a.kind}:${a.label}`, a);
         }
-        return Promise.resolve([...latest.values()].sort((a, b) => b.id - a.id));
+        return Promise.resolve([...latest.values()].filter((a) => !isClearedAttachment(a)).sort((a, b) => b.id - a.id));
       },
       artifactVersions: (globId, kind, label) =>
         Promise.resolve(s.artifacts.filter((a) => a.globId === globId && a.kind === kind && a.label === label)),
       listArtifactSummaries: (boardId, globIds) => {
         const onBoard = (id: string) => s.globs.get(id)?.glob.boardId === boardId && globIds.includes(id);
         const summaries = new Map<string, ArtifactSummary>();
+        const cleared = new Set<string>();
         for (const a of s.artifacts) {
           if (!onBoard(a.globId)) continue;
           const key = `${a.globId}:${a.kind}:${a.label}`;
+          if (isClearedAttachment(a)) cleared.add(key);
+          else cleared.delete(key);
           summaries.set(key, {
             globId: a.globId,
             kind: a.kind,
@@ -620,7 +629,7 @@ export class MemoryStore implements Store {
             ...(a.provenance.independentReview === undefined ? {} : { review: a.provenance.independentReview }),
           });
         }
-        return Promise.resolve([...summaries.values()]);
+        return Promise.resolve([...summaries.entries()].filter(([key]) => !cleared.has(key)).map(([, v]) => v));
       },
       getDeploy: (id) => Promise.resolve(s.deploys.get(id) ?? null),
       saveDeploys: (deploys) => {
@@ -816,6 +825,30 @@ export class MemoryStore implements Store {
       listKbSignals: (boardId) => Promise.resolve([...s.kbSignals.values()].filter((k) => k.boardId === boardId)),
       upsertKbSignal: (state) => {
         s.kbSignals.set(`${state.boardId}:${state.key}`, state);
+        return Promise.resolve();
+      },
+      recordChoiceUsage: (boardId, itemIds, globId, day) => {
+        const wanted = new Set(itemIds);
+        const at = globId ?? NO_GLOB;
+        for (const d of s.decisions) {
+          if (d.boardId !== boardId || !wanted.has(d.itemId)) continue;
+          const i = s.choiceUsage.findIndex((r) => r.decisionId === d.id && r.day === day && r.globId === at);
+          const row = s.choiceUsage[i];
+          if (row === undefined) s.choiceUsage.push({ boardId, decisionId: d.id, day, globId: at, count: 1 });
+          else s.choiceUsage[i] = { ...row, count: row.count + 1 };
+        }
+        return Promise.resolve();
+      },
+      listChoiceUsage: (boardId, fromDay) => {
+        const alive = new Set(s.decisions.map((d) => d.id));
+        return Promise.resolve(
+          s.choiceUsage
+            .filter((r) => r.boardId === boardId && r.day >= fromDay && alive.has(r.decisionId))
+            .map(({ decisionId, day, globId, count }) => ({ decisionId, day, globId, count })),
+        );
+      },
+      pruneChoiceUsage: (boardId, beforeDay) => {
+        s.choiceUsage = s.choiceUsage.filter((r) => r.boardId !== boardId || r.day >= beforeDay);
         return Promise.resolve();
       },
       getBoardJob: (boardId, job) => Promise.resolve(s.boardJobs.get(`${boardId}:${job}`) ?? null),
@@ -1138,6 +1171,11 @@ export class MemoryStore implements Store {
         if (s.inboxLinks.some((l) => l.inboxId === link.inboxId && l.globId === link.globId)) return Promise.resolve(false);
         s.inboxLinks.push(link);
         return Promise.resolve(true);
+      },
+      deleteInboxLink: (inboxId, globId) => {
+        const before = s.inboxLinks.length;
+        s.inboxLinks = s.inboxLinks.filter((l) => l.inboxId !== inboxId || l.globId !== globId);
+        return Promise.resolve(s.inboxLinks.length < before);
       },
       listInboxLinks: (boardId) => {
         const mine = new Set(s.inboxItems.filter((i) => i.boardId === boardId).map((i) => i.id));

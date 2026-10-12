@@ -17,6 +17,7 @@ import type { IdLetter } from './domain/ids.js';
 import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
 import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from './domain/knowledge-page.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
+import type { ChoiceUsageRow } from './domain/choice-usage.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
 import type { NewSizeCalibrationChange, SizeCalibration, SizeCalibrationChange, SizeRecord } from './domain/size-forecast.js';
 import type { NewSizeThresholdChange, SizeCheck, SizeThreshold, SizeThresholdChange } from './domain/size-check.js';
@@ -303,6 +304,15 @@ export interface Tx {
   /** A board's mined-signal state, one row per signal key. */
   listKbSignals(boardId: number): Promise<KbSignalState[]>;
   upsertKbSignal(state: KbSignalState): Promise<void>;
+  /**
+   * Counts one retrieval of each of the board's choices among `itemIds` (knowledge item ids; items that are not a
+   * choice are ignored) on `day` (`YYYY-MM-DD`), under `globId` or `NO_GLOB`. A cheap counter, one increment each.
+   */
+  recordChoiceUsage(boardId: number, itemIds: readonly number[], globId: string | null, day: string): Promise<void>;
+  /** A board's choice usage rows on or after `fromDay`, for choices that still exist. */
+  listChoiceUsage(boardId: number, fromDay: string): Promise<ChoiceUsageRow[]>;
+  /** Deletes a board's usage rows before `day`. */
+  pruneChoiceUsage(boardId: number, beforeDay: string): Promise<void>;
   getBoardJob(boardId: number, job: BoardJobName): Promise<BoardJob | null>;
   /**
    * Takes a board job's lease until `now + leaseMs` unless another server holds it (its `runningUntil` is after
@@ -410,6 +420,8 @@ export interface Tx {
   /** Records a link; false when the item is already linked to the glob. */
   insertInboxLink(link: InboxLink): Promise<boolean>;
   listInboxLinks(boardId: number): Promise<InboxLink[]>;
+  /** Deletes the link between an item and a glob; false when there was none. */
+  deleteInboxLink(inboxId: number, globId: string): Promise<boolean>;
   /** The attached items linked to a glob, oldest link first. */
   listInboxForGlob(globId: string): Promise<InboxItem[]>;
   /** Sets the globs (and group) a search item links to, without touching its chunks. */

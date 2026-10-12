@@ -208,7 +208,7 @@ describe('knowledge page routes', () => {
   });
 });
 
-const MIGRATION = '0052_knowledge_page_daily';
+const MIGRATION = '0055_knowledge_page_daily';
 const ADMIN_URL = process.env.TEST_ADMIN_DATABASE_URL ?? 'postgres://slop:slop@localhost:5432/slop';
 const MIGRATION_DB = `slop_test_kpagemig_${process.pid}`;
 const migrationUrl = ADMIN_URL.replace(/\/[^/]+$/, `/${MIGRATION_DB}`);
@@ -230,8 +230,10 @@ describe('knowledge page daily default (migration 0052)', () => {
     folder = await mkdtemp(join(tmpdir(), 'kpage-migration-'));
     await cp(new URL('../drizzle', import.meta.url).pathname, folder, { recursive: true });
     const journal = JSON.parse(await readFile(join(folder, 'meta/_journal.json'), 'utf8')) as { entries: { tag: string; when: number }[] };
-    const earlier = journal.entries.filter((e) => e.tag !== MIGRATION);
-    expect(journal.entries.find((e) => e.tag === MIGRATION)?.when ?? 0).toBeGreaterThan(earlier.at(-1)?.when ?? Infinity);
+    // Cut at this migration's index, so any later migration is held back too.
+    const at = journal.entries.findIndex((e) => e.tag === MIGRATION);
+    const earlier = journal.entries.slice(0, at);
+    expect(journal.entries[at]?.when ?? 0).toBeGreaterThan(earlier.at(-1)?.when ?? Infinity);
     journal.entries = earlier;
     await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify(journal));
     await runMigrations(migrationUrl, folder);

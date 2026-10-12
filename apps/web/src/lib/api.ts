@@ -321,6 +321,10 @@ export interface NewGlob {
   start?: boolean;
   /** IDs of globs on the board to start after. */
   after?: string[];
+  /** An inbox item of the board to attach to the new glob as it is created. */
+  inboxItem?: number;
+  /** Overrides the random key (a glob made from an inbox item uses `inbox:<id>`, so a repeat finds it). */
+  idempotencyKey?: string;
   /** Files intake guessed the work changes (sent back as given). */
   files?: string[];
   /** What the intake proposal behind the form said, sent back so the glob's snapshot records it. */
@@ -585,7 +589,7 @@ export const api = {
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
   deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),
   createGlob: (boardId: number, input: NewGlob) =>
-    request<GlobView>('POST', `/api/boards/${boardId}/globs`, { ...input, idempotencyKey: crypto.randomUUID() }),
+    request<GlobView>('POST', `/api/boards/${boardId}/globs`, { ...input, idempotencyKey: input.idempotencyKey ?? crypto.randomUUID() }),
   updateGlob: (id: string, version: number, changes: GlobChanges) =>
     request<GlobView>('PATCH', `/api/globs/${id}`, { ...changes, version }),
   deleteGlob: (id: string, version: number) => request<object>('DELETE', `/api/globs/${id}`, { version }),
@@ -704,6 +708,9 @@ export const api = {
   findings: (id: string) => request<GlobFindings>('GET', `/api/globs/${id}/findings`),
   /** The decisions taken on a glob, newest first, with what replaced them. */
   decisions: (boardId: number, id: string) => request<{ decisions: DecisionView[] }>('GET', `/api/boards/${boardId}/globs/${id}/decisions`),
+  /** A replacement card (a decision glob asking "did X replace Y?"): Confirm applies the replacement, Dismiss keeps both and blocks the pair. */
+  decideReplacement: (boardId: number, globId: string, outcome: 'confirm' | 'dismiss', reason?: string) =>
+    request<unknown>('POST', `/api/boards/${boardId}/globs/${globId}/replacement`, { outcome, ...(reason === undefined ? {} : { reason }) }),
   /** Confirms a proposed replacement (the older decision becomes superseded). */
   confirmDecision: (boardId: number, id: number) => request<DecisionView>('POST', `/api/boards/${boardId}/decisions/${id}/confirm`),
   /** Undoes a replacement, or dismisses a proposed one. */
@@ -714,6 +721,10 @@ export const api = {
   addToInbox: (boardId: number, paste: NewInboxPaste) => request<{ id: number; created: boolean }>('POST', `/api/boards/${boardId}/inbox`, paste),
   attachInbox: (boardId: number, id: number, globIds: readonly string[]) =>
     request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/attach`, { globIds }),
+  /** The glob already made from this item (Create glob), or null. */
+  inboxGlob: (boardId: number, id: number) => request<{ globId: string | null }>('GET', `/api/boards/${boardId}/inbox/${id}/glob`),
+  detachInbox: (boardId: number, id: number, globIds: readonly string[]) =>
+    request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/detach`, { globIds }),
   keepInbox: (boardId: number, id: number) => request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/keep`),
   discardInbox: (boardId: number, id: number) => request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/discard`),
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */

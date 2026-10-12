@@ -442,7 +442,7 @@ export const createLearning = async (
     throw new Error(`${id} is not a KB item ID on board ${String(boardId)}`);
   const source = input.source ?? 'submitted';
   const attributes: DecisionAttributes = {
-    scope: defaultScope(input.type),
+    scope: defaultScope(),
     origin: { kind: source },
     channel: source === 'mined' ? 'mined' : 'agent',
     outcome: null,

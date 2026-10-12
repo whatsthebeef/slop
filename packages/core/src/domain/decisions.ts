@@ -1,4 +1,6 @@
 import { hash } from '../app/text-hash.js';
+import type { ChoiceUsage } from './choice-usage.js';
+import type { AuthorityTier } from './search.js';
 
 /**
  * Decisions (spec, Decisions and supersession): choices a team made, found in the implementation record's
@@ -8,6 +10,23 @@ import { hash } from '../app/text-hash.js';
 
 export const DECISION_SOURCE_KINDS = ['implementation_plan', 'plan', 'attachment', 'kb_item', 'inbox'] as const;
 export type DecisionSourceKind = (typeof DECISION_SOURCE_KINDS)[number];
+
+/**
+ * A choice weighs what its source weighs: the implementation record keeps the decision tier, plans, attachments and
+ * accepted learnings the approved-plan tier, and pasted meetings, threads and documents the discussion tier.
+ */
+export const choiceAuthority = (kind: DecisionSourceKind): AuthorityTier => {
+  switch (kind) {
+    case 'implementation_plan':
+      return 'decision';
+    case 'inbox':
+      return 'discussion';
+    case 'plan':
+    case 'attachment':
+    case 'kb_item':
+      return 'approved_plan';
+  }
+};
 
 /**
  * How a decision relates to the newer one that replaces it. `hint`: the model proposed it but a quote failed the
@@ -143,6 +162,8 @@ export interface DecisionRelation {
   readonly state: ReplaceState;
   readonly sourceLabel: string;
   readonly sourceUrl: string | null;
+  /** The decision glob waiting on a person for this proposed replacement, when there is one (on a `hint`). */
+  readonly cardGlobId?: string | null;
   /** The quotes and reason behind the relation (on `replacedBy`; empty on `replaces`, whose own row holds them). */
   readonly oldQuote: string | null;
   readonly newQuote: string | null;
@@ -166,9 +187,16 @@ export interface DecisionView {
   readonly replacedBy: DecisionRelation | null;
   /** The older decisions this one replaced or proposes to replace. */
   readonly replaces: readonly DecisionRelation[];
+  /** How often agents and chat were given it in the last `CHOICE_USAGE_WINDOW_DAYS` days; only the glob view's list sets it. */
+  readonly usage?: ChoiceUsage;
 }
 
-const relationOf = (d: Decision, state: ReplaceState, quotes: Pick<Decision, 'replaceOldQuote' | 'replaceNewQuote' | 'replaceReason'>): DecisionRelation => ({
+const relationOf = (
+  d: Decision,
+  state: ReplaceState,
+  quotes: Pick<Decision, 'replaceOldQuote' | 'replaceNewQuote' | 'replaceReason'>,
+  cardGlobId: string | null,
+): DecisionRelation => ({
   id: d.id,
   globId: d.globId,
   statement: d.statement,
@@ -179,13 +207,22 @@ const relationOf = (d: Decision, state: ReplaceState, quotes: Pick<Decision, 're
   oldQuote: quotes.replaceOldQuote,
   newQuote: quotes.replaceNewQuote,
   reason: quotes.replaceReason,
+  cardGlobId,
 });
 
 /** A relation a person can still see: undone ones are gone. */
 const shown = (d: Decision): ReplaceState | null => (d.replaceState === null || d.replaceState === 'undone' ? null : d.replaceState);
 
-/** `chosen` as views, with their relations resolved against every decision of the board (`all`), newest first. */
-export const decisionViews = (chosen: readonly Decision[], all: readonly Decision[]): DecisionView[] => {
+/**
+ * `chosen` as views, with their relations resolved against every decision of the board (`all`), newest first. `cards` maps
+ * an older choice to the decision glob waiting on a person to confirm or dismiss its proposed replacement.
+ */
+export const decisionViews = (
+  chosen: readonly Decision[],
+  all: readonly Decision[],
+  cards: ReadonlyMap<number, string> = new Map(),
+  usage?: ReadonlyMap<number, ChoiceUsage>,
+): DecisionView[] => {
   const byId = new Map(all.map((d) => [d.id, d]));
   return [...chosen]
     .sort((a, b) => b.decidedAt.localeCompare(a.decidedAt) || b.id - a.id)
@@ -203,10 +240,11 @@ export const decisionViews = (chosen: readonly Decision[], all: readonly Decisio
         sourceLabel: d.sourceLabel,
         sourceUrl: d.sourceUrl,
         status: isSuperseded(d) ? 'superseded' : 'current',
-        replacedBy: state === null || newer === undefined ? null : relationOf(newer, state, d),
+        replacedBy: state === null || newer === undefined ? null : relationOf(newer, state, d, cards.get(d.id) ?? null),
         replaces: all
           .filter((o) => o.replacedBy === d.id && shown(o) !== null)
-          .map((o) => relationOf(o, shown(o) ?? 'hint', o)),
+          .map((o) => relationOf(o, shown(o) ?? 'hint', o, cards.get(o.id) ?? null)),
+        ...(usage === undefined ? {} : { usage: usage.get(d.id) ?? { returns: 0, globs: 0 } }),
       };
     });
 };

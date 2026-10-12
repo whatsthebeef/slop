@@ -98,6 +98,72 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     });
   });
 
+  describe('missing core documents', () => {
+    const mergedGlobs = async (count: number, createdAt: string) => {
+      for (let i = 0; i < count; i++) {
+        await store.transaction((tx) => tx.insertGlob(glob({ id: `s${String(board.id)}t${String(++n)}`, boardId: board.id, status: 'signed_off', createdAt }), null));
+      }
+    };
+    const withDocs = async (areas: string[]) => {
+      for (const area of areas) {
+        await store.transaction((tx) =>
+          tx.saveKnowledge({
+            boardId: board.id,
+            kind: 'doc',
+            name: `${area}_doc`,
+            area,
+            audience: [],
+            description: '',
+            content: `# ${area}`,
+            layer: 'file',
+            version: 1,
+            source: 'upload',
+            updatedBy: ADMIN,
+            updatedAt: START,
+          }),
+        );
+      }
+    };
+
+    it('raises one pattern per missing area, once', async () => {
+      await mergedGlobs(5, later(-10 * DAY));
+      await withDocs(['build']);
+      const first = await mining.mine(board.id, START);
+      expect(first.raised).toHaveLength(2);
+      const raised = await Promise.all(first.raised.map(item));
+      expect(raised.map((i) => i.signal?.key).sort()).toEqual(['missing_doc:architecture', 'missing_doc:conventions']);
+      expect(raised[0]).toMatchObject({ type: 'pattern', source: 'mined', status: 'open' });
+      const second = await mining.mine(board.id, later(WEEK));
+      expect(second.raised).toEqual([]);
+      expect(await items()).toHaveLength(2);
+    });
+
+    it('waits until the board is 7 days old and has 5 merged globs', async () => {
+      await mergedGlobs(5, later(-3 * DAY));
+      expect((await mining.mine(board.id, START)).raised).toEqual([]);
+      await store.transaction((tx) => tx.insertGlob(glob({ id: 's1t99', boardId: board.id, status: 'signed_off', createdAt: later(-20 * DAY) }), null));
+      expect((await mining.mine(board.id, later(DAY))).raised).toHaveLength(3);
+    });
+
+    it('does not raise for a board with fewer than 5 merged globs, or once the documents exist', async () => {
+      await mergedGlobs(4, later(-20 * DAY));
+      expect((await mining.mine(board.id, START)).raised).toEqual([]);
+      await mergedGlobs(1, later(-20 * DAY));
+      await withDocs(['build', 'conventions', 'architecture']);
+      expect((await mining.mine(board.id, later(DAY))).raised).toEqual([]);
+    });
+
+    it('raises a rejected one again only after 60 days, while the area is still missing', async () => {
+      await mergedGlobs(5, later(-10 * DAY));
+      await withDocs(['build', 'conventions']);
+      const first = await mining.mine(board.id, START);
+      const id = first.raised[0] ?? '';
+      await decide(id, { status: 'rejected', decidedBy: ADMIN, decidedAt: START, decisionReason: 'Not now' });
+      expect((await mining.mine(board.id, later(59 * DAY))).raised).toEqual([]);
+      expect((await mining.mine(board.id, later(61 * DAY))).raised).toHaveLength(1);
+    });
+  });
+
   it('makes a mined item a decision glob (channel mined, in Planning, assessed) under its own ID', async () => {
     await runs(10, 3, later(-2 * DAY));
     const result = await mining.mine(board.id, START);

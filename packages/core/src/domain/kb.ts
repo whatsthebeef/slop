@@ -8,7 +8,7 @@ import type { KbSignal } from './signals.js';
  * KB items (`s<board>k<n>`): proposed changes to a board's knowledge base or agent set. Nothing
  * reaches either without an admin's approval; rejected items are kept to suppress repeats.
  */
-export const LEARNING_TYPES = ['decision', 'gotcha', 'pattern', 'agent-behaviour'] as const;
+export const LEARNING_TYPES = ['gotcha', 'pattern', 'agent-behaviour'] as const;
 export type LearningType = (typeof LEARNING_TYPES)[number];
 
 /**

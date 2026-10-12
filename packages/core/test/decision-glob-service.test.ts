@@ -145,6 +145,12 @@ describe('decision globs', () => {
     return made.globId;
   };
   const setScope = async (id: string, scope: unknown) => unwrap(await globs.update(ADMIN, id, (await glob(id)).version, { attributes: { scope } }));
+  /** A learning whose scope an admin widened to the whole project. */
+  const submitProject = async (patch: Partial<NewLearning> = {}) => {
+    const made = await submit({ type: 'pattern', ...patch });
+    await setScope(made.globId, { kind: 'project', ref: null });
+    return made;
+  };
   /** Approves the item on the Knowledge page as `learning`: the decision glob follows. */
   const approveOnPage = async (itemId: string) => unwrap(await knowledge.approve(ADMIN, itemId, (await item(itemId)).version, { as: 'learning' }));
 
@@ -174,19 +180,27 @@ describe('decision globs', () => {
   });
 
   describe('creation', () => {
+    it('refuses the removed decision learning type, pointing at the implementation record', async () => {
+      const refused = await knowledge.submitLearning(DEV, boardId, { sourceGlobId: workId, type: 'decision', statement: GEN, evidence: 'because' });
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.error.message).toMatch(/## Decisions; learnings are guidance/);
+      const unknown = await knowledge.submitLearning(DEV, boardId, { sourceGlobId: workId, type: 'rule', statement: GEN, evidence: 'because' });
+      expect(unknown.ok).toBe(false);
+    });
+
     it('is a submitted learning itself: Planning, the item\'s fields as attributes, proposal as plan.md, assessment v1', async () => {
-      const made = await submit({ type: 'decision' });
+      const made = await submit({ type: 'pattern' });
       // The glob is the item, under the item's own ID.
       expect(made.globId).toBe('s1k1');
       expect(made.globId).toBe(made.id);
       const g = await glob(made.globId);
       expect(g).toMatchObject({ category: 'decision', type: 'same', status: 'planning', title: GEN, provisioning: 'none', labels: {}, runs: [], doingSince: null, version: 1 });
       expect(g.attributes).toEqual({
-        scope: { kind: 'project', ref: null },
+        scope: { kind: 'future_work', ref: null },
         origin: { kind: 'submitted' },
         channel: 'agent',
         outcome: null,
-        kind: 'decision',
+        kind: 'pattern',
         sourceGlobs: [workId],
         target: { suggested: null, routed: null },
         evidenceCount: 1,
@@ -198,7 +212,7 @@ describe('decision globs', () => {
       expect(plan?.provenance.by).toBe('routine');
       const versions = await assessments(made.globId);
       expect(versions).toHaveLength(1);
-      expect(versions[0]?.content).toMatch(/Scope: the whole project/);
+      expect(versions[0]?.content).toMatch(/Scope: future work/);
     });
 
     it('scopes a non-decision learning to future work by default, and numbers it in the k sequence of the KB items', async () => {
@@ -622,7 +636,7 @@ describe('decision globs', () => {
       });
 
     it('flags only a contradiction with a broader decision', async () => {
-      const broad = await submit({ type: 'decision', statement: 'Never edit generated files' });
+      const broad = await submitProject({ statement: 'Never edit generated files' });
       const narrow = await submit({ statement: 'Edit generated files only in src/gen/', type: 'pattern' });
       await approveOnPage(broad.id);
 
@@ -631,11 +645,11 @@ describe('decision globs', () => {
       expect((await assessments(narrow.globId)).at(-1)?.content).toMatch(/Conflicts with s1k1 \(broader scope\)/);
 
       // The other way round: the broader item contradicting a narrower one is not flagged.
-      const second = await submit({ type: 'decision', statement: 'Project-wide rule' });
+      const second = await submitProject({ statement: 'Project-wide rule' });
       await contradict(second.id, narrow.id);
       expect((await attributesOf(second.globId)).conflictsWith).toBeUndefined();
       // Equal scope is not broader either.
-      const peer = await submit({ type: 'decision', statement: 'A peer rule' });
+      const peer = await submitProject({ statement: 'A peer rule' });
       await contradict(peer.id, second.id);
       expect((await attributesOf(peer.globId)).conflictsWith).toBeUndefined();
     });
@@ -654,7 +668,7 @@ describe('decision globs', () => {
     it('serves the accepted decisions that govern a glob, by scope kind, broadest first', async () => {
       const grouped = await newWork({ title: 'Billing work', group: 'billing' });
       const shared = async (statement: string, scope: unknown) => {
-        const made = await submit({ statement, type: 'decision' });
+        const made = await submit({ statement, type: 'pattern' });
         await setScope(made.globId, scope);
         await approveOnPage(made.id);
         return made.globId;
@@ -668,7 +682,7 @@ describe('decision globs', () => {
       const forFuture = await shared('Future billing work', { kind: 'future_work', ref: 'billing' });
       const forFutureAll = await shared('Future work', { kind: 'future_work', ref: null });
       // An open decision binds nothing.
-      await submit({ statement: 'Not accepted yet', type: 'decision' });
+      await submit({ statement: 'Not accepted yet', type: 'pattern' });
 
       const ids = async (id: string) => unwrap(await artifacts.context(DEV, id)).scopedDecisions.map((d) => d.id);
       expect(await ids(workId)).toEqual([forProject, forGlob]);
@@ -684,7 +698,7 @@ describe('decision globs', () => {
     it('attaches the decisions that govern a new glob, and nothing when none do', async () => {
       const before = await newWork({ title: 'Before any decision' });
       expect(await artifactsOf(before.id, 'attachment')).toEqual([]);
-      const made = await submit({ type: 'decision', statement: 'Project rule' });
+      const made = await submitProject({ statement: 'Project rule' });
       await approveOnPage(made.id);
       const after = await newWork({ title: 'After the decision' });
       const [attachment] = await artifactsOf(after.id, 'attachment');
@@ -694,7 +708,7 @@ describe('decision globs', () => {
     });
 
     it('gives the parts of a split the decisions that govern them, not only a created glob', async () => {
-      const made = await submit({ type: 'decision', statement: 'Project rule' });
+      const made = await submitProject({ statement: 'Project rule' });
       await approveOnPage(made.id);
       const original = await newWork({ title: 'Big', plan: 'Everything' });
       const part = (title: string) => ({ title, summary: '', plan: `Do ${title}` });
@@ -731,7 +745,7 @@ describe('decision globs', () => {
     });
 
     it('serves a decision’s proposal as its plan and payload, its attributes, and lists the assessment as available', async () => {
-      const made = await submit({ type: 'decision' });
+      const made = await submit({ type: 'pattern' });
       const context = unwrap(await artifacts.context(DEV, made.globId));
       expect(context.payload).toEqual(context.plan);
       expect(context.payload?.content).toContain(GEN);

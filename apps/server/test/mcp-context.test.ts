@@ -1,4 +1,4 @@
-import { ArtifactService, FakeEmbedder, GlobService, IntakeService, SearchService, vectorOf } from '@slop/core';
+import { ArtifactService, FakeEmbedder, GlobService, InboxService, IntakeService, SearchService, vectorOf } from '@slop/core';
 import type { Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -122,8 +122,9 @@ describe('MCP get_context include and get_artifact', () => {
       store,
       llm: { complete: () => Promise.resolve(JSON.stringify({ title: 'Design it', summary: 'S', type: 'super', typeReason: 'Open design', category: 'feature' })) },
     });
+    const inbox = new InboxService(deps);
     const outbox = { drain: () => Promise.resolve() };
-    const server = buildServer({ artifacts, globs, intake, outbox } as unknown as McpDeps, DEV, 'http://localhost');
+    const server = buildServer({ artifacts, globs, intake, outbox, inbox } as unknown as McpDeps, DEV, 'http://localhost');
     const [a, b] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test', version: '0' });
     await Promise.all([server.connect(a), client.connect(b)]);
@@ -233,5 +234,15 @@ describe('MCP get_context include and get_artifact', () => {
     expect(asked).toMatchObject({ type: 'super', status: 'in_progress' });
     const parked = await created({ title: 'Parked', type: 'super', category: 'feature', start: false, idempotencyKey: 'parked-super' });
     expect(parked).toMatchObject({ status: 'planning' });
+  });
+
+  it('create_glob attaches an inbox item of the board and refuses another one', async () => {
+    const added = (await call('add_to_inbox', { board: boardId, text: 'Notes: we should export CSV from the report page.' })).body as unknown as { id: number };
+    const made = (await call('create_glob', { board: boardId, title: 'Export CSV', category: 'feature', type: 'same', inboxItem: added.id, idempotencyKey: 'from-inbox' })).body as unknown as { id: string };
+    const ctx = (await call('get_context', { id: made.id })).body as unknown as { inbox: { id: number }[] };
+    expect(ctx.inbox.map((i) => i.id)).toEqual([added.id]);
+    expect((await store.transaction((tx) => tx.getInboxItem(boardId, added.id)))?.status).toBe('attached');
+    const bad = await call('create_glob', { board: boardId, title: 'No such item', category: 'task', type: 'same', inboxItem: 99999, idempotencyKey: 'bad-item' });
+    expect(bad.isError).toBe(true);
   });
 });

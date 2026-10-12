@@ -1,5 +1,5 @@
 import { evidenceCount } from './kb.js';
-import type { DraftPreview, KbContradiction, KbCoverage, KbDraft, LearningWire, LearningStatus, KbPossibleCoverage, KbProcessing, KbTarget, LearningType, ProposedDocument } from './kb.js';
+import type { DraftPreview, KbContradiction, KbCoverage, KbDraft, LearningWire, LearningStatus, KbPossibleCoverage, KbProcessing, KbTarget, ProposedDocument } from './kb.js';
 import { isDecisionAttributes } from './attributes.js';
 import type { DecisionAttributes, DecisionScope, ScopeKind } from './attributes.js';
 import type { Glob } from './types.js';
@@ -48,13 +48,21 @@ export const scopeLabel = (scope: DecisionScope): string => {
 export const learningKey = (itemId: string): string => `kb:${itemId}`;
 export const inboxKey = (inboxId: number): string => `inbox:${String(inboxId)}`;
 export const extractedKey = (decisionId: number): string => `decision:${String(decisionId)}`;
+/** One card per pair of choices: did `newId` replace `oldId`? */
+export const replacementKey = (oldId: number, newId: number): string => `replacement:${String(oldId)}:${String(newId)}`;
 
-/**
- * Where a submitted learning applies unless an admin says otherwise: a decision learning governs the project, anything
- * else the work that comes after it. Editable afterwards.
- */
-export const defaultScope = (type: LearningType): DecisionScope =>
-  type === 'decision' ? { kind: 'project', ref: null } : { kind: 'future_work', ref: null };
+/** The replacement a decision glob asks about, or null for any other glob. */
+export const replacementOf = (glob: Glob): { readonly oldId: number; readonly newId: number } | null => {
+  const origin = decisionOf(glob)?.origin;
+  return origin?.kind === 'replacement' ? { oldId: origin.oldId, newId: origin.newId } : null;
+};
+
+/** "Did "<new choice>" replace "<old choice>"?", each choice cut to its first line and 40 characters. */
+export const replacementTitle = (oldStatement: string, newStatement: string): string =>
+  `Did "${firstLine(newStatement, 40)}" replace "${firstLine(oldStatement, 40)}"?`;
+
+/** Where a submitted learning applies unless an admin says otherwise: the work that comes after it. Editable afterwards. */
+export const defaultScope = (): DecisionScope => ({ kind: 'future_work', ref: null });
 
 /** An accepted decision binds: accepted (with or without edits), or whose needs-work glob merged; not archived. */
 export const isAccepted = (glob: Glob): boolean => {

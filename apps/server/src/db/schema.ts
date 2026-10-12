@@ -36,6 +36,7 @@ import {
   bigserial,
   boolean,
   customType,
+  date,
   doublePrecision,
   foreignKey,
   index,
@@ -410,6 +411,26 @@ export const kbSignals = pgTable(
     belowThresholdRuns: integer('below_threshold_runs').notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.boardId, t.key] })],
+);
+
+/**
+ * How often each choice was returned to an agent or chat, per day and glob (`''` when the retrieval had none). One
+ * counter row per combination, pruned after `CHOICE_USAGE_RETENTION_DAYS`; the weekly mining run reads it.
+ */
+export const choiceUsage = pgTable(
+  'choice_usage',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    decisionId: bigint('decision_id', { mode: 'number' })
+      .notNull()
+      .references(() => decisions.id, { onDelete: 'cascade' }),
+    day: date('day', { mode: 'string' }).notNull(),
+    globId: text('glob_id').notNull().default(''),
+    count: integer('count').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.decisionId, t.day, t.globId] }), index('choice_usage_board_day_idx').on(t.boardId, t.day)],
 );
 
 /** Per-board self-improvement jobs (mining, later consolidation and effect checks): last run and a lease. */

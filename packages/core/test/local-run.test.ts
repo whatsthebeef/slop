@@ -110,7 +110,7 @@ describe('the local-run spec through the KB', () => {
     unwrap(
       await knowledge.submitLearning(DEV, boardId, {
         sourceGlobId: globId,
-        type: 'decision',
+        type: 'pattern',
         statement: 'Sessions launch with scripts/session.sh after pnpm install',
         evidence: 's15f11',
         ...patch,

@@ -213,7 +213,7 @@ describe('decisions', () => {
       ]);
     });
 
-    it('turns an approved decision learning into a decision without asking the model', async () => {
+    it('no longer records approved learnings as choices, and keeps the choices earlier learnings created', async () => {
       const learning = (id: string, type: LearningWire['type'], statement: string): LearningWire => ({
         id,
         boardId,
@@ -237,80 +237,29 @@ describe('decisions', () => {
         processing: 'drafted',
         version: 2,
       });
+      const k = (n: number) => `s${String(boardId)}k${String(n)}`;
       await store.transaction(async (tx) => {
-        await learningSeed(tx, TEST_KB_WRITES).insertSeeded(learning(`s${String(boardId)}k1`, 'decision', 'Dates are stored in UTC and shown in the board time zone.'));
-        await learningSeed(tx, TEST_KB_WRITES).insertSeeded(learning(`s${String(boardId)}k2`, 'gotcha', 'The cache needs a restart after a config change.'));
+        await learningSeed(tx, TEST_KB_WRITES).insertSeeded(learning(k(1), 'pattern', 'Dates are stored in UTC and shown in the board time zone.'));
+        await learningSeed(tx, TEST_KB_WRITES).insertSeeded(learning(k(2), 'gotcha', 'The cache needs a restart after a config change.'));
+        await tx.upsertDecision({
+          boardId,
+          itemId: 1,
+          globId: null,
+          group: null,
+          statement: 'Use cursors for pagination.',
+          quote: 'Use cursors for pagination.',
+          decidedBy: 'admin@example.com',
+          decidedAt: '2026-08-02T00:00:00.000Z',
+          sourceKind: 'kb_item',
+          sourceRef: `learning:${k(3)}`,
+          sourceLabel: '',
+          sourceUrl: `/boards/${String(boardId)}/knowledge`,
+          createdAt: '2026-08-02T00:00:00.000Z',
+        });
       });
       await run();
       expect(llm.calls).toHaveLength(0);
-      const found = await decisions();
-      expect(found).toHaveLength(1);
-      expect(found[0]).toMatchObject({
-        globId: null,
-        sourceKind: 'kb_item',
-        sourceRef: `learning:s${String(boardId)}k1`,
-        decidedBy: 'admin@example.com',
-        decidedAt: '2026-08-02T00:00:00.000Z',
-        statement: 'Dates are stored in UTC and shown in the board time zone.',
-        sourceUrl: `/boards/${String(boardId)}/knowledge`,
-      });
-      expect(found[0]?.quote).toBe(found[0]?.statement);
-    });
-
-    it('records only approved decision learnings, from the same fields the adapter read (s15t72)', async () => {
-      const k = (n: number) => `s${String(boardId)}k${String(n)}`;
-      const decided = { decidedBy: 'admin@example.com', decidedAt: '2026-08-02T00:00:00.000Z', processing: 'none' as const, version: 2 };
-      const learning = (n: number, patch: Partial<LearningWire>): LearningWire => ({
-        id: k(n),
-        boardId,
-        status: 'open',
-        type: 'decision',
-        statement: `Decision ${String(n)}: dates are stored in UTC and shown in the board time zone.`,
-        evidence: 'because',
-        suggestedTarget: null,
-        sourceGlobIds: [],
-        source: 'submitted',
-        signal: null,
-        agentSetVersion: null,
-        submittedBy: DEV,
-        createdAt: '2026-08-01T00:00:00.000Z',
-        decidedBy: null,
-        decidedAt: null,
-        decisionReason: null,
-        document: null,
-        outcome: null,
-        ...UNPROCESSED,
-        version: 1,
-        ...patch,
-      });
-      const all = [
-        learning(1, { status: 'approved', outcome: { kind: 'learning' }, ...decided }),
-        learning(2, { processing: 'drafted' }),
-        learning(3, { status: 'rejected', outcome: { kind: 'rejected', via: 'agent' }, ...decided }),
-        learning(4, { status: 'merged', duplicateOf: k(1), processing: 'none' }),
-        learning(5, { status: 'approved', document: { name: 'adr', area: 'architecture', audience: [], description: 'ADR', content: '# ADR\n' }, ...decided }),
-        learning(6, { status: 'approved', type: 'gotcha', ...decided }),
-        learning(7, { status: 'approved', ...decided, decidedBy: 'ana@example.com', decidedAt: '2026-08-03T00:00:00.000Z', createdAt: '2026-07-01T00:00:00.000Z' }),
-        learning(8, { status: 'covered', coveredBy: { kind: 'item', id: k(1) }, processing: 'none' }),
-      ];
-      await store.transaction(async (tx) => {
-        for (const i of all) if (!(await learningSeed(tx, TEST_KB_WRITES).insertSeeded(i))) throw new Error(`${i.id} not inserted`);
-      });
-      // What the adapter's approved listing gave the pipeline before the switch, mapped as it was.
-      const expected = (await store.transaction((tx) => learningSeed(tx).listSeeded(boardId, 'approved')))
-        .filter((i) => i.type === 'decision' && i.document === null && i.statement.trim() !== '')
-        .map((i) => ({ sourceRef: `learning:${i.id}`, statement: i.statement.trim(), quote: i.statement.trim(), decidedBy: i.decidedBy, decidedAt: i.decidedAt ?? i.createdAt }));
-      expect(expected.map((e) => e.sourceRef)).toEqual([`learning:${k(7)}`, `learning:${k(1)}`]);
-
-      // The two decisions are checked against each other for a supersession; none is found.
-      llm.checks.push(replaces(), replaces());
-      await run();
-      expect(llm.count(EXTRACT_SYSTEM)).toBe(0);
-      const found = (await decisions())
-        .map((d) => ({ sourceRef: d.sourceRef, statement: d.statement, quote: d.quote, decidedBy: d.decidedBy, decidedAt: d.decidedAt }))
-        .sort((a, b) => a.sourceRef.localeCompare(b.sourceRef));
-      expect(found).toEqual([...expected].sort((a, b) => a.sourceRef.localeCompare(b.sourceRef)));
-      expect(found.find((d) => d.sourceRef === `learning:${k(7)}`)).toMatchObject({ decidedBy: 'ana@example.com', decidedAt: '2026-08-03T00:00:00.000Z' });
+      expect((await decisions()).map((d) => d.sourceRef)).toEqual([`learning:${k(3)}`]);
     });
 
     it('falls back to the artifact date when the model gives no usable date', async () => {
@@ -689,6 +638,140 @@ describe('decisions', () => {
     });
   });
 
+  describe('replacement cards', () => {
+    const PO = 'po@example.com';
+    const UNVERIFIED = replaces({ id: 1, oldQuote: 'we have always polled every thirty seconds', newQuote: 'push sync jobs over a websocket', reason: 'Push replaces polling.' });
+    const VERIFIED = replaces({ id: 1, oldQuote: 'poll the server every thirty seconds', newQuote: 'push sync jobs over a websocket' });
+
+    const seed = async (answer: string) => {
+      await store.transaction(async (tx) => {
+        await tx.upsertUser({ email: PO, name: PO, active: true });
+        await tx.upsertMember({ boardId, email: PO, role: 'po' });
+      });
+      const a = await addGlob({ id: 's1t1', group: 'sync' });
+      const b = await addGlob({ id: 's1t2', group: 'sync' });
+      await addArtifact(a.id, 'implementation_plan', record(`- ${POLLING}`));
+      await addArtifact(b.id, 'implementation_plan', record(`- ${PUSH}`));
+      llm.extractions.push(
+        { match: 'poll the server', answer: extractAnswer({ quote: POLLING, decidedAt: '2026-06-01' }) },
+        { match: 'websocket', answer: extractAnswer({ quote: PUSH, decidedAt: '2026-09-01' }) },
+      );
+      llm.checks.push(answer);
+      await run();
+    };
+    const cards = (): Promise<Glob[]> => store.transaction((tx) => tx.listGlobs(boardId, { include: 'decisions', origins: ['replacement'] }));
+    const service = () => new DecisionService({ store, clock, notifier });
+
+    it('makes no card for a verified replacement', async () => {
+      await seed(VERIFIED);
+      expect((await byQuote(POLLING)).replaceState).toBe('applied');
+      expect(await cards()).toHaveLength(0);
+    });
+
+    it('makes exactly one card for an unverified one, in Planning, with both choices in its plan', async () => {
+      await seed(UNVERIFIED);
+      const old = await byQuote(POLLING);
+      const next = await byQuote(PUSH);
+      const found = await cards();
+      expect(found).toHaveLength(1);
+      const [card] = found;
+      expect(card).toMatchObject({
+        category: 'decision',
+        status: 'planning',
+        title: 'Did "Replacing s1t1, we will push sync job..." replace "We will poll the server every thirty ..."?',
+        attributes: { scope: { kind: 'glob', ref: 's1t1' }, origin: { kind: 'replacement', oldId: old.id, newId: next.id }, outcome: null },
+      });
+      const plan = (await store.transaction((tx) => tx.listArtifacts(card?.id ?? '', 'plan')))[0]?.content ?? '';
+      expect(plan).toContain(POLLING);
+      expect(plan).toContain(PUSH);
+      expect(plan).toContain('Push replaces polling.');
+      expect(plan).toContain('2026-06-01');
+      expect(notifier.hints).toContainEqual(expect.objectContaining({ kind: 'glob.changed', globId: card?.id }));
+      // Sweeping again, or checking the pair again, makes no second card.
+      await run();
+      await store.transaction((tx) => tx.updateDecision(next.id, { checkedAt: null }));
+      llm.checks.push(UNVERIFIED);
+      await run();
+      expect(await cards()).toHaveLength(1);
+    });
+
+    it('links the older choice to its open card instead of leaving the decision to its own view', async () => {
+      await seed(UNVERIFIED);
+      const [card] = await cards();
+      const older = unwrap(await service().forGlob(DEV, boardId, 's1t1'));
+      expect(older[0]?.replacedBy).toMatchObject({ state: 'hint', cardGlobId: card?.id });
+    });
+
+    it('applies the replacement on Confirm, signing the card off archived', async () => {
+      await seed(UNVERIFIED);
+      const [card] = await cards();
+      expect(errorCode(await service().decideReplacement(DEV, boardId, card?.id ?? '', 'confirm'))).toBe('forbidden');
+      const decided = unwrap(await service().decideReplacement(PO, boardId, card?.id ?? '', 'confirm'));
+      expect(decided).toMatchObject({ status: 'signed_off', attributes: { archived: true, outcome: { kind: 'accept', by: PO } } });
+      const old = await byQuote(POLLING);
+      expect(old.replaceState).toBe('confirmed');
+      expect(itemOf(old)).toMatchObject({ status: 'superseded', supersededBy: (await byQuote(PUSH)).itemId });
+      expect(errorCode(await service().decideReplacement(PO, boardId, card?.id ?? '', 'confirm'))).toBe('invalid_input');
+    });
+
+    it('blocks the pair on Dismiss, for good', async () => {
+      await seed(UNVERIFIED);
+      const [card] = await cards();
+      const decided = unwrap(await service().decideReplacement(PO, boardId, card?.id ?? '', 'dismiss', 'Different things.'));
+      expect(decided).toMatchObject({ status: 'signed_off', attributes: { archived: true, outcome: { kind: 'reject', reason: 'Different things.' } } });
+      const old = await byQuote(POLLING);
+      expect(old.replaceState).toBe('undone');
+      expect(itemOf(old)?.status).toBe('active');
+      // The pair is never proposed again, even when it is checked again.
+      await store.transaction((tx) => tx.updateDecision(old.replacedBy ?? 0, { checkedAt: null }));
+      llm.checks.push(UNVERIFIED);
+      await run();
+      expect((await byQuote(POLLING)).replaceState).toBe('undone');
+      expect(await cards()).toHaveLength(1);
+    });
+
+    it('closes itself when the newer choice is replaced before anyone decides', async () => {
+      await seed(UNVERIFIED);
+      const next = await byQuote(PUSH);
+      await store.transaction((tx) => tx.updateDecision(next.id, { replacedBy: 99999, replaceState: 'applied' }));
+      await run();
+      const [card] = await cards();
+      expect(card).toMatchObject({ status: 'signed_off', attributes: { archived: true, outcome: { kind: 'closed', by: 'slop' } } });
+      expect(notifier.hints).toContainEqual(expect.objectContaining({ kind: 'glob.changed', globId: card?.id }));
+    });
+
+    it('closes itself when a choice is deleted', async () => {
+      await seed(UNVERIFIED);
+      const next = await byQuote(PUSH);
+      await store.transaction((tx) => tx.deleteDecision(next.id));
+      await run();
+      expect((await cards())[0]).toMatchObject({ status: 'signed_off', attributes: { outcome: { kind: 'closed' } } });
+    });
+
+    it('closes when its pair is answered through the choice itself, and Confirm on it then reports it closed', async () => {
+      await seed(UNVERIFIED);
+      const [card] = await cards();
+      unwrap(await service().confirm(DEV, (await byQuote(POLLING)).id));
+      expect((await cards())[0]).toMatchObject({ status: 'signed_off', attributes: { outcome: { kind: 'closed' } } });
+      expect(card?.id).toBeDefined();
+    });
+
+    it('raises a card, once, for a proposal that was stored before cards existed', async () => {
+      await seed(replaces());
+      const old = await byQuote(POLLING);
+      const next = await byQuote(PUSH);
+      expect(await cards()).toHaveLength(0);
+      await store.transaction((tx) =>
+        tx.updateDecision(old.id, { replacedBy: next.id, replaceState: 'hint', replaceOldQuote: 'old words', replaceNewQuote: 'new words', replaceReason: 'Looks like it.' }),
+      );
+      await pipeline.syncBoard(boardId);
+      await pipeline.syncBoard(boardId);
+      const found = await cards();
+      expect(found).toHaveLength(1);
+      expect(found[0]?.attributes).toMatchObject({ origin: { kind: 'replacement', oldId: old.id, newId: next.id } });
+    });
+  });
+
   describe('people', () => {
     it('lists the decisions of a glob with what replaced them, for members only', async () => {
       const a = await addGlob({ id: 's1t1', group: 'sync' });
@@ -781,7 +864,7 @@ describe('decisions', () => {
       const hits = unwrap(await search.text(DEV, { boardId, query: 'sync jobs', sourceTypes: ['decision'] }));
       expect(hits.map((h) => h.status)).toEqual(['active', 'superseded']);
       expect(hits[0]?.citation).toMatchObject({ source: 'decision', globId: 's1t2', link: `/boards/${String(boardId)}?glob=s1t2` });
-      expect(hits[1]?.label).toMatch(/^superseded by ".+" on 2026-09-01$/);
+      expect(hits[1]?.label).toMatch(/^replaced by ".+" on 2026-09-01$/);
       const history = unwrap(await search.text(DEV, { boardId, query: 'sync jobs', mode: 'all_time', sourceTypes: ['decision'] }));
       expect(history).toHaveLength(2);
       expect(history.find((h) => h.status === 'superseded')?.label).toContain('on 2026-09-01');
@@ -803,6 +886,19 @@ describe('decisions', () => {
       // A glob's own decisions aren't repeated in related: they come in the bundle's `decisions`.
       const own = await store.transaction((tx) => search.related(tx, makeGlob({ id: 's1t2', boardId, title: 'sync jobs' })));
       expect(own.some((h) => h.citation.globId === 's1t2')).toBe(false);
+    });
+
+    it('does not lead related with a choice from discussion', async () => {
+      await seedPair();
+      for (const item of store.state.searchItems.values()) {
+        if (item.sourceType === 'decision') store.state.searchItems.set(item.externalRef, { ...item, authority: 'discussion' });
+      }
+      const asker = await addGlob({ id: 's1t9', title: 'sync jobs', summary: 'How sync jobs reach clients.' });
+      await addArtifact(asker.id, 'plan', 'sync jobs plan text mentioning sync jobs many times: sync jobs sync jobs');
+      await new SearchIndexer({ store, clock, embedder, changes: { mergedDiff: () => Promise.resolve(null) }, llm }).syncBoard(boardId);
+      const search = new SearchService({ store, clock, embedder });
+      const related = await store.transaction((tx) => search.related(tx, asker));
+      expect(related[0]?.citation.source).not.toBe('decision');
     });
 
     it('gives the context bundle the glob\'s decisions and the order of authority', async () => {

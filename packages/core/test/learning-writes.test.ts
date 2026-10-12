@@ -385,7 +385,7 @@ describe('the learning writes, against the adapter', () => {
       contradicts: [{ kind: 'item', ref: 's1k1', note: 'Says otherwise' }],
     });
     const { b } = await parity(
-      [contradicting, drafted({ type: 'decision', statement: 'Use cursors' })],
+      [contradicting, drafted({ type: 'pattern', statement: 'Use cursors' })],
       (t) =>
         adapterWrite(t, 's1k1', (i) => ({
           ...i,
@@ -407,6 +407,11 @@ describe('the learning writes, against the adapter', () => {
           effectCheck: null,
           edited: false,
         }),
+      (t) => {
+        // The approved learning governs the whole project, a broader scope than the contradicting one's.
+        const entry = t.store.state.globs.get('s1k1');
+        if (entry !== undefined) entry.glob = { ...entry.glob, attributes: { ...entry.glob.attributes, scope: { kind: 'project', ref: null } } } as typeof entry.glob;
+      },
     );
     expect(b.store.state.globs.get('s1k2')?.glob.attributes).toMatchObject({
       conflictsWith: ['s1k1'],

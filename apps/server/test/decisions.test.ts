@@ -114,7 +114,7 @@ describe('decisions store', () => {
     if (!hits.ok) throw new Error(hits.error.message);
     expect(hits.value.map((h) => h.status)).toEqual(['active', 'superseded']);
     expect(hits.value[0]?.citation.source).toBe('decision');
-    expect(hits.value[1]?.label).toMatch(/^superseded by ".+" on \d{4}-\d{2}-\d{2}$/);
+    expect(hits.value[1]?.label).toMatch(/^replaced by ".+" on \d{4}-\d{2}-\d{2}$/);
     expect(hits.value[1]?.supersededBy?.date).not.toBeNull();
     const view = await decisions.forGlob(DEV, boardId, old?.globId ?? '');
     expect(view.ok && view.value[0]?.status).toBe('superseded');

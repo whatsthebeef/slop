@@ -320,7 +320,7 @@ export class ChatService {
     } catch {
       // An embedder failure that isn't "unavailable" must not fail the question: answer from keyword matches.
       try {
-        const found = await this.deps.search.text(email, filters);
+        const found = await this.deps.search.text(email, filters, false);
         if (!found.ok) return found;
         hits = found.value;
       } catch {
@@ -379,6 +379,7 @@ export class ChatService {
         // Nothing is offered under "couldn't find"; saving needs sources to point at.
         if (!text.startsWith(CHAT_DONT_KNOW)) actions = parsed.actions;
         const seen = new Set<number>();
+        const cited: SearchHit[] = [];
         for (const n of [...used].sort((a, b) => a - b)) {
           if (n === stateN) {
             citations.push(boardStateCitation(request.boardId, this.deps.clock.now(), n));
@@ -393,7 +394,10 @@ export class ChatService {
           if (hit === undefined || seen.has(hit.itemId)) continue;
           seen.add(hit.itemId);
           citations.push(citationOf(hit, n));
+          cited.push(hit);
         }
+        // A choice the answer cites was returned to chat: counted once per answer, on the glob the question is about.
+        await this.deps.store.transaction((tx) => this.deps.search.recordUse(tx, request.boardId, cited, request.globId ?? null));
       }
     }
     if (citations.length === 0) actions = [];
@@ -640,7 +644,7 @@ export class ChatService {
     const sources = (reply.citations ?? []).map((c) => `[${String(c.n)}] ${c.sourceLabel}: ${c.title} (${c.date.slice(0, 10)})`).join('\n');
     return submit(email, boardId, {
       sourceGlobId,
-      type: 'decision',
+      type: 'pattern',
       statement: reply.content,
       evidence: `Answer from the board chat${asked === undefined ? '' : ` to "${asked.content}"`}, saved by ${email}.${sources === '' ? '' : `\nSources:\n${sources}`}`,
     });

@@ -20,7 +20,7 @@ const ready: ReadinessFacts = {
   claudeAllowsSlop: true,
   appEvents: { missing: [], settingsUrl: 'https://github.com/settings/apps/slop/permissions' },
   committedAgentSetVersion: 3,
-  hasBuildDoc: true,
+  missingCoreAreas: [],
   ticks: { routines: true, routine_repo: true, claude_app: true },
   recentFailures: [],
   unreactedCheckFailures: [],
@@ -89,7 +89,7 @@ describe('board readiness', () => {
       installUrl: 'https://github.com/apps/slop/installations/new?state=1',
       subGateWorkflow: false,
       committedAgentSetVersion: 2,
-      hasBuildDoc: false,
+      missingCoreAreas: ['build', 'architecture'],
       board: { ...ready.board, environments: [{ name: 'dev', allowBranchDeploy: true }] },
       ticks: {},
     });
@@ -98,6 +98,9 @@ describe('board readiness', () => {
     expect(byKey.sub_gate?.fix).toMatchObject({ kind: 'link', href: 'https://github.com/acme/app/new/main?filename=.github/workflows/sub-gate.yml' });
     expect(byKey.agent_set?.detail).toMatch(/version 2; the board's is 3/);
     expect(byKey.build_doc).toMatchObject({ state: 'missing', fix: { kind: 'knowledge' } });
+    expect(byKey.architecture_doc).toMatchObject({ state: 'missing', fix: { kind: 'knowledge' } });
+    expect(byKey.architecture_doc?.detail).toMatch(/No architecture document\. Run `\/kb-bootstrap \d+`/);
+    expect(byKey.conventions_doc?.state).toBe('ok');
     expect(byKey.environments?.detail).toMatch(/default for subs/);
     expect(items.filter((i) => i.manual).map((i) => i.state)).toEqual(['missing', 'missing', 'missing']);
   });

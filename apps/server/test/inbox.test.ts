@@ -76,6 +76,7 @@ describe('inbox', () => {
   let boardId: number;
   let otherBoardId: number;
   let first: string;
+  let makeGlob: (title: string) => Promise<string>;
   let second: string;
   let foreign: string;
 
@@ -166,6 +167,7 @@ describe('inbox', () => {
       if (!made.ok) throw new Error(made.error.message);
       return made.value.id;
     };
+    makeGlob = (title) => make(boardId, DEV, title);
     first = await make(boardId, DEV, 'Push sync jobs over a websocket');
     second = await make(boardId, DEV, 'Billing export');
     foreign = await make(otherBoardId, STRANGER, 'Elsewhere');
@@ -337,6 +339,29 @@ describe('inbox', () => {
     expect(await rowsOf(schema.inboxLinks)).toBe(0);
   });
 
+  it('detaches: link, attachment and search link go, the item is kept and can be discarded; non-members are refused', async () => {
+    const globId = await makeGlob('Wrong glob');
+    const added = await paste({ text: 'A note that goes on the wrong glob, then comes off it' });
+    const id = String(added.json.id);
+    expect((await post(`/${id}/attach`, { globIds: [globId] })).status).toBe(200);
+    expect((await post(`/${id}/detach`, { globIds: [globId] }, STRANGER)).status).toBe(403);
+    expect((await post(`/${id}/detach`, { globIds: [] })).status).toBe(422);
+    const detached = await post(`/${id}/detach`, { globIds: [globId] });
+    expect(detached.status).toBe(200);
+    expect(await store.transaction((tx) => tx.listArtifacts(globId, 'attachment'))).toHaveLength(0);
+    expect(await store.transaction((tx) => tx.listInboxLinks(boardId))).toHaveLength(0);
+    const [item] = await database.db
+      .select()
+      .from(schema.knowledgeItems)
+      .where(eq(schema.knowledgeItems.externalRef, `inbox:${id}`));
+    expect(item?.globIds).toEqual([]);
+    const [row] = await database.db.select().from(schema.inboxItems).where(eq(schema.inboxItems.id, added.json.id));
+    expect(row?.status).toBe('kept');
+    // Again: nothing changes. Then it can be discarded.
+    expect((await post(`/${id}/detach`, { globIds: [globId] })).status).toBe(200);
+    expect((await post(`/${id}/discard`)).status).toBe(200);
+  });
+
   it('refuses non-members, other boards, and bad bodies', async () => {
     expect((await req('', STRANGER)).status).toBe(403);
     expect((await post('', { text: NOTES }, STRANGER)).status).toBe(403);
@@ -461,5 +486,30 @@ describe('inbox', () => {
     expect((await outcomes([item('x')], STRANGER)).status).toBe(403);
     expect((await outcomes([])).status).toBe(422);
     expect((await outcomes([item('x', { source: 'slack' })])).status).toBe(422);
+  });
+
+  it('creates a glob from an item on Postgres: attached together, idempotent, and nothing made for another board\'s item', async () => {
+    const globs = new GlobService({ store, notifier, clock, ids: { runId: () => crypto.randomUUID() }, routines: { hasRoutine: () => Promise.resolve(true) } });
+    const add = async (text: string, board = boardId, email = DEV) => {
+      const result = await inbox.add(email, board, { text });
+      if (!result.ok) throw new Error(result.error.message);
+      return result.value.id;
+    };
+    const item = await add('Notes: build the export page for reports');
+    const foreignItem = await add('Notes on another board', otherBoardId, STRANGER);
+    const input = { boardId, title: 'Export page', summary: 'Do it', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false } as const;
+    const made = await globs.create(DEV, { ...input, inboxItem: item, idempotencyKey: `inbox:${String(item)}` });
+    if (!made.ok) throw new Error(made.error.message);
+    expect(await rowsOf(schema.inboxLinks)).toBeGreaterThan(0);
+    const [attachment] = await store.transaction((tx) => tx.listArtifacts(made.value.id, 'attachment'));
+    expect(attachment?.label).toBe('From the inbox: Notes: build the export page for reports');
+    expect((await (await req(`/${String(item)}`)).json() as { status: string }).status).toBe('attached');
+    expect(await (await req(`/${String(item)}/glob`)).json()).toEqual({ globId: made.value.id });
+    const again = await globs.create(DEV, { ...input, inboxItem: item, idempotencyKey: `inbox:${String(item)}` });
+    expect(again.ok && again.value.id).toBe(made.value.id);
+    const before = await store.transaction((tx) => tx.listGlobs(boardId, { include: 'all' }));
+    const refused = await globs.create(DEV, { ...input, inboxItem: foreignItem, idempotencyKey: null });
+    expect(refused.ok).toBe(false);
+    expect(await store.transaction((tx) => tx.listGlobs(boardId, { include: 'all' }))).toHaveLength(before.length);
   });
 });

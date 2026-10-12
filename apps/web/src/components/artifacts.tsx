@@ -1,15 +1,17 @@
 import { parseInvestigation } from '@slop/core';
 import type { ArtifactKind, Investigation } from '@slop/core';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ClipboardCheck, FileCheck, FileText, Microscope, Paperclip, SearchCheck } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { api } from '@/lib/api';
+import { api, RequestError } from '@/lib/api';
 import type { ArtifactSummaryView } from '@/lib/api';
-import { isInboxLink } from '@/lib/inbox';
-import { artifactKey } from '@/lib/live';
+import { inboxLinkTarget, isInboxLink } from '@/lib/inbox';
+import { artifactKey, globsKey, inboxKey } from '@/lib/live';
 import { cn } from '@/lib/utils';
+import { useToast } from '@/toast';
+import { Button } from './ui/button';
 import { MarkdownView } from './markdown-view';
 
 export const ARTIFACT_META: Record<
@@ -98,6 +100,40 @@ export const ArtifactsSection = ({
   );
 };
 
+/** Detach for the "From the inbox" attachment: confirms, then removes the item from this glob. */
+const DetachInboxItem = ({ globId, link, label }: { globId: string; link: string; label: string }) => {
+  const client = useQueryClient();
+  const toast = useToast();
+  const target = inboxLinkTarget(link);
+  const detach = useMutation({
+    mutationFn: () => {
+      if (target === null) throw new Error('Not an inbox link');
+      return api.detachInbox(target.boardId, target.itemId, [globId]);
+    },
+    onSuccess: () => {
+      if (target !== null) void client.invalidateQueries({ queryKey: inboxKey(target.boardId) });
+      void client.invalidateQueries({ queryKey: globsKey(target?.boardId ?? 0) });
+      toast('Detached');
+    },
+    onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Something went wrong'),
+  });
+  if (target === null) return null;
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      className="w-fit"
+      disabled={detach.isPending}
+      onClick={() => {
+        if (window.confirm(`Detach "${label.replace(/^From the inbox: /, '')}" from ${globId}? It leaves this glob's context and choices.`))
+          detach.mutate();
+      }}
+    >
+      Detach
+    </Button>
+  );
+};
+
 const ArtifactViewer = ({ globId, summary }: { globId: string; summary: ArtifactSummaryView }) => {
   const versions = useQuery({
     queryKey: artifactKey(globId, summary.kind, summary.label),
@@ -152,9 +188,12 @@ const ArtifactViewer = ({ globId, summary }: { globId: string; summary: Artifact
           {shown.link !== null &&
             // A link into slop (an inbox item) opens in place; anything else in a new tab.
             (isInboxLink(shown.link) ? (
-              <Link className="text-sm underline" to={shown.link}>
-                Open in the inbox
-              </Link>
+              <div className="flex flex-wrap items-center gap-3">
+                <Link className="text-sm underline" to={shown.link}>
+                  Open in the inbox
+                </Link>
+                <DetachInboxItem globId={globId} link={shown.link} label={shown.label} />
+              </div>
             ) : (
               <a className="text-sm underline" href={shown.link} target="_blank" rel="noreferrer">
                 {shown.link}

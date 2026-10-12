@@ -1,7 +1,8 @@
 import { invalidInput, llmUnavailable, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
-import { MAX_QUERY_LENGTH, matchesFilters, rankCandidates, rrfFuse, toHit, withinBudget } from '../domain/search.js';
+import { AUTHORITY_WEIGHTS, MAX_QUERY_LENGTH, matchesFilters, rankCandidates, rrfFuse, toHit, withinBudget } from '../domain/search.js';
 import type { Candidate, SearchHit, SearchMode, SearchQuery } from '../domain/search.js';
+import { usageDay } from '../domain/choice-usage.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Embedder, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
@@ -14,6 +15,8 @@ const RELATED_POOL = 30;
 export const RELATED_LIMIT = 5;
 /** How many current decisions `related` puts first, before the other hits. */
 export const RELATED_DECISIONS = 3;
+/** Only choices from records and plans lead `related`; discussion choices compete as ordinary results. */
+const LEADING_AUTHORITY = AUTHORITY_WEIGHTS.approved_plan;
 /** `get_context` must stay quick when the embedder is slow: past this the related section is keyword-only. */
 const RELATED_EMBED_TIMEOUT_MS = 5_000;
 
@@ -33,12 +36,17 @@ export interface BoardSearch {
 export class SearchService {
   constructor(private readonly deps: { store: Store; clock: Clock; embedder: Embedder }) {}
 
-  /** `search_text`: keyword and trigram matches, ranked. */
-  async text(email: string, request: SearchRequest): Promise<Result<readonly SearchHit[]>> {
+  /**
+   * `search_text`: keyword and trigram matches, ranked. The choices among the hits count as returned to the caller
+   * (`record: false` for chat, which counts the ones it cites).
+   */
+  async text(email: string, request: SearchRequest, record = true): Promise<Result<readonly SearchHit[]>> {
     return this.deps.store.transaction(async (tx) => {
       const q = await this.query(tx, email, request);
       if (!q.ok) return q;
-      return ok(this.rank(await tx.keywordCandidates(q.value, POOL), q.value));
+      const hits = this.rank(await tx.keywordCandidates(q.value, POOL), q.value);
+      if (record) await this.recordUse(tx, q.value.boardId, hits, request.globId ?? null);
+      return ok(hits);
     });
   }
 
@@ -53,8 +61,19 @@ export class SearchService {
       // Membership could have been removed while the embedder ran.
       const again = await this.query(tx, email, request);
       if (!again.ok) return again;
-      return ok(this.rank(await tx.vectorCandidates(again.value, embedding, POOL), again.value));
+      const hits = this.rank(await tx.vectorCandidates(again.value, embedding, POOL), again.value);
+      await this.recordUse(tx, again.value.boardId, hits, request.globId ?? null);
+      return ok(hits);
     });
+  }
+
+  /**
+   * Counts the choices among `hits` as returned once each (usage for the `choice_in_use` signal): a counter per
+   * choice, day and glob, no model call. A search without a glob counts under none.
+   */
+  async recordUse(tx: Tx, boardId: number, hits: readonly SearchHit[], globId: string | null): Promise<void> {
+    if (hits.length === 0) return;
+    await tx.recordChoiceUsage(boardId, [...new Set(hits.map((h) => h.itemId))], globId, usageDay(this.deps.clock.now()));
   }
 
   /** `search_changes`: merged changes with the reason they were made, newest first, within the date range. */
@@ -97,11 +116,14 @@ export class SearchService {
       // Related is a bonus on the context bundle: a slow or failing embedder must not fail it.
     }
     const notOwn = (c: Candidate) => !c.globIds.includes(glob.id);
-    const current = await this.fuse(tx, { ...q, sourceTypes: ['decision'] }, q.query, embedding, RELATED_POOL, (c) => notOwn(c) && c.status === 'active');
+    const current = await this.fuse(tx, { ...q, sourceTypes: ['decision'] }, q.query, embedding, RELATED_POOL, (c) => notOwn(c) && c.status === 'active' && AUTHORITY_WEIGHTS[c.authority] >= LEADING_AUTHORITY);
     const first = current.hits.slice(0, RELATED_DECISIONS);
     const { hits } = await this.fuse(tx, q, q.query, embedding, RELATED_POOL, notOwn);
     const seen = new Set(first.map((h) => h.itemId));
-    return [...first, ...hits.filter((h) => !seen.has(h.itemId))].slice(0, RELATED_LIMIT);
+    const related = [...first, ...hits.filter((h) => !seen.has(h.itemId))].slice(0, RELATED_LIMIT);
+    // The bundle hands these to the glob's agent: that is a return of each choice among them, on this glob.
+    await this.recordUse(tx, glob.boardId, related, glob.id);
+    return related;
   }
 
   private async fuse(

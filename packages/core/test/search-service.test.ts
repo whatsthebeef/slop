@@ -121,10 +121,10 @@ describe('SearchService', () => {
     ));
     const current = unwrap(await search.text(DEV, query()));
     expect(current.map((h) => h.citation.title)).toEqual(['New', 'Dead', 'Old']);
-    expect(current.find((h) => h.citation.title === 'Dead')?.label).toBe('superseded');
+    expect(current.find((h) => h.citation.title === 'Dead')?.label).toBe('replaced');
     const history = unwrap(await search.text(DEV, query({ mode: 'all_time' })));
     expect(history.map((h) => h.score)).toEqual([0.9, 0.9, 0.9]);
-    expect(history.find((h) => h.citation.title === 'Dead')?.label).toBe('superseded');
+    expect(history.find((h) => h.citation.title === 'Dead')?.label).toBe('replaced');
   });
 
   it('puts legacy material last in current mode', async () => {

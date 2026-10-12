@@ -33,6 +33,8 @@ export type DecisionOrigin =
   | { readonly kind: 'mined' }
   | { readonly kind: 'inbox'; readonly id: number }
   | { readonly kind: 'extracted'; readonly decisionId: number }
+  /** An unverified replacement: "did choice `newId` replace choice `oldId`?" (decision numbers, not glob IDs). */
+  | { readonly kind: 'replacement'; readonly oldId: number; readonly newId: number }
   | { readonly kind: 'manual' };
 
 /** How the proposal reached the board: an agent, slop's mining, the inbox, a person, or the backfill. */
@@ -178,8 +180,13 @@ const validateOrigin = (value: unknown): Result<DecisionOrigin> => {
         ? ok({ kind: 'extracted', decisionId: id })
         : invalidInput('origin.decisionId must be a decision number');
     }
+    case 'replacement': {
+      const { oldId, newId } = value;
+      const valid = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0;
+      return valid(oldId) && valid(newId) ? ok({ kind: 'replacement', oldId, newId }) : invalidInput('origin.oldId and origin.newId must be decision numbers');
+    }
     default:
-      return invalidInput('origin.kind must be submitted, mined, inbox, extracted or manual');
+      return invalidInput('origin.kind must be submitted, mined, inbox, extracted, replacement or manual');
   }
 };
 
