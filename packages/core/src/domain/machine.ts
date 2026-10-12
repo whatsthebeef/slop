@@ -241,15 +241,6 @@ class Builder {
       : this.event('RunEnded', { ...detail, ...purpose, runId: run.id, outcome });
   }
 
-  /**
-   * Ends the current run only when it is watching the PR (a failure the watcher can't act on, e.g. a merge failure, would
-   * otherwise leave it blocking Pick up, Retrigger and Resolve conflict). A working (`active`) run is left alone: its next
-   * `get_glob` check stops it.
-   */
-  endWatchingRun(failureReason: string): this {
-    return currentRun(this.glob)?.state === 'watching' ? this.endRun('failed', failureReason) : this;
-  }
-
   updateRun(patch: Partial<Run>): this {
     const run = currentRun(this.glob);
     if (run === null) return this;
@@ -1586,18 +1577,19 @@ export const checksCompleted = (
     if (checks.conflict !== undefined) {
       const reason = conflictReason(checks.conflict);
       return b
-        .endWatchingRun(reason)
         .set({ failure: { reason, at: ctx.now, kind: 'merge', conflict: checks.conflict }, mergeMode: null })
         .event('MergeFailed', { reason, conflict: true })
         .status('failed')
         .done();
     }
     if (!checks.passed) {
-      const reason = `Checks failed after updating the branch${failure === undefined ? '' : `: ${failureSummary(failure)}`}`;
       return b
-        .endWatchingRun(reason)
         .set({
-          failure: { reason, at: ctx.now, kind: 'merge' },
+          failure: {
+            reason: `Checks failed after updating the branch${failure === undefined ? '' : `: ${failureSummary(failure)}`}`,
+            at: ctx.now,
+            kind: 'merge',
+          },
           mergeMode: null,
         })
         .event('MergeFailed', { reason: 'checks failed after update' })
@@ -1876,7 +1868,6 @@ export const mergeFailed = (
 ): Result<Transition> => {
   if (glob.status !== 'merging') return unchanged(glob);
   return new Builder(glob, ctx)
-    .endWatchingRun(reason)
     .set({ failure: { reason, at: ctx.now, kind: 'merge', ...(conflict === undefined ? {} : { conflict }) }, mergeMode: null })
     .event('MergeFailed', { reason })
     .status('failed')
