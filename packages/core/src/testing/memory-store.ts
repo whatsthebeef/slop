@@ -11,6 +11,8 @@ import type { BoardNotification } from '../domain/notifications.js';
 import type { ChatMessage, ChatThread } from '../domain/chat.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
+import { KNOWLEDGE_PAGE_INTERVAL_DEFAULT } from '../domain/knowledge-page.js';
+import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from '../domain/knowledge-page.js';
 import { DEFAULT_REVIEW_BOARD_SETTINGS } from '../domain/review-settings.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
@@ -68,6 +70,7 @@ interface State {
   boardJobStates: Map<string, unknown>;
   subLimitChanges: SubLimitChange[];
   llmSpend: LlmSpend[];
+  knowledgePages: KnowledgePageVersion[];
   reviewFeedback: ReviewFeedback[];
   dependencyRules: DependencyRule[];
   dependencyRuleChanges: DependencyRuleChange[];
@@ -159,6 +162,7 @@ const clone = (state: State): State => ({
   boardJobStates: new Map(state.boardJobStates),
   subLimitChanges: [...state.subLimitChanges],
   llmSpend: [...state.llmSpend],
+  knowledgePages: [...state.knowledgePages],
   reviewFeedback: [...state.reviewFeedback],
   dependencyRules: [...state.dependencyRules],
   dependencyRuleChanges: [...state.dependencyRuleChanges],
@@ -215,6 +219,7 @@ export class MemoryStore implements Store {
     boardJobStates: new Map(),
     subLimitChanges: [],
     llmSpend: [],
+    knowledgePages: [],
     reviewFeedback: [],
     dependencyRules: [],
     dependencyRuleChanges: [],
@@ -346,7 +351,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, subLimitStep: SUB_LIMIT_STEP, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs', autoInvestigate: true, review: DEFAULT_REVIEW_BOARD_SETTINGS };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, subLimitStep: SUB_LIMIT_STEP, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs', autoInvestigate: true, knowledgePageIntervalMinutes: KNOWLEDGE_PAGE_INTERVAL_DEFAULT, review: DEFAULT_REVIEW_BOARD_SETTINGS };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -900,6 +905,22 @@ export class MemoryStore implements Store {
         }
         return Promise.resolve([...latest.values()]);
       },
+      insertKnowledgePageVersion: (version) => {
+        if (s.knowledgePages.some((v) => v.boardId === version.boardId && v.version === version.version)) return Promise.resolve(false);
+        s.knowledgePages.push(version);
+        return Promise.resolve(true);
+      },
+      latestKnowledgePageVersion: (boardId) =>
+        Promise.resolve(s.knowledgePages.filter((v) => v.boardId === boardId).sort((a, b) => b.version - a.version)[0] ?? null),
+      getKnowledgePageVersion: (boardId, version) => Promise.resolve(s.knowledgePages.find((v) => v.boardId === boardId && v.version === version) ?? null),
+      listKnowledgePageVersions: (boardId, limit): Promise<KnowledgePageHistoryEntry[]> =>
+        Promise.resolve(
+          s.knowledgePages
+            .filter((v) => v.boardId === boardId)
+            .sort((a, b) => b.version - a.version)
+            .slice(0, limit)
+            .map((v) => ({ version: v.version, createdAt: v.createdAt, reason: v.reason })),
+        ),
       latestOutboxJobs: (globIds, kinds) => {
         const latest = new Map<string, OutboxJob>();
         for (const j of s.outboxJobs) {
@@ -1149,6 +1170,17 @@ export class MemoryStore implements Store {
         for (const effect of effects) {
           // One pending recheck per board is enough: it reads the board as it is when it runs.
           if (effect.kind === 'recheck_overlaps' && s.outbox.some((e) => e.kind === 'recheck_overlaps' && e.globId === effect.globId)) continue;
+          // One unclaimed knowledge page job per board; a Rebuild upgrades the waiting one and makes it due now.
+          if (effect.kind === 'regenerate_knowledge_page') {
+            const waiting = s.outboxJobs.find((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0);
+            if (waiting !== undefined) {
+              if (effect.full === true && !(waiting.effect.kind === effect.kind && waiting.effect.full === true)) {
+                s.outbox = s.outbox.map((e) => (e === waiting.effect ? effect : e));
+                s.outboxJobs = s.outboxJobs.map((j) => (j === waiting ? { ...j, effect, runAfter: QUEUED_AT } : j));
+              }
+              continue;
+            }
+          }
           // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running, or
           // backing off) gets a sibling, so a change it may not have seen still gets its step.
           if ((effect.kind === 'kb_route' || effect.kind === 'kb_draft') && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;

@@ -318,6 +318,17 @@ describe('decision globs', () => {
       expect(notifier.hints).toContainEqual({ kind: 'glob.changed', boardId, globId: id, version: result.version });
     });
 
+    it('accepting or rejecting queues the knowledge page\'s regeneration, once per board', async () => {
+      const queued = () => store.state.outbox.filter((e) => e.kind === 'regenerate_knowledge_page');
+      const rejected = await inDoing(await drafted());
+      unwrap(await decide(rejected, { outcome: 'reject', reason: 'No' }));
+      expect(queued()).toHaveLength(1);
+      const accepted = await inDoing(await drafted({ statement: GEN_AGAIN }));
+      unwrap(await decide(accepted, { outcome: 'accept' }));
+      // Still one waiting job for the board.
+      expect(queued()).toEqual([{ kind: 'regenerate_knowledge_page', globId: `board-${String(boardId)}`, boardId }]);
+    });
+
     it('accept with edits applies the edited draft instead', async () => {
       const made = await drafted();
       const id = await inDoing(made);

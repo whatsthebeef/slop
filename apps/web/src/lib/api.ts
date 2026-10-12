@@ -462,6 +462,61 @@ export const healthKey = ['health'] as const;
 /** The board's notifications; invalidated by `board.notifications` hints and on reconnect. */
 export const notificationsKey = (boardId: number) => ['notifications', boardId] as const;
 
+/** One agent or skill in the generated knowledge page. Every field after `name` may be missing from an older API. */
+export interface KnowledgePageAgent {
+  readonly path: string;
+  readonly kind?: 'agent' | 'command';
+  readonly name: string;
+  readonly description?: string;
+  readonly changedInAgentSet?: number | null;
+  readonly decisionGlobId?: string | null;
+}
+
+export interface KnowledgePageDecision {
+  readonly text: string;
+  readonly rationale?: string;
+  readonly globIds?: readonly string[];
+}
+
+export interface KnowledgePageDecisionGroup {
+  readonly area: string;
+  readonly entries?: readonly KnowledgePageDecision[];
+}
+
+export interface KnowledgePageChange {
+  readonly at: string;
+  readonly kind?: 'decision' | 'work' | 'agent_set';
+  readonly text: string;
+  readonly why?: string | null;
+  readonly globId?: string | null;
+  readonly agentSetVersion?: number;
+}
+
+export interface KnowledgePageVersion {
+  readonly boardId?: number;
+  readonly version: number;
+  readonly createdAt: string;
+  readonly reason?: 'first' | 'delta' | 'rebuild' | 'prompt';
+  readonly sections?: {
+    readonly agents?: readonly KnowledgePageAgent[];
+    readonly decisions?: readonly KnowledgePageDecisionGroup[];
+    readonly changes?: readonly KnowledgePageChange[];
+  };
+}
+
+export interface KnowledgePageHistoryItem {
+  readonly version: number;
+  readonly createdAt: string;
+  readonly reason?: string;
+}
+
+export interface KnowledgePageView {
+  readonly current: KnowledgePageVersion | null;
+  readonly history?: readonly KnowledgePageHistoryItem[];
+  readonly nextRegenerationAt?: string | null;
+  readonly pending?: boolean;
+}
+
 export const api = {
   health: () => request<IntegrationHealthView>('GET', '/api/health'),
   notifications: (boardId: number) =>
@@ -538,6 +593,16 @@ export const api = {
       `/api/boards/${boardId}/repo-connection`,
     ),
   knowledge: (boardId: number) => request<KnowledgeIndex>('GET', `/api/boards/${boardId}/kb`),
+  /** The generated page; null when the server has no such endpoint (404), so the section is just hidden. */
+  knowledgePage: (boardId: number): Promise<KnowledgePageView | null> =>
+    request<KnowledgePageView>('GET', `/api/boards/${boardId}/knowledge-page`).catch((e: unknown) => {
+      if (e instanceof RequestError && e.status === 404) return null;
+      throw e;
+    }),
+  knowledgePageVersion: (boardId: number, version: number) =>
+    request<KnowledgePageVersion>('GET', `/api/boards/${boardId}/knowledge-page/versions/${version}`),
+  rebuildKnowledgePage: (boardId: number) =>
+    request<{ queued?: boolean }>('POST', `/api/boards/${boardId}/knowledge-page/rebuild`),
   knowledgeDoc: (boardId: number, name: string) =>
     request<{ name: string; content: string; version: number }[]>('GET', `/api/boards/${boardId}/kb/docs/${encodeURIComponent(name)}`),
   catalog: () => request<CatalogEntry[]>('GET', '/api/catalog/kb'),
