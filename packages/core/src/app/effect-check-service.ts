@@ -28,7 +28,7 @@ import { MAX_SIGNAL_GLOBS, signalKindOf } from '../domain/signals.js';
 import type { BoardActivity, BoardJobResult, KbSignal } from '../domain/signals.js';
 import type { Board } from '../domain/types.js';
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
-import { newKbItemId } from './knowledge-service.js';
+import { newLearningId } from './knowledge-service.js';
 import { MINED_BY } from './mining-service.js';
 import type { MiningService } from './mining-service.js';
 import { boardLearnings, readLearning } from './learning-reads.js';
@@ -179,7 +179,7 @@ export class EffectCheckService {
     const { after } = check;
     const { glob } = original;
     if (after === null) throw new Error(`${glob.id}'s effect check has no figures`);
-    const id = await newKbItemId(tx, board.id);
+    const id = await newLearningId(tx, board.id);
     const signal: KbSignal = {
       key: effectSignalKey(glob.id),
       kind: signalKindOf(check.key) ?? watched.kind,

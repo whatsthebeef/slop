@@ -17,7 +17,7 @@ export type LearningType = (typeof LEARNING_TYPES)[number];
  * `suppressed` (matched a rejected item) and `covered` (already in approved knowledge).
  */
 export const KB_ITEM_STATUSES = ['open', 'approved', 'rejected', 'merged', 'suppressed', 'covered'] as const;
-export type KbItemStatus = (typeof KB_ITEM_STATUSES)[number];
+export type LearningStatus = (typeof KB_ITEM_STATUSES)[number];
 
 /**
  * Where the background pipeline is with an item: waiting to be routed and deduplicated
@@ -132,15 +132,15 @@ export interface DraftPreview {
  * A KB item as the Knowledge page lists it: open drafted items carry their preview, and every item its evidence
  * count and freshest evidence (the open queue's order, worked out in core).
  */
-export interface KbItemView extends KbItem {
+export interface LearningWireView extends LearningWire {
   readonly preview: DraftPreview | null;
   readonly evidenceCount: number;
   readonly lastEvidenceAt: string;
 }
 
 /** The newest items of a history group (decided, or closed by the pipeline) and how many there are in all. */
-export interface KbItemPage {
-  readonly items: readonly KbItemView[];
+export interface LearningWirePage {
+  readonly items: readonly LearningWireView[];
   readonly total: number;
 }
 
@@ -149,9 +149,9 @@ export interface KbItemPage {
  * closed items (bounded, since they only grow).
  */
 export interface KbProposalList {
-  readonly open: readonly KbItemView[];
-  readonly decided: KbItemPage;
-  readonly closed: KbItemPage;
+  readonly open: readonly LearningWireView[];
+  readonly decided: LearningWirePage;
+  readonly closed: LearningWirePage;
 }
 
 /** How many decided and closed items the Knowledge page lists by default, and at most. */
@@ -160,12 +160,16 @@ export const KB_HISTORY_MAX = 1000;
 
 /** `submitted` by an agent through `submit_learning`; `mined` from signals by slop's weekly mining job. */
 export const KB_ITEM_SOURCES = ['submitted', 'mined'] as const;
-export type KbItemSource = (typeof KB_ITEM_SOURCES)[number];
+export type LearningSource = (typeof KB_ITEM_SOURCES)[number];
 
-export interface KbItem {
+/**
+ * A learning as the Knowledge page and agents receive it (`/api/kb/*`, `list_kb_items`, `decide_kb_item`, a version
+ * conflict's `currentItem`). An output format: the services' own decisions use the helpers in `domain/learning.ts`.
+ */
+export interface LearningWire {
   readonly id: string;
   readonly boardId: number;
-  readonly status: KbItemStatus;
+  readonly status: LearningStatus;
   readonly type: LearningType;
   readonly statement: string;
   readonly evidence: string;
@@ -173,7 +177,7 @@ export interface KbItem {
   readonly suggestedTarget: string | null;
   /** The globs that produced it; near-duplicates add theirs later. */
   readonly sourceGlobIds: readonly string[];
-  readonly source: KbItemSource;
+  readonly source: LearningSource;
   /** Mined items: the signal that raised it and the figures behind it (refreshed weekly while open). */
   readonly signal: KbSignal | null;
   /** The board's agent-set version the submitting run used (`.claude/slop-agent-set.json`). */
@@ -267,11 +271,11 @@ export const STALE_KEEP_DAYS = 60;
 export const STALE_KEEP_MS = STALE_KEEP_DAYS * DAY_MS;
 
 /** How much evidence an item has: its occurrences (it and its near-duplicates), or its source globs if more. */
-export const evidenceCount = (item: Pick<KbItem, 'occurrenceCount' | 'sourceGlobIds'>): number =>
+export const evidenceCount = (item: Pick<LearningWire, 'occurrenceCount' | 'sourceGlobIds'>): number =>
   Math.max(item.occurrenceCount, item.sourceGlobIds.length);
 
 /** The newest evidence an item has: its submission, a near-duplicate merged into it, or its signal's last measurement. */
-export const lastEvidenceAt = (item: Pick<KbItem, 'createdAt' | 'extraEvidence' | 'signal'>): string => {
+export const lastEvidenceAt = (item: Pick<LearningWire, 'createdAt' | 'extraEvidence' | 'signal'>): string => {
   const times = [item.createdAt, ...item.extraEvidence.map((e) => e.at), ...(item.signal === null ? [] : [item.signal.measuredAt])];
   return times.reduce((latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest));
 };
@@ -281,8 +285,8 @@ export const lastEvidenceAt = (item: Pick<KbItem, 'createdAt' | 'extraEvidence' 
  * freshest evidence, so an item that keeps coming back rises instead of sinking under new ones; then the oldest.
  */
 export const byEvidence = (
-  a: Pick<KbItem, 'id' | 'createdAt' | 'occurrenceCount' | 'sourceGlobIds' | 'extraEvidence' | 'signal'>,
-  b: Pick<KbItem, 'id' | 'createdAt' | 'occurrenceCount' | 'sourceGlobIds' | 'extraEvidence' | 'signal'>,
+  a: Pick<LearningWire, 'id' | 'createdAt' | 'occurrenceCount' | 'sourceGlobIds' | 'extraEvidence' | 'signal'>,
+  b: Pick<LearningWire, 'id' | 'createdAt' | 'occurrenceCount' | 'sourceGlobIds' | 'extraEvidence' | 'signal'>,
 ): number =>
   evidenceCount(b) - evidenceCount(a) ||
   Date.parse(lastEvidenceAt(b)) - Date.parse(lastEvidenceAt(a)) ||
@@ -295,7 +299,7 @@ export const byEvidence = (
  * when it has no signal row). Null while an admin's Keep holds, and for anything not open.
  */
 export const staleReasonAt = (
-  item: Pick<KbItem, 'status' | 'createdAt' | 'extraEvidence' | 'signal' | 'staleDismissedAt'>,
+  item: Pick<LearningWire, 'status' | 'createdAt' | 'extraEvidence' | 'signal' | 'staleDismissedAt'>,
   now: string,
   belowThresholdRuns: number | null,
 ): KbStaleReason | null => {
@@ -326,18 +330,18 @@ export const BUSY_WAITING_PREFIX = 'Waiting: Bedrock busy';
 const BUSY_ERROR = /unable to process your request|too many requests|throttl|rate exceeded|service unavailable|model is not ready|waiting: bedrock busy/i;
 
 /** Whether a `failed` item failed only because Bedrock was busy. */
-export const failedBecauseBusy = (item: Pick<KbItem, 'processing' | 'processingError'>): boolean =>
+export const failedBecauseBusy = (item: Pick<LearningWire, 'processing' | 'processingError'>): boolean =>
   item.processing === 'failed' && item.processingError !== null && BUSY_ERROR.test(item.processingError);
 
 /** Why an open item is waiting for the LLM, or null when it isn't. */
-export const llmWaitingReason = (item: Pick<KbItem, 'processing' | 'processingError'>): string | null =>
+export const llmWaitingReason = (item: Pick<LearningWire, 'processing' | 'processingError'>): string | null =>
   (item.processing === 'pending' || item.processing === 'routed') && item.processingError?.startsWith(LLM_WAITING_PREFIX) === true
     ? item.processingError.slice(LLM_WAITING_PREFIX.length)
     : null;
 
 /** The pipeline fields of a newly submitted item. */
 export const UNPROCESSED: Pick<
-  KbItem,
+  LearningWire,
   | 'processing'
   | 'processingError'
   | 'processingAttempts'
@@ -442,7 +446,7 @@ export const KB_STEP_KINDS: readonly EffectKind[] = ['kb_route', 'kb_draft'];
  * The step an item waits for, read from the item alone: none when it isn't open, route without a target, then none for a
  * document proposal (its own draft), draft with no draft yet, none once drafted (a stale draft is redone at approval).
  */
-export const kbStepOf = (item: Pick<KbItem, 'status' | 'document' | 'target' | 'draft'>): KbStep | null => {
+export const kbStepOf = (item: Pick<LearningWire, 'status' | 'document' | 'target' | 'draft'>): KbStep | null => {
   if (item.status !== 'open') return null;
   if (item.target === null) return 'route';
   // A document proposal is its own draft (one from before routing existed is routed to its document, with no model).
@@ -471,7 +475,7 @@ export const stepEffects = (id: string, before: StepState | null, after: StepSta
 };
 
 /** `stepEffects` for a whole item. */
-export const kbEffectsFor = (before: KbItem | null, after: KbItem): Effect[] =>
+export const kbEffectsFor = (before: LearningWire | null, after: LearningWire): Effect[] =>
   stepEffects(after.id, before === null ? null : { step: kbStepOf(before), target: before.target }, { step: kbStepOf(after), target: after.target });
 
 /** The pipeline fields of a learning, read from its next step's newest outbox job. */
@@ -488,7 +492,7 @@ export interface PipelineState {
  * `failed`. An open learning with no step (drafted, or a document proposal) reads `drafted`; one no longer open reads
  * `none`; neither has an error. `jobs` may hold other learnings' jobs.
  */
-export const pipelineFrom = (id: string, status: KbItemStatus, step: KbStep | null, jobs: readonly OutboxJob[]): PipelineState => {
+export const pipelineFrom = (id: string, status: LearningStatus, step: KbStep | null, jobs: readonly OutboxJob[]): PipelineState => {
   const idle = { error: null, attempts: 0, runAfter: null };
   // Decided or closed: out of the pipeline.
   if (status !== 'open') return { processing: 'none', ...idle };
@@ -509,7 +513,7 @@ export const pipelineFrom = (id: string, status: KbItemStatus, step: KbStep | nu
 };
 
 /** The item with its pipeline fields read from the outbox (`pipelineFrom`). */
-export const withProcessing = (item: KbItem, jobs: readonly OutboxJob[]): KbItem => {
+export const withProcessing = (item: LearningWire, jobs: readonly OutboxJob[]): LearningWire => {
   const state = pipelineFrom(item.id, item.status, kbStepOf(item), jobs);
   return { ...item, processing: state.processing, processingError: state.error, processingAttempts: state.attempts, processAfter: state.runAfter };
 };

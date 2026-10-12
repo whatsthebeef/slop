@@ -52,7 +52,7 @@ export interface NewDecisionGlob {
   readonly attributes: DecisionAttributes;
   /** An explicit `k` ID on the board (checked); left out, the glob takes the next `k` number. */
   readonly id?: string;
-  /** Makes creation idempotent: `inbox:<id>`, `decision:<id>` (a KB item's glob has `kb:<id>`, see `kbItems`). */
+  /** Makes creation idempotent: `inbox:<id>`, `decision:<id>` (a learning's glob has `kb:<id>`). */
   readonly creationKey: string;
   readonly group?: string | null;
   /** Backdates the glob's creation (the backfill keeps the original date). */

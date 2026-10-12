@@ -1,4 +1,4 @@
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
@@ -23,11 +23,11 @@ import {
 import { MiningService } from '../src/app/mining-service.js';
 import type { Result } from '../src/domain/errors.js';
 import { STALE_AFTER_MS, STALE_KEEP_MS, UNPROCESSED } from '../src/domain/kb.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import type { KbSignal } from '../src/domain/signals.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
-import { seedKbItem, TEST_KB_WRITES } from '../src/testing/kb-queue.js';
+import { seedLearning, TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 
 const ADMIN = 'admin@example.com';
 const DEV = 'dev@example.com';
@@ -92,9 +92,9 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
   let n: number;
 
   /** An open, drafted statement on the board (created `createdAt`), as the pipeline leaves it. */
-  const add = async (patch: Partial<KbItem> = {}): Promise<KbItem> => {
+  const add = async (patch: Partial<LearningWire> = {}): Promise<LearningWire> => {
     const id = `s${String(boardId)}k${String(++n)}`;
-    const item: KbItem = {
+    const item: LearningWire = {
       id,
       boardId,
       status: 'open',
@@ -121,17 +121,17 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
       version: 3,
       ...patch,
     };
-    return seedKbItem(store, item);
+    return seedLearning(store, item);
   };
-  const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+  const item = async (id: string): Promise<LearningWire> => {
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
-  const update = async (id: string, patch: Partial<KbItem>) => {
+  const update = async (id: string, patch: Partial<LearningWire>) => {
     const current = await item(id);
     await store.transaction((tx) =>
-      kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, ...patch, version: current.version + 1 }, current.version),
+      learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, ...patch, version: current.version + 1 }, current.version),
     );
   };
 
@@ -482,7 +482,7 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
       expect(llm.calls.at(-1)?.prompt).toContain(c.statement);
     });
 
-    it.each<[string, Partial<KbItem>]>([
+    it.each<[string, Partial<LearningWire>]>([
       ['type', { type: 'pattern' }],
       ['target', { target: { kind: 'doc', name: 'build_test_lint', section: 'Lint', newDocument: null } }],
       ['statement', { statement: 'Check CI before starting any run again.' }],
@@ -498,7 +498,7 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
     });
 
     it(`keeps the newest ${String(MAX_REMEMBERED_NOT_SAME)} pairs found different`, async () => {
-      const items: KbItem[] = [];
+      const items: LearningWire[] = [];
       for (let i = 0; i < 33; i++) items.push(await add({ statement: `Run vitest with the dot reporter, case ${String(i)}.` }));
       const all: [string, string][] = [];
       for (const [i, x] of items.entries()) for (const y of items.slice(i + 1)) all.push([x.id, y.id]);
@@ -523,7 +523,7 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
     });
 
     it('lists pairs found different as already checked, and keeps them out of the cap so new pairs get a slot', async () => {
-      const items: KbItem[] = [];
+      const items: LearningWire[] = [];
       for (let i = 0; i <= MAX_CONSOLIDATION_PAIRS; i++)
         items.push(await add({ statement: `Run vitest with the dot reporter, case ${String(i)}.` }));
       const [first, ...rest] = items;
@@ -1181,7 +1181,7 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
       llm.answer(pairs([a.id, d.id]), async () => {
         // An admin separates A from D while the pair is verified (and the version race is out of the way).
         const fresh = await item(d.id);
-        await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...fresh, keptApartFrom: [a.id] }, fresh.version));
+        await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...fresh, keptApartFrom: [a.id] }, fresh.version));
         return sameFact(quote, quote);
       });
       expect(await consolidation.consolidate(boardId)).toMatchObject({ verified: 1, merged: [], skipped: 1 });
@@ -1294,7 +1294,7 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
   it('records an outage met mid-run as skipped, without moving the last run, so the next check tries again', async () => {
     for (const id of ['s1k1', 's1k2']) {
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).insertKbItem({
+        learningSeed(tx, TEST_KB_WRITES).insertSeeded({
           id,
           boardId,
           status: 'open',
@@ -1359,7 +1359,7 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
     now = at(DAY);
     // Run now while the model is down mid-run: skipped, and the last run stays.
     await store.transaction((tx) =>
-      kbItems(tx, TEST_KB_WRITES).insertKbItem({
+      learningSeed(tx, TEST_KB_WRITES).insertSeeded({
         id: 's1k1',
         boardId,
         status: 'open',
@@ -1387,8 +1387,8 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
       }),
     );
     await store.transaction(async (tx) => {
-      const first = await kbItems(tx).getKbItem('s1k1');
-      if (first !== null) await kbItems(tx, TEST_KB_WRITES).insertKbItem({ ...first, id: 's1k2' });
+      const first = await learningSeed(tx).readSeeded('s1k1');
+      if (first !== null) await learningSeed(tx, TEST_KB_WRITES).insertSeeded({ ...first, id: 's1k2' });
     });
     llm.answer(new LlmUnavailable('AWS sign-in expired', 'Run aws sso login'));
     const skipped = unwrap(await jobs.runNow(ADMIN, boardId, 'consolidation'));
@@ -1410,7 +1410,7 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
     // Two candidates, so the pair call runs; its answer isn't JSON, which fails the run.
     for (const id of ['s1k1', 's1k2'])
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).insertKbItem({
+        learningSeed(tx, TEST_KB_WRITES).insertSeeded({
           id,
           boardId,
           status: 'open',
@@ -1473,7 +1473,7 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
     const HOUR = 60 * 60 * 1000;
     for (const id of ['s1k1', 's1k2'])
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).insertKbItem({
+        learningSeed(tx, TEST_KB_WRITES).insertSeeded({
           id,
           boardId,
           status: 'open',

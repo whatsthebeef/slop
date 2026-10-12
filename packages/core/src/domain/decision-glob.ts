@@ -1,5 +1,5 @@
 import { evidenceCount } from './kb.js';
-import type { DraftPreview, KbContradiction, KbCoverage, KbDraft, KbItem, KbItemStatus, KbPossibleCoverage, KbProcessing, KbTarget, LearningType, ProposedDocument } from './kb.js';
+import type { DraftPreview, KbContradiction, KbCoverage, KbDraft, LearningWire, LearningStatus, KbPossibleCoverage, KbProcessing, KbTarget, LearningType, ProposedDocument } from './kb.js';
 import { isDecisionAttributes } from './attributes.js';
 import type { DecisionAttributes, DecisionScope, ScopeKind } from './attributes.js';
 import type { Glob } from './types.js';
@@ -45,7 +45,7 @@ export const scopeLabel = (scope: DecisionScope): string => {
 };
 
 /** The idempotency keys of decision globs, one per proposal source, so any creation is safe to repeat. */
-export const kbItemKey = (itemId: string): string => `kb:${itemId}`;
+export const learningKey = (itemId: string): string => `kb:${itemId}`;
 export const inboxKey = (inboxId: number): string => `inbox:${String(inboxId)}`;
 export const extractedKey = (decisionId: number): string => `decision:${String(decisionId)}`;
 
@@ -128,7 +128,7 @@ export const decisionsAttachment = (decisions: readonly ScopedDecision[]): strin
  */
 export const broaderConflicts = (
   scope: DecisionScope,
-  item: Pick<KbItem, 'contradicts'>,
+  item: Pick<LearningWire, 'contradicts'>,
   globOfItem: (itemId: string) => Glob | undefined,
 ): string[] => {
   const found: string[] = [];
@@ -145,7 +145,7 @@ export type SuggestedOutcome = 'accept' | 'needs_work' | 'reject';
 
 /** What a learning's assessment reads (each field as on the KB item it was taken from). */
 export interface LearningAssessmentFacts {
-  readonly status: KbItemStatus;
+  readonly status: LearningStatus;
   readonly coveredBy: KbCoverage | null;
   readonly possiblyCoveredBy: KbPossibleCoverage | null;
   readonly contradicts: readonly KbContradiction[];

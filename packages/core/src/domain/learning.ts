@@ -9,8 +9,8 @@ import type {
   KbContradiction,
   KbCoverage,
   KbDraft,
-  KbItemSource,
-  KbItemStatus,
+  LearningSource,
+  LearningStatus,
   KbMergeNote,
   KbOutcome,
   KbPossibleCoverage,
@@ -109,7 +109,7 @@ const attributesOf = (glob: Glob): DecisionAttributes | null => decisionOf(glob)
 /** What a learning is and where it came from. */
 export interface LearningFacts {
   readonly kind: LearningType;
-  readonly source: KbItemSource;
+  readonly source: LearningSource;
   /** Mined learnings: the signal that raised it and the figures behind it. */
   readonly signal: KbSignal | null;
   readonly agentSetVersion: number | null;
@@ -144,7 +144,7 @@ export const learningOutcome = (a: Pick<LearningArtifacts, 'outcome'>): KbOutcom
 export const learningStatusFrom = (
   attributes: DecisionAttributes | null,
   outcome: KbOutcome | null,
-): KbItemStatus => {
+): LearningStatus => {
   if (attributes?.closedAs !== undefined) return attributes.closedAs;
   const kind = attributes?.outcome?.kind;
   if (kind === 'reject') return 'rejected';
@@ -157,7 +157,7 @@ export const learningStatusFrom = (
   return 'open';
 };
 
-export const learningStatus = (glob: Glob, a: Pick<LearningArtifacts, 'outcome'>): KbItemStatus =>
+export const learningStatus = (glob: Glob, a: Pick<LearningArtifacts, 'outcome'>): LearningStatus =>
   learningStatusFrom(attributesOf(glob), learningOutcome(a));
 
 const decidedOutcome = (outcome: DecisionOutcome | null | undefined): DecisionOutcome | null =>

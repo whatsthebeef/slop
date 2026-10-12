@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { readLearning } from '../src/app/learning-reads.js';
 import { startEffectCheck } from '../src/domain/effect-check.js';
 import { evidenceCount, lastEvidenceAt } from '../src/domain/kb.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import {
   learningAssessmentFacts,
   learningCatalog,
@@ -25,22 +25,22 @@ import {
 } from '../src/domain/learning.js';
 import type { LearningRead } from '../src/domain/learning.js';
 import { learningWire, learningWireView } from '../src/domain/learning-wire.js';
-import { seedKbItem, TEST_KB_WRITES } from '../src/testing/kb-queue.js';
+import { seedLearning, TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 import type { MemoryStore } from '../src/testing/memory-store.js';
 import { NOW } from './fixtures.js';
 import { document, drafted, full, item, newStore, routed } from './kb-fixtures.js';
 
 const LATER = '2026-10-05T13:00:00.000Z';
 
-const insert = (store: MemoryStore, ...items: KbItem[]) =>
+const insert = (store: MemoryStore, ...items: LearningWire[]) =>
   store.transaction(async (tx) => {
     for (const i of items)
-      if (!(await kbItems(tx, TEST_KB_WRITES).insertKbItem(i)))
+      if (!(await learningSeed(tx, TEST_KB_WRITES).insertSeeded(i)))
         throw new Error(`${i.id} not inserted`);
   });
-const update = (store: MemoryStore, next: KbItem) =>
+const update = (store: MemoryStore, next: LearningWire) =>
   store.transaction(async (tx) => {
-    if (!(await kbItems(tx, TEST_KB_WRITES).updateKbItem(next, next.version - 1)))
+    if (!(await learningSeed(tx, TEST_KB_WRITES).updateSeeded(next, next.version - 1)))
       throw new Error(`${next.id} not written`);
   });
 const read = async (store: MemoryStore, id = 's1k1'): Promise<LearningRead> => {
@@ -49,7 +49,7 @@ const read = async (store: MemoryStore, id = 's1k1'): Promise<LearningRead> => {
   return learning;
 };
 const adapter = (store: MemoryStore, id = 's1k1') =>
-  store.transaction((tx) => kbItems(tx).getKbItem(id));
+  store.transaction((tx) => learningSeed(tx).readSeeded(id));
 
 /** Every helper's value (and the glob's own columns), under the name of the item field it must equal. */
 const helpersOf = ({ glob, artifacts, jobs }: LearningRead) => {
@@ -108,7 +108,7 @@ const helpersOf = ({ glob, artifacts, jobs }: LearningRead) => {
 };
 
 /** Asserts each helper equals what the item says, and the wire is the item, key order included. */
-const expectLearning = async (store: MemoryStore, expected: KbItem) => {
+const expectLearning = async (store: MemoryStore, expected: LearningWire) => {
   const learning = await read(store, expected.id);
   expect(helpersOf(learning)).toEqual(expected);
   const wire = learningWire(learning);
@@ -319,7 +319,7 @@ describe('the learning helpers', () => {
 
   it("read the pipeline state from the step's newest job", async () => {
     const store = await newStore();
-    const cases: [KbItem, ReturnType<typeof pipelineState>][] = [
+    const cases: [LearningWire, ReturnType<typeof pipelineState>][] = [
       [item({ id: 's1k1' }), { processing: 'pending', error: null, attempts: 0, runAfter: null }],
       [routed({ id: 's1k2' }), { processing: 'routed', error: null, attempts: 0, runAfter: null }],
       [
@@ -356,7 +356,7 @@ describe('the learning helpers', () => {
       ],
     ];
     for (const [seed, expected] of cases) {
-      const seeded = await seedKbItem(store, seed);
+      const seeded = await seedLearning(store, seed);
       const learning = await read(store, seed.id);
       expect(pipelineState(learning.glob, learning.artifacts, learning.jobs), seed.id).toEqual(
         expected,

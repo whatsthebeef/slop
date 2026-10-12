@@ -1,4 +1,4 @@
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { EscalationLearningService } from '../src/app/escalation-learning-service.js';
@@ -161,7 +161,7 @@ describe('escalation learning service', () => {
     });
   };
   const records = () => store.transaction((tx) => tx.listEscalationRecords(boardId));
-  const items = () => store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'open'));
+  const items = () => store.transaction((tx) => learningSeed(tx).listSeeded(boardId, 'open'));
 
   beforeEach(async () => {
     store = new MemoryStore();

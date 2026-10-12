@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import {
-  kbItems,
+  learningSeed,
   ArtifactService,
   BoardService,
   DEDUPE_SYSTEM,
@@ -16,7 +16,7 @@ import {
   UNPROCESSED,
   VERIFY_SYSTEM,
 } from '@slop/core';
-import type { BoardJob, BoardJobStatus, KbItem, KbSignal, Llm } from '@slop/core';
+import type { BoardJob, BoardJobStatus, LearningWire, KbSignal, Llm } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -118,9 +118,9 @@ describe('Weekly consolidation in Postgres', () => {
   });
 
   /** An open, drafted statement, as the pipeline leaves it. */
-  const add = async (patch: Partial<KbItem> = {}): Promise<KbItem> => {
+  const add = async (patch: Partial<LearningWire> = {}): Promise<LearningWire> => {
     const id = `s${String(boardId)}k${String(++n)}`;
-    const item: KbItem = {
+    const item: LearningWire = {
       id,
       boardId,
       status: 'open',
@@ -147,11 +147,11 @@ describe('Weekly consolidation in Postgres', () => {
       version: 2,
       ...patch,
     };
-    expect(await store.transaction((tx) => kbItems(tx, KB_WRITES).insertKbItem(item))).toBe(true);
+    expect(await store.transaction((tx) => learningSeed(tx, KB_WRITES).insertSeeded(item))).toBe(true);
     return item;
   };
-  const get = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+  const get = async (id: string): Promise<LearningWire> => {
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -189,7 +189,7 @@ describe('Weekly consolidation in Postgres', () => {
 
   it('round-trips the consolidation columns', async () => {
     const item = await add();
-    const updated: KbItem = {
+    const updated: LearningWire = {
       ...item,
       staleSince: '2026-10-07T12:00:00.000Z',
       staleReason: 'signal_below_threshold',
@@ -198,7 +198,7 @@ describe('Weekly consolidation in Postgres', () => {
       mergeNote: { by: 'consolidation', quote: 'a', survivorQuote: 'b', at: START },
       version: item.version + 1,
     };
-    expect(await store.transaction((tx) => kbItems(tx, KB_WRITES).updateKbItem(updated, item.version))).toBe(true);
+    expect(await store.transaction((tx) => learningSeed(tx, KB_WRITES).updateSeeded(updated, item.version))).toBe(true);
     expect(await get(item.id)).toEqual(updated);
   });
 
@@ -289,7 +289,7 @@ describe('Weekly consolidation in Postgres', () => {
           // Another writer updates the loser and holds its transaction open: the merge reads the committed
           // version (unchanged), writes the survivor, then waits on the loser's row.
           concurrent = store.transaction(async (tx) => {
-            const wrote = await kbItems(tx, KB_WRITES).updateKbItem(
+            const wrote = await learningSeed(tx, KB_WRITES).updateSeeded(
               { ...loser, evidence: 'Edited meanwhile', version: loser.version + 1 },
               loser.version,
             );
@@ -497,7 +497,7 @@ describe('Consolidation routes', () => {
 
   it('POST /api/kb/:id/keep clears a stale flag for admins, conditional on the version', async () => {
     const id = `s${String(boardId)}k1`;
-    const item: KbItem = {
+    const item: LearningWire = {
       id,
       boardId,
       status: 'open',
@@ -522,12 +522,12 @@ describe('Consolidation routes', () => {
       staleReason: 'no_recent_evidence',
       version: 4,
     };
-    await store.transaction((tx) => kbItems(tx, KB_WRITES).insertKbItem(item));
+    await store.transaction((tx) => learningSeed(tx, KB_WRITES).insertSeeded(item));
     expect((await post(`/api/kb/${id}/keep`, { version: 4 }, DEV)).status).toBe(403);
     expect((await post(`/api/kb/${id}/keep`, { version: 3 })).status).toBe(409);
     const kept = await post(`/api/kb/${id}/keep`, { version: 4 });
     expect(kept.status).toBe(200);
-    expect((await kept.json()) as KbItem).toMatchObject({
+    expect((await kept.json()) as LearningWire).toMatchObject({
       staleSince: null,
       staleReason: null,
       version: 5,

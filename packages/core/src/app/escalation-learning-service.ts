@@ -14,7 +14,7 @@ import type { EscalationCandidate, EscalationRecord, EscalationView } from '../d
 import type { Board } from '../domain/types.js';
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
-import { newKbItemId } from './knowledge-service.js';
+import { newLearningId } from './knowledge-service.js';
 import type { RiskAreaService } from './risk-area-service.js';
 import { createLearning } from './learning-writes.js';
 
@@ -140,7 +140,7 @@ export class EscalationLearningService {
     stance: 'loosened' | 'default' | 'strengthened',
     records: readonly EscalationRecord[],
   ): Promise<Hint[]> {
-    const id = await newKbItemId(tx, board.id);
+    const id = await newLearningId(tx, board.id);
     const hints: Hint[] = [];
     // Slop raised it from outcomes, as mining does: a mined proposal.
     const created = await createLearning(

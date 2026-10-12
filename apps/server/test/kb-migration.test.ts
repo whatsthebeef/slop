@@ -1,8 +1,8 @@
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { decisionGlobTitle, failedBecauseBusy, GlobService, isArchivedDecision, kbItems, KnowledgeService, proposalText, UNPROCESSED, withProcessing } from '@slop/core';
-import type { KbItem, OutboxJob, Result } from '@slop/core';
+import { decisionGlobTitle, failedBecauseBusy, GlobService, isArchivedDecision, learningSeed, KnowledgeService, proposalText, UNPROCESSED, withProcessing } from '@slop/core';
+import type { LearningWire, OutboxJob, Result } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, PgStore, runMigrations } from '../src/db/store.js';
@@ -45,7 +45,7 @@ describe('KB items become decision globs (migration 0049)', () => {
   const id = (n: number, board = boardId) => `s${String(board)}k${String(n)}`;
   const target = { kind: 'doc' as const, name: 'build', section: 'Test', newDocument: null };
 
-  const base = (n: number, patch: Partial<KbItem> = {}): KbItem => ({
+  const base = (n: number, patch: Partial<LearningWire> = {}): LearningWire => ({
     id: id(n),
     boardId,
     status: 'open',
@@ -68,7 +68,7 @@ describe('KB items become decision globs (migration 0049)', () => {
     version: 3,
     ...patch,
   });
-  const drafted = (n: number, patch: Partial<KbItem> = {}) =>
+  const drafted = (n: number, patch: Partial<LearningWire> = {}) =>
     base(n, { target, draft: { section: 'Test', content: '## Test\n\nRun vitest --run.' }, draftedAgainstVersion: 1, rationale: 'Why', processing: 'drafted', ...patch });
 
   const signal = {
@@ -98,7 +98,7 @@ describe('KB items become decision globs (migration 0049)', () => {
   const document = { name: 'architecture', area: 'architecture', audience: ['implementer'], description: 'How it fits', content: '# Architecture\n\nLayers.\n' };
 
   /** The rows, as the old pipeline left them. */
-  const rows = (): KbItem[] => [
+  const rows = (): LearningWire[] => [
     // Open, in four shapes.
     base(1),
     base(2, { target, processing: 'routed', suggestedTarget: 'build' }),
@@ -151,7 +151,7 @@ describe('KB items become decision globs (migration 0049)', () => {
     { ...base(1), id: id(1, otherBoard), boardId: otherBoard, sourceGlobIds: [] },
   ];
 
-  const item = (n: number, board = boardId) => store.transaction((tx) => kbItems(tx).getKbItem(id(n, board)));
+  const item = (n: number, board = boardId) => store.transaction((tx) => learningSeed(tx).readSeeded(id(n, board)));
   const glob = (n: number, board = boardId) => store.transaction((tx) => tx.getGlob(id(n, board)));
   const jobs = async (n: number) =>
     (await database.db.execute(sql`select kind, state, attempts, last_error, run_after from outbox where glob_id = ${id(n)} and lane = 'llm' order by id`)).map((j) => ({
@@ -164,7 +164,7 @@ describe('KB items become decision globs (migration 0049)', () => {
   const artifacts = async (n: number) =>
     database.db.execute(sql`select kind, label, version, content, provenance, created_at from artifacts where glob_id = ${id(n)} order by id`);
   /** What the adapter should read for a seeded row: the row with its pipeline fields from its jobs. */
-  const expected = async (row: KbItem): Promise<KbItem> => {
+  const expected = async (row: LearningWire): Promise<LearningWire> => {
     const found = await database.db.execute(sql`select distinct on (kind) id, glob_id, kind, state, attempts, last_error, run_after from outbox where glob_id = ${row.id} order by kind, id desc`);
     const latest: OutboxJob[] = found.map((j) => ({
       id: Number(j.id),
@@ -254,7 +254,7 @@ describe('KB items become decision globs (migration 0049)', () => {
   it('drops kb_proposals, and every row reads back through the adapter as it was, its pipeline fields from its jobs', async () => {
     expect(await database.db.execute(sql`select to_regclass('kb_proposals') as t`)).toEqual([{ t: null }]);
     for (const row of rows()) {
-      const read = await store.transaction((tx) => kbItems(tx).getKbItem(row.id));
+      const read = await store.transaction((tx) => learningSeed(tx).readSeeded(row.id));
       expect(read, row.id).toEqual(await expected(row));
     }
     // One glob per learning, on its own board, with the creation key and no other.
@@ -324,7 +324,7 @@ describe('KB items become decision globs (migration 0049)', () => {
     const old = await glob(9);
     expect(old).toMatchObject({ status: 'signed_off', attributes: { archived: true } });
     expect(await item(9)).toMatchObject({ status: 'approved' });
-    const approved = await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'approved'));
+    const approved = await store.transaction((tx) => learningSeed(tx).listSeeded(boardId, 'approved'));
     // (s1k40 is an approval that lost its time, below.)
     expect(approved.map((i) => i.id)).toEqual([id(40), id(8), id(9)]);
   });

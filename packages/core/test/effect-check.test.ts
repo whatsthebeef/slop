@@ -1,9 +1,9 @@
 import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { EffectCheckService } from '../src/app/effect-check-service.js';
-import { KnowledgeService, newKbItemId } from '../src/app/knowledge-service.js';
+import { KnowledgeService, newLearningId } from '../src/app/knowledge-service.js';
 import { EFFECT_CHECK_INTERVAL_MS, LearningJobService } from '../src/app/learning-jobs.js';
 import { MINED_BY, MiningService } from '../src/app/mining-service.js';
 import { EFFECT_LOOKBACK_DAYS } from '../src/app/effect-check-service.js';
@@ -12,7 +12,7 @@ import type { EffectCheck, EffectFigures } from '../src/domain/effect-check.js';
 import type { Result } from '../src/domain/errors.js';
 import type { DomainEvent } from '../src/domain/events.js';
 import { UNPROCESSED } from '../src/domain/kb.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import type { KbSignal } from '../src/domain/signals.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -209,10 +209,10 @@ describe('Effect checks', () => {
   };
 
   /** An approved item watching `ci_after_local`; by default a document change (time basis). */
-  const approved = async (patch: Partial<KbItem> = {}): Promise<KbItem> =>
+  const approved = async (patch: Partial<LearningWire> = {}): Promise<LearningWire> =>
     store.transaction(async (tx) => {
-      const item: KbItem = {
-        id: await newKbItemId(tx, boardId),
+      const item: LearningWire = {
+        id: await newLearningId(tx, boardId),
         boardId,
         status: 'approved',
         type: 'gotcha',
@@ -236,12 +236,12 @@ describe('Effect checks', () => {
         version: 1,
         ...patch,
       };
-      await kbItems(tx, TEST_KB_WRITES).insertKbItem(item);
+      await learningSeed(tx, TEST_KB_WRITES).insertSeeded(item);
       return item;
     });
 
-  const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+  const item = async (id: string): Promise<LearningWire> => {
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -469,7 +469,7 @@ describe('Effect checks', () => {
     });
     expect(await item(watched.id)).toEqual(settled);
     expect(
-      (await store.transaction((tx) => kbItems(tx).listKbItems(boardId))).filter(
+      (await store.transaction((tx) => learningSeed(tx).listSeeded(boardId))).filter(
         (i) => i.source === 'mined' && i.status === 'open',
       ),
     ).toHaveLength(1);
@@ -546,7 +546,7 @@ describe('Effect checks', () => {
     await series(3, 1, DAY);
     const watched = await approved();
     const [a, b] = await Promise.all([checks.check(boardId, now), checks.check(boardId, now)]);
-    const items = await store.transaction((tx) => kbItems(tx).listKbItems(boardId));
+    const items = await store.transaction((tx) => learningSeed(tx).listSeeded(boardId));
     const raised = items.filter((i) => i.signal?.key === `effect:${watched.id}`);
     expect(raised).toHaveLength(1);
     expect((await check(watched.id)).raisedItemId).toBe(raised[0]?.id);
@@ -915,7 +915,7 @@ describe('Effect checks', () => {
       const id = await submitted();
       const current = await item(id);
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, signal: CI, version: current.version + 1 }, current.version),
+        learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, signal: CI, version: current.version + 1 }, current.version),
       );
       const refused = await knowledge.approve(ADMIN, id, current.version + 1, {
         as: 'learning',
@@ -998,7 +998,7 @@ describe('Effect checks', () => {
         const id = await submitted();
         const current = await item(id);
         await store.transaction((tx) =>
-          kbItems(tx, TEST_KB_WRITES).updateKbItem(
+          learningSeed(tx, TEST_KB_WRITES).updateSeeded(
             { ...current, signal: CI, version: current.version + 1 },
             current.version,
           ),
@@ -1084,7 +1084,7 @@ describe('Effect checks', () => {
       const id = await submitted();
       const current = await item(id);
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, signal: CI, version: current.version + 1 }, current.version),
+        learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, signal: CI, version: current.version + 1 }, current.version),
       );
       const versionBefore = unwrap(await boards.get(ADMIN, boardId)).board.agentSetVersion;
       const decided = unwrap(

@@ -1,4 +1,4 @@
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
 import { BoardService } from '../src/app/board-service.js';
@@ -16,7 +16,7 @@ import { isDecisionAttributes } from '../src/domain/attributes.js';
 import type { DecisionAttributes } from '../src/domain/attributes.js';
 import { decisionOf, isArchivedDecision } from '../src/domain/decision-glob.js';
 import type { Result } from '../src/domain/errors.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import * as machine from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
 import type { Catalog } from '../src/ports.js';
@@ -90,8 +90,8 @@ describe('decision globs', () => {
     if (found === null) throw new Error(`${id} is not a decision`);
     return found;
   };
-  const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+  const item = async (id: string): Promise<LearningWire> => {
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -579,9 +579,9 @@ describe('decision globs', () => {
       const made = await submit();
       const other = await submit({ statement: 'Code in src/gen/ is generated' });
       await store.transaction(async (tx) => {
-        const current = await kbItems(tx).getKbItem(made.id);
+        const current = await learningSeed(tx).readSeeded(made.id);
         if (current === null) throw new Error('missing');
-        await kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, status: 'merged', duplicateOf: other.id, version: current.version + 1 }, current.version);
+        await learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, status: 'merged', duplicateOf: other.id, version: current.version + 1 }, current.version);
       });
       expect(await glob(made.globId)).toMatchObject({ status: 'signed_off', links: [{ id: other.id, kind: 'duplicate_of', source: 'pipeline' }] });
       expect(await attributesOf(made.globId)).toMatchObject({ archived: true, closedAs: 'merged', outcome: { kind: 'closed', by: 'slop' } });
@@ -592,10 +592,10 @@ describe('decision globs', () => {
       const made = await submit();
       const other = await submit({ statement: 'Code in src/gen/ is generated' });
       await store.transaction(async (tx) => {
-        const current = await kbItems(tx).getKbItem(made.id);
+        const current = await learningSeed(tx).readSeeded(made.id);
         if (current === null) throw new Error('missing');
         const target = { kind: 'doc' as const, name: 'build_test_lint', section: 'Test', newDocument: null };
-        await kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, status: 'merged', target, duplicateOf: other.id, version: current.version + 1 }, current.version);
+        await learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, status: 'merged', target, duplicateOf: other.id, version: current.version + 1 }, current.version);
       });
       const closed = await glob(made.globId);
       expect(errorCode(await decisions.reopen(PO, made.globId, closed.version))).toBe('forbidden');
@@ -616,9 +616,9 @@ describe('decision globs', () => {
   describe('scope and conflicts', () => {
     const contradict = async (id: string, other: string) =>
       store.transaction(async (tx) => {
-        const current = await kbItems(tx).getKbItem(id);
+        const current = await learningSeed(tx).readSeeded(id);
         if (current === null) throw new Error('missing');
-        await kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, contradicts: [{ kind: 'item', ref: other, note: 'Says the opposite' }], version: current.version + 1 }, current.version);
+        await learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, contradicts: [{ kind: 'item', ref: other, note: 'Says the opposite' }], version: current.version + 1 }, current.version);
       });
 
     it('flags only a contradiction with a broader decision', async () => {

@@ -1,11 +1,12 @@
-import { kbItems, kbJobHint } from '../app/kb-items.js';
+import { learningSeed } from '../testing/learning-seed.js';
+import { kbJobHint } from '../app/kb-job-hint.js';
 import type { KbPipeline } from '../app/kb-pipeline.js';
 import { claimLeaseMs, laneOf, maxAttemptsOf, outboxBackoffMs } from '../domain/events.js';
 import type { OutboxState } from '../domain/events.js';
 import { KB_STEP_KIND, kbStepOfKind } from '../domain/kb.js';
-import type { KbItem, KbStep } from '../domain/kb.js';
+import type { LearningWire, KbStep } from '../domain/kb.js';
 import type { Clock, Notifier } from '../ports.js';
-import type { KbWriteContext } from '../app/kb-items.js';
+import type { KbWriteContext } from '../testing/learning-seed.js';
 import type { MemoryOutboxJob, MemoryStore } from './memory-store.js';
 
 /**
@@ -116,7 +117,7 @@ export class MemoryKbQueue {
  * step with the given attempts, error and time; its fields are made to agree with that step (an item waiting to be
  * routed has no target, one waiting for its draft or given up on has no draft). Returns the item as it reads.
  */
-export const seedKbItem = async (store: MemoryStore, item: KbItem): Promise<KbItem> => {
+export const seedLearning = async (store: MemoryStore, item: LearningWire): Promise<LearningWire> => {
   const step: KbStep | null =
     item.status !== 'open' || item.document !== null || item.processing === 'drafted'
       ? null
@@ -124,10 +125,10 @@ export const seedKbItem = async (store: MemoryStore, item: KbItem): Promise<KbIt
         ? 'route'
         : 'draft';
   const cleared = { draft: null, draftedAgainstVersion: null, rationale: null };
-  const seeded: KbItem = step === 'route' ? { ...item, ...cleared, target: null } : step === 'draft' ? { ...item, ...cleared } : item;
+  const seeded: LearningWire = step === 'route' ? { ...item, ...cleared, target: null } : step === 'draft' ? { ...item, ...cleared } : item;
   await store.transaction(async (tx) => {
     // The insert queues the item's step (`kbEffectsFor`); a repeat is dropped by the one-pending-job rule.
-    await kbItems(tx, { clock: { now: () => item.createdAt } }).insertKbItem(seeded);
+    await learningSeed(tx, { clock: { now: () => item.createdAt } }).insertSeeded(seeded);
     if (step !== null) await tx.enqueueEffects([{ kind: KB_STEP_KIND[step], globId: item.id }]);
   });
   if (step !== null && (item.processing === 'failed' || item.processingAttempts > 0 || item.processingError !== null)) {
@@ -146,7 +147,7 @@ export const seedKbItem = async (store: MemoryStore, item: KbItem): Promise<KbIt
       );
     }
   }
-  const read = await store.transaction((tx) => kbItems(tx).getKbItem(item.id));
+  const read = await store.transaction((tx) => learningSeed(tx).readSeeded(item.id));
   if (read === null) throw new Error(`Seeding ${item.id} failed`);
   return read;
 };
