@@ -296,6 +296,10 @@ export interface Artifact {
   readonly createdAt: string;
 }
 
+/** An attachment whose latest version has no text and no link: it was removed (an inbox detach), its older versions stay as history. */
+export const isClearedAttachment = (a: { readonly kind: string; readonly content: string; readonly link: string | null }): boolean =>
+  a.kind === 'attachment' && a.content === '' && a.link === null;
+
 /** An artifact's latest version without its content: what cards and `get_glob` show. */
 export interface ArtifactSummary {
   readonly globId: string;

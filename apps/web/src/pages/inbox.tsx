@@ -138,6 +138,15 @@ const Card = ({
     onSuccess: onChanged,
     onError: (e) => toast(message(e)),
   });
+  const detach = useMutation({
+    mutationFn: (globId: string) => api.detachInbox(boardId, item.id, [globId]),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: globsKey(boardId) });
+      toast('Detached');
+      onChanged();
+    },
+    onError: (e) => toast(message(e)),
+  });
   // A decision glob in Planning with this item attached as its source; promoting again returns the same glob.
   const client = useQueryClient();
   const promote = useMutation({
@@ -208,13 +217,23 @@ const Card = ({
         <p className="flex flex-wrap gap-1 text-xs">
           <span className="text-muted-foreground">On:</span>
           {attached.map((a) => (
-            <Link
-              key={a.globId}
-              className="rounded-full border px-2 underline"
-              to={globLink(boardId, a.globId)}
-            >
-              {a.globId}
-            </Link>
+            <span key={a.globId} className="inline-flex items-center gap-1 rounded-full border px-2">
+              <Link className="underline" to={globLink(boardId, a.globId)}>
+                {a.globId}
+              </Link>
+              <button
+                type="button"
+                className="text-muted-foreground hover:text-foreground"
+                aria-label={`Detach from ${a.globId}`}
+                disabled={detach.isPending}
+                onClick={() => {
+                  if (window.confirm(`Detach "${item.title}" from ${a.globId} (${a.title})? It leaves that glob's context and choices.`))
+                    detach.mutate(a.globId);
+                }}
+              >
+                Detach
+              </button>
+            </span>
           ))}
         </p>
       )}

@@ -31,6 +31,7 @@ import type { Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
 import { addAttachment } from './artifact-service.js';
 import { createDecisionForInbox } from './decision-glob.js';
+import { isSuperseded } from '../domain/decisions.js';
 
 /** A source label is a short note ("Tuesday standup"). */
 const SOURCE_LABEL_LIMIT = 100;
@@ -453,6 +454,77 @@ export class InboxService {
       this.deps.notifier.publish({ kind: 'glob.artifacts', boardId, globId });
     if (result.value.linked.length > 0)
       this.deps.notifier.publish({ kind: 'board.inbox', boardId });
+    return ok(result.value.view);
+  }
+
+  /**
+   * Detaches an item from globs it is on (the undo of `attach`), in one transaction per call: the link row, the glob's link
+   * attachment (a new empty version, so its history stays), the glob in the item's search item, and the decision source
+   * `inbox:<item>:<glob>` with the decisions taken from it (older decisions they replaced stand again). An item left on no
+   * glob becomes `kept`. A glob the item is not on changes nothing.
+   */
+  async detach(
+    email: string,
+    boardId: number,
+    id: number,
+    globIds: readonly string[],
+  ): Promise<Result<InboxView>> {
+    const wanted = [...new Set(globIds)];
+    if (wanted.length === 0) return invalidInput('Choose at least one glob');
+    if (wanted.length > MAX_ATTACH_GLOBS)
+      return invalidInput(`Detach from at most ${String(MAX_ATTACH_GLOBS)} globs at a time`);
+    const result = await this.deps.store.transaction(
+      async (tx): Promise<Result<{ view: InboxView; detached: string[] }>> => {
+        const actor = await memberOf(tx, email, boardId);
+        if (!actor.ok) return actor;
+        const item = await tx.getInboxItem(boardId, id);
+        if (item === null) return notFound(`No inbox item ${String(id)}`);
+        const link = inboxLink(boardId, id);
+        const detached: string[] = [];
+        for (const globId of wanted) {
+          if (!(await tx.deleteInboxLink(id, globId))) continue;
+          detached.push(globId);
+          const glob = await tx.getGlob(globId);
+          if (glob === null) continue;
+          const attachment = (await tx.listArtifacts(globId, 'attachment')).find((a) => a.link === link);
+          if (attachment !== undefined)
+            await addAttachment(tx, this.deps.clock, glob, email, { label: attachment.label, content: '', link: null });
+          const ref = `inbox:${String(id)}:${globId}`;
+          const all = await tx.listDecisions(boardId);
+          for (const decision of all.filter((d) => d.sourceRef === ref)) {
+            for (const older of all) {
+              if (older.replacedBy !== decision.id) continue;
+              await tx.updateDecision(older.id, {
+                replacedBy: null,
+                replaceState: null,
+                replaceOldQuote: null,
+                replaceNewQuote: null,
+                replaceReason: null,
+              });
+              if (isSuperseded(older)) await tx.setItemSupersession(older.itemId, 'active', null);
+            }
+            await tx.deleteDecision(decision.id);
+          }
+          await tx.deleteDecisionSource(boardId, ref);
+        }
+        let current = item;
+        if (detached.length > 0) {
+          const left = (await tx.listInboxLinks(boardId)).filter((l) => l.inboxId === id).map((l) => l.globId);
+          if (item.itemId !== null) await tx.setItemLinks(item.itemId, left, left.length > 0 ? await groupOf(tx, left) : null);
+          current = {
+            ...item,
+            status: left.length === 0 && item.status === 'attached' ? 'kept' : item.status,
+            updatedAt: this.deps.clock.now(),
+          };
+          if (!(await tx.updateInboxItem(current, item.version))) return invalidInput('The item changed: try again');
+        }
+        return ok({ view: await this.viewOf(tx, current), detached });
+      },
+    );
+    if (!result.ok) return result;
+    for (const globId of result.value.detached)
+      this.deps.notifier.publish({ kind: 'glob.artifacts', boardId, globId });
+    if (result.value.detached.length > 0) this.deps.notifier.publish({ kind: 'board.inbox', boardId });
     return ok(result.value.view);
   }
 

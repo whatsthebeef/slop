@@ -16,6 +16,7 @@ import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from '../domain/
 import { DEFAULT_REVIEW_BOARD_SETTINGS } from '../domain/review-settings.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
+import { isClearedAttachment } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
 import { GLOB_OWNED_SOURCES, matchesFilters } from '../domain/search.js';
 import type { Candidate, KnowledgeItem } from '../domain/search.js';
@@ -597,16 +598,19 @@ export class MemoryStore implements Store {
         for (const a of s.artifacts) {
           if (a.globId === globId && (kind === undefined || a.kind === kind)) latest.set(`${a.kind}:${a.label}`, a);
         }
-        return Promise.resolve([...latest.values()].sort((a, b) => b.id - a.id));
+        return Promise.resolve([...latest.values()].filter((a) => !isClearedAttachment(a)).sort((a, b) => b.id - a.id));
       },
       artifactVersions: (globId, kind, label) =>
         Promise.resolve(s.artifacts.filter((a) => a.globId === globId && a.kind === kind && a.label === label)),
       listArtifactSummaries: (boardId, globIds) => {
         const onBoard = (id: string) => s.globs.get(id)?.glob.boardId === boardId && globIds.includes(id);
         const summaries = new Map<string, ArtifactSummary>();
+        const cleared = new Set<string>();
         for (const a of s.artifacts) {
           if (!onBoard(a.globId)) continue;
           const key = `${a.globId}:${a.kind}:${a.label}`;
+          if (isClearedAttachment(a)) cleared.add(key);
+          else cleared.delete(key);
           summaries.set(key, {
             globId: a.globId,
             kind: a.kind,
@@ -620,7 +624,7 @@ export class MemoryStore implements Store {
             ...(a.provenance.independentReview === undefined ? {} : { review: a.provenance.independentReview }),
           });
         }
-        return Promise.resolve([...summaries.values()]);
+        return Promise.resolve([...summaries.entries()].filter(([key]) => !cleared.has(key)).map(([, v]) => v));
       },
       getDeploy: (id) => Promise.resolve(s.deploys.get(id) ?? null),
       saveDeploys: (deploys) => {
@@ -1138,6 +1142,11 @@ export class MemoryStore implements Store {
         if (s.inboxLinks.some((l) => l.inboxId === link.inboxId && l.globId === link.globId)) return Promise.resolve(false);
         s.inboxLinks.push(link);
         return Promise.resolve(true);
+      },
+      deleteInboxLink: (inboxId, globId) => {
+        const before = s.inboxLinks.length;
+        s.inboxLinks = s.inboxLinks.filter((l) => l.inboxId !== inboxId || l.globId !== globId);
+        return Promise.resolve(s.inboxLinks.length < before);
       },
       listInboxLinks: (boardId) => {
         const mine = new Set(s.inboxItems.filter((i) => i.boardId === boardId).map((i) => i.id));
