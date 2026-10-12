@@ -15,6 +15,7 @@ export interface CommitChecks {
 
 interface CheckRun {
   readonly id: number;
+  readonly suiteId: number | null;
   readonly name: string;
   readonly status: string;
   readonly conclusion: string | null;
@@ -27,11 +28,12 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 
 const asCheckRun = (value: unknown): CheckRun | null => {
   if (!isRecord(value)) return null;
-  const { id, name, status, conclusion, html_url, completed_at, output } = value;
+  const { id, name, status, conclusion, html_url, completed_at, output, check_suite } = value;
   if (typeof id !== 'number' || typeof name !== 'string' || typeof status !== 'string') return null;
   const out = isRecord(output) ? output : null;
   return {
     id,
+    suiteId: isRecord(check_suite) && typeof check_suite.id === 'number' ? check_suite.id : null,
     name,
     status,
     conclusion: typeof conclusion === 'string' ? conclusion : null,
@@ -70,12 +72,27 @@ const logTail = async (request: Request, repo: Repo, jobId: number): Promise<str
   }
 };
 
+/** Workflow events that test the commit itself; any other event (a comment, a review, a schedule, a manual run) only borrows its sha. */
+const TESTING_EVENTS = new Set(['push', 'merge_group']);
+
+/** The check suites of workflow runs on `sha` that were not triggered by a push to it, so their results say nothing about the commit. */
+const borrowedSuites = async (request: Request, repo: Repo, sha: string): Promise<Set<number>> => {
+  const { data } = await request('GET /repos/{owner}/{repo}/actions/runs', { owner: repo.owner, repo: repo.name, head_sha: sha, per_page: 100 });
+  const runs = isRecord(data) && Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+  return new Set(
+    runs.flatMap((r: unknown) =>
+      isRecord(r) && typeof r.check_suite_id === 'number' && typeof r.event === 'string' && !TESTING_EVENTS.has(r.event) ? [r.check_suite_id] : [],
+    ),
+  );
+};
+
 /**
  * The state of the checks on a commit and, when one failed, which and why: the check's name, the failed step and the
  * first error lines from the tail of its log (GitHub Actions: a check run's ID is its job's ID), else the run's own
  * output. Explaining a failure is best effort; the state is returned either way.
  */
-export const readCommitChecks = async (request: Request, repo: Repo, sha: string): Promise<CommitChecks> => {
+export const readCommitChecks = async (request: Request, repo: Repo, sha: string, opts: { pushedOnly?: boolean } = {}): Promise<CommitChecks> => {
+  const borrowed = opts.pushedOnly === true ? await borrowedSuites(request, repo, sha) : new Set<number>();
   const { data } = await request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
     owner: repo.owner,
     repo: repo.name,
@@ -85,7 +102,7 @@ export const readCommitChecks = async (request: Request, repo: Repo, sha: string
   });
   const runs = (isRecord(data) && Array.isArray(data.check_runs) ? data.check_runs : []).flatMap((r: unknown) => {
     const run = asCheckRun(r);
-    return run === null || run.name === REVIEW_CHECK ? [] : [run];
+    return run === null || run.name === REVIEW_CHECK || (run.suiteId !== null && borrowed.has(run.suiteId)) ? [] : [run];
   });
   const failed = runs
     .filter((r) => r.status === 'completed' && r.conclusion !== null && FAILED_CONCLUSIONS.has(r.conclusion))
