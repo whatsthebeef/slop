@@ -122,7 +122,7 @@ Standard mode: if this is the **final round**, or there are **no in-scope items*
 
 ### 9. Flag what needs a human
 
-Besides the findings, say under `### Needs a human` (in the Summary) when the change meets one of the orchestrator's escalation criteria and the plan didn't settle it: a product or design decision, a board risk area, a rewrite of existing data, auth, permissions or secrets changes, weakened or deleted tests, changed agent instructions, or scope well beyond the plan. Give the reason and the files. The orchestrator escalates the sub from it. Say nothing when none applies: size alone is not a reason, and the default is to let a sub merge.
+Besides the findings, say under `### Needs a human` (in the Summary) when the change meets one of the escalation criteria in the board's `risk_and_size` document (given to you with the other board docs; it also lists the risk areas) and the plan didn't settle it. Give the reason and the files. The orchestrator escalates the sub from it. Say nothing when none applies: size alone is not a reason, and the default is to let a sub merge.
 
 ### 10. Return decision
 
@@ -142,3 +142,4 @@ Include a brief summary.
 - **Accumulate the document**: each round appends; never overwrite earlier rounds.
 - **No code modifications in standalone mode.**
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
+

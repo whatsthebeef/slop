@@ -1,7 +1,13 @@
+import { field, isObject, parseJson, text } from '../app/llm-json.js';
+import { safeGrepPattern, safeRepoPath } from './review-tools.js';
 import type { ItemStatus, SourceType } from './search.js';
 
 /** What the assistant says when the board's records don't answer (also when the model says so). */
 export const CHAT_DONT_KNOW = "I couldn't find anything about that in the board's records.";
+/** What the assistant says when the question needs the code and the code could not be read. */
+export const CHAT_NO_CODE = "I couldn't read the board's code to answer that.";
+/** The most code-view calls one answer may make (the size forecast's loop has the same budget). */
+export const CHAT_CODE_MAX_CALLS = 6;
 /** The most messages a conversation returns (and the most turns' worth kept readable). */
 export const CHAT_HISTORY_LIMIT = 50;
 
@@ -56,12 +62,12 @@ export const isSmallTalk = (question: string): boolean => {
     /^(what can you (do|help( me)? with)|what are you|who are you|how (do|can) you help|how does this (chat )?work|help)$/.test(q);
 };
 
-/** A source an answer used, built from the retrieved hit and never from model text. */
+/** A source an answer used, built from the retrieved hit (or the code the view returned) and never from model text. */
 export interface ChatCitation {
   /** The source's number in the prompt, the `[n]` the answer uses (the lowest, when one item has several chunks). */
   readonly n: number;
   /** `board_state` is the live snapshot of the board, not a stored record. */
-  readonly source: SourceType | 'board_state';
+  readonly source: SourceType | 'board_state' | 'code';
   /** `Decision`, `Plan`, ... as search shows it. */
   readonly sourceLabel: string;
   readonly title: string;
@@ -130,3 +136,69 @@ export interface NewChatMessage {
 export interface ChatMessage extends NewChatMessage {
   readonly id: number;
 }
+
+/** What the model may ask of the code view: the base branch only, read-only. */
+export type ChatCodeCall =
+  | { readonly tool: 'tree'; readonly path: string }
+  | { readonly tool: 'grep'; readonly pattern: string; readonly paths: readonly string[] }
+  | { readonly tool: 'read'; readonly path: string; readonly start?: number; readonly end?: number }
+  | { readonly tool: 'history'; readonly path: string }
+  | { readonly tool: 'imports'; readonly path: string; readonly direction: 'imports' | 'importedBy' };
+
+const CODE_TOOLS = ['tree', 'grep', 'read', 'history', 'imports'] as const;
+
+const lineNumber = (value: unknown): number | undefined => (typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : undefined);
+
+/**
+ * A reply that asks for a code-view call: a JSON object (the reply starts with `{`; an answer never does) with a "tool".
+ * Null when the reply is an answer; `problem` when it asks for a call that can't be made, which the model is told.
+ */
+export const parseCodeCall = (raw: string): ChatCodeCall | { readonly problem: string } | null => {
+  if (!raw.trimStart().startsWith('{')) return null;
+  const parsed = parseJson(raw);
+  if (!isObject(parsed) || field(parsed, 'tool') === undefined) return null;
+  const tool = CODE_TOOLS.find((name) => name === field(parsed, 'tool'));
+  if (tool === undefined) return { problem: `"tool" must be one of ${CODE_TOOLS.join(', ')}.` };
+  if (tool === 'grep') {
+    const pattern = safeGrepPattern(text(field(parsed, 'pattern')) ?? '');
+    if (pattern === null) return { problem: 'grep needs a "pattern" (a regular expression, not empty, not long, not starting with "-").' };
+    const only = text(field(parsed, 'path'));
+    const path = only === null ? '' : safeRepoPath(only);
+    if (path === null) return { problem: 'grep\'s "path" must be relative to the repository root, without ".." or a leading "/".' };
+    return { tool, pattern, paths: path === '' ? [] : [path] };
+  }
+  const path = safeRepoPath(text(field(parsed, 'path')) ?? '');
+  if (path === null) return { problem: `${tool} needs a "path" relative to the repository root, without ".." or a leading "/".` };
+  if (tool === 'tree') return { tool, path };
+  if (path === '') return { problem: `${tool} needs the path of a file.` };
+  if (tool === 'history') return { tool, path };
+  if (tool === 'imports') return { tool, path, direction: field(parsed, 'direction') === 'importedBy' ? 'importedBy' : 'imports' };
+  const start = lineNumber(field(parsed, 'start'));
+  const end = lineNumber(field(parsed, 'end'));
+  return { tool, path, ...(start === undefined ? {} : { start }), ...(end === undefined ? {} : { end }) };
+};
+
+/**
+ * Wraps a streaming callback for a turn that may turn out to be a code-view request: text is held until the first
+ * character shows which it is, and a reply that starts with `{` (a request) is never passed on.
+ */
+export const withoutCodeRequests = (onText: (text: string) => void): ((piece: string) => void) => {
+  let held = '';
+  let mode: 'undecided' | 'answer' | 'request' = 'undecided';
+  return (piece) => {
+    if (mode === 'request') return;
+    if (mode === 'answer') {
+      onText(piece);
+      return;
+    }
+    held += piece;
+    const start = held.trimStart();
+    if (start === '') return;
+    if (start.startsWith('{')) {
+      mode = 'request';
+      return;
+    }
+    mode = 'answer';
+    onText(held);
+  };
+};

@@ -53,7 +53,7 @@ Full test runs and coverage are the **tester**'s job; don't run the full suite.
 
 ## Flag what needs a human
 
-You can't call slop, so say so in your summary under `## Needs a human`, with the reason and evidence, whenever you hit one of the orchestrator's escalation criteria: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth, permissions or secrets changes, a test you had to weaken or delete, a change to agent instructions, or scope well beyond the plan. The orchestrator escalates the sub from it. Leave the section out when none applies; size alone is not a reason.
+You can't call slop, so say so in your summary under `## Needs a human`, with the reason and evidence, whenever you hit one of the escalation criteria in the board's `risk_and_size` document (read it if the orchestrator gave you its path). The orchestrator escalates the sub from it. Leave the section out when none applies; size alone is not a reason.
 
 ## Coding guidelines
 
@@ -70,3 +70,4 @@ You can't call slop, so say so in your summary under `## Needs a human`, with th
 - If a planned step is ambiguous, implement the most reasonable interpretation and note the assumption in the summary.
 - If a test you didn't change starts failing, check whether your change caused it. If so, fix it; if not, note it.
 - If a blocker prevents implementation, stop and return a clear description of it.
+
