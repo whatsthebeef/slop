@@ -757,7 +757,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
 export const ACTION_LABELS: Record<Action, string> = {
   start: 'Start',
   investigate: 'Investigate',
-  review_now: 'Review now',
+  review_now: 'Get AI review',
   start_anyway: 'Start anyway',
   pick_up: 'Pick up',
   take_over: 'Take over',
@@ -770,7 +770,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   deescalate: 'Make it a sub again',
   make_super: 'Make it a super',
   merge_continue: 'Merge and continue',
-  mark_ready: 'Ready for review',
+  mark_ready: 'Mark done (PR ready)',
   decide: 'Decide',
   sign_off: 'Sign off',
   reopen: 'Reopen',

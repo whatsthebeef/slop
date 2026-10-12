@@ -57,10 +57,10 @@ const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLoc
 
 const ACTION_TIPS: Partial<Record<Action, string>> = {
   investigate: 'Starts a routine run that investigates the plan (no branch, no commits) and attaches the result; starting later reuses it when the plan and files are unchanged',
-  review_now: 'Queues a fresh independent review of the change as it is now (an open PR as it would land on main, a merged one as its commit); it never blocks merging',
+  review_now: 'An independent AI reviewer reads the change as it would land on main and posts its findings on the glob and the PR. It never blocks merging.',
   start_anyway: 'Starts now, before what it waits for has merged; its branch will lack those changes',
   merge_continue: "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
-  mark_ready: 'Marks the draft PR ready for review',
+  mark_ready: 'Takes the PR out of draft: the work is done. A sub then merges by itself once its checks pass; a same or super waits for you to merge. Refused while the branch conflicts with main.',
   retry_autofix: 'Starts a new routine run that watches this PR and fixes its failed checks on the same branch',
   resolve_conflict: 'Asks the Claude GitHub App, in a PR comment, to merge the base branch into this branch and resolve the conflicts',
 };
@@ -168,7 +168,7 @@ export const GlobDetail = ({
   const tiers = actionTiers(allActions);
   const disabled = waitingFor(glob, actions, board.role);
   const status = viewStatusLine(glob, new Date().toISOString(), disabled);
-  // Ready for review changes nothing until GitHub confirms, so say it was asked for meanwhile.
+  // Mark done (PR ready) changes nothing until GitHub confirms, so say it was asked for meanwhile.
   const [readyAsked, setReadyAsked] = useState(false);
   const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
   // A super's local review normally comes first (/finalise); the board warns, then allows.
@@ -483,7 +483,7 @@ export const GlobDetail = ({
                     Cancel
                   </Button>
                   <Button size='sm' disabled={busy} onClick={() => void markReady()} data-testid='confirm-ready'>
-                    Ready for review
+                    Mark done (PR ready)
                   </Button>
                 </div>
               )}
