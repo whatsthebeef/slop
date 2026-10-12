@@ -3,7 +3,7 @@ import type { Action, LabelCommand, LabelName, List } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode, RefObject } from 'react';
+import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
 import { FILTER_TOGGLE_ID, FilterPane, FilterToggle, useFilterPaneOpen } from '@/components/board-filter-pane';
@@ -17,8 +17,6 @@ import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/l
 import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
-import { useColumnExit } from '@/lib/column-exit';
-import { useColumnGlide } from '@/lib/column-glide';
 import { activeCount, matchesFilters, parseFilters, writeFilters } from '@/lib/board-filters';
 import type { FilterValues } from '@/lib/board-filters';
 import { withGlob } from '@/lib/glob-list';
@@ -100,10 +98,8 @@ const Column = ({
   boardId,
   ghost,
   filtered,
-  sectionRef,
 }: {
   list: List;
-  sectionRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
   count: number;
   /** Everything in the list, when it shows only the latest few. */
@@ -115,8 +111,7 @@ const Column = ({
   filtered: boolean;
 }) => (
   <section
-    ref={sectionRef}
-    className='list-well flex min-w-64 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2'
+    className='list-well flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2'
     aria-label={LIST_TITLES[list]}
     data-testid={`list-${list}`}
   >
@@ -226,7 +221,7 @@ export const BoardPage = () => {
   const toast = useToast();
   const live = useLiveBoard(boardId);
   // The ＋ (New glob) icon lives in the shell's tab row.
-  const { headerActions, hideSignedOff } = useOutletContext<BoardShellContext>();
+  const { headerActions } = useOutletContext<BoardShellContext>();
   usePageContext({ type: 'board' });
   const [creating, setCreating] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -247,9 +242,6 @@ export const BoardPage = () => {
     [globs.data],
   );
   const motion = useBoardMotion(shown, live);
-  // Opening the chat hides Signed Off and moves the other columns at once; they glide to their new places.
-  const signedOff = useColumnExit<HTMLElement>(hideSignedOff);
-  useColumnGlide(motion.container, hideSignedOff);
   // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens its page.
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -432,13 +424,13 @@ export const BoardPage = () => {
         className='flex-1 overflow-auto px-5 pb-4 pt-1.5'
       >
         <div className='relative flex min-h-full min-w-full items-stretch gap-3'>
-          {LISTS.filter((list) => !(signedOff.phase === 'gone' && list === 'signed_off')).map((list) => {
+          {LISTS.map((list) => {
             const inList = all.filter((g) => g.list === list);
             const items =
               list === 'signed_off' ? bySignedOffNewest(inList) : inList.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
             const total = list === 'signed_off' && filtering === 0 ? Math.max(items.length, signedOffTotal.data ?? 0) : items.length;
             return (
-              <Column key={list} sectionRef={list === 'signed_off' ? signedOff.ref : undefined} list={list} count={items.length} total={total} boardId={boardId} ghost={preview?.target === list ? preview : null} filtered={filtering > 0}>
+              <Column key={list} list={list} count={items.length} total={total} boardId={boardId} ghost={preview?.target === list ? preview : null} filtered={filtering > 0}>
                 {items.map((glob) => {
                   const moves = movesFor(glob);
                   return (
