@@ -43,13 +43,13 @@ type Answer = string | Error | (() => Promise<string>);
 
 /** A fake LLM answering from a queue of canned answers (or errors, or calls), recording each request. */
 class FakeLlm implements Llm {
-  readonly calls: { system: string; prompt: string }[] = [];
+  readonly calls: Pick<LlmRequest, 'system' | 'prompt' | 'spend'>[] = [];
   constructor(private readonly answers: Answer[] = []) {}
   answer(...answers: Answer[]): void {
     this.answers.push(...answers);
   }
-  complete(request: { system: string; prompt: string; maxTokens: number }): Promise<string> {
-    this.calls.push({ system: request.system, prompt: request.prompt });
+  complete(request: LlmRequest): Promise<string> {
+    this.calls.push({ system: request.system, prompt: request.prompt, spend: request.spend });
     const next = this.answers.shift();
     if (next === undefined) return Promise.reject(new Error('No canned answer'));
     if (typeof next === 'function') return next();
@@ -225,6 +225,9 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(dedupe?.system).toBe(DEDUPE_SYSTEM);
     expect(dedupe?.prompt).toContain('## Test\n\nRun vitest.');
     expect(dedupe?.prompt).not.toContain('Run eslint.');
+    // Both calls go to the board's ledger as KB routing, against the learning.
+    expect(route?.spend).toEqual({ boardId, source: 'kb_route', globId: id });
+    expect(dedupe?.spend).toEqual({ boardId, source: 'kb_route', globId: id });
     expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
     // Next in line: its draft.
     expect(queue.jobOf(id)).toMatchObject({ kind: 'kb_draft', state: 'pending', attempts: 0 });

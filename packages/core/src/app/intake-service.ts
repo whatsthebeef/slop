@@ -18,6 +18,7 @@ import { memberOf } from './access.js';
 import { recentTypeCorrections } from './type-learning-service.js';
 import { embedRequest, nearestExamples } from './intake-learning-service.js';
 import { field, parseJson, text } from './llm-json.js';
+import type { LlmSpendTag } from '../domain/spend.js';
 
 /**
  * The LLM port: a single completion. The adapter chooses the model (Haiku for intake). An adapter
@@ -28,6 +29,11 @@ export interface LlmRequest {
   readonly prompt: string;
   readonly maxTokens: number;
   readonly signal?: AbortSignal;
+  /**
+   * Which board and source the call is for. Local metadata: adapters never send it to the model. The
+   * server's usage callback writes one ledger row per tagged call; untagged calls are only logged.
+   */
+  readonly spend?: LlmSpendTag;
 }
 
 export interface Llm {
@@ -254,7 +260,12 @@ export class IntakeService {
     ].join('\n');
     let completion: string;
     try {
-      completion = await this.deps.llm.complete({ system: INTAKE_SYSTEM, prompt, maxTokens: 1200 });
+      completion = await this.deps.llm.complete({
+        system: INTAKE_SYSTEM,
+        prompt,
+        maxTokens: 1200,
+        spend: { boardId, source: 'intake' },
+      });
     } catch (error) {
       if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
       throw error;

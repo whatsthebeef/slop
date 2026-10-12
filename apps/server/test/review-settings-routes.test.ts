@@ -153,6 +153,7 @@ describe('review settings and the spend line over HTTP (s15f43)', () => {
       usd: 0.15,
       unpricedCalls: 1,
       bySource: { review: 0.15 },
+      unpricedBySource: { review: 1 },
     });
     expect((await call(STRANGER, 'GET', `/api/boards/${boardId}/spend`)).status).toBe(403);
   });

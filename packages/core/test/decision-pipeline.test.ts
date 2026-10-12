@@ -178,6 +178,7 @@ describe('decisions', () => {
       });
       // The model saw only the Decisions section.
       const shown = llm.calls[0]?.prompt ?? '';
+      expect(llm.calls[0]?.spend).toEqual({ boardId, source: 'decisions', globId: 's1t1' });
       expect(shown).toContain('Rejected: long polling');
       expect(shown).not.toContain('Nothing else was settled');
       const item = itemOf(found[0] as Decision);
@@ -518,6 +519,7 @@ describe('decisions', () => {
       llm.checks.push(replaces({ id: 1, oldQuote: 'poll the server every thirty seconds', newQuote: 'Now every ten seconds' }));
       await run();
       expect(llm.count(SUPERSEDE_SYSTEM)).toBe(1);
+      expect(llm.calls.find((c) => c.system === SUPERSEDE_SYSTEM)?.spend).toEqual({ boardId, source: 'decisions', globId: 's1t2' });
       expect((await byQuote(POLLING)).replaceState).toBe('applied');
     });
 

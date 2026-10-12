@@ -35,7 +35,7 @@ import { LocalFollowWatch } from './local-follow.js';
 import { mountReadiness } from './http/readiness.js';
 import { ReadinessWatch } from './readiness-watch.js';
 import { HintHub } from './notifier.js';
-import { BedrockLlm, reviewerLlm, shownModelId } from './llm.js';
+import { BedrockLlm, reviewerLlm, shownModelId, spendRecorder } from './llm.js';
 import { BedrockEmbedder } from './embedder.js';
 import { CodeHostChanges } from './code-host-changes.js';
 import { marksBoardDirty, SearchSync } from './jobs/search-sync.js';
@@ -200,6 +200,9 @@ const decisionGlobs = new DecisionGlobService({ store, clock, notifier: hub, kno
 const findings = new FindingsService({ store, clock, notifier: hub });
 const logUsage = (u: { model: string; input: number; output: number }) =>
   console.log(`[llm] ${u.model} in=${String(u.input)} out=${String(u.output)}`);
+// Every board-scoped call is tagged with its board and source (core sets `spend` on the request): one ledger row each.
+// Untagged calls (reviews and the knowledge page record their own rows; the sign-in probe has no board) are only logged.
+const recordUsage = spendRecorder(spend, (message) => logError('llm spend', message));
 // Credential and access failures mark a model down (logged once per change); the worst model's state
 // goes to the integration registry, whose banner shows it on every board (the waiting KB cards get
 // their own board.kb hints).
@@ -231,12 +234,12 @@ const trackLlm = (llm: Llm, model: string): Llm => {
 };
 // Opus 5.5 takes no sampling parameters other than the defaults. Routing, dedupe and weekly consolidation share it.
 const kbRouteLlm = trackLlm(
-  new BedrockLlm({ id: config.KB_ROUTE_MODEL, configKey: 'KB_ROUTE_MODEL' }, config.BEDROCK_REGION, logUsage, null),
+  new BedrockLlm({ id: config.KB_ROUTE_MODEL, configKey: 'KB_ROUTE_MODEL' }, config.BEDROCK_REGION, recordUsage, null),
   config.KB_ROUTE_MODEL,
 );
 const kbModels = [config.KB_ROUTE_MODEL, config.KB_DRAFT_MODEL];
 const kbDraftLlm = trackLlm(
-  new BedrockLlm({ id: config.KB_DRAFT_MODEL, configKey: 'KB_DRAFT_MODEL' }, config.BEDROCK_REGION, logUsage, null),
+  new BedrockLlm({ id: config.KB_DRAFT_MODEL, configKey: 'KB_DRAFT_MODEL' }, config.BEDROCK_REGION, recordUsage, null),
   config.KB_DRAFT_MODEL,
 );
 const kbPipeline = new KbPipeline({
@@ -253,7 +256,7 @@ const knowledgePage = new KnowledgePageService({ store, clock, notifier: hub, ll
 
 // Haiku: splitting and classifying review findings, and checking bug reports for the learned sub limit.
 const findingsLlm = trackLlm(
-  new BedrockLlm({ id: config.FINDINGS_MODEL, configKey: 'FINDINGS_MODEL' }, config.BEDROCK_REGION, logUsage),
+  new BedrockLlm({ id: config.FINDINGS_MODEL, configKey: 'FINDINGS_MODEL' }, config.BEDROCK_REGION, recordUsage),
   config.FINDINGS_MODEL,
 );
 const findingsPipeline = new FindingsPipeline({ store, clock, notifier: hub, llm: findingsLlm });
@@ -266,7 +269,7 @@ const embedder = llmHealth.trackEmbedder(
   config.EMBED_MODEL,
 );
 const intakeLlm = trackLlm(
-  new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, logUsage),
+  new BedrockLlm({ id: config.INTAKE_MODEL, configKey: 'INTAKE_MODEL' }, config.BEDROCK_REGION, recordUsage),
   config.INTAKE_MODEL,
 );
 // The code view: a clone per board on the data disk, an index of its base branch in Postgres, one read-only port over both.
@@ -289,7 +292,7 @@ const intake = new IntakeService({
 });
 // Haiku, for the index's change summaries and for decisions.
 const searchLlm = trackLlm(
-  new BedrockLlm({ id: config.SEARCH_MODEL, configKey: 'SEARCH_MODEL' }, config.BEDROCK_REGION, logUsage),
+  new BedrockLlm({ id: config.SEARCH_MODEL, configKey: 'SEARCH_MODEL' }, config.BEDROCK_REGION, recordUsage),
   config.SEARCH_MODEL,
 );
 const searchIndexer = new SearchIndexer({
@@ -319,9 +322,9 @@ const chat = new ChatService({
   // Questions about the code go through the code view (base branch, a capped loop of calls), counted as consumer `chat`.
   code,
   warn: (message) => console.warn(`[chat] ${message}`),
-  llm: trackLlm(new BedrockLlm({ id: config.CHAT_MODEL, configKey: 'CHAT_MODEL' }, config.BEDROCK_REGION, logUsage, null), config.CHAT_MODEL),
+  llm: trackLlm(new BedrockLlm({ id: config.CHAT_MODEL, configKey: 'CHAT_MODEL' }, config.BEDROCK_REGION, recordUsage, null), config.CHAT_MODEL),
   // "Think harder" answers one question with Opus.
-  deepLlm: trackLlm(new BedrockLlm({ id: config.CHAT_THINK_MODEL, configKey: 'CHAT_THINK_MODEL' }, config.BEDROCK_REGION, logUsage, null), config.CHAT_THINK_MODEL),
+  deepLlm: trackLlm(new BedrockLlm({ id: config.CHAT_THINK_MODEL, configKey: 'CHAT_THINK_MODEL' }, config.BEDROCK_REGION, recordUsage, null), config.CHAT_THINK_MODEL),
   // Save to knowledge goes to the proposal queue, like an agent's learning.
   submitLearning: (email, board, learning) => knowledge.submitLearning(email, board, learning),
 });

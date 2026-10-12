@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { reviewFormOf, reviewSettingsOfForm, spendLine, toolCapInvalid } from '../src/lib/review-settings';
+import { reviewFormOf, reviewSettingsOfForm, spendBreakdown, spendLine, toolCapInvalid } from '../src/lib/review-settings';
 
 describe('review settings form', () => {
   it('shows the defaults as blank fields and sends them back as null', () => {
@@ -54,17 +54,45 @@ describe('review settings form', () => {
 
 describe('spend line', () => {
   it('shows the month to date in dollars and cents', () => {
-    expect(spendLine({ usd: 0, unpricedCalls: 0 })).toBe('Review LLM spend this month $0.00');
-    expect(spendLine({ usd: 1.2345, unpricedCalls: 0 })).toBe('Review LLM spend this month $1.23');
+    expect(spendLine({ usd: 0, unpricedCalls: 0 })).toBe('LLM spend this month $0.00');
+    expect(spendLine({ usd: 1.2345, unpricedCalls: 0 })).toBe('LLM spend this month $1.23');
   });
 
   it('says how many calls had no price', () => {
     expect(spendLine({ usd: 2, unpricedCalls: 1 })).toBe(
-      'Review LLM spend this month $2.00 + 1 unpriced call',
+      'LLM spend this month $2.00 + 1 unpriced call',
     );
     expect(spendLine({ usd: 2, unpricedCalls: 3 })).toBe(
-      'Review LLM spend this month $2.00 + 3 unpriced calls',
+      'LLM spend this month $2.00 + 3 unpriced calls',
     );
+  });
+});
+
+describe('spend breakdown', () => {
+  it('lists each source with its cost, costliest first, then the unpriced calls', () => {
+    expect(
+      spendBreakdown({ bySource: { review: 0.1, chat: 0.4234, kb_draft: 1.5, intake: 0.1 }, unpricedCalls: 2 }),
+    ).toBe('kb_draft $1.50\nchat $0.42\nintake $0.10\nreview $0.10\n2 unpriced calls');
+    expect(spendBreakdown({ bySource: { chat: 1 }, unpricedCalls: 1 })).toBe('chat $1.00\n1 unpriced call');
+  });
+
+  it('names the sources of unpriced calls, also a source with no priced calls at all', () => {
+    expect(
+      spendBreakdown({
+        bySource: { chat: 0.5, intake: 0.1 },
+        unpricedBySource: { chat: 1, kb_draft: 3, review: 1 },
+        unpricedCalls: 5,
+      }),
+    ).toBe('chat $0.50 + 1 unpriced\nintake $0.10\nkb_draft 3 unpriced\nreview 1 unpriced\n5 unpriced calls');
+    expect(spendBreakdown({ bySource: {}, unpricedBySource: { size_check: 2 }, unpricedCalls: 2 })).toBe(
+      'size_check 2 unpriced\n2 unpriced calls',
+    );
+  });
+
+  it('says there is nothing yet, and copes with an older API that sends no breakdown', () => {
+    expect(spendBreakdown({ bySource: {}, unpricedCalls: 0 })).toBe('No LLM spend yet this month');
+    expect(spendBreakdown({ unpricedCalls: 0 })).toBe('No LLM spend yet this month');
+    expect(spendBreakdown({ unpricedCalls: 3 })).toBe('3 unpriced calls');
   });
 });
 

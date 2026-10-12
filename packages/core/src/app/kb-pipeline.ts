@@ -32,6 +32,7 @@ import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/know
 import { checkLocalRun, LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
 import { checkMergePolicy, MERGE_POLICY_NAME, parseMergePolicy, renderMergePolicy } from '../domain/merge-policy.js';
 import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
+import type { LlmSpendTag } from '../domain/spend.js';
 import type { Catalog, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
@@ -354,6 +355,7 @@ export class KbPipeline {
           system: DRAFT_SYSTEM,
           prompt: draftPrompt(learning, target, state, context.docs),
           maxTokens: DRAFT_MAX_TOKENS,
+          spend: { boardId: glob.boardId, source: 'kb_draft', globId: glob.id },
         }),
         target,
         state,
@@ -402,9 +404,15 @@ export class KbPipeline {
     learning: LearningRead,
     snapshot: Snapshot,
   ): Promise<{ routing: Routing; dedupe: Dedupe } | { failure: string } | { unavailable: LlmUnavailable }> {
+    const spend: LlmSpendTag = { boardId: learning.glob.boardId, source: 'kb_route', globId: learning.glob.id };
     try {
       const routing = parseRouting(
-        await this.complete(this.deps.route, { system: ROUTE_SYSTEM, prompt: routePrompt(learning, snapshot), maxTokens: 600 }),
+        await this.complete(this.deps.route, {
+          system: ROUTE_SYSTEM,
+          prompt: routePrompt(learning, snapshot),
+          maxTokens: 600,
+          spend,
+        }),
         snapshot,
       );
       if (routing === null) return { failure: 'The routing answer was not usable JSON' };
@@ -418,6 +426,7 @@ export class KbPipeline {
           prompt: dedupePrompt(learning, snapshot, routing.target, targetText),
           // The fact and up to five relations come before the answer.
           maxTokens: 1_000,
+          spend,
         }),
         learning.glob.summary,
         snapshot,

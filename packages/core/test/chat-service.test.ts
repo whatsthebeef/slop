@@ -347,6 +347,7 @@ describe('ChatService', () => {
     expect(harder.reply.content).toBe('Deeper [1]');
     expect(harder.reply.tools).toContain('Thought harder (stronger model)');
     expect(llm.requests).toHaveLength(1);
+    expect(deep.requests[0]?.spend).toEqual({ boardId, source: 'chat' });
     // Without a stronger model the usual one answers.
     chat = new ChatService({ store, clock: { now: () => NOW }, search: new SearchService({ store, clock: { now: () => NOW }, embedder: new FakeEmbedder() }), llm });
     expect(unwrap(await ask('retry backoff', { thinkHarder: true })).reply.content).toBe('Usual [1]');
@@ -445,6 +446,9 @@ describe('ChatService', () => {
       expect(reply.answered).toBe(true);
       expect(llm.requests[0]?.prompt).toContain('Question: awhy did we do notifcations like that?');
       expect(rewriter.requests[0]?.prompt).toContain('awhy did we do notifcations like that?');
+      // The rewrite goes to the board's ledger as search, the answer as chat.
+      expect(rewriter.requests[0]?.spend).toEqual({ boardId, source: 'search' });
+      expect(llm.requests[0]?.spend).toEqual({ boardId, source: 'chat' });
     });
 
     it('treats a message the rewrite calls small talk as conversation, with no search', async () => {
@@ -454,6 +458,7 @@ describe('ChatService', () => {
       const reply = unwrap(await ask('thanks a lot, that helps')).reply;
       expect(reply).toMatchObject({ content: 'Glad it helped!', citations: [], actions: [] });
       expect(llm.requests[0]?.system).not.toContain('numbered sources');
+      expect(llm.requests[0]?.spend).toEqual({ boardId, source: 'chat' });
     });
 
     it('falls back to the original question when the rewrite fails or is unreadable', async () => {
@@ -615,6 +620,8 @@ describe('ChatService reading the code', () => {
     expect(view.calls).toEqual(['grep null retry', 'read null src/main.ts']);
     expect(usage).toEqual(['chat:search_code', 'chat:read_file']);
     expect(streamed.join('')).toBe('It lives in src/main.ts [1]');
+    // Every turn of the loop goes to the board's ledger as chat.
+    expect(llm.requests.map((r) => r.spend)).toEqual([1, 2, 3].map(() => ({ boardId: repoBoard, source: 'chat' })));
   });
 
   it('stops at the cap: the last turn may not look, and a model that still asks gets no answer', async () => {

@@ -21,6 +21,7 @@ import type {
   KnowledgePageVersion,
   KnowledgePageView,
 } from '../domain/knowledge-page.js';
+import type { LlmSpendSource } from '../domain/spend.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
@@ -34,7 +35,7 @@ import type { SpendService } from './spend-service.js';
 import { hash } from './text-hash.js';
 
 /** The ledger's source for the page's model calls. */
-export const KNOWLEDGE_PAGE_SPEND_SOURCE = 'knowledge_page';
+export const KNOWLEDGE_PAGE_SPEND_SOURCE: LlmSpendSource = 'knowledge_page';
 /** How many versions the history lists. */
 export const KNOWLEDGE_PAGE_HISTORY_MAX = 100;
 /** Why a regeneration that came too soon waits (the job's last error). */

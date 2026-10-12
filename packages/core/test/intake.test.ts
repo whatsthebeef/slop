@@ -208,6 +208,8 @@ describe('intake', () => {
     expect(INTAKE_SYSTEM).not.toMatch(/large or multi-area/);
     // No type in the answer: the optimistic default.
     expect(p.type).toBe('sub');
+    // The call goes to the board's ledger as intake (no glob yet).
+    expect(request?.spend).toEqual({ boardId, source: 'intake' });
   });
 
   it('shows the board\'s learned risk areas and sub size', async () => {

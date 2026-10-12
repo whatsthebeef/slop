@@ -416,7 +416,7 @@ export class DecisionPipeline {
       );
       return;
     }
-    const outcome = await this.ask(found);
+    const outcome = await this.ask(source.boardId, found);
     if ('unavailable' in outcome) {
       await this.waitSource(source, outcome.unavailable);
       return;
@@ -438,7 +438,7 @@ export class DecisionPipeline {
     if (globs !== null) for (const globId of globs) this.deps.notifier.publish({ kind: 'glob.decisions', boardId: source.boardId, globId });
   }
 
-  private async ask(source: SourceText): Promise<Outcome<Found[]>> {
+  private async ask(boardId: number, source: SourceText): Promise<Outcome<Found[]>> {
     try {
       const answer = await completeWithDeadline(
         this.deps.llm,
@@ -446,6 +446,7 @@ export class DecisionPipeline {
           system: EXTRACT_SYSTEM,
           prompt: `Document: ${source.label === '' ? source.ref : source.label}\n<<<\n${source.text}\n>>>`,
           maxTokens: EXTRACT_MAX_TOKENS,
+          spend: { boardId, source: 'decisions', globId: source.globId },
         },
         this.deps.llmTimeoutMs ?? DECISIONS_LLM_TIMEOUT_MS,
       );
@@ -592,7 +593,12 @@ export class DecisionPipeline {
       try {
         const answer = await completeWithDeadline(
           this.deps.llm,
-          { system: SUPERSEDE_SYSTEM, prompt: checkPrompt(next, candidates), maxTokens: CHECK_MAX_TOKENS },
+          {
+            system: SUPERSEDE_SYSTEM,
+            prompt: checkPrompt(next, candidates),
+            maxTokens: CHECK_MAX_TOKENS,
+            spend: { boardId: next.boardId, source: 'decisions', globId: next.globId },
+          },
           this.deps.llmTimeoutMs ?? DECISIONS_LLM_TIMEOUT_MS,
         );
         const parsed = parseReplaces(answer, candidates, next);

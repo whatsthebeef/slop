@@ -25,13 +25,13 @@ const unwrap = <T>(result: Result<T>): T => {
 };
 
 class FakeLlm implements Llm {
-  readonly calls: { system: string; prompt: string }[] = [];
+  readonly calls: Pick<LlmRequest, 'system' | 'prompt' | 'spend'>[] = [];
   private readonly answers: (string | Error)[] = [];
   answer(...answers: (string | Error)[]): void {
     this.answers.push(...answers);
   }
   complete(request: LlmRequest): Promise<string> {
-    this.calls.push({ system: request.system, prompt: request.prompt });
+    this.calls.push({ system: request.system, prompt: request.prompt, spend: request.spend });
     const next = this.answers.shift();
     if (next === undefined) return Promise.reject(new Error('No canned answer'));
     return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
@@ -142,6 +142,18 @@ describe('knowledge page', () => {
     expect(v.basis.promptVersion).toBe(KNOWLEDGE_PAGE_PROMPT_VERSION);
     expect(notifier.hints).toContainEqual({ kind: 'board.kb', boardId });
     expect(store.state.llmSpend).toMatchObject([{ boardId, source: KNOWLEDGE_PAGE_SPEND_SOURCE, model: 'test-model', ref: '1' }]);
+  });
+
+  it('leaves its model call untagged and writes exactly one spend row of its own, so it is not counted twice (s15f60)', async () => {
+    const a = await accepted({ id: 's1k1' });
+    llm.answer(groups({ area: 'Testing', text: 'Run the suite', globIds: [a.id] }));
+
+    expect(await page.regenerate(boardId, false)).toBe('done');
+
+    expect(llm.calls).toHaveLength(1);
+    expect(llm.calls[0]?.spend).toBeUndefined();
+    expect(store.state.llmSpend).toHaveLength(1);
+    expect(store.state.llmSpend[0]).toMatchObject({ boardId, source: KNOWLEDGE_PAGE_SPEND_SOURCE });
   });
 
   it('writes nothing and calls no model when nothing the page is built from changed', async () => {

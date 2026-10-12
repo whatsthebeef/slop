@@ -212,6 +212,7 @@ export class SubLimitService {
               system: SYSTEM,
               prompt: `Does this bug report say the defect was introduced by ${candidate.globId} (${candidate.title})?\n\nBug report ${candidate.bug.id}:\n<<<\n${shown}\n>>>`,
               maxTokens: 300,
+              spend: { boardId, source: 'sub_limit', globId: candidate.globId },
             },
             this.deps.llmTimeoutMs ?? SUB_LIMIT_LLM_TIMEOUT_MS,
           );
