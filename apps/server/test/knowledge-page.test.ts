@@ -187,11 +187,11 @@ describe('knowledge page routes', () => {
   it('serves an empty page, then the current version with its history, and one version by number', async () => {
     const empty = await get('');
     expect(empty.status).toBe(200);
-    expect(await empty.json()).toEqual({ current: null, history: [], nextRegenerationAt: null, pending: false, agentSetHistory: [] });
+    expect(await empty.json()).toEqual({ current: null, history: [], nextRegenerationAt: null, pending: false, agentSetHistory: [], feedback: [] });
 
     await store.transaction((tx) => tx.insertKnowledgePageVersion(version(boardId, 1)));
     const page = await get('');
-    expect(await page.json()).toEqual({ current: version(boardId, 1), history: [{ version: 1, createdAt: version(boardId, 1).createdAt, reason: 'first' }], nextRegenerationAt: null, pending: false, agentSetHistory: [] });
+    expect(await page.json()).toEqual({ current: version(boardId, 1), history: [{ version: 1, createdAt: version(boardId, 1).createdAt, reason: 'first' }], nextRegenerationAt: null, pending: false, agentSetHistory: [], feedback: [] });
     expect(await (await get('/versions/1')).json()).toEqual(version(boardId, 1));
     expect((await get('/versions/2')).status).toBe(404);
     expect((await get('/versions/abc')).status).toBe(422);
@@ -205,6 +205,78 @@ describe('knowledge page routes', () => {
     expect(await queued.json()).toEqual({ queued: true });
     const page = (await (await get('')).json()) as { pending: boolean };
     expect(page.pending).toBe(true);
+  });
+});
+
+describe('knowledge page verdicts (s15f63)', () => {
+  let database: Database;
+  let drop: () => Promise<void>;
+  let store: PgStore;
+  let boardId: number;
+  let app: Hono<Env>;
+
+  beforeAll(async () => {
+    ({ database, drop } = await createTestDatabase('kpage_feedback'));
+    store = new PgStore(database.db);
+    const deps = { store, notifier: { publish: () => undefined }, clock: { now: () => new Date().toISOString() } };
+    const knowledge = new KnowledgeService({ ...deps, catalog });
+    app = new Hono<Env>();
+    app.use('/api/*', async (c, next) => {
+      c.set('email', c.req.header('x-test-email') ?? ADMIN);
+      await next();
+    });
+    mountKnowledge(app, {
+      knowledge,
+      artifacts: new ArtifactService(deps),
+      findings: new FindingsService(deps),
+      catalog,
+      intake: new IntakeService({ store, llm: { complete: unused } }),
+      boards: new BoardService(deps),
+      host: fakeCodeHost({ configured: false }),
+      jobs: new LearningJobService({ ...deps, mining: new MiningService(deps), manifests: null }),
+      knowledgePage: new KnowledgePageService({ ...deps, llm: { complete: unused }, model: 'm', spend: { record: () => Promise.resolve() }, knowledge }),
+      logError: () => undefined,
+    });
+    boardId = await store.transaction(async (tx) => {
+      await tx.upsertUser({ email: ADMIN, name: 'Admin', active: true });
+      await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
+      const board = await tx.insertBoard({ name: 'test', repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] });
+      await tx.upsertMember({ boardId: board.id, email: ADMIN, role: 'admin' });
+      await tx.upsertMember({ boardId: board.id, email: DEV, role: 'dev' });
+      return board.id;
+    });
+  });
+
+  afterAll(() => drop());
+
+  const post = (body: unknown, email = ADMIN) =>
+    app.request(`/api/boards/${String(boardId)}/knowledge-page/feedback`, {
+      method: 'POST',
+      headers: { 'x-test-email': email, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('keeps one verdict per decision, replaces it, lists the newest first and deletes it on undo', async () => {
+    const at = (n: number) => new Date(Date.UTC(2026, 9, n)).toISOString();
+    await store.transaction(async (tx) => {
+      await tx.saveKnowledgePageFeedback({ boardId, globId: 's1k1', verdict: 'pin', by: ADMIN, at: at(1) });
+      await tx.saveKnowledgePageFeedback({ boardId, globId: 's1k2', verdict: 'hide', by: ADMIN, at: at(2) });
+      await tx.saveKnowledgePageFeedback({ boardId, globId: 's1k1', verdict: 'hide', by: DEV, at: at(3) });
+    });
+    const listed = await store.transaction((tx) => tx.listKnowledgePageFeedback(boardId));
+    expect(listed).toEqual([
+      { boardId, globId: 's1k1', verdict: 'hide', by: DEV, at: at(3) },
+      { boardId, globId: 's1k2', verdict: 'hide', by: ADMIN, at: at(2) },
+    ]);
+    await store.transaction((tx) => tx.deleteKnowledgePageFeedback(boardId, 's1k1'));
+    expect((await store.transaction((tx) => tx.listKnowledgePageFeedback(boardId))).map((f) => f.globId)).toEqual(['s1k2']);
+  });
+
+  it('refuses a dev (403), a bad body (422) and a decision that is not on the board (404)', async () => {
+    expect((await post({ globIds: ['s1k1'], verdict: 'pin' }, DEV)).status).toBe(403);
+    expect((await post({ globIds: [], verdict: 'pin' })).status).toBe(422);
+    expect((await post({ globIds: ['s1k1'], verdict: 'maybe' })).status).toBe(422);
+    expect((await post({ globIds: ['s1k404'], verdict: 'pin' })).status).toBe(404);
   });
 });
 

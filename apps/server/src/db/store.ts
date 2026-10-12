@@ -729,6 +729,22 @@ export class PgStore implements Store {
           .limit(limit);
         return rows.map((r) => ({ version: r.version, createdAt: r.createdAt.toISOString(), reason: r.reason }));
       },
+      listKnowledgePageFeedback: async (boardId) => {
+        const f = schema.knowledgePageFeedback;
+        const rows = await t.select().from(f).where(eq(f.boardId, boardId)).orderBy(desc(f.at), f.globId);
+        return rows.map((r) => ({ boardId: r.boardId, globId: r.globId, verdict: r.verdict, by: r.by, at: r.at.toISOString() }));
+      },
+      saveKnowledgePageFeedback: async (feedback) => {
+        const values = { ...feedback, at: new Date(feedback.at) };
+        await t
+          .insert(schema.knowledgePageFeedback)
+          .values(values)
+          .onConflictDoUpdate({ target: [schema.knowledgePageFeedback.boardId, schema.knowledgePageFeedback.globId], set: values });
+      },
+      deleteKnowledgePageFeedback: async (boardId, globId) => {
+        const f = schema.knowledgePageFeedback;
+        await t.delete(f).where(and(eq(f.boardId, boardId), eq(f.globId, globId)));
+      },
       insertLlmSpend: async (row) => {
         await t.insert(schema.llmSpend).values({ ...row, createdAt: new Date(row.createdAt) });
       },

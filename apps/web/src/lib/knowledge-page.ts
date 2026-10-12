@@ -1,4 +1,4 @@
-import type { KnowledgePageAgentSetVersion, KnowledgePageDecision, KnowledgePageDecisionGroup } from './api';
+import type { KnowledgePageAgentSetVersion, KnowledgePageDecision, KnowledgePageDecisionGroup, KnowledgePageFeedback, KnowledgePageVerdict } from './api';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -43,17 +43,38 @@ const keep = (groups: readonly KnowledgePageDecisionGroup[], wanted: ReadonlySet
     return entries.length === 0 ? [] : [{ area: g.area, entries }];
   });
 
+/** The verdicts by decision glob. */
+export const verdictMap = (feedback: readonly KnowledgePageFeedback[] | undefined): ReadonlyMap<string, KnowledgePageVerdict> =>
+  new Map((feedback ?? []).map((f) => [f.globId, f.verdict]));
+
+/** The verdicts that apply to an entry's decisions, as the server writes them in: any pin makes it key, else any "not key" makes it not. */
+export const entryVerdict = (entry: KnowledgePageDecision, verdicts: ReadonlyMap<string, KnowledgePageVerdict>): KnowledgePageVerdict | null => {
+  const given = (entry.globIds ?? []).flatMap((id) => verdicts.get(id) ?? []);
+  return given.includes('pin') ? 'pin' : given.includes('hide') ? 'hide' : null;
+};
+
+/** Whether the entry is key once the verdicts are applied; undefined for an entry the model never flagged and nobody judged. */
+const keyOf = (entry: KnowledgePageDecision, verdicts: ReadonlyMap<string, KnowledgePageVerdict>): boolean | undefined => {
+  const verdict = entryVerdict(entry, verdicts);
+  return verdict === null ? entry.key : verdict === 'pin';
+};
+
 /**
- * Splits a version's decisions into the key ones to show (newest-backed first, at most `max`, grouped by area in the
- * stored order) and the rest. A version in which no entry carries the flag is legacy: it shows everything.
+ * Splits a version's decisions into the key ones to show (pinned first, then newest-backed, at most `max`, grouped by
+ * area in the stored order) and the rest. Verdicts win over the stored flag. A version in which no entry carries the
+ * flag is legacy: it shows everything.
  */
-export const keyDecisions = (groups: readonly KnowledgePageDecisionGroup[], max: number = KEY_DECISIONS_MAX): KeyDecisions => {
+export const keyDecisions = (
+  groups: readonly KnowledgePageDecisionGroup[],
+  max: number = KEY_DECISIONS_MAX,
+  verdicts: ReadonlyMap<string, KnowledgePageVerdict> = new Map(),
+): KeyDecisions => {
   const entries = groups.flatMap((g) => g.entries ?? []);
-  if (!entries.some((e) => e.key !== undefined)) return { flagged: false, shown: groups, more: [], moreCount: 0 };
+  if (!entries.some((e) => keyOf(e, verdicts) !== undefined)) return { flagged: false, shown: groups, more: [], moreCount: 0 };
   const newest = entries
-    .filter((e) => e.key === true)
-    .map((entry, order) => ({ entry, order }))
-    .sort((a, b) => (b.entry.at ?? '').localeCompare(a.entry.at ?? '') || a.order - b.order)
+    .filter((e) => keyOf(e, verdicts) === true)
+    .map((entry, order) => ({ entry, order, pinned: entryVerdict(entry, verdicts) === 'pin' }))
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || (b.entry.at ?? '').localeCompare(a.entry.at ?? '') || a.order - b.order)
     .slice(0, max)
     .map((x) => x.entry);
   const picked = new Set(newest);

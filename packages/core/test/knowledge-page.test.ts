@@ -482,9 +482,151 @@ describe('knowledge page', () => {
     expect(await page.regenerate(999, false)).toBe('dropped');
   });
 
+  describe('the guide and the verdicts (s15f63)', () => {
+    const verdict = (globIds: string[], v: 'pin' | 'hide' | null, who = ADMIN) => page.setVerdict(who, boardId, globIds, v);
+    const firstPage = async () => {
+      const a = await accepted({ id: 's1k1', title: 'Alpha title' });
+      const b = await accepted({ id: 's1k2', title: 'Beta title' });
+      llm.answer(
+        JSON.stringify({
+          groups: [
+            {
+              area: 'Testing',
+              entries: [
+                { text: 'Alpha', rationale: '', globIds: [a.id], key: true },
+                { text: 'Beta', rationale: '', globIds: [b.id], key: false },
+              ],
+            },
+          ],
+        }),
+      );
+      await page.regenerate(boardId, false);
+      advance(61 * MINUTE);
+      return { a, b };
+    };
+    const entry = (text: string) => latest().sections.decisions.flatMap((g) => g.entries).find((e) => e.text === text);
+
+    it('seeds the guide on first use, puts it in the prompt and writes its version into the basis', async () => {
+      const a = await accepted();
+      llm.answer(groups({ area: 'Testing', text: 'One', globIds: [a.id] }));
+      await page.regenerate(boardId, false);
+
+      const doc = await store.transaction((tx) => tx.getKnowledge(boardId, 'doc', 'knowledge-page-guide'));
+      expect(doc).toMatchObject({ version: 1, area: 'knowledge-page', audience: [] });
+      expect(doc?.description).toContain('what the knowledge page shows as key decisions');
+      expect(llm.calls[0]?.prompt).toContain("The board's rules for what is key:");
+      expect(llm.calls[0]?.prompt).toContain('not obvious from the code');
+      expect(latest().basis.guideVersion).toBe(1);
+    });
+
+    it('rebuilds with the new text when the guide changes, and not before', async () => {
+      const { a } = await firstPage();
+      expect(await page.regenerate(boardId, false)).toBe('done');
+      expect(versions()).toHaveLength(1);
+
+      await store.transaction(async (tx) => {
+        const doc = await tx.getKnowledge(boardId, 'doc', 'knowledge-page-guide');
+        if (doc === null) throw new Error('no guide');
+        await tx.saveKnowledge({ ...doc, content: 'Only product behaviour is key.', version: doc.version + 1 });
+      });
+      llm.answer(groups({ area: 'Testing', text: 'Alpha again', globIds: [a.id, 's1k2'], key: false }));
+      expect(await page.regenerate(boardId, false)).toBe('done');
+
+      expect(latest()).toMatchObject({ version: 2, reason: 'guide', basis: { guideVersion: 2 } });
+      expect(llm.calls[1]?.prompt).toContain('Only product behaviour is key.');
+      expect(llm.calls[1]?.prompt).toContain('There is no previous section');
+    });
+
+    it('lets a verdict win over the model, with no model call, and gives the model\'s word back when it is undone', async () => {
+      const { a, b } = await firstPage();
+      unwrap(await verdict([a.id], 'hide'));
+      unwrap(await verdict([b.id], 'pin'));
+
+      expect(await page.regenerate(boardId, false)).toBe('done');
+      expect(llm.calls).toHaveLength(1);
+      expect(latest()).toMatchObject({ version: 2, reason: 'delta', changed: { decisions: true } });
+      expect(entry('Alpha')).toMatchObject({ key: false, modelKey: true });
+      expect(entry('Beta')).toMatchObject({ key: true, modelKey: false });
+      expect(latest().basis.feedback).toEqual({ s1k1: 'hide', s1k2: 'pin' });
+
+      advance(61 * MINUTE);
+      unwrap(await verdict([a.id, b.id], null));
+      expect(await page.regenerate(boardId, false)).toBe('done');
+      expect(llm.calls).toHaveLength(1);
+      expect(entry('Alpha')).toMatchObject({ key: true });
+      expect(entry('Alpha')).not.toHaveProperty('modelKey');
+      expect(entry('Beta')).toMatchObject({ key: false });
+    });
+
+    it('keeps a verdict over a later model answer for the same decision', async () => {
+      const { a } = await firstPage();
+      unwrap(await verdict([a.id], 'hide'));
+      const c = await accepted({ id: 's1k3', title: 'Gamma title' });
+      llm.answer(
+        JSON.stringify({
+          groups: [{ area: 'Testing', entries: [{ text: 'Alpha', rationale: '', globIds: [a.id, 's1k2'], key: true }, { text: 'Gamma', rationale: '', globIds: [c.id], key: true }] }],
+        }),
+      );
+      await page.regenerate(boardId, false);
+      expect(entry('Alpha')).toMatchObject({ key: false });
+      expect(entry('Gamma')).toMatchObject({ key: true });
+    });
+
+    it('shows the model the newest 20 verdicts as examples, each with its decision title', async () => {
+      const ids: string[] = [];
+      for (let i = 1; i <= 22; i++) ids.push((await accepted({ id: `s1k${String(i)}`, title: `Title ${String(i)}` })).id);
+      llm.answer(groups({ area: 'Testing', text: 'All', globIds: ids }));
+      await page.regenerate(boardId, false);
+      advance(61 * MINUTE);
+      for (const [n, id] of ids.entries()) {
+        unwrap(await verdict([id], n % 2 === 0 ? 'pin' : 'hide'));
+        advance(MINUTE);
+      }
+      const extra = await accepted({ id: 's1k99', title: 'Fresh title' });
+      llm.answer(groups({ area: 'Testing', text: 'All', globIds: [...ids, extra.id] }));
+      await page.regenerate(boardId, false);
+
+      const prompt = llm.calls[1]?.prompt ?? '';
+      expect(prompt).toContain('- not key: Title 22');
+      expect(prompt).toContain('- pinned: Title 21');
+      expect(prompt).toContain('- not key: Title 4');
+      expect(prompt).not.toContain('Title 2\n');
+      expect(prompt).not.toContain('- pinned: Title 1\n');
+      expect(prompt.split('\n').filter((l) => /^- (pinned|not key): /.test(l))).toHaveLength(20);
+    });
+
+    it('shows the model its own earlier key flag, not a verdict\'s', async () => {
+      const { a, b } = await firstPage();
+      unwrap(await verdict([a.id], 'hide'));
+      await page.regenerate(boardId, false);
+      advance(61 * MINUTE);
+      await accepted({ id: 's1k3' });
+      llm.answer(
+        JSON.stringify({ groups: [{ area: 'Testing', entries: [{ text: 'Alpha', rationale: '', globIds: [a.id], key: true }, { text: 'Beta', rationale: '', globIds: [b.id], key: false }, { text: 'New', rationale: '', globIds: ['s1k3'], key: false }] }] }),
+      );
+      await page.regenerate(boardId, false);
+      expect(llm.calls[1]?.prompt).toContain('"text":"Alpha","rationale":"","globIds":["s1k1"],"key":true');
+    });
+
+    it('lets admins and POs give verdicts, others not, and only on decisions of the board', async () => {
+      const { a } = await firstPage();
+      const boards = new BoardService({ store, notifier });
+      await store.transaction((tx) => tx.upsertUser({ email: 'po@example.com', name: 'po', active: true }));
+      unwrap(await boards.setMember(ADMIN, boardId, 'po@example.com', 'po'));
+
+      expect((await verdict([a.id], 'pin', DEV)).ok).toBe(false);
+      expect((await verdict([a.id], 'pin', 'po@example.com')).ok).toBe(true);
+      expect((await verdict(['s1k404'], 'pin')).ok).toBe(false);
+      expect((await verdict([], 'pin')).ok).toBe(false);
+      const view = unwrap(await page.view(DEV, boardId));
+      expect(view.feedback).toMatchObject([{ globId: a.id, verdict: 'pin', by: 'po@example.com' }]);
+      expect(jobs().length).toBeGreaterThan(0);
+    });
+  });
+
   describe('reading and rebuilding', () => {
     it('serves the current version, the history and whether a regeneration waits', async () => {
-      expect(unwrap(await page.view(DEV, boardId))).toEqual({ current: null, history: [], nextRegenerationAt: null, pending: false, agentSetHistory: [] });
+      expect(unwrap(await page.view(DEV, boardId))).toEqual({ current: null, history: [], nextRegenerationAt: null, pending: false, agentSetHistory: [], feedback: [] });
       await page.regenerate(boardId, false);
       advance(MINUTE);
       await store.transaction((tx) => tx.enqueueEffects([knowledgePageEffect(boardId)]));
