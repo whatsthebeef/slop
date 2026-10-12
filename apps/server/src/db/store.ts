@@ -1,5 +1,5 @@
 import type { KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { laneOf, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
+import { NO_GLOB, laneOf, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -1559,6 +1559,30 @@ export class PgStore implements Store {
           .insert(schema.kbSignals)
           .values({ boardId: state.boardId, key: state.key, ...columns })
           .onConflictDoUpdate({ target: [schema.kbSignals.boardId, schema.kbSignals.key], set: columns });
+      },
+      recordChoiceUsage: async (boardId, itemIds, globId, day) => {
+        if (itemIds.length === 0) return;
+        const u = schema.choiceUsage;
+        const d = schema.decisions;
+        // Items that aren't choices have no decisions row and drop out of the join.
+        const choices = await t
+          .select({ id: d.id })
+          .from(d)
+          .where(and(eq(d.boardId, boardId), inArray(d.itemId, [...itemIds])));
+        if (choices.length === 0) return;
+        await t
+          .insert(u)
+          .values(choices.map((c) => ({ boardId, decisionId: c.id, day, globId: globId ?? NO_GLOB, count: 1 })))
+          .onConflictDoUpdate({ target: [u.decisionId, u.day, u.globId], set: { count: sql`${u.count} + 1` } });
+      },
+      listChoiceUsage: async (boardId, fromDay) => {
+        const u = schema.choiceUsage;
+        const rows = await t.select().from(u).where(and(eq(u.boardId, boardId), gte(u.day, fromDay)));
+        return rows.map(({ decisionId, day, globId, count }) => ({ decisionId, day, globId, count }));
+      },
+      pruneChoiceUsage: async (boardId, beforeDay) => {
+        const u = schema.choiceUsage;
+        await t.delete(u).where(and(eq(u.boardId, boardId), lt(u.day, beforeDay)));
       },
       getBoardJob: async (boardId, job) => {
         const [row] = await t

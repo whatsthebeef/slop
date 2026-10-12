@@ -479,6 +479,7 @@ describe('mined signals: a glob\'s agent-set version', () => {
       ['dependency', null],
       ['review_false_positive', null],
       ['missing_doc', null],
+      ['choice_in_use', null],
     ]);
     expect(SIGNALS.every((s) => s.threshold !== '')).toBe(true);
   });

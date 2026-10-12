@@ -33,7 +33,8 @@ describe('decision learnings become patterns (migration 0053)', () => {
     const folder = await mkdtemp(join(tmpdir(), 'learning-type-'));
     await cp(new URL('../drizzle', import.meta.url).pathname, folder, { recursive: true });
     const journal = JSON.parse(await readFile(join(folder, 'meta/_journal.json'), 'utf8')) as { entries: { tag: string }[] };
-    journal.entries = journal.entries.filter((e) => e.tag !== TAG);
+    // The migration and every later one are held back, so that they run in order afterwards.
+    journal.entries = journal.entries.slice(0, journal.entries.findIndex((e) => e.tag === TAG));
     await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify(journal));
     await runMigrations(URL_, folder);
     database = connect(URL_);

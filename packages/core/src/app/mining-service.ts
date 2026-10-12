@@ -1,3 +1,6 @@
+import { CHOICE_USAGE_RETENTION_DAYS, CHOICE_USAGE_WINDOW_DAYS, summariseUsage, usageFrom } from '../domain/choice-usage.js';
+import type { ChoiceActivity } from '../domain/choice-usage.js';
+import { isSuperseded } from '../domain/decisions.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import { learningDecision, learningEvidence, learningFacts, learningLinks, learningStatus } from '../domain/learning.js';
 import type { LearningRead } from '../domain/learning.js';
@@ -18,6 +21,7 @@ import type {
   MergedCommit,
 } from '../domain/signals.js';
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
+import { squash } from './kb-dedupe.js';
 import { newLearningId } from './knowledge-service.js';
 import { boardLearnings, readLearning } from './learning-reads.js';
 import { createLearning, refreshMinedLearning } from './learning-writes.js';
@@ -76,6 +80,7 @@ export class MiningService {
     const reviewFeedback = await tx.listReviewFeedback(boardId, from, now);
     const knowledge = await tx.listKnowledge(boardId, ['doc']);
     const learnings = await boardLearnings(tx, boardId);
+    const choices = await this.choices(tx, boardId, now, knowledge);
     return {
       window: { from, to: now },
       globs: globs.map((g) => ({ id: g.id, type: g.type, status: g.status, createdAt: g.createdAt })),
@@ -86,11 +91,43 @@ export class MiningService {
       manifestChanges,
       documents: knowledge.map((d) => ({ name: d.name, area: d.area, content: d.content })),
       documentAreasKnown: true,
+      choices,
       learnings: learnings.flatMap(({ glob }) => {
         const facts = learningFacts(glob);
         return facts.source === 'submitted' ? [{ globIds: facts.sourceGlobIds, agentSetVersion: facts.agentSetVersion }] : [];
       }),
     };
+  }
+
+  /**
+   * The board's choices with their usage over `CHOICE_USAGE_WINDOW_DAYS` ending at `now`. A choice is covered when a
+   * document's text has its source quote or its statement (a possible-coverage hint on the raised learning is the
+   * pipeline's, after it exists: the signal is raised once per choice, so it counts the same).
+   */
+  private async choices(tx: Tx, boardId: number, now: string, documents: readonly { content: string }[]): Promise<ChoiceActivity[]> {
+    const usage = summariseUsage(await tx.listChoiceUsage(boardId, usageFrom(now, CHOICE_USAGE_WINDOW_DAYS)));
+    const text = documents.map((d) => squash(d.content)).join('\n');
+    const said = (value: string): boolean => {
+      const needle = squash(value);
+      return needle !== '' && text.includes(needle);
+    };
+    return (await tx.listDecisions(boardId)).map((d) => {
+      const used = usage.get(d.id);
+      // Never the glob it was taken on: a choice counts for the globs that were handed it.
+      const globIds = (used?.globIds ?? []).filter((g) => g !== d.globId);
+      return {
+        id: d.id,
+        globId: d.globId,
+        statement: d.statement,
+        quote: d.quote,
+        sourceKind: d.sourceKind,
+        sourceLabel: d.sourceLabel,
+        current: !isSuperseded(d),
+        covered: said(d.quote) || said(d.statement),
+        returns: used?.returns ?? 0,
+        globIds,
+      };
+    });
   }
 
   /**
@@ -110,6 +147,7 @@ export class MiningService {
       hints.length = 0;
       // The lease keeps runs apart only while it lasts: a second run waits here and then reads the first's rows.
       await tx.lockBoardJob(boardId, 'mining');
+      await tx.pruneChoiceUsage(boardId, usageFrom(now, CHOICE_USAGE_RETENTION_DAYS));
       const board = await tx.getBoard(boardId);
       if (board === null) throw new Error(`No board ${boardId}`);
       const activity = await this.activity(tx, boardId, now, options.manifestChanges ?? null);
@@ -153,6 +191,13 @@ export class MiningService {
         }
         const original = row?.itemId == null ? null : await readLearning(tx, row.itemId);
         const survivor = original === null ? null : await surviving(tx, original);
+        // A signal raised once (a choice in use) is never raised again, whatever became of its item: not when it was
+        // rejected, and not when it was merged into one that is gone.
+        const once = signalDefinition(m.key)?.once === true;
+        if (survivor === null && once && row?.itemId != null) {
+          await record(m.key, { ...measured, belowThresholdRuns: 0 });
+          continue;
+        }
         if (survivor === null) {
           await record(m.key, { ...measured, itemId: await raise(m), raisedAt: now, belowThresholdRuns: 0 });
           continue;
@@ -164,7 +209,7 @@ export class MiningService {
           await record(m.key, { ...measured, belowThresholdRuns: 0 });
           continue;
         }
-        if (status === 'rejected' || status === 'suppressed') {
+        if ((status === 'rejected' || status === 'suppressed') && !once) {
           const quietSince = learningDecision(item, survivor.artifacts).at ?? row?.raisedAt ?? item.createdAt;
           const signal = learningFacts(item).signal;
           // Rates of different signals aren't comparable: a survivor raised for another signal doesn't count.

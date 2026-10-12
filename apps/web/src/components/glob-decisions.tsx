@@ -65,6 +65,11 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
           {d.decidedBy !== null && <span>{d.decidedBy}</span>}
           <span>{day(d.decidedAt)}</span>
           <Source label={d.sourceLabel} url={d.sourceUrl} />
+          {d.usage !== undefined && d.usage.returns > 0 && (
+            <span data-testid='decision-usage'>
+              used {d.usage.returns} {d.usage.returns === 1 ? 'time' : 'times'} on {d.usage.globs} {d.usage.globs === 1 ? 'glob' : 'globs'}
+            </span>
+          )}
           {!replaced && d.sourceKind !== 'kb_item' && (
             <button type='button' className='underline' disabled={promote.isPending} onClick={() => promote.mutate(d.id)}>
               Promote to decision
