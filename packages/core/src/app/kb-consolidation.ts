@@ -1,15 +1,27 @@
 import { evidenceCount, staleReasonAt } from '../domain/kb.js';
-import type { KbItem, KbMergeNote } from '../domain/kb.js';
-import type { BoardJobResult } from '../domain/signals.js';
-import type { Clock, Notifier, Store } from '../ports.js';
+import type { ExtraEvidence, KbMergeNote, KbStaleReason, KbTarget, LearningType } from '../domain/kb.js';
+import {
+  learningDocument,
+  learningExtraEvidence,
+  learningFacts,
+  learningLinks,
+  learningStaleness,
+  learningStatus,
+  learningTarget,
+  pipelineState,
+} from '../domain/learning.js';
+import type { LearningRead } from '../domain/learning.js';
+import type { BoardJobResult, KbSignal } from '../domain/signals.js';
+import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
-import { keptApart, longEnoughQuote, mergeItems, normalised, verifiedQuote } from './kb-dedupe.js';
+import { keptApart, longEnoughQuote, normalised, verifiedQuote } from './kb-dedupe.js';
 import { LLM_TIMEOUT_MS } from './kb-pipeline.js';
 import { completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 import { hash } from './text-hash.js';
-import { kbItems } from './kb-items.js';
+import { boardLearnings, readLearning } from './learning-reads.js';
+import { flagLearningStale, mergeLearnings } from './learning-writes.js';
 
 export type ConsolidationResult = Extract<BoardJobResult, { kind: 'consolidation' }>;
 
@@ -46,6 +58,64 @@ Overlapping topic, tool or area is not the same fact, and a more general rule is
 Respond with one JSON object and nothing else:
 {"fact": string, "relation": "same fact" | "related topic only" | "unrelated" | "contradicts", "quoteA": string | null, "quoteB": string | null}`;
 
+/**
+ * An open learning as consolidation reads it: the fields its pair and verification calls, its merge order and its
+ * stale rule use, each from its helper (`domain/learning.ts`), and the raw read its merge writes from.
+ */
+interface OpenLearning {
+  readonly read: LearningRead;
+  readonly id: string;
+  readonly version: number;
+  readonly createdAt: string;
+  readonly type: LearningType;
+  readonly statement: string;
+  /** Where the pipeline routed it. */
+  readonly target: KbTarget | null;
+  readonly occurrenceCount: number;
+  readonly sourceGlobIds: readonly string[];
+  readonly extraEvidence: readonly ExtraEvidence[];
+  readonly signal: KbSignal | null;
+  readonly keptApartFrom: readonly string[];
+  readonly staleSince: string | null;
+  readonly staleReason: KbStaleReason | null;
+  readonly staleDismissedAt: string | null;
+  /** Drafted, or given up on by the pipeline; not a document proposal. */
+  readonly settled: boolean;
+  readonly drafted: boolean;
+}
+
+/** The learning as read, or null when it isn't open. */
+const openLearningOf = (read: LearningRead): OpenLearning | null => {
+  const { glob, artifacts } = read;
+  if (learningStatus(glob, artifacts) !== 'open') return null;
+  const facts = learningFacts(glob);
+  const stale = learningStaleness(glob);
+  const processing = pipelineState(glob, artifacts, read.jobs).processing;
+  return {
+    read,
+    id: glob.id,
+    version: glob.version,
+    createdAt: glob.createdAt,
+    type: facts.kind,
+    statement: glob.summary,
+    target: learningTarget(glob).routed,
+    occurrenceCount: facts.occurrenceCount,
+    sourceGlobIds: facts.sourceGlobIds,
+    extraEvidence: learningExtraEvidence(artifacts),
+    signal: facts.signal,
+    keptApartFrom: learningLinks(glob).keptApartFrom,
+    staleSince: stale.since,
+    staleReason: stale.reason,
+    staleDismissedAt: stale.dismissedAt,
+    settled:
+      learningDocument(glob, artifacts) === null && (processing === 'drafted' || processing === 'failed'),
+    drafted: processing === 'drafted',
+  };
+};
+
+const openLearnings = (reads: readonly LearningRead[]): OpenLearning[] =>
+  reads.flatMap((read) => openLearningOf(read) ?? []);
+
 /** A proposed pair that the model then classified as the same fact, quoting each statement verbatim. */
 interface Verified {
   readonly quoteA: string;
@@ -74,16 +144,16 @@ export interface ConsolidationMemory {
 const EMPTY_MEMORY: ConsolidationMemory = { candidates: null, notSame: [] };
 
 /** An item as the pair and verification calls see it: its ID and a hash of its type, target and statement. */
-const itemKey = (item: KbItem): string => {
+const itemKey = (item: OpenLearning): string => {
   const target = item.target === null ? null : [item.target.kind, item.target.name, item.target.section];
   return `${item.id}#${hash(JSON.stringify([item.type, target, item.statement]))}`;
 };
-const pairKey = (a: KbItem, b: KbItem): [string, string] => {
+const pairKey = (a: OpenLearning, b: OpenLearning): [string, string] => {
   const [x, y] = [itemKey(a), itemKey(b)];
   return x < y ? [x, y] : [y, x];
 };
 /** The candidate set: equal only when no candidate came or went and none's statement, type or target changed. */
-const candidateKey = (candidates: readonly KbItem[]): string => candidates.map(itemKey).sort().join(' ');
+const candidateKey = (candidates: readonly OpenLearning[]): string => candidates.map(itemKey).sort().join(' ');
 
 const isKeyPair = (value: unknown): value is [string, string] =>
   Array.isArray(value) && value.length === 2 && value.every((v) => typeof v === 'string');
@@ -109,21 +179,18 @@ class MergeConflict extends Error {
  * Settled open statements: drafted, or given up on by the pipeline. Items still being routed or drafted are left to
  * the pipeline (it holds them by lease, and its dedupe sees the open queue), and document proposals aren't facts.
  */
-const isCandidate = (item: KbItem): boolean =>
-  item.status === 'open' &&
-  item.document === null &&
-  (item.processing === 'drafted' || item.processing === 'failed');
+const isCandidate = (item: OpenLearning): boolean => item.settled;
 
-const newestFirst = (a: KbItem, b: KbItem): number =>
+const newestFirst = (a: OpenLearning, b: OpenLearning): number =>
   Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id);
 
-const drafted = (item: KbItem): number => (item.processing === 'drafted' ? 1 : 0);
+const drafted = (item: OpenLearning): number => (item.drafted ? 1 : 0);
 
 /**
  * The survivor of a merge: a drafted item before one the pipeline gave up on (the draft stays reviewable), then the
  * more repeated item, then the older one (it has stood in the queue longer).
  */
-const survivorFirst = (a: KbItem, b: KbItem): [KbItem, KbItem] => {
+const survivorFirst = (a: OpenLearning, b: OpenLearning): [OpenLearning, OpenLearning] => {
   const order =
     drafted(b) - drafted(a) ||
     b.occurrenceCount - a.occurrenceCount ||
@@ -132,7 +199,7 @@ const survivorFirst = (a: KbItem, b: KbItem): [KbItem, KbItem] => {
   return order <= 0 ? [a, b] : [b, a];
 };
 
-const targetOf = (item: KbItem): string =>
+const targetOf = (item: OpenLearning): string =>
   item.target === null
     ? '(none)'
     : `${item.target.name}${item.target.section === null ? '' : ` › ${item.target.section}`}`;
@@ -166,6 +233,12 @@ export class KbConsolidation {
     return completeWithDeadline(this.deps.llm, request, this.deps.llmTimeoutMs ?? LLM_TIMEOUT_MS);
   }
 
+  /** The open learning `id`, or null when there is none or it is no longer open. */
+  private async readOpen(tx: Tx, id: string): Promise<OpenLearning | null> {
+    const read = await readLearning(tx, id);
+    return read === null ? null : openLearningOf(read);
+  }
+
   /**
    * One run on a board. An `LlmUnavailable` from any call propagates (the job is skipped and tried again on the next
    * hourly check; merges already written stand, and the memory stays as the last finished run left it); any other
@@ -178,7 +251,7 @@ export class KbConsolidation {
   async consolidate(boardId: number): Promise<ConsolidationResult> {
     const now = this.deps.clock.now();
     const { open, memory } = await this.deps.store.transaction(async (tx) => ({
-      open: await kbItems(tx).listKbItems(boardId, 'open'),
+      open: openLearnings(await boardLearnings(tx, boardId)),
       memory: consolidationMemoryOf(await tx.getBoardJobState(boardId, 'consolidation')),
     }));
     const candidates = candidatesOf(open);
@@ -297,10 +370,10 @@ export class KbConsolidation {
    * ignored; an answer that isn't JSON fails the run.
    */
   private async proposePairs(
-    candidates: readonly KbItem[],
+    candidates: readonly OpenLearning[],
     notSame: ReadonlySet<string>,
   ): Promise<{ pairs: [string, string][]; alreadyChecked: number }> {
-    const checked: [KbItem, KbItem][] = [];
+    const checked: [OpenLearning, OpenLearning][] = [];
     for (const [i, a] of candidates.entries())
       for (const b of candidates.slice(i + 1)) if (notSame.has(pairKey(a, b).join(' '))) checked.push([a, b]);
     const answer = await this.complete({
@@ -337,7 +410,7 @@ export class KbConsolidation {
    * else, `unverified` when it says the same fact without such quotes (both stay open either way); `unusable` when
    * the call failed or the answer isn't JSON. An `LlmUnavailable` propagates.
    */
-  private async verify(a: KbItem, b: KbItem): Promise<Verified | 'different' | 'unverified' | 'unusable'> {
+  private async verify(a: OpenLearning, b: OpenLearning): Promise<Verified | 'different' | 'unverified' | 'unusable'> {
     let answer: string;
     try {
       answer = await this.complete({
@@ -367,21 +440,20 @@ export class KbConsolidation {
    */
   private async merge(
     boardId: number,
-    a: KbItem,
-    b: KbItem,
+    a: OpenLearning,
+    b: OpenLearning,
     verdict: Verified,
     now: string,
-  ): Promise<{ survivor: KbItem; loser: KbItem } | null> {
+  ): Promise<{ survivor: OpenLearning; loser: OpenLearning } | null> {
     try {
       return await this.deps.store.transaction(async (tx) => {
         // Mining holds this lock for its whole run: a merge doesn't interleave with its reads and writes of the
         // board's kb_signals rows (whose items it repoints) or its refreshes of open items.
         await tx.lockBoardJob(boardId, 'mining');
-        const storedA = await kbItems(tx).getKbItem(a.id);
-        const storedB = await kbItems(tx).getKbItem(b.id);
+        const storedA = await this.readOpen(tx, a.id);
+        const storedB = await this.readOpen(tx, b.id);
         if (storedA?.version !== a.version || storedB?.version !== b.version) return null;
-        if (!isCandidate(storedA) || !isCandidate(storedB) || keptApart(storedA, storedB))
-          return null;
+        if (!isCandidate(storedA) || !isCandidate(storedB) || keptApart(storedA, storedB)) return null;
         const [survivor, loser] = survivorFirst(storedA, storedB);
         const note: KbMergeNote = {
           by: 'consolidation',
@@ -389,28 +461,15 @@ export class KbConsolidation {
           survivorQuote: survivor.id === a.id ? verdict.quoteA : verdict.quoteB,
           at: now,
         };
-        const closed: KbItem = {
-          ...loser,
-          status: 'merged',
-          duplicateOf: survivor.id,
-          mergeNote: note,
-          processAfter: null,
-          // A closed item isn't flagged; reopened, it is flagged again by the next run if the rule still holds.
-          staleSince: null,
-          staleReason: null,
-        };
-        const takesSignal = loser.signal !== null && survivor.signal === null;
-        const wrote = await mergeItems(kbItems(tx, { clock: this.deps.clock }), survivor, loser, closed, (m) =>
-          takesSignal ? { ...m, signal: loser.signal } : m,
-        );
+        const wrote = await mergeLearnings(tx, { clock: this.deps.clock }, survivor.read, loser.read, note);
         if (!wrote) throw new MergeConflict(a.id, b.id);
         // The loser's signal rows point at the survivor now (mining would follow the merge to it anyway).
         for (const row of await tx.listKbSignals(boardId)) {
           if (row.itemId === loser.id) await tx.upsertKbSignal({ ...row, itemId: survivor.id });
         }
-        const written = await kbItems(tx).getKbItem(survivor.id);
+        const written = await this.readOpen(tx, survivor.id);
         if (written === null) throw new MergeConflict(a.id, b.id);
-        return { survivor: written, loser: { ...closed, version: loser.version + 1 } };
+        return { survivor: written, loser: { ...loser, version: loser.version + 1 } };
       });
     } catch (error) {
       if (error instanceof MergeConflict) return null;
@@ -426,7 +485,7 @@ export class KbConsolidation {
   private async flagStale(
     boardId: number,
     now: string,
-    remember: (open: readonly KbItem[]) => ConsolidationMemory,
+    remember: (open: readonly OpenLearning[]) => ConsolidationMemory,
   ): Promise<{ flagged: number; cleared: number }> {
     return this.deps.store.transaction(async (tx) => {
       // The below-threshold counts are mining's: read them as its last run left them.
@@ -436,26 +495,19 @@ export class KbConsolidation {
       );
       let flagged = 0;
       let cleared = 0;
-      const after: KbItem[] = [];
-      for (const item of await kbItems(tx).listKbItems(boardId, 'open')) {
+      const after: OpenLearning[] = [];
+      for (const item of openLearnings(await boardLearnings(tx, boardId))) {
         after.push(item);
-        if (!(item.processing === 'drafted' || item.processing === 'failed')) continue;
+        if (!isCandidate(item)) continue;
         const reason = staleReasonAt(
-          item,
+          { ...item, status: 'open' },
           now,
           item.signal === null ? null : (runs.get(item.signal.key) ?? null),
         );
         if (reason === item.staleReason) continue;
-        const next: KbItem =
-          reason === null
-            ? { ...item, staleSince: null, staleReason: null, version: item.version + 1 }
-            : {
-                ...item,
-                staleSince: item.staleSince ?? now,
-                staleReason: reason,
-                version: item.version + 1,
-              };
-        if (!(await kbItems(tx, { clock: this.deps.clock }).updateKbItem(next, item.version))) continue;
+        const since = reason === null ? null : (item.staleSince ?? now);
+        if (!(await flagLearningStale(tx, { clock: this.deps.clock }, item.id, item.version, since, reason))) continue;
+        const next: OpenLearning = { ...item, staleSince: since, staleReason: reason, version: item.version + 1 };
         after[after.length - 1] = next;
         if (reason === null) cleared++;
         else if (item.staleSince === null) flagged++;
@@ -467,11 +519,11 @@ export class KbConsolidation {
 }
 
 /** The newest settled open statements, as one run compares them. */
-const candidatesOf = (open: readonly KbItem[]): KbItem[] =>
+const candidatesOf = (open: readonly OpenLearning[]): OpenLearning[] =>
   open.filter(isCandidate).sort(newestFirst).slice(0, MAX_CONSOLIDATION_CANDIDATES);
 
 // One JSON object per line: a statement's newlines (or text that looks like another entry) stay inside its string.
-const pairsPrompt = (candidates: readonly KbItem[], checked: readonly (readonly [KbItem, KbItem])[]): string =>
+const pairsPrompt = (candidates: readonly OpenLearning[], checked: readonly (readonly [OpenLearning, OpenLearning])[]): string =>
   [
     'Open learnings:',
     ...candidates.map((i) =>
@@ -492,7 +544,7 @@ const pairsPrompt = (candidates: readonly KbItem[], checked: readonly (readonly 
         ]),
   ].join('\n');
 
-const verifyPrompt = (a: KbItem, b: KbItem): string =>
+const verifyPrompt = (a: OpenLearning, b: OpenLearning): string =>
   [
     `Learning A, ${a.id} (${a.type}; target: ${targetOf(a)}):`,
     '<<<',
