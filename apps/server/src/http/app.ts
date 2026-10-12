@@ -83,6 +83,8 @@ const settingsSchema = z.object({
   effectCheckGlobs: z.number().int().optional(),
   agentKbApproval: z.enum(AGENT_KB_APPROVALS).optional(),
   autoInvestigate: z.boolean().optional(),
+  // Core checks the range (5 to 1440).
+  knowledgePageIntervalMinutes: z.number().int().optional(),
   // Only the keys sent change; core checks the values.
   review: z
     .object({

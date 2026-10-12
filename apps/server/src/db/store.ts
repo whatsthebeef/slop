@@ -1,4 +1,4 @@
-import type { OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { laneOf, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -53,11 +53,22 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   effectCheckGlobs: row.effectCheckGlobs,
   agentKbApproval: row.agentKbApproval,
   autoInvestigate: row.autoInvestigate,
+  knowledgePageIntervalMinutes: row.knowledgePageIntervalMinutes,
   review: reviewSettingsOf(row.reviewSettings),
   deploy: row.deploy,
   readinessTicks: row.readinessTicks,
   baseChecks: row.baseChecks,
   version: row.version,
+});
+
+const toKnowledgePage = (row: typeof schema.knowledgePageVersions.$inferSelect): KnowledgePageVersion => ({
+  boardId: row.boardId,
+  version: row.version,
+  createdAt: row.createdAt.toISOString(),
+  reason: row.reason,
+  sections: row.sections,
+  changed: row.changed,
+  basis: row.basis,
 });
 
 /** Narrows a stored string to one of a fixed set of values; a mismatch means a corrupt row. */
@@ -674,6 +685,7 @@ export class PgStore implements Store {
             effectCheckGlobs: board.effectCheckGlobs,
             agentKbApproval: board.agentKbApproval,
             autoInvestigate: board.autoInvestigate,
+            knowledgePageIntervalMinutes: board.knowledgePageIntervalMinutes,
             reviewSettings: { ...board.review, ignoredPaths: [...board.review.ignoredPaths] },
             version: board.version,
           })
@@ -688,6 +700,34 @@ export class PgStore implements Store {
           .where(and(eq(schema.boards.id, boardId), eq(schema.boards.subMaxChangedLines, from)))
           .returning({ id: schema.boards.id });
         return rows.length === 1;
+      },
+      insertKnowledgePageVersion: async (v) => {
+        const rows = await t
+          .insert(schema.knowledgePageVersions)
+          .values({ ...v, createdAt: new Date(v.createdAt) })
+          .onConflictDoNothing()
+          .returning({ version: schema.knowledgePageVersions.version });
+        return rows.length === 1;
+      },
+      latestKnowledgePageVersion: async (boardId) => {
+        const p = schema.knowledgePageVersions;
+        const [row] = await t.select().from(p).where(eq(p.boardId, boardId)).orderBy(desc(p.version)).limit(1);
+        return row === undefined ? null : toKnowledgePage(row);
+      },
+      getKnowledgePageVersion: async (boardId, version) => {
+        const p = schema.knowledgePageVersions;
+        const [row] = await t.select().from(p).where(and(eq(p.boardId, boardId), eq(p.version, version)));
+        return row === undefined ? null : toKnowledgePage(row);
+      },
+      listKnowledgePageVersions: async (boardId, limit) => {
+        const p = schema.knowledgePageVersions;
+        const rows = await t
+          .select({ version: p.version, createdAt: p.createdAt, reason: p.reason })
+          .from(p)
+          .where(eq(p.boardId, boardId))
+          .orderBy(desc(p.version))
+          .limit(limit);
+        return rows.map((r) => ({ version: r.version, createdAt: r.createdAt.toISOString(), reason: r.reason }));
       },
       insertLlmSpend: async (row) => {
         await t.insert(schema.llmSpend).values({ ...row, createdAt: new Date(row.createdAt) });
@@ -2105,6 +2145,25 @@ export class PgStore implements Store {
             if (pending !== undefined || rows.some((r) => r.kind === 'recheck_overlaps' && r.globId === effect.globId)) continue;
             rows.push({ kind: effect.kind, lane: laneOf(effect.kind), globId: effect.globId, effect, runAfter: new Date(Date.now() + RECHECK_DELAY_MS) });
             continue;
+          }
+          if (effect.kind === 'regenerate_knowledge_page') {
+            // One unclaimed regeneration per board: it reads the board when it runs. A waiting one (it asked to run later
+            // for the minimum interval) stays unclaimed; a Rebuild upgrades it and makes it due now.
+            const jobs = schema.outbox;
+            const [pending] = await t
+              .select({ id: jobs.id, full: sql<boolean>`coalesce(${jobs.effect}->>'full' = 'true', false)` })
+              .from(jobs)
+              .where(and(eq(jobs.kind, effect.kind), eq(jobs.globId, effect.globId), eq(jobs.state, 'pending'), eq(jobs.attempts, 0)))
+              .limit(1);
+            if (pending !== undefined) {
+              if (effect.full === true && !pending.full) await t.update(jobs).set({ effect, runAfter: new Date() }).where(eq(jobs.id, pending.id));
+              continue;
+            }
+            const queued = rows.findIndex((r) => r.kind === effect.kind && r.globId === effect.globId);
+            if (queued >= 0) {
+              if (effect.full === true) rows[queued] = { kind: effect.kind, lane: laneOf(effect.kind), globId: effect.globId, effect };
+              continue;
+            }
           }
           if (effect.kind === 'kb_route' || effect.kind === 'kb_draft') {
             // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running,

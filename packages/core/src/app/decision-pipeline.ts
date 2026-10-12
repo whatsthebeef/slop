@@ -10,6 +10,7 @@ import {
 } from '../domain/decisions.js';
 import type { Decision, DecisionSource, DecisionSourceKind } from '../domain/decisions.js';
 import { inboxLink, inboxTitle } from '../domain/inbox.js';
+import { knowledgePageEffect } from '../domain/events.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import { sameHeading, sectionText } from '../domain/sections.js';
 import { MAX_QUERY_LENGTH } from '../domain/search.js';
@@ -631,6 +632,8 @@ export class DecisionPipeline {
     if (r.checked && mayApply(old, next)) {
       await tx.updateDecision(old.id, { ...fields, replaceState: 'applied' });
       await tx.setItemSupersession(old.itemId, 'superseded', next.itemId);
+      // A replaced decision leaves the decisions in force.
+      await tx.enqueueEffects([knowledgePageEffect(old.boardId)]);
       return true;
     }
     // A proposal doesn't replace one a person hasn't answered yet.

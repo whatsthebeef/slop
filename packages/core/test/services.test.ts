@@ -262,6 +262,8 @@ describe('services', () => {
     );
     const signedOff = unwrap(await globs.reviewLabel(PO, ticked.id, ticked.version, 'QA', { kind: 'approve' }));
     expect(signedOff.status).toBe('signed_off');
+    // Signing a work glob off queues the knowledge page's regeneration (once per board).
+    expect(store.state.outbox.filter((e) => e.kind === 'regenerate_knowledge_page')).toEqual([{ kind: 'regenerate_knowledge_page', globId: 'board-1', boardId: 1 }]);
     expect(store.state.events.filter((e) => e.type.startsWith('Label')).map((e) => [e.type, e.actor])).toEqual([
       ['LabelChanged', PO],
       ['LabelItemTicked', DEV],

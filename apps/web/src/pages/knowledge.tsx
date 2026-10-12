@@ -3,6 +3,7 @@ import { useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { useParams } from 'react-router';
 import { AgentSetFiles, LineDiff } from '@/components/agent-set-files';
+import { KnowledgePageView } from '@/components/knowledge-page-view';
 import { KbProposals } from '@/components/kb-proposals';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -80,6 +81,10 @@ export const KnowledgePage = () => {
 
   return (
     <main className='mx-auto grid w-full max-w-[63rem] gap-8 p-6' data-live={live}>
+      <KnowledgePageView key={boardId} boardId={boardId} admin={admin} />
+
+      <h2 className='border-t pt-6 text-base font-semibold'>Manage knowledge</h2>
+
       <section className='grid gap-2'>
         <h2 className='text-sm font-semibold'>Documents</h2>
         <p className='text-xs text-muted-foreground'>

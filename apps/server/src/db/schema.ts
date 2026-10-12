@@ -22,12 +22,15 @@ import type {
   Effect,
   Environment,
   Glob,
+  KnowledgePageBasis,
+  KnowledgePageSections,
+  KnowledgePageVersion,
   Provenance,
   InboxSuggestion,
   SignalFigures,
   TypeSignals,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
+import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -82,6 +85,8 @@ export const boards = pgTable('boards', {
   agentKbApproval: text('agent_kb_approval', { enum: AGENT_KB_APPROVALS }).notNull().default('docs'),
   /** Slop starts an investigate-only run by itself on a Planning glob intake flagged as big. */
   autoInvestigate: boolean('auto_investigate').notNull().default(true),
+  /** The knowledge page regenerates at most this often (minutes). */
+  knowledgePageIntervalMinutes: integer('knowledge_page_interval_minutes').notNull().default(KNOWLEDGE_PAGE_INTERVAL_DEFAULT),
   /** The independent reviewer's settings; a missing key reads as its default (`reviewSettingsOf`). */
   reviewSettings: jsonb('review_settings').$type<Partial<ReviewBoardSettings>>().notNull().default({}),
   /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
@@ -471,6 +476,25 @@ export const llmSpend = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
   (t) => [index('llm_spend_board_created_idx').on(t.boardId, t.createdAt)],
+);
+
+/** The board's generated knowledge page, one row per regeneration (the page is data; an earlier version can be read back). */
+export const knowledgePageVersions = pgTable(
+  'knowledge_page_versions',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    reason: text('reason', { enum: KNOWLEDGE_PAGE_REASONS }).notNull(),
+    sections: jsonb('sections').$type<KnowledgePageSections>().notNull(),
+    /** Which sections this version rewrote. */
+    changed: jsonb('changed').$type<KnowledgePageVersion['changed']>().notNull(),
+    /** What the version was built from, for the next regeneration's nothing-changed check and delta. */
+    basis: jsonb('basis').$type<KnowledgePageBasis>().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.version] })],
 );
 
 /** People's verdicts on the independent reviewer's inline comments (wrong, thumbs-down), read by the weekly mining. */

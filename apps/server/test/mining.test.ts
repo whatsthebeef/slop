@@ -505,6 +505,7 @@ describe('Manifest changes and commit trailers', () => {
     effectCheckGlobs: 10,
     agentKbApproval: 'docs',
     autoInvestigate: true,
+    knowledgePageIntervalMinutes: 60,
     review: { enabled: true, model: null, minSeverity: 'medium', ignoredPaths: [], toolCap: null },
     version: 1,
   };

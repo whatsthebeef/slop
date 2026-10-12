@@ -193,7 +193,14 @@ export type Effect =
    * repeat costs at most one model call. The outbox keeps one pending job per item and kind.
    */
   | { readonly kind: 'kb_route'; readonly globId: string }
-  | { readonly kind: 'kb_draft'; readonly globId: string };
+  | { readonly kind: 'kb_draft'; readonly globId: string }
+  /**
+   * Regenerate the board's knowledge page (a new version, unless nothing it is built from changed). Board-wide like
+   * `recheck_overlaps` (`globId` is `board-<id>`, not generation-checked) and on the `llm` lane; the outbox keeps one
+   * unclaimed job per board. `full` (an admin's Rebuild) skips the minimum interval and rewrites every section; a
+   * `full` request upgrades the job already waiting instead of queueing another.
+   */
+  | { readonly kind: 'regenerate_knowledge_page'; readonly globId: string; readonly boardId: number; readonly full?: true };
 
 export type ReviewStage = 'pre_merge' | 'post_merge';
 
@@ -206,10 +213,10 @@ export const OUTBOX_LANES: readonly OutboxLane[] = ['default', 'llm'];
 
 /**
  * The one place an effect kind is assigned its lane. Every kind is `default` except the slow LLM effects, which go in
- * `llm`: the KB pipeline's routing and drafting. The `llm` runner starts with the `llm` job switch (or `kb`), so a new
+ * `llm`: the KB pipeline's routing and drafting and the knowledge page's regeneration. The `llm` runner starts with the `llm` job switch (or `kb`), so a new
  * llm-lane kind runs wherever those are on.
  */
-const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm' };
+const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm', regenerate_knowledge_page: 'llm' };
 
 export const laneOf = (kind: EffectKind): OutboxLane => LANE_OF_KIND[kind] ?? 'default';
 
@@ -270,3 +277,11 @@ export interface OutboxJob {
 
 /** The board's overlap recheck: its `globId` is `board-<id>`, as for the other board-wide effects. */
 export const recheckOverlapsEffect = (boardId: number): Effect => ({ kind: 'recheck_overlaps', globId: `board-${String(boardId)}`, boardId });
+
+/** Regenerate the board's knowledge page; `full` (an admin's Rebuild) ignores the minimum interval and rewrites every section. */
+export const knowledgePageEffect = (boardId: number, full = false): Effect => ({
+  kind: 'regenerate_knowledge_page',
+  globId: `board-${String(boardId)}`,
+  boardId,
+  ...(full ? { full: true as const } : {}),
+});
