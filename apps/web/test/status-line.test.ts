@@ -191,3 +191,35 @@ describe('activity label', () => {
     expect(statusLine(failed, NOW)?.kind).toBe('checks');
   });
 });
+
+describe('investigate runs', () => {
+  const planning = (r: ReturnType<typeof run>) => view({ status: 'planning', list: 'planning', runs: [r], currentRun: r });
+
+  it('says Investigating while queued or active, never started or working', () => {
+    for (const state of ['queued', 'active'] as const) {
+      const label = activityLabel(planning(run({ state, purpose: 'investigate', sessionUrl: 'https://claude.ai/code/s' })), NOW);
+      expect(label?.kind).toBe('investigating');
+      expect(label?.text).toBe('Investigating');
+      expect(label?.tip).toContain('https://claude.ai/code/s');
+    }
+  });
+
+  it('shows nothing run-like once a completed investigation has ended', () => {
+    const g = planning(run({ state: 'ended', outcome: 'completed', purpose: 'investigate' }));
+    expect(activityLabel(g, NOW)).toBeNull();
+    expect(statusLine(g, NOW)).toBeNull();
+  });
+
+  it('shows a failed investigation as a muted note with the reason, not a red failure', () => {
+    const line = statusLine(planning(run({ state: 'ended', outcome: 'failed', failureReason: 'No progress', purpose: 'investigate' })), NOW);
+    expect(line?.kind).toBe('investigation-failed');
+    expect(line?.full).toBe('Investigation failed: No progress');
+    expect(line?.tone).not.toBe('text-red');
+  });
+
+  it('leaves an implementation run unchanged', () => {
+    expect(activityLabel(view({ currentRun: run({ state: 'active' }) }), NOW)?.kind).toBe('working');
+    expect(activityLabel(view({ currentRun: run({ state: 'queued' }) }), NOW)?.kind).toBe('queued');
+    expect(statusLine(view({ currentRun: run({ state: 'ended', outcome: 'failed', failureReason: 'x' }) }), NOW)?.kind).not.toBe('investigation-failed');
+  });
+});

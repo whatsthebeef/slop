@@ -762,6 +762,7 @@ export const GlobDetail = ({
               {[...glob.runs].reverse().map((run) => (
                 <div key={run.id} className='flex justify-between gap-2 rounded bg-muted px-2 py-1 text-xs'>
                   <span>
+                    {run.purpose === 'investigate' && 'Investigation · '}
                     {run.state === 'ended' ? (run.outcome ?? 'ended') : run.state} · owner {run.routineOwner}
                     {run.sessionUrl !== null && (
                       <>
