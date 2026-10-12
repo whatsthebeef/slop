@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, ContextReportService, ContextTuningService, SubLimitService, DependencyLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, WORK_CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -93,6 +93,9 @@ export const mountKnowledge = (
     typeLearning?: TypeLearningService;
     /** The learned size threshold; absent: its route isn't mounted. */
     sizeCheck?: SizeCheckService;
+    /** The context report and the reset of a context setting (System page); absent: their routes aren't mounted. */
+    contextTuning?: ContextTuningService;
+    contextReport?: ContextReportService;
     /** Intake's accuracy (System page); absent: its route isn't mounted. */
     intakeLearning?: IntakeLearningService;
     /** The generated knowledge page; absent: its routes aren't mounted. */
@@ -266,6 +269,18 @@ export const mountKnowledge = (
     app.get('/api/boards/:b/size-calibration', async (c) => send(c, await sizeCheck.calibrationView(c.get('email'), Number(c.req.param('b')))));
     // Admins put the board back on the default threshold; the history keeps the reset.
     app.post('/api/boards/:b/size-threshold/reset', async (c) => send(c, await sizeCheck.reset(c.get('email'), Number(c.req.param('b')))));
+  }
+
+  // What agents were handed, what became of the choices and the context settings with their history, for members.
+  const { contextReport, contextTuning } = deps;
+  if (contextReport !== undefined) {
+    app.get('/api/boards/:b/context-report', async (c) => send(c, await contextReport.report(c.get('email'), Number(c.req.param('b')))));
+  }
+  // Admins put one context setting back on its default; the history keeps the reset. There is no manual edit.
+  if (contextTuning !== undefined) {
+    app.post('/api/boards/:b/context-settings/:key/reset', async (c) =>
+      send(c, await contextTuning.reset(c.get('email'), Number(c.req.param('b')), c.req.param('key'))),
+    );
   }
 
   // How often intake's category and type survived to the merge, by month and prompt version, and typical effort by kind (System page), for members.

@@ -30,7 +30,7 @@ import type {
   SignalFigures,
   TypeSignals,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, KNOWLEDGE_PAGE_VERDICTS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
+import { AGENT_KB_APPROVALS, CONTEXT_SETTING_KEYS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, KNOWLEDGE_PAGE_VERDICTS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -431,6 +431,56 @@ export const choiceUsage = pgTable(
     count: integer('count').notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.decisionId, t.day, t.globId] }), index('choice_usage_board_day_idx').on(t.boardId, t.day)],
+);
+
+/**
+ * How often knowledge items of each source type and ranking tier were returned to an agent or chat, per day. One
+ * counter row per combination, pruned after `CHOICE_USAGE_RETENTION_DAYS`; the context report reads it.
+ */
+export const contextRetrievals = pgTable(
+  'context_retrievals',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    day: date('day', { mode: 'string' }).notNull(),
+    sourceType: text('source_type', { enum: SOURCE_TYPES }).notNull(),
+    tier: text('tier', { enum: AUTHORITY_TIERS }).notNull(),
+    count: integer('count').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.day, t.sourceType, t.tier] })],
+);
+
+/** A board's stored context settings (one row per key that differs from the default; the core clamps to the bounds on read). */
+export const contextSettings = pgTable(
+  'context_settings',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    value: doublePrecision('value').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.key] })],
+);
+
+/** Every move of a context setting (and every reset), with the value before and after and the evidence for it. */
+export const contextSettingChanges = pgTable(
+  'context_setting_changes',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    key: text('key', { enum: CONTEXT_SETTING_KEYS }).notNull(),
+    before: doublePrecision('before').notNull(),
+    after: doublePrecision('after').notNull(),
+    outcome: text('outcome').notNull(),
+    evidence: text('evidence').notNull(),
+  },
+  (t) => [index('context_setting_changes_board_at_idx').on(t.boardId, t.at)],
 );
 
 /** Per-board self-improvement jobs (mining, later consolidation and effect checks): last run and a lease. */

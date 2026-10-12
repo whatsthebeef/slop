@@ -84,6 +84,7 @@ export class MiningService {
     const knowledge = await tx.listKnowledge(boardId, ['doc']);
     const learnings = await boardLearnings(tx, boardId);
     const choices = await this.choices(tx, boardId, now, knowledge);
+    const settings = await tx.getContextSettings(boardId);
     const knowledgePageFeedback = await this.knowledgePageFeedback(tx, boardId, now);
     return {
       window: { from, to: now },
@@ -96,6 +97,7 @@ export class MiningService {
       documents: knowledge.map((d) => ({ name: d.name, area: d.area, content: d.content })),
       documentAreasKnown: true,
       choices,
+      settings,
       knowledgePageFeedback,
       learnings: learnings.flatMap(({ glob }) => {
         const facts = learningFacts(glob);
@@ -182,6 +184,7 @@ export class MiningService {
       // The lease keeps runs apart only while it lasts: a second run waits here and then reads the first's rows.
       await tx.lockBoardJob(boardId, 'mining');
       await tx.pruneChoiceUsage(boardId, usageFrom(now, CHOICE_USAGE_RETENTION_DAYS));
+      await tx.pruneContextRetrievals(boardId, usageFrom(now, CHOICE_USAGE_RETENTION_DAYS));
       const board = await tx.getBoard(boardId);
       if (board === null) throw new Error(`No board ${boardId}`);
       const activity = await this.activity(tx, boardId, now, options.manifestChanges ?? null);

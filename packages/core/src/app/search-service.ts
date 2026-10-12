@@ -1,8 +1,10 @@
 import { invalidInput, llmUnavailable, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { AUTHORITY_WEIGHTS, MAX_QUERY_LENGTH, matchesFilters, rankCandidates, rrfFuse, toHit, withinBudget } from '../domain/search.js';
-import type { Candidate, SearchHit, SearchMode, SearchQuery } from '../domain/search.js';
+import type { AuthorityTier, Candidate, SearchHit, SearchMode, SearchQuery, SourceType } from '../domain/search.js';
 import { usageDay } from '../domain/choice-usage.js';
+import { DEFAULT_CONTEXT_SETTINGS } from '../domain/context-settings.js';
+import type { ContextSettings } from '../domain/context-settings.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Embedder, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
@@ -12,9 +14,9 @@ import { LlmUnavailable } from './intake-service.js';
 const POOL = 50;
 /** `related` fetches deeper because the glob's own items are dropped afterwards. */
 const RELATED_POOL = 30;
-export const RELATED_LIMIT = 5;
+export const RELATED_LIMIT = DEFAULT_CONTEXT_SETTINGS.related_results;
 /** How many current decisions `related` puts first, before the other hits. */
-export const RELATED_DECISIONS = 3;
+export const RELATED_DECISIONS = DEFAULT_CONTEXT_SETTINGS.related_choices;
 /** Only choices from records and plans lead `related`; discussion choices compete as ordinary results. */
 const LEADING_AUTHORITY = AUTHORITY_WEIGHTS.approved_plan;
 /** `get_context` must stay quick when the embedder is slow: past this the related section is keyword-only. */
@@ -44,7 +46,7 @@ export class SearchService {
     return this.deps.store.transaction(async (tx) => {
       const q = await this.query(tx, email, request);
       if (!q.ok) return q;
-      const hits = this.rank(await tx.keywordCandidates(q.value, POOL), q.value);
+      const hits = this.rank(await tx.keywordCandidates(q.value, POOL), q.value, await tx.getContextSettings(q.value.boardId));
       if (record) await this.recordUse(tx, q.value.boardId, hits, request.globId ?? null);
       return ok(hits);
     });
@@ -61,7 +63,7 @@ export class SearchService {
       // Membership could have been removed while the embedder ran.
       const again = await this.query(tx, email, request);
       if (!again.ok) return again;
-      const hits = this.rank(await tx.vectorCandidates(again.value, embedding, POOL), again.value);
+      const hits = this.rank(await tx.vectorCandidates(again.value, embedding, POOL), again.value, await tx.getContextSettings(again.value.boardId));
       await this.recordUse(tx, again.value.boardId, hits, request.globId ?? null);
       return ok(hits);
     });
@@ -73,7 +75,17 @@ export class SearchService {
    */
   async recordUse(tx: Tx, boardId: number, hits: readonly SearchHit[], globId: string | null): Promise<void> {
     if (hits.length === 0) return;
-    await tx.recordChoiceUsage(boardId, [...new Set(hits.map((h) => h.itemId))], globId, usageDay(this.deps.clock.now()));
+    const day = usageDay(this.deps.clock.now());
+    // One counter per source type and tier among the hits, for the context report's "what agents get".
+    const counts = new Map<string, { sourceType: SourceType; tier: AuthorityTier; count: number }>();
+    for (const h of hits) {
+      const key = `${h.citation.source}:${h.authority}`;
+      const found = counts.get(key);
+      if (found === undefined) counts.set(key, { sourceType: h.citation.source, tier: h.authority, count: 1 });
+      else found.count += 1;
+    }
+    await tx.recordContextRetrievals(boardId, day, [...counts.values()]);
+    await tx.recordChoiceUsage(boardId, [...new Set(hits.map((h) => h.itemId))], globId, day);
   }
 
   /** `search_changes`: merged changes with the reason they were made, newest first, within the date range. */
@@ -102,10 +114,11 @@ export class SearchService {
    * The related section of `get_context`, inside its transaction (the caller has checked membership): what the board
    * already knows about this glob's title and summary, current mode, without the glob's own items. The keyword arm
    * uses the title alone, because a whole summary as a keyword query would have to match every word of it. Current
-   * decisions on the topic come first (up to RELATED_DECISIONS), then the other hits, where a superseded decision
+   * decisions on the topic come first (up to the board's `related_choices`), then the other hits, where a superseded decision
    * appears labelled as history; the glob's own decisions are returned separately (`decisions` of the bundle).
    */
   async related(tx: Tx, glob: Glob): Promise<readonly SearchHit[]> {
+    const settings = await tx.getContextSettings(glob.boardId);
     const text = `${glob.title}\n${glob.summary}`.trim().slice(0, MAX_QUERY_LENGTH);
     const q: SearchQuery = { boardId: glob.boardId, query: glob.title, mode: 'current' };
     let embedding: number[] | null = null;
@@ -117,10 +130,10 @@ export class SearchService {
     }
     const notOwn = (c: Candidate) => !c.globIds.includes(glob.id);
     const current = await this.fuse(tx, { ...q, sourceTypes: ['decision'] }, q.query, embedding, RELATED_POOL, (c) => notOwn(c) && c.status === 'active' && AUTHORITY_WEIGHTS[c.authority] >= LEADING_AUTHORITY);
-    const first = current.hits.slice(0, RELATED_DECISIONS);
+    const first = current.hits.slice(0, settings.related_choices);
     const { hits } = await this.fuse(tx, q, q.query, embedding, RELATED_POOL, notOwn);
     const seen = new Set(first.map((h) => h.itemId));
-    const related = [...first, ...hits.filter((h) => !seen.has(h.itemId))].slice(0, RELATED_LIMIT);
+    const related = [...first, ...hits.filter((h) => !seen.has(h.itemId))].slice(0, settings.related_results);
     // The bundle hands these to the glob's agent: that is a return of each choice among them, on this glob.
     await this.recordUse(tx, glob.boardId, related, glob.id);
     return related;
@@ -137,14 +150,14 @@ export class SearchService {
     const lists = [await tx.keywordCandidates({ ...q, query: keyword }, pool)];
     if (embedding !== null) lists.push(await tx.vectorCandidates(q, embedding, pool));
     const fused = lists.length === 1 ? lists[0] ?? [] : rrfFuse(lists);
-    const hits = this.rank(fused.filter(keep), q);
+    const hits = this.rank(fused.filter(keep), q, await tx.getContextSettings(q.boardId));
     return { hits, semantic: embedding === null ? 'unavailable' : 'ok' };
   }
 
-  private rank(candidates: readonly Candidate[], q: SearchQuery): SearchHit[] {
+  private rank(candidates: readonly Candidate[], q: SearchQuery, settings: ContextSettings): SearchHit[] {
     // The store filters too; this keeps every store honest about the filters.
     const allowed = candidates.filter((c) => matchesFilters(c, q));
-    return withinBudget(rankCandidates(allowed, q.mode, this.deps.clock.now()));
+    return withinBudget(rankCandidates(allowed, q.mode, this.deps.clock.now(), settings));
   }
 
   /** The query for a request from `email`, or why they can't run it. `blankOk`: a changes listing needs no words. */

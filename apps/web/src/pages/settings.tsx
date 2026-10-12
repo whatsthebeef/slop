@@ -4,6 +4,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { GroupChip } from '@/components/glob-card';
+import { ContextSection } from '@/components/context-report';
 import { JobStatus } from '@/components/job-status';
 import { ReadinessChecklist } from '@/components/readiness';
 import { Button } from '@/components/ui/button';
@@ -354,6 +355,7 @@ export const SettingsPage = () => {
         <Escalations boardId={boardId} admin={admin} />
         <SizeThreshold boardId={boardId} admin={admin} />
         <SizeCalibrationView boardId={boardId} />
+        <ContextSection boardId={boardId} admin={admin} />
         <IntakeAccuracyView boardId={boardId} admin={admin} />
         <IntegrationToken boardId={boardId} admin={admin} />
         <DeploySettings

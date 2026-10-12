@@ -3,6 +3,8 @@ import { isInvestigateEvent } from './events.js';
 import type { DomainEvent, JsonValue } from './events.js';
 import { CHOICE_DISCUSSION_MIN_RETURNS, CHOICE_MIN_GLOBS, CHOICE_MIN_RETURNS, CHOICE_USAGE_WINDOW_DAYS } from './choice-usage.js';
 import type { ChoiceActivity } from './choice-usage.js';
+import { DEFAULT_CONTEXT_SETTINGS } from './context-settings.js';
+import type { ContextSettingKey, ContextSettings } from './context-settings.js';
 import { REVIEW_GUIDE_AREA } from './code-review.js';
 import { missingCoreAreas, MISSING_DOC_MIN_DAYS, MISSING_DOC_MIN_MERGED_GLOBS, MISSING_DOC_RERAISE_DAYS } from './core-docs.js';
 import { FINDING_CLASS_DESCRIPTIONS } from './findings.js';
@@ -136,6 +138,8 @@ export interface BoardActivity {
   readonly documentAreasKnown?: boolean;
   /** The board's choices with what usage recording counted over `CHOICE_USAGE_WINDOW_DAYS`; absent: `choice_in_use` isn't measured. */
   readonly choices?: readonly ChoiceActivity[];
+  /** The board's context settings (the promotion thresholds); absent: the defaults. */
+  readonly settings?: ContextSettings;
   /** The knowledge page's Pin / Not key verdicts from the last `KNOWLEDGE_PAGE_FEEDBACK_DAYS` days; absent: `knowledge_page` isn't measured. */
   readonly knowledgePageFeedback?: readonly KnowledgePageVerdictActivity[];
 }
@@ -367,7 +371,7 @@ interface Spec {
   /** The globs that count toward a key's rate (for keyed signals, the same for every key). */
   readonly eligibleGlobs: (activity: BoardActivity) => ReadonlySet<string>;
   readonly tallies: (activity: BoardActivity) => Tally[];
-  readonly crosses: (tally: Tally) => boolean;
+  readonly crosses: (tally: Tally, activity: BoardActivity) => boolean;
   readonly statement: (measurement: Measurement) => string;
   readonly quietMs?: number;
   readonly reraiseFactor?: number;
@@ -395,7 +399,7 @@ const define = (spec: Spec): SignalDefinition => {
         figures: { affected: t.affected, eligible: t.eligible, rate: rateOf(t.affected, t.eligible), count: t.count },
         globIds: [...t.affectedGlobs].sort().slice(0, MAX_SIGNAL_GLOBS),
         examples: t.examples.slice(0, MAX_SIGNAL_EXAMPLES),
-        crosses: spec.crosses(t),
+        crosses: spec.crosses(t, activity),
         ...(t.context !== undefined && { context: t.context }),
       })),
     perGlob: (activity, globId, key) => ({
@@ -930,9 +934,10 @@ const choiceInUseSignal = define({
         context: c.sourceKind,
       }));
   },
-  crosses: (t) => {
-    const needed = t.context === 'inbox' ? CHOICE_DISCUSSION_MIN_RETURNS : CHOICE_MIN_RETURNS;
-    return t.count >= needed && t.affected >= CHOICE_MIN_GLOBS;
+  crosses: (t, activity) => {
+    const settings = activity.settings ?? DEFAULT_CONTEXT_SETTINGS;
+    const needed = t.context === 'inbox' ? settings.promotion_discussion_min_returns : settings.promotion_min_returns;
+    return t.count >= needed && t.affected >= settings.promotion_min_globs;
   },
   statement: (m) => `A choice agents keep relying on is in no document: "${m.label}" (used by ${m.globIds.join(', ')}). Make it standing guidance.`,
   once: true,
@@ -1022,7 +1027,7 @@ export const SIGNAL_QUIET_MS = 12 * 7 * 24 * 60 * 60 * 1000;
 export const SIGNAL_RERAISE_FACTOR = 1.5;
 
 /** Per-board background jobs of the self-improvement pipeline (`board_jobs`). */
-export const BOARD_JOBS = ['mining', 'consolidation', 'effect_check', 'sub_limit', 'intake_outcome', 'size_threshold'] as const;
+export const BOARD_JOBS = ['mining', 'consolidation', 'effect_check', 'sub_limit', 'intake_outcome', 'size_threshold', 'context_tuning'] as const;
 export type BoardJobName = (typeof BOARD_JOBS)[number];
 
 export type BoardJobResult =
@@ -1099,6 +1104,13 @@ export type BoardJobResult =
       readonly changes: readonly { readonly globId: string; readonly outcome: SizeOutcome; readonly from: SizeThreshold; readonly to: SizeThreshold }[];
       /** Size records written this run and the calibration moves they made (absent when none). */
       readonly calibration?: { readonly records: number; readonly moves: readonly { readonly globId: string; readonly cause: string }[] };
+    }
+  | {
+      readonly kind: 'context_tuning';
+      /** Settings moved this run, with the outcome that moved each. */
+      readonly moves: readonly { readonly key: ContextSettingKey; readonly before: number; readonly after: number; readonly outcome: string }[];
+      /** Settings checked and left as they were (a short sample, a recent change, a bound). */
+      readonly held: number;
     }
   /**
    * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.

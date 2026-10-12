@@ -8,6 +8,7 @@ import {
   isSuperseded,
   parseDecidedAt,
 } from '../domain/decisions.js';
+import { DEFAULT_CONTEXT_SETTINGS } from '../domain/context-settings.js';
 import { choiceAuthority } from '../domain/decisions.js';
 import type { Decision, DecisionSource, DecisionSourceKind } from '../domain/decisions.js';
 import { inboxLink, inboxTitle } from '../domain/inbox.js';
@@ -32,15 +33,15 @@ export const DECISIONS_LLM_TIMEOUT_MS = 60_000;
 const LEASE_MS = 2 * 60_000;
 const backoffMs = (attempts: number) => 30_000 * 2 ** (attempts - 1);
 /** A source yields at most this many decisions; the rest are dropped. */
-export const MAX_DECISIONS_PER_SOURCE = 40;
+export const MAX_DECISIONS_PER_SOURCE = DEFAULT_CONTEXT_SETTINGS.choice_extraction_cap;
 /** How much of a source the extraction model sees. */
-export const SOURCE_TEXT_LIMIT = 30_000;
+export const SOURCE_TEXT_LIMIT = DEFAULT_CONTEXT_SETTINGS.source_text_limit;
 const EXTRACT_MAX_TOKENS = 6_000;
 const CHECK_MAX_TOKENS = 1_500;
 /** The most earlier decisions one supersession check compares a new decision with. */
 export const MAX_CANDIDATES = 6;
 /** A semantically near decision must be at least this similar to be compared. */
-export const VECTOR_MIN_RELEVANCE = 0.75;
+export const VECTOR_MIN_RELEVANCE = DEFAULT_CONTEXT_SETTINGS.replacement_similarity;
 const NEAR_POOL = 20;
 /** Supersession's embedding is a bonus: a slow embedder only costs the semantic candidates. */
 const EMBED_TIMEOUT_MS = 5_000;
@@ -94,7 +95,7 @@ interface SourceText {
   readonly label: string;
   readonly globId: string | null;
   readonly group: string | null;
-  /** What the model is shown (a section or a whole text, cut to SOURCE_TEXT_LIMIT). */
+  /** What the model is shown (a section or a whole text, cut to the board's `source_text_limit`). */
   readonly text: string;
   readonly hash: string;
   readonly createdAt: string;
@@ -102,7 +103,7 @@ interface SourceText {
 }
 
 /** The decisions the model found whose quote is in `shown` and long enough to rest on; `decidedAt` falls back to the source's date. */
-const parseExtract = (answer: string, shown: string, fallbackAt: string): Found[] | null => {
+const parseExtract = (answer: string, shown: string, fallbackAt: string, cap: number): Found[] | null => {
   const parsed = parseJson(answer);
   if (!isObject(parsed) || !Array.isArray(field(parsed, 'decisions'))) return null;
   const seen = new Set<string>();
@@ -120,7 +121,7 @@ const parseExtract = (answer: string, shown: string, fallbackAt: string): Found[
       decidedBy: oneLine(field(entry, 'decidedBy'), 100),
       decidedAt: parseDecidedAt(field(entry, 'decidedAt')) ?? fallbackAt,
     });
-    if (found.length >= MAX_DECISIONS_PER_SOURCE) break;
+    if (found.length >= cap) break;
   }
   return found;
 };
@@ -304,6 +305,7 @@ export class DecisionPipeline {
 
   /** The texts decisions are read from, as they are now (artifacts without a decisions section aren't sources). */
   private async discover(tx: Tx, boardId: number): Promise<SourceText[]> {
+    const limit = (await tx.getContextSettings(boardId)).source_text_limit;
     const globs = new Map((await tx.listGlobs(boardId, {})).map((g) => [g.id, g]));
     const out: SourceText[] = [];
     for (const artifact of await tx.listLatestArtifacts(boardId)) {
@@ -321,7 +323,7 @@ export class DecisionPipeline {
         kind = 'attachment';
         body = artifact.content;
       } else continue;
-      const shown = (body ?? '').trim().slice(0, SOURCE_TEXT_LIMIT);
+      const shown = (body ?? '').trim().slice(0, limit);
       if (shown === '') continue;
       out.push({
         ref: `artifact:${glob.id}:${artifact.kind}:${artifact.label}`,
@@ -338,7 +340,7 @@ export class DecisionPipeline {
     // Attached inbox items are read on each glob they are on, so the glob's decisions show them.
     const links = await tx.listInboxLinks(boardId);
     for (const item of await tx.listInboxItems(boardId, ['attached'])) {
-      const shown = item.text.trim().slice(0, SOURCE_TEXT_LIMIT);
+      const shown = item.text.trim().slice(0, limit);
       if (shown === '') continue;
       for (const link of links) {
         const glob = link.inboxId === item.id ? globs.get(link.globId) : undefined;
@@ -384,9 +386,10 @@ export class DecisionPipeline {
   }
 
   private async extract(source: DecisionSource): Promise<void> {
-    const found = await this.deps.store.transaction(async (tx) => {
-      return (await this.discover(tx, source.boardId)).find((s) => s.ref === source.sourceRef) ?? null;
-    });
+    const { found, cap } = await this.deps.store.transaction(async (tx) => ({
+      found: (await this.discover(tx, source.boardId)).find((s) => s.ref === source.sourceRef) ?? null,
+      cap: (await tx.getContextSettings(source.boardId)).choice_extraction_cap,
+    }));
     if (found === null) {
       // Its text is gone (or has no decisions section now): the next sync removes the rows.
       await this.deps.store.transaction((tx) => tx.deleteDecisionSource(source.boardId, source.sourceRef));
@@ -399,7 +402,7 @@ export class DecisionPipeline {
       );
       return;
     }
-    const outcome = await this.ask(source.boardId, found);
+    const outcome = await this.ask(source.boardId, found, cap);
     if ('unavailable' in outcome) {
       await this.waitSource(source, outcome.unavailable);
       return;
@@ -426,7 +429,7 @@ export class DecisionPipeline {
     }
   }
 
-  private async ask(boardId: number, source: SourceText): Promise<Outcome<Found[]>> {
+  private async ask(boardId: number, source: SourceText, cap: number): Promise<Outcome<Found[]>> {
     try {
       const answer = await completeWithDeadline(
         this.deps.llm,
@@ -438,7 +441,7 @@ export class DecisionPipeline {
         },
         this.deps.llmTimeoutMs ?? DECISIONS_LLM_TIMEOUT_MS,
       );
-      const decisions = parseExtract(answer, source.text, source.createdAt);
+      const decisions = parseExtract(answer, source.text, source.createdAt, cap);
       return decisions === null ? { failure: 'The decisions answer was not usable JSON' } : { ok: decisions };
     } catch (error) {
       if (error instanceof LlmUnavailable) return { unavailable: error };
@@ -541,13 +544,14 @@ export class DecisionPipeline {
     // A superseded decision can't replace anything (and no replacement may close a cycle).
     if (isSuperseded(next)) return [];
     return this.deps.store.transaction(async (tx) => {
+      const similarity = (await tx.getContextSettings(next.boardId)).replacement_similarity;
       const all = await tx.listDecisions(next.boardId);
       const byItem = new Map(all.map((d) => [d.itemId, d]));
       const eligible = (d: Decision | undefined): d is Decision =>
         d !== undefined && d.id !== next.id && !sameSource(d, next) && !isSuperseded(d) && d.decidedAt <= next.decidedAt;
       const query = { boardId: next.boardId, query: next.statement.slice(0, MAX_QUERY_LENGTH), mode: 'all_time', sourceTypes: ['decision'] } as const;
       const near: Candidate[] = [];
-      if (embedding !== null) near.push(...(await tx.vectorCandidates(query, embedding, NEAR_POOL)).filter((c) => c.relevance >= VECTOR_MIN_RELEVANCE));
+      if (embedding !== null) near.push(...(await tx.vectorCandidates(query, embedding, NEAR_POOL)).filter((c) => c.relevance >= similarity));
       near.push(...(await tx.keywordCandidates(query, NEAR_POOL)));
       const ordered: Decision[] = [];
       const add = (d: Decision | undefined) => {
