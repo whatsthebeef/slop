@@ -7,8 +7,8 @@ import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../do
 import { byEvidence, isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE } from '../domain/kb.js';
 import type {
   DraftPreview,
-  KbItemPage,
-  KbItemStatus,
+  LearningWirePage,
+  LearningStatus,
   KbOutcome,
   KbProposalList,
   KbTarget,
@@ -33,7 +33,7 @@ import {
 } from '../domain/learning.js';
 import type { LearningRead } from '../domain/learning.js';
 import { learningWire, learningWireView } from '../domain/learning-wire.js';
-import type { LearningWire, LearningWireView } from '../domain/learning-wire.js';
+import type { LearningWire, LearningWireView } from '../domain/kb.js';
 import {
   agentSetKind,
   catalogUpdates,
@@ -326,7 +326,7 @@ const byEvidenceOrder = (learnings: readonly LearningRead[]): LearningRead[] =>
 const ADMINS: readonly Role[] = ['admin'];
 
 /** A decision's conditional write lost to a concurrent one; thrown so the transaction rolls back. */
-class StaleKbItem extends Error {
+class StaleLearning extends Error {
   constructor(id: string) {
     super(`KB item ${id} changed during the decision`);
   }
@@ -364,7 +364,7 @@ export const draftPreview = async (tx: Tx, catalog: CatalogAgentSet, item: Draft
   return { version: state.version, stale: state.version !== item.draftedAgainstVersion, diff: contextDiff(diff) };
 };
 
-export const newKbItemId = async (tx: Tx, boardId: number): Promise<string> => formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
+export const newLearningId = async (tx: Tx, boardId: number): Promise<string> => formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
 
 /** A document proposal's target: that document, with its proposed frontmatter when the board doesn't have it yet. */
 export const documentTarget = async (tx: Tx, boardId: number, document: ProposedDocument): Promise<KbTarget> => {
@@ -489,7 +489,7 @@ export class KnowledgeService {
     try {
       return await this.transaction(work);
     } catch (error) {
-      if (!(error instanceof StaleKbItem || error instanceof BoardChanged) || itemId === null) throw error;
+      if (!(error instanceof StaleLearning || error instanceof BoardChanged) || itemId === null) throw error;
       const current = await this.deps.store.transaction((tx) => this.current(tx, itemId));
       if (current === null) return notFound(`No KB item ${itemId}`);
       return err({ code: 'version_conflict', message: `${itemId} changed meanwhile; try again`, currentItem: current });
@@ -802,7 +802,7 @@ export class KnowledgeService {
         if (glob?.boardId !== boardId) return notFound(`No glob ${sourceGlobId} on board ${boardId}`);
         sourceGlobIds.push(glob.id);
       }
-      const id = await newKbItemId(tx, boardId);
+      const id = await newLearningId(tx, boardId);
       // Document proposals name their target and are their own draft, so the pipeline has nothing to do.
       const target = document === null ? null : await documentTarget(tx, boardId, document);
       // The item is its decision glob: it enters Planning under the same ID.
@@ -845,7 +845,7 @@ export class KnowledgeService {
       for (const learning of byEvidenceOrder(learnings.filter((l) => statusOf(l) === 'open'))) {
         open.push(learningWireView(learning, await this.preview(tx, catalog, learning)));
       }
-      const page = (statuses: readonly KbItemStatus[]): KbItemPage => {
+      const page = (statuses: readonly LearningStatus[]): LearningWirePage => {
         // Newest by decision (a learning joins the decided group when decided); closed ones have none.
         const all = learnings
           .filter((l) => statuses.includes(statusOf(l)))
@@ -961,12 +961,12 @@ export class KnowledgeService {
       const other = former === null ? null : await readLearning(tx, former);
       if (other !== null && !learningLinks(other.glob).keptApartFrom.includes(glob.id)) {
         // The other item changed between the read and the write: roll the reopen back too, as a conflict.
-        if (!(await keepLearningApart(tx, this.writes(tx), other.glob.id, glob.id, other.glob.version))) throw new StaleKbItem(other.glob.id);
+        if (!(await keepLearningApart(tx, this.writes(tx), other.glob.id, glob.id, other.glob.version))) throw new StaleLearning(other.glob.id);
       }
       this.kbChanged(tx, glob.boardId);
       return ok(await this.written(tx, itemId));
     }).catch(async (error: unknown) => {
-      if (!(error instanceof StaleKbItem)) throw error;
+      if (!(error instanceof StaleLearning)) throw error;
       const current = await this.deps.store.transaction((tx) => this.current(tx, itemId));
       return current === null
         ? notFound(`No KB item ${itemId}`)
@@ -1148,7 +1148,7 @@ export class KnowledgeService {
    * The board's KB items with the given status (open by default), for an admin's agent: the open queue in the page's
    * order, others newest decision first. Admins only, like deciding.
    */
-  async listItems(email: string, boardId: number, status: KbItemStatus = 'open'): Promise<Result<LearningWireView[]>> {
+  async listItems(email: string, boardId: number, status: LearningStatus = 'open'): Promise<Result<LearningWireView[]>> {
     const catalog = await this.deps.catalog.agentSet();
     return this.deps.store.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
@@ -1266,7 +1266,7 @@ export class KnowledgeService {
       return await this.transaction((tx) => this.decideIn(tx, email, itemId, version, decision, { ...(via === undefined ? {} : { via }), roles: ADMINS }));
     } catch (error) {
       // A concurrent agent-set change (another approval or import) is a conflict to retry, like a stale item.
-      if (!(error instanceof StaleKbItem || error instanceof BoardChanged)) throw error;
+      if (!(error instanceof StaleLearning || error instanceof BoardChanged)) throw error;
       const current = await this.deps.store.transaction((tx) => this.current(tx, itemId));
       if (current === null) return notFound(`No KB item ${itemId}`);
       return error instanceof BoardChanged
@@ -1293,7 +1293,7 @@ export class KnowledgeService {
 
   /**
    * A decision: the item exists, the caller has one of `roles` on its board, it is unchanged since read and still open
-   * (items the pipeline closed as merged, suppressed or covered can't be decided). Throws `StaleKbItem` or `BoardChanged`
+   * (items the pipeline closed as merged, suppressed or covered can't be decided). Throws `StaleLearning` or `BoardChanged`
    * on a lost conditional write so the transaction rolls back; the callers turn those into a version conflict.
    */
   private async decideIn(
@@ -1341,7 +1341,7 @@ export class KnowledgeService {
         edited: options.edited === true,
       });
     }
-    if (!written) throw new StaleKbItem(id);
+    if (!written) throw new StaleLearning(id);
     this.kbChanged(tx, boardId);
     // Decided, it has left the pipeline.
     return ok(await this.written(tx, id));
@@ -1405,7 +1405,7 @@ export class KnowledgeService {
     const state = await targetState(tx, await this.deps.catalog.agentSet(), item.boardId, target);
     if (state === null) return notFound(`${target.name} is no longer on board ${item.boardId}; choose another target under Edit`);
     if (drafted !== null && drafted.targetVersion !== null && state.version !== drafted.targetVersion) {
-      if (!(await requeueLearningDraft(tx, this.writes(tx), item.id, learning.glob.version))) throw new StaleKbItem(item.id);
+      if (!(await requeueLearningDraft(tx, this.writes(tx), item.id, learning.glob.version))) throw new StaleLearning(item.id);
       this.kbChanged(tx, item.boardId);
       return err({
         code: 'version_conflict',

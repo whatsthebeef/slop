@@ -1,4 +1,4 @@
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Llm } from '../src/app/intake-service.js';
 import { KbPipeline } from '../src/app/kb-pipeline.js';
@@ -7,7 +7,7 @@ import { FAILED_RETRY_MAX_MS, isJobDue, LearningJobService, MINING_INTERVAL_MS }
 import { MINED_BY, MiningService } from '../src/app/mining-service.js';
 import type { Result } from '../src/domain/errors.js';
 import type { DomainEvent } from '../src/domain/events.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import type { BoardJob, BoardJobResult, ManifestChange, MergedCommit } from '../src/domain/signals.js';
 import type { Board } from '../src/domain/types.js';
 import type { Catalog, ManifestSource, Store } from '../src/ports.js';
@@ -73,17 +73,17 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     await store.transaction((tx) => tx.appendEvents(events));
   };
 
-  const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+  const item = async (id: string): Promise<LearningWire> => {
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
-  const decide = async (id: string, patch: Partial<KbItem>) => {
+  const decide = async (id: string, patch: Partial<LearningWire>) => {
     const current = await item(id);
-    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, ...patch, version: current.version + 1 }, current.version));
+    await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, ...patch, version: current.version + 1 }, current.version));
   };
   const signalRow = async (key: string) => (await store.transaction((tx) => tx.listKbSignals(board.id))).find((r) => r.key === key);
-  const items = () => store.transaction((tx) => kbItems(tx).listKbItems(board.id));
+  const items = () => store.transaction((tx) => learningSeed(tx).listSeeded(board.id));
 
   beforeEach(async () => {
     store = new MemoryStore();
@@ -248,8 +248,8 @@ describe('Mining: mined KB items and the re-raise rules', () => {
   it('follows a merged item to the item it was merged into: refreshed while that is open, never again once approved', async () => {
     await runs(10, 3, later(-2 * DAY));
     const [mined] = (await mining.mine(board.id, START)).raised;
-    const survivor: KbItem = { ...(await item(mined ?? '')), id: 's1k99', signal: null, evidence: 'Submitted', version: 1 };
-    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(survivor));
+    const survivor: LearningWire = { ...(await item(mined ?? '')), id: 's1k99', signal: null, evidence: 'Submitted', version: 1 };
+    await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).insertSeeded(survivor));
     await decide(mined ?? '', { status: 'merged', duplicateOf: survivor.id });
 
     expect(await mining.mine(board.id, later(WEEK))).toMatchObject({ raised: [], refreshed: [survivor.id] });
@@ -289,7 +289,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     await runs(10, 3, later(-2 * DAY));
     const [mined] = (await mining.mine(board.id, START)).raised;
     const base = await item(mined ?? '');
-    const survivor: KbItem = {
+    const survivor: LearningWire = {
       ...base,
       id: 's1k70',
       status: 'rejected',
@@ -297,7 +297,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
       signal: base.signal === null ? null : { ...base.signal, key: 'failure:timeout', kind: 'failure', figures: { affected: 9, eligible: 10, rate: 0.9, count: 9 } },
       version: 1,
     };
-    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(survivor));
+    await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).insertSeeded(survivor));
     await decide(mined ?? '', { status: 'merged', duplicateOf: survivor.id });
     // 45% is 1.5× run_superseded's 30%, though far below the survivor's 90%.
     const reRaisedAt = later(13 * WEEK);
@@ -310,8 +310,8 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     const [mined] = (await mining.mine(board.id, START)).raised;
     const base = await item(mined ?? '');
     // A loop: the mined item and a submitted one merged into each other.
-    const other: KbItem = { ...base, id: 's1k80', status: 'merged', duplicateOf: base.id, signal: null, version: 1 };
-    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(other));
+    const other: LearningWire = { ...base, id: 's1k80', status: 'merged', duplicateOf: base.id, signal: null, version: 1 };
+    await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).insertSeeded(other));
     await decide(base.id, { status: 'merged', duplicateOf: other.id });
     const again = await mining.mine(board.id, later(WEEK));
     expect(again.raised).toHaveLength(1);
@@ -357,7 +357,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     const queue = new MemoryKbQueue(store, pipeline, { now: () => START }, notifier);
     await runs(10, 3, later(-2 * DAY));
     const [mined] = (await mining.mine(board.id, START)).raised;
-    const submitted: KbItem = {
+    const submitted: LearningWire = {
       ...(await item(mined ?? '')),
       id: 's1k50',
       source: 'submitted',
@@ -368,7 +368,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
       processing: 'drafted',
       version: 1,
     };
-    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(submitted));
+    await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).insertSeeded(submitted));
 
     route.answer(
       JSON.stringify({ target: { kind: 'document', name: 'build_test_lint', section: '## Test', newDocument: null }, catalogCandidate: false, catalogReason: null }),
@@ -397,8 +397,8 @@ describe('Mining: mined KB items and the re-raise rules', () => {
   it('never raises again a signal covered by an approved item (s15f8)', async () => {
     await runs(10, 3, later(-2 * DAY));
     const [mined] = (await mining.mine(board.id, START)).raised;
-    const approved: KbItem = { ...(await item(mined ?? '')), id: 's1k60', status: 'approved', signal: null, decidedAt: START, version: 1 };
-    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(approved));
+    const approved: LearningWire = { ...(await item(mined ?? '')), id: 's1k60', status: 'approved', signal: null, decidedAt: START, version: 1 };
+    await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).insertSeeded(approved));
     await decide(mined ?? '', { status: 'covered', coveredBy: { kind: 'item', id: approved.id } });
     await runs(4, 4, later(-DAY, later(30 * WEEK)));
     expect(await mining.mine(board.id, later(30 * WEEK))).toMatchObject({ crossed: 1, raised: [], refreshed: [] });

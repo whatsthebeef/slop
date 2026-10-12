@@ -1,5 +1,5 @@
 import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
@@ -7,7 +7,7 @@ import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from '../src/app/kb-pipeline.js'
 import { EMBED_BATCH, SearchIndexer } from '../src/app/search-indexer.js';
 import type { Artifact, ArtifactKind } from '../src/domain/knowledge.js';
 import { LLM_WAITING_PREFIX, UNPROCESSED } from '../src/domain/kb.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import type { SourceType } from '../src/domain/search.js';
 import type { Board, Glob } from '../src/domain/types.js';
 import type { ChangeSource } from '../src/ports.js';
@@ -121,7 +121,7 @@ describe('SearchIndexer', () => {
         updatedAt: START,
       }),
     );
-    const learning: KbItem = {
+    const learning: LearningWire = {
       id: 's1k1',
       boardId,
       status: 'approved',
@@ -144,7 +144,7 @@ describe('SearchIndexer', () => {
       processing: 'drafted',
       version: 2,
     };
-    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(learning));
+    await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).insertSeeded(learning));
     await merge(task.id);
     return { task, sup };
   };
@@ -266,7 +266,7 @@ describe('SearchIndexer', () => {
   it('indexes only approved learnings that are not documents or decisions, with the fields the adapter reads (s15t72)', async () => {
     await addGlob({ id: 's1t1', title: 'Sync retries', summary: 'Retry failed syncs three times.' });
     const decided = { decidedBy: 'admin@example.com', decidedAt: at(5_000), processing: 'none' as const, version: 2 };
-    const learning = (id: string, patch: Partial<KbItem>): KbItem => ({
+    const learning = (id: string, patch: Partial<LearningWire>): LearningWire => ({
       id,
       boardId,
       status: 'open',
@@ -310,10 +310,10 @@ describe('SearchIndexer', () => {
       }),
     ];
     await store.transaction(async (tx) => {
-      for (const i of all) if (!(await kbItems(tx, TEST_KB_WRITES).insertKbItem(i))) throw new Error(`${i.id} not inserted`);
+      for (const i of all) if (!(await learningSeed(tx, TEST_KB_WRITES).insertSeeded(i))) throw new Error(`${i.id} not inserted`);
     });
     // What the adapter's approved listing gave the indexer before the switch, mapped as it was.
-    const expected = (await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'approved')))
+    const expected = (await store.transaction((tx) => learningSeed(tx).listSeeded(boardId, 'approved')))
       .filter((i) => i.document === null && i.type !== 'decision')
       .map((i) => ({
         externalRef: `learning:${i.id}`,

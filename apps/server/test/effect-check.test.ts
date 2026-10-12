@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import {
-  kbItems,
+  learningSeed,
   ArtifactService,
   BoardService,
   EffectCheckService,
@@ -10,10 +10,10 @@ import {
   KnowledgeService,
   LearningJobService,
   MiningService,
-  newKbItemId,
+  newLearningId,
   UNPROCESSED,
 } from '@slop/core';
-import type { BoardJob, DomainEvent, KbItem, KbSignal, Result, Store } from '@slop/core';
+import type { BoardJob, DomainEvent, LearningWire, KbSignal, Result, Store } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -196,10 +196,10 @@ describe('Effect checks in Postgres', () => {
   };
 
   /** An open mined item watching `ci_after_local`, kept as a learning when approved (time basis). */
-  const mined = async (): Promise<KbItem> =>
+  const mined = async (): Promise<LearningWire> =>
     store.transaction(async (tx) => {
-      const item: KbItem = {
-        id: await newKbItemId(tx, boardId),
+      const item: LearningWire = {
+        id: await newLearningId(tx, boardId),
         boardId,
         status: 'open',
         type: 'gotcha',
@@ -221,11 +221,11 @@ describe('Effect checks in Postgres', () => {
         processing: 'drafted',
         version: 1,
       };
-      await kbItems(tx, KB_WRITES).insertKbItem(item);
+      await learningSeed(tx, KB_WRITES).insertSeeded(item);
       return item;
     });
-  const get = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+  const get = async (id: string): Promise<LearningWire> => {
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -331,7 +331,7 @@ describe('Effect checks in Postgres', () => {
       version: item.version,
     });
     expect(approved.status).toBe(200);
-    expect(((await approved.json()) as KbItem).effectCheck).toMatchObject({
+    expect(((await approved.json()) as LearningWire).effectCheck).toMatchObject({
       state: 'watching',
       basis: { kind: 'time', since: NOW },
       n: 3,
@@ -383,7 +383,7 @@ describe('Effect checks in Postgres', () => {
   });
 
   it('raises one revise-or-revert item when two runs check at once, and stores the check', async () => {
-    const watching = (await store.transaction((tx) => kbItems(tx).listKbItems(boardId))).filter(
+    const watching = (await store.transaction((tx) => learningSeed(tx).listSeeded(boardId))).filter(
       (i) => i.effectCheck?.state === 'watching',
     );
     expect(watching).toHaveLength(1);
@@ -403,7 +403,7 @@ describe('Effect checks in Postgres', () => {
       raisedItemId: raised[0],
       after: { affected: 2, eligible: 3 },
     });
-    const items = await store.transaction((tx) => kbItems(tx).listKbItems(boardId));
+    const items = await store.transaction((tx) => learningSeed(tx).listSeeded(boardId));
     expect(items.filter((i) => i.signal?.key === `effect:${watched.id}`).map((i) => i.id)).toEqual(
       raised,
     );

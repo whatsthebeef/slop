@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
 import type { Glob } from '../src/domain/types.js';
@@ -44,7 +44,7 @@ describe('reopening a merge (s15t72)', () => {
   let boardId: number;
 
   const item = async (id: string) => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -58,8 +58,8 @@ describe('reopening a merge (s15t72)', () => {
       await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
     ).id;
     await store.transaction(async (tx) => {
-      const kb = kbItems(tx, TEST_KB_WRITES);
-      if (!(await kb.insertKbItem(drafted({ id: `s${String(boardId)}k1`, boardId }))))
+      const kb = learningSeed(tx, TEST_KB_WRITES);
+      if (!(await kb.insertSeeded(drafted({ id: `s${String(boardId)}k1`, boardId }))))
         throw new Error('survivor not inserted');
       const merged = drafted({
         id: `s${String(boardId)}k2`,
@@ -69,7 +69,7 @@ describe('reopening a merge (s15t72)', () => {
         duplicateOf: `s${String(boardId)}k1`,
         mergeNote: { by: 'intake', quote: 'a', survivorQuote: 'b', at: LATER },
       });
-      if (!(await kb.insertKbItem(merged))) throw new Error('merged not inserted');
+      if (!(await kb.insertSeeded(merged))) throw new Error('merged not inserted');
     });
   });
 

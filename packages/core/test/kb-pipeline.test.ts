@@ -1,4 +1,4 @@
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
@@ -9,7 +9,7 @@ import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { NewLearning } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
 import { llmWaitingReason } from '../src/domain/kb.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import type { Catalog, Tx } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { MemoryKbQueue, TEST_KB_WRITES } from '../src/testing/kb-queue.js';
@@ -121,8 +121,8 @@ describe('KB pipeline: routing and dedupe', () => {
       }),
     ).id;
 
-  const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+  const item = async (id: string): Promise<LearningWire> => {
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -305,7 +305,7 @@ describe('KB pipeline: routing and dedupe', () => {
       extraEvidence: [{ itemId: second, globIds: [otherGlobId], evidence: 'Tester note', submittedBy: DEV, at: START }],
     });
     // Merged items leave the open queue.
-    const open = await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'open'));
+    const open = await store.transaction((tx) => learningSeed(tx).listSeeded(boardId, 'open'));
     expect(open.map((i) => i.id)).toEqual([first]);
   });
 
@@ -314,7 +314,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
     // An admin reopened a merge between them (or between one and an item the other holds).
     const pending = await item(second);
-    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...pending, keptApartFrom: [first], version: pending.version + 1 }, pending.version));
+    await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...pending, keptApartFrom: [first], version: pending.version + 1 }, pending.version));
     const before = await item(first);
     llm.answer(toNewDoc('testing'), json({ checked: classed('same fact', first), duplicateOf: claim(first), suppressedBy: null, coveredBy: null, contradicts: [] }));
     expect(await queue.process(second)).toBe(true);
@@ -339,7 +339,7 @@ describe('KB pipeline: routing and dedupe', () => {
     // The step itself says so: run again at once.
     drafter.answer(async () => {
       const current = await item(first);
-      await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, evidence: `${current.evidence} (more)`, version: current.version + 1 }, current.version));
+      await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, evidence: `${current.evidence} (more)`, version: current.version + 1 }, current.version));
       return json({ section: null, content: '# Testing\n\nAnother draft.\n', rationale: 'r' });
     });
     expect(await pipeline.runStep(first, 'draft')).toEqual({ state: 'pending', retryAfterMs: 0 });
@@ -565,7 +565,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const keepApart = async (id: string, other: string) => {
       const pending = await item(id);
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...pending, keptApartFrom: [other], version: pending.version + 1 }, pending.version),
+        learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...pending, keptApartFrom: [other], version: pending.version + 1 }, pending.version),
       );
     };
 
@@ -677,7 +677,7 @@ describe('KB pipeline: routing and dedupe', () => {
       const own = { knowledgeKind: 'doc' as const, name: 'testing', section: null, quote: 'Its own', reason: 'Earlier' };
       const current = await item(open);
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, possiblyCoveredBy: own, version: current.version + 1 }, current.version),
+        learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, possiblyCoveredBy: own, version: current.version + 1 }, current.version),
       );
       expect(await queue.process(id)).toBe(true);
       expect((await item(open)).possiblyCoveredBy).toEqual(own);
@@ -687,7 +687,7 @@ describe('KB pipeline: routing and dedupe', () => {
       const { open, rejected, id } = await setUp();
       const current = await item(open);
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, keptApartFrom: [rejected], version: current.version + 1 }, current.version),
+        learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, keptApartFrom: [rejected], version: current.version + 1 }, current.version),
       );
       expect(await queue.process(id)).toBe(true);
       expect(await item(open)).toMatchObject({ occurrenceCount: 2, possiblyCoveredBy: null });
@@ -708,7 +708,7 @@ describe('KB pipeline: routing and dedupe', () => {
       const { rejected, id } = await setUp();
       const pending = await item(id);
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...pending, keptApartFrom: [rejected], version: pending.version + 1 }, pending.version),
+        learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...pending, keptApartFrom: [rejected], version: pending.version + 1 }, pending.version),
       );
       llm.answer(toNewDoc('testing'), answer(rejected));
       expect(await queue.process(id)).toBe(true);
@@ -731,8 +731,8 @@ describe('KB pipeline: routing and dedupe', () => {
               const read = await tx.getGlob(globId);
               if (armed && globId === rejected && read !== null) {
                 armed = false;
-                const current = await kbItems(tx).getKbItem(globId);
-                if (current !== null) await kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, decisionReason: 'Edited', version: current.version + 1 }, current.version);
+                const current = await learningSeed(tx).readSeeded(globId);
+                if (current !== null) await learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, decisionReason: 'Edited', version: current.version + 1 }, current.version);
               }
               return read;
             },
@@ -754,7 +754,7 @@ describe('KB pipeline: routing and dedupe', () => {
         // Changed while the dedupe call ran (no service does this today: the check is a defence).
         const current = await item(rejected);
         await store.transaction((tx) =>
-          kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, status: 'open', version: current.version + 1 }, current.version),
+          learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, status: 'open', version: current.version + 1 }, current.version),
         );
         return answer(rejected);
       });
@@ -802,7 +802,7 @@ describe('KB pipeline: routing and dedupe', () => {
       const id = await submit({ sourceGlobId });
       const current = await item(id);
       const statement = `Revise or revert ${originalId} (${original.statement}): after 3 globs the rate of CI failing after local checks passed is 33% (1/3), against 33% (1/3) before.`;
-      await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, statement, signal, version: current.version + 1 }, current.version));
+      await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, statement, signal, version: current.version + 1 }, current.version));
       return id;
     };
     // An earlier one for the same original, rejected.
@@ -891,7 +891,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const id = await submit();
     const current = await item(id);
     await store.transaction((tx) =>
-      kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, status: 'merged', duplicateOf: 's1k99', target: null, version: current.version + 1 }, current.version),
+      learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, status: 'merged', duplicateOf: 's1k99', target: null, version: current.version + 1 }, current.version),
     );
     const refused = await knowledge.reopen(ADMIN, id, current.version + 1);
     expect(errorCode(refused)).toBe('invalid_input');
@@ -1283,7 +1283,7 @@ describe('KB pipeline: routing and dedupe', () => {
     // A document proposal from before routing (pending after the migration) is routed without the LLM...
     const legacy = await item(fresh);
     await store.transaction(async (tx) => {
-      await kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...legacy, processing: 'pending', target: null }, legacy.version);
+      await learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...legacy, processing: 'pending', target: null }, legacy.version);
       // As the queue migration leaves it: a routing job.
       await tx.enqueueEffects([{ kind: 'kb_route', globId: fresh }]);
     });
@@ -1291,7 +1291,7 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(await item(fresh)).toMatchObject({ processing: 'drafted', target: { name: 'architecture' } });
     // ...and one routed before drafting existed reads as drafted, with nothing to run.
     const routed = await item(replacing);
-    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...routed, processing: 'routed' }, routed.version));
+    await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...routed, processing: 'routed' }, routed.version));
     expect(await item(replacing)).toMatchObject({ processing: 'drafted', draft: null });
     expect(await queue.processNext()).toBeNull();
     expect(llm.calls).toHaveLength(0);

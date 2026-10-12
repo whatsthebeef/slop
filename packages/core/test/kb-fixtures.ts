@@ -1,6 +1,6 @@
 import type { OutboxJob } from '../src/domain/events.js';
 import { UNPROCESSED } from '../src/domain/kb.js';
-import type { KbItem, KbTarget } from '../src/domain/kb.js';
+import type { LearningWire, KbTarget } from '../src/domain/kb.js';
 import type { KbSignal } from '../src/domain/signals.js';
 import { MemoryStore } from '../src/testing/memory-store.js';
 import { NOW } from './fixtures.js';
@@ -15,7 +15,7 @@ export const TARGET: KbTarget = {
 };
 export const OTHER: KbTarget = { ...TARGET, section: 'Lint' };
 
-export const item = (patch: Partial<KbItem> = {}): KbItem => ({
+export const item = (patch: Partial<LearningWire> = {}): LearningWire => ({
   id: 's1k1',
   boardId: 1,
   status: 'open',
@@ -38,9 +38,9 @@ export const item = (patch: Partial<KbItem> = {}): KbItem => ({
   version: 1,
   ...patch,
 });
-export const routed = (patch: Partial<KbItem> = {}): KbItem =>
+export const routed = (patch: Partial<LearningWire> = {}): LearningWire =>
   item({ target: TARGET, processing: 'routed', ...patch });
-export const drafted = (patch: Partial<KbItem> = {}): KbItem =>
+export const drafted = (patch: Partial<LearningWire> = {}): LearningWire =>
   routed({ draft: { section: 'Test', content: '## Test\n' }, processing: 'drafted', ...patch });
 export const document = {
   name: 'architecture',
@@ -91,7 +91,7 @@ export const signal: KbSignal = {
 };
 
 /** A drafted item with every field a learning can carry: links of each kind, text and item contradictions, merged evidence, flags. */
-export const full = (patch: Partial<KbItem> = {}): KbItem =>
+export const full = (patch: Partial<LearningWire> = {}): LearningWire =>
   drafted({
     suggestedTarget: 'build doc',
     sourceGlobIds: ['s1t1', 's1t2'],

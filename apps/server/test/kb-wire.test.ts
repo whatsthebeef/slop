@@ -1,5 +1,5 @@
 import {
-  kbItems,
+  learningSeed,
   ArtifactService,
   BoardService,
   DecisionGlobService,
@@ -11,7 +11,7 @@ import {
   MAX_PROCESSING_ATTEMPTS,
   MiningService,
 } from '@slop/core';
-import type { Catalog, KbItem, Result } from '@slop/core';
+import type { Catalog, LearningWire, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { sql } from 'drizzle-orm';
@@ -29,7 +29,7 @@ import { fakeCodeHost } from './support/fake-codehost.js';
 
 /**
  * The wire contract of the KB routes and MCP tools: every response that carries a learning, as full JSON, key order
- * included. Recorded before the knowledge service moved off the KbItem adapter (s15t72) and kept as the contract the
+ * included. Recorded before the knowledge service moved off the LearningWire adapter (s15t72) and kept as the contract the
  * Knowledge page and agents rely on.
  */
 
@@ -213,16 +213,16 @@ describe('the KB wire contract', () => {
       }),
     ).id;
 
-  const read = async (id: string): Promise<KbItem> => {
-    const item = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+  const read = async (id: string): Promise<LearningWire> => {
+    const item = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (item === null) throw new Error(`missing ${id}`);
     return item;
   };
   /** Writes the item through the adapter, as the pipeline would. */
-  const write = async (id: string, patch: Partial<KbItem>): Promise<void> => {
+  const write = async (id: string, patch: Partial<LearningWire>): Promise<void> => {
     const current = await read(id);
     const written = await store.transaction((tx) =>
-      kbItems(tx, WRITES).updateKbItem(
+      learningSeed(tx, WRITES).updateSeeded(
         { ...current, ...patch, version: current.version + 1 },
         current.version,
       ),

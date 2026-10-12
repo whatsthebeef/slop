@@ -1,4 +1,4 @@
-import type { KbItem } from './kb.js';
+import type { LearningWire } from './kb.js';
 import type { Glob, Status } from './types.js';
 
 export type DomainError =
@@ -6,7 +6,7 @@ export type DomainError =
   | { readonly code: 'not_found'; readonly message: string }
   | { readonly code: 'version_conflict'; readonly message: string; readonly current: Glob }
   /** A KB item changed since it was read (another admin decided it). */
-  | { readonly code: 'version_conflict'; readonly message: string; readonly currentItem: KbItem }
+  | { readonly code: 'version_conflict'; readonly message: string; readonly currentItem: LearningWire }
   | {
       readonly code: 'invalid_transition';
       readonly message: string;

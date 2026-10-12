@@ -1,4 +1,4 @@
-import type { EffectCheck, ExtraEvidence, KbContradiction, KbCoverage, KbDraft, KbItem, KbMergeNote, KbOutcome, KbPossibleCoverage, KbSignal, KbTarget, ProposedDocument } from '@slop/core';
+import type { EffectCheck, ExtraEvidence, KbContradiction, KbCoverage, KbDraft, LearningWire, KbMergeNote, KbOutcome, KbPossibleCoverage, KbSignal, KbTarget, ProposedDocument } from '@slop/core';
 import { KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, LEARNING_TYPES } from '@slop/core';
 import { boolean, index, integer, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
@@ -67,7 +67,7 @@ export const kbProposals = pgTable(
 );
 
 /** A KB item as its row stood in the old table. */
-export const kbProposalRow = (item: KbItem): typeof kbProposals.$inferInsert => ({
+export const kbProposalRow = (item: LearningWire): typeof kbProposals.$inferInsert => ({
   ...item,
   sourceGlobIds: [...item.sourceGlobIds],
   extraEvidence: [...item.extraEvidence],

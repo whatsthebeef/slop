@@ -1,5 +1,5 @@
 import {
-  kbItems,
+  learningSeed,
   ArtifactService,
   BoardService,
   FindingsService,
@@ -10,7 +10,7 @@ import {
   MAX_PROCESSING_ATTEMPTS,
   MiningService,
 } from '@slop/core';
-import type { BoardJob, BoardJobStatus, Catalog, KbItem, Result } from '@slop/core';
+import type { BoardJob, BoardJobStatus, Catalog, LearningWire, Result } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -127,9 +127,9 @@ describe('KB routes: retrying failed items and catalog updates', () => {
   /** A write that changes nothing but the version, as a concurrent writer's would. */
   const bump = (id: string) =>
     store.transaction(async (tx) => {
-      const current = await kbItems(tx).getKbItem(id);
+      const current = await learningSeed(tx).readSeeded(id);
       if (current === null) throw new Error('missing');
-      await kbItems(tx, { clock: { now: () => new Date().toISOString() } }).updateKbItem({ ...current, version: current.version + 1 }, current.version);
+      await learningSeed(tx, { clock: { now: () => new Date().toISOString() } }).updateSeeded({ ...current, version: current.version + 1 }, current.version);
     });
   const post = (path: string, body: unknown, email = ADMIN) =>
     app.request(path, {
@@ -157,7 +157,7 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     expect((await post(`/api/kb/${id}/retry`, {})).status).toBe(422);
     const stale = await post(`/api/kb/${id}/retry`, { version: 1 });
     expect(stale.status).toBe(409);
-    expect(((await stale.json()) as { currentItem: KbItem }).currentItem.version).toBe(2);
+    expect(((await stale.json()) as { currentItem: LearningWire }).currentItem.version).toBe(2);
 
     const response = await post(`/api/kb/${id}/retry`, { version: 2 });
     expect(response.status).toBe(200);
@@ -168,7 +168,7 @@ describe('KB routes: retrying failed items and catalog updates', () => {
       processingAttempts: 0,
       version: 3,
     });
-    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({
+    expect(await store.transaction((tx) => learningSeed(tx).readSeeded(id))).toMatchObject({
       processing: 'pending',
       processingAttempts: 0,
       version: 3,
@@ -188,9 +188,9 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     const coveredBy = { kind: 'knowledge', knowledgeKind: 'doc', name: 'testing', section: null };
     // The pipeline closed it as covered by a document's text.
     await store.transaction(async (tx) => {
-      const current = await kbItems(tx).getKbItem(id);
+      const current = await learningSeed(tx).readSeeded(id);
       if (current === null) throw new Error('missing');
-      await kbItems(tx, { clock: { now: () => new Date().toISOString() } }).updateKbItem(
+      await learningSeed(tx, { clock: { now: () => new Date().toISOString() } }).updateSeeded(
         { ...current, status: 'covered', target: { ...target, kind: 'doc' }, coveredBy: { ...coveredBy, kind: 'knowledge', knowledgeKind: 'doc' }, version: 2 },
         current.version,
       );
@@ -202,7 +202,7 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     const response = await post(`/api/kb/${id}/reopen`, { version: 2 });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ id, status: 'open', coveredBy: null, processing: 'routed', target, version: 3 });
-    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({ status: 'open', coveredBy: null, processing: 'routed' });
+    expect(await store.transaction((tx) => learningSeed(tx).readSeeded(id))).toMatchObject({ status: 'open', coveredBy: null, processing: 'routed' });
     // Only closed items: reopening an open one is refused.
     expect((await post(`/api/kb/${id}/reopen`, { version: 3 })).status).toBe(422);
   });
@@ -217,7 +217,7 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     const get = (query: string) => app.request(`/api/boards/${boardId}/kb/proposals${query}`, { headers: { 'x-test-email': DEV } });
     const response = await get('?limit=1');
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { open: KbItem[]; decided: { items: KbItem[]; total: number }; closed: { total: number } };
+    const body = (await response.json()) as { open: LearningWire[]; decided: { items: LearningWire[]; total: number }; closed: { total: number } };
     expect(body.decided.items.map((i) => i.id)).toEqual([rejected[1]]);
     expect(body.decided.total).toBe(2);
     expect(body.open.every((i) => i.status === 'open')).toBe(true);
@@ -230,7 +230,7 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     await database.db.execute(
       sql`update globs set data = jsonb_set(data, '{attributes,outcome,at}', to_jsonb(to_char((now() + interval '1 hour') at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))) where id = ${rejected[0]}`,
     );
-    const redecided = (await (await get('?limit=1')).json()) as { decided: { items: KbItem[] } };
+    const redecided = (await (await get('?limit=1')).json()) as { decided: { items: LearningWire[] } };
     expect(redecided.decided.items.map((i) => i.id)).toEqual([rejected[0]]);
   });
 

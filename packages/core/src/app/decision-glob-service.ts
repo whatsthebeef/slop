@@ -6,7 +6,7 @@ import { decisionOf } from '../domain/decision-glob.js';
 import type { EffectCheck } from '../domain/effect-check.js';
 import { knowledgePageEffect } from '../domain/events.js';
 import type { DecisionOutcomeKind } from '../domain/attributes.js';
-import type { DraftPreview, KbDraft, KbItemStatus, KbProcessing, KbTarget } from '../domain/kb.js';
+import type { DraftPreview, KbDraft, LearningStatus, KbProcessing, KbTarget } from '../domain/kb.js';
 import { isLearning, learningAssessmentFacts, learningDocument, learningDraft, learningEffectCheck, learningStatus, learningTarget, pipelineState } from '../domain/learning.js';
 import type { LearningRead } from '../domain/learning.js';
 import { isAgentSetKind } from '../domain/knowledge.js';
@@ -50,7 +50,7 @@ export interface DecisionDiff {
 
 /** Where a learning is: whether it is still open, the pipeline's step and its failures, and the effect check of an approved change. */
 export interface DecisionLearning {
-  readonly status: KbItemStatus;
+  readonly status: LearningStatus;
   readonly processing: KbProcessing;
   readonly processingError: string | null;
   readonly processingAttempts: number;

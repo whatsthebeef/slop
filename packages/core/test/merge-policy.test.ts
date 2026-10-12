@@ -1,4 +1,4 @@
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
@@ -7,7 +7,7 @@ import { KbPipeline } from '../src/app/kb-pipeline.js';
 import { KnowledgeService, readMergePolicy } from '../src/app/knowledge-service.js';
 import type { NewLearning } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import { isAgentSetKind } from '../src/domain/knowledge.js';
 import {
   checkMergePolicy,
@@ -111,8 +111,8 @@ describe('the merge policy through the KB', () => {
   let boardId: number;
   let globId: string;
 
-  const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+  const item = async (id: string): Promise<LearningWire> => {
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };

@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { BoardService, DecisionGlobService, GlobService, InboxService, KnowledgeService, kbItems } from '@slop/core';
+import { BoardService, DecisionGlobService, GlobService, InboxService, KnowledgeService, learningSeed } from '@slop/core';
 import type { Catalog, Effect, Glob, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -212,7 +212,7 @@ describe('decision globs', () => {
       expect((await decide(globId, { outcome: 'reject', reason: 'No' }, DEV)).status).toBe(403);
       const rejected = await json<View>(await decide(globId, { outcome: 'reject', reason: 'Already covered' }));
       expect(rejected).toMatchObject({ status: 'signed_off', attributes: { archived: true, outcome: { kind: 'reject' } } });
-      expect((await store.transaction((tx) => kbItems(tx).getKbItem(id)))?.status).toBe('rejected');
+      expect((await store.transaction((tx) => learningSeed(tx).readSeeded(id)))?.status).toBe('rejected');
       const list = await json<View[]>(await call(ADMIN, 'GET', `/api/boards/${boardId}/globs`));
       expect(list.map((g) => g.id)).not.toContain(globId);
       const page = await json<{ globs: View[] }>(await call(ADMIN, 'GET', `/api/boards/${boardId}/signed-off`));
@@ -230,7 +230,7 @@ describe('decision globs', () => {
       await pickUp(globId);
       const accepted = await json<View>(await decide(globId, { outcome: 'accept' }));
       expect(accepted).toMatchObject({ status: 'reviewing', attributes: { outcome: { kind: 'accept' } } });
-      expect((await store.transaction((tx) => kbItems(tx).getKbItem(id)))?.status).toBe('approved');
+      expect((await store.transaction((tx) => learningSeed(tx).readSeeded(id)))?.status).toBe('approved');
       const reopened = await json<View>(await call(ADMIN, 'POST', `/api/globs/${globId}/actions/reopen`, { version: accepted.version }));
       expect(reopened).toMatchObject({ status: 'in_progress', attributes: { outcome: null } });
       const again = await json<View>(await decide(globId, { outcome: 'accept' }));
@@ -269,10 +269,10 @@ describe('decision globs', () => {
       const { globId, id } = await submit('Close me', 'gotcha');
       const { id: other } = await submit('The survivor', 'gotcha');
       await store.transaction(async (tx) => {
-        const current = await kbItems(tx).getKbItem(id);
+        const current = await learningSeed(tx).readSeeded(id);
         if (current === null) throw new Error('missing');
         const target = { kind: 'doc' as const, name: 'build', section: null, newDocument: null };
-        await kbItems(tx, { clock: { now: () => new Date().toISOString() } }).updateKbItem({ ...current, status: 'merged', target, duplicateOf: other, version: current.version + 1 }, current.version);
+        await learningSeed(tx, { clock: { now: () => new Date().toISOString() } }).updateSeeded({ ...current, status: 'merged', target, duplicateOf: other, version: current.version + 1 }, current.version);
       });
       const closed = await json<View>(await call(ADMIN, 'GET', `/api/globs/${globId}`));
       expect(closed).toMatchObject({ status: 'signed_off', attributes: { closedAs: 'merged' }, links: [{ id: other, kind: 'duplicate_of' }] });
@@ -282,7 +282,7 @@ describe('decision globs', () => {
       const reopened = await call(ADMIN, 'POST', `/api/globs/${globId}/actions/reopen`, { version: closed.version });
       expect(reopened.status).toBe(200);
       expect(await json<View>(reopened)).toMatchObject({ status: 'planning', links: [{ id: other, kind: 'kept_apart_from', source: 'explicit' }] });
-      expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({ status: 'open', keptApartFrom: [other] });
+      expect(await store.transaction((tx) => learningSeed(tx).readSeeded(id))).toMatchObject({ status: 'open', keptApartFrom: [other] });
     });
   });
 

@@ -1,5 +1,5 @@
-import { DEDUPE_SYSTEM, GlobService, KbPipeline, KnowledgeService, kbItems, LlmBusy, LlmUnavailable, MAX_PROCESSING_ATTEMPTS, ROUTE_SYSTEM, UNPROCESSED } from '@slop/core';
-import type { Effect, GlobService as Globs, KbItem, Llm, Result } from '@slop/core';
+import { DEDUPE_SYSTEM, GlobService, KbPipeline, KnowledgeService, learningSeed, LlmBusy, LlmUnavailable, MAX_PROCESSING_ATTEMPTS, ROUTE_SYSTEM, UNPROCESSED } from '@slop/core';
+import type { Effect, GlobService as Globs, LearningWire, Llm, Result } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PgStore } from '../src/db/store.js';
@@ -85,8 +85,8 @@ describe('KB pipeline in Postgres', () => {
   const submit = async (statement: string) =>
     unwrap(await knowledge.submitLearning(DEV, boardId, { sourceGlobId: globId, type: 'gotcha', statement, evidence: 'Seen in review' })).id;
 
-  const get = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+  const get = async (id: string): Promise<LearningWire> => {
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -121,7 +121,7 @@ describe('KB pipeline in Postgres', () => {
 
   it('round-trips every KB item field through its decision glob, artifacts, attachments and links', async () => {
     const id = `s${String(boardId)}k500`;
-    const item: KbItem = {
+    const item: LearningWire = {
       id,
       boardId,
       status: 'open',
@@ -156,22 +156,22 @@ describe('KB pipeline in Postgres', () => {
       version: 1,
     };
     const writes = { clock };
-    expect(await store.transaction((tx) => kbItems(tx, writes).insertKbItem(item))).toBe(true);
+    expect(await store.transaction((tx) => learningSeed(tx, writes).insertSeeded(item))).toBe(true);
     expect(await get(id)).toEqual(item);
-    const closed: KbItem = {
+    const closed: LearningWire = {
       ...item,
       status: 'covered',
       coveredBy: { kind: 'knowledge', knowledgeKind: 'doc', name: 'build', section: null },
       mergeNote: { by: 'consolidation', quote: 'a', survivorQuote: 'b', at: '2026-10-05T12:00:00.000Z' },
       version: 2,
     };
-    expect(await store.transaction((tx) => kbItems(tx, writes).updateKbItem(closed, 1))).toBe(true);
+    expect(await store.transaction((tx) => learningSeed(tx, writes).updateSeeded(closed, 1))).toBe(true);
     // Closed, it reads as out of the pipeline.
     expect(await get(id)).toEqual({ ...closed, processing: 'none' });
     const glob = await store.transaction((tx) => tx.getGlob(id));
     expect(glob).toMatchObject({ category: 'decision', status: 'signed_off', version: 2, attributes: { closedAs: 'covered', archived: true, coveredByText: { name: 'build' } } });
     // A stale version writes nothing.
-    expect(await store.transaction((tx) => kbItems(tx, writes).updateKbItem({ ...closed, version: 3 }, 1))).toBe(false);
+    expect(await store.transaction((tx) => learningSeed(tx, writes).updateSeeded({ ...closed, version: 3 }, 1))).toBe(false);
   });
 
   it('queues routing on the llm lane in the submit transaction, and reads the pipeline fields from that job', async () => {
@@ -344,7 +344,7 @@ describe('KB pipeline in Postgres', () => {
         if (calls === 1) {
           // Something else writes the item while it is being routed: the result is dropped and the step reruns.
           const current = await get(id);
-          await store.transaction((tx) => kbItems(tx, { clock }).updateKbItem({ ...current, evidence: 'More evidence', version: current.version + 1 }, current.version));
+          await store.transaction((tx) => learningSeed(tx, { clock }).updateSeeded({ ...current, evidence: 'More evidence', version: current.version + 1 }, current.version));
         }
         return NEW_DOC;
       },

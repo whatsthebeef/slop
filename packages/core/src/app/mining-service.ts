@@ -18,7 +18,7 @@ import type {
   MergedCommit,
 } from '../domain/signals.js';
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
-import { newKbItemId } from './knowledge-service.js';
+import { newLearningId } from './knowledge-service.js';
 import { boardLearnings, readLearning } from './learning-reads.js';
 import { createLearning, refreshMinedLearning } from './learning-writes.js';
 
@@ -219,7 +219,7 @@ export class MiningService {
 
   private async insertItem(tx: Tx, boardId: number, agentSetVersion: number, m: Measurement, signal: KbSignal, now: string, hints: Hint[]): Promise<string> {
     const definition = signalDefinition(m.key);
-    const id = await newKbItemId(tx, boardId);
+    const id = await newLearningId(tx, boardId);
     // The item is its decision glob, so mined proposals are decided where the board looks; the KB pipeline routes, dedupes and drafts it.
     const created = await createLearning(
       tx,

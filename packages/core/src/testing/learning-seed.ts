@@ -1,9 +1,9 @@
-import { decisionGlobTitle, decisionOf, defaultScope, kbItemKey } from '../domain/decision-glob.js';
+import { decisionGlobTitle, decisionOf, defaultScope, learningKey } from '../domain/decision-glob.js';
 import type { DecisionAttributes } from '../domain/attributes.js';
 import type { DomainEvent, Effect } from '../domain/events.js';
 import { parseId } from '../domain/ids.js';
 import { kbEffectsFor } from '../domain/kb.js';
-import type { DraftPreview, KbItem, KbItemStatus } from '../domain/kb.js';
+import type { DraftPreview, LearningWire, LearningStatus } from '../domain/kb.js';
 import { kbAttributesOf, kbLinksOf, proposalText } from '../domain/kb-glob.js';
 import { learningWire } from '../domain/learning-wire.js';
 import * as machine from '../domain/machine.js';
@@ -11,31 +11,32 @@ import type { Transition } from '../domain/machine.js';
 import type { Result } from '../domain/errors.js';
 import type { Actor, Glob, GlobLink } from '../domain/types.js';
 import type { Hint, Tx } from '../ports.js';
-import { DECISION_SYSTEM_ACTOR, decisionContext } from './decision-glob.js';
-import { boardLearnings, readLearnings } from './learning-reads.js';
-import { assessLearning, assessmentDue, learningConflicts, refreshOnApproval, writeLearningArtifacts } from './learning-writes.js';
-import type { LearningArtifactState, LearningWriteContext } from './learning-writes.js';
+import { DECISION_SYSTEM_ACTOR, decisionContext } from '../app/decision-glob.js';
+import { boardLearnings, readLearnings } from '../app/learning-reads.js';
+import { assessLearning, assessmentDue, learningConflicts, refreshOnApproval, writeLearningArtifacts } from '../app/learning-writes.js';
+import type { LearningArtifactState, LearningWriteContext } from '../app/learning-writes.js';
 
 /**
- * KB items as the pipeline, the Knowledge page and the services read and write them. A KB item *is* its decision glob
+ * Test seeding: writes a learning as a test describes it (a `LearningWire`) and reads it back. Production code does not use
+ * this; it reads with `domain/learning.ts` and writes with `app/learning-writes.ts`. A learning *is* its decision glob
  * (same `k` ID; `domain/kb-glob.ts` maps the two shapes): this reads the glob, its artifacts and its pipeline jobs, and
  * writes them back in one glob write plus artifact versions. Every status change goes through a decision row (approved:
  * `decisionApproved`; rejected: `decisionRejected`; closed by the pipeline: `closeDecision`, D10′; reopened after a
  * closure: `reopenClosedDecision`, D12; reopened after an agent's decision: `decisionReopened`). The pipeline's queue is
  * the outbox: a write queues the step it makes due (`kbEffectsFor`) in the same transaction, and an open item's pipeline
- * fields are read from its next step's newest job (`withProcessing`). `KbItem.version` is the glob's version.
+ * fields are read from its next step's newest job (`withProcessing`). `LearningWire.version` is the glob's version.
  */
-export interface KbItems {
-  getKbItem(id: string): Promise<KbItem | null>;
+export interface LearningSeed {
+  readSeeded(id: string): Promise<LearningWire | null>;
   /** A board's items, oldest first, optionally with one status. */
-  listKbItems(boardId: number, status?: KbItemStatus): Promise<KbItem[]>;
+  listSeeded(boardId: number, status?: LearningStatus): Promise<LearningWire[]>;
   /** Inserts a new item as its decision glob (row D1, then the row its status needs) and queues its first step; false if the ID is taken. */
-  insertKbItem(item: KbItem): Promise<boolean>;
+  insertSeeded(item: LearningWire): Promise<boolean>;
   /**
    * Writes `item` if the glob's version is still `expectedVersion` (the glob takes `item.version`) and queues any step the
    * change makes due; false otherwise.
    */
-  updateKbItem(item: KbItem, expectedVersion: number, options?: KbWriteOptions): Promise<boolean>;
+  updateSeeded(item: LearningWire, expectedVersion: number, options?: KbWriteOptions): Promise<boolean>;
 }
 
 export interface KbWriteOptions {
@@ -51,15 +52,15 @@ export interface KbWriteOptions {
 export type KbWriteContext = LearningWriteContext;
 
 /** Channels whose assessments slop writes by itself as the pipeline works. */
-const channelOf = (item: KbItem): 'agent' | 'mined' => (item.source === 'mined' ? 'mined' : 'agent');
+const channelOf = (item: LearningWire): 'agent' | 'mined' => (item.source === 'mined' ? 'mined' : 'agent');
 
-const isClosed = (status: KbItemStatus): status is 'merged' | 'suppressed' | 'covered' =>
+const isClosed = (status: LearningStatus): status is 'merged' | 'suppressed' | 'covered' =>
   status === 'merged' || status === 'suppressed' || status === 'covered';
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /** The link that closed an item, if one names a learning (coverage by a document's text has none). */
-const closingLink = (item: KbItem): GlobLink | null =>
+const closingLink = (item: LearningWire): GlobLink | null =>
   item.duplicateOf !== null
     ? { id: item.duplicateOf, kind: 'duplicate_of', source: 'pipeline' }
     : item.suppressedBy !== null
@@ -69,7 +70,7 @@ const closingLink = (item: KbItem): GlobLink | null =>
         : null;
 
 /** An item's artifact state, for `writeLearningArtifacts`. */
-const artifactStateOf = (item: KbItem): LearningArtifactState => ({
+const artifactStateOf = (item: LearningWire): LearningArtifactState => ({
   origin: { id: item.id, createdAt: item.createdAt, submittedBy: item.submittedBy, source: item.source, agentSetVersion: item.agentSetVersion },
   payload: proposalText(item),
   documentEvidence: item.document === null ? null : item.evidence,
@@ -85,31 +86,31 @@ const artifactStateOf = (item: KbItem): LearningArtifactState => ({
   mergeNote: item.mergeNote,
 });
 
-export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
+export const learningSeed = (tx: Tx, context?: KbWriteContext): LearningSeed => {
   const writes = (): LearningWriteContext => {
-    if (context === undefined) throw new Error('KB item writes need a clock (kbItems(tx, { clock }))');
+    if (context === undefined) throw new Error('KB item writes need a clock (learningSeed(tx, { clock }))');
     return context;
   };
   const clockOf = () => writes().clock;
   const raise = (hint: Hint) => context?.raise?.(hint);
 
   /** Items from their globs, with artifacts and (for open ones) jobs read in one query each (`readLearnings`). */
-  const itemsOf = async (globs: readonly Glob[]): Promise<KbItem[]> => (await readLearnings(tx, globs)).map(learningWire);
-  const boardItems = async (boardId: number): Promise<KbItem[]> => (await boardLearnings(tx, boardId)).map(learningWire);
-  const read = async (id: string): Promise<KbItem | null> => {
+  const itemsOf = async (globs: readonly Glob[]): Promise<LearningWire[]> => (await readLearnings(tx, globs)).map(learningWire);
+  const boardItems = async (boardId: number): Promise<LearningWire[]> => (await boardLearnings(tx, boardId)).map(learningWire);
+  const read = async (id: string): Promise<LearningWire | null> => {
     const glob = await tx.getGlob(id);
     return glob === null ? null : ((await itemsOf([glob]))[0] ?? null);
   };
 
   /** The artifact versions a change needs (`writeLearningArtifacts`). */
-  const writeArtifacts = (glob: Glob, before: KbItem | null, after: KbItem, at: string): Promise<boolean> =>
+  const writeArtifacts = (glob: Glob, before: LearningWire | null, after: LearningWire, at: string): Promise<boolean> =>
     writeLearningArtifacts(tx, glob, before === null ? null : artifactStateOf(before), artifactStateOf(after), at);
 
   /** The broader decisions an open learning contradicts (by scope rank). */
-  const conflictsOf = (scope: DecisionAttributes['scope'], item: KbItem): Promise<string[]> => learningConflicts(tx, scope, item.status, item.contradicts);
+  const conflictsOf = (scope: DecisionAttributes['scope'], item: LearningWire): Promise<string[]> => learningConflicts(tx, scope, item.status, item.contradicts);
 
   /** The decision row a status change needs, if any. */
-  const statusStep = (glob: Glob, before: KbItem | null, after: KbItem, options: KbWriteOptions, at: string): Result<Transition> | null => {
+  const statusStep = (glob: Glob, before: LearningWire | null, after: LearningWire, options: KbWriteOptions, at: string): Result<Transition> | null => {
     const from = before?.status ?? 'open';
     if (from === after.status) return null;
     const ctx = decisionContext(clockOf(), options.actor ?? null, at);
@@ -126,7 +127,7 @@ export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
    * The glob after `after` is written over `glob` (as `before`): the status row, then the item's fields, links and
    * conflict flags. Throws when the row refuses: callers check what may happen before they write.
    */
-  const nextGlob = async (glob: Glob, before: KbItem | null, after: KbItem, options: KbWriteOptions, at: string): Promise<{ glob: Glob; events: readonly DomainEvent[]; effects: readonly Effect[] }> => {
+  const nextGlob = async (glob: Glob, before: LearningWire | null, after: LearningWire, options: KbWriteOptions, at: string): Promise<{ glob: Glob; events: readonly DomainEvent[]; effects: readonly Effect[] }> => {
     const step = statusStep(glob, before, after, options, at);
     if (step !== null && !step.ok) throw new Error(`${after.id}: ${step.error.message}`);
     const moved = step?.value.glob ?? glob;
@@ -160,17 +161,17 @@ export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
   };
 
   /** Writes the assessment of an automated channel's open learning: at creation, when drafted, and when its conflict flags move. */
-  const assess = (glob: Glob, item: KbItem, preview: DraftPreview | null, due: boolean): Promise<void> => assessLearning(tx, writes(), glob, item, preview, due);
+  const assess = (glob: Glob, item: LearningWire, preview: DraftPreview | null, due: boolean): Promise<void> => assessLearning(tx, writes(), glob, item, preview, due);
 
   return {
-    getKbItem: read,
-    listKbItems: async (boardId, status) => (await boardItems(boardId)).filter((i) => status === undefined || i.status === status),
-    insertKbItem: async (item) => {
+    readSeeded: read,
+    listSeeded: async (boardId, status) => (await boardItems(boardId)).filter((i) => status === undefined || i.status === status),
+    insertSeeded: async (item) => {
       const clock = clockOf();
       const board = await tx.getBoard(item.boardId);
       const parsed = parseId(item.id);
       if (board === null || parsed?.letter !== 'k' || parsed.boardId !== item.boardId) throw new Error(`${item.id} is not a KB item ID on board ${String(item.boardId)}`);
-      const open: KbItem = { ...item, status: 'open' };
+      const open: LearningWire = { ...item, status: 'open' };
       const created = machine.create(
         {
           id: item.id,
@@ -190,7 +191,7 @@ export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
       if (!created.ok) throw new Error(`${item.id}: ${created.error.message}`);
       // A seeded item that isn't open goes through the row its status needs, as if it had been decided.
       const written = await nextGlob({ ...created.value.glob, version: item.version }, open, item, {}, item.decidedAt ?? clock.now());
-      if (!(await tx.insertGlob(written.glob, kbItemKey(item.id)))) return false;
+      if (!(await tx.insertGlob(written.glob, learningKey(item.id)))) return false;
       await tx.appendEvents([...created.value.events, ...written.events]);
       await writeArtifacts(written.glob, null, item, clock.now());
       await assess(written.glob, item, null, true);
@@ -198,7 +199,7 @@ export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
       raise({ kind: 'glob.changed', boardId: item.boardId, globId: item.id, version: written.glob.version });
       return true;
     },
-    updateKbItem: async (item, expectedVersion, options = {}) => {
+    updateSeeded: async (item, expectedVersion, options = {}) => {
       const now = clockOf().now();
       const glob = await tx.getGlob(item.id);
       if (glob?.version !== expectedVersion) return false;
@@ -226,14 +227,4 @@ export const kbItems = (tx: Tx, context?: KbWriteContext): KbItems => {
       return true;
     },
   };
-};
-
-/**
- * The live hint for a pipeline job the outbox settled (failed, retrying, or waiting with a new reason): the board's
- * Knowledge page refetches. Null for any other effect.
- */
-export const kbJobHint = (effect: Effect): Hint | null => {
-  if (effect.kind !== 'kb_route' && effect.kind !== 'kb_draft') return null;
-  const parsed = parseId(effect.globId);
-  return parsed === null ? null : { kind: 'board.kb', boardId: parsed.boardId };
 };
