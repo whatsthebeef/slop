@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import {
+  kbItems,
   ArtifactService,
   BoardService,
   EffectCheckService,
@@ -219,7 +220,7 @@ describe('Effect checks in Postgres', () => {
       return item;
     });
   const get = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -397,7 +398,7 @@ describe('Effect checks in Postgres', () => {
   });
 
   it('raises one revise-or-revert item when two runs check at once, and stores the check', async () => {
-    const watching = (await store.transaction((tx) => tx.listKbItems(boardId))).filter(
+    const watching = (await store.transaction((tx) => kbItems(tx).listKbItems(boardId))).filter(
       (i) => i.effectCheck?.state === 'watching',
     );
     expect(watching).toHaveLength(1);
@@ -417,7 +418,7 @@ describe('Effect checks in Postgres', () => {
       raisedItemId: raised[0],
       after: { affected: 2, eligible: 3 },
     });
-    const items = await store.transaction((tx) => tx.listKbItems(boardId));
+    const items = await store.transaction((tx) => kbItems(tx).listKbItems(boardId));
     expect(items.filter((i) => i.signal?.key === `effect:${watched.id}`).map((i) => i.id)).toEqual(
       raised,
     );
@@ -430,6 +431,7 @@ describe('Effect checks in Postgres', () => {
   });
   it('refuses a watch signal on a document approval at the route (s15f8)', async () => {
     const item = await mined();
+    const before = await get(item.id);
     const refused = await request('POST', `/api/kb/${item.id}/approve`, {
       as: 'document',
       version: item.version,
@@ -440,7 +442,7 @@ describe('Effect checks in Postgres', () => {
     expect(((await refused.json()) as { message: string }).message).toContain(
       "A document proposal doesn't watch a signal",
     );
-    expect(await get(item.id)).toEqual(item);
+    expect(await get(item.id)).toEqual(before);
   });
 
   it('answers the approval when the check started on it fails, and logs the failure (s15f8)', async () => {

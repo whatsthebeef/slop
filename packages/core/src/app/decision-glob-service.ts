@@ -13,6 +13,7 @@ import { memberOf, roleOf } from './access.js';
 import { applyDecisionStep, createDecisionForExtracted, decisionContext, writeAssessment, syncDecisionFromItem } from './decision-glob.js';
 import type { GlobService } from './glob-service.js';
 import type { Approval, KnowledgeService, TargetChange } from './knowledge-service.js';
+import { kbItems } from './kb-items.js';
 
 /** Who may decide a decision glob, and so a KB item through it. */
 const DECIDERS: readonly Role[] = ['admin', 'po'];
@@ -205,7 +206,7 @@ export class DecisionGlobService {
         ? invalidInput('This decision has no knowledge item, so there is nothing to edit or retarget')
         : ok(null);
     }
-    const item = await tx.getKbItem(itemId);
+    const item = await kbItems(tx).getKbItem(itemId);
     if (item === null) return notFound(`No KB item ${itemId}`);
     if (item.status !== 'open') {
       // A reopened decision whose item was approved stays accepted: accepting again only records the outcome.
@@ -273,7 +274,7 @@ export class DecisionGlobService {
       if (attributes === null) return invalidInput(`${id} is not a decision glob`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const item = attributes.kbItemId === null ? null : await tx.getKbItem(attributes.kbItemId);
+      const item = attributes.kbItemId === null ? null : await kbItems(tx).getKbItem(attributes.kbItemId);
       const preview = item === null ? null : await this.deps.knowledge.previewFor(tx, item);
       const draft = item?.document == null ? (item?.draft ?? null) : { section: null, content: item.document.content };
       return ok({ target: item?.target ?? null, currentVersion: preview?.version ?? null, preview, draft });
@@ -289,7 +290,7 @@ export class DecisionGlobService {
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
       const itemId = decisionOf(glob)?.kbItemId ?? null;
-      const item = itemId === null ? null : await tx.getKbItem(itemId);
+      const item = itemId === null ? null : await kbItems(tx).getKbItem(itemId);
       const preview = item === null ? null : await this.deps.knowledge.previewFor(tx, item);
       const changed = await writeAssessment(tx, { clock: this.deps.clock }, glob, item, preview);
       const latest = (await tx.artifactVersions(id, 'assessment', '')).at(-1);
@@ -321,7 +322,7 @@ export class DecisionGlobService {
   /** Brings the glob in front of one KB item in line with it (a repair path and what the backfill's resync uses). */
   async syncFromItem(itemId: string): Promise<void> {
     const hints = await this.deps.store.transaction(async (tx) => {
-      const item = await tx.getKbItem(itemId);
+      const item = await kbItems(tx).getKbItem(itemId);
       if (item === null) return [];
       return syncDecisionFromItem(tx, this.deps.clock, item, await this.deps.knowledge.previewFor(tx, item));
     });

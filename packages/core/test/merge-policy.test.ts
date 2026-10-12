@@ -1,3 +1,4 @@
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
@@ -17,6 +18,7 @@ import {
 } from '../src/domain/merge-policy.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import { MemoryKbQueue } from '../src/testing/kb-queue.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -103,13 +105,14 @@ describe('the merge policy through the KB', () => {
   let store: MemoryStore;
   let knowledge: KnowledgeService;
   let pipeline: KbPipeline;
+  let queue: MemoryKbQueue;
   let router: FakeLlm;
   let drafter: FakeLlm;
   let boardId: number;
   let globId: string;
 
   const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -130,7 +133,7 @@ describe('the merge policy through the KB', () => {
     const id = await submit();
     unwrap(await knowledge.changeTarget(ADMIN, id, (await item(id)).version, TARGET));
     drafter.answer(json({ section: null, content, rationale: 'Sets the launch' }));
-    expect(await pipeline.process(id)).toBe(true);
+    expect(await queue.process(id)).toBe(true);
     return id;
   };
   const approveDraft = async (id: string, patch: { content?: string } = {}) =>
@@ -144,6 +147,7 @@ describe('the merge policy through the KB', () => {
     drafter = new FakeLlm();
     knowledge = new KnowledgeService({ store, clock, catalog, notifier });
     pipeline = new KbPipeline({ store, clock, catalog, notifier, route: router, draft: drafter });
+    queue = new MemoryKbQueue(store, pipeline, clock, notifier);
     const boards = new BoardService({ store, notifier });
     const globs = new GlobService({
       store,
@@ -175,7 +179,7 @@ describe('the merge policy through the KB', () => {
   it('routes a learning to the policy, showing the model its current value (or that it is not set)', async () => {
     const id = await submit();
     router.answer(json({ target: { kind: 'merge_policy', name: 'whatever', section: 'x' }, catalogCandidate: false }), json({ contradicts: [] }));
-    expect(await pipeline.process(id)).toBe(true);
+    expect(await queue.process(id)).toBe(true);
     expect(await item(id)).toMatchObject({ processing: 'routed', target: { kind: 'merge_policy', name: 'merge-policy', section: null, newDocument: null } });
     expect(router.calls[0]?.prompt).toContain('Merge policy (merge-policy):\n(not set)');
     expect(router.calls[0]?.system).toContain('"merge_policy"');
@@ -213,7 +217,7 @@ describe('the merge policy through the KB', () => {
     const id = await submit();
     unwrap(await knowledge.changeTarget(ADMIN, id, (await item(id)).version, TARGET));
     drafter.answer(json({ section: null, content: { exclusivePaths: 'x' }, rationale: 'r' }));
-    expect(await pipeline.process(id)).toBe(true);
+    expect(await queue.process(id)).toBe(true);
     expect(await item(id)).toMatchObject({ processing: 'routed', draft: null, processingAttempts: 1 });
     expect((await item(id)).processingError).toContain('The drafted merge policy is invalid');
 

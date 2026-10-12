@@ -1,3 +1,4 @@
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
@@ -105,7 +106,7 @@ describe('submit_learning', () => {
         }),
       ),
     );
-    const item = await store.transaction((tx) => tx.getKbItem(id));
+    const item = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     expect(item).toEqual({
       id,
       boardId,
@@ -130,16 +131,16 @@ describe('submit_learning', () => {
       decisionGlobId: 's1k1',
       version: 1,
     });
-    const open = await store.transaction((tx) => tx.listKbItems(boardId, 'open'));
+    const open = await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'open'));
     expect(open.map((i) => i.id)).toEqual([id]);
-    expect(await store.transaction((tx) => tx.listKbItems(boardId, 'approved'))).toEqual([]);
+    expect(await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'approved'))).toEqual([]);
   });
 
   it('stores no agent-set version or target when none is given', async () => {
     const { id } = unwrap(
       await knowledge.submitLearning(DEV, boardId, learning({ suggestedTarget: '  ' })),
     );
-    expect(await store.transaction((tx) => tx.getKbItem(id))).toMatchObject({
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({
       agentSetVersion: null,
       suggestedTarget: null,
     });
@@ -203,7 +204,7 @@ describe('KB review', () => {
     ).id;
 
   const item = async (id: string) => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -333,7 +334,7 @@ describe('KB review', () => {
         publish: (hint) => {
           // A client refetching on the hint must find the change.
           if (hint.kind !== 'board.kb') return;
-          reads.push(store.transaction(async (tx) => (await tx.listKbItems(boardId)).at(-1)?.status));
+          reads.push(store.transaction(async (tx) => (await kbItems(tx).listKbItems(boardId)).at(-1)?.status));
         },
       },
     });
@@ -481,7 +482,7 @@ describe('KB review', () => {
     const ids: string[] = [];
     for (let n = 0; n < 3; n++) ids.push(await submit({ statement: `Rule ${n}` }));
     const decideAt = async (id: string, at: string) => {
-      const item = await store.transaction((tx) => tx.getKbItem(id));
+      const item = await store.transaction((tx) => kbItems(tx).getKbItem(id));
       if (item === null) throw new Error('no item');
       await store.transaction((tx) =>
         tx.updateKbItem({ ...item, status: 'rejected', decidedBy: ADMIN, decidedAt: at, decisionReason: 'No', version: item.version + 1 }, item.version),

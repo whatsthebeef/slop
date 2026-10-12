@@ -1,3 +1,4 @@
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { backfillBoard, backfillDecisionGlobs, BACKFILL_BATCH } from '../src/app/decision-backfill.js';
@@ -133,7 +134,7 @@ describe('decision backfill', () => {
     expect(decisionOf(need(refused))?.outcome).toMatchObject({ kind: 'reject', reason: 'No' });
 
     // The items now point at their globs, and the work listing is unchanged.
-    expect((await store.transaction((tx) => tx.getKbItem(open.id)))?.decisionGlobId).toBe(planning?.id);
+    expect((await store.transaction((tx) => kbItems(tx).getKbItem(open.id)))?.decisionGlobId).toBe(planning?.id);
     expect((await store.transaction((tx) => tx.listGlobs(boardId, {}))).map((g) => g.id)).toEqual([workId]);
   });
 
@@ -222,12 +223,12 @@ describe('decision backfill', () => {
     await backfillBoard(store, clock, boardId);
     const glob = await byKey(`kb:${open.id}`);
     await store.transaction(async (tx) => {
-      const current = await tx.getKbItem(open.id);
+      const current = await kbItems(tx).getKbItem(open.id);
       if (current === null) throw new Error('missing');
       await tx.updateKbItem({ ...current, decisionGlobId: null, version: current.version + 1 }, current.version);
     });
     await backfillBoard(store, clock, boardId);
-    expect((await store.transaction((tx) => tx.getKbItem(open.id)))?.decisionGlobId).toBe(glob?.id);
+    expect((await store.transaction((tx) => kbItems(tx).getKbItem(open.id)))?.decisionGlobId).toBe(glob?.id);
     expect(await decisionsOf()).toHaveLength(1);
   });
 

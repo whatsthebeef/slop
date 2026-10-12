@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import {
+  kbItems,
   ArtifactService,
   BoardService,
   DEDUPE_SYSTEM,
@@ -147,7 +148,7 @@ describe('Weekly consolidation in Postgres', () => {
     return item;
   };
   const get = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -428,7 +429,7 @@ describe('Weekly consolidation in Postgres', () => {
         [PAIRS_SYSTEM]: () => Promise.resolve(PAIR(survivor.id, loser.id)),
         [VERIFY_SYSTEM]: async () => {
           // A pipeline worker merges the new item into the survivor while the pair is being verified.
-          expect(await pipeline.process(fresh.id)).toBe(true);
+          expect(await pipeline.runStep(fresh.id, 'route')).toBe('done');
           return SAME;
         },
       }),

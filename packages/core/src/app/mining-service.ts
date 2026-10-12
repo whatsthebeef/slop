@@ -20,6 +20,7 @@ import type {
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { newKbItemId } from './knowledge-service.js';
 import { createDecisionForItem } from './decision-glob.js';
+import { kbItems } from './kb-items.js';
 
 export type MiningResult = Extract<BoardJobResult, { kind: 'mining' }>;
 
@@ -74,7 +75,7 @@ export class MiningService {
     const findings = await tx.listBoardFindings(boardId, from, now);
     const reviewFeedback = await tx.listReviewFeedback(boardId, from, now);
     const knowledge = await tx.listKnowledge(boardId, ['doc']);
-    const items = await tx.listKbItems(boardId);
+    const items = await kbItems(tx).listKbItems(boardId);
     return {
       window: { from, to: now },
       globs: globs.map((g) => ({ id: g.id, type: g.type, status: g.status, createdAt: g.createdAt })),
@@ -146,7 +147,7 @@ export class MiningService {
           if (row !== undefined) await record(m.key, { ...measured, belowThresholdRuns: row.belowThresholdRuns + 1 });
           continue;
         }
-        const original = row?.itemId == null ? null : await tx.getKbItem(row.itemId);
+        const original = row?.itemId == null ? null : await kbItems(tx).getKbItem(row.itemId);
         const item = original === null ? null : await surviving(tx, original);
         if (item === null) {
           await record(m.key, { ...measured, itemId: await raise(m), raisedAt: now, belowThresholdRuns: 0 });
@@ -237,7 +238,7 @@ export class MiningService {
     // Its face on the board: a decision glob, so mined proposals are decided where the board looks.
     const decision = await createDecisionForItem(tx, { clock: { now: () => now } }, item, { email: MINED_BY, role: 'dev' }, 'mined');
     if (!decision.ok) throw new Error(decision.error.message);
-    const inserted = await tx.insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
+    const inserted = await kbItems(tx).insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
     // The counter is atomic, so a clash means the counter and the table disagree.
     if (!inserted) throw new Error(`KB item ${id} already exists`);
     hints.push(...decision.value.hints);
@@ -264,7 +265,7 @@ export class MiningService {
       version: item.version + 1,
     };
     // A conflicting write (the pipeline has it) leaves the refresh to next week.
-    return tx.updateKbItem(updated, item.version);
+    return kbItems(tx).updateKbItem(updated, item.version);
   }
 }
 
@@ -295,7 +296,7 @@ const surviving = async (tx: Tx, item: KbItem): Promise<KbItem | null> => {
           ? current.coveredBy.id
           : null;
     if (next === null) return current.status === 'merged' ? null : current;
-    const found = await tx.getKbItem(next);
+    const found = await kbItems(tx).getKbItem(next);
     if (found === null) return current.status === 'merged' ? null : current;
     current = found;
   }

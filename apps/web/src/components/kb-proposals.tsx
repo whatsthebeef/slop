@@ -346,7 +346,7 @@ const ProcessingState = ({ item, admin, onRetry, retrying }: { item: KbItem; adm
     );
   }
   const working = item.processing === 'pending' ? 'Routing…' : 'Drafting…';
-  // While retrying, `processAfter` is the backoff's end (or, once picked up again, the lease's).
+  // While retrying, `processAfter` is the backoff's end (or, while its job runs, the claim's backoff).
   const next = item.processAfter === null ? 'shortly' : `by ${new Date(item.processAfter).toLocaleTimeString()}`;
   return (
     <p className='text-xs text-muted-foreground' data-testid='processing'>

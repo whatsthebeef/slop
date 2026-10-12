@@ -1,4 +1,5 @@
 import type { ContextDiffLine } from './agent-set.js';
+import type { Effect, EffectKind, OutboxJob } from './events.js';
 import type { EffectCheck } from './effect-check.js';
 import type { KnowledgeKind } from './knowledge.js';
 import type { KbSignal } from './signals.js';
@@ -23,7 +24,8 @@ export type KbItemStatus = (typeof KB_ITEM_STATUSES)[number];
  * (`pending`), routed and waiting for its draft (`routed`), drafted, or given up on after repeated
  * LLM failures (`failed`: routing failed when it has no target, drafting failed when it has one;
  * the item stays open and can still be decided by hand). A drafted item whose target changes goes
- * back to `routed` to be drafted again.
+ * back to `routed` to be drafted again. Derived, never stored: from the item's next step (`kbStepOf`)
+ * and that step's newest outbox job (`withProcessing`).
  */
 export const KB_PROCESSING_STATES = ['pending', 'routed', 'drafted', 'failed'] as const;
 export type KbProcessing = (typeof KB_PROCESSING_STATES)[number];
@@ -444,3 +446,70 @@ export const needsDraft = (item: KbItem, target: KbTarget | null = item.target):
   rationale: null,
   version: item.version + 1,
 });
+
+/** The pipeline's two steps for an open learning: route and deduplicate it, then draft it against its target. */
+export type KbStep = 'route' | 'draft';
+
+export const KB_STEP_KIND: Readonly<Record<KbStep, 'kb_route' | 'kb_draft'>> = { route: 'kb_route', draft: 'kb_draft' };
+export const KB_STEP_KINDS: readonly EffectKind[] = ['kb_route', 'kb_draft'];
+
+/**
+ * The step an item waits for, read from the item alone: none when it isn't open, route without a target, then none for a
+ * document proposal (its own draft), draft with no draft yet, none once drafted (a stale draft is redone at approval).
+ */
+export const kbStepOf = (item: Pick<KbItem, 'status' | 'document' | 'target' | 'draft'>): KbStep | null => {
+  if (item.status !== 'open') return null;
+  if (item.target === null) return 'route';
+  // A document proposal is its own draft (one from before routing existed is routed to its document, with no model).
+  if (item.document !== null) return null;
+  return item.draft === null ? 'draft' : null;
+};
+
+const sameTarget = (a: KbTarget | null, b: KbTarget | null): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The pipeline jobs a write queues (`before` null: the item is new): routing for a new item with no target, drafting
+ * when an item is routed, retargeted, reopened or has its draft cleared (a stale draft sent back at approval). Never just
+ * because something else changed, so a job that failed is only retried when an admin asks (`retryStep`).
+ */
+export const kbEffectsFor = (before: KbItem | null, after: KbItem): Effect[] => {
+  const step = kbStepOf(after);
+  if (step === null) return [];
+  if (step === 'route') return before === null ? [{ kind: 'kb_route', globId: after.id }] : [];
+  const due =
+    before === null ||
+    kbStepOf(before) !== 'draft' ||
+    !sameTarget(before.target, after.target);
+  return due ? [{ kind: 'kb_draft', globId: after.id }] : [];
+};
+
+/**
+ * The item with its pipeline fields read from the outbox: its next step's newest job says whether it is waiting
+ * (`pending` or `routed`, with the attempts spent, the last error or why it waits, and when it runs next) or `failed`.
+ * An open item with no step is `drafted`; a decided or closed one keeps the fields it left the pipeline with. `jobs` may
+ * hold other items' jobs.
+ */
+export const withProcessing = (item: KbItem, jobs: readonly OutboxJob[]): KbItem => {
+  // A decided or closed item has left the pipeline: its fields stay as they were when it left.
+  if (item.status !== 'open') return item;
+  const step = kbStepOf(item);
+  if (step === null) return { ...item, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null };
+  const kind = KB_STEP_KIND[step];
+  const job = jobs.reduce<OutboxJob | null>((newest, j) => (j.globId === item.id && j.kind === kind && (newest === null || j.id > newest.id) ? j : newest), null);
+  const waiting: KbProcessing = step === 'route' ? 'pending' : 'routed';
+  // A finished job whose step is still due (it was dropped, or the item changed back) is as good as none.
+  if (job === null || job.state === 'done' || job.state === 'dropped') {
+    return { ...item, processing: waiting, processingError: null, processingAttempts: 0, processAfter: null };
+  }
+  return {
+    ...item,
+    processing: job.state === 'failed' ? 'failed' : waiting,
+    processingError: job.lastError,
+    processingAttempts: job.attempts,
+    // A job queued and not yet tried is due now.
+    processAfter: job.state === 'failed' || (job.attempts === 0 && job.lastError === null) ? null : job.runAfter,
+  };
+};
+
+/** The step a pipeline job runs, or null for any other effect kind. */
+export const kbStepOfKind = (kind: EffectKind): KbStep | null => (kind === 'kb_route' ? 'route' : kind === 'kb_draft' ? 'draft' : null);

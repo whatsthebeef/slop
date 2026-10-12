@@ -25,6 +25,7 @@ import { newKbItemId } from './knowledge-service.js';
 import { MINED_BY } from './mining-service.js';
 import type { MiningService } from './mining-service.js';
 import { createDecisionForItem } from './decision-glob.js';
+import { kbItems } from './kb-items.js';
 
 export type EffectCheckResult = Extract<BoardJobResult, { kind: 'effect_check' }>;
 
@@ -66,7 +67,7 @@ export class EffectCheckService {
     const read = await this.deps.store.transaction(async (tx) => {
       const board = await tx.getBoard(boardId);
       if (board === null) throw new Error(`No board ${boardId}`);
-      const items = (await tx.listKbItems(boardId)).filter(
+      const items = (await kbItems(tx).listKbItems(boardId)).filter(
         (i) => isWatched(i) && (only === undefined || only.includes(i.id)),
       );
       if (items.length === 0) return null;
@@ -120,7 +121,7 @@ export class EffectCheckService {
     hints: Hint[],
   ): Promise<{ state: EffectState; raisedItemId: string | null } | null> {
     await tx.lockBoardJob(board.id, 'effect_check');
-    const item = await tx.getKbItem(itemId);
+    const item = await kbItems(tx).getKbItem(itemId);
     if (item === null || !isWatched(item) || item.signal === null || item.decidedAt === null)
       return null;
     // Approved before effect checks: watched from the approval, by its outcome.
@@ -146,7 +147,7 @@ export class EffectCheckService {
       effectCheck: { ...check, raisedItemId },
       version: item.version + 1,
     };
-    if (!(await tx.updateKbItem(updated, item.version))) throw new EffectCheckConflict(item.id);
+    if (!(await kbItems(tx).updateKbItem(updated, item.version))) throw new EffectCheckConflict(item.id);
     return { state: check.state, raisedItemId };
   }
 
@@ -205,7 +206,7 @@ export class EffectCheckService {
     };
     const decision = await createDecisionForItem(tx, { clock: { now: () => now } }, item, { email: MINED_BY, role: 'dev' }, 'mined');
     if (!decision.ok) throw new Error(decision.error.message);
-    const inserted = await tx.insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
+    const inserted = await kbItems(tx).insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
     if (!inserted) throw new Error(`KB item ${id} already exists`);
     hints.push(...decision.value.hints);
     return id;

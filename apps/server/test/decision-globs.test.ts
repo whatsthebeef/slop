@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { BoardService, DecisionGlobService, GlobService, InboxService, KnowledgeService } from '@slop/core';
+import { BoardService, DecisionGlobService, GlobService, InboxService, KnowledgeService, kbItems } from '@slop/core';
 import type { Catalog, Effect, Glob, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -118,7 +118,9 @@ describe('decision globs', () => {
   const submit = async (statement: string, type: 'decision' | 'gotcha' = 'decision') =>
     unwrap(await knowledge.submitLearning(DEV, boardId, { sourceGlobId, type, statement, evidence: 'Seen in review', suggestedTarget: null, document: null }));
   /** An item the pipeline gave up routing is kept as a learning when accepted (no drafting needed). */
-  const settle = (itemId: string) => database.db.execute(sql`update kb_proposals set processing = 'failed' where id = ${itemId}`);
+  /** The pipeline gave up on routing the item: its job failed (it can still be decided as a learning). */
+  const settle = (itemId: string) =>
+    database.db.execute(sql`update outbox set state = 'failed', attempts = 3, last_error = 'The routing answer was not usable JSON' where glob_id = ${itemId} and lane = 'llm'`);
   const pickUp = async (id: string, email = ADMIN) => {
     const response = await call(email, 'POST', `/api/globs/${id}/actions/pick-up`, { version: (await view(id)).version });
     return response;
@@ -213,7 +215,7 @@ describe('decision globs', () => {
       expect((await decide(globId, { outcome: 'reject', reason: 'No' }, DEV)).status).toBe(403);
       const rejected = await json<View>(await decide(globId, { outcome: 'reject', reason: 'Already covered' }));
       expect(rejected).toMatchObject({ status: 'signed_off', attributes: { archived: true, outcome: { kind: 'reject' } } });
-      expect((await store.transaction((tx) => tx.getKbItem(id)))?.status).toBe('rejected');
+      expect((await store.transaction((tx) => kbItems(tx).getKbItem(id)))?.status).toBe('rejected');
       const list = await json<View[]>(await call(ADMIN, 'GET', `/api/boards/${boardId}/globs`));
       expect(list.map((g) => g.id)).not.toContain(globId);
       const page = await json<{ globs: View[] }>(await call(ADMIN, 'GET', `/api/boards/${boardId}/signed-off`));
@@ -231,7 +233,7 @@ describe('decision globs', () => {
       await pickUp(globId);
       const accepted = await json<View>(await decide(globId, { outcome: 'accept' }));
       expect(accepted).toMatchObject({ status: 'reviewing', attributes: { outcome: { kind: 'accept' } } });
-      expect((await store.transaction((tx) => tx.getKbItem(id)))?.status).toBe('approved');
+      expect((await store.transaction((tx) => kbItems(tx).getKbItem(id)))?.status).toBe('approved');
       const reopened = await json<View>(await call(ADMIN, 'POST', `/api/globs/${globId}/actions/reopen`, { version: accepted.version }));
       expect(reopened).toMatchObject({ status: 'in_progress', attributes: { outcome: null } });
       const again = await json<View>(await decide(globId, { outcome: 'accept' }));

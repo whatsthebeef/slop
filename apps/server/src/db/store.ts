@@ -1284,28 +1284,6 @@ export class PgStore implements Store {
         const [counted] = await t.select({ total: sql<number>`count(*)`.mapWith(Number) }).from(schema.kbProposals).where(where);
         return { items: rows.map(toKbItem), total: counted?.total ?? 0 };
       },
-      nextKbItemToProcess: async (now) => {
-        const [row] = await t
-          .select()
-          .from(schema.kbProposals)
-          .where(
-            and(
-              eq(schema.kbProposals.status, 'open'),
-              inArray(schema.kbProposals.processing, ['pending', 'routed']),
-              or(isNull(schema.kbProposals.processAfter), lte(schema.kbProposals.processAfter, new Date(now))),
-            ),
-          )
-          .orderBy(asc(schema.kbProposals.createdAt), asc(schema.kbProposals.id))
-          .limit(1);
-        return row === undefined ? null : toKbItem(row);
-      },
-      listFailedKbItems: async () =>
-        (
-          await t
-            .select()
-            .from(schema.kbProposals)
-            .where(and(eq(schema.kbProposals.status, 'open'), eq(schema.kbProposals.processing, 'failed')))
-        ).map(toKbItem),
       updateKbItem: async (item, expectedVersion) => {
         const rows = await t
           .update(schema.kbProposals)
@@ -2223,6 +2201,16 @@ export class PgStore implements Store {
             if (pending !== undefined || rows.some((r) => r.kind === 'recheck_overlaps' && r.globId === effect.globId)) continue;
             rows.push({ kind: effect.kind, lane: laneOf(effect.kind), globId: effect.globId, effect, runAfter: new Date(Date.now() + RECHECK_DELAY_MS) });
             continue;
+          }
+          if (effect.kind === 'kb_route' || effect.kind === 'kb_draft') {
+            // One pending KB pipeline job per item and kind (claimed or not): it re-reads the item when it runs, and a
+            // claimed one whose item changed under it runs again.
+            const [pending] = await t
+              .select({ id: schema.outbox.id })
+              .from(schema.outbox)
+              .where(and(eq(schema.outbox.kind, effect.kind), eq(schema.outbox.globId, effect.globId), eq(schema.outbox.state, 'pending')))
+              .limit(1);
+            if (pending !== undefined || rows.some((r) => r.kind === effect.kind && r.globId === effect.globId)) continue;
           }
           // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
           if (effect.kind === 'review_change' && effect.requestId === undefined) {

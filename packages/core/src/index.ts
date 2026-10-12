@@ -54,6 +54,7 @@ export * from './app/notification-service.js';
 export * from './domain/notifications.js';
 export * from './domain/provisioning.js';
 export * from './app/knowledge-service.js';
+export * from './app/kb-items.js';
 export * from './app/artifact-service.js';
 export * from './app/investigation-service.js';
 export * from './app/intake-service.js';

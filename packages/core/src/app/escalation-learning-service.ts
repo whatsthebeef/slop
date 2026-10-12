@@ -19,6 +19,7 @@ import { adminOf, memberOf } from './access.js';
 import { createDecisionForItem } from './decision-glob.js';
 import { newKbItemId } from './knowledge-service.js';
 import type { RiskAreaService } from './risk-area-service.js';
+import { kbItems } from './kb-items.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** How far back the learning reads events: an outcome older than this is settled. */
@@ -167,7 +168,7 @@ export class EscalationLearningService {
     };
     const decision = await createDecisionForItem(tx, { clock: this.deps.clock }, item, { email: SUBMITTED_BY, role: 'dev' }, 'mined');
     if (!decision.ok) throw new Error(decision.error.message);
-    const inserted = await tx.insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
+    const inserted = await kbItems(tx).insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
     if (!inserted) throw new Error(`KB item ${id} already exists`);
     return [...decision.value.hints];
   }

@@ -638,19 +638,6 @@ export class MemoryStore implements Store {
           .map(({ item }) => item);
         return Promise.resolve({ items: all.slice(0, limit), total: all.length });
       },
-      nextKbItemToProcess: (now) =>
-        Promise.resolve(
-          [...s.kbItems.values()]
-            .filter(
-              (i) =>
-                i.status === 'open' &&
-                (i.processing === 'pending' || i.processing === 'routed') &&
-                (i.processAfter === null || i.processAfter <= now),
-            )
-            .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] ?? null,
-        ),
-      listFailedKbItems: () =>
-        Promise.resolve([...s.kbItems.values()].filter((i) => i.status === 'open' && i.processing === 'failed')),
       updateKbItem: (item, expectedVersion) => {
         if (s.kbItems.get(item.id)?.version !== expectedVersion) return Promise.resolve(false);
         s.kbItems.set(item.id, item);
@@ -1188,6 +1175,8 @@ export class MemoryStore implements Store {
         for (const effect of effects) {
           // One pending recheck per board is enough: it reads the board as it is when it runs.
           if (effect.kind === 'recheck_overlaps' && s.outbox.some((e) => e.kind === 'recheck_overlaps' && e.globId === effect.globId)) continue;
+          // One pending KB pipeline job per item and kind: it re-reads the item when it runs.
+          if ((effect.kind === 'kb_route' || effect.kind === 'kb_draft') && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending')) continue;
           // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
           if (effect.kind === 'review_change' && effect.requestId === undefined) {
             const same = (e: Effect) => e.kind === 'review_change' && e.requestId === undefined && e.globId === effect.globId && e.stage === effect.stage;

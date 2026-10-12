@@ -1,3 +1,4 @@
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
@@ -26,6 +27,7 @@ import type { KbItem } from '../src/domain/kb.js';
 import type { KbSignal } from '../src/domain/signals.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import { seedKbItem } from '../src/testing/kb-queue.js';
 
 const ADMIN = 'admin@example.com';
 const DEV = 'dev@example.com';
@@ -119,11 +121,10 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
       version: 3,
       ...patch,
     };
-    await store.transaction((tx) => tx.insertKbItem(item));
-    return item;
+    return seedKbItem(store, item);
   };
   const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -1112,7 +1113,7 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
     });
     expect((await item(a.id)).keptApartFrom).toEqual([b.id]);
     // Drafted again, it is a candidate; the pair is dropped before any verification.
-    await update(b.id, { processing: 'drafted' });
+    await update(b.id, { processing: 'drafted', draft: { section: 'Test', content: `## Test\n\n- ${b.id}\n` } });
     llm.answer(pairs([a.id, b.id]));
     expect(await consolidation.consolidate(boardId)).toMatchObject({
       candidates: 2,
@@ -1313,6 +1314,9 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
           outcome: null,
           ...UNPROCESSED,
           processing: 'drafted',
+          // Drafted: routed and given its draft.
+          target: { kind: 'doc', name: 'build_test_lint', section: 'Test', newDocument: null },
+          draft: { section: 'Test', content: '## Test\n\n- A learning\n' },
           version: 1,
         }),
       );
@@ -1375,11 +1379,14 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
         outcome: null,
         ...UNPROCESSED,
         processing: 'drafted',
+        // Drafted: routed and given its draft.
+        target: { kind: 'doc', name: 'build_test_lint', section: 'Test', newDocument: null },
+        draft: { section: 'Test', content: '## Test\n\n- A learning\n' },
         version: 1,
       }),
     );
     await store.transaction(async (tx) => {
-      const first = await tx.getKbItem('s1k1');
+      const first = await kbItems(tx).getKbItem('s1k1');
       if (first !== null) await tx.insertKbItem({ ...first, id: 's1k2' });
     });
     llm.answer(new LlmUnavailable('AWS sign-in expired', 'Run aws sso login'));
@@ -1423,6 +1430,9 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
           outcome: null,
           ...UNPROCESSED,
           processing: 'drafted',
+          // Drafted: routed and given its draft.
+          target: { kind: 'doc', name: 'build_test_lint', section: 'Test', newDocument: null },
+          draft: { section: 'Test', content: '## Test\n\n- A learning\n' },
           version: 1,
         }),
       );
@@ -1483,6 +1493,9 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
           outcome: null,
           ...UNPROCESSED,
           processing: 'drafted',
+          // Drafted: routed and given its draft.
+          target: { kind: 'doc', name: 'build_test_lint', section: 'Test', newDocument: null },
+          draft: { section: 'Test', content: '## Test\n\n- A learning\n' },
           version: 1,
         }),
       );

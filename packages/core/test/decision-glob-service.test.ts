@@ -1,3 +1,4 @@
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
 import { backfillBoard } from '../src/app/decision-backfill.js';
@@ -21,6 +22,7 @@ import * as machine from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import { MemoryKbQueue } from '../src/testing/kb-queue.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -67,6 +69,7 @@ describe('decision globs', () => {
   let artifacts: ArtifactService;
   let inbox: InboxService;
   let pipeline: KbPipeline;
+  let queue: MemoryKbQueue;
   let router: FakeLlm;
   let drafter: FakeLlm;
   let now: string;
@@ -89,7 +92,7 @@ describe('decision globs', () => {
     return found;
   };
   const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -130,7 +133,7 @@ describe('decision globs', () => {
     const target: TargetChange = { kind: 'doc', name: 'build_test_lint', section: 'Lint' };
     unwrap(await knowledge.changeTarget(ADMIN, made.id, (await item(made.id)).version, target));
     drafter.answer(answer);
-    expect(await pipeline.process(made.id)).toBe(true);
+    expect(await queue.process(made.id)).toBe(true);
     expect((await item(made.id)).processing).toBe('drafted');
     return made;
   };
@@ -158,6 +161,7 @@ describe('decision globs', () => {
     artifacts = new ArtifactService({ store, clock, notifier });
     inbox = new InboxService({ store, clock, notifier });
     pipeline = new KbPipeline({ store, clock, catalog, notifier, route: router, draft: drafter });
+    queue = new MemoryKbQueue(store, pipeline, clock, notifier);
     const boards = new BoardService({ store, notifier });
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, PO, DEV]) await tx.upsertUser({ email, name: email, active: true });
@@ -204,9 +208,12 @@ describe('decision globs', () => {
 
     it('queues no effect for a decision: no branch, no PR, no run', async () => {
       await submit();
-      expect(store.state.outbox.filter((e) => 'globId' in e && e.globId === 's1k1')).toEqual([]);
+      // The only job is the learning's own: routing it, on the KB pipeline's lane.
+      const glob_ = () => store.state.outbox.filter((e) => 'globId' in e && e.globId === 's1k1' && e.kind !== 'kb_route');
+      expect(store.state.outbox.filter((e) => e.globId === 's1k1').map((e) => e.kind)).toEqual(['kb_route']);
+      expect(glob_()).toEqual([]);
       await pickUp('s1k1');
-      expect(store.state.outbox.filter((e) => 'globId' in e && e.globId === 's1k1')).toEqual([]);
+      expect(glob_()).toEqual([]);
       expect(await glob('s1k1')).toMatchObject({ status: 'in_progress', provisioning: 'none', runs: [], implementer: ADMIN });
     });
 
@@ -390,11 +397,7 @@ describe('decision globs', () => {
       await pickUp(waiting.globId);
       expect(errorCode(await decide(waiting.globId, { outcome: 'accept' }))).toBe('invalid_input');
       const failed = await submit({ statement: 'Second' });
-      await store.transaction(async (tx) => {
-        const current = await tx.getKbItem(failed.id);
-        if (current === null) throw new Error('missing');
-        await tx.updateKbItem({ ...current, processing: 'failed', version: current.version + 1 }, current.version);
-      });
+      queue.fail(failed.id, 'The routing answer was not usable JSON');
       await pickUp(failed.globId);
       expect(unwrap(await decide(failed.globId, { outcome: 'accept' })).status).toBe('reviewing');
       expect(await item(failed.id)).toMatchObject({ status: 'approved', outcome: { kind: 'learning' } });
@@ -423,7 +426,7 @@ describe('decision globs', () => {
       const agentItem = await submit({ statement: 'Implementers run the linter', type: 'agent-behaviour' });
       unwrap(await knowledge.changeTarget(ADMIN, agentItem.id, (await item(agentItem.id)).version, { kind: 'agent', name: 'agents/implementer.md', section: null }));
       drafter.answer(draftAnswer(null, '- Run the linter.'));
-      await pipeline.process(agentItem.id);
+      await queue.process(agentItem.id);
       const agentGlob = await inDoing(agentItem, PO);
       expect(errorCode(await decide(agentGlob, { outcome: 'accept' }, PO))).toBe('forbidden');
       expect(errorCode(await decide(agentGlob, { outcome: 'retarget', target: { kind: 'agent', name: 'agents/implementer.md', section: 'Rules' } }, PO))).toBe('forbidden');
@@ -477,13 +480,13 @@ describe('decision globs', () => {
     it('archives the glob when the pipeline merges the item into another, and reopens it with the item', async () => {
       router.answer(toNewDoc('testing'));
       const first = await submit();
-      expect(await pipeline.processNext()).toBe(first.id);
+      expect(await queue.processNext()).toBe(first.id);
       const second = await submit({ statement: GEN_AGAIN, evidence: 'Tester note' });
       router.answer(
         toNewDoc('testing'),
         json({ checked: [{ ref: first.id, relation: 'same fact' }], duplicateOf: { id: first.id, quote: GEN, newQuote: GEN_AGAIN }, suppressedBy: null, coveredBy: null, contradicts: [] }),
       );
-      expect(await pipeline.process(second.id)).toBe(true);
+      expect(await queue.process(second.id)).toBe(true);
       expect(await item(second.id)).toMatchObject({ status: 'merged' });
       const closed = await glob(second.globId);
       expect(closed).toMatchObject({ status: 'signed_off' });
@@ -504,7 +507,7 @@ describe('decision globs', () => {
       unwrap(await knowledge.changeTarget(ADMIN, made.id, (await item(made.id)).version, { kind: 'doc', name: 'build_test_lint', section: 'Lint' }));
       expect(await assessments(made.globId)).toHaveLength(1);
       drafter.answer(draftAnswer('Lint', 'Run eslint --max-warnings 0.'));
-      await pipeline.process(made.id);
+      await queue.process(made.id);
       const versions = await assessments(made.globId);
       expect(versions).toHaveLength(2);
       expect(versions[1]?.content).toMatch(/Target: doc `build_test_lint`, section "Lint"/);
@@ -531,7 +534,7 @@ describe('decision globs', () => {
     it('syncFromItem repairs a glob that fell behind its item', async () => {
       const made = await submit();
       await store.transaction(async (tx) => {
-        const current = await tx.getKbItem(made.id);
+        const current = await kbItems(tx).getKbItem(made.id);
         if (current === null) throw new Error('missing');
         await tx.updateKbItem({ ...current, status: 'covered', version: current.version + 1 }, current.version);
       });
@@ -545,7 +548,7 @@ describe('decision globs', () => {
   describe('scope and conflicts', () => {
     const contradict = async (id: string, other: string) =>
       store.transaction(async (tx) => {
-        const current = await tx.getKbItem(id);
+        const current = await kbItems(tx).getKbItem(id);
         if (current === null) throw new Error('missing');
         await tx.updateKbItem({ ...current, contradicts: [{ kind: 'item', ref: other, note: 'Says the opposite' }], version: current.version + 1 }, current.version);
       });

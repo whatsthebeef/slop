@@ -1,4 +1,4 @@
-import { GlobService, KnowledgeService } from '@slop/core';
+import { GlobService, KnowledgeService, kbItems } from '@slop/core';
 import type { Result } from '@slop/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PgStore } from '../src/db/store.js';
@@ -85,7 +85,7 @@ describe('KB items in Postgres', () => {
 
   it('round-trips a KB item through insert, get and list', async () => {
     const { id } = unwrap(await submit('Write the regression test before the fix'));
-    const item = await store.transaction((tx) => tx.getKbItem(id));
+    const item = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     expect(item).toMatchObject({
       id,
       boardId,
@@ -107,20 +107,20 @@ describe('KB items in Postgres', () => {
     });
     expect(Number.isNaN(Date.parse(item?.createdAt ?? ''))).toBe(false);
     expect(
-      (await store.transaction((tx) => tx.listKbItems(boardId, 'open'))).map((i) => i.id),
+      (await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'open'))).map((i) => i.id),
     ).toContain(id);
-    expect(await store.transaction((tx) => tx.listKbItems(boardId, 'rejected'))).toEqual([]);
-    expect(await store.transaction((tx) => tx.getKbItem('s999k1'))).toBeNull();
+    expect(await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'rejected'))).toEqual([]);
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem('s999k1'))).toBeNull();
   });
 
   it('refuses a second item with the same ID', async () => {
     const { id } = unwrap(await submit('Run the formatter on changed files only'));
-    const existing = await store.transaction((tx) => tx.getKbItem(id));
+    const existing = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (existing === null) throw new Error(`KB item ${id} was not stored`);
     expect(
       await store.transaction((tx) => tx.insertKbItem({ ...existing, statement: 'Another' })),
     ).toBe(false);
-    expect((await store.transaction((tx) => tx.getKbItem(id)))?.statement).toBe(
+    expect((await store.transaction((tx) => kbItems(tx).getKbItem(id)))?.statement).toBe(
       'Run the formatter on changed files only',
     );
   });
@@ -132,13 +132,13 @@ describe('KB items in Postgres', () => {
     const ids = results.map((r) => unwrap(r).id);
     expect(new Set(ids).size).toBe(20);
     expect(ids.every((id) => new RegExp(`^s${String(boardId)}k\\d+$`).test(id))).toBe(true);
-    const stored = (await store.transaction((tx) => tx.listKbItems(boardId))).map((i) => i.id);
+    const stored = (await store.transaction((tx) => kbItems(tx).listKbItems(boardId))).map((i) => i.id);
     expect(ids.every((id) => stored.includes(id))).toBe(true);
   });
 
   it('writes a decision only against the version it read', async () => {
     const { id } = unwrap(await submit('Prefer small commits'));
-    const item = await store.transaction((tx) => tx.getKbItem(id));
+    const item = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (item === null) throw new Error(`KB item ${id} was not stored`);
     const decided = {
       ...item,
@@ -150,9 +150,9 @@ describe('KB items in Postgres', () => {
     };
     expect(await store.transaction((tx) => tx.updateKbItem(decided, 2))).toBe(false);
     expect(await store.transaction((tx) => tx.updateKbItem(decided, 1))).toBe(true);
-    expect(await store.transaction((tx) => tx.getKbItem(id))).toEqual(decided);
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toEqual(decided);
     expect(await store.transaction((tx) => tx.updateKbItem({ ...decided, version: 3 }, 1))).toBe(false);
-    expect((await store.transaction((tx) => tx.listKbItems(boardId, 'rejected'))).map((i) => i.id)).toContain(id);
+    expect((await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'rejected'))).map((i) => i.id)).toContain(id);
   });
 
   it('round-trips a document proposal and its applied outcome', async () => {
@@ -172,10 +172,10 @@ describe('KB items in Postgres', () => {
         document,
       }),
     );
-    expect(await store.transaction((tx) => tx.getKbItem(id))).toMatchObject({ document, sourceGlobIds: [], outcome: null });
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({ document, sourceGlobIds: [], outcome: null });
     const approved = unwrap(await knowledge.approve(ADMIN, id, 1, { as: 'document' }));
     expect(approved.outcome).toEqual({ kind: 'applied', target: 'doc', name: 'architecture', version: 1 });
-    expect(await store.transaction((tx) => tx.getKbItem(id))).toEqual(approved);
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toEqual(approved);
     expect(await store.transaction((tx) => tx.getKnowledge(boardId, 'doc', 'architecture'))).toMatchObject({
       area: 'architecture',
       audience: ['investigator'],
@@ -223,7 +223,7 @@ describe('KB items in Postgres', () => {
     ]);
     expect(results.filter((r) => r.ok)).toHaveLength(1);
     expect(results.flatMap((r) => (r.ok ? [] : [r.error.code]))).toEqual(['version_conflict']);
-    expect((await store.transaction((tx) => tx.getKbItem(id)))?.version).toBe(2);
+    expect((await store.transaction((tx) => kbItems(tx).getKbItem(id)))?.version).toBe(2);
   });
 
   it('turns racing agent-file approvals into version conflicts, never a server error', async () => {
@@ -261,7 +261,7 @@ describe('KB items in Postgres', () => {
     for (const [i, r] of results.entries()) {
       if (r.ok) continue;
       expect((await store.transaction((tx) => tx.getKnowledge(boardId, 'agent', files[i] ?? '')))?.content).toBe('Old.\n');
-      expect((await store.transaction((tx) => tx.getKbItem(ids[i] ?? '')))?.status).toBe('open');
+      expect((await store.transaction((tx) => kbItems(tx).getKbItem(ids[i] ?? '')))?.status).toBe('open');
     }
   });
 });

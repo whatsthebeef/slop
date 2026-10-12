@@ -9,6 +9,7 @@ import { LLM_TIMEOUT_MS } from './kb-pipeline.js';
 import { completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 import { hash } from './text-hash.js';
+import { kbItems } from './kb-items.js';
 
 export type ConsolidationResult = Extract<BoardJobResult, { kind: 'consolidation' }>;
 
@@ -177,7 +178,7 @@ export class KbConsolidation {
   async consolidate(boardId: number): Promise<ConsolidationResult> {
     const now = this.deps.clock.now();
     const { open, memory } = await this.deps.store.transaction(async (tx) => ({
-      open: await tx.listKbItems(boardId, 'open'),
+      open: await kbItems(tx).listKbItems(boardId, 'open'),
       memory: consolidationMemoryOf(await tx.getBoardJobState(boardId, 'consolidation')),
     }));
     const candidates = candidatesOf(open);
@@ -376,8 +377,8 @@ export class KbConsolidation {
         // Mining holds this lock for its whole run: a merge doesn't interleave with its reads and writes of the
         // board's kb_signals rows (whose items it repoints) or its refreshes of open items.
         await tx.lockBoardJob(boardId, 'mining');
-        const storedA = await tx.getKbItem(a.id);
-        const storedB = await tx.getKbItem(b.id);
+        const storedA = await kbItems(tx).getKbItem(a.id);
+        const storedB = await kbItems(tx).getKbItem(b.id);
         if (storedA?.version !== a.version || storedB?.version !== b.version) return null;
         if (!isCandidate(storedA) || !isCandidate(storedB) || keptApart(storedA, storedB))
           return null;
@@ -407,7 +408,7 @@ export class KbConsolidation {
         for (const row of await tx.listKbSignals(boardId)) {
           if (row.itemId === loser.id) await tx.upsertKbSignal({ ...row, itemId: survivor.id });
         }
-        const written = await tx.getKbItem(survivor.id);
+        const written = await kbItems(tx).getKbItem(survivor.id);
         if (written === null) throw new MergeConflict(a.id, b.id);
         return { survivor: written, loser: { ...closed, version: loser.version + 1 } };
       });
@@ -436,7 +437,7 @@ export class KbConsolidation {
       let flagged = 0;
       let cleared = 0;
       const after: KbItem[] = [];
-      for (const item of await tx.listKbItems(boardId, 'open')) {
+      for (const item of await kbItems(tx).listKbItems(boardId, 'open')) {
         after.push(item);
         if (!(item.processing === 'drafted' || item.processing === 'failed')) continue;
         const reason = staleReasonAt(
@@ -454,7 +455,7 @@ export class KbConsolidation {
                 staleReason: reason,
                 version: item.version + 1,
               };
-        if (!(await tx.updateKbItem(next, item.version))) continue;
+        if (!(await kbItems(tx).updateKbItem(next, item.version))) continue;
         after[after.length - 1] = next;
         if (reason === null) cleared++;
         else if (item.staleSince === null) flagged++;

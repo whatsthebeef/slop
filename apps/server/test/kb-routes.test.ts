@@ -1,4 +1,5 @@
 import {
+  kbItems,
   ArtifactService,
   BoardService,
   FindingsService,
@@ -139,9 +140,11 @@ describe('KB routes: retrying failed items and catalog updates', () => {
         evidence: 'Seen',
       }),
     );
+    // Routing gave up: its job failed after the llm lane's attempts.
     await database.db.execute(
-      sql`update kb_proposals set processing = 'failed', processing_error = 'Haiku is down', processing_attempts = ${MAX_PROCESSING_ATTEMPTS}, version = 2 where id = ${id}`,
+      sql`update outbox set state = 'failed', last_error = 'Haiku is down', attempts = ${MAX_PROCESSING_ATTEMPTS} where glob_id = ${id} and kind = 'kb_route'`,
     );
+    await database.db.execute(sql`update kb_proposals set version = 2 where id = ${id}`);
     expect((await post(`/api/kb/${id}/retry`, { version: 2 }, DEV)).status).toBe(403);
     expect((await post(`/api/kb/${id}/retry`, {})).status).toBe(422);
     const stale = await post(`/api/kb/${id}/retry`, { version: 1 });
@@ -157,11 +160,14 @@ describe('KB routes: retrying failed items and catalog updates', () => {
       processingAttempts: 0,
       version: 3,
     });
-    expect(await store.transaction((tx) => tx.getKbItem(id))).toMatchObject({
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({
       processing: 'pending',
       processingAttempts: 0,
       version: 3,
     });
+    // A fresh routing job, beside the failed one.
+    const jobs = await database.db.execute(sql`select state, attempts from outbox where glob_id = ${id} and kind = 'kb_route' order by id`);
+    expect(jobs.map((j) => [j.state, j.attempts])).toEqual([['failed', MAX_PROCESSING_ATTEMPTS], ['pending', 0]]);
     // Only failed items: retrying again is refused.
     expect((await post(`/api/kb/${id}/retry`, { version: 3 })).status).toBe(422);
   });
@@ -182,7 +188,7 @@ describe('KB routes: retrying failed items and catalog updates', () => {
     const response = await post(`/api/kb/${id}/reopen`, { version: 2 });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ id, status: 'open', coveredBy: null, processing: 'routed', target, version: 3 });
-    expect(await store.transaction((tx) => tx.getKbItem(id))).toMatchObject({ status: 'open', coveredBy: null, processing: 'routed' });
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({ status: 'open', coveredBy: null, processing: 'routed' });
     // Only closed items: reopening an open one is refused.
     expect((await post(`/api/kb/${id}/reopen`, { version: 3 })).status).toBe(422);
   });

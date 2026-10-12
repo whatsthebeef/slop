@@ -42,6 +42,7 @@ import type { AgentKbApproval, Board, Role } from '../domain/types.js';
 import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf, roleOf } from './access.js';
 import { createDecisionForItem, syncDecisionFromItem } from './decision-glob.js';
+import { kbItems } from './kb-items.js';
 
 /** A board's review guide documents, for `get_review_guide`. */
 export interface ReviewGuide {
@@ -443,7 +444,7 @@ export class KnowledgeService {
       return await this.transaction(work);
     } catch (error) {
       if (!(error instanceof StaleKbItem || error instanceof BoardChanged) || itemId === null) throw error;
-      const current = await this.deps.store.transaction((tx) => tx.getKbItem(itemId));
+      const current = await this.deps.store.transaction((tx) => kbItems(tx).getKbItem(itemId));
       if (current === null) return notFound(`No KB item ${itemId}`);
       return err({ code: 'version_conflict', message: `${itemId} changed meanwhile; try again`, currentItem: current });
     }
@@ -773,7 +774,7 @@ export class KnowledgeService {
       // The item's face on the board: a decision glob in Planning, made in this transaction so the two never part.
       const decision = await createDecisionForItem(tx, { clock: this.deps.clock }, item, actor.value, 'agent');
       if (!decision.ok) return decision;
-      const inserted = await tx.insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
+      const inserted = await kbItems(tx).insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
       // The counter is atomic, so a clash means the counter and the table disagree.
       if (!inserted) throw new Error(`KB item ${id} already exists`);
       this.kbChanged(tx, boardId);
@@ -795,11 +796,11 @@ export class KnowledgeService {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
       const open: KbItemView[] = [];
-      for (const item of [...(await tx.listKbItems(boardId, 'open'))].sort(byEvidence)) {
+      for (const item of [...(await kbItems(tx).listKbItems(boardId, 'open'))].sort(byEvidence)) {
         open.push(view(item, await this.preview(tx, catalog, item)));
       }
       const page = async (statuses: readonly KbItemStatus[]): Promise<KbItemPage> => {
-        const { items, total } = await tx.listRecentKbItems(boardId, statuses, limit);
+        const { items, total } = await kbItems(tx).listRecentKbItems(boardId, statuses, limit);
         return { items: items.map((item) => view(item, null)), total };
       };
       return ok({ open, decided: await page(['approved', 'rejected']), closed: await page(['merged', 'suppressed', 'covered']) });
@@ -824,7 +825,7 @@ export class KnowledgeService {
     roles: readonly Role[] = ADMINS,
   ): Promise<Result<KbItem>> {
     const catalog = await this.deps.catalog.agentSet();
-    const item = await tx.getKbItem(itemId);
+    const item = await kbItems(tx).getKbItem(itemId);
     if (item === null) return notFound(`No KB item ${itemId}`);
     const actor = await roleOf(tx, email, item.boardId, roles);
     if (!actor.ok) return actor;
@@ -836,8 +837,8 @@ export class KnowledgeService {
     const target = await this.checkTarget(tx, catalog, item.boardId, change);
     if (!target.ok) return target;
     const next = needsDraft(item, target.value);
-    if (!(await tx.updateKbItem(next, item.version))) {
-      const current = await tx.getKbItem(itemId);
+    if (!(await kbItems(tx).updateKbItem(next, item.version))) {
+      const current = await kbItems(tx).getKbItem(itemId);
       return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
     }
     this.kbChanged(tx, item.boardId);
@@ -851,7 +852,7 @@ export class KnowledgeService {
    */
   async retryProcessing(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
     return this.transaction(async (tx) => {
-      const item = await tx.getKbItem(itemId);
+      const item = await kbItems(tx).getKbItem(itemId);
       if (item === null) return notFound(`No KB item ${itemId}`);
       const actor = await adminOf(tx, email, item.boardId);
       if (!actor.ok) return actor;
@@ -860,14 +861,14 @@ export class KnowledgeService {
       if (item.version !== version) return stale(item);
       if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
       if (item.processing !== 'failed') return invalidInput(`${item.id} hasn't failed; it is ${item.processing}`);
-      const next: KbItem =
-        item.target === null
-          ? { ...item, processing: 'pending', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
-          : needsDraft(item);
-      if (!(await tx.updateKbItem(next, item.version))) {
-        const current = await tx.getKbItem(itemId);
+      // A fresh job for the step it failed at (routing without a target, drafting with one), with its attempts unspent.
+      // The write bumps the version, so a Knowledge page tab holding the failed item gets a conflict and refetches.
+      const bumped: KbItem = { ...item, version: item.version + 1 };
+      if (!(await kbItems(tx).updateKbItem(bumped, item.version))) {
+        const current = await kbItems(tx).getKbItem(itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
       }
+      const next = await kbItems(tx).retryStep(bumped);
       this.kbChanged(tx, item.boardId);
       return ok(next);
     });
@@ -886,7 +887,7 @@ export class KnowledgeService {
    */
   async reopen(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
     return this.transaction(async (tx) => {
-      const item = await tx.getKbItem(itemId);
+      const item = await kbItems(tx).getKbItem(itemId);
       if (item === null) return notFound(`No KB item ${itemId}`);
       const actor = await adminOf(tx, email, item.boardId);
       if (!actor.ok) return actor;
@@ -915,22 +916,22 @@ export class KnowledgeService {
         item.document !== null
           ? { ...reopened, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
           : needsDraft(reopened);
-      if (!(await tx.updateKbItem(next, item.version))) {
-        const current = await tx.getKbItem(itemId);
+      if (!(await kbItems(tx).updateKbItem(next, item.version))) {
+        const current = await kbItems(tx).getKbItem(itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
       }
-      const other = former === null ? null : await tx.getKbItem(former);
+      const other = former === null ? null : await kbItems(tx).getKbItem(former);
       if (other !== null && !other.keptApartFrom.includes(item.id)) {
         const separated: KbItem = { ...other, keptApartFrom: apart(other.keptApartFrom, item.id), version: other.version + 1 };
         // The other item changed between the read and the write: roll the reopen back too, as a conflict.
-        if (!(await tx.updateKbItem(separated, other.version))) throw new StaleKbItem(other.id);
+        if (!(await kbItems(tx).updateKbItem(separated, other.version))) throw new StaleKbItem(other.id);
       }
       this.kbChanged(tx, item.boardId);
       await this.sync(tx, next);
       return ok(next);
     }).catch(async (error: unknown) => {
       if (!(error instanceof StaleKbItem)) throw error;
-      const current = await this.deps.store.transaction((tx) => tx.getKbItem(itemId));
+      const current = await this.deps.store.transaction((tx) => kbItems(tx).getKbItem(itemId));
       return current === null
         ? notFound(`No KB item ${itemId}`)
         : err({ code: 'version_conflict', message: `${itemId} changed meanwhile; try again`, currentItem: current });
@@ -981,8 +982,8 @@ export class KnowledgeService {
     const next: KbItem = item.document !== null
       ? { ...reopened, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
       : needsDraft(reopened);
-    if (!(await tx.updateKbItem(next, item.version))) {
-      const current = await tx.getKbItem(item.id);
+    if (!(await kbItems(tx).updateKbItem(next, item.version))) {
+      const current = await kbItems(tx).getKbItem(item.id);
       return current === null ? notFound(`No KB item ${item.id}`) : stale(current);
     }
     this.kbChanged(tx, item.boardId);
@@ -996,7 +997,7 @@ export class KnowledgeService {
    */
   async keepStale(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
     return this.transaction(async (tx) => {
-      const item = await tx.getKbItem(itemId);
+      const item = await kbItems(tx).getKbItem(itemId);
       if (item === null) return notFound(`No KB item ${itemId}`);
       const actor = await adminOf(tx, email, item.boardId);
       if (!actor.ok) return actor;
@@ -1012,8 +1013,8 @@ export class KnowledgeService {
         staleDismissedAt: this.deps.clock.now(),
         version: item.version + 1,
       };
-      if (!(await tx.updateKbItem(next, item.version))) {
-        const current = await tx.getKbItem(itemId);
+      if (!(await kbItems(tx).updateKbItem(next, item.version))) {
+        const current = await kbItems(tx).getKbItem(itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
       }
       this.kbChanged(tx, item.boardId);
@@ -1036,7 +1037,7 @@ export class KnowledgeService {
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
-      const items = await tx.listKbItems(boardId, 'approved');
+      const items = await kbItems(tx).listKbItems(boardId, 'approved');
       return ok(
         items
           .filter((i) => i.outcome?.kind === 'learning')
@@ -1129,7 +1130,7 @@ export class KnowledgeService {
     return this.deps.store.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
       if (!actor.ok) return actor;
-      const items = await tx.listKbItems(boardId, status);
+      const items = await kbItems(tx).listKbItems(boardId, status);
       if (status !== 'open') return ok(items.map((item) => view(item, null)));
       const views: KbItemView[] = [];
       for (const item of [...items].sort(byEvidence)) views.push(view(item, await this.preview(tx, catalog, item)));
@@ -1239,7 +1240,7 @@ export class KnowledgeService {
     } catch (error) {
       // A concurrent agent-set change (another approval or import) is a conflict to retry, like a stale item.
       if (!(error instanceof StaleKbItem || error instanceof BoardChanged)) throw error;
-      const current = await this.deps.store.transaction((tx) => tx.getKbItem(itemId));
+      const current = await this.deps.store.transaction((tx) => kbItems(tx).getKbItem(itemId));
       if (current === null) return notFound(`No KB item ${itemId}`);
       return error instanceof BoardChanged
         ? err({ code: 'version_conflict', message: 'The board changed meanwhile; try again', currentItem: current })
@@ -1277,7 +1278,7 @@ export class KnowledgeService {
   ): Promise<Result<KbItem>> {
     const { via } = options;
     const stale = (item: KbItem) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
-    const item = await tx.getKbItem(itemId);
+    const item = await kbItems(tx).getKbItem(itemId);
     if (item === null) return notFound(`No KB item ${itemId}`);
     const actor = await roleOf(tx, email, item.boardId, options.roles);
     if (!actor.ok) return actor;
@@ -1301,7 +1302,7 @@ export class KnowledgeService {
       next = { ...base, status: 'approved', statement, ...(approvedReason === null ? {} : { decisionReason: approvedReason }), outcome: via === undefined ? outcome : { ...outcome, via }, signal, effectCheck };
       if (chosen !== null) await this.claimSignal(tx, next, chosen);
     }
-    if (!(await tx.updateKbItem(next, item.version))) throw new StaleKbItem(item.id);
+    if (!(await kbItems(tx).updateKbItem(next, item.version))) throw new StaleKbItem(item.id);
     this.kbChanged(tx, item.boardId);
     if (options.sync) await this.sync(tx, next);
     return ok(next);
@@ -1315,7 +1316,7 @@ export class KnowledgeService {
     const board = await tx.getBoard(boardId);
     if (board === null) throw new Error(`No board ${boardId}`);
     const originalId = effectItemOf(signal.key);
-    const original = originalId === null ? null : await tx.getKbItem(originalId);
+    const original = originalId === null ? null : await kbItems(tx).getKbItem(originalId);
     const watch = original?.effectCheck ?? original?.signal ?? signal;
     return startEffectCheck({ key: watch.key, label: watch.label }, effectBasisOf(outcome, decidedAt), board.effectCheckGlobs);
   }
@@ -1326,7 +1327,7 @@ export class KnowledgeService {
    */
   private async claimSignal(tx: Tx, item: KbItem, signal: KbSignal): Promise<void> {
     const row = (await tx.listKbSignals(item.boardId)).find((r) => r.key === signal.key);
-    const holder = row?.itemId == null ? null : await tx.getKbItem(row.itemId);
+    const holder = row?.itemId == null ? null : await kbItems(tx).getKbItem(row.itemId);
     if (holder?.status === 'open') return;
     await tx.upsertKbSignal({
       boardId: item.boardId,
@@ -1364,7 +1365,7 @@ export class KnowledgeService {
     if (state === null) return notFound(`${target.name} is no longer on board ${item.boardId}; choose another target under Edit`);
     if (item.draft !== null && item.draftedAgainstVersion !== null && state.version !== item.draftedAgainstVersion) {
       const requeued = needsDraft(item);
-      if (!(await tx.updateKbItem(requeued, item.version))) throw new StaleKbItem(item.id);
+      if (!(await kbItems(tx).updateKbItem(requeued, item.version))) throw new StaleKbItem(item.id);
       this.kbChanged(tx, item.boardId);
       return err({
         code: 'version_conflict',
@@ -1617,12 +1618,12 @@ export class KnowledgeService {
     changed: readonly { kind: KnowledgeKind; name: string }[],
     decidingItem: string | null,
   ): Promise<void> {
-    for (const item of await tx.listKbItems(boardId, 'open')) {
+    for (const item of await kbItems(tx).listKbItems(boardId, 'open')) {
       const { target } = item;
       if (item.id === decidingItem || item.processing !== 'drafted' || item.document !== null || target === null) continue;
       if (!changed.some((c) => c.kind === target.kind && c.name === target.name)) continue;
       // A lost conditional write means the item changed meanwhile; approving it still checks the version.
-      await tx.updateKbItem(needsDraft(item), item.version);
+      await kbItems(tx).updateKbItem(needsDraft(item), item.version);
     }
   }
 }

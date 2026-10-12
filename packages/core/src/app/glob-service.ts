@@ -27,6 +27,7 @@ import { checkFrom } from './size-check-service.js';
 import type { SizeAssessor } from './size-check-service.js';
 import { needsInvestigation, unresolved } from '../domain/size-check.js';
 import type { SizeCheck } from '../domain/size-check.js';
+import { kbItems } from './kb-items.js';
 
 export interface GlobServiceDeps {
   readonly store: Store;
@@ -835,7 +836,7 @@ export class GlobService {
       // and an accepted one governs work): reject the item to remove the decision. A rejected item keeps its link, so a
       // backfill sees the glob is gone and leaves it that way.
       const itemId = glob.category === 'decision' ? decisionOf(glob)?.kbItemId ?? null : null;
-      const item = itemId === null ? null : await tx.getKbItem(itemId);
+      const item = itemId === null ? null : await kbItems(tx).getKbItem(itemId);
       if (item !== null && (item.status === 'open' || item.status === 'approved')) {
         return invalidInput(`This decision belongs to a ${item.status} knowledge item; reject the item to remove it`);
       }

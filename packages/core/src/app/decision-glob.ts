@@ -13,6 +13,7 @@ import type { Provenance } from '../domain/knowledge.js';
 import type { Actor, Glob } from '../domain/types.js';
 import type { Clock, Hint, Tx } from '../ports.js';
 import { addArtifact } from './artifact-service.js';
+import { kbItems } from './kb-items.js';
 
 /** The name slop's own writes carry (mined proposals, assessments, the backfill). */
 export const DECISION_SYSTEM_ACTOR = 'slop';
@@ -296,7 +297,7 @@ const refreshConflicts = async (tx: Tx, clock: Clock, item: KbItem, glob: Glob):
   const globs = new Map<string, Glob>();
   for (const c of item.contradicts) {
     if (c.kind !== 'item') continue;
-    const other = await tx.getKbItem(c.ref);
+    const other = await kbItems(tx).getKbItem(c.ref);
     const otherGlob = other === null ? null : await globOfItem(tx, other);
     if (otherGlob !== null) globs.set(c.ref, otherGlob);
   }
@@ -353,7 +354,7 @@ export const syncDecisionFromItem = async (tx: Tx, clock: Clock, item: KbItem, p
     }
   } else if (item.status === 'approved') {
     // A broader decision was accepted: the narrower open ones that contradict it may now conflict with it.
-    for (const other of await tx.listKbItems(item.boardId, 'open')) {
+    for (const other of await kbItems(tx).listKbItems(item.boardId, 'open')) {
       if (!other.contradicts.some((c) => c.kind === 'item' && c.ref === item.id)) continue;
       const otherGlob = await globOfItem(tx, other);
       if (otherGlob !== null && (await refreshConflicts(tx, clock, other, otherGlob))) {

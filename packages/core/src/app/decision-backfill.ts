@@ -5,6 +5,7 @@ import { defaultScope, kbItemKey, decisionGlobTitle, proposalText } from '../dom
 import type { Glob } from '../domain/types.js';
 import type { Clock, Store, Tx } from '../ports.js';
 import { applyDecisionStep, createDecisionForExtracted, createDecisionInTx, DECISION_SYSTEM_ACTOR, decisionContext } from './decision-glob.js';
+import { kbItems } from './kb-items.js';
 
 /** KB items and extracted decisions decided within this many days are migrated; older ones are left as they are. */
 export const BACKFILL_DAYS = 30;
@@ -67,7 +68,7 @@ const itemGlob = async (tx: Tx, clock: Clock, item: KbItem): Promise<'created' |
  */
 const linkItem = async (tx: Tx, item: KbItem, glob: Glob): Promise<void> => {
   if (item.decisionGlobId === glob.id) return;
-  await tx.updateKbItem({ ...item, decisionGlobId: glob.id, version: item.version + 1 }, item.version);
+  await kbItems(tx).updateKbItem({ ...item, decisionGlobId: glob.id, version: item.version + 1 }, item.version);
 };
 
 /** An extracted decision: a signed-off glob (outcome accept) at the decision's date, scoped to its glob or the project. */
@@ -91,7 +92,7 @@ const extractedDecision = async (tx: Tx, clock: Clock, decision: Decision): Prom
 export const backfillBoard = async (store: Store, clock: Clock, boardId: number): Promise<BackfillCounts> => {
   const cutoff = new Date(Date.parse(clock.now()) - BACKFILL_DAYS * DAY_MS).toISOString();
   const { items, decisions } = await store.transaction(async (tx) => ({
-    items: await tx.listKbItems(boardId),
+    items: await kbItems(tx).listKbItems(boardId),
     decisions: await tx.listDecisions(boardId),
   }));
   const recent = (at: string | null): boolean => at !== null && at >= cutoff;

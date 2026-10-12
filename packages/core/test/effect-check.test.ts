@@ -1,3 +1,4 @@
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { EffectCheckService } from '../src/app/effect-check-service.js';
@@ -239,7 +240,7 @@ describe('Effect checks', () => {
     });
 
   const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -467,7 +468,7 @@ describe('Effect checks', () => {
     });
     expect(await item(watched.id)).toEqual(settled);
     expect(
-      (await store.transaction((tx) => tx.listKbItems(boardId))).filter(
+      (await store.transaction((tx) => kbItems(tx).listKbItems(boardId))).filter(
         (i) => i.source === 'mined' && i.status === 'open',
       ),
     ).toHaveLength(1);
@@ -544,7 +545,7 @@ describe('Effect checks', () => {
     await series(3, 1, DAY);
     const watched = await approved();
     const [a, b] = await Promise.all([checks.check(boardId, now), checks.check(boardId, now)]);
-    const items = await store.transaction((tx) => tx.listKbItems(boardId));
+    const items = await store.transaction((tx) => kbItems(tx).listKbItems(boardId));
     const raised = items.filter((i) => i.signal?.key === `effect:${watched.id}`);
     expect(raised).toHaveLength(1);
     expect((await check(watched.id)).raisedItemId).toBe(raised[0]?.id);
@@ -942,6 +943,8 @@ describe('Effect checks', () => {
           description: 'How tests run',
           content: '# Testing\n',
         },
+        // A document proposal names its own target when it is submitted.
+        target: { kind: 'doc', name: 'testing', section: null, newDocument: { area: 'testing', audience: [], description: 'How tests run' } },
       });
       for (const as of ['document', 'draft'] as const) {
         const refused = await knowledge.approve(ADMIN, proposal.id, proposal.version, {

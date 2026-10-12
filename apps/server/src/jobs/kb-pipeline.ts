@@ -3,14 +3,14 @@ const POLL_MS = 5_000;
 export const PROBE_MS = 60_000;
 
 /**
- * Routes, deduplicates and drafts submitted KB items in the background, one step at a time: every
- * few seconds it processes items due for routing or drafting until none is left. `stop` lets the
- * item in hand finish. The findings pipeline (splitting and classifying review findings) runs in
- * its own instance, named by `task` in the error log.
+ * Runs a polling pipeline in the background, one item at a time: every few seconds it processes due
+ * items until none is left. `stop` lets the item in hand finish. The findings, search, decision and
+ * inbox pipelines each run their own instance, named by `task` in the error log. (The KB pipeline
+ * runs on the outbox's `llm` lane instead: `kb-executors.ts`.)
  *
  * While the LLM is unavailable (expired sign-in, no model access) it claims at most one item a
  * minute: that item's call is the probe, and the first success marks the LLM ok again. Items the
- * LLM fails this way wait without losing attempts (`KbPipeline`), so pausing only saves calls.
+ * LLM fails this way wait without losing attempts, so pausing only saves calls.
  */
 export class KbPipelineJob {
   private timer: NodeJS.Timeout | null = null;

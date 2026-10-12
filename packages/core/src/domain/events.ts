@@ -186,7 +186,14 @@ export type Effect =
    * `requestId` marks an on-demand review (Review now): it is never deduplicated or cancelled, and it reviews whatever the
    * PR is when it runs (the stage follows the PR's state, so `stage` and `sha` only say what it was when asked).
    */
-  | { readonly kind: 'review_change'; readonly globId: string; readonly generation: number; readonly stage: ReviewStage; readonly sha: string; readonly requestId?: string };
+  | { readonly kind: 'review_change'; readonly globId: string; readonly generation: number; readonly stage: ReviewStage; readonly sha: string; readonly requestId?: string }
+  /**
+   * The KB pipeline's steps for one learning (`globId` is the KB item's ID): route and deduplicate it, or draft it against
+   * its target. No generation: the executor re-derives the step from the item and drops a job that no longer applies, so a
+   * repeat costs at most one model call. The outbox keeps one pending job per item and kind.
+   */
+  | { readonly kind: 'kb_route'; readonly globId: string }
+  | { readonly kind: 'kb_draft'; readonly globId: string };
 
 export type ReviewStage = 'pre_merge' | 'post_merge';
 
@@ -199,11 +206,36 @@ export const OUTBOX_LANES: readonly OutboxLane[] = ['default', 'llm'];
 
 /**
  * The one place an effect kind is assigned its lane. Every kind is `default` except the slow LLM effects, which go in
- * `llm`; there are none yet (the KB pipeline's routing and drafting add theirs).
+ * `llm`: the KB pipeline's routing and drafting.
  */
-const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = {};
+const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm' };
 
 export const laneOf = (kind: EffectKind): OutboxLane => LANE_OF_KIND[kind] ?? 'default';
+
+/**
+ * Attempts a job may spend before it ends `failed`. A model that keeps giving unusable answers is given up on sooner
+ * (the item stays decidable by hand); waits for an unavailable or busy model spend none.
+ */
+const MAX_ATTEMPTS_OF_LANE: Readonly<Record<OutboxLane, number>> = { default: 8, llm: 3 };
+
+export const maxAttemptsOf = (lane: OutboxLane): number => MAX_ATTEMPTS_OF_LANE[lane];
+
+/** How long a claimed job waits before it may run again (a crash mid-job, or a thrown failure): 5 s doubling, capped at an hour. */
+export const outboxBackoffMs = (attempts: number): number => Math.min(2 ** attempts * 5, 3_600) * 1000;
+
+/**
+ * An executor's request to run again later without spending an attempt (an LLM that is busy or unavailable, or a record
+ * that changed under it). `reason` is kept as the job's last error, so the item can say why it waits; without one the
+ * last error stays as it was.
+ */
+export interface RetryLater {
+  readonly state: 'pending';
+  readonly retryAfterMs: number;
+  readonly reason?: string;
+}
+
+/** What running an effect did: done, dropped because it no longer applies, or asked to run again later. Throwing spends an attempt. */
+export type EffectOutcome = 'done' | 'dropped' | RetryLater;
 
 export const OUTBOX_STATES = ['pending', 'done', 'dropped', 'failed'] as const;
 export type OutboxState = (typeof OUTBOX_STATES)[number];

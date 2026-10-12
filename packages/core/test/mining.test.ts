@@ -1,3 +1,4 @@
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Llm } from '../src/app/intake-service.js';
 import { KbPipeline } from '../src/app/kb-pipeline.js';
@@ -11,6 +12,7 @@ import type { BoardJob, BoardJobResult, ManifestChange, MergedCommit } from '../
 import type { Board } from '../src/domain/types.js';
 import type { Catalog, ManifestSource, Store } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import { MemoryKbQueue } from '../src/testing/kb-queue.js';
 import { glob } from './fixtures.js';
 
 const ADMIN = 'admin@example.com';
@@ -72,7 +74,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
   };
 
   const item = async (id: string): Promise<KbItem> => {
-    const found = await store.transaction((tx) => tx.getKbItem(id));
+    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -81,7 +83,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     await store.transaction((tx) => tx.updateKbItem({ ...current, ...patch, version: current.version + 1 }, current.version));
   };
   const signalRow = async (key: string) => (await store.transaction((tx) => tx.listKbSignals(board.id))).find((r) => r.key === key);
-  const items = () => store.transaction((tx) => tx.listKbItems(board.id));
+  const items = () => store.transaction((tx) => kbItems(tx).listKbItems(board.id));
 
   beforeEach(async () => {
     store = new MemoryStore();
@@ -169,6 +171,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     const route = new FakeLlm();
     const draft = new FakeLlm();
     const pipeline = new KbPipeline({ store, clock: { now: () => START }, catalog, notifier, route, draft });
+    const queue = new MemoryKbQueue(store, pipeline, { now: () => START }, notifier);
     await runs(10, 3, later(-2 * DAY));
     const [id] = (await mining.mine(board.id, START)).raised;
 
@@ -176,19 +179,24 @@ describe('Mining: mined KB items and the re-raise rules', () => {
       JSON.stringify({ target: { kind: 'document', name: 'build_test_lint', section: '## Test', newDocument: null }, catalogCandidate: false, catalogReason: null }),
       JSON.stringify({ suppressedBy: null, duplicateOf: null, coveredBy: null, contradicts: [] }),
     );
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect(route.calls[0]?.prompt).toContain('Routine runs keep ending with someone taking over or starting again');
     expect(await item(id ?? '')).toMatchObject({ processing: 'routed', target: { kind: 'doc', name: 'build_test_lint', section: 'Test' } });
 
     draft.answer(JSON.stringify({ section: 'Test', content: '## Test\n\nRun vitest. Starting again needs a reason.\n', rationale: 'Adds the rule' }));
-    expect(await pipeline.processNext()).toBe(id);
+    expect(await queue.processNext()).toBe(id);
     expect(await item(id ?? '')).toMatchObject({ status: 'open', processing: 'drafted', source: 'mined', draft: { section: 'Test' } });
   });
 
   it('refreshes an open item weekly (figures and a line of evidence) without raising or drafting again', async () => {
     await runs(10, 3, later(-2 * DAY));
     const [id] = (await mining.mine(board.id, START)).raised;
-    await decide(id ?? '', { processing: 'drafted', draft: { section: null, content: 'x' }, draftedAgainstVersion: 1 });
+    await decide(id ?? '', {
+      processing: 'drafted',
+      target: { kind: 'doc', name: 'build_test_lint', section: null, newDocument: null },
+      draft: { section: null, content: 'x' },
+      draftedAgainstVersion: 1,
+    });
     const before = await item(id ?? '');
     await runs(2, 2, later(-DAY));
 
@@ -346,6 +354,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     unwrap(await knowledge.importDocuments(ADMIN, board.id, [{ fileName: 'build_test_lint.md', content: BUILD_DOC }], 'upload'));
     const route = new FakeLlm();
     const pipeline = new KbPipeline({ store, clock: { now: () => START }, catalog, notifier, route, draft: new FakeLlm() });
+    const queue = new MemoryKbQueue(store, pipeline, { now: () => START }, notifier);
     await runs(10, 3, later(-2 * DAY));
     const [mined] = (await mining.mine(board.id, START)).raised;
     const submitted: KbItem = {
@@ -365,7 +374,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
       JSON.stringify({ target: { kind: 'document', name: 'build_test_lint', section: '## Test', newDocument: null }, catalogCandidate: false, catalogReason: null }),
       JSON.stringify({ checked: [{ ref: submitted.id, relation: 'same fact' }], suppressedBy: null, duplicateOf: { id: submitted.id, quote: 'Say why when starting again', newQuote: 'someone taking over or starting again' }, coveredBy: null, contradicts: [] }),
     );
-    expect(await pipeline.processNext()).toBe(mined);
+    expect(await queue.processNext()).toBe(mined);
     expect(await item(mined ?? '')).toMatchObject({ status: 'merged', duplicateOf: submitted.id });
 
     const nextWeek = later(WEEK);
@@ -416,7 +425,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
           work({
             ...tx,
             getKbItem: async (itemId) => {
-              const found = await tx.getKbItem(itemId);
+              const found = await kbItems(tx).getKbItem(itemId);
               return found === null || itemId !== id ? found : { ...found, version: found.version - 1 };
             },
           }),
