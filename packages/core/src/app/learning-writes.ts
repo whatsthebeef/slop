@@ -8,6 +8,7 @@ import {
 } from '../domain/decision-glob.js';
 import type { LearningAssessmentFacts } from '../domain/decision-glob.js';
 import type { EffectCheck } from '../domain/effect-check.js';
+import type { Effect, OutboxJob } from '../domain/events.js';
 import type { Result } from '../domain/errors.js';
 import { parseId } from '../domain/ids.js';
 import { KB_STEP_KIND, kbStepOf, stepEffects } from '../domain/kb.js';
@@ -20,6 +21,7 @@ import type {
   KbItemStatus,
   KbMergeNote,
   KbOutcome,
+  KbPossibleCoverage,
   KbTarget,
   LearningType,
   ProposedDocument,
@@ -30,6 +32,8 @@ import {
   DOCUMENT_EVIDENCE_LABEL,
   EVIDENCE_PREFIX,
   MERGE_NOTE_LABEL,
+  contradictionLinks,
+  dedupeAttributesOf,
   learningAssessmentFacts,
   learningDecision,
   learningDocument,
@@ -45,6 +49,7 @@ import {
   learningStatusFrom,
   learningStep,
   learningTarget,
+  possiblyCoveredLinks,
 } from '../domain/learning.js';
 import type { LearningRead } from '../domain/learning.js';
 import * as machine from '../domain/machine.js';
@@ -532,6 +537,18 @@ interface LearningEdit {
     readonly at?: string;
   };
   readonly effectCheck?: EffectCheck | null;
+  /** Evidence merged in from near-duplicates, after what the learning holds. */
+  readonly addEvidence?: readonly ExtraEvidence[];
+  /** The verified quotes a pipeline closure rests on. */
+  readonly mergeNote?: KbMergeNote;
+  /** A new draft against `target` (a draft artifact), and the preview its assessment shows. */
+  readonly draft?: {
+    readonly draft: KbDraft;
+    readonly target: KbTarget;
+    readonly targetVersion: number | null;
+    readonly rationale: string | null;
+    readonly preview: DraftPreview | null;
+  };
 }
 
 /**
@@ -598,6 +615,18 @@ const editLearning = async (
       : { outcome: outcome.value, decidedBy: outcome.by ?? null, decidedAt: outcome.at ?? null }),
     ...(edit.effectCheck === undefined ? {} : { effectCheck: edit.effectCheck }),
     ...(edit.clearMergeNote === true ? { mergeNote: null } : {}),
+    ...(edit.mergeNote === undefined ? {} : { mergeNote: edit.mergeNote }),
+    ...(edit.addEvidence === undefined
+      ? {}
+      : { extraEvidence: [...stateBefore.extraEvidence, ...edit.addEvidence] }),
+    ...(edit.draft === undefined
+      ? {}
+      : {
+          draft: edit.draft.draft,
+          draftedAgainstVersion: edit.draft.targetVersion,
+          rationale: edit.draft.rationale,
+          target: edit.draft.target,
+        }),
   };
   const wrote = await writeLearningArtifacts(tx, next, stateBefore, stateAfter, now);
   await refreshOnApproval(tx, ctx, { id, boardId: glob.boardId }, statusBefore, status);
@@ -628,7 +657,7 @@ const editLearning = async (
     // Read back with the step just queued, so the assessment sees the pipeline state the write left.
     const after = await readLearning(tx, id);
     if (after !== null)
-      await assessLearning(tx, ctx, next, learningAssessmentFacts(after), null, true);
+      await assessLearning(tx, ctx, next, learningAssessmentFacts(after), edit.draft?.preview ?? null, true);
   }
   ctx.raise?.({ kind: 'glob.changed', boardId: glob.boardId, globId: id, version: next.version });
   if (wrote) ctx.raise?.({ kind: 'glob.artifacts', boardId: glob.boardId, globId: id });
@@ -801,4 +830,191 @@ export const recordLearningDecision = (
     outcome,
     effectCheck: decision.effectCheck,
   });
+};
+
+/** What the pipeline's routing and dedupe step decided about a learning. */
+export interface LearningRouting {
+  readonly target: KbTarget;
+  readonly catalogCandidate: boolean;
+  readonly catalogReason: string | null;
+  /**
+   * How the pipeline closes the learning (`closeDecision`), or null to leave it open. Closing writes the link that closed
+   * it (none when a document's text covers it) and the verified quotes it closed on, and leaves its hints as they were.
+   */
+  readonly closure: {
+    readonly as: 'merged' | 'suppressed' | 'covered';
+    readonly link: GlobLink | null;
+    readonly note: KbMergeNote | null;
+  } | null;
+  /** An open learning's hint that something may already say it, and the contradictions found; replace what it had. */
+  readonly possiblyCoveredBy: KbPossibleCoverage | null;
+  readonly contradicts: readonly KbContradiction[];
+}
+
+const HINT_LINKS: readonly GlobLink['kind'][] = ['possibly_covered_by', 'contradicts'];
+
+/**
+ * Records the routing and dedupe outcome on a learning: its routed target (which makes drafting due), the catalog flag,
+ * and either its closure or its hint and contradictions. False if the glob moved from `expectedVersion`.
+ */
+export const routeLearning = (
+  tx: Tx,
+  ctx: LearningWriteContext,
+  id: string,
+  expectedVersion: number,
+  routing: LearningRouting,
+): Promise<boolean> => {
+  const { closure } = routing;
+  return editLearning(tx, ctx, id, expectedVersion, {
+    ...(closure === null
+      ? {}
+      : {
+          row: (glob, at) =>
+            machine.closeDecision(glob, closure.as, closure.link, decisionContext(ctx.clock, null, at)),
+          ...(closure.note === null ? {} : { mergeNote: closure.note }),
+        }),
+    attributes: (a) => {
+      const next: MutableAttributes = {
+        ...a,
+        target: { suggested: a.target?.suggested ?? null, routed: routing.target },
+      };
+      delete next.catalogCandidate;
+      delete next.catalogReason;
+      if (routing.catalogCandidate) next.catalogCandidate = true;
+      if (routing.catalogReason !== null) next.catalogReason = routing.catalogReason;
+      if (closure === null) {
+        delete next.possiblyCoveredByText;
+        delete next.contradictsText;
+        Object.assign(
+          next,
+          dedupeAttributesOf(null, routing.possiblyCoveredBy, routing.contradicts),
+        );
+      }
+      return next;
+    },
+    ...(closure === null
+      ? {
+          links: (links) => [
+            ...links.filter((l) => !HINT_LINKS.includes(l.kind)),
+            ...possiblyCoveredLinks(routing.possiblyCoveredBy),
+            ...contradictionLinks(routing.contradicts),
+          ],
+        }
+      : {}),
+  });
+};
+
+/**
+ * Folds `from`'s evidence into learning `id` (a merge or coverage closes `from` on it): its evidence, source globs and
+ * count are added, with everything either was kept apart from, and a stale flag clears. `hint` is a hint the learning
+ * takes when it has none. False if `id` moved from `expectedVersion`.
+ */
+export const addLearningEvidence = (
+  tx: Tx,
+  ctx: LearningWriteContext,
+  id: string,
+  expectedVersion: number,
+  from: LearningRead,
+  hint: Extract<KbPossibleCoverage, { kind: 'item' }> | null,
+): Promise<boolean> => {
+  const facts = learningFacts(from.glob);
+  const fromApart = learningLinks(from.glob).keptApartFrom;
+  const added: ExtraEvidence[] = [
+    {
+      itemId: from.glob.id,
+      globIds: facts.sourceGlobIds,
+      evidence: learningEvidence(from.glob, from.artifacts),
+      submittedBy: from.glob.creator,
+      at: from.glob.createdAt,
+    },
+    ...learningExtraEvidence(from.artifacts),
+  ];
+  return editLearning(tx, ctx, id, expectedVersion, {
+    addEvidence: added,
+    attributes: (a) => {
+      const next: MutableAttributes = {
+        ...a,
+        evidenceCount: (a.evidenceCount ?? 1) + facts.occurrenceCount,
+        sourceGlobs: [...new Set([...(a.sourceGlobs ?? []), ...facts.sourceGlobIds])],
+      };
+      // New evidence clears a stale flag; the next consolidation run flags it again if that evidence is old too.
+      if (a.stale !== undefined) {
+        if (a.stale.dismissedAt === null) delete next.stale;
+        else next.stale = { since: null, reason: null, dismissedAt: a.stale.dismissedAt };
+      }
+      return next;
+    },
+    links: (links) => {
+      const apart = new Set(links.filter((l) => l.kind === 'kept_apart_from').map((l) => l.id));
+      const joined: GlobLink[] = [
+        ...links,
+        ...fromApart
+          .filter((other) => other !== id && !apart.has(other))
+          .map((other): GlobLink => ({ id: other, kind: 'kept_apart_from', source: 'explicit' })),
+      ];
+      return hint === null
+        ? joined
+        : [...joined.filter((l) => l.kind !== 'possibly_covered_by'), ...possiblyCoveredLinks(hint)];
+    },
+  });
+};
+
+/** A draft the pipeline wrote against the target's text at `targetVersion`. */
+export interface LearningDraftWrite {
+  readonly draft: KbDraft;
+  readonly target: KbTarget;
+  readonly targetVersion: number;
+  readonly rationale: string | null;
+  /** What approving it would change now, for the assessment. */
+  readonly preview: DraftPreview | null;
+}
+
+/** Records a draft on an open learning: its target as the drafter settled it, the draft and why. False if the glob moved from `expectedVersion`. */
+export const recordLearningDraft = (
+  tx: Tx,
+  ctx: LearningWriteContext,
+  id: string,
+  expectedVersion: number,
+  write: LearningDraftWrite,
+): Promise<boolean> =>
+  editLearning(tx, ctx, id, expectedVersion, {
+    attributes: (a) => ({ ...a, target: { suggested: a.target?.suggested ?? null, routed: write.target } }),
+    draft: {
+      draft: write.draft,
+      target: write.target,
+      targetVersion: write.targetVersion,
+      rationale: write.rationale,
+      preview: write.preview,
+    },
+  });
+
+/**
+ * Takes the lock on a learning the pipeline checks against (a rejected one a suppression rests on): the row is written
+ * back unchanged, so a change committed since fails the check, and it stays locked until this transaction commits.
+ * False if the glob moved from `expectedVersion`.
+ */
+export const lockLearning = async (tx: Tx, id: string, expectedVersion: number): Promise<boolean> => {
+  const glob = await tx.getGlob(id);
+  return glob?.version === expectedVersion && (await tx.updateGlob(glob, expectedVersion));
+};
+
+/**
+ * Self-healing: queues the due step of every open learning on the board whose step has no job waiting (none, or the
+ * newest finished or was dropped). A failed one is left for an admin's Retry. Returns how many it queued.
+ */
+export const queueDueLearningSteps = async (tx: Tx, boardId: number): Promise<number> => {
+  const due: Effect[] = [];
+  for (const { glob, artifacts, jobs } of await boardLearnings(tx, boardId)) {
+    if (learningStatus(glob, artifacts) !== 'open') continue;
+    const step = learningStep(glob, artifacts);
+    if (step === null) continue;
+    const kind = KB_STEP_KIND[step];
+    const newest = jobs
+      .filter((j) => j.kind === kind)
+      .reduce<OutboxJob | null>((a, j) => (a === null || j.id > a.id ? j : a), null);
+    if (newest === null || newest.state === 'done' || newest.state === 'dropped')
+      due.push({ kind, globId: glob.id });
+  }
+  await tx.enqueueEffects(due);
+  return due.length;
 };

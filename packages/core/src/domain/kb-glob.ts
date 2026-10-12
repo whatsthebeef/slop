@@ -1,9 +1,11 @@
-import type { DecisionAttributes, KnowledgeCoverage, KnowledgePossibleCoverage } from './attributes.js';
-import type { JsonValue } from './events.js';
+import type { DecisionAttributes } from './attributes.js';
 import { UNPROCESSED } from './kb.js';
-import type { KbItem, KbPossibleCoverage } from './kb.js';
+import type { KbItem } from './kb.js';
 import {
   EVIDENCE_HEADING,
+  contradictionLinks,
+  dedupeAttributesOf,
+  possiblyCoveredLinks,
   learningCatalog,
   learningDecision,
   learningDocument,
@@ -31,13 +33,8 @@ import type { Glob, GlobLink } from './types.js';
 export const proposalText = (item: Pick<KbItem, 'statement' | 'evidence' | 'document'>): string =>
   item.document !== null ? item.document.content : `${item.statement}${EVIDENCE_HEADING}${item.evidence}`;
 
-const isKnowledgePossible = (hint: KbPossibleCoverage): hint is KnowledgePossibleCoverage => hint.kind !== 'item';
-
 /** The KB fields of a learning's decision attributes (the decision rows own scope, origin, channel, outcome and archived). */
 export const kbAttributesOf = (item: KbItem): Partial<DecisionAttributes> => {
-  const coveredByText: KnowledgeCoverage | null = item.coveredBy?.kind === 'knowledge' ? item.coveredBy : null;
-  const possible = item.possiblyCoveredBy;
-  const contradictsText = item.contradicts.filter((c) => c.kind === 'knowledge');
   const stale = item.staleSince !== null || item.staleReason !== null || item.staleDismissedAt !== null;
   return {
     kind: item.type,
@@ -53,9 +50,7 @@ export const kbAttributesOf = (item: KbItem): Partial<DecisionAttributes> => {
     ...(item.document === null
       ? {}
       : { document: { name: item.document.name, area: item.document.area, audience: item.document.audience, description: item.document.description } }),
-    ...(coveredByText === null ? {} : { coveredByText }),
-    ...(possible !== null && isKnowledgePossible(possible) ? { possiblyCoveredByText: possible } : {}),
-    ...(contradictsText.length === 0 ? {} : { contradictsText }),
+    ...dedupeAttributesOf(item.coveredBy, item.possiblyCoveredBy, item.contradicts),
   };
 };
 
@@ -77,29 +72,13 @@ export const KB_ATTRIBUTE_KEYS = [
   'contradictsText',
 ] as const;
 
-/** An item hint as a link's detail (the ID is the link's). */
-const hintDetail = (hint: Extract<KbPossibleCoverage, { kind: 'item' }>): JsonValue => ({
-  quote: hint.quote,
-  shortQuote: true,
-  ...(hint.claim === undefined ? {} : { claim: hint.claim }),
-  ...(hint.ownQuote === undefined ? {} : { ownQuote: hint.ownQuote }),
-  ...(hint.tooShort === undefined ? {} : { tooShort: hint.tooShort }),
-  ...(hint.alsoTarget === undefined ? {} : { alsoTarget: { quote: hint.alsoTarget.quote, reason: hint.alsoTarget.reason } }),
-  ...(hint.via === undefined ? {} : { via: hint.via }),
-});
-
 /** How a learning relates to others, as links: what closed it, a hint naming another learning, contradictions, pairs kept apart. */
 export const kbLinksOf = (item: KbItem): GlobLink[] => {
   const links: GlobLink[] = [];
   if (item.duplicateOf !== null) links.push({ id: item.duplicateOf, kind: 'duplicate_of', source: 'pipeline' });
   if (item.suppressedBy !== null) links.push({ id: item.suppressedBy, kind: 'suppressed_by', source: 'pipeline' });
   if (item.coveredBy?.kind === 'item') links.push({ id: item.coveredBy.id, kind: 'covered_by', source: 'pipeline' });
-  const hint = item.possiblyCoveredBy;
-  if (hint?.kind === 'item') links.push({ id: hint.id, kind: 'possibly_covered_by', source: 'pipeline', detail: hintDetail(hint) });
-  // `position` keeps the contradictions' order across links and the text ones (`contradictsText`).
-  item.contradicts.forEach((c, position) => {
-    if (c.kind === 'item') links.push({ id: c.ref, kind: 'contradicts', source: 'pipeline', detail: { note: c.note, position } });
-  });
+  links.push(...possiblyCoveredLinks(item.possiblyCoveredBy), ...contradictionLinks(item.contradicts));
   for (const id of item.keptApartFrom) links.push({ id, kind: 'kept_apart_from', source: 'explicit' });
   return links;
 };

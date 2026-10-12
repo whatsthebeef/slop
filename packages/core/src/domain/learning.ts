@@ -1,4 +1,4 @@
-import type { DecisionAttributes, DecisionOutcome } from './attributes.js';
+import type { DecisionAttributes, DecisionOutcome, KnowledgeCoverage, KnowledgePossibleCoverage } from './attributes.js';
 import { decisionOf } from './decision-glob.js';
 import type { LearningAssessmentFacts } from './decision-glob.js';
 import type { EffectCheck } from './effect-check.js';
@@ -323,6 +323,50 @@ const contradictionsOf = (
   return slots
     .map((slot) => slot ?? rest.shift())
     .filter((c): c is KbContradiction => c !== undefined);
+};
+
+/** An item hint as a link's detail (the ID is the link's): `hintOf` reads it back. */
+const hintDetail = (hint: Extract<KbPossibleCoverage, { kind: 'item' }>): JsonValue => ({
+  quote: hint.quote,
+  shortQuote: true,
+  ...(hint.claim === undefined ? {} : { claim: hint.claim }),
+  ...(hint.ownQuote === undefined ? {} : { ownQuote: hint.ownQuote }),
+  ...(hint.tooShort === undefined ? {} : { tooShort: hint.tooShort }),
+  ...(hint.alsoTarget === undefined
+    ? {}
+    : { alsoTarget: { quote: hint.alsoTarget.quote, reason: hint.alsoTarget.reason } }),
+  ...(hint.via === undefined ? {} : { via: hint.via }),
+});
+
+/** The link a hint naming another learning is stored as; none for a hint about a document's text (an attribute). */
+export const possiblyCoveredLinks = (hint: KbPossibleCoverage | null): GlobLink[] =>
+  hint?.kind === 'item'
+    ? [{ id: hint.id, kind: 'possibly_covered_by', source: 'pipeline', detail: hintDetail(hint) }]
+    : [];
+
+/** The links contradictions naming a learning are stored as; `position` keeps their order among the text ones. */
+export const contradictionLinks = (contradicts: readonly KbContradiction[]): GlobLink[] =>
+  contradicts.flatMap((c, position): GlobLink[] =>
+    c.kind === 'item'
+      ? [{ id: c.ref, kind: 'contradicts', source: 'pipeline', detail: { note: c.note, position } }]
+      : [],
+  );
+
+/** The attributes the text-side of coverage, hints and contradictions are stored as (the item side is links). */
+export const dedupeAttributesOf = (
+  coveredBy: KbCoverage | null,
+  possiblyCoveredBy: KbPossibleCoverage | null,
+  contradicts: readonly KbContradiction[],
+): Partial<DecisionAttributes> => {
+  const coveredByText: KnowledgeCoverage | null = coveredBy?.kind === 'knowledge' ? coveredBy : null;
+  const possible: KnowledgePossibleCoverage | null =
+    possiblyCoveredBy !== null && possiblyCoveredBy.kind !== 'item' ? possiblyCoveredBy : null;
+  const contradictsText = contradicts.filter((c) => c.kind === 'knowledge');
+  return {
+    ...(coveredByText === null ? {} : { coveredByText }),
+    ...(possible === null ? {} : { possiblyCoveredByText: possible }),
+    ...(contradictsText.length === 0 ? {} : { contradictsText }),
+  };
 };
 
 /** How a learning relates to others: what closed it, a hint that it may be said already, contradictions, pairs kept apart. */

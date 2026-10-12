@@ -1,4 +1,6 @@
 import type { KbItem } from '../domain/kb.js';
+import { learningExtraEvidence, learningLinks } from '../domain/learning.js';
+import type { LearningRead } from '../domain/learning.js';
 import { text } from './llm-json.js';
 import type { KbItems } from './kb-items.js';
 
@@ -50,15 +52,29 @@ export const longEnoughQuote = (quote: string): boolean => {
   return squashed.length >= MIN_MERGE_QUOTE_CHARS && squashed.split(' ').length >= MIN_MERGE_QUOTE_WORDS;
 };
 
+/** What the kept-apart check reads of a learning. */
+export interface KeepsApart {
+  readonly id: string;
+  readonly extraEvidence: readonly { readonly itemId: string }[];
+  readonly keptApartFrom: readonly string[];
+}
+
+/** The kept-apart check's view of a learning as read (`LearningRead`). */
+export const keepsApartOf = ({ glob, artifacts }: LearningRead): KeepsApart => ({
+  id: glob.id,
+  extraEvidence: learningExtraEvidence(artifacts),
+  keptApartFrom: learningLinks(glob).keptApartFrom,
+});
+
 /** The items whose evidence `item` holds: itself and every item merged into it (directly or through another). */
-const holding = (item: KbItem): string[] => [item.id, ...item.extraEvidence.map((e) => e.itemId)];
+const holding = (item: KeepsApart): string[] => [item.id, ...item.extraEvidence.map((e) => e.itemId)];
 
 /**
  * Whether an admin separated the two (by reopening a merge): either keeps apart an item whose evidence the other
  * holds. A merge carries both items' `keptApartFrom` and evidence onto the survivor, so this holds through any
  * chain of merges, in one run or across runs: a model-verified merge never joins what an admin split.
  */
-export const keptApart = (a: KbItem, b: KbItem): boolean =>
+export const keptApart = (a: KeepsApart, b: KeepsApart): boolean =>
   holding(a).some((id) => b.keptApartFrom.includes(id)) ||
   holding(b).some((id) => a.keptApartFrom.includes(id));
 
