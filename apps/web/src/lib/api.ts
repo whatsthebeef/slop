@@ -676,7 +676,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   investigate: 'Investigate',
   review_now: 'Review now',
   start_anyway: 'Start anyway',
-  pick_up: "Pick up (I'll do it)",
+  pick_up: 'Pick up',
   take_over: 'Take over',
   retrigger: 'Re-trigger',
   retry_autofix: 'Retry auto-fix',

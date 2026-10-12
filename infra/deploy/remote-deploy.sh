@@ -3,7 +3,7 @@
 # The new image is pulled before anything running is touched. If it doesn't answer its health check, the
 # previous image is started again and the script fails, so CodeBuild goes red and the old release keeps serving.
 #
-# Environment: IMAGE (ECR URI with tag), PUBLIC_URL (https://<id>.cloudfront.net), AWS_REGION, STAGE, BACKUP_BUCKET.
+# Environment: IMAGE (ECR URI with tag), PUBLIC_URL (the public address), optionally PUBLIC_URL_ALIASES (other addresses that reach it), AWS_REGION, STAGE, BACKUP_BUCKET.
 # Next to it, extracted from the same image by the SSM command: compose.yaml (compose.prod.yaml from the repo) and
 # backup.sh (the nightly dump, scheduled below).
 set -euo pipefail
@@ -48,6 +48,7 @@ EXTRA="$(printf '%s\n' "$EXTRA" | grep -v '^[[:space:]]*AUTH_MODE=' || true)"
 
 (umask 077 && {
   echo "PUBLIC_URL=${PUBLIC_URL}"
+  [ -z "${PUBLIC_URL_ALIASES:-}" ] || echo "PUBLIC_URL_ALIASES=${PUBLIC_URL_ALIASES}"
   echo "DATABASE_URL=postgres://slop:${POSTGRES_PASSWORD}@postgres:5432/slop"
   echo "SECRETS=aws"
   echo "SECRETS_PREFIX=slop/${STAGE}/"

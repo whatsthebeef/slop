@@ -3,7 +3,7 @@
 # then waits for the result. The instance takes the deploy files (compose.yaml, remote-deploy.sh, backup.sh) from
 # the image it is deploying (/app/deploy), so no bucket carries them. Exits non-zero when the deploy failed.
 #
-# Environment (set by the CodeBuild project): AWS_REGION, STAGE, INSTANCE_ID, BACKUP_BUCKET, IMAGE, PUBLIC_URL.
+# Environment (set by the CodeBuild project): AWS_REGION, STAGE, INSTANCE_ID, BACKUP_BUCKET, IMAGE, PUBLIC_URL; optionally PUBLIC_URL_ALIASES.
 set -euo pipefail
 : "${AWS_REGION:?}" "${STAGE:?}" "${INSTANCE_ID:?}" "${BACKUP_BUCKET:?}" "${IMAGE:?}" "${PUBLIC_URL:?}"
 
@@ -17,7 +17,7 @@ cat > ssm-parameters.json <<JSON
   "CID=\$(docker create ${IMAGE})",
   "docker cp \$CID:/app/deploy/. /opt/slop/",
   "docker rm \$CID >/dev/null",
-  "IMAGE=${IMAGE} BACKUP_BUCKET=${BACKUP_BUCKET} PUBLIC_URL=${PUBLIC_URL} AWS_REGION=${AWS_REGION} STAGE=${STAGE} bash /opt/slop/remote-deploy.sh"
+  "IMAGE=${IMAGE} BACKUP_BUCKET=${BACKUP_BUCKET} PUBLIC_URL=${PUBLIC_URL} PUBLIC_URL_ALIASES=${PUBLIC_URL_ALIASES:-} AWS_REGION=${AWS_REGION} STAGE=${STAGE} bash /opt/slop/remote-deploy.sh"
 ]}
 JSON
 

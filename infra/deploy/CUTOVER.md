@@ -166,3 +166,22 @@ http://localhost:3000/mcp --client-id <dev Claude Code client> --callback-port 7
   production. Production has its own copies in Secrets Manager (section 1).
 - The ngrok tunnel is only for testing integrations (GitHub, Slack) locally.
 - Submit the real names, timings and this note for the build doc to the knowledge base (`submit_learning`).
+
+## 8. Custom domain (`slopmux.thepocketlab.com`)
+
+The host stack can serve the distribution at a custom domain. The ACM certificate for it must exist in us-east-1. The stack
+creates no DNS record (the zone is managed elsewhere), and the `*.cloudfront.net` address keeps working: the server's
+`PUBLIC_URL_ALIASES` makes it present itself under whichever address the client used, and Cognito lists both addresses'
+callbacks. Without the context the stacks are unchanged.
+
+1. [ ] DNS: CNAME `slopmux.thepocketlab.com` → the host stack's `CloudFrontUrl` output (`<id>.cloudfront.net`).
+2. [ ] Deploy the host stack with `-c domainName=slopmux.thepocketlab.com -c certificateArn=arn:aws:acm:us-east-1:...` (plus
+      its usual context). That sets the alternate domain and certificate on CloudFront and `PUBLIC_URL` / `PUBLIC_URL_ALIASES`
+      on the deploy project; then start a deploy (`aws codebuild start-build --project-name <DeployProject>`) so the server
+      restarts with them.
+3. [ ] Deploy the auth stack with `-c publicUrl=https://slopmux.thepocketlab.com -c publicUrlAliases=https://<id>.cloudfront.net`.
+4. [ ] `infra/deploy/verify.sh https://slopmux.thepocketlab.com` and the same on the CloudFront address both pass; sign in on both.
+5. [ ] Move clients at leisure: the GitHub App webhook and callback/setup URLs, the claude.ai Slop connector URL, each CLI's
+      `SLOP_URL` and sstor config. (`SLOP_URL` in the agent set follows `PUBLIC_URL`, so it moves with the next agent set.)
+6. [ ] Later, optionally: redeploy the auth stack without `publicUrlAliases` once nothing signs in on the CloudFront address. The
+      server keeps answering on it (harmless); the host stack keeps listing it as an alias while a domain is set.
