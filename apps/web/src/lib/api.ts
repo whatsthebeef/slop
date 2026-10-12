@@ -718,6 +718,8 @@ export const api = {
     request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/attach`, { globIds }),
   /** The glob already made from this item (Create glob), or null. */
   inboxGlob: (boardId: number, id: number) => request<{ globId: string | null }>('GET', `/api/boards/${boardId}/inbox/${id}/glob`),
+  detachInbox: (boardId: number, id: number, globIds: readonly string[]) =>
+    request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/detach`, { globIds }),
   keepInbox: (boardId: number, id: number) => request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/keep`),
   discardInbox: (boardId: number, id: number) => request<InboxItemView>('POST', `/api/boards/${boardId}/inbox/${id}/discard`),
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */

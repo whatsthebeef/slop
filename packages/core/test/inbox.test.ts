@@ -665,6 +665,107 @@ describe('inbox', () => {
       expect(await store.transaction((tx) => tx.listInboxLinks(boardId))).toHaveLength(0);
     });
 
+    describe('detach', () => {
+      const attachment = (globId: string) =>
+        store.transaction((tx) => tx.listArtifacts(globId, 'attachment'));
+
+      it('removes the link, the attachment (history kept), the search link and the context entry', async () => {
+        const artifacts = new ArtifactService({ store, clock, notifier });
+        unwrap(await inbox.attach(DEV, boardId, id, [g1.id, g2.id]));
+        notifier.hints.length = 0;
+        const view = unwrap(await inbox.detach(DEV, boardId, id, [g1.id]));
+        expect(view.status).toBe('attached');
+        expect(view.attachedTo.map((a) => a.globId)).toEqual(['s1t2']);
+        expect(await attachment(g1.id)).toHaveLength(0);
+        expect(await attachment(g2.id)).toHaveLength(1);
+        const versions = await store.transaction((tx) =>
+          tx.artifactVersions(g1.id, 'attachment', 'From the inbox: Sync standup'),
+        );
+        expect(versions.map((v) => v.version)).toEqual([1, 2]);
+        expect(versions[1]).toMatchObject({ content: '', link: null });
+        expect(searchItem(id)?.globIds).toEqual(['s1t2']);
+        expect(unwrap(await artifacts.context(DEV, g1.id)).inbox).toEqual([]);
+        expect(unwrap(await artifacts.context(DEV, g2.id)).inbox).toHaveLength(1);
+        expect(notifier.hints).toContainEqual({ kind: 'glob.artifacts', boardId, globId: g1.id });
+        expect(notifier.hints).toContainEqual({ kind: 'board.inbox', boardId });
+      });
+
+      it('keeps the item when its last glob goes, so it can be discarded, and it can be attached again', async () => {
+        unwrap(await inbox.attach(DEV, boardId, id, [g1.id]));
+        expect(errorCode(await inbox.discard(DEV, boardId, id))).toBe('invalid_input');
+        const view = unwrap(await inbox.detach(DEV, boardId, id, [g1.id]));
+        expect(view).toMatchObject({ status: 'kept', attachedTo: [] });
+        expect(searchItem(id)).toMatchObject({ globIds: [] });
+        expect(unwrap(await inbox.attach(DEV, boardId, id, [g1.id])).status).toBe('attached');
+        // The same label again, not a numbered one: the cleared version no longer counts as taken.
+        expect((await attachment(g1.id)).map((a) => a.label)).toEqual(['From the inbox: Sync standup']);
+        unwrap(await inbox.detach(DEV, boardId, id, [g1.id]));
+        expect(unwrap(await inbox.discard(DEV, boardId, id)).status).toBe('discarded');
+      });
+
+      it('is idempotent: a glob the item is not on changes nothing', async () => {
+        unwrap(await inbox.attach(DEV, boardId, id, [g1.id]));
+        notifier.hints.length = 0;
+        const before = await row(id);
+        const view = unwrap(await inbox.detach(DEV, boardId, id, [g2.id]));
+        expect(view.attachedTo.map((a) => a.globId)).toEqual(['s1t1']);
+        expect(await row(id)).toEqual(before);
+        expect(await attachment(g1.id)).toHaveLength(1);
+        expect(notifier.hints).toEqual([]);
+        unwrap(await inbox.detach(DEV, boardId, id, [g1.id]));
+        expect(unwrap(await inbox.detach(DEV, boardId, id, [g1.id])).status).toBe('kept');
+      });
+
+      it('refuses non-members, a missing item and bad glob lists', async () => {
+        unwrap(await inbox.attach(DEV, boardId, id, [g1.id]));
+        expect(errorCode(await inbox.detach(OUTSIDER, boardId, id, [g1.id]))).toBe('forbidden');
+        expect(errorCode(await inbox.detach(DEV, boardId, 999, [g1.id]))).toBe('not_found');
+        expect(errorCode(await inbox.detach(DEV, boardId, id, []))).toBe('invalid_input');
+        expect(
+          errorCode(
+            await inbox.detach(DEV, boardId, id, Array.from({ length: 11 }, (_, n) => `s1t${String(n)}`)),
+          ),
+        ).toBe('invalid_input');
+        expect(await attachment(g1.id)).toHaveLength(1);
+        expect((await row(id)).status).toBe('attached');
+      });
+
+      it('drops the glob\'s decision source and decisions, and releases the older decisions they replaced', async () => {
+        unwrap(await inbox.attach(DEV, boardId, id, [g1.id, g2.id]));
+        const base = {
+          boardId,
+          group: null,
+          statement: 's',
+          quote: 'q',
+          decidedBy: null,
+          decidedAt: START,
+          sourceKind: 'inbox' as const,
+          sourceLabel: 'l',
+          sourceUrl: null,
+          createdAt: START,
+        };
+        const ref = (globId: string) => `inbox:${String(id)}:${globId}`;
+        const mine = await store.transaction((tx) => tx.upsertDecision({ ...base, itemId: 9001, globId: g1.id, sourceRef: ref(g1.id) }));
+        const other = await store.transaction((tx) => tx.upsertDecision({ ...base, itemId: 9002, globId: g2.id, sourceRef: ref(g2.id) }));
+        const older = await store.transaction((tx) =>
+          tx.upsertDecision({ ...base, itemId: 9003, globId: null, sourceKind: 'plan', sourceRef: 'artifact:s1t9:plan:' }),
+        );
+        await store.transaction(async (tx) => {
+          await tx.updateDecision(older.id, { replacedBy: mine.id, replaceState: 'applied' });
+          for (const sourceRef of [ref(g1.id), ref(g2.id)])
+            await tx.upsertDecisionSource({
+              boardId, sourceRef, contentHash: 'h', state: 'done', attempts: 0, processAfter: null, lastError: null, globId: sourceRef === ref(g1.id) ? g1.id : g2.id, updatedAt: START,
+            });
+        });
+        unwrap(await inbox.detach(DEV, boardId, id, [g1.id]));
+        const left = await store.transaction((tx) => tx.listDecisions(boardId));
+        expect(left.map((d) => d.id).sort()).toEqual([other.id, older.id].sort());
+        expect(left.find((d) => d.id === older.id)).toMatchObject({ replacedBy: null, replaceState: null });
+        const sources = await store.transaction((tx) => tx.listDecisionSources(boardId));
+        expect(sources.map((d) => d.sourceRef)).toEqual([ref(g2.id)]);
+      });
+    });
+
     it('lists suggestions on live open globs that are not already attached', async () => {
       llm.queue.push(answer({ suggestions: [] }));
       await addGlob({ id: 's1t3', title: 'Done work', status: 'signed_off' });

@@ -410,6 +410,8 @@ export interface Tx {
   /** Records a link; false when the item is already linked to the glob. */
   insertInboxLink(link: InboxLink): Promise<boolean>;
   listInboxLinks(boardId: number): Promise<InboxLink[]>;
+  /** Deletes the link between an item and a glob; false when there was none. */
+  deleteInboxLink(inboxId: number, globId: string): Promise<boolean>;
   /** The attached items linked to a glob, oldest link first. */
   listInboxForGlob(globId: string): Promise<InboxItem[]>;
   /** Sets the globs (and group) a search item links to, without touching its chunks. */

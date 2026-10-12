@@ -76,6 +76,7 @@ describe('inbox', () => {
   let boardId: number;
   let otherBoardId: number;
   let first: string;
+  let makeGlob: (title: string) => Promise<string>;
   let second: string;
   let foreign: string;
 
@@ -166,6 +167,7 @@ describe('inbox', () => {
       if (!made.ok) throw new Error(made.error.message);
       return made.value.id;
     };
+    makeGlob = (title) => make(boardId, DEV, title);
     first = await make(boardId, DEV, 'Push sync jobs over a websocket');
     second = await make(boardId, DEV, 'Billing export');
     foreign = await make(otherBoardId, STRANGER, 'Elsewhere');
@@ -335,6 +337,29 @@ describe('inbox', () => {
       .where(eq(schema.inboxItems.id, standup.id));
     expect(after?.status).toBe('kept');
     expect(await rowsOf(schema.inboxLinks)).toBe(0);
+  });
+
+  it('detaches: link, attachment and search link go, the item is kept and can be discarded; non-members are refused', async () => {
+    const globId = await makeGlob('Wrong glob');
+    const added = await paste({ text: 'A note that goes on the wrong glob, then comes off it' });
+    const id = String(added.json.id);
+    expect((await post(`/${id}/attach`, { globIds: [globId] })).status).toBe(200);
+    expect((await post(`/${id}/detach`, { globIds: [globId] }, STRANGER)).status).toBe(403);
+    expect((await post(`/${id}/detach`, { globIds: [] })).status).toBe(422);
+    const detached = await post(`/${id}/detach`, { globIds: [globId] });
+    expect(detached.status).toBe(200);
+    expect(await store.transaction((tx) => tx.listArtifacts(globId, 'attachment'))).toHaveLength(0);
+    expect(await store.transaction((tx) => tx.listInboxLinks(boardId))).toHaveLength(0);
+    const [item] = await database.db
+      .select()
+      .from(schema.knowledgeItems)
+      .where(eq(schema.knowledgeItems.externalRef, `inbox:${id}`));
+    expect(item?.globIds).toEqual([]);
+    const [row] = await database.db.select().from(schema.inboxItems).where(eq(schema.inboxItems.id, added.json.id));
+    expect(row?.status).toBe('kept');
+    // Again: nothing changes. Then it can be discarded.
+    expect((await post(`/${id}/detach`, { globIds: [globId] })).status).toBe(200);
+    expect((await post(`/${id}/discard`)).status).toBe(200);
   });
 
   it('refuses non-members, other boards, and bad bodies', async () => {
