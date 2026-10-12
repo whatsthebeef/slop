@@ -95,6 +95,7 @@ describe('decisions', () => {
     if (found === undefined) throw new Error(`No decision quoting ${quote}`);
     return found;
   };
+  const openCards = (): Promise<Glob[]> => store.transaction((tx) => tx.listGlobs(boardId, { include: 'decisions', origins: ['replacement'] }));
   const itemOf = (d: Decision) => [...store.state.searchItems.values()].find((i) => i.id === d.itemId);
 
   const addGlob = async (patch: Partial<Glob> = {}) => {
@@ -416,20 +417,21 @@ describe('decisions', () => {
       expect(notifier.hints).toContainEqual({ kind: 'glob.decisions', boardId, globId: 's1t1' });
     });
 
-    it('only proposes a replacement whose quote is not in the decision (a hint, nothing applied)', async () => {
+    it('drops a replacement whose quote is not in the decision: nothing applied, no hint, no card', async () => {
       await twoDecisions();
       llm.checks.push(replaces({ id: 1, oldQuote: 'we have always polled every thirty seconds', newQuote: 'push sync jobs over a websocket' }));
       await run();
       const old = await byQuote(POLLING);
-      expect(old).toMatchObject({ replaceState: 'hint', replacedBy: (await byQuote(PUSH)).id });
+      expect(old).toMatchObject({ replaceState: null, replacedBy: null });
       expect(itemOf(old)?.status).toBe('active');
+      expect(await openCards()).toHaveLength(0);
     });
 
-    it('proposes rather than applies when a quote is too short to rest on', async () => {
+    it('drops a replacement when a quote is too short to rest on', async () => {
       await twoDecisions();
       llm.checks.push(replaces({ id: 1, oldQuote: 'poll the server', newQuote: 'websocket' }));
       await run();
-      expect((await byQuote(POLLING)).replaceState).toBe('hint');
+      expect((await byQuote(POLLING)).replaceState).toBeNull();
     });
 
     it('ignores a replacement that names an unknown decision, and an empty answer', async () => {
@@ -535,23 +537,24 @@ describe('decisions', () => {
       expect(itemOf(polling)?.status).toBe('active');
     });
 
-    it('only proposes a replacement the model does not class as the same subject', async () => {
+    it('drops a replacement the model does not class as the same subject', async () => {
       await twoDecisions();
       llm.checks.push(replaces({ id: 1, oldQuote: 'poll the server every thirty seconds', newQuote: 'push sync jobs over a websocket', sameSubject: false }));
       await run();
       const old = await byQuote(POLLING);
-      expect(old).toMatchObject({ replaceState: 'hint', replacedBy: (await byQuote(PUSH)).id });
+      expect(old).toMatchObject({ replaceState: null, replacedBy: null });
       expect(itemOf(old)?.status).toBe('active');
+      expect(await openCards()).toHaveLength(0);
     });
 
-    it('only proposes a replacement when the answer has no same-subject classification', async () => {
+    it('drops a replacement when the answer has no same-subject classification', async () => {
       await twoDecisions();
       llm.checks.push(JSON.stringify({ replaces: [{ id: 1, oldQuote: 'poll the server every thirty seconds', newQuote: 'push sync jobs over a websocket', reason: 'Shared words.' }] }));
       await run();
-      expect((await byQuote(POLLING)).replaceState).toBe('hint');
+      expect((await byQuote(POLLING)).replaceState).toBeNull();
     });
 
-    it('only proposes a replacement across globs unless the newer decision names the older glob', async () => {
+    it('drops a cross-glob replacement unless the newer decision names the older glob', async () => {
       const a = await addGlob({ id: 's1t1', group: 'sync' });
       const b = await addGlob({ id: 's1t2', group: 'sync' });
       const UNNAMED = 'We will push sync jobs over a websocket connection instead of polling';
@@ -563,7 +566,8 @@ describe('decisions', () => {
       );
       llm.checks.push(replaces({ id: 1, oldQuote: 'poll the server every thirty seconds', newQuote: 'push sync jobs over a websocket' }));
       await run();
-      expect(await byQuote(POLLING)).toMatchObject({ replaceState: 'hint', replacedBy: (await byQuote(UNNAMED)).id });
+      expect(await byQuote(POLLING)).toMatchObject({ replaceState: null, replacedBy: null });
+      expect(await openCards()).toHaveLength(0);
     });
 
     it('still applies a real contradiction between two sources of one glob', async () => {
@@ -638,18 +642,13 @@ describe('decisions', () => {
     });
   });
 
-  describe('replacement cards', () => {
-    const PO = 'po@example.com';
+  describe('unverified replacements', () => {
     const UNVERIFIED = replaces({ id: 1, oldQuote: 'we have always polled every thirty seconds', newQuote: 'push sync jobs over a websocket', reason: 'Push replaces polling.' });
     const VERIFIED = replaces({ id: 1, oldQuote: 'poll the server every thirty seconds', newQuote: 'push sync jobs over a websocket' });
 
-    const seed = async (answer: string) => {
-      await store.transaction(async (tx) => {
-        await tx.upsertUser({ email: PO, name: PO, active: true });
-        await tx.upsertMember({ boardId, email: PO, role: 'po' });
-      });
+    const seed = async (answer: string, newerGlob = 's1t2') => {
       const a = await addGlob({ id: 's1t1', group: 'sync' });
-      const b = await addGlob({ id: 's1t2', group: 'sync' });
+      const b = await addGlob({ id: newerGlob, group: 'sync' });
       await addArtifact(a.id, 'implementation_plan', record(`- ${POLLING}`));
       await addArtifact(b.id, 'implementation_plan', record(`- ${PUSH}`));
       llm.extractions.push(
@@ -659,116 +658,100 @@ describe('decisions', () => {
       llm.checks.push(answer);
       await run();
     };
-    const cards = (): Promise<Glob[]> => store.transaction((tx) => tx.listGlobs(boardId, { include: 'decisions', origins: ['replacement'] }));
-    const service = () => new DecisionService({ store, clock, notifier });
 
-    it('makes no card for a verified replacement', async () => {
+    it('applies a checked replacement and makes no card', async () => {
       await seed(VERIFIED);
       expect((await byQuote(POLLING)).replaceState).toBe('applied');
-      expect(await cards()).toHaveLength(0);
+      expect(await openCards()).toHaveLength(0);
     });
 
-    it('makes exactly one card for an unverified one, in Planning, with both choices in its plan', async () => {
+    it('writes nothing and creates no glob for an unchecked one, however often it is checked', async () => {
       await seed(UNVERIFIED);
-      const old = await byQuote(POLLING);
       const next = await byQuote(PUSH);
-      const found = await cards();
-      expect(found).toHaveLength(1);
-      const [card] = found;
-      expect(card).toMatchObject({
-        category: 'decision',
-        status: 'planning',
-        title: 'Did "Replacing s1t1, we will push sync job..." replace "We will poll the server every thirty ..."?',
-        attributes: { scope: { kind: 'glob', ref: 's1t1' }, origin: { kind: 'replacement', oldId: old.id, newId: next.id }, outcome: null },
-      });
-      const plan = (await store.transaction((tx) => tx.listArtifacts(card?.id ?? '', 'plan')))[0]?.content ?? '';
-      expect(plan).toContain(POLLING);
-      expect(plan).toContain(PUSH);
-      expect(plan).toContain('Push replaces polling.');
-      expect(plan).toContain('2026-06-01');
-      expect(notifier.hints).toContainEqual(expect.objectContaining({ kind: 'glob.changed', globId: card?.id }));
-      // Sweeping again, or checking the pair again, makes no second card.
-      await run();
+      expect((await decisions()).every((d) => d.replaceState === null)).toBe(true);
+      expect(await openCards()).toHaveLength(0);
       await store.transaction((tx) => tx.updateDecision(next.id, { checkedAt: null }));
       llm.checks.push(UNVERIFIED);
       await run();
-      expect(await cards()).toHaveLength(1);
+      expect(await openCards()).toHaveLength(0);
     });
 
-    it('links the older choice to its open card instead of leaving the decision to its own view', async () => {
-      await seed(UNVERIFIED);
-      const [card] = await cards();
-      const older = unwrap(await service().forGlob(DEV, boardId, 's1t1'));
-      expect(older[0]?.replacedBy).toMatchObject({ state: 'hint', cardGlobId: card?.id });
-    });
-
-    it('applies the replacement on Confirm, signing the card off archived', async () => {
-      await seed(UNVERIFIED);
-      const [card] = await cards();
-      expect(errorCode(await service().decideReplacement(DEV, boardId, card?.id ?? '', 'confirm'))).toBe('forbidden');
-      const decided = unwrap(await service().decideReplacement(PO, boardId, card?.id ?? '', 'confirm'));
-      expect(decided).toMatchObject({ status: 'signed_off', attributes: { archived: true, outcome: { kind: 'accept', by: PO } } });
-      const old = await byQuote(POLLING);
-      expect(old.replaceState).toBe('confirmed');
-      expect(itemOf(old)).toMatchObject({ status: 'superseded', supersededBy: (await byQuote(PUSH)).itemId });
-      expect(errorCode(await service().decideReplacement(PO, boardId, card?.id ?? '', 'confirm'))).toBe('invalid_input');
-    });
-
-    it('blocks the pair on Dismiss, for good', async () => {
-      await seed(UNVERIFIED);
-      const [card] = await cards();
-      const decided = unwrap(await service().decideReplacement(PO, boardId, card?.id ?? '', 'dismiss', 'Different things.'));
-      expect(decided).toMatchObject({ status: 'signed_off', attributes: { archived: true, outcome: { kind: 'reject', reason: 'Different things.' } } });
-      const old = await byQuote(POLLING);
-      expect(old.replaceState).toBe('undone');
-      expect(itemOf(old)?.status).toBe('active');
-      // The pair is never proposed again, even when it is checked again.
-      await store.transaction((tx) => tx.updateDecision(old.replacedBy ?? 0, { checkedAt: null }));
-      llm.checks.push(UNVERIFIED);
-      await run();
-      expect((await byQuote(POLLING)).replaceState).toBe('undone');
-      expect(await cards()).toHaveLength(1);
-    });
-
-    it('closes itself when the newer choice is replaced before anyone decides', async () => {
-      await seed(UNVERIFIED);
-      const next = await byQuote(PUSH);
-      await store.transaction((tx) => tx.updateDecision(next.id, { replacedBy: 99999, replaceState: 'applied' }));
-      await run();
-      const [card] = await cards();
-      expect(card).toMatchObject({ status: 'signed_off', attributes: { archived: true, outcome: { kind: 'closed', by: 'slop' } } });
-      expect(notifier.hints).toContainEqual(expect.objectContaining({ kind: 'glob.changed', globId: card?.id }));
-    });
-
-    it('closes itself when a choice is deleted', async () => {
-      await seed(UNVERIFIED);
-      const next = await byQuote(PUSH);
-      await store.transaction((tx) => tx.deleteDecision(next.id));
-      await run();
-      expect((await cards())[0]).toMatchObject({ status: 'signed_off', attributes: { outcome: { kind: 'closed' } } });
-    });
-
-    it('closes when its pair is answered through the choice itself, and Confirm on it then reports it closed', async () => {
-      await seed(UNVERIFIED);
-      const [card] = await cards();
-      unwrap(await service().confirm(DEV, (await byQuote(POLLING)).id));
-      expect((await cards())[0]).toMatchObject({ status: 'signed_off', attributes: { outcome: { kind: 'closed' } } });
-      expect(card?.id).toBeDefined();
-    });
-
-    it('raises a card, once, for a proposal that was stored before cards existed', async () => {
-      await seed(replaces());
+    it('retires the cards and hints raised before, once', async () => {
+      await seed(VERIFIED);
       const old = await byQuote(POLLING);
       const next = await byQuote(PUSH);
-      expect(await cards()).toHaveLength(0);
-      await store.transaction((tx) =>
-        tx.updateDecision(old.id, { replacedBy: next.id, replaceState: 'hint', replaceOldQuote: 'old words', replaceNewQuote: 'new words', replaceReason: 'Looks like it.' }),
+      // An open card and a hint as the old pipeline left them.
+      await store.transaction(async (tx) => {
+        await tx.updateDecision(old.id, { replacedBy: next.id, replaceState: 'hint', replaceOldQuote: 'old words', replaceNewQuote: 'new words', replaceReason: 'Looks like it.' });
+        await tx.setItemSupersession(old.itemId, 'active', null);
+        const glob = makeGlob({
+          id: 's1k900',
+          boardId,
+          category: 'decision',
+          status: 'planning',
+          attributes: { scope: { kind: 'glob', ref: 's1t1' }, origin: { kind: 'replacement', oldId: old.id, newId: next.id }, channel: 'mined', outcome: null },
+        });
+        await tx.insertGlob(glob, null);
+      });
+      expect(await openCards()).toHaveLength(1);
+      await pipeline.syncBoard(boardId);
+      expect((await byQuote(POLLING)).replaceState).toBeNull();
+      expect((await openCards())[0]).toMatchObject({ status: 'signed_off', attributes: { archived: true, outcome: { kind: 'closed', by: 'slop', reason: 'Replacement cards retired' } } });
+      const version = (await openCards())[0]?.version;
+      await pipeline.syncBoard(boardId);
+      expect((await openCards())[0]?.version).toBe(version);
+    });
+  });
+
+  describe('duplicate choices', () => {
+    const RESTATED = `${POLLING}.`;
+
+    const byGlob = async (globId: string): Promise<Decision> => {
+      const found = (await decisions()).find((d) => d.globId === globId);
+      if (found === undefined) throw new Error(`No decision on ${globId}`);
+      return found;
+    };
+    const twoCopies = async (older: string, newer: string, newerGlob = 's1t2') => {
+      const a = await addGlob({ id: 's1t1' });
+      const b = await addGlob({ id: newerGlob });
+      await addArtifact(a.id, 'implementation_plan', record(`- ${older}`));
+      await addArtifact(b.id, 'implementation_plan', record(`- ${newer}`));
+      llm.extractions.push(
+        { match: newer, answer: extractAnswer({ quote: newer, decidedAt: '2026-09-01' }) },
+        { match: older, answer: extractAnswer({ quote: older, decidedAt: '2026-06-01' }) },
       );
-      await pipeline.syncBoard(boardId);
-      await pipeline.syncBoard(boardId);
-      const found = await cards();
-      expect(found).toHaveLength(1);
-      expect(found[0]?.attributes).toMatchObject({ origin: { kind: 'replacement', oldId: old.id, newId: next.id } });
+    };
+
+    it('replaces the older copy without asking the model, even across globs that do not name each other', async () => {
+      await twoCopies(POLLING, RESTATED);
+      await run();
+      expect(llm.count(SUPERSEDE_SYSTEM)).toBe(0);
+      const old = await byGlob('s1t1');
+      const next = await byGlob('s1t2');
+      expect(old).toMatchObject({ replaceState: 'applied', replacedBy: next.id, replaceReason: 'same choice restated' });
+      expect(itemOf(old)).toMatchObject({ status: 'superseded', supersededBy: next.itemId });
+      expect(next.replaceState).toBeNull();
+    });
+
+    it('treats one choice containing the other as a restatement', async () => {
+      await twoCopies(POLLING, `Decided: ${POLLING}`);
+      await run();
+      expect(llm.count(SUPERSEDE_SYSTEM)).toBe(0);
+      expect((await byGlob('s1t1')).replaceState).toBe('applied');
+    });
+
+    it('leaves different choices to the model', async () => {
+      await twoCopies(POLLING, PUSH);
+      llm.checks.push(replaces());
+      await run();
+      expect(llm.count(SUPERSEDE_SYSTEM)).toBe(1);
+      expect((await byQuote(POLLING)).replaceState).toBeNull();
+    });
+
+    it('is symmetrical in time: the newer copy never replaces the older one', async () => {
+      await twoCopies(POLLING, RESTATED);
+      await run();
+      expect((await byGlob('s1t2')).replaceState).toBeNull();
     });
   });
 
@@ -803,11 +786,14 @@ describe('decisions', () => {
         { match: 'poll the server', answer: extractAnswer({ quote: POLLING, decidedAt: '2026-06-01' }) },
         { match: 'websocket', answer: extractAnswer({ quote: PUSH, decidedAt: '2026-09-01' }) },
       );
-      llm.checks.push(replaces({ id: 1, oldQuote: 'we always polled', newQuote: PUSH }));
+      llm.checks.push(replaces());
       await run();
       const service = new DecisionService({ store, clock, notifier });
       const old = await byQuote(POLLING);
-      expect(old.replaceState).toBe('hint');
+      // A proposal as an earlier pipeline left it.
+      const pushId = (await byQuote(PUSH)).id;
+      await store.transaction((tx) => tx.updateDecision(old.id, { replacedBy: pushId, replaceState: 'hint' }));
+      expect((await byQuote(POLLING)).replaceState).toBe('hint');
       expect(errorCode(await service.confirm(OUTSIDER, old.id))).toBe('forbidden');
       expect(errorCode(await service.confirm(DEV, old.id, boardId + 1))).toBe('not_found');
       expect(errorCode(await service.confirm(DEV, 9999))).toBe('not_found');
@@ -834,11 +820,14 @@ describe('decisions', () => {
         { match: 'poll the server', answer: extractAnswer({ quote: POLLING, decidedAt: '2026-06-01' }) },
         { match: 'websocket', answer: extractAnswer({ quote: PUSH, decidedAt: '2026-09-01' }) },
       );
-      llm.checks.push(replaces({ id: 1, oldQuote: 'we always polled', newQuote: PUSH }));
+      llm.checks.push(replaces());
       await run();
       const old = await byQuote(POLLING);
       const next = await byQuote(PUSH);
-      await store.transaction((tx) => tx.updateDecision(next.id, { replacedBy: 12345, replaceState: 'applied' }));
+      await store.transaction(async (tx) => {
+        await tx.updateDecision(old.id, { replacedBy: next.id, replaceState: 'hint' });
+        await tx.updateDecision(next.id, { replacedBy: 12345, replaceState: 'applied' });
+      });
       const service = new DecisionService({ store, clock, notifier });
       expect(errorCode(await service.confirm(DEV, old.id))).toBe('invalid_input');
     });

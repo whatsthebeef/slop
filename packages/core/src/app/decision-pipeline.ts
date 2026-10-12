@@ -20,7 +20,7 @@ import type { AuthorityTier, Candidate } from '../domain/search.js';
 import type { Clock, Embedder, Hint, Notifier, Store, Tx } from '../ports.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm } from './intake-service.js';
-import { closeStaleReplacements, createDecisionForReplacement, raiseReplacementCards } from './decision-glob.js';
+import { retireReplacementCards } from './decision-glob.js';
 import { longEnoughQuote, verifiedQuote } from './kb-dedupe.js';
 import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
@@ -135,6 +135,8 @@ interface Replacement {
   readonly reason: string;
   /** Both quotes were found verbatim and are long enough, and the model said the subject is the same. */
   readonly checked: boolean;
+  /** The newer choice restates the older one: applied without the model and without `mayApply`. */
+  readonly duplicate?: boolean;
 }
 
 /** The replacements the model named among `candidates` (numbered from 1); an unknown number is ignored, null when the answer isn't usable. */
@@ -183,6 +185,29 @@ const mayApply = (old: Decision, next: Decision): boolean => {
   if (old.globId === null) return false;
   if (old.globId === next.globId) return true;
   return new RegExp(`(?<![\\w-])${old.globId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`, 'i').test(decisionBody(next));
+};
+
+const DUPLICATE_SIMILARITY = 0.9;
+/** "One contains the other" counts as a restatement only when the contained one is this share of the longer, so an added clause that changes the choice doesn't. */
+const DUPLICATE_CONTAINED_SHARE = 0.8;
+const DUPLICATE_REASON = 'same choice restated';
+
+const wordsOf = (statement: string): string[] => statement.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(' ').filter((w) => w !== '');
+
+/** Whether two statements are the same choice restated: equal once case, punctuation and spacing are ignored, one contains the other (nearly all of it), or their words overlap by 0.9 or more. */
+export const nearDuplicate = (a: string, b: string): boolean => {
+  const wa = wordsOf(a);
+  const wb = wordsOf(b);
+  if (wa.length === 0 || wb.length === 0) return false;
+  const ta = wa.join(' ');
+  const tb = wb.join(' ');
+  if (ta === tb) return true;
+  if (Math.min(wa.length, wb.length) >= DUPLICATE_CONTAINED_SHARE * Math.max(wa.length, wb.length) && (ta.includes(tb) || tb.includes(ta))) return true;
+  const sa = new Set(wa);
+  const sb = new Set(wb);
+  let shared = 0;
+  for (const w of sa) if (sb.has(w)) shared++;
+  return shared / (sa.size + sb.size - shared) >= DUPLICATE_SIMILARITY;
 };
 
 /** Decisions from one source text (one artifact, attachment, inbox item or learning) state one author's intent at one moment: none replaces another. */
@@ -270,12 +295,9 @@ export class DecisionPipeline {
         removed++;
         if (decision.globId !== null) globs.add(decision.globId);
       }
-      // Proposed replacements are decision globs: the ones proposed before cards existed get theirs here, and cards whose pair changed close.
+      // Replacements slop can't verify are dropped, not asked about: cards raised before that, and their hints, are retired.
       const remaining = removed > 0 ? await tx.listDecisions(boardId) : all;
-      const hints = [
-        ...(await closeStaleReplacements(tx, this.cardDeps, boardId, remaining)),
-        ...(await raiseReplacementCards(tx, this.cardDeps, remaining)),
-      ];
+      const hints = await retireReplacementCards(tx, this.cardDeps, boardId, remaining);
       return { queued, written: 0, removed, globs, hints };
     });
     for (const globId of result.globs) this.deps.notifier.publish({ kind: 'glob.decisions', boardId, globId });
@@ -422,13 +444,10 @@ export class DecisionPipeline {
       if (row?.contentHash !== source.contentHash) return null;
       const written = await this.store(tx, source.boardId, found, decisions, now, await tx.listDecisions(source.boardId));
       await tx.upsertDecisionSource({ ...row, state: 'done', attempts: 0, processAfter: null, lastError: null, updatedAt: now });
-      // A choice that went may leave a card asking about it.
-      const hints = written.removed > 0 ? await closeStaleReplacements(tx, this.cardDeps, source.boardId, await tx.listDecisions(source.boardId)) : [];
-      return { globs: written.changed ? new Set(found.globId === null ? [] : [found.globId]) : new Set<string>(), hints };
+      return { globs: written.changed ? new Set(found.globId === null ? [] : [found.globId]) : new Set<string>() };
     });
     if (globs !== null) {
       for (const globId of globs.globs) this.deps.notifier.publish({ kind: 'glob.decisions', boardId: source.boardId, globId });
-      for (const hint of globs.hints) this.deps.notifier.publish(hint);
     }
   }
 
@@ -586,8 +605,9 @@ export class DecisionPipeline {
 
   /** The supersession check of one new decision (claimed). */
   private async check(next: Decision): Promise<void> {
-    const candidates = await this.candidatesFor(next, await this.embeddingOf(next));
-    let replaces: Replacement[] = [];
+    const duplicates = await this.duplicatesOf(next);
+    const candidates = (await this.candidatesFor(next, await this.embeddingOf(next))).filter((c) => !duplicates.some((d) => d.id === c.id));
+    let replaces: Replacement[] = duplicates.map((old) => ({ old, oldQuote: '', newQuote: '', reason: DUPLICATE_REASON, checked: true, duplicate: true }));
     if (candidates.length > 0) {
       try {
         const answer = await completeWithDeadline(
@@ -605,7 +625,7 @@ export class DecisionPipeline {
           await this.failCheck(next, 'The supersession answer was not usable JSON');
           return;
         }
-        replaces = parsed;
+        replaces = [...replaces, ...parsed];
       } catch (error) {
         if (error instanceof LlmUnavailable) await this.waitCheck(next, error);
         else await this.failCheck(next, error instanceof Error ? error.message : String(error));
@@ -618,19 +638,15 @@ export class DecisionPipeline {
       const current = await tx.getDecision(next.id);
       if (current === null) return null;
       const touched = new Set<string>();
-      const hints: Hint[] = [];
       for (const r of replaces) {
-        if (await this.applyReplacement(tx, current, r, hints)) if (r.old.globId !== null) touched.add(r.old.globId);
+        if (await this.applyReplacement(tx, current, r)) if (r.old.globId !== null) touched.add(r.old.globId);
       }
       await tx.updateDecision(next.id, { checkedAt: now, attempts: 0, processAfter: null, lastError: null });
-      // An applied replacement may leave a card asking about a choice that is no longer in force.
-      if (replaces.length > 0) hints.push(...(await closeStaleReplacements(tx, this.cardDeps, next.boardId, await tx.listDecisions(next.boardId))));
       if (touched.size > 0 && current.globId !== null) touched.add(current.globId);
-      return { touched, hints };
+      return { touched };
     });
     if (done !== null) {
       for (const globId of done.touched) this.deps.notifier.publish({ kind: 'glob.decisions', boardId: next.boardId, globId });
-      for (const hint of done.hints) this.deps.notifier.publish(hint);
     }
   }
 
@@ -639,33 +655,43 @@ export class DecisionPipeline {
   }
 
   /**
-   * Records one replacement in the transaction: applied when it is checked and allowed by `mayApply`, else a proposal that
-   * raises a decision glob for a person (its hints are added to `hints`). False when nothing was written.
+   * Records one replacement in the transaction: applied when it is checked and allowed by `mayApply` (or restates the older
+   * choice), else dropped: nothing is written and nobody is asked. False when nothing was written.
    */
-  private async applyReplacement(tx: Tx, next: Decision, r: Replacement, hints: Hint[]): Promise<boolean> {
+  private async applyReplacement(tx: Tx, next: Decision, r: Replacement): Promise<boolean> {
     const old = await tx.getDecision(r.old.id);
     // Both sides are read again: either may have changed while the model worked.
     if (old === null || isSuperseded(old) || isSuperseded(next) || old.id === next.id || sameSource(old, next)) return false;
-    // A person's undo for this pair stands, and a proposal the other way round would make a cycle.
+    // A person's undo for this pair stands, and a replacement the other way round would make a cycle.
     if (old.replaceState === 'undone' && old.replacedBy === next.id) return false;
     if (next.replacedBy === old.id && next.replaceState !== null && next.replaceState !== 'undone') return false;
-    const fields = { replacedBy: next.id, replaceOldQuote: r.oldQuote, replaceNewQuote: r.newQuote, replaceReason: r.reason };
-    if (r.checked && mayApply(old, next)) {
-      await tx.updateDecision(old.id, { ...fields, replaceState: 'applied' });
-      await tx.setItemSupersession(old.itemId, 'superseded', next.itemId);
-      // A replaced decision leaves the decisions in force.
-      await tx.enqueueEffects([knowledgePageEffect(old.boardId)]);
-      return true;
-    }
-    // A proposal doesn't replace one a person hasn't answered yet.
-    if (old.replaceState === 'hint') return false;
-    await tx.updateDecision(old.id, { ...fields, replaceState: 'hint' });
-    const proposed = await tx.getDecision(old.id);
-    if (proposed !== null) {
-      const card = await createDecisionForReplacement(tx, this.cardDeps, proposed, next);
-      if (card.ok) hints.push(...card.value.hints);
-    }
+    if (r.duplicate !== true && !(r.checked && mayApply(old, next))) return false;
+    await tx.updateDecision(old.id, {
+      replacedBy: next.id,
+      replaceOldQuote: r.oldQuote === '' ? null : r.oldQuote,
+      replaceNewQuote: r.newQuote === '' ? null : r.newQuote,
+      replaceReason: r.reason,
+      replaceState: 'applied',
+    });
+    await tx.setItemSupersession(old.itemId, 'superseded', next.itemId);
+    // A replaced decision leaves the decisions in force.
+    await tx.enqueueEffects([knowledgePageEffect(old.boardId)]);
     return true;
+  }
+
+  /** The earlier, still-standing choices the new one restates (any glob): they are replaced without asking the model. */
+  private async duplicatesOf(next: Decision): Promise<Decision[]> {
+    if (isSuperseded(next)) return [];
+    return this.deps.store.transaction(async (tx) =>
+      (await tx.listDecisions(next.boardId)).filter(
+        (d) =>
+          d.id !== next.id &&
+          !sameSource(d, next) &&
+          !isSuperseded(d) &&
+          (d.decidedAt < next.decidedAt || (d.decidedAt === next.decidedAt && d.id < next.id)) &&
+          nearDuplicate(d.statement, next.statement),
+      ),
+    );
   }
 
   private async writeSource(source: DecisionSource, next: (current: DecisionSource) => DecisionSource): Promise<void> {
