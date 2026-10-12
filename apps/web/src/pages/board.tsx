@@ -18,6 +18,7 @@ import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { activeCount, matchesFilters, parseFilters, writeFilters } from '@/lib/board-filters';
+import { browserStore, clearFilterMemory, hasFilterParams, loadFilterMemory, saveFilterMemory } from '@/lib/board-filter-memory';
 import type { FilterValues } from '@/lib/board-filters';
 import { withGlob } from '@/lib/glob-list';
 import { usePageContext } from '@/lib/page-context';
@@ -251,7 +252,24 @@ export const BoardPage = () => {
   // Filters live in the URL so a filtered board can be linked; whether their pane is open is the viewer's own preference.
   const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
   const filtering = activeCount(filters);
-  const setFilters = (values: FilterValues) => setSearchParams((params) => writeFilters(params, values), { replace: true });
+  const setFilters = (values: FilterValues) => {
+    // Back to the defaults forgets the memory first, so the restore below doesn't bring the old filters back.
+    if (activeCount(values) === 0) clearFilterMemory(browserStore(), boardId);
+    setSearchParams((params) => writeFilters(params, values), { replace: true });
+  };
+  // The board remembers its filters: a URL with filters wins and is saved; a bare URL (back from a glob, another tab or
+  // board, a reload) gets the remembered ones.
+  const query = searchParams.toString();
+  useEffect(() => {
+    const store = browserStore();
+    if (hasFilterParams(searchParams)) {
+      saveFilterMemory(store, boardId, searchParams);
+      return;
+    }
+    const saved = loadFilterMemory(store, boardId);
+    if (saved === null) return;
+    setSearchParams((params) => new URLSearchParams([...params, ...saved]), { replace: true });
+  }, [boardId, query]);
   const [filterOpen, setFilterOpen] = useFilterPaneOpen();
   // "Create glob" under a chat answer arrives with the answer's text, to start the form from.
   const location = useLocation();
