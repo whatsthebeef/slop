@@ -189,7 +189,7 @@ describe('opening a board not in the bar (s15t46)', () => {
 });
 
 describe('sessionForKey', () => {
-  const sessions = [board(1, 0), board(2, 1), board(3, 2)];
+  const sessions = [board(1, 1), board(2, 2), board(3, 3)];
   const key = (k: string, patch: Record<string, unknown> = {}) => ({
     key: k,
     ctrlKey: false,
@@ -206,6 +206,13 @@ describe('sessionForKey', () => {
     expect(sessionForKey(key('1'), sessions, undefined, null)?.id).toBe(1);
     expect(sessionForKey(key('2'), sessions, 1, null)?.id).toBe(2);
     expect(sessionForKey(key('3'), sessions, 1, null)?.id).toBe(3);
+  });
+
+  it('follows the stored number, not the place in the list', () => {
+    const gapped = [board(7, 2), board(8, 5)];
+    expect(sessionForKey(key('2'), gapped, undefined, null)?.id).toBe(7);
+    expect(sessionForKey(key('1'), gapped, undefined, null)).toBeNull();
+    expect(sessionForKey(key('5'), gapped, undefined, null)?.id).toBe(8);
   });
 
   it('ignores digits with no session, other keys, and the board already shown', () => {

@@ -1,12 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
-import {
-  appendSession,
-  displaySessions,
-  isContiguous,
-  removeSession,
-  sessionOrder,
-} from '../src/domain/board-sessions.js';
+import { nextFreePosition } from '../src/domain/board-sessions.js';
 import type { BoardSession } from '../src/domain/board-sessions.js';
 import type { Result } from '../src/domain/errors.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -28,31 +22,13 @@ const session = (
   lastViewedAt: string | null = null,
 ): BoardSession => ({ boardId, position, lastViewedAt });
 
-describe('board session order', () => {
-  it('orders by position, tolerating gaps and ties', () => {
-    expect(sessionOrder([session(3, 5), session(1, null), session(2, 2), session(4, 2)])).toEqual([
-      2, 4, 3,
-    ]);
-  });
-
-  it('appends to the end, once', () => {
-    expect(appendSession([2, 1], 3)).toEqual([2, 1, 3]);
-    expect(appendSession([2, 1, 3], 1)).toEqual([2, 1, 3]);
-  });
-
-  it('removes keeping the order, idempotently', () => {
-    expect(removeSession([2, 1, 3], 1)).toEqual([2, 3]);
-    expect(removeSession([2, 3], 1)).toEqual([2, 3]);
-  });
-
-  it('knows a contiguous bar and renumbers gaps for display', () => {
-    expect(isContiguous([session(1, 1), session(2, 2), session(3, null)])).toBe(true);
-    expect(isContiguous([session(1, 1), session(2, 3)])).toBe(false);
-    expect(displaySessions([session(1, 1), session(2, 3), session(3, null, T1)])).toEqual([
-      session(1, 1),
-      session(2, 2),
-      session(3, null, T1),
-    ]);
+describe('nextFreePosition', () => {
+  it('takes 1, then the first gap, then one past the highest, ignoring nulls', () => {
+    expect(nextFreePosition([])).toBe(1);
+    expect(nextFreePosition([null, null])).toBe(1);
+    expect(nextFreePosition([2, 3])).toBe(1);
+    expect(nextFreePosition([1, 2, 4, null])).toBe(3);
+    expect(nextFreePosition([3, 1, 2])).toBe(4);
   });
 });
 
@@ -145,7 +121,7 @@ describe('BoardService sessions', () => {
     expect(store.state.boardSessions.size).toBe(0);
   });
 
-  it('removes a board and renumbers the rest, idempotently, keeping its view time', async () => {
+  it('removes a board leaving a gap, idempotently, keeping its view time', async () => {
     const [a, b, c] = ids as [number, number, number];
     for (const id of ids) {
       unwrap(await boards.addSession(DEV, id));
@@ -153,13 +129,13 @@ describe('BoardService sessions', () => {
     }
     const sessions = unwrap(await boards.removeSession(DEV, b));
     expect(sessions).toEqual(
-      expect.arrayContaining([session(a, 1, T1), session(b, null, T1), session(c, 2, T1)]),
+      expect.arrayContaining([session(a, 1, T1), session(b, null, T1), session(c, 3, T1)]),
     );
     expect(unwrap(await boards.removeSession(DEV, b))).toEqual(sessions);
-    expect(await positions()).toEqual({ [a]: 1, [b]: null, [c]: 2 });
+    expect(await positions()).toEqual({ [a]: 1, [b]: null, [c]: 3 });
   });
 
-  it('removes the last board without renumbering the others (s15t42)', async () => {
+  it('removes the last board without touching the others (s15t42)', async () => {
     const [a, b, c] = ids as [number, number, number];
     for (const id of ids) {
       unwrap(await boards.addSession(DEV, id));
@@ -191,7 +167,7 @@ describe('BoardService sessions', () => {
     expect(await positions()).toEqual({ [a]: 1, [b]: 2, [c]: 3 });
   });
 
-  it('adds a board to the end, idempotently', async () => {
+  it('adds a board at the lowest free number, idempotently', async () => {
     const [a, b, c] = ids as [number, number, number];
     for (const id of ids) {
       unwrap(await boards.addSession(DEV, id));
@@ -199,9 +175,22 @@ describe('BoardService sessions', () => {
     }
     unwrap(await boards.removeSession(DEV, b));
     unwrap(await boards.addSession(DEV, b));
-    expect(await positions()).toEqual({ [a]: 1, [b]: 3, [c]: 2 });
+    expect(await positions()).toEqual({ [a]: 1, [b]: 2, [c]: 3 });
     unwrap(await boards.addSession(DEV, b));
-    expect(await positions()).toEqual({ [a]: 1, [b]: 3, [c]: 2 });
+    expect(await positions()).toEqual({ [a]: 1, [b]: 2, [c]: 3 });
+  });
+
+  it('keeps numbers when sessions go: 1,2,3 minus 1 is 2,3; the next add takes 1, then 4', async () => {
+    const [a, b, c] = ids as [number, number, number];
+    const d = await create('d');
+    const e = await create('e');
+    for (const id of [a, b, c]) unwrap(await boards.addSession(DEV, id));
+    unwrap(await boards.removeSession(DEV, a));
+    expect(await positions()).toMatchObject({ [a]: null, [b]: 2, [c]: 3 });
+    unwrap(await boards.addSession(DEV, d));
+    expect(await positions()).toMatchObject({ [d]: 1, [b]: 2, [c]: 3 });
+    unwrap(await boards.addSession(DEV, e));
+    expect(await positions()).toMatchObject({ [d]: 1, [b]: 2, [c]: 3, [e]: 4 });
   });
 
   it('adds a board never opened, with no view time', async () => {
@@ -228,7 +217,7 @@ describe('BoardService sessions', () => {
     expect(await positions(DEV)).toMatchObject({ [a]: 1, [b]: null });
   });
 
-  it('drops the session with the membership and shows the rest without a gap', async () => {
+  it('drops the session with the membership and leaves the others where they are', async () => {
     const [a, b, c] = ids as [number, number, number];
     for (const id of [a, b, c]) unwrap(await boards.setMember(DEV, id, OTHER, 'dev'));
     for (const id of [a, b, c]) {
@@ -236,11 +225,9 @@ describe('BoardService sessions', () => {
       unwrap(await boards.openBoard(OTHER, id, T1));
     }
     unwrap(await boards.removeMember(DEV, a, OTHER));
-    expect(await positions(OTHER)).toEqual({ [b]: 1, [c]: 2 });
-    // The next write closes the stored gap.
+    expect(await positions(OTHER)).toEqual({ [b]: 2, [c]: 3 });
     unwrap(await boards.removeSession(OTHER, b));
-    expect(await positions(OTHER)).toEqual({ [b]: null, [c]: 1 });
-    expect(store.state.boardSessions.get(`${c}:${OTHER}`)?.position).toBe(1);
+    expect(await positions(OTHER)).toEqual({ [b]: null, [c]: 3 });
   });
 
   it('publishes no board hint', async () => {
