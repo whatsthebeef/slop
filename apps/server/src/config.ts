@@ -155,17 +155,17 @@ const schema = z.object({
   CODE_CAP_MB: z.coerce.number().int().min(1).default(2048),
   BEDROCK_REGION: z.string().default('us-east-1'),
   /** Haiku 4.5 for intake and classification. */
-  INTAKE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
+  INTAKE_MODEL: z.string().default('global.anthropic.claude-haiku-4-5-20251001-v1:0'),
   /**
-   * Opus 5.5 (US cross-region inference profile) routes and deduplicates submitted KB items: the KB
+   * Opus 5.5 (global inference profile) routes and deduplicates submitted KB items: the KB
    * pipeline is the most important part of the system. Override in apps/server/.env.local if Bedrock
    * names it differently.
    */
-  KB_ROUTE_MODEL: z.string().default('us.anthropic.claude-opus-5-5'),
-  /** Opus 5.5 (US cross-region inference profile) drafts KB changes. */
-  KB_DRAFT_MODEL: z.string().default('us.anthropic.claude-opus-5-5'),
+  KB_ROUTE_MODEL: z.string().default('global.anthropic.claude-opus-5-5'),
+  /** Opus 5.5 (global inference profile) drafts KB changes. */
+  KB_DRAFT_MODEL: z.string().default('global.anthropic.claude-opus-5-5'),
   /** Haiku 4.5 splits free-form reviews into findings and classifies each finding (temperature 0). */
-  FINDINGS_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
+  FINDINGS_MODEL: z.string().default('global.anthropic.claude-haiku-4-5-20251001-v1:0'),
   /**
    * The independent reviewer's default model: not a Claude model, so its blind spots differ from the implementers'
    * (OpenAI's open-weight gpt-oss-120b; Amazon Nova is the alternative). A board's own setting overrides it.
@@ -174,11 +174,11 @@ const schema = z.object({
   /** Titan Text Embeddings V2 (1024 dimensions) embeds search chunks and queries; it is the only embedding model slop uses. */
   EMBED_MODEL: z.string().default('amazon.titan-embed-text-v2:0'),
   /** Haiku 4.5 writes the "why this changed" note of each merged change for the search index. */
-  SEARCH_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
-  /** Sonnet 5.5 (US cross-region inference profile) answers board chat questions from the retrieved sources. */
-  CHAT_MODEL: z.string().default('us.anthropic.claude-sonnet-5-5'),
+  SEARCH_MODEL: z.string().default('global.anthropic.claude-haiku-4-5-20251001-v1:0'),
+  /** Sonnet 5.5 (global inference profile) answers board chat questions from the retrieved sources. */
+  CHAT_MODEL: z.string().default('global.anthropic.claude-sonnet-5-5'),
   /** Opus 5.5 answers one question when the person asks the chat to think harder. */
-  CHAT_THINK_MODEL: z.string().default('us.anthropic.claude-opus-5-5'),
+  CHAT_THINK_MODEL: z.string().default('global.anthropic.claude-opus-5-5'),
 });
 
 export type Config = z.infer<typeof schema>;
