@@ -1,5 +1,5 @@
 import type { Board, BoardService, GlobService, NotificationService, ReadinessFacts, ReadinessItem, Store } from '@slop/core';
-import { allowsBot, appSettingsUrl, missingAppEvents, readiness, recentRoutineFailures, runsClaudeAction, unreactedCheckFailures } from '@slop/core';
+import { allowsBot, appSettingsUrl, missingAppEvents, missingCoreAreas, readiness, recentRoutineFailures, runsClaudeAction, unreactedCheckFailures } from '@slop/core';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import type { CodeHost } from '../codehost.js';
@@ -116,7 +116,7 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
     claudeAllowsSlop,
     appEvents,
     committedAgentSetVersion: agentSetRead ? committedAgentSetVersion : 'unknown',
-    hasBuildDoc: docs.some((d) => d.area === 'build'),
+    missingCoreAreas: missingCoreAreas(docs),
     ticks: board.readinessTicks,
     recentFailures: recentRoutineFailures(globs, since),
     unreactedCheckFailures: unreactedCheckFailures(globs, new Date().toISOString()),

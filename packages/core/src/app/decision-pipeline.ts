@@ -8,6 +8,7 @@ import {
   isSuperseded,
   parseDecidedAt,
 } from '../domain/decisions.js';
+import { choiceAuthority } from '../domain/decisions.js';
 import type { Decision, DecisionSource, DecisionSourceKind } from '../domain/decisions.js';
 import { inboxLink, inboxTitle } from '../domain/inbox.js';
 import { knowledgePageEffect } from '../domain/events.js';
@@ -471,7 +472,7 @@ export class DecisionPipeline {
           externalRef,
           title,
           occurredAt: f.decidedAt,
-          authority: 'decision',
+          authority: choiceAuthority(source.kind),
           // replaceItem overwrites these: a re-extracted decision keeps what a supersession set on it.
           status: existing?.status ?? 'active',
           supersededBy: existing?.supersededBy ?? null,

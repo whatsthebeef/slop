@@ -754,6 +754,19 @@ describe('decisions', () => {
       expect(own.some((h) => h.citation.globId === 's1t2')).toBe(false);
     });
 
+    it('does not lead related with a choice from discussion', async () => {
+      await seedPair();
+      for (const item of store.state.searchItems.values()) {
+        if (item.sourceType === 'decision') store.state.searchItems.set(item.externalRef, { ...item, authority: 'discussion' });
+      }
+      const asker = await addGlob({ id: 's1t9', title: 'sync jobs', summary: 'How sync jobs reach clients.' });
+      await addArtifact(asker.id, 'plan', 'sync jobs plan text mentioning sync jobs many times: sync jobs sync jobs');
+      await new SearchIndexer({ store, clock, embedder, changes: { mergedDiff: () => Promise.resolve(null) }, llm }).syncBoard(boardId);
+      const search = new SearchService({ store, clock, embedder });
+      const related = await store.transaction((tx) => search.related(tx, asker));
+      expect(related[0]?.citation.source).not.toBe('decision');
+    });
+
     it('gives the context bundle the glob\'s decisions and the order of authority', async () => {
       await seedPair();
       const artifacts = new ArtifactService({ store, clock, notifier });

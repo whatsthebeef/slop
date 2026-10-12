@@ -22,6 +22,7 @@ export * from './domain/learning-wire.js';
 export * from './domain/sections.js';
 export * from './domain/sub-gate.js';
 export * from './domain/attention.js';
+export * from './domain/core-docs.js';
 export * from './domain/readiness.js';
 export * from './domain/findings.js';
 export * from './domain/signals.js';

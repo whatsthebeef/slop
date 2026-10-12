@@ -9,10 +9,10 @@ import type { Database } from '../src/db/store.js';
 const ADMIN_URL = process.env.TEST_ADMIN_DATABASE_URL ?? 'postgres://slop:slop@localhost:5432/slop';
 const DB = `slop_test_learningtype_${process.pid}`;
 const URL_ = ADMIN_URL.replace(/\/[^/]+$/, `/${DB}`);
-const TAG = '0052_learning_type_decision_to_pattern';
+const TAG = '0053_learning_type_decision_to_pattern';
 
 /** The migration that drops the `decision` learning type, against Postgres: migrated up to the one before, rows, then it. */
-describe('decision learnings become patterns (migration 0052)', () => {
+describe('decision learnings become patterns (migration 0053)', () => {
   let admin: Database;
   let database: Database;
 

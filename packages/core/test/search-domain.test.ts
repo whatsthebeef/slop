@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { choiceAuthority } from '../src/domain/decisions.js';
 import { chunkDocument, CHUNK_MAX_TOKENS, CHUNK_MIN_TOKENS, contentHash } from '../src/domain/chunking.js';
 import {
   AUTHORITY_WEIGHTS,
@@ -145,6 +146,24 @@ describe('ranking', () => {
       NOW,
     );
     expect(hits.map((h) => h.itemId)).toEqual([2, 1]);
+  });
+
+  it('gives a choice the authority of its source, and ranks a meeting choice below a plan and knowledge on the same query', () => {
+    expect(choiceAuthority('implementation_plan')).toBe('decision');
+    expect(choiceAuthority('plan')).toBe('approved_plan');
+    expect(choiceAuthority('attachment')).toBe('approved_plan');
+    expect(choiceAuthority('kb_item')).toBe('approved_plan');
+    expect(choiceAuthority('inbox')).toBe('discussion');
+    const hits = rankCandidates(
+      [
+        candidate({ chunkId: 1, authority: choiceAuthority('inbox'), sourceType: 'decision' }),
+        candidate({ chunkId: 2, authority: 'approved_plan', sourceType: 'glob_plan' }),
+        candidate({ chunkId: 3, authority: 'approved_plan', sourceType: 'kb_doc' }),
+      ],
+      'current',
+      NOW,
+    );
+    expect(hits.map((h) => h.itemId).at(-1)).toBe(1);
   });
 
   it('ranks a current decision above any superseded one, labels the superseded with the date, and keeps both in all-time', () => {

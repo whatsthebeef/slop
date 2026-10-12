@@ -2,6 +2,7 @@ import type { EffectState } from './effect-check.js';
 import { isInvestigateEvent } from './events.js';
 import type { DomainEvent, JsonValue } from './events.js';
 import { REVIEW_GUIDE_AREA } from './code-review.js';
+import { missingCoreAreas, MISSING_DOC_MIN_DAYS, MISSING_DOC_MIN_MERGED_GLOBS, MISSING_DOC_RERAISE_DAYS } from './core-docs.js';
 import { FINDING_CLASS_DESCRIPTIONS } from './findings.js';
 import { globIdInText } from './ids.js';
 import type { FindingClass, ReviewFinding } from './findings.js';
@@ -35,6 +36,7 @@ export const SIGNAL_KINDS = [
   'ci_after_local',
   'dependency',
   'review_false_positive',
+  'missing_doc',
 ] as const;
 export type SignalKind = (typeof SIGNAL_KINDS)[number];
 
@@ -121,9 +123,11 @@ export interface BoardActivity {
   /** Null when the manifests weren't fetched (no code host): the dependency signal isn't measured. */
   readonly manifestChanges: readonly ManifestChange[] | null;
   /** The board's documents, to tell whether a dependency is mentioned anywhere. */
-  readonly documents: readonly { readonly name: string; readonly content: string }[];
+  readonly documents: readonly { readonly name: string; readonly area?: string | null; readonly content: string }[];
   /** Submitted learnings' globs and agent-set versions (for `globAgentSetVersion`). */
   readonly learnings: readonly { readonly globIds: readonly string[]; readonly agentSetVersion: number | null }[];
+  /** The window's end is `window.to`; absent (no way to read the documents' areas): `missing_doc` isn't measured. */
+  readonly documentAreasKnown?: boolean;
 }
 
 /** One signal key's figures for a window, before the thresholds are applied. */
@@ -165,6 +169,10 @@ export interface SignalDefinition {
   /** Whether one glob counts toward the key's rate, and whether it is affected (effect checks). */
   readonly perGlob: (activity: BoardActivity, globId: string, key: string) => { readonly eligible: boolean; readonly affected: boolean };
   readonly statement: (measurement: Measurement) => string;
+  /** How long a rejected or suppressed item stays quiet before it may be raised again (default `SIGNAL_QUIET_MS`). */
+  readonly quietMs?: number;
+  /** How much its rate must grow to be raised again after that (default `SIGNAL_RERAISE_FACTOR`). */
+  readonly reraiseFactor?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +346,8 @@ interface Spec {
   readonly tallies: (activity: BoardActivity) => Tally[];
   readonly crosses: (tally: Tally) => boolean;
   readonly statement: (measurement: Measurement) => string;
+  readonly quietMs?: number;
+  readonly reraiseFactor?: number;
 }
 
 const define = (spec: Spec): SignalDefinition => {
@@ -350,6 +360,8 @@ const define = (spec: Spec): SignalDefinition => {
     suggestedTarget: spec.suggestedTarget,
     threshold: spec.threshold,
     statement: spec.statement,
+    ...(spec.quietMs !== undefined && { quietMs: spec.quietMs }),
+    ...(spec.reraiseFactor !== undefined && { reraiseFactor: spec.reraiseFactor }),
     measure: (activity) =>
       tallies(activity).map((t) => ({
         key: t.key,
@@ -823,6 +835,50 @@ const reviewFalsePositive = define({
     `People keep marking the independent reviewer's ${m.label} findings as wrong: ${String(m.figures.affected)} of ${String(m.figures.eligible)} reviewed globs ${WINDOW_WORDS}.`,
 });
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Globs that have merged: work globs past their merge (reviewing, signed off). */
+const mergedGlobs = (activity: BoardActivity): ActivityGlob[] => activity.globs.filter((g) => g.status === 'reviewing' || g.status === 'signed_off');
+
+/**
+ * The core areas with no document, once the board is old enough to have had one: its oldest glob is at least
+ * `MISSING_DOC_MIN_DAYS` old (the board's age; slop doesn't record when a document went missing) and it has
+ * `MISSING_DOC_MIN_MERGED_GLOBS` merged globs. Empty when the documents' areas weren't read.
+ */
+const missingDocAreas = (activity: BoardActivity): string[] => {
+  if (activity.documentAreasKnown !== true) return [];
+  const merged = mergedGlobs(activity);
+  const oldest = activity.globs.reduce<number>((min, g) => Math.min(min, Date.parse(g.createdAt)), Infinity);
+  const old = Date.parse(activity.window.to) - oldest >= MISSING_DOC_MIN_DAYS * DAY_MS;
+  if (!old || merged.length < MISSING_DOC_MIN_MERGED_GLOBS) return [];
+  return missingCoreAreas(activity.documents.map((d) => ({ area: d.area ?? null })));
+};
+
+const missingDoc = define({
+  kind: 'missing_doc',
+  agent: null,
+  type: 'pattern',
+  suggestedTarget: 'a new document for the missing area (/kb-bootstrap proposes it)',
+  threshold: `a core area (build, conventions, architecture) with no document, on a board at least ${String(MISSING_DOC_MIN_DAYS)} days old with ${String(MISSING_DOC_MIN_MERGED_GLOBS)} merged globs`,
+  eligibleGlobs: (activity) => new Set(mergedGlobs(activity).map((g) => g.id)),
+  tallies: (activity) =>
+    missingDocAreas(activity).map((area) => ({
+      key: `missing_doc:${area}`,
+      label: `no ${area} document`,
+      eligible: 1,
+      affected: 1,
+      count: 1,
+      affectedGlobs: new Set<string>(),
+      examples: [],
+      context: area,
+    })),
+  crosses: () => true,
+  // Raised again only after 60 days, and then whatever the rate (it is always 1).
+  quietMs: MISSING_DOC_RERAISE_DAYS * DAY_MS,
+  reraiseFactor: 1,
+  statement: (m) => `This board has no ${m.context ?? 'core'} document; run /kb-bootstrap to propose one.`,
+});
+
 /** Every mined signal, in the order the spec lists them. */
 export const SIGNALS: readonly SignalDefinition[] = [
   finding,
@@ -836,6 +892,7 @@ export const SIGNALS: readonly SignalDefinition[] = [
   ciAfterLocalSignal,
   dependency,
   reviewFalsePositive,
+  missingDoc,
 ];
 
 export const signalKindOf = (key: string): SignalKind | null => {
