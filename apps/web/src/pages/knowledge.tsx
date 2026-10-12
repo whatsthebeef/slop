@@ -1,3 +1,4 @@
+import { missingCoreAreas, missingCoreDocNotice } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ChangeEvent } from 'react';
@@ -75,11 +76,20 @@ export const KnowledgePage = () => {
   if (board.data === undefined || kb.data === undefined) return <p className='p-6 text-muted-foreground'>Loading…</p>;
   const admin = board.data.role === 'admin';
   const imported = new Set(kb.data.documents.map((d) => d.source.replace(/^catalog:|@\d+$/g, '')));
+  const missingCore = missingCoreAreas(kb.data.documents);
   const updates = kb.data.catalogUpdates;
   const compared = updates.find((u) => u.name === comparing) ?? null;
 
   return (
     <main className='mx-auto grid w-full max-w-[63rem] gap-8 p-6' data-live={live}>
+      {missingCore.length > 0 && (
+        <ul className='grid gap-1 rounded-md border border-required-border p-3 text-sm' data-testid='missing-core-docs'>
+          {missingCore.map((area) => (
+            <li key={area}>{missingCoreDocNotice(area, boardId)}</li>
+          ))}
+        </ul>
+      )}
+
       <KnowledgePageView key={boardId} boardId={boardId} admin={admin} />
 
       <h2 className='border-t pt-6 text-base font-semibold'>Manage knowledge</h2>
