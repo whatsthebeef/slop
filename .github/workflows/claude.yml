@@ -6,7 +6,7 @@
 # key instead, store it as ANTHROPIC_API_KEY and swap the `claude_code_oauth_token` input for `anthropic_api_key`.
 #
 # allowed_bots: slop's @claude comments come from slop's GitHub App, so their author is a bot (`<slug>[bot]`), and
-# claude-code-action ignores bots that aren't listed in `allowed_bots`. Slop's App is `slop[bot]`; keep it
+# claude-code-action ignores bots that aren't listed in `allowed_bots`. Slop's App here is `slop-whatsthebeef[bot]`; keep it
 # listed below. List specific bots only, never "*".
 name: claude
 
@@ -39,4 +39,4 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: 'slop[bot]'
+          allowed_bots: 'slop-whatsthebeef[bot]'

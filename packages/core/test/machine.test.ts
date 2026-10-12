@@ -447,6 +447,17 @@ describe('PR and merge events (rows 11–16)', () => {
     expect(t.glob.status).toBe('failed');
     expect(t.glob.failure?.reason).toBe('conflict');
   });
+
+  it('row 16: a failed merge ends a watching run, so the glob can be picked up again', () => {
+    const t = value(m.mergeFailed(glob({ status: 'merging', runs: [run({ state: 'watching' })] }), 'conflict', ctx(null)));
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'failed', failureReason: 'conflict' });
+    expect(m.hasLiveRun(t.glob)).toBe(false);
+  });
+
+  it('row 16: a failed merge leaves an active run alone', () => {
+    const t = value(m.mergeFailed(glob({ status: 'merging', runs: [run({ state: 'active' })] }), 'conflict', ctx(null)));
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'active' });
+  });
 });
 
 describe('failures (rows 17–19, 25)', () => {

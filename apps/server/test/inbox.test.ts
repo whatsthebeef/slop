@@ -6,9 +6,11 @@ import {
   InboxService,
   LlmBusy,
   SearchIndexer,
+  SearchService,
   vectorOf,
 } from '@slop/core';
 import type { Llm } from '@slop/core';
+import { readFile } from 'node:fs/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { eq, sql } from 'drizzle-orm';
@@ -435,6 +437,52 @@ describe('inbox', () => {
       .from(schema.inboxItems)
       .where(eq(schema.inboxItems.id, added.json.id));
     expect(row?.state).toBe('done');
+  });
+
+  it('ranks an imported item after a discussion item in current mode and labels it legacy in all-time', async () => {
+    const text = 'zebra quorum protocol for the sync store';
+    const imported = await post('/import', {
+      items: [{ source: 'jira', sourceKey: 'APP-77', title: 'APP-77: Quorum', text, sourceType: 'thread', occurredAt: new Date().toISOString() }],
+    });
+    expect(imported.status).toBe(200);
+    await paste({ text: `Quorum notes: ${text}`, title: 'Quorum notes' });
+    const search = new SearchService({ store, clock, embedder });
+    const current = await search.text(DEV, { boardId, query: 'zebra quorum', mode: 'current' }, false);
+    if (!current.ok) throw new Error(current.error.message);
+    expect(current.value.map((h) => h.citation.title)).toEqual(['Quorum notes', 'APP-77: Quorum']);
+    const all = await search.text(DEV, { boardId, query: 'zebra quorum', mode: 'all_time' }, false);
+    if (!all.ok) throw new Error(all.error.message);
+    expect(all.value.find((h) => h.citation.title === 'APP-77: Quorum')?.label).toBe('legacy');
+    expect(all.value.find((h) => h.citation.title === 'Quorum notes')?.label).toBeNull();
+  });
+
+  it('the legacy-tier migration re-tiers existing imported items and their choices, and leaves pasted ones', async () => {
+    const [row] = await database.db.select().from(schema.inboxItems).where(eq(schema.inboxItems.sourceRef, 'APP-77'));
+    const [pasted] = await database.db.select().from(schema.inboxItems).where(eq(schema.inboxItems.title, 'Quorum notes'));
+    const authorityOf = async (itemId: number | null | undefined) =>
+      (await database.db.select().from(schema.knowledgeItems).where(eq(schema.knowledgeItems.id, itemId ?? 0)))[0]?.authority;
+    // As an older server indexed it.
+    await database.db.update(schema.knowledgeItems).set({ authority: 'discussion' }).where(eq(schema.knowledgeItems.id, row?.itemId ?? 0));
+    const [choice] = await database.db
+      .insert(schema.knowledgeItems)
+      .values({
+        boardId,
+        sourceType: 'decision',
+        externalRef: `decision:inbox:${String(row?.id)}:s1t1:abc`,
+        title: 'A choice',
+        occurredAt: new Date(),
+        authority: 'discussion',
+        status: 'active',
+        contentHash: 'h',
+        state: 'ready',
+      })
+      .returning();
+    expect(await authorityOf(row?.itemId)).toBe('discussion');
+    const migration = await readFile(new URL('../drizzle/0059_import_legacy_tier.sql', import.meta.url), 'utf8');
+    for (const statement of migration.split('--> statement-breakpoint')) await database.db.execute(sql.raw(statement));
+    expect(await authorityOf(row?.itemId)).toBe('legacy');
+    expect(await authorityOf(choice?.id)).toBe('legacy');
+    expect(await authorityOf(pasted?.itemId)).toBe('discussion');
   });
 
   it('imports through the route: archived, searchable, deduped by source key, updated on change', async () => {

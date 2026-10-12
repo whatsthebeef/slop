@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Pin } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { api, RequestError } from '@/lib/api';
-import type { KnowledgePageDecisionGroup } from '@/lib/api';
-import { decisionLinks, decisionsHref, globHref, keyDecisions, recentAgentSetVersions, relativeTime } from '@/lib/knowledge-page';
+import type { KnowledgePageDecision, KnowledgePageDecisionGroup, KnowledgePageVerdict } from '@/lib/api';
+import { decisionLinks, decisionsHref, entryVerdict, globHref, keyDecisions, recentAgentSetVersions, relativeTime, verdictMap } from '@/lib/knowledge-page';
 import { useToast } from '@/toast';
 import { Button } from './ui/button';
 
@@ -14,7 +15,18 @@ const linkClass = 'text-xs underline text-muted-foreground hover:text-foreground
  * latest version (or an earlier one, read-only). Text comes from models and documents, so it is plain text. A server
  * without the endpoint hides the whole section.
  */
-const DecisionList = ({ boardId, groups }: { boardId: number; groups: readonly KnowledgePageDecisionGroup[] }) => (
+const DecisionList = ({
+  boardId,
+  groups,
+  verdicts,
+  judge,
+}: {
+  boardId: number;
+  groups: readonly KnowledgePageDecisionGroup[];
+  verdicts: ReadonlyMap<string, KnowledgePageVerdict>;
+  /** Present for admins and POs on the current version: gives or undoes a verdict on an entry's decisions. */
+  judge?: (entry: KnowledgePageDecision, verdict: KnowledgePageVerdict | null) => void;
+}) => (
   <>
     {groups.map((g) => (
       <div key={g.area} className='grid gap-1'>
@@ -22,7 +34,10 @@ const DecisionList = ({ boardId, groups }: { boardId: number; groups: readonly K
         <ul className='grid gap-1.5'>
           {(g.entries ?? []).map((entry) => (
             <li key={entry.text} className='grid gap-0.5 text-sm'>
-              <span>{entry.text}</span>
+              <span className='flex items-start gap-1.5'>
+                {entryVerdict(entry, verdicts) === 'pin' && <Pin aria-label='Pinned as key' className='mt-0.5 size-3.5 shrink-0' />}
+                <span>{entry.text}</span>
+              </span>
               {entry.rationale !== undefined && entry.rationale !== '' && (
                 <span className='text-xs text-muted-foreground'>{entry.rationale}</span>
               )}
@@ -32,6 +47,7 @@ const DecisionList = ({ boardId, groups }: { boardId: number; groups: readonly K
                     {l.label}
                   </Link>
                 ))}
+                {judge !== undefined && <Judgement entry={entry} verdict={entryVerdict(entry, verdicts)} judge={judge} />}
               </span>
             </li>
           ))}
@@ -39,6 +55,41 @@ const DecisionList = ({ boardId, groups }: { boardId: number; groups: readonly K
       </div>
     ))}
   </>
+);
+
+/** Pin as key / Not key for one entry, each undoable. */
+const Judgement = ({
+  entry,
+  verdict,
+  judge,
+}: {
+  entry: KnowledgePageDecision;
+  verdict: KnowledgePageVerdict | null;
+  judge: (entry: KnowledgePageDecision, verdict: KnowledgePageVerdict | null) => void;
+}) => (
+  <span className='ml-auto flex gap-2' data-testid='knowledge-page-judge'>
+    {verdict === 'pin' ? (
+      <button type='button' className={linkClass} onClick={() => judge(entry, null)}>
+        Unpin
+      </button>
+    ) : (
+      <button type='button' className={linkClass} onClick={() => judge(entry, 'pin')}>
+        Pin as key
+      </button>
+    )}
+    {verdict === 'hide' ? (
+      <button type='button' className={linkClass} onClick={() => judge(entry, null)}>
+        Undo not key
+      </button>
+    ) : (
+      verdict === null &&
+      entry.key !== false && (
+        <button type='button' className={linkClass} onClick={() => judge(entry, 'hide')}>
+          Not key
+        </button>
+      )
+    )}
+  </span>
 );
 
 /**
@@ -75,7 +126,7 @@ export const AgentSetHistory = ({ boardId }: { boardId: number }) => {
   );
 };
 
-export const KnowledgePageView = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
+export const KnowledgePageView = ({ boardId, admin, canJudge = admin }: { boardId: number; admin: boolean; canJudge?: boolean }) => {
   const client = useQueryClient();
   const toast = useToast();
   const [viewing, setViewing] = useState<number | null>(null);
@@ -94,6 +145,12 @@ export const KnowledgePageView = ({ boardId, admin }: { boardId: number; admin: 
       void client.invalidateQueries({ queryKey: ['knowledge-page', boardId] });
     },
     onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not queue the rebuild'),
+  });
+
+  const judgement = useMutation({
+    mutationFn: (v: { globIds: readonly string[]; verdict: KnowledgePageVerdict | null }) => api.knowledgePageFeedback(boardId, v.globIds, v.verdict),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['knowledge-page', boardId] }),
+    onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not save that'),
   });
 
   if (page.data === undefined || page.data === null) return null;
@@ -120,7 +177,12 @@ export const KnowledgePageView = ({ boardId, admin }: { boardId: number; admin: 
   const shown = viewing === null ? current : earlier.data;
   const sections = shown?.sections;
   const agents = sections?.agents ?? [];
-  const decisions = keyDecisions(sections?.decisions ?? []);
+  const verdicts = verdictMap(page.data.feedback);
+  const decisions = keyDecisions(sections?.decisions ?? [], undefined, verdicts);
+  const judge =
+    canJudge && viewing === null
+      ? (entry: KnowledgePageDecision, verdict: KnowledgePageVerdict | null) => judgement.mutate({ globIds: entry.globIds ?? [], verdict })
+      : undefined;
 
   return (
     <section className='grid gap-4' data-testid='knowledge-page'>
@@ -190,14 +252,14 @@ export const KnowledgePageView = ({ boardId, admin }: { boardId: number; admin: 
           <div className='grid gap-2'>
             <h3 className='text-sm font-medium'>{decisions.flagged ? 'Key decisions' : 'Decisions in force'}</h3>
             {decisions.shown.length === 0 && <p className='text-xs text-muted-foreground'>None yet.</p>}
-            <DecisionList boardId={boardId} groups={decisions.shown} />
+            <DecisionList boardId={boardId} groups={decisions.shown} verdicts={verdicts} judge={judge} />
             {decisions.moreCount > 0 && (
               <details className='grid gap-2' data-testid='knowledge-page-more'>
                 <summary className='cursor-pointer text-xs text-muted-foreground'>
                   {decisions.moreCount} more decision{decisions.moreCount === 1 ? '' : 's'}
                 </summary>
                 <div className='mt-2 grid gap-2'>
-                  <DecisionList boardId={boardId} groups={decisions.more} />
+                  <DecisionList boardId={boardId} groups={decisions.more} verdicts={verdicts} judge={judge} />
                 </div>
               </details>
             )}

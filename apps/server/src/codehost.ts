@@ -220,7 +220,7 @@ export interface CodeHost {
    * The state of the checks on a commit and, when one failed, the first failing check's name, failed step and first
    * error lines from its log. Explaining is best effort: a failure with no lines still names the check.
    */
-  commitChecks(repo: Repo, sha: string): Promise<{ state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }>;
+  commitChecks(repo: Repo, sha: string, opts?: { pushedOnly?: boolean }): Promise<{ state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }>;
   /** The head's latest check runs that were cancelled and their end times: a newer run normally replaces them. */
   cancelledChecks(repo: Repo, sha: string): Promise<{ id: number; completedAt: string | null }[]>;
   /** Asks the app that owns a check run to run it again; best effort (another app's run can't be re-requested). */

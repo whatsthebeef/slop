@@ -330,9 +330,13 @@ export class GitHub implements CodeHost, CommitGraph {
     }
   }
 
-  async commitChecks(repo: Repo, sha: string): Promise<{ state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }> {
+  async commitChecks(
+    repo: Repo,
+    sha: string,
+    opts?: { pushedOnly?: boolean },
+  ): Promise<{ state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }> {
     const gh = await this.octokit(repo);
-    return readCommitChecks((route, params) => gh.request(route, params), repo, sha);
+    return readCommitChecks((route, params) => gh.request(route, params), repo, sha, opts);
   }
 
   async cancelledChecks(repo: Repo, sha: string): Promise<{ id: number; completedAt: string | null }[]> {

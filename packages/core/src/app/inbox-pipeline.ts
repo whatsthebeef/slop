@@ -22,8 +22,7 @@ export const INBOX_LLM_TIMEOUT_MS = 60_000;
 const LEASE_MS = 2 * 60_000;
 const backoffMs = (attempts: number) => 30_000 * 2 ** (attempts - 1);
 const MAX_TOKENS = 800;
-/** Candidate globs the model chooses from, and the chunks searched to find them. */
-const MAX_CANDIDATES = 8;
+/** The chunks searched to find the candidate globs the model chooses from (how many it is shown is the board's `inbox_candidates`). */
 const POOL = 40;
 /** The start of the text the semantic search embeds. */
 const EMBED_CHARS = 1_500;
@@ -128,10 +127,14 @@ export class InboxPipeline {
 
   private async summarise(item: InboxItem): Promise<void> {
     const embedding = await this.embeddingOf(item);
-    const candidates = await this.deps.store.transaction((tx) =>
-      this.candidatesFor(tx, item, embedding),
-    );
-    const outcome = await this.ask(item, candidates);
+    const { candidates, suggestions } = await this.deps.store.transaction(async (tx) => {
+      const settings = await tx.getContextSettings(item.boardId);
+      return {
+        candidates: await this.candidatesFor(tx, item, embedding, settings.inbox_candidates),
+        suggestions: settings.inbox_suggestions,
+      };
+    });
+    const outcome = await this.ask(item, candidates, suggestions);
     if ('unavailable' in outcome) {
       await this.wait(item, outcome.unavailable);
       return;
@@ -187,6 +190,7 @@ export class InboxPipeline {
     tx: Tx,
     item: InboxItem,
     embedding: readonly number[] | null,
+    limit: number,
   ): Promise<InboxCandidate[]> {
     const base = { boardId: item.boardId, mode: 'current' } as const;
     const lists: Candidate[][] = [];
@@ -217,7 +221,7 @@ export class InboxPipeline {
         summary: glob.summary.trim().slice(0, CANDIDATE_SUMMARY_CHARS),
         evidence: c.text.slice(0, EVIDENCE_CHARS),
       });
-      if (out.length >= MAX_CANDIDATES) break;
+      if (out.length >= limit) break;
     }
     return out;
   }
@@ -236,7 +240,7 @@ export class InboxPipeline {
     }
   }
 
-  private async ask(item: InboxItem, candidates: readonly InboxCandidate[]): Promise<Outcome> {
+  private async ask(item: InboxItem, candidates: readonly InboxCandidate[], suggestions: number): Promise<Outcome> {
     try {
       const answer = await completeWithDeadline(
         this.deps.llm,
@@ -248,7 +252,7 @@ export class InboxPipeline {
         },
         this.deps.llmTimeoutMs ?? INBOX_LLM_TIMEOUT_MS,
       );
-      const parsed = parseSummary(answer, new Set(candidates.map((c) => c.globId)));
+      const parsed = parseSummary(answer, new Set(candidates.map((c) => c.globId)), suggestions);
       return parsed === null
         ? { failure: 'The summary answer was not usable JSON' }
         : { ok: parsed };

@@ -1,4 +1,4 @@
-import type { AgentSetCommitService, ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
+import type { AgentSetCommitService, ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, ContextReportService, ContextTuningService, SubLimitService, DependencyLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { readCommittedAgentSetVersion } from '../agent-set-executors.js';
@@ -94,6 +94,9 @@ export const mountKnowledge = (
     typeLearning?: TypeLearningService;
     /** The learned size threshold; absent: its route isn't mounted. */
     sizeCheck?: SizeCheckService;
+    /** The context report and the reset of a context setting (System page); absent: their routes aren't mounted. */
+    contextTuning?: ContextTuningService;
+    contextReport?: ContextReportService;
     /** Intake's accuracy (System page); absent: its route isn't mounted. */
     intakeLearning?: IntakeLearningService;
     /** The generated knowledge page; absent: its routes aren't mounted. */
@@ -220,6 +223,14 @@ export const mountKnowledge = (
       const result = await knowledgePage.requestRebuild(c.get('email'), Number(c.req.param('b')));
       return result.ok ? c.json(result.value, 202) : send(c, result);
     });
+    // Admins and POs: pin decisions as key, mark them not key, or undo (verdict null).
+    app.post('/api/boards/:b/knowledge-page/feedback', async (c) => {
+      const body = z
+        .object({ globIds: z.array(z.string().min(1)).min(1).max(50), verdict: z.enum(['pin', 'hide']).nullable() })
+        .safeParse(await c.req.json().catch(() => null));
+      if (!body.success) return c.json({ code: 'invalid_input', message: 'globIds (1 to 50) and verdict (pin, hide or null) are required' }, 422);
+      return send(c, await knowledgePage.setVerdict(c.get('email'), Number(c.req.param('b')), body.data.globIds, body.data.verdict));
+    });
   }
 
   // The board's learned sub size limit, its bounds and its history (board settings), for members.
@@ -265,6 +276,18 @@ export const mountKnowledge = (
     app.get('/api/boards/:b/size-calibration', async (c) => send(c, await sizeCheck.calibrationView(c.get('email'), Number(c.req.param('b')))));
     // Admins put the board back on the default threshold; the history keeps the reset.
     app.post('/api/boards/:b/size-threshold/reset', async (c) => send(c, await sizeCheck.reset(c.get('email'), Number(c.req.param('b')))));
+  }
+
+  // What agents were handed, what became of the choices and the context settings with their history, for members.
+  const { contextReport, contextTuning } = deps;
+  if (contextReport !== undefined) {
+    app.get('/api/boards/:b/context-report', async (c) => send(c, await contextReport.report(c.get('email'), Number(c.req.param('b')))));
+  }
+  // Admins put one context setting back on its default; the history keeps the reset. There is no manual edit.
+  if (contextTuning !== undefined) {
+    app.post('/api/boards/:b/context-settings/:key/reset', async (c) =>
+      send(c, await contextTuning.reset(c.get('email'), Number(c.req.param('b')), c.req.param('key'))),
+    );
   }
 
   // How often intake's category and type survived to the merge, by month and prompt version, and typical effort by kind (System page), for members.

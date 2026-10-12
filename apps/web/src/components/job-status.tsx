@@ -40,6 +40,8 @@ export const jobSummary = (result: BoardJobResult): string => {
       const moved = result.changes.filter((c) => c.from.maxTasks !== c.to.maxTasks || c.from.maxParts !== c.to.maxParts).length;
       return `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts, ${result.changes.length} outcomes recorded (${moved} moved it)`;
     }
+    case 'context_tuning':
+      return `${result.moves.length} ${result.moves.length === 1 ? 'setting' : 'settings'} moved, ${result.held} left as they were`;
     case 'intake_outcome':
       return `${result.recorded} outcomes recorded, ${result.refreshed} refreshed${result.backfilled > 0 ? `, ${result.backfilled} snapshots backfilled` : ''}`;
     case 'effect_check':
@@ -54,7 +56,7 @@ export const jobSummary = (result: BoardJobResult): string => {
   }
 };
 
-export type JobName = 'mining' | 'consolidation' | 'effect_check' | 'sub_limit' | 'intake_outcome' | 'size_threshold';
+export type JobName = 'mining' | 'consolidation' | 'effect_check' | 'sub_limit' | 'intake_outcome' | 'size_threshold' | 'context_tuning';
 
 export const JOB_LABELS: Record<JobName, { title: string; name: string }> = {
   mining: { title: 'Mined weekly', name: 'Mining' },
@@ -63,6 +65,7 @@ export const JOB_LABELS: Record<JobName, { title: string; name: string }> = {
   sub_limit: { title: 'Learned hourly', name: 'Sub-limit learning' },
   intake_outcome: { title: 'Recorded hourly', name: 'Intake outcomes' },
   size_threshold: { title: 'Learned hourly', name: 'Size-threshold learning' },
+  context_tuning: { title: 'Tuned weekly', name: 'Context tuning' },
 };
 
 /**

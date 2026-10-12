@@ -40,6 +40,6 @@ describe('a board job in a few words', () => {
   });
 
   it('labels every job the board runs', () => {
-    expect(Object.keys(JOB_LABELS).sort()).toEqual(['consolidation', 'effect_check', 'intake_outcome', 'mining', 'size_threshold', 'sub_limit']);
+    expect(Object.keys(JOB_LABELS).sort()).toEqual(['consolidation', 'context_tuning', 'effect_check', 'intake_outcome', 'mining', 'size_threshold', 'sub_limit']);
   });
 });

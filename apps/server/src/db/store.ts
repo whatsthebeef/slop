@@ -1,5 +1,5 @@
-import type { KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { AGENT_SET_COMMIT_DELAY_MS, NO_GLOB, laneOf, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
+import type { ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { AGENT_SET_COMMIT_DELAY_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -101,6 +101,17 @@ const toSubLimitChange = (row: typeof schema.subLimitChanges.$inferSelect): SubL
   changedLines: row.changedLines,
   evidence: row.evidence,
   step: row.step,
+});
+
+const toContextSettingChange = (row: typeof schema.contextSettingChanges.$inferSelect): ContextSettingChange => ({
+  id: row.id,
+  boardId: row.boardId,
+  at: row.at.toISOString(),
+  key: oneOf(CONTEXT_SETTING_KEYS, row.key),
+  before: row.before,
+  after: row.after,
+  outcome: row.outcome,
+  evidence: row.evidence,
 });
 
 const toRiskArea = (row: typeof schema.boardRiskAreas.$inferSelect): RiskArea => ({
@@ -735,6 +746,22 @@ export class PgStore implements Store {
           .orderBy(desc(p.version))
           .limit(limit);
         return rows.map((r) => ({ version: r.version, createdAt: r.createdAt.toISOString(), reason: r.reason }));
+      },
+      listKnowledgePageFeedback: async (boardId) => {
+        const f = schema.knowledgePageFeedback;
+        const rows = await t.select().from(f).where(eq(f.boardId, boardId)).orderBy(desc(f.at), f.globId);
+        return rows.map((r) => ({ boardId: r.boardId, globId: r.globId, verdict: r.verdict, by: r.by, at: r.at.toISOString() }));
+      },
+      saveKnowledgePageFeedback: async (feedback) => {
+        const values = { ...feedback, at: new Date(feedback.at) };
+        await t
+          .insert(schema.knowledgePageFeedback)
+          .values(values)
+          .onConflictDoUpdate({ target: [schema.knowledgePageFeedback.boardId, schema.knowledgePageFeedback.globId], set: values });
+      },
+      deleteKnowledgePageFeedback: async (boardId, globId) => {
+        const f = schema.knowledgePageFeedback;
+        await t.delete(f).where(and(eq(f.boardId, boardId), eq(f.globId, globId)));
       },
       insertLlmSpend: async (row) => {
         await t.insert(schema.llmSpend).values({ ...row, createdAt: new Date(row.createdAt) });
@@ -1576,6 +1603,55 @@ export class PgStore implements Store {
         const u = schema.choiceUsage;
         await t.delete(u).where(and(eq(u.boardId, boardId), lt(u.day, beforeDay)));
       },
+      recordContextRetrievals: async (boardId, day, rows) => {
+        if (rows.length === 0) return;
+        const r = schema.contextRetrievals;
+        // A fixed order, so two searches touching the same pairs take their row locks the same way and can't deadlock.
+        const ordered = [...rows].sort((a, b) => a.sourceType.localeCompare(b.sourceType) || a.tier.localeCompare(b.tier));
+        await t
+          .insert(r)
+          .values(ordered.map((row) => ({ boardId, day, sourceType: row.sourceType, tier: row.tier, count: row.count })))
+          .onConflictDoUpdate({ target: [r.boardId, r.day, r.sourceType, r.tier], set: { count: sql`${r.count} + excluded.count` } });
+      },
+      listContextRetrievals: async (boardId, fromDay) => {
+        const r = schema.contextRetrievals;
+        const rows = await t.select().from(r).where(and(eq(r.boardId, boardId), gte(r.day, fromDay)));
+        return rows.map(({ day, sourceType, tier, count }) => ({ day, sourceType, tier, count }));
+      },
+      pruneContextRetrievals: async (boardId, beforeDay) => {
+        const r = schema.contextRetrievals;
+        await t.delete(r).where(and(eq(r.boardId, boardId), lt(r.day, beforeDay)));
+      },
+      getContextSettings: async (boardId) => {
+        const rows = await t.select().from(schema.contextSettings).where(eq(schema.contextSettings.boardId, boardId));
+        return resolveContextSettings(Object.fromEntries(rows.map((r) => [r.key, r.value])));
+      },
+      setContextSetting: async (boardId, key, value, at) => {
+        const columns = { value, updatedAt: new Date(at) };
+        await t
+          .insert(schema.contextSettings)
+          .values({ boardId, key, ...columns })
+          .onConflictDoUpdate({ target: [schema.contextSettings.boardId, schema.contextSettings.key], set: columns });
+      },
+      resetContextSetting: async (boardId, key) => {
+        await t.delete(schema.contextSettings).where(and(eq(schema.contextSettings.boardId, boardId), eq(schema.contextSettings.key, key)));
+      },
+      insertContextSettingChange: async (change) => {
+        const [row] = await t
+          .insert(schema.contextSettingChanges)
+          .values({ ...change, at: new Date(change.at) })
+          .returning();
+        if (row === undefined) throw new Error('Context setting change was not stored');
+        return toContextSettingChange(row);
+      },
+      listContextSettingChanges: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.contextSettingChanges)
+            .where(eq(schema.contextSettingChanges.boardId, boardId))
+            .orderBy(desc(schema.contextSettingChanges.at), desc(schema.contextSettingChanges.id))
+        ).map(toContextSettingChange),
       getBoardJob: async (boardId, job) => {
         const [row] = await t
           .select()

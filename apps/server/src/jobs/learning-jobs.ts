@@ -34,6 +34,12 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
         `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts`,
         ...result.changes.map((c) => `${c.globId} ${c.outcome.replace(/_/g, ' ')}: ${c.from.maxTasks}/${c.from.maxParts} to ${c.to.maxTasks}/${c.to.maxParts}`),
       ].join('; ');
+    case 'context_tuning':
+      return [
+        result.moves.length === 0 ? 'no setting moved' : `${result.moves.length} ${result.moves.length === 1 ? 'setting' : 'settings'} moved`,
+        ...result.moves.map((m) => `${m.key} ${m.outcome.replace(/_/g, ' ')}: ${m.before} to ${m.after}`),
+        `${result.held} left as they were`,
+      ].join('; ');
     case 'skipped':
       return `skipped (${result.reason}); the next check tries again`;
   }

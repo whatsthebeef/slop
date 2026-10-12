@@ -90,7 +90,7 @@ export const KnowledgePage = () => {
         </ul>
       )}
 
-      <KnowledgePageView key={boardId} boardId={boardId} admin={admin} />
+      <KnowledgePageView key={boardId} boardId={boardId} admin={admin} canJudge={admin || board.data.role === 'po'} />
 
       <h2 className='border-t pt-6 text-base font-semibold'>Manage knowledge</h2>
 

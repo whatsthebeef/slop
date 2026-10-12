@@ -11,6 +11,8 @@ import type {
   BoardSession,
   BoardJob,
   BoardJobStatus,
+  ContextReport,
+  ContextSettingsView,
   CatalogUpdate,
   Category,
   ChatCitation,
@@ -504,7 +506,7 @@ export interface KnowledgePageVersion {
   readonly boardId?: number;
   readonly version: number;
   readonly createdAt: string;
-  readonly reason?: 'first' | 'delta' | 'rebuild' | 'prompt';
+  readonly reason?: 'first' | 'delta' | 'rebuild' | 'prompt' | 'guide';
   readonly sections?: {
     readonly agents?: readonly KnowledgePageAgent[];
     readonly decisions?: readonly KnowledgePageDecisionGroup[];
@@ -523,6 +525,16 @@ export interface KnowledgePageAgentSetVersion {
   readonly changedPaths?: readonly string[];
 }
 
+export type KnowledgePageVerdict = 'pin' | 'hide';
+
+/** A Pin / Not key verdict on a decision glob. */
+export interface KnowledgePageFeedback {
+  readonly globId: string;
+  readonly verdict: KnowledgePageVerdict;
+  readonly by: string;
+  readonly at: string;
+}
+
 export interface KnowledgePageView {
   readonly current: KnowledgePageVersion | null;
   readonly history?: readonly KnowledgePageHistoryItem[];
@@ -530,6 +542,8 @@ export interface KnowledgePageView {
   readonly pending?: boolean;
   /** The last agent-set versions the page observed, newest first; absent on an older API. */
   readonly agentSetHistory?: readonly KnowledgePageAgentSetVersion[];
+  /** Verdicts in force, newest first; absent on an older API. */
+  readonly feedback?: readonly KnowledgePageFeedback[];
 }
 
 export const api = {
@@ -618,6 +632,9 @@ export const api = {
     request<KnowledgePageVersion>('GET', `/api/boards/${boardId}/knowledge-page/versions/${version}`),
   rebuildKnowledgePage: (boardId: number) =>
     request<{ queued?: boolean }>('POST', `/api/boards/${boardId}/knowledge-page/rebuild`),
+  /** Pins the decisions as key, marks them not key, or undoes the verdict (null). */
+  knowledgePageFeedback: (boardId: number, globIds: readonly string[], verdict: KnowledgePageVerdict | null) =>
+    request<{ updated: number }>('POST', `/api/boards/${boardId}/knowledge-page/feedback`, { globIds, verdict }),
   knowledgeDoc: (boardId: number, name: string) =>
     request<{ name: string; content: string; version: number }[]>('GET', `/api/boards/${boardId}/kb/docs/${encodeURIComponent(name)}`),
   catalog: () => request<CatalogEntry[]>('GET', '/api/catalog/kb'),
@@ -671,6 +688,11 @@ export const api = {
   sizeCalibration: (boardId: number) => request<SizeCalibrationView>('GET', `/api/boards/${boardId}/size-calibration`),
   /** Admins: puts the size threshold back on the defaults (the history keeps the reset). */
   resetSizeThreshold: (boardId: number) => request<SizeThresholdView>('POST', `/api/boards/${boardId}/size-threshold/reset`, {}),
+  /** What agents were handed, what became of the choices and the context settings with their history (members). */
+  contextReport: (boardId: number) => request<ContextReport>('GET', `/api/boards/${boardId}/context-report`),
+  /** Admins: puts one context setting back on its default (the history keeps the reset). */
+  resetContextSetting: (boardId: number, key: string) =>
+    request<ContextSettingsView>('POST', `/api/boards/${boardId}/context-settings/${encodeURIComponent(key)}/reset`, {}),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */
   keepWhole: (id: string) => request<GlobView>('POST', `/api/globs/${id}/keep-whole`, {}),
   /** Whether the board has an active integration token (members); the secret is never returned here. */
@@ -719,8 +741,9 @@ export const api = {
   confirmDecision: (boardId: number, id: number) => request<DecisionView>('POST', `/api/boards/${boardId}/decisions/${id}/confirm`),
   /** Undoes a replacement, or dismisses a proposed one. */
   undoDecision: (boardId: number, id: number) => request<DecisionView>('POST', `/api/boards/${boardId}/decisions/${id}/undo`),
-  /** The board's inbox: new, attached and kept items (newest first). */
-  inbox: (boardId: number) => request<{ items: InboxItemView[] }>('GET', `/api/boards/${boardId}/inbox`).then((r) => r.items),
+  /** The board's inbox: new, attached and kept items (newest first), or the ones with `status` (e.g. `archived`, the imported ones). */
+  inbox: (boardId: number, status?: InboxStatus) =>
+    request<{ items: InboxItemView[] }>('GET', `/api/boards/${boardId}/inbox${status === undefined ? '' : `?status=${status}`}`).then((r) => r.items),
   inboxItem: (boardId: number, id: number) => request<InboxItemView>('GET', `/api/boards/${boardId}/inbox/${id}`),
   addToInbox: (boardId: number, paste: NewInboxPaste) => request<{ id: number; created: boolean }>('POST', `/api/boards/${boardId}/inbox`, paste),
   attachInbox: (boardId: number, id: number, globIds: readonly string[]) =>
