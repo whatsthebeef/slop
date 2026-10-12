@@ -1,11 +1,12 @@
 import { MessageCircle } from 'lucide-react';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link, Outlet, useLocation, useParams } from 'react-router';
+import { Link, Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import { ChatDock } from '@/components/chat-dock';
 import { NotificationBar } from '@/components/notification-bar';
 import { AppSettings, BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
+import { barRows, sessionForKey } from '@/lib/board-bar';
 import { isChatShortcut, WIDE_QUERY } from '@/lib/chat';
 import { spendLine } from '@/lib/review-settings';
 import { newCount } from '@/lib/inbox';
@@ -65,7 +66,7 @@ const BoardTabs = ({
           className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:text-foreground'
           aria-label='Ask the board chat'
           aria-pressed={chatOpen}
-          title='Ask the board chat (/ or ⌘K)'
+          title='Ask the board chat (/ or ⌘K). 1–9 switch boards.'
           data-testid='chat-toggle'
           onClick={onChat}
         >
@@ -131,6 +132,20 @@ export const BoardShell = () => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [isBoard]);
+  // 1–9 open the board in that place of the bar, as clicking it does (the navigation closes any open glob view).
+  const navigate = useNavigate();
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });
+  const barSessions = barRows(me.data?.boards ?? [], undefined).sessions;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const board = sessionForKey(e, barSessions, isBoard ? boardId : undefined);
+      if (board === null) return;
+      e.preventDefault();
+      void navigate(`/boards/${board.id}`);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [barSessions, isBoard, boardId, navigate]);
   const showChat = isBoard && chatOpen;
   // The panel stays mounted while it steps out (the dock says when it is gone), so Signed Off stays hidden until then.
   const [docked, setDocked] = useState(false);
