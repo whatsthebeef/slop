@@ -3,7 +3,7 @@ import { LlmBusy, LlmUnavailable } from '@slop/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BEDROCK_CLIENT_RETRY, BedrockLlm, shownModelId } from '../src/llm.js';
 
-const MODEL = 'us.anthropic.claude-opus-5-5';
+const MODEL = 'global.anthropic.claude-opus-5-5';
 
 /** An SDK-style error: the SDK tells failures apart by `name`. */
 const sdkError = (name: string, message: string): Error => Object.assign(new Error(message), { name });
