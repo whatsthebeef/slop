@@ -22,6 +22,7 @@ import type {
   KbMergeNote,
   KbOutcome,
   KbPossibleCoverage,
+  KbStaleReason,
   KbTarget,
   LearningType,
   ProposedDocument,
@@ -530,6 +531,10 @@ interface LearningEdit {
   /** Back to drafting: the draft is cleared (a document proposal is its own draft, and keeps it). */
   readonly requeue?: true;
   readonly clearMergeNote?: true;
+  /** The verified quotes a closure rests on (a merge's note). */
+  readonly mergeNote?: KbMergeNote;
+  /** Evidence merged in from near-duplicates, after what it has. */
+  readonly addEvidence?: readonly ExtraEvidence[];
   /** The outcome artifact (null clears it), by whom (slop when absent) and when (the edit's time when absent). */
   readonly outcome?: {
     readonly value: KbOutcome | null;
@@ -537,10 +542,6 @@ interface LearningEdit {
     readonly at?: string;
   };
   readonly effectCheck?: EffectCheck | null;
-  /** Evidence merged in from near-duplicates, after what the learning holds. */
-  readonly addEvidence?: readonly ExtraEvidence[];
-  /** The verified quotes a pipeline closure rests on. */
-  readonly mergeNote?: KbMergeNote;
   /** A new draft against `target` (a draft artifact), and the preview its assessment shows. */
   readonly draft?: {
     readonly draft: KbDraft;
@@ -765,6 +766,63 @@ export const dismissLearningStale = (
     attributes: (a) => ({ ...a, stale: { since: null, reason: null, dismissedAt: at } }),
   });
 
+/** `attributes` with its stale flag set (or removed once nothing is flagged or dismissed); an admin's Keep stays. */
+const withStale = (
+  attributes: DecisionAttributes,
+  since: string | null,
+  reason: KbStaleReason | null,
+): DecisionAttributes => {
+  const dismissedAt = attributes.stale?.dismissedAt ?? null;
+  const next: MutableAttributes = { ...attributes };
+  delete next.stale;
+  return since === null && reason === null && dismissedAt === null
+    ? next
+    : { ...next, stale: { since, reason, dismissedAt } };
+};
+
+/** Weekly consolidation's flag on an open learning: stale since `since` for `reason`, or cleared (both null). */
+export const flagLearningStale = (
+  tx: Tx,
+  ctx: LearningWriteContext,
+  id: string,
+  expectedVersion: number,
+  since: string | null,
+  reason: KbStaleReason | null,
+): Promise<boolean> =>
+  editLearning(tx, ctx, id, expectedVersion, {
+    attributes: (a) => withStale(a, since, reason),
+  });
+
+/**
+ * Merges `loser` into `survivor` (both as read in this transaction), each write conditional on the version read:
+ * the survivor gains the loser's evidence, source globs, count and kept-apart links, and its signal when it has
+ * none (new evidence clears its stale flag); the loser is closed as merged into the survivor (row D10′, a
+ * `duplicate_of` link) with the verified quotes. False when either changed, and the caller must roll the
+ * transaction back (the first write may have landed).
+ */
+export const mergeLearnings = async (
+  tx: Tx,
+  ctx: LearningWriteContext,
+  survivor: LearningRead,
+  loser: LearningRead,
+  note: KbMergeNote,
+): Promise<boolean> => {
+  const took = await addLearningEvidence(tx, ctx, survivor, loser, { signal: true });
+  if (!took) return false;
+  return editLearning(tx, ctx, loser.glob.id, loser.glob.version, {
+    row: (glob, at) =>
+      machine.closeDecision(
+        glob,
+        'merged',
+        { id: survivor.glob.id, kind: 'duplicate_of', source: 'pipeline' },
+        decisionContext(ctx.clock, null, at),
+      ),
+    // A closed learning isn't flagged; reopened, the next run flags it again if the rule still holds.
+    attributes: (a) => withStale(a, null, null),
+    mergeNote: note,
+  });
+};
+
 /** A decision on an open learning, by `by` at `at`. */
 export type LearningDecisionRecord =
   | {
@@ -904,57 +962,63 @@ export const routeLearning = (
   });
 };
 
+/** What a learning takes with the evidence of one folded into it. */
+export interface EvidenceTaken {
+  /** A hint naming another learning, taken when it has none. */
+  readonly hint?: Extract<KbPossibleCoverage, { kind: 'item' }>;
+  /** Take the other's signal when it has none (a consolidation merge; intake's near-duplicate doesn't). */
+  readonly signal?: true;
+}
+
 /**
- * Folds `from`'s evidence into learning `id` (a merge or coverage closes `from` on it): its evidence, source globs and
- * count are added, with everything either was kept apart from, and a stale flag clears. `hint` is a hint the learning
- * takes when it has none. False if `id` moved from `expectedVersion`.
+ * Folds `from`'s evidence into learning `into` (read in this transaction), conditional on the version read: the
+ * evidence, source globs and count are added, with everything either was kept apart from, and a stale flag clears
+ * (new evidence; the next consolidation run flags it again if it is old too). False if `into` moved.
  */
 export const addLearningEvidence = (
   tx: Tx,
   ctx: LearningWriteContext,
-  id: string,
-  expectedVersion: number,
+  into: LearningRead,
   from: LearningRead,
-  hint: Extract<KbPossibleCoverage, { kind: 'item' }> | null,
+  taken: EvidenceTaken = {},
 ): Promise<boolean> => {
-  const facts = learningFacts(from.glob);
-  const fromApart = learningLinks(from.glob).keptApartFrom;
-  const added: ExtraEvidence[] = [
-    {
-      itemId: from.glob.id,
-      globIds: facts.sourceGlobIds,
-      evidence: learningEvidence(from.glob, from.artifacts),
-      submittedBy: from.glob.creator,
-      at: from.glob.createdAt,
-    },
-    ...learningExtraEvidence(from.artifacts),
+  const id = into.glob.id;
+  const intoFacts = learningFacts(into.glob);
+  const fromFacts = learningFacts(from.glob);
+  const added: ExtraEvidence = {
+    itemId: from.glob.id,
+    globIds: fromFacts.sourceGlobIds,
+    evidence: learningEvidence(from.glob, from.artifacts),
+    submittedBy: from.glob.creator,
+    at: from.glob.createdAt,
+  };
+  const signal = taken.signal === true && intoFacts.signal === null ? fromFacts.signal : null;
+  const apart = learningLinks(into.glob).keptApartFrom;
+  const fromApart = [
+    ...new Set(learningLinks(from.glob).keptApartFrom.filter((other) => other !== id && !apart.includes(other))),
   ];
-  return editLearning(tx, ctx, id, expectedVersion, {
-    addEvidence: added,
-    attributes: (a) => {
-      const next: MutableAttributes = {
-        ...a,
-        evidenceCount: (a.evidenceCount ?? 1) + facts.occurrenceCount,
-        sourceGlobs: [...new Set([...(a.sourceGlobs ?? []), ...facts.sourceGlobIds])],
-      };
-      // New evidence clears a stale flag; the next consolidation run flags it again if that evidence is old too.
-      if (a.stale !== undefined) {
-        if (a.stale.dismissedAt === null) delete next.stale;
-        else next.stale = { since: null, reason: null, dismissedAt: a.stale.dismissedAt };
-      }
-      return next;
-    },
+  return editLearning(tx, ctx, id, into.glob.version, {
+    // The other's own evidence comes first, then what was merged into it.
+    addEvidence: [added, ...learningExtraEvidence(from.artifacts)],
+    attributes: (a) =>
+      withStale(
+        {
+          ...a,
+          evidenceCount: intoFacts.occurrenceCount + fromFacts.occurrenceCount,
+          sourceGlobs: [...new Set([...intoFacts.sourceGlobIds, ...fromFacts.sourceGlobIds])],
+          ...(signal === null ? {} : { signal }),
+        },
+        null,
+        null,
+      ),
     links: (links) => {
-      const apart = new Set(links.filter((l) => l.kind === 'kept_apart_from').map((l) => l.id));
       const joined: GlobLink[] = [
         ...links,
-        ...fromApart
-          .filter((other) => other !== id && !apart.has(other))
-          .map((other): GlobLink => ({ id: other, kind: 'kept_apart_from', source: 'explicit' })),
+        ...fromApart.map((other): GlobLink => ({ id: other, kind: 'kept_apart_from', source: 'explicit' })),
       ];
-      return hint === null
+      return taken.hint === undefined
         ? joined
-        : [...joined.filter((l) => l.kind !== 'possibly_covered_by'), ...possiblyCoveredLinks(hint)];
+        : [...joined.filter((l) => l.kind !== 'possibly_covered_by'), ...possiblyCoveredLinks(taken.hint)];
     },
   });
 };

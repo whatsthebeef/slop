@@ -1,13 +1,11 @@
-import type { KbItem } from '../domain/kb.js';
 import { learningExtraEvidence, learningLinks } from '../domain/learning.js';
 import type { LearningRead } from '../domain/learning.js';
 import { text } from './llm-json.js';
-import type { KbItems } from './kb-items.js';
 
 /**
  * What the KB pipeline's intake dedupe and weekly consolidation share: the checks that keep a model's answer from
- * closing an item on its own say-so (a relation compared as normalised text, a quote found verbatim), and the
- * merge write that folds one item's evidence into another.
+ * closing an item on its own say-so (a relation compared as normalised text, a quote found verbatim) and the
+ * check that an admin's separation of two items holds.
  */
 
 /** A `checked` ref or relation as compared: lower case, `_` and `-` as spaces, spaces collapsed ("Same_Fact" is "same fact"). */
@@ -77,60 +75,3 @@ const holding = (item: KeepsApart): string[] => [item.id, ...item.extraEvidence.
 export const keptApart = (a: KeepsApart, b: KeepsApart): boolean =>
   holding(a).some((id) => b.keptApartFrom.includes(id)) ||
   holding(b).some((id) => a.keptApartFrom.includes(id));
-
-/**
- * `into` with `from`'s evidence, globs and count added (and its version bumped), and everything either was kept
- * apart from. New evidence clears a stale flag; the next consolidation run flags it again if that evidence is old too.
- */
-export const withEvidenceFrom = (into: KbItem, from: KbItem): KbItem => ({
-  ...into,
-  // A pending item may already carry near-duplicates of its own; they move with it.
-  occurrenceCount: into.occurrenceCount + from.occurrenceCount,
-  extraEvidence: [
-    ...into.extraEvidence,
-    {
-      itemId: from.id,
-      globIds: from.sourceGlobIds,
-      evidence: from.evidence,
-      submittedBy: from.submittedBy,
-      at: from.createdAt,
-    },
-    ...from.extraEvidence,
-  ],
-  sourceGlobIds: [...new Set([...into.sourceGlobIds, ...from.sourceGlobIds])],
-  keptApartFrom: [...new Set([...into.keptApartFrom, ...from.keptApartFrom])].filter((id) => id !== into.id),
-  staleSince: null,
-  staleReason: null,
-  version: into.version + 1,
-});
-
-/**
- * Writes `into` (as read in this transaction) with `from`'s evidence, conditional on its version; false when it
- * changed meanwhile, and the caller rolls the transaction back.
- */
-export const addEvidenceTo = async (
-  kb: KbItems,
-  into: KbItem,
-  from: KbItem,
-  adjust: (merged: KbItem) => KbItem = (m) => m,
-): Promise<boolean> => {
-  // The write bumps its version, so a step running on it now finds it changed and runs again at once.
-  return kb.updateKbItem(adjust(withEvidenceFrom(into, from)), into.version);
-};
-
-/**
- * Merges `loser` into `survivor` (both as read in this transaction): the survivor gains the loser's evidence
- * (`adjust` changes anything else it takes), and the loser is written as `closed`. Both writes are conditional on
- * the versions read; false when either changed, and the caller must roll the transaction back (the first write
- * may have landed).
- */
-export const mergeItems = async (
-  kb: KbItems,
-  survivor: KbItem,
-  loser: KbItem,
-  closed: KbItem,
-  adjust: (merged: KbItem) => KbItem = (m) => m,
-): Promise<boolean> => {
-  if (!(await addEvidenceTo(kb, survivor, loser, adjust))) return false;
-  return kb.updateKbItem({ ...closed, version: loser.version + 1 }, loser.version);
-};

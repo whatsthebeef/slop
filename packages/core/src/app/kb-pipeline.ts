@@ -505,7 +505,7 @@ export class KbPipeline {
           // An admin separated them (reopening a merge): the learning stays open rather than joining it again.
           if (other === null || learningStatus(other.glob, other.artifacts) !== status || keptApart(keepsApartOf(other), keepsApartOf(current)))
             return false;
-          if (!(await addLearningEvidence(tx, ctx, id, other.glob.version, current, hint))) throw new StaleItem(id);
+          if (!(await addLearningEvidence(tx, ctx, other, current, hint === null ? {} : { hint }))) throw new StaleItem(id);
           return true;
         };
         // The verified quotes go on the closed learning, so its card shows what it closed on.
