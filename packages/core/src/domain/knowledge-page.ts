@@ -1,22 +1,20 @@
 /**
- * The board's knowledge page: a generated, versioned summary of the agents and skills, the decisions in force and what
- * changed lately. Each regeneration is a new version, so an earlier one can be read back; the generated page is data,
- * not a document, and nobody edits it. The agents and the changes come from the board's data; only the decisions
- * section is written by a model, and only from what changed since the previous version.
+ * The board's knowledge page: a generated, versioned summary of the agents and skills and the key decisions in force.
+ * Each regeneration is a new version, so an earlier one can be read back; the generated page is data, not a document,
+ * and nobody edits it. The agents come from the board's data; only the decisions section is written by a model, and
+ * only from what changed since the previous version.
  */
 
 /** Bump to rebuild every board's page in full at its next regeneration (the model's instructions changed). */
-export const KNOWLEDGE_PAGE_PROMPT_VERSION = 1;
+export const KNOWLEDGE_PAGE_PROMPT_VERSION = 2;
 
 /** How often the page may regenerate (minutes): the board setting's default and bounds. */
-export const KNOWLEDGE_PAGE_INTERVAL_DEFAULT = 60;
+export const KNOWLEDGE_PAGE_INTERVAL_DEFAULT = 1440;
 export const KNOWLEDGE_PAGE_INTERVAL_MIN = 5;
 export const KNOWLEDGE_PAGE_INTERVAL_MAX = 1440;
 
-/** The page lists this many recent changes, newest first. */
-export const KNOWLEDGE_PAGE_CHANGES_MAX = 30;
-/** Recent changes look back this far (days). */
-export const KNOWLEDGE_PAGE_CHANGES_DAYS = 60;
+/** The page remembers (and the Agent set section lists) this many observed agent-set versions. */
+export const KNOWLEDGE_PAGE_AGENT_SET_HISTORY_MAX = 10;
 /** A full rebuild covers at most this many decisions in force (the newest), so one call stays small. */
 export const KNOWLEDGE_PAGE_DECISIONS_MAX = 150;
 
@@ -39,32 +37,30 @@ export interface KnowledgePageAgent {
 }
 
 /** Decisions in force under one area, as the model wrote them. Entries link to the decision globs through `globIds`. */
-export interface KnowledgePageDecisionGroup {
-  readonly area: string;
-  readonly entries: readonly { readonly text: string; readonly rationale: string; readonly globIds: readonly string[] }[];
+export interface KnowledgePageDecisionEntry {
+  readonly text: string;
+  readonly rationale: string;
+  readonly globIds: readonly string[];
+  /** A new developer or the product owner would need it. Absent on versions written before the flag existed. */
+  readonly key?: boolean;
+  /** When the newest decision behind the entry was decided; absent on older versions. */
+  readonly at?: string;
 }
 
-export interface KnowledgePageChange {
-  readonly at: string;
-  readonly kind: 'decision' | 'work' | 'agent_set';
-  readonly text: string;
-  readonly why: string | null;
-  readonly globId: string | null;
-  /** Agent-set changes: the version the board's agent set reached. */
-  readonly agentSetVersion?: number;
+export interface KnowledgePageDecisionGroup {
+  readonly area: string;
+  readonly entries: readonly KnowledgePageDecisionEntry[];
 }
 
 export interface KnowledgePageSections {
   readonly agents: readonly KnowledgePageAgent[];
   readonly decisions: readonly KnowledgePageDecisionGroup[];
-  readonly changes: readonly KnowledgePageChange[];
 }
 
 /** Which sections this version rewrote (the others are as the previous version had them). */
 export interface KnowledgePageChanged {
   readonly agents: boolean;
   readonly decisions: boolean;
-  readonly changes: boolean;
 }
 
 /** What a version was built from: the "nothing changed" check and the next delta compare against it. */
@@ -76,10 +72,8 @@ export interface KnowledgePageBasis {
   readonly agentSeen: Readonly<Record<string, { readonly hash: string; readonly since: number | null }>>;
   /** Decision glob ID to a fingerprint of what the decisions section says about it. */
   readonly decisions: Readonly<Record<string, string>>;
-  /** Hash of the recent-changes list. */
-  readonly changesHash: string;
   readonly promptVersion: number;
-  /** The agent-set versions this page observed, with when it first saw each and which agent files moved with it (the change list's agent-set entries). */
+  /** The agent-set versions this page observed, with when it first saw each and which agent files moved with it (the Agent set section's history). */
   readonly agentSetBumps: readonly { readonly version: number; readonly at: string; readonly changedPaths: readonly string[] }[];
 }
 
@@ -109,4 +103,9 @@ export interface KnowledgePageView {
   readonly nextRegenerationAt: string | null;
   /** A regeneration is queued or waiting for the interval. */
   readonly pending: boolean;
+  /** The last agent-set versions the page observed, newest first. */
+  readonly agentSetHistory: readonly KnowledgePageAgentSetVersion[];
 }
+
+/** An agent-set version the page observed, with the agent and command files that moved with it. */
+export type KnowledgePageAgentSetVersion = KnowledgePageBasis['agentSetBumps'][number];

@@ -247,9 +247,13 @@ const kbPipeline = new KbPipeline({
   route: kbRouteLlm,
   draft: kbDraftLlm,
 });
-// The knowledge page's decisions section is written by the KB draft model (it is prose over the board's decisions); the
-// page's own jobs only ask it about what changed. Its health follows the KB models, so a down model waits like a KB job.
-const knowledgePage = new KnowledgePageService({ store, clock, notifier: hub, llm: kbDraftLlm, model: config.KB_DRAFT_MODEL, spend, knowledge });
+// The knowledge page's decisions section is written by Haiku (KNOWLEDGE_PAGE_MODEL): a short rewrite over the board's
+// decisions, at most daily by default. Its own jobs only ask it about what changed.
+const knowledgePageLlm = trackLlm(
+  new BedrockLlm({ id: config.KNOWLEDGE_PAGE_MODEL, configKey: 'KNOWLEDGE_PAGE_MODEL' }, config.BEDROCK_REGION, logUsage),
+  config.KNOWLEDGE_PAGE_MODEL,
+);
+const knowledgePage = new KnowledgePageService({ store, clock, notifier: hub, llm: knowledgePageLlm, model: config.KNOWLEDGE_PAGE_MODEL, spend, knowledge });
 
 // Haiku: splitting and classifying review findings, and checking bug reports for the learned sub limit.
 const findingsLlm = trackLlm(

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { useParams } from 'react-router';
 import { AgentSetFiles, LineDiff } from '@/components/agent-set-files';
-import { KnowledgePageView } from '@/components/knowledge-page-view';
+import { AgentSetHistory, KnowledgePageView } from '@/components/knowledge-page-view';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { api, RequestError } from '@/lib/api';
@@ -169,6 +169,7 @@ export const KnowledgePage = () => {
           slop's catalog version plus this board's rules, so catalog updates arrive on their own.
         </p>
         <AgentSetFiles boardId={boardId} admin={admin} entries={kb.data.agentSet.entries} />
+        <AgentSetHistory boardId={boardId} />
       </section>
 
       <section className='grid gap-2' data-testid='local-run'>

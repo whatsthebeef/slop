@@ -365,6 +365,13 @@
       "when": 1791774784066,
       "tag": "0051_knowledge_page",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1791774785066,
+      "tag": "0052_knowledge_page_daily",
+      "breakpoints": true
     }
   ]
 }

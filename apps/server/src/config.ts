@@ -164,6 +164,8 @@ const schema = z.object({
   KB_ROUTE_MODEL: z.string().default('us.anthropic.claude-opus-5-5'),
   /** Opus 5.5 (US cross-region inference profile) drafts KB changes. */
   KB_DRAFT_MODEL: z.string().default('us.anthropic.claude-opus-5-5'),
+  /** Haiku 4.5 writes the generated knowledge page's decisions section. */
+  KNOWLEDGE_PAGE_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
   /** Haiku 4.5 splits free-form reviews into findings and classifies each finding (temperature 0). */
   FINDINGS_MODEL: z.string().default('us.anthropic.claude-haiku-4-5-20251001-v1:0'),
   /**

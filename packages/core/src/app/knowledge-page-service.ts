@@ -4,18 +4,17 @@ import type { Result } from '../domain/errors.js';
 import { knowledgePageEffect } from '../domain/events.js';
 import type { EffectOutcome, RetryLater } from '../domain/events.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
-import { agentSetKind, parseFrontmatter } from '../domain/knowledge.js';
+import { agentSetKind, isAgentSetKind, parseFrontmatter } from '../domain/knowledge.js';
 import {
-  KNOWLEDGE_PAGE_CHANGES_DAYS,
-  KNOWLEDGE_PAGE_CHANGES_MAX,
+  KNOWLEDGE_PAGE_AGENT_SET_HISTORY_MAX,
   KNOWLEDGE_PAGE_DECISIONS_MAX,
   KNOWLEDGE_PAGE_PROMPT_VERSION,
 } from '../domain/knowledge-page.js';
 import type {
   KnowledgePageAgent,
   KnowledgePageBasis,
-  KnowledgePageChange,
   KnowledgePageChanged,
+  KnowledgePageDecisionEntry,
   KnowledgePageDecisionGroup,
   KnowledgePageReason,
   KnowledgePageVersion,
@@ -45,19 +44,19 @@ const ANSWER_MAX_TOKENS = 6_000;
 const STATEMENT_MAX = 400;
 const RATIONALE_MAX = 300;
 const LLM_WAIT_MS = 60_000;
-const DAY_MS = 24 * 60 * 60_000;
 
-export const KNOWLEDGE_PAGE_SYSTEM = `You keep one section of a software project's knowledge page: the decisions in force, grouped by area. You are given the previous version of the section (JSON), the decisions that are new or changed since (one JSON object per line), and the IDs of decisions that are no longer in force.
+export const KNOWLEDGE_PAGE_SYSTEM = `You keep one section of a software project's knowledge page: the key decisions in force, grouped by area. You are given the previous version of the section (JSON), the decisions that are new or changed since (one JSON object per line), and the IDs of decisions that are no longer in force.
 
 Rules:
 - Return the whole updated section. Keep the previous section's wording for entries the change does not touch, and keep its areas.
 - Each entry states one rule or choice in a plain sentence ("text"), why it was decided in a short phrase ("rationale", empty when unknown), and the IDs of the decisions behind it ("globIds"). Merge decisions that say the same thing into one entry.
 - Every decision that is new or changed, and every decision the previous section covers that is still in force, must be behind exactly one entry. Never use an ID you were not given. Drop a decision that is no longer in force from its entry; drop the entry when none are left.
+- Each entry also says whether it is key ("key": true or false). It is key when a new developer or the product owner would need it to work on the project: a choice of architecture, tooling, process or product behaviour that is not obvious from the code. Keep a previous entry's "key" unless the change touches it.
 - Never write a decision's ID in "text" or "rationale": the page links them from "globIds".
 - Group under short area names a reader would look for (for example "Testing", "Deploys"). Reuse the previous section's names.
 
 Respond with one JSON object and nothing else:
-{"groups": [{"area": string, "entries": [{"text": string, "rationale": string, "globIds": [string]}]}]}`;
+{"groups": [{"area": string, "entries": [{"text": string, "rationale": string, "globIds": [string], "key": boolean}]}]}`;
 
 /** A decision in force, with what the page remembers about it. */
 interface InForce {
@@ -68,8 +67,10 @@ interface InForce {
 
 /** Everything a regeneration reads of the board's data. */
 interface Facts {
+  /** The decisions the page covers: in force, leaving out learnings that only instruct agents. */
   readonly decisions: readonly InForce[];
-  readonly changes: readonly KnowledgePageChange[];
+  /** Every decision in force, for the agents' "decision" links (an agent's own learning targets its file). */
+  readonly agentDecisions: readonly InForce[];
 }
 
 const clip = (value: string, max: number): string => (value.length > max ? `${value.slice(0, max - 3)}...` : value);
@@ -101,6 +102,10 @@ const promptLine = (d: InForce): string => {
   });
 };
 
+/** The latest decision time among an entry's decisions. */
+const newestAt = (globIds: readonly string[], inForce: ReadonlyMap<string, InForce>): string | undefined =>
+  globIds.flatMap((id) => inForce.get(id)?.at ?? []).sort().pop();
+
 const nameOf = (path: string): string => (path.split('/').pop() ?? path).replace(/\.md$/i, '');
 
 /**
@@ -116,13 +121,13 @@ export const parseDecisionGroups = (answer: string, allowed: ReadonlySet<string>
   for (const group of groups) {
     if (!isObject(group)) continue;
     const area = (text(field(group, 'area')) ?? '').trim() || 'General';
-    const entries: { text: string; rationale: string; globIds: string[] }[] = [];
+    const entries: { text: string; rationale: string; globIds: string[]; key: boolean }[] = [];
     for (const entry of list(field(group, 'entries'))) {
       const body = (text(field(entry, 'text')) ?? '').trim();
       const globIds = [...new Set(list(field(entry, 'globIds')).flatMap((id) => (typeof id === 'string' && allowed.has(id) ? [id] : [])))];
       if (body === '' || globIds.length === 0) continue;
       for (const id of globIds) covered.add(id);
-      entries.push({ text: body, rationale: (text(field(entry, 'rationale')) ?? '').trim(), globIds });
+      entries.push({ text: body, rationale: (text(field(entry, 'rationale')) ?? '').trim(), globIds, key: field(entry, 'key') === true });
     }
     if (entries.length > 0) out.push({ area, entries });
   }
@@ -147,8 +152,8 @@ export interface KnowledgePageDeps {
 }
 
 /**
- * The board's generated knowledge page. A regeneration (the `regenerate_knowledge_page` job) builds the agents and
- * recent-changes sections from the board's data and asks the model only about the decisions that are new, changed or no
+ * The board's generated knowledge page. A regeneration (the `regenerate_knowledge_page` job) builds the agents
+ * section from the board's data and asks the model only about the decisions that are new, changed or no
  * longer in force, giving it the previous decisions section and nothing else of the board. It writes a version only
  * when what the page is built from changed, and no more often than the board's interval unless an admin asks for a
  * rebuild.
@@ -170,7 +175,8 @@ export class KnowledgePageService {
       const [job] = await tx.latestOutboxJobs([knowledgePageEffect(boardId).globId], ['regenerate_knowledge_page']);
       const pending = job?.state === 'pending';
       const next = current === null ? null : new Date(Date.parse(current.createdAt) + board.knowledgePageIntervalMinutes * 60_000).toISOString();
-      return ok({ current, history, nextRegenerationAt: pending ? next : null, pending });
+      const agentSetHistory = [...(current?.basis.agentSetBumps ?? [])].sort((a, b) => b.version - a.version).slice(0, KNOWLEDGE_PAGE_AGENT_SET_HISTORY_MAX);
+      return ok({ current, history, nextRegenerationAt: pending ? next : null, pending, agentSetHistory });
     });
   }
 
@@ -210,7 +216,7 @@ export class KnowledgePageService {
     }
     const set = await this.deps.knowledge.agentSetForDownload(boardId);
     if (!set.ok) return 'dropped';
-    const facts = await this.deps.store.transaction((tx) => this.gather(tx, boardId, now));
+    const facts = await this.deps.store.transaction((tx) => this.gather(tx, boardId));
 
     const previous = last?.basis ?? null;
     const agentSetVersion = set.value.version;
@@ -218,15 +224,13 @@ export class KnowledgePageService {
       const kind = agentSetKind(f.path);
       return kind === 'agent' || kind === 'command' ? [{ path: f.path, kind, content: f.content }] : [];
     });
-    const agents = this.agentsOf(files, previous, agentSetVersion, facts.decisions);
+    const agents = this.agentsOf(files, previous, agentSetVersion, facts.agentDecisions);
     const bumps = this.bumpsOf(previous, agentSetVersion, now, agents.changedPaths);
-    const changes = this.changesOf(facts.changes, bumps);
     const basis: KnowledgePageBasis = {
       agentSetVersion,
       agentsHash: hash(set.value.files.map((f) => `${f.path}\u0000${hash(f.content)}`).join('\u0001')),
       agentSeen: agents.seen,
       decisions: Object.fromEntries(facts.decisions.map((d) => [d.glob.id, d.fingerprint])),
-      changesHash: hash(JSON.stringify(changes)),
       promptVersion: KNOWLEDGE_PAGE_PROMPT_VERSION,
       agentSetBumps: bumps,
     };
@@ -237,7 +241,6 @@ export class KnowledgePageService {
       previous.promptVersion === basis.promptVersion &&
       previous.agentSetVersion === basis.agentSetVersion &&
       previous.agentsHash === basis.agentsHash &&
-      previous.changesHash === basis.changesHash &&
       sameRecord(previous.decisions, basis.decisions)
     ) {
       return 'done';
@@ -255,11 +258,10 @@ export class KnowledgePageService {
     this.busy.clear(boardId);
 
     const { groups: decisions, changed: decisionsChanged, usage } = section;
-    const sections = { agents: agents.agents, decisions, changes };
+    const sections = { agents: agents.agents, decisions };
     const changed: KnowledgePageChanged = {
       agents: last === null || JSON.stringify(last.sections.agents) !== JSON.stringify(agents.agents),
       decisions: last === null || decisionsChanged,
-      changes: last === null || JSON.stringify(last.sections.changes) !== JSON.stringify(changes),
     };
     const next: KnowledgePageVersion = { boardId, version: (last?.version ?? 0) + 1, createdAt: now, reason, sections, changed, basis };
     const written = await this.deps.store.transaction(async (tx) => {
@@ -283,41 +285,27 @@ export class KnowledgePageService {
     return 'done';
   }
 
-  /** The decisions in force and the recent changes, read in one transaction. */
-  private async gather(tx: Tx, boardId: number, now: string): Promise<Facts> {
+  /** The decisions in force, read in one transaction. */
+  private async gather(tx: Tx, boardId: number): Promise<Facts> {
     const [globs, decisionRows] = await Promise.all([tx.listGlobs(boardId, { include: 'decisions' }), tx.listDecisions(boardId)]);
     // A decision glob taken from an extracted decision stops being in force when a newer decision replaced it.
     const replaced = new Set(decisionRows.filter((d) => d.replaceState === 'applied' || d.replaceState === 'confirmed').map((d) => d.id));
-    const decisions = globs
+    const agentDecisions = globs
       .filter(isAccepted)
       .flatMap((glob): InForce[] => {
         const origin = decisionOf(glob)?.origin;
         const superseded = origin?.kind === 'extracted' && replaced.has(origin.decisionId);
         return superseded ? [] : [{ glob, fingerprint: fingerprintOf(glob), at: decisionOf(glob)?.outcome?.at ?? glob.updatedAt }];
       })
-      .sort((a, b) => b.at.localeCompare(a.at) || a.glob.id.localeCompare(b.glob.id))
+      .sort((a, b) => b.at.localeCompare(a.at) || a.glob.id.localeCompare(b.glob.id));
+    // A learning that targets a file of the agent set is in the agent set already; the page keeps project decisions.
+    const decisions = agentDecisions
+      .filter((d) => {
+        const routed = decisionOf(d.glob)?.target?.routed ?? null;
+        return routed === null || !isAgentSetKind(routed.kind);
+      })
       .slice(0, KNOWLEDGE_PAGE_DECISIONS_MAX);
-
-    const since = new Date(Date.parse(now) - KNOWLEDGE_PAGE_CHANGES_DAYS * DAY_MS).toISOString();
-    const events = await tx.listBoardEvents(boardId, since, ['StatusChanged', 'DecisionDecided']);
-    const globsById = new Map((await tx.getGlobs([...new Set(events.map((e) => e.globId))])).map((g) => [g.id, g]));
-    const seen = new Map<string, KnowledgePageChange>();
-    for (const e of events) {
-      const glob = globsById.get(e.globId);
-      if (glob === undefined) continue;
-      if (e.type === 'DecisionDecided') {
-        const kind = text(field(e.data['outcome'], 'kind'));
-        if (kind !== 'accept' && kind !== 'accept_with_edits') continue;
-        const reasonText = text(field(e.data['outcome'], 'reason'))?.trim();
-        const why = reasonText !== undefined && reasonText !== '' ? reasonText : oneLine(glob.summary) || null;
-        seen.set(`decision:${glob.id}`, { at: e.at, kind: 'decision', text: glob.title, why: why === null ? null : clip(why, STATEMENT_MAX), globId: glob.id });
-      } else if (e.data['to'] === 'signed_off' && glob.category !== 'decision') {
-        // No model call: the glob's own summary says why (a merged change's generated summary is not read here).
-        const why = oneLine(glob.summary);
-        seen.set(`work:${glob.id}`, { at: e.at, kind: 'work', text: glob.title, why: why === '' ? null : clip(why, STATEMENT_MAX), globId: glob.id });
-      }
-    }
-    return { decisions, changes: [...seen.values()] };
+    return { decisions, agentDecisions };
   }
 
   /** The agent-set versions this page has observed, with the newly observed one stamped now. */
@@ -329,7 +317,7 @@ export class KnowledgePageService {
   ): KnowledgePageBasis['agentSetBumps'] {
     const bumps = previous?.agentSetBumps ?? [];
     const moved = previous !== null && agentSetVersion > previous.agentSetVersion;
-    return (moved ? [...bumps, { version: agentSetVersion, at: now, changedPaths }] : bumps).slice(-KNOWLEDGE_PAGE_CHANGES_MAX);
+    return (moved ? [...bumps, { version: agentSetVersion, at: now, changedPaths }] : bumps).slice(-KNOWLEDGE_PAGE_AGENT_SET_HISTORY_MAX);
   }
 
   /** The agents and commands, read from their files; `changedInAgentSet` is the version at which the page first saw the text. */
@@ -364,23 +352,6 @@ export class KnowledgePageService {
     return { agents, seen, changedPaths };
   }
 
-  /** The recent changes: decisions accepted and work signed off, with each observed agent-set version, newest first. */
-  private changesOf(events: readonly KnowledgePageChange[], bumps: KnowledgePageBasis['agentSetBumps']): KnowledgePageChange[] {
-    const sets = bumps.map(
-      (b): KnowledgePageChange => ({
-        at: b.at,
-        kind: 'agent_set',
-        text: `Agent set updated to version ${String(b.version)}`,
-        why: b.changedPaths.length > 0 ? `Changed: ${b.changedPaths.join(', ')}` : null,
-        globId: null,
-        agentSetVersion: b.version,
-      }),
-    );
-    return [...events, ...sets]
-      .sort((a, b) => b.at.localeCompare(a.at) || (a.globId ?? '').localeCompare(b.globId ?? '') || a.kind.localeCompare(b.kind))
-      .slice(0, KNOWLEDGE_PAGE_CHANGES_MAX);
-  }
-
   /**
    * The decisions section. `previous` null writes it whole from every decision in force; otherwise only the decisions
    * that are new, changed or gone reach the model, with the previous section. No model call when none did.
@@ -411,22 +382,40 @@ export class KnowledgePageService {
 
     const prompt = [
       'Previous section (JSON):',
-      JSON.stringify({ groups: previous === null ? [] : kept.map((g) => ({ area: g.area, entries: g.entries.map((e) => ({ text: e.text, rationale: e.rationale, globIds: e.globIds })) })) }),
+      JSON.stringify({ groups: previous === null ? [] : kept.map((g) => ({ area: g.area, entries: g.entries.map((e) => ({ text: e.text, rationale: e.rationale, globIds: e.globIds, key: e.key === true })) })) }),
       '',
       previous === null ? 'There is no previous section: write it whole from these decisions.' : 'New or changed decisions (one JSON object per line):',
       ...(previous === null ? inForce : changedNow).map(promptLine),
       '',
       removed.length === 0 ? 'No decision left force.' : `No longer in force: ${removed.join(', ')}`,
     ].join('\n');
-    const answer = await completeWithDeadline(this.deps.llm, { system: KNOWLEDGE_PAGE_SYSTEM, prompt, maxTokens: ANSWER_MAX_TOKENS }, this.deps.timeoutMs ?? LLM_TIMEOUT_MS);
-
     const allowed = new Set(current.keys());
     const covered = new Set(kept.flatMap((g) => g.entries.flatMap((e) => e.globIds)));
     // Everything in force that the previous section covered or that changed must be behind an entry.
     const required = new Set(inForce.filter((d) => previous === null || covered.has(d.glob.id) || before[d.glob.id] !== d.fingerprint).map((d) => d.glob.id));
-    const groups = parseDecisionGroups(answer, allowed, required);
+    const ask = (text: string): Promise<string> =>
+      completeWithDeadline(this.deps.llm, { system: KNOWLEDGE_PAGE_SYSTEM, prompt: text, maxTokens: ANSWER_MAX_TOKENS }, this.deps.timeoutMs ?? LLM_TIMEOUT_MS);
     // Tokens as characters over four: the adapter's usage isn't passed up through the `Llm` port.
-    return { groups, changed: true, usage: { input: Math.ceil((KNOWLEDGE_PAGE_SYSTEM.length + prompt.length) / 4), output: Math.ceil(answer.length / 4) } };
+    let input = 0;
+    let output = 0;
+    const count = (sent: string, answer: string): void => {
+      input += Math.ceil((KNOWLEDGE_PAGE_SYSTEM.length + sent.length) / 4);
+      output += Math.ceil(answer.length / 4);
+    };
+    let parsed: KnowledgePageDecisionGroup[];
+    const first = await ask(prompt);
+    count(prompt, first);
+    try {
+      parsed = parseDecisionGroups(first, allowed, required);
+    } catch (error) {
+      // Once more with the refusal in the prompt; a second refusal throws, so no partial page is ever written.
+      const retry = `${prompt}\n\nYour previous answer was refused: ${error instanceof Error ? error.message : 'it could not be read'}. Answer again with the whole section, fixing this.`;
+      const second = await ask(retry);
+      count(retry, second);
+      parsed = parseDecisionGroups(second, allowed, required);
+    }
+    const groups = parsed.map((g) => ({ area: g.area, entries: g.entries.map((e): KnowledgePageDecisionEntry => ({ ...e, at: newestAt(e.globIds, current) })) }));
+    return { groups, changed: true, usage: { input, output } };
   }
 
   /** The model can't be used: run again later without spending an attempt (busy: after a growing delay). */

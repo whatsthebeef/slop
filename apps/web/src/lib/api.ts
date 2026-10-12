@@ -477,20 +477,15 @@ export interface KnowledgePageDecision {
   readonly text: string;
   readonly rationale?: string;
   readonly globIds?: readonly string[];
+  /** A new developer or the product owner would need it; absent on versions written before the flag existed. */
+  readonly key?: boolean;
+  /** When the newest decision behind it was decided. */
+  readonly at?: string;
 }
 
 export interface KnowledgePageDecisionGroup {
   readonly area: string;
   readonly entries?: readonly KnowledgePageDecision[];
-}
-
-export interface KnowledgePageChange {
-  readonly at: string;
-  readonly kind?: 'decision' | 'work' | 'agent_set';
-  readonly text: string;
-  readonly why?: string | null;
-  readonly globId?: string | null;
-  readonly agentSetVersion?: number;
 }
 
 export interface KnowledgePageVersion {
@@ -501,7 +496,6 @@ export interface KnowledgePageVersion {
   readonly sections?: {
     readonly agents?: readonly KnowledgePageAgent[];
     readonly decisions?: readonly KnowledgePageDecisionGroup[];
-    readonly changes?: readonly KnowledgePageChange[];
   };
 }
 
@@ -511,11 +505,19 @@ export interface KnowledgePageHistoryItem {
   readonly reason?: string;
 }
 
+export interface KnowledgePageAgentSetVersion {
+  readonly version: number;
+  readonly at: string;
+  readonly changedPaths?: readonly string[];
+}
+
 export interface KnowledgePageView {
   readonly current: KnowledgePageVersion | null;
   readonly history?: readonly KnowledgePageHistoryItem[];
   readonly nextRegenerationAt?: string | null;
   readonly pending?: boolean;
+  /** The last agent-set versions the page observed, newest first; absent on an older API. */
+  readonly agentSetHistory?: readonly KnowledgePageAgentSetVersion[];
 }
 
 export const api = {
