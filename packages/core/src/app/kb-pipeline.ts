@@ -1,33 +1,54 @@
 import { composeAgentSet } from '../domain/agent-set.js';
 import { effectItemOf } from '../domain/effect-check.js';
 import type { EffectOutcome, RetryLater } from '../domain/events.js';
-import { BUSY_WAITING_PREFIX, LLM_WAITING_PREFIX, kbStepOf } from '../domain/kb.js';
+import { BUSY_WAITING_PREFIX, LLM_WAITING_PREFIX } from '../domain/kb.js';
 import type {
   KbContradiction,
   KbCoverage,
   KbDraft,
-  KbItem,
   KbMergeNote,
+  KbOutcome,
   KbPossibleCoverage,
   KbStep,
   KbTarget,
+  LearningType,
   NewDocumentMeta,
 } from '../domain/kb.js';
+import {
+  learningDecision,
+  learningDocument,
+  learningEvidence,
+  learningExtraEvidence,
+  learningFacts,
+  learningLinks,
+  learningOutcome,
+  learningStatus,
+  learningStep,
+  learningTarget,
+} from '../domain/learning.js';
+import type { LearningRead } from '../domain/learning.js';
 import { agentSetKind, docName, hasFrontmatter, isAgentSetKind, parseFrontmatter, PROSE_KINDS } from '../domain/knowledge.js';
 import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
 import { checkLocalRun, LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
 import { checkMergePolicy, MERGE_POLICY_NAME, parseMergePolicy, renderMergePolicy } from '../domain/merge-policy.js';
 import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
-import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
+import type { Catalog, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
 import { draftPreview, documentTarget, targetState } from './knowledge-service.js';
 import type { TargetState } from './knowledge-service.js';
-import { addEvidenceTo, keptApart, longEnoughQuote, normalised, verifiedQuote } from './kb-dedupe.js';
+import { keepsApartOf, keptApart, longEnoughQuote, normalised, verifiedQuote } from './kb-dedupe.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
-import { kbItems } from './kb-items.js';
-import type { KbItems } from './kb-items.js';
+import { boardLearnings, readLearning } from './learning-reads.js';
+import {
+  addLearningEvidence,
+  lockLearning,
+  queueDueLearningSteps,
+  recordLearningDraft,
+  routeLearning,
+} from './learning-writes.js';
+import type { LearningRouting, LearningWriteContext } from './learning-writes.js';
 
 /**
  * Failures at one stage (LLM errors or unusable answers) before an item is marked `failed`: the `llm` outbox lane's
@@ -133,10 +154,29 @@ interface Snapshot {
   readonly localRun: KnowledgeDoc | null;
   /** The board's merge policy row; null when it has none yet. */
   readonly mergePolicy: KnowledgeDoc | null;
-  readonly open: readonly KbItem[];
-  readonly approved: readonly KbItem[];
-  readonly rejected: readonly KbItem[];
+  readonly open: readonly Peer[];
+  readonly approved: readonly Peer[];
+  readonly rejected: readonly Peer[];
 }
+
+/** What the routing and dedupe calls show of another learning, and what dedupe checks a claim about it against. */
+interface Peer {
+  readonly id: string;
+  readonly type: LearningType;
+  readonly statement: string;
+  readonly reason: string | null;
+  readonly outcome: KbOutcome | null;
+  readonly target: KbTarget | null;
+}
+
+const peerOf = ({ glob, artifacts }: LearningRead): Peer => ({
+  id: glob.id,
+  type: learningFacts(glob).kind,
+  statement: glob.summary,
+  reason: learningDecision(glob, artifacts).reason,
+  outcome: learningOutcome(artifacts),
+  target: learningTarget(glob).routed,
+});
 
 interface Routing {
   readonly target: KbTarget;
@@ -189,7 +229,7 @@ class StaleItem extends Error {
   }
 }
 
-const newest = (items: readonly KbItem[]) => [...items].reverse().slice(0, CANDIDATE_CAP);
+const newest = (items: readonly Peer[]) => [...items].reverse().slice(0, CANDIDATE_CAP);
 
 const targetLabel = (target: KbTarget) =>
   target.kind === 'local_run'
@@ -198,7 +238,7 @@ const targetLabel = (target: KbTarget) =>
       ? 'the merge policy'
       : `${target.kind === 'doc' ? 'document' : 'agent file'} ${target.name}${target.section === null ? '' : `, section "${target.section}"`}`;
 
-const describeItem = (item: KbItem) => {
+const describeItem = (item: Peer) => {
   if (item.outcome?.kind === 'applied') return ` -> applied to ${item.outcome.name}`;
   return item.target === null ? '' : ` -> ${targetLabel(item.target)}`;
 };
@@ -229,9 +269,9 @@ export class KbPipeline {
     },
   ) {}
 
-  /** The KB items in `tx`, writing with the pipeline's clock and collecting the live hints for after the commit. */
-  private kb(tx: Tx, hints: Hint[]): KbItems {
-    return kbItems(tx, { clock: this.deps.clock, raise: (hint) => hints.push(hint) });
+  /** What learning writes need: the pipeline's clock, and where to collect the live hints published after the commit. */
+  private writes(hints: Hint[]): LearningWriteContext {
+    return { clock: this.deps.clock, raise: (hint) => hints.push(hint) };
   }
 
   /** One LLM call with a deadline; a timeout rejects with a readable reason, recorded like any other failure. */
@@ -241,13 +281,13 @@ export class KbPipeline {
 
   /**
    * Self-healing, run when the `llm` runner starts: every board's open learnings whose step has no job waiting get one
-   * (`KbItems.queueDueSteps`). Idempotent: a step already queued is not queued again. Returns how many it queued.
+   * (`queueDueLearningSteps`). Idempotent: a step already queued is not queued again. Returns how many it queued.
    */
   async queueDueSteps(): Promise<number> {
     const boards = await this.deps.store.transaction((tx) => tx.listAllBoards());
     let queued = 0;
     for (const board of boards) {
-      const n = await this.deps.store.transaction((tx) => kbItems(tx).queueDueSteps(board.id));
+      const n = await this.deps.store.transaction((tx) => queueDueLearningSteps(tx, board.id));
       if (n > 0) this.deps.notifier.publish({ kind: 'board.kb', boardId: board.id });
       queued += n;
     }
@@ -255,53 +295,55 @@ export class KbPipeline {
   }
 
   /**
-   * Runs one step of one item, as the outbox's `kb_route` and `kb_draft` jobs ask: re-reads the item and drops the job
+   * Runs one step of one learning, as the outbox's `kb_route` and `kb_draft` jobs ask: re-reads it and drops the job
    * when that step is no longer its next (decided, closed, already routed or drafted). A failure (an LLM error, an
    * unusable answer) throws with a readable reason, spending one of the job's attempts; an unavailable or busy LLM, or
-   * an item that changed under the step, asks to run again later without spending one.
+   * a learning that changed under the step, asks to run again later without spending one.
    */
   async runStep(itemId: string, step: KbStep): Promise<EffectOutcome> {
-    const item = await this.deps.store.transaction((tx) => kbItems(tx).getKbItem(itemId));
-    if (item === null || kbStepOf(item) !== step) return 'dropped';
+    const learning = await this.deps.store.transaction((tx) => readLearning(tx, itemId));
+    if (learning === null || learningStep(learning.glob, learning.artifacts) !== step) return 'dropped';
     let outcome: EffectOutcome | null = null;
     try {
-      outcome = step === 'route' ? await this.route(item) : await this.draft(item);
+      outcome = step === 'route' ? await this.route(learning) : await this.draft(learning);
       return outcome;
     } finally {
       // Whatever ended the busy streak (a success, a real failure) starts the next one over.
-      if (!(typeof outcome === 'object' && outcome?.reason?.startsWith(BUSY_WAITING_PREFIX) === true)) this.busy.clear(item.id);
+      if (!(typeof outcome === 'object' && outcome?.reason?.startsWith(BUSY_WAITING_PREFIX) === true)) this.busy.clear(itemId);
     }
   }
 
-  /** Routes and deduplicates an item: one routing call, then one dedupe call against the routed target. */
-  private async route(item: KbItem): Promise<EffectOutcome> {
-    if (item.document !== null) {
+  /** Routes and deduplicates a learning: one routing call, then one dedupe call against the routed target. */
+  private async route(learning: LearningRead): Promise<EffectOutcome> {
+    const { glob, artifacts } = learning;
+    const document = learningDocument(glob, artifacts);
+    if (document !== null) {
       // A document proposal names its own target (items from before routing existed land here).
-      const { document } = item;
-      return this.finish(item, async (tx) => ({
-        routing: { target: await documentTarget(tx, item.boardId, document), catalogCandidate: false, catalogReason: null },
+      return this.finish(learning, async (tx) => ({
+        routing: { target: await documentTarget(tx, glob.boardId, document), catalogCandidate: false, catalogReason: null },
         dedupe: NO_MATCH,
       }));
     }
-    const snapshot = await this.snapshot(item);
-    const decided = await this.ask(item, snapshot);
-    if ('unavailable' in decided) return this.waitFor(item, decided.unavailable);
+    const snapshot = await this.snapshot(learning);
+    const decided = await this.ask(learning, snapshot);
+    if ('unavailable' in decided) return this.waitFor(glob.id, decided.unavailable);
     if ('failure' in decided) throw new Error(decided.failure.slice(0, 500));
-    return this.finish(item, () => Promise.resolve(decided));
+    return this.finish(learning, () => Promise.resolve(decided));
   }
 
   /**
-   * Drafts a routed item against its target's current text. If the target changes during the call, the step runs
+   * Drafts a routed learning against its target's current text. If the target changes during the call, the step runs
    * again at once against the new text.
    */
-  private async draft(item: KbItem): Promise<EffectOutcome> {
-    const { target } = item;
-    // `kbStepOf` only asks to draft an item with a target and no document.
+  private async draft(learning: LearningRead): Promise<EffectOutcome> {
+    const { glob } = learning;
+    const target = learningTarget(glob).routed;
+    // `learningStep` only asks to draft a learning with a target and no document.
     if (target === null) return 'dropped';
     const catalog = await this.deps.catalog.agentSet();
     const context = await this.deps.store.transaction(async (tx) => ({
-      state: await targetState(tx, catalog, item.boardId, target),
-      docs: target.newDocument === null ? [] : await tx.listKnowledge(item.boardId, ['doc']),
+      state: await targetState(tx, catalog, glob.boardId, target),
+      docs: target.newDocument === null ? [] : await tx.listKnowledge(glob.boardId, ['doc']),
     }));
     const { state } = context;
     if (state === null) throw new Error(`The target ${target.name} is no longer on the board; choose another target`);
@@ -310,64 +352,46 @@ export class KbPipeline {
       drafted = parseDraft(
         await this.complete(this.deps.draft, {
           system: DRAFT_SYSTEM,
-          prompt: draftPrompt(item, target, state, context.docs),
+          prompt: draftPrompt(learning, target, state, context.docs),
           maxTokens: DRAFT_MAX_TOKENS,
         }),
         target,
         state,
       );
     } catch (error) {
-      if (error instanceof LlmUnavailable) return this.waitFor(item, error);
+      if (error instanceof LlmUnavailable) return this.waitFor(glob.id, error);
       throw new Error((error instanceof Error ? error.message : String(error)).slice(0, 500), { cause: error });
     }
     if (typeof drafted === 'string') throw new Error(drafted.slice(0, 500));
     const { draft, rationale } = drafted;
     // The decision's assessment is refreshed with the new draft's diff.
-    const wrote = await this.write(item, async (current, tx) => {
-      const now = await targetState(tx, catalog, item.boardId, target);
+    let hints: Hint[] = [];
+    const wrote = await this.deps.store.transaction(async (tx): Promise<boolean> => {
+      hints = [];
+      const current = await readLearning(tx, glob.id);
+      if (current?.glob.version !== glob.version) return false;
+      const now = await targetState(tx, catalog, glob.boardId, target);
       // The target moved during the call: draft again against the new text.
-      if (now?.version !== state.version) return null;
-      return {
-        ...current,
+      if (now?.version !== state.version) return false;
+      const preview = await draftPreview(tx, catalog, {
+        boardId: glob.boardId,
+        status: learningStatus(current.glob, current.artifacts),
         target: drafted.target,
         draft,
-        rationale,
         draftedAgainstVersion: state.version,
-        processing: 'drafted',
-        processingError: null,
-        processingAttempts: 0,
-        processAfter: null,
-      };
-    }, catalog);
-    if (wrote !== 'written') return AGAIN;
-    this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
-    return 'done';
-  }
-
-  /**
-   * A conditional write of the item as the step read it: `changed` when it changed meanwhile (decided, retargeted), and
-   * `skipped` when `next` returns null (nothing to write). With `catalog`, the draft's preview goes to the assessment.
-   */
-  private async write(
-    item: KbItem,
-    next: (current: KbItem, tx: Tx) => KbItem | null | Promise<KbItem | null>,
-    catalog?: CatalogAgentSet,
-  ): Promise<'written' | 'changed' | 'skipped'> {
-    let hints: Hint[] = [];
-    const wrote = await this.deps.store.transaction(async (tx): Promise<'written' | 'changed' | 'skipped'> => {
-      hints = [];
-      const kb = this.kb(tx, hints);
-      const current = await kb.getKbItem(item.id);
-      if (current?.version !== item.version) return 'changed';
-      const changed = await next(current, tx);
-      if (changed === null) return 'skipped';
-      const written: KbItem = { ...changed, version: current.version + 1 };
-      // The decision's assessment is refreshed with the new draft's diff.
-      const preview = catalog === undefined ? null : await draftPreview(tx, catalog, written);
-      return (await kb.updateKbItem(written, current.version, { preview })) ? 'written' : 'changed';
+      });
+      return recordLearningDraft(tx, this.writes(hints), glob.id, glob.version, {
+        draft,
+        target: drafted.target,
+        targetVersion: state.version,
+        rationale,
+        preview,
+      });
     });
     for (const hint of hints) this.deps.notifier.publish(hint);
-    return wrote;
+    if (!wrote) return AGAIN;
+    this.deps.notifier.publish({ kind: 'board.kb', boardId: glob.boardId });
+    return 'done';
   }
 
   /**
@@ -375,12 +399,12 @@ export class KbPipeline {
    * went wrong, and `unavailable` why the LLM can't be used at all.
    */
   private async ask(
-    item: KbItem,
+    learning: LearningRead,
     snapshot: Snapshot,
   ): Promise<{ routing: Routing; dedupe: Dedupe } | { failure: string } | { unavailable: LlmUnavailable }> {
     try {
       const routing = parseRouting(
-        await this.complete(this.deps.route, { system: ROUTE_SYSTEM, prompt: routePrompt(item, snapshot), maxTokens: 600 }),
+        await this.complete(this.deps.route, { system: ROUTE_SYSTEM, prompt: routePrompt(learning, snapshot), maxTokens: 600 }),
         snapshot,
       );
       if (routing === null) return { failure: 'The routing answer was not usable JSON' };
@@ -391,11 +415,11 @@ export class KbPipeline {
       const dedupe = parseDedupe(
         await this.complete(this.deps.route, {
           system: DEDUPE_SYSTEM,
-          prompt: dedupePrompt(item, snapshot, routing.target, targetText),
+          prompt: dedupePrompt(learning, snapshot, routing.target, targetText),
           // The fact and up to five relations come before the answer.
           maxTokens: 1_000,
         }),
-        item,
+        learning.glob.summary,
         snapshot,
         routing.target,
         targetText,
@@ -407,11 +431,12 @@ export class KbPipeline {
     }
   }
 
-  /** What the routing and dedupe calls see: the board's documents and agent files, and its other items. */
-  private async snapshot(item: KbItem): Promise<Snapshot> {
+  /** What the routing and dedupe calls see: the board's documents and agent files, and its other learnings. */
+  private async snapshot(learning: LearningRead): Promise<Snapshot> {
+    const { glob } = learning;
     const catalog = await this.deps.catalog.agentSet();
     return this.deps.store.transaction(async (tx) => {
-      const knowledge = await tx.listKnowledge(item.boardId);
+      const knowledge = await tx.listKnowledge(glob.boardId);
       const docs = knowledge.filter((d) => d.kind === 'doc');
       const rows = knowledge.filter((d) => isAgentSetKind(d.kind));
       const composed = composeAgentSet(catalog.files, rows);
@@ -436,127 +461,127 @@ export class KbPipeline {
       }
       // A revise-or-revert item (`effect:` signal) is about its original, and quotes it: dedupe never sees the original
       // or another item raised for it, so it can't be closed as covered by (or a repeat of) the change it questions.
-      const original = item.signal === null ? null : effectItemOf(item.signal.key);
-      const aboutOriginal = (i: KbItem) => original !== null && (i.id === original || i.signal?.key === item.signal?.key);
-      const others = (await kbItems(tx).listKbItems(item.boardId)).filter(
-        (i) => i.id !== item.id && i.document === null && !aboutOriginal(i),
+      const signal = learningFacts(glob).signal;
+      const original = signal === null ? null : effectItemOf(signal.key);
+      const aboutOriginal = (i: LearningRead) =>
+        original !== null && (i.glob.id === original || learningFacts(i.glob).signal?.key === signal?.key);
+      const others = (await boardLearnings(tx, glob.boardId)).filter(
+        (i) => i.glob.id !== glob.id && learningDocument(i.glob, i.artifacts) === null && !aboutOriginal(i),
       );
+      const withStatus = (status: 'open' | 'approved' | 'rejected') =>
+        newest(others.filter((i) => learningStatus(i.glob, i.artifacts) === status).map(peerOf));
       return {
         docs,
         agentFiles,
         localRun: knowledge.find((d) => d.kind === 'local_run' && d.name === LOCAL_RUN_NAME) ?? null,
         mergePolicy: knowledge.find((d) => d.kind === 'merge_policy' && d.name === MERGE_POLICY_NAME) ?? null,
-        open: newest(others.filter((i) => i.status === 'open')),
-        approved: newest(others.filter((i) => i.status === 'approved')),
-        rejected: newest(others.filter((i) => i.status === 'rejected')),
+        open: withStatus('open'),
+        approved: withStatus('approved'),
+        rejected: withStatus('rejected'),
       };
     });
   }
 
   /**
-   * Writes the outcome in one transaction, conditional on the item (and any item it adds evidence to); when either
-   * changed meanwhile, nothing is written and the step runs again at once.
+   * Writes the outcome in one transaction, conditional on the learning (and any learning it adds evidence to); when
+   * either changed meanwhile, nothing is written and the step runs again at once.
    */
-  private async finish(item: KbItem, decide: (tx: Tx) => Promise<{ routing: Routing; dedupe: Dedupe }>): Promise<EffectOutcome> {
+  private async finish(learning: LearningRead, decide: (tx: Tx) => Promise<{ routing: Routing; dedupe: Dedupe }>): Promise<EffectOutcome> {
+    const { glob } = learning;
     let hints: Hint[] = [];
     try {
       await this.deps.store.transaction(async (tx) => {
         hints = [];
-        const kb = this.kb(tx, hints);
-        const current = await kb.getKbItem(item.id);
-        if (current?.version !== item.version) throw new StaleItem(item.id);
+        const ctx = this.writes(hints);
+        const current = await readLearning(tx, glob.id);
+        if (current?.glob.version !== glob.version) throw new StaleItem(glob.id);
         const { routing, dedupe } = await decide(tx);
-        let next: KbItem = {
-          ...current,
-          target: routing.target,
-          catalogCandidate: routing.catalogCandidate,
-          catalogReason: routing.catalogReason,
-          // A document proposal is its own draft.
-          processing: item.document === null ? 'routed' : 'drafted',
-          processingError: null,
-          processingAttempts: 0,
-          processAfter: null,
-          version: current.version + 1,
-        };
         const addEvidence = async (
           id: string,
           status: 'open' | 'approved',
-          adjust?: (merged: KbItem) => KbItem,
+          hint: ItemHint | null = null,
         ): Promise<boolean> => {
-          const other = await kb.getKbItem(id);
-          // An admin separated them (reopening a merge): the item stays open rather than joining it again.
-          if (other?.status !== status || keptApart(other, current)) return false;
-          if (!(await addEvidenceTo(kb, other, current, adjust))) throw new StaleItem(id);
+          const other = await readLearning(tx, id);
+          // An admin separated them (reopening a merge): the learning stays open rather than joining it again.
+          if (other === null || learningStatus(other.glob, other.artifacts) !== status || keptApart(keepsApartOf(other), keepsApartOf(current)))
+            return false;
+          if (!(await addLearningEvidence(tx, ctx, other, current, hint === null ? {} : { hint }))) throw new StaleItem(id);
           return true;
         };
-        // The verified quotes go on the closed item, so its card shows what it closed on.
+        // The verified quotes go on the closed learning, so its card shows what it closed on.
         const noteOn = (match: ClosingMatch): KbMergeNote => ({
           by: 'intake',
           quote: match.ownQuote,
           survivorQuote: match.quote,
           at: this.deps.clock.now(),
         });
-        // A suppression adds nothing to the rejected item, but checks it as a merge or coverage does: still rejected,
-        // and not kept apart from this one. Like theirs, the check holds at the write: the rejected item is written
-        // back unchanged on the version read, so a change committed since fails it (and the item is retried), and
-        // the row stays locked until this transaction commits.
+        // A suppression adds nothing to the rejected learning, but checks it as a merge or coverage does: still
+        // rejected, and not kept apart from this one. Like theirs, the check holds at the write: the rejected
+        // learning is written back unchanged on the version read, so a change committed since fails it (and the step
+        // is retried), and the row stays locked until this transaction commits.
         const stillRejected = async (id: string): Promise<boolean> => {
-          const other = await kb.getKbItem(id);
-          if (other?.status !== 'rejected' || keptApart(other, current)) return false;
-          if (!(await kb.updateKbItem(other, other.version))) throw new StaleItem(id);
+          const other = await readLearning(tx, id);
+          if (other === null || learningStatus(other.glob, other.artifacts) !== 'rejected' || keptApart(keepsApartOf(other), keepsApartOf(current)))
+            return false;
+          if (!(await lockLearning(tx, id, other.glob.version))) throw new StaleItem(id);
           return true;
         };
-        // A short-quote hint on an item is only shown when an admin hasn't kept that item apart from this one, as a
+        // A short-quote hint on a learning is only shown when an admin hasn't kept it apart from this one, as a
         // closure on it would be refused; a target hint it hid is shown instead.
         const shownHint = async (hint: KbPossibleCoverage | null): Promise<KbPossibleCoverage | null> => {
           if (hint === null || hint.kind !== 'item') return hint;
-          const other = await kb.getKbItem(hint.id);
-          if (other === null || !keptApart(other, current)) return hint;
+          const other = await readLearning(tx, hint.id);
+          if (other === null || !keptApart(keepsApartOf(other), keepsApartOf(current))) return hint;
           const { kind, name, section } = routing.target;
           return hint.alsoTarget === undefined ? null : { knowledgeKind: kind, name, section, ...hint.alsoTarget };
         };
-        // A merge closes the item, so a short-quote match with a rejected item would go unseen: it moves to the open
-        // item merged into (when that has no hint of its own, and isn't kept apart from the rejected item), with
-        // `via` naming this item, whose statement its `ownQuote` is from. The target hint beside it is this item's
-        // target's, so it stays behind.
+        // A merge closes the learning, so a short-quote match with a rejected one would go unseen: it moves to the open
+        // learning merged into (when that has no hint of its own, and isn't kept apart from the rejected one), with
+        // `via` naming this learning, whose statement its `ownQuote` is from. The target hint beside it is this
+        // learning's target's, so it stays behind.
         const hint = dedupe.possiblyCoveredBy;
         const rejectedHint = hint?.kind === 'item' && hint.claim === 'suppressed' ? hint : null;
-        const hinted = rejectedHint === null ? null : await kb.getKbItem(rejectedHint.id);
-        const carryHint = (survivor: KbItem): KbItem => {
-          if (rejectedHint === null || hinted === null) return survivor;
-          if (survivor.possiblyCoveredBy !== null || keptApart(hinted, survivor)) return survivor;
-          const carried: ItemHint = { ...rejectedHint, alsoTarget: undefined, via: current.id };
-          return { ...survivor, possiblyCoveredBy: carried };
+        const hinted = rejectedHint === null ? null : await readLearning(tx, rejectedHint.id);
+        /** The hint the survivor takes: none when it has one of its own, or an admin kept it apart from the rejected one. */
+        const carriedBy = async (survivorId: string): Promise<ItemHint | null> => {
+          if (rejectedHint === null || hinted === null) return null;
+          const survivor = await readLearning(tx, survivorId);
+          if (survivor === null || learningLinks(survivor.glob).possiblyCoveredBy !== null) return null;
+          if (keptApart(keepsApartOf(hinted), keepsApartOf(survivor))) return null;
+          return { ...rejectedHint, alsoTarget: undefined, via: glob.id };
         };
+        let closure: LearningRouting['closure'] = null;
+        let possiblyCoveredBy: KbPossibleCoverage | null = null;
+        let contradicts: readonly KbContradiction[] = [];
         if (dedupe.suppressedBy !== null && (await stillRejected(dedupe.suppressedBy.id))) {
-          next = {
-            ...next,
-            status: 'suppressed',
-            suppressedBy: dedupe.suppressedBy.id,
-            mergeNote: noteOn(dedupe.suppressedBy),
+          closure = {
+            as: 'suppressed',
+            link: { id: dedupe.suppressedBy.id, kind: 'suppressed_by', source: 'pipeline' },
+            note: noteOn(dedupe.suppressedBy),
           };
-        } else if (dedupe.duplicateOf !== null && (await addEvidence(dedupe.duplicateOf.id, 'open', carryHint))) {
-          next = {
-            ...next,
-            status: 'merged',
-            duplicateOf: dedupe.duplicateOf.id,
-            mergeNote: noteOn(dedupe.duplicateOf),
+        } else if (dedupe.duplicateOf !== null && (await addEvidence(dedupe.duplicateOf.id, 'open', await carriedBy(dedupe.duplicateOf.id)))) {
+          closure = {
+            as: 'merged',
+            link: { id: dedupe.duplicateOf.id, kind: 'duplicate_of', source: 'pipeline' },
+            note: noteOn(dedupe.duplicateOf),
           };
         } else if (dedupe.coveredBy?.kind === 'item' && (await addEvidence(dedupe.coveredBy.id, 'approved'))) {
-          next = { ...next, status: 'covered', coveredBy: dedupe.coveredBy };
+          closure = { as: 'covered', link: { id: dedupe.coveredBy.id, kind: 'covered_by', source: 'pipeline' }, note: null };
         } else {
-          // Coverage by the target's text, or a match with an item on a short quote, is only a hint: the item stays
-          // open for an admin to decide.
-          next = { ...next, possiblyCoveredBy: await shownHint(dedupe.possiblyCoveredBy), contradicts: dedupe.contradicts };
+          // Coverage by the target's text, or a match with a learning on a short quote, is only a hint: the learning
+          // stays open for an admin to decide.
+          possiblyCoveredBy = await shownHint(dedupe.possiblyCoveredBy);
+          contradicts = dedupe.contradicts;
         }
-        if (!(await kb.updateKbItem(next, current.version))) throw new StaleItem(item.id);
+        if (!(await routeLearning(tx, ctx, glob.id, current.glob.version, { ...routing, closure, possiblyCoveredBy, contradicts })))
+          throw new StaleItem(glob.id);
       });
     } catch (error) {
       // Decided or merged into meanwhile: the rerun re-reads it (and drops the job if it is no longer due).
       if (error instanceof StaleItem) return AGAIN;
       throw error;
     }
-    this.deps.notifier.publish({ kind: 'board.kb', boardId: item.boardId });
+    this.deps.notifier.publish({ kind: 'board.kb', boardId: glob.boardId });
     for (const hint of hints) this.deps.notifier.publish(hint);
     return 'done';
   }
@@ -566,8 +591,8 @@ export class KbPipeline {
    * a growing delay). Not a failed attempt: the item never ends `failed` this way, and the job's last error says why it
    * waits. The Knowledge page hears of it from the outbox once the job is updated.
    */
-  private waitFor(item: KbItem, unavailable: LlmUnavailable): RetryLater {
-    const ms = unavailable instanceof LlmBusy ? this.busy.next(item.id) : LLM_WAIT_MS;
+  private waitFor(id: string, unavailable: LlmUnavailable): RetryLater {
+    const ms = unavailable instanceof LlmBusy ? this.busy.next(id) : LLM_WAIT_MS;
     const retryAt = new Date(Date.parse(this.deps.clock.now()) + ms).toISOString();
     const reason = (unavailable instanceof LlmBusy ? busyMessage(retryAt) : `${LLM_WAITING_PREFIX}${unavailable.reason}`).slice(0, 500);
     return { state: 'pending', retryAfterMs: ms, reason };
@@ -576,11 +601,11 @@ export class KbPipeline {
 
 const headingsLine = (headings: readonly string[]) => (headings.length === 0 ? '(none)' : headings.join(' | '));
 
-const routePrompt = (item: KbItem, snapshot: Snapshot): string =>
+const routePrompt = ({ glob, artifacts }: LearningRead, snapshot: Snapshot): string =>
   [
-    `Learning (${item.type}): ${item.statement}`,
-    `Evidence: ${item.evidence}`,
-    `Suggested target: ${item.suggestedTarget ?? '(none)'}`,
+    `Learning (${learningFacts(glob).kind}): ${glob.summary}`,
+    `Evidence: ${learningEvidence(glob, artifacts)}`,
+    `Suggested target: ${learningTarget(glob).suggested ?? '(none)'}`,
     '',
     'Documents:',
     ...(snapshot.docs.length === 0
@@ -628,10 +653,10 @@ const currentText = (target: KbTarget, snapshot: Snapshot): string | null => {
   return whole.length > TARGET_TEXT_LIMIT ? `${whole.slice(0, TARGET_TEXT_LIMIT)}\n(truncated)` : whole;
 };
 
-const dedupePrompt = (item: KbItem, snapshot: Snapshot, target: KbTarget, targetText: string | null): string =>
+const dedupePrompt = ({ glob, artifacts }: LearningRead, snapshot: Snapshot, target: KbTarget, targetText: string | null): string =>
   [
-    `New learning (${item.type}): ${item.statement}`,
-    `Evidence: ${item.evidence}`,
+    `New learning (${learningFacts(glob).kind}): ${glob.summary}`,
+    `Evidence: ${learningEvidence(glob, artifacts)}`,
     '',
     'Open items:',
     ...(snapshot.open.length === 0 ? ['(none)'] : snapshot.open.map((i) => `- ${i.id} (${i.type}): ${i.statement}`)),
@@ -644,7 +669,7 @@ const dedupePrompt = (item: KbItem, snapshot: Snapshot, target: KbTarget, target
     'Rejected items:',
     ...(snapshot.rejected.length === 0
       ? ['(none)']
-      : snapshot.rejected.map((i) => `- ${i.id}: ${i.statement} (rejected: ${i.decisionReason ?? 'no reason'})`)),
+      : snapshot.rejected.map((i) => `- ${i.id}: ${i.statement} (rejected: ${i.reason ?? 'no reason'})`)),
     '',
     targetText === null
       ? `Current text: (none; the learning would start ${targetLabel(target)})`
@@ -723,7 +748,7 @@ const TARGET_REF = 'current text';
  */
 const parseDedupe = (
   answer: string,
-  item: KbItem,
+  ownStatement: string,
   snapshot: Snapshot,
   target: KbTarget,
   targetText: string | null,
@@ -737,7 +762,7 @@ const parseDedupe = (
     if (ref !== '' && relation !== '') relations.set(ref, relation);
   }
   const classedAs = (ref: string, relation: 'same fact' | 'contradicts') => relations.get(normalised(ref)) === relation;
-  const itemIn = (items: readonly KbItem[], value: unknown, relation: 'same fact' | 'contradicts') => {
+  const itemIn = (items: readonly Peer[], value: unknown, relation: 'same fact' | 'contradicts') => {
     const id = text(value)?.trim();
     const found = items.find((i) => i.id === id) ?? null;
     return found !== null && classedAs(found.id, relation) ? found : null;
@@ -748,14 +773,14 @@ const parseDedupe = (
    * too short; otherwise it is dropped (null).
    */
   const closingClaim = (
-    items: readonly KbItem[],
+    items: readonly Peer[],
     value: unknown,
     claim: 'duplicate' | 'suppressed',
   ): { match: ClosingMatch } | { hint: ItemHint } | null => {
     const other = itemIn(items, field(value, 'id'), 'same fact');
     if (other === null) return null;
     const quote = verifiedQuote(field(value, 'quote'), other.statement);
-    const ownQuote = verifiedQuote(field(value, 'newQuote'), item.statement);
+    const ownQuote = verifiedQuote(field(value, 'newQuote'), ownStatement);
     if (quote === null || ownQuote === null) return null;
     const quoteOk = longEnoughQuote(quote);
     const ownOk = longEnoughQuote(ownQuote);
@@ -819,7 +844,8 @@ const parseDedupe = (
 const titled = (heading: string, text: string) => `${heading}\n<<<\n${text.trim() === '' ? '(empty)' : text}\n>>>`;
 
 /** What the drafter sees: the learning and its evidence, the target, and the target's full current text. */
-const draftPrompt = (item: KbItem, target: KbTarget, state: TargetState, docs: readonly KnowledgeDoc[]): string => {
+const draftPrompt = ({ glob, artifacts }: LearningRead, target: KbTarget, state: TargetState, docs: readonly KnowledgeDoc[]): string => {
+  const extraEvidence = learningExtraEvidence(artifacts);
   const where = target.section === null ? 'no section chosen' : `section "${target.section}"`;
   let targetLines: string[];
   if (target.kind === 'local_run') {
@@ -864,17 +890,17 @@ const draftPrompt = (item: KbItem, target: KbTarget, state: TargetState, docs: r
     ];
   }
   return [
-    `Learning (${item.type}): ${item.statement}`,
-    `Evidence: ${item.evidence}`,
-    ...(item.extraEvidence.length === 0
+    `Learning (${learningFacts(glob).kind}): ${glob.summary}`,
+    `Evidence: ${learningEvidence(glob, artifacts)}`,
+    ...(extraEvidence.length === 0
       ? []
       : [
           'More evidence (from near-duplicates):',
-          ...item.extraEvidence.map(
+          ...extraEvidence.map(
             (e) => `- ${e.itemId}${e.globIds.length === 0 ? '' : ` (${e.globIds.join(', ')})`}: ${e.evidence}`,
           ),
         ]),
-    `Source globs: ${item.sourceGlobIds.join(', ') || '(none)'}`,
+    `Source globs: ${learningFacts(glob).sourceGlobIds.join(', ') || '(none)'}`,
     '',
     ...targetLines,
   ].join('\n');
