@@ -57,4 +57,3 @@ Work on a slop glob, or review existing changes.
 ### Restarting from a phase
 
 Edit the output file of the previous phase, then `/run-glob --from <phase> <id>`.
-

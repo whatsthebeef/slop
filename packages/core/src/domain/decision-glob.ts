@@ -1,5 +1,5 @@
 import { evidenceCount } from './kb.js';
-import type { DraftPreview, KbItem, LearningType } from './kb.js';
+import type { DraftPreview, KbContradiction, KbCoverage, KbDraft, KbItem, KbItemStatus, KbPossibleCoverage, KbProcessing, KbTarget, LearningType, ProposedDocument } from './kb.js';
 import { isDecisionAttributes } from './attributes.js';
 import type { DecisionAttributes, DecisionScope, ScopeKind } from './attributes.js';
 import type { Glob } from './types.js';
@@ -143,9 +143,25 @@ export const broaderConflicts = (
 
 export type SuggestedOutcome = 'accept' | 'needs_work' | 'reject';
 
+/** What a learning's assessment reads (each field as on the KB item it was taken from). */
+export interface LearningAssessmentFacts {
+  readonly status: KbItemStatus;
+  readonly coveredBy: KbCoverage | null;
+  readonly possiblyCoveredBy: KbPossibleCoverage | null;
+  readonly contradicts: readonly KbContradiction[];
+  readonly catalogCandidate: boolean;
+  readonly staleSince: string | null;
+  readonly processing: KbProcessing;
+  readonly document: ProposedDocument | null;
+  readonly target: KbTarget | null;
+  readonly draft: KbDraft | null;
+  readonly occurrenceCount: number;
+  readonly sourceGlobIds: readonly string[];
+}
+
 export interface AssessmentInput {
   readonly attributes: DecisionAttributes;
-  readonly item: KbItem | null;
+  readonly item: LearningAssessmentFacts | null;
   readonly preview: DraftPreview | null;
   /** Broader-scope decision globs this one contradicts. */
   readonly conflicts: readonly string[];
@@ -156,14 +172,14 @@ export interface Assessment {
   readonly suggested: SuggestedOutcome | null;
 }
 
-const targetText = (item: KbItem): string => {
+const targetText = (item: LearningAssessmentFacts): string => {
   if (item.document !== null) return `new or updated document \`${item.document.name}\``;
   if (item.target === null) return item.processing === 'failed' ? 'none (routing failed)' : 'not routed yet';
   const section = item.target.section === null ? '' : `, section "${item.target.section}"`;
   return `${item.target.kind} \`${item.target.name}\`${section}`;
 };
 
-const changeText = (item: KbItem, preview: DraftPreview | null): string => {
+const changeText = (item: LearningAssessmentFacts, preview: DraftPreview | null): string => {
   if (item.document !== null) return 'a whole document';
   if (preview === null) return item.draft === null ? 'no draft yet' : 'a draft (no preview available)';
   const added = preview.diff.filter((l) => l.op === 'added').length;

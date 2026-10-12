@@ -4,11 +4,12 @@ import { formatId, parseId } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import type { Context, Transition } from '../domain/machine.js';
 import { assessmentOf, decisionOf, decisionGlobTitle, extractedKey, inboxKey } from '../domain/decision-glob.js';
+import type { LearningAssessmentFacts } from '../domain/decision-glob.js';
 import type { DecisionAttributes, DecisionChannel, DecisionScope } from '../domain/attributes.js';
 import type { Decision } from '../domain/decisions.js';
 import { INBOX_EXCERPT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
 import type { InboxItem } from '../domain/inbox.js';
-import type { DraftPreview, KbItem } from '../domain/kb.js';
+import type { DraftPreview } from '../domain/kb.js';
 import type { Provenance } from '../domain/knowledge.js';
 import type { Actor, Glob } from '../domain/types.js';
 import type { Clock, Hint, Tx } from '../ports.js';
@@ -57,7 +58,7 @@ export interface NewDecisionGlob {
   /** Backdates the glob's creation (the backfill keeps the original date). */
   readonly at?: string;
   /** Write the deterministic assessment now (automated channels); a human channel asks for it on demand. */
-  readonly assess?: { readonly item: KbItem | null };
+  readonly assess?: { readonly item: LearningAssessmentFacts | null };
 }
 
 export interface CreatedDecision {
@@ -201,7 +202,7 @@ export const writeAssessment = async (
   tx: Tx,
   deps: DecisionDeps,
   glob: Glob,
-  item: KbItem | null,
+  item: LearningAssessmentFacts | null,
   preview: DraftPreview | null,
 ): Promise<boolean> => {
   const attributes = decisionOf(glob);

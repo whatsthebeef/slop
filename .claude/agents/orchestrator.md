@@ -433,6 +433,19 @@ In s15f8, two merges of main conflicted only in additive ways. Keeping both side
 - the fake `CodeHost`s in the server tests;
 - the drizzle journal and snapshots.
 
+**When `<base>` changed files under `.claude/`.** The sandbox refuses writes under `.claude/`, so `git merge origin/<base>` fails before it writes anything. Don't retry it, and don't disable the sandbox. Build the merge without touching `.claude/` in the working tree:
+
+    tree=$(git merge-tree --write-tree HEAD origin/<base>)
+    commit=$(git commit-tree "$tree" -p HEAD -p origin/<base> -m "Merge origin/<base> into <id>")
+    git reset -q "$commit"                        # HEAD and the index take the merge; the working tree is untouched
+    git checkout -- . ':(exclude).claude'         # bring every other file up to the merge
+
+If `merge-tree` exits non-zero, the merge has conflicts and its output is not a usable tree: don't run `commit-tree`. In an interactive session, ask the developer to run the merge outside the sandbox (`! git merge origin/<base>`) and resolve as above; in a routine, call `report_failure`.
+
+After a clean merge, the working tree's `.claude/` is stale. In an interactive session, ask the developer to run `! git checkout -- .claude`. Until it's clean, and always in a routine, stage explicit paths only: `git add -A` or `commit -a` would stage the stale files and revert `<base>`'s `.claude` change.
+
+In s15f36 (merge commit 6f3148c), main changed nine `.claude/` files. The sandbox refused the implementer's `git merge`, and auto mode blocked four merge commands in a row before the implementer switched to `merge-tree`. The developer then ran `! git checkout -- .claude`.
+
 ### Handovers for subs and sames created from a super
 
 A sub or same created from inside a super branches from `<base>`, not from the super's branch. Its handover may rely only on code that is already on `origin/<base>`.
@@ -479,4 +492,3 @@ A check that was skipped has not passed. If a fast check (lint, type check, test
 - "Not checked" in a report is never a reason to go ahead with the Phase 6 push or an auto-fix push.
 
 In s15t12, the run said "I couldn't run eslint because @eslint/js isn't installed in this environment". It still pushed b462e02 and marked PR #50 ready. CI Lint then failed with 18 errors in `apps/server/test/renumber-migrations.test.ts`.
-

@@ -4,13 +4,11 @@ import { formatId } from '../domain/ids.js';
 import { composeAgentSet, contextDiff, overlayProblem } from '../domain/agent-set.js';
 import { knowledgePageEffect } from '../domain/events.js';
 import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../domain/agent-set.js';
-import { byEvidence, evidenceCount, isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE, lastEvidenceAt, needsDraft, UNPROCESSED, withProcessing } from '../domain/kb.js';
+import { byEvidence, isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE } from '../domain/kb.js';
 import type {
   DraftPreview,
-  KbItem,
   KbItemPage,
   KbItemStatus,
-  KbItemView,
   KbOutcome,
   KbProposalList,
   KbTarget,
@@ -19,6 +17,23 @@ import type {
   NewDocumentMeta,
   ProposedDocument,
 } from '../domain/kb.js';
+import {
+  learningDecision,
+  learningDocument,
+  learningDraft,
+  learningEffectCheck,
+  learningEvidenceOrder,
+  learningFacts,
+  learningLinks,
+  learningOutcome,
+  learningStaleness,
+  learningStatus,
+  learningTarget,
+  pipelineState,
+} from '../domain/learning.js';
+import type { LearningRead } from '../domain/learning.js';
+import { learningWire, learningWireView } from '../domain/learning-wire.js';
+import type { LearningWire, LearningWireView } from '../domain/learning-wire.js';
 import {
   agentSetKind,
   catalogUpdates,
@@ -42,8 +57,18 @@ import { splicePreview } from '../domain/sections.js';
 import type { AgentKbApproval, Board, Role } from '../domain/types.js';
 import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf, roleOf } from './access.js';
-import { kbItems } from './kb-items.js';
-import type { KbItems, KbWriteOptions } from './kb-items.js';
+import { boardLearnings, readLearning } from './learning-reads.js';
+import {
+  createLearning,
+  dismissLearningStale,
+  keepLearningApart,
+  recordLearningDecision,
+  reopenClosedLearning,
+  reopenDecidedLearning,
+  requeueLearningDraft,
+  retryLearningStep,
+} from './learning-writes.js';
+import type { LearningWriteContext } from './learning-writes.js';
 
 /** A board's review guide documents, for `get_review_guide`. */
 export interface ReviewGuide {
@@ -249,36 +274,56 @@ class BoardChanged extends Error {
   }
 }
 
-/** An item as the Knowledge page lists it. */
-const view = (item: KbItem, preview: DraftPreview | null): KbItemView => ({
-  ...item,
-  preview,
-  evidenceCount: evidenceCount(item),
-  lastEvidenceAt: lastEvidenceAt(item),
-});
-
-/** Why an agent may not approve the item, or null when it may: these are decided by a person. */
-const keptForPeople = (item: KbItem, setting: AgentKbApproval): string | null => {
+/** Why an agent may not approve the learning, or null when it may: these are decided by a person. */
+const keptForPeople = (learning: LearningRead, setting: AgentKbApproval): string | null => {
   const wider = setting === 'docs_and_agent_files';
-  if (item.document !== null) return 'proposes a whole document';
-  if (!wider && item.contradicts.length > 0) return 'is flagged as contradicting existing knowledge';
-  if (item.target?.kind === 'local_run') return "changes the local-run spec, which sstor runs on developers' machines";
-  if (item.target?.kind === 'merge_policy') return 'changes the merge policy, which decides which globs wait for each other';
-  if (!wider && item.target !== null && isAgentSetKind(item.target.kind)) return `changes an agent-set file (${item.target.kind} ${item.target.name}), which changes how agents behave`;
+  const target = learningTarget(learning.glob).routed;
+  if (learningDocument(learning.glob, learning.artifacts) !== null) return 'proposes a whole document';
+  if (!wider && learningLinks(learning.glob).contradicts.length > 0) return 'is flagged as contradicting existing knowledge';
+  if (target?.kind === 'local_run') return "changes the local-run spec, which sstor runs on developers' machines";
+  if (target?.kind === 'merge_policy') return 'changes the merge policy, which decides which globs wait for each other';
+  if (!wider && target !== null && isAgentSetKind(target.kind)) return `changes an agent-set file (${target.kind} ${target.name}), which changes how agents behave`;
   return null;
 };
 
 /** What a decision does inside `decideIn`: the checks and writes for an approval, or just the reason for a rejection. */
 type DecisionStep = (
   tx: Tx,
-  item: KbItem,
+  learning: LearningRead,
 ) => Promise<Result<{ statement: string; outcome: KbOutcome; signal?: KbSignal | null; reason?: string } | { reason: string }>>;
+
+/** The learning that approval writes are made for: its ID and board. */
+interface LearningRef {
+  readonly id: string;
+  readonly boardId: number;
+}
+
+const refOf = (learning: LearningRead): LearningRef => ({ id: learning.glob.id, boardId: learning.glob.boardId });
+
+/** What a draft's preview reads (a KB item has these fields). */
+export type DraftPreviewInput = Pick<LearningWire, 'boardId' | 'status' | 'target' | 'draft' | 'draftedAgainstVersion'>;
+
+/** A learning's fields for its draft's preview. */
+const previewInputOf = (learning: LearningRead): DraftPreviewInput => {
+  const drafted = learningDraft(learning.artifacts);
+  return {
+    boardId: learning.glob.boardId,
+    status: learningStatus(learning.glob, learning.artifacts),
+    target: learningTarget(learning.glob).routed,
+    draft: drafted?.draft ?? null,
+    draftedAgainstVersion: drafted?.targetVersion ?? null,
+  };
+};
+
+/** Learnings in the open queue's order (`byEvidence`), each one's evidence read once. */
+const byEvidenceOrder = (learnings: readonly LearningRead[]): LearningRead[] =>
+  learnings
+    .map((learning) => ({ learning, order: learningEvidenceOrder(learning.glob, learning.artifacts) }))
+    .sort((a, b) => byEvidence(a.order, b.order))
+    .map(({ learning }) => learning);
 
 /** Who decides a KB item on the Knowledge page. */
 const ADMINS: readonly Role[] = ['admin'];
-
-/** `ids` with `id` added once. */
-const apart = (ids: readonly string[], id: string): string[] => (ids.includes(id) ? [...ids] : [...ids, id]);
 
 /** A decision's conditional write lost to a concurrent one; thrown so the transaction rolls back. */
 class StaleKbItem extends Error {
@@ -309,7 +354,7 @@ const checkDocument = (document: ProposedDocument): Result<ProposedDocument> => 
 
 /** The next KB item ID on a board (`s<board>k<n>`), for submitted and mined items alike. */
 /** What approving an open item's draft would change now, against the target's current text; null without a draft or a target. */
-export const draftPreview = async (tx: Tx, catalog: CatalogAgentSet, item: KbItem): Promise<DraftPreview | null> => {
+export const draftPreview = async (tx: Tx, catalog: CatalogAgentSet, item: DraftPreviewInput): Promise<DraftPreview | null> => {
   if (item.status !== 'open' || item.draft === null || item.target === null) return null;
   const state = await targetState(tx, catalog, item.boardId, item.target);
   if (state === null) return null;
@@ -445,7 +490,7 @@ export class KnowledgeService {
       return await this.transaction(work);
     } catch (error) {
       if (!(error instanceof StaleKbItem || error instanceof BoardChanged) || itemId === null) throw error;
-      const current = await this.deps.store.transaction((tx) => this.kb(tx).getKbItem(itemId));
+      const current = await this.deps.store.transaction((tx) => this.current(tx, itemId));
       if (current === null) return notFound(`No KB item ${itemId}`);
       return err({ code: 'version_conflict', message: `${itemId} changed meanwhile; try again`, currentItem: current });
     }
@@ -456,9 +501,22 @@ export class KnowledgeService {
     for (const h of hints) this.hint(tx, h);
   }
 
-  /** The KB items in `tx`: written with the service's clock, their live hints raised for after the commit. */
-  private kb(tx: Tx): KbItems {
-    return kbItems(tx, { clock: this.deps.clock, raise: (hint) => this.hint(tx, hint) });
+  /** How learnings are written in `tx`: with the service's clock, their live hints raised for after the commit. */
+  private writes(tx: Tx): LearningWriteContext {
+    return { clock: this.deps.clock, raise: (hint) => this.hint(tx, hint) };
+  }
+
+  /** A learning as it reads now, in its wire form; null when there is none. */
+  private async current(tx: Tx, id: string): Promise<LearningWire | null> {
+    const learning = await readLearning(tx, id);
+    return learning === null ? null : learningWire(learning);
+  }
+
+  /** A learning this transaction just wrote, in its wire form. */
+  private async written(tx: Tx, id: string): Promise<LearningWire> {
+    const current = await this.current(tx, id);
+    if (current === null) throw new Error(`KB item ${id} is missing after its write`);
+    return current;
   }
 
   private kbChanged(tx: Tx, boardId: number): void {
@@ -746,34 +804,22 @@ export class KnowledgeService {
       }
       const id = await newKbItemId(tx, boardId);
       // Document proposals name their target and are their own draft, so the pipeline has nothing to do.
-      const routed =
-        document === null
-          ? UNPROCESSED
-          : { ...UNPROCESSED, processing: 'drafted' as const, target: await documentTarget(tx, boardId, document) };
-      const item: KbItem = {
+      const target = document === null ? null : await documentTarget(tx, boardId, document);
+      // The item is its decision glob: it enters Planning under the same ID.
+      const inserted = await createLearning(tx, this.writes(tx), {
         id,
         boardId,
-        status: 'open',
         type,
         statement,
         evidence,
         suggestedTarget: suggestedTarget === '' ? null : suggestedTarget,
         sourceGlobIds,
-        source: 'submitted',
-        signal: null,
         agentSetVersion,
         submittedBy: email,
         createdAt: this.deps.clock.now(),
-        decidedBy: null,
-        decidedAt: null,
-        decisionReason: null,
         document,
-        outcome: null,
-        ...routed,
-        version: 1,
-      };
-      // The item is its decision glob: it enters Planning under the same ID.
-      const inserted = await this.kb(tx).insertKbItem(item);
+        target,
+      });
       // The counter is atomic, so a clash means the counter and the globs disagree.
       if (!inserted) throw new Error(`KB item ${id} already exists`);
       this.kbChanged(tx, boardId);
@@ -793,15 +839,21 @@ export class KnowledgeService {
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
-      const open: KbItemView[] = [];
-      for (const item of [...(await this.kb(tx).listKbItems(boardId, 'open'))].sort(byEvidence)) {
-        open.push(view(item, await this.preview(tx, catalog, item)));
+      const learnings = await boardLearnings(tx, boardId);
+      const statusOf = (l: LearningRead) => learningStatus(l.glob, l.artifacts);
+      const open: LearningWireView[] = [];
+      for (const learning of byEvidenceOrder(learnings.filter((l) => statusOf(l) === 'open'))) {
+        open.push(learningWireView(learning, await this.preview(tx, catalog, learning)));
       }
-      const page = async (statuses: readonly KbItemStatus[]): Promise<KbItemPage> => {
-        const { items, total } = await this.kb(tx).listRecentKbItems(boardId, statuses, limit);
-        return { items: items.map((item) => view(item, null)), total };
+      const page = (statuses: readonly KbItemStatus[]): KbItemPage => {
+        // Newest by decision (a learning joins the decided group when decided); closed ones have none.
+        const all = learnings
+          .filter((l) => statuses.includes(statusOf(l)))
+          .map((learning) => ({ learning, at: learningDecision(learning.glob, learning.artifacts).at ?? learning.glob.createdAt }))
+          .sort((a, b) => b.at.localeCompare(a.at) || b.learning.glob.id.localeCompare(a.learning.glob.id));
+        return { items: all.slice(0, limit).map(({ learning }) => learningWireView(learning, null)), total: all.length };
       };
-      return ok({ open, decided: await page(['approved', 'rejected']), closed: await page(['merged', 'suppressed', 'covered']) });
+      return ok({ open, decided: page(['approved', 'rejected']), closed: page(['merged', 'suppressed', 'covered']) });
     });
   }
 
@@ -809,7 +861,7 @@ export class KnowledgeService {
    * Admins point an open item at another document or agent file (or a new document): its draft is
    * cleared and it is drafted again against that target, without routing it again.
    */
-  async changeTarget(email: string, itemId: string, version: number, change: TargetChange): Promise<Result<KbItem>> {
+  async changeTarget(email: string, itemId: string, version: number, change: TargetChange): Promise<Result<LearningWire>> {
     return this.transaction((tx) => this.changeTargetIn(tx, email, itemId, version, change));
   }
 
@@ -821,53 +873,53 @@ export class KnowledgeService {
     version: number,
     change: TargetChange,
     roles: readonly Role[] = ADMINS,
-  ): Promise<Result<KbItem>> {
+  ): Promise<Result<LearningWire>> {
     const catalog = await this.deps.catalog.agentSet();
-    const item = await this.kb(tx).getKbItem(itemId);
-    if (item === null) return notFound(`No KB item ${itemId}`);
-    const actor = await roleOf(tx, email, item.boardId, roles);
+    const learning = await readLearning(tx, itemId);
+    if (learning === null) return notFound(`No KB item ${itemId}`);
+    const { glob } = learning;
+    const actor = await roleOf(tx, email, glob.boardId, roles);
     if (!actor.ok) return actor;
-    const stale = (current: KbItem) =>
-      err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: current });
-    if (item.version !== version) return stale(item);
-    if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
-    if (item.document !== null) return invalidInput(`${item.id} proposes a document; its target is that document`);
-    const target = await this.checkTarget(tx, catalog, item.boardId, change);
+    const stale = (current: LearningWire) => err({ code: 'version_conflict', message: `${glob.id} has changed`, currentItem: current });
+    if (glob.version !== version) return stale(learningWire(learning));
+    const status = learningStatus(glob, learning.artifacts);
+    if (status !== 'open') return invalidInput(`${glob.id} is already ${status}`);
+    if (learningDocument(glob, learning.artifacts) !== null) return invalidInput(`${glob.id} proposes a document; its target is that document`);
+    const target = await this.checkTarget(tx, catalog, glob.boardId, change);
     if (!target.ok) return target;
-    const next = needsDraft(item, target.value);
-    if (!(await this.kb(tx).updateKbItem(next, item.version))) {
-      const current = await this.kb(tx).getKbItem(itemId);
+    if (!(await requeueLearningDraft(tx, this.writes(tx), itemId, glob.version, target.value))) {
+      const current = await this.current(tx, itemId);
       return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
     }
-    this.kbChanged(tx, item.boardId);
-    return ok(next);
+    this.kbChanged(tx, glob.boardId);
+    return ok(await this.written(tx, itemId));
   }
 
   /**
    * Admins send an item the pipeline gave up on (`failed`) back to it with fresh attempts: to
    * routing when it has no target yet, otherwise to drafting against its target.
    */
-  async retryProcessing(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
+  async retryProcessing(email: string, itemId: string, version: number): Promise<Result<LearningWire>> {
     return this.transaction(async (tx) => {
-      const item = await this.kb(tx).getKbItem(itemId);
-      if (item === null) return notFound(`No KB item ${itemId}`);
-      const actor = await adminOf(tx, email, item.boardId);
+      const learning = await readLearning(tx, itemId);
+      if (learning === null) return notFound(`No KB item ${itemId}`);
+      const { glob } = learning;
+      const actor = await adminOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const stale = (current: KbItem) =>
-        err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: current });
-      if (item.version !== version) return stale(item);
-      if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
-      if (item.processing !== 'failed') return invalidInput(`${item.id} hasn't failed; it is ${item.processing}`);
+      const stale = (current: LearningWire) => err({ code: 'version_conflict', message: `${glob.id} has changed`, currentItem: current });
+      if (glob.version !== version) return stale(learningWire(learning));
+      const status = learningStatus(glob, learning.artifacts);
+      if (status !== 'open') return invalidInput(`${glob.id} is already ${status}`);
+      const { processing } = pipelineState(glob, learning.artifacts, learning.jobs);
+      if (processing !== 'failed') return invalidInput(`${glob.id} hasn't failed; it is ${processing}`);
       // A fresh job for the step it failed at (routing without a target, drafting with one), with its attempts unspent.
       // The write bumps the version, so a Knowledge page tab holding the failed item gets a conflict and refetches.
-      const bumped: KbItem = { ...item, version: item.version + 1 };
-      if (!(await this.kb(tx).updateKbItem(bumped, item.version))) {
-        const current = await this.kb(tx).getKbItem(itemId);
+      if (!(await retryLearningStep(tx, this.writes(tx), itemId, glob.version))) {
+        const current = await this.current(tx, itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
       }
-      const next = await this.kb(tx).retryStep(bumped);
-      this.kbChanged(tx, item.boardId);
-      return ok(next);
+      this.kbChanged(tx, glob.boardId);
+      return ok(await this.written(tx, itemId));
     });
   }
 
@@ -882,53 +934,40 @@ export class KnowledgeService {
    * that item may have been decided since. A reopened merge records the pair in both items'
    * `keptApartFrom`, in the same transaction, so weekly consolidation never merges them again.
    */
-  async reopen(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
+  async reopen(email: string, itemId: string, version: number): Promise<Result<LearningWire>> {
     return this.transaction(async (tx) => {
-      const item = await this.kb(tx).getKbItem(itemId);
-      if (item === null) return notFound(`No KB item ${itemId}`);
-      const actor = await adminOf(tx, email, item.boardId);
+      const learning = await readLearning(tx, itemId);
+      if (learning === null) return notFound(`No KB item ${itemId}`);
+      const { glob, artifacts } = learning;
+      const actor = await adminOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const stale = (current: KbItem) =>
-        err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: current });
-      if (item.version !== version) return stale(item);
-      if ((item.status === 'approved' || item.status === 'rejected') && item.outcome?.via === 'agent') return this.reopenAgentApproval(tx, email, item, stale);
-      if (!(item.status === 'merged' || item.status === 'suppressed' || item.status === 'covered')) {
-        return invalidInput(`${item.id} is ${item.status}; only items the pipeline closed or an agent approved can be reopened`);
+      const stale = (current: LearningWire) => err({ code: 'version_conflict', message: `${glob.id} has changed`, currentItem: current });
+      if (glob.version !== version) return stale(learningWire(learning));
+      const status = learningStatus(glob, artifacts);
+      if ((status === 'approved' || status === 'rejected') && learningOutcome(artifacts)?.via === 'agent') return this.reopenAgentApproval(tx, email, learning, stale);
+      if (!(status === 'merged' || status === 'suppressed' || status === 'covered')) {
+        return invalidInput(`${glob.id} is ${status}; only items the pipeline closed or an agent approved can be reopened`);
       }
       // A merge the admin undid keeps the pair apart: weekly consolidation never merges them again.
-      const former = item.status === 'merged' ? item.duplicateOf : null;
-      const reopened: KbItem = {
-        ...item,
-        status: 'open',
-        duplicateOf: null,
-        suppressedBy: null,
-        coveredBy: null,
-        mergeNote: null,
-        keptApartFrom: former === null ? item.keptApartFrom : apart(item.keptApartFrom, former),
-      };
-      if (item.document === null && item.target === null) {
-        return invalidInput(`${item.id} has no target, so reopening it would route and deduplicate it again`);
+      const former = status === 'merged' ? learningLinks(glob).duplicateOf : null;
+      if (learningDocument(glob, artifacts) === null && learningTarget(glob).routed === null) {
+        return invalidInput(`${glob.id} has no target, so reopening it would route and deduplicate it again`);
       }
-      const next: KbItem =
-        item.document !== null
-          ? { ...reopened, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
-          : needsDraft(reopened);
       // Row D12: the admin reopens the closure on the decision itself.
-      if (!(await this.kb(tx).updateKbItem(next, item.version, { actor: actor.value }))) {
-        const current = await this.kb(tx).getKbItem(itemId);
+      if (!(await reopenClosedLearning(tx, this.writes(tx), itemId, actor.value, glob.version))) {
+        const current = await this.current(tx, itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
       }
-      const other = former === null ? null : await this.kb(tx).getKbItem(former);
-      if (other !== null && !other.keptApartFrom.includes(item.id)) {
-        const separated: KbItem = { ...other, keptApartFrom: apart(other.keptApartFrom, item.id), version: other.version + 1 };
+      const other = former === null ? null : await readLearning(tx, former);
+      if (other !== null && !learningLinks(other.glob).keptApartFrom.includes(glob.id)) {
         // The other item changed between the read and the write: roll the reopen back too, as a conflict.
-        if (!(await this.kb(tx).updateKbItem(separated, other.version))) throw new StaleKbItem(other.id);
+        if (!(await keepLearningApart(tx, this.writes(tx), other.glob.id, glob.id, other.glob.version))) throw new StaleKbItem(other.glob.id);
       }
-      this.kbChanged(tx, item.boardId);
-      return ok(next);
+      this.kbChanged(tx, glob.boardId);
+      return ok(await this.written(tx, itemId));
     }).catch(async (error: unknown) => {
       if (!(error instanceof StaleKbItem)) throw error;
-      const current = await this.deps.store.transaction((tx) => this.kb(tx).getKbItem(itemId));
+      const current = await this.deps.store.transaction((tx) => this.current(tx, itemId));
       return current === null
         ? notFound(`No KB item ${itemId}`)
         : err({ code: 'version_conflict', message: `${itemId} changed meanwhile; try again`, currentItem: current });
@@ -944,77 +983,60 @@ export class KnowledgeService {
   private async reopenAgentApproval(
     tx: Tx,
     email: string,
-    item: KbItem,
-    stale: (current: KbItem) => Result<never>,
-  ): Promise<Result<KbItem>> {
-    const outcome = item.outcome;
+    learning: LearningRead,
+    stale: (current: LearningWire) => Result<never>,
+  ): Promise<Result<LearningWire>> {
+    const { id, boardId } = refOf(learning);
+    const outcome = learningOutcome(learning.artifacts);
     if (outcome?.kind === 'applied') {
-      const current = await tx.getKnowledge(item.boardId, outcome.target, outcome.name);
+      const current = await tx.getKnowledge(boardId, outcome.target, outcome.name);
       if (current === null || current.version !== outcome.version) {
-        return invalidInput(`${outcome.name} changed after ${item.id} was approved; revert it by hand under Edit, then reject or edit this item`);
+        return invalidInput(`${outcome.name} changed after ${id} was approved; revert it by hand under Edit, then reject or edit this item`);
       }
-      const previous = await tx.getKnowledgeVersion(item.boardId, outcome.target, outcome.name, outcome.version - 1);
+      const previous = await tx.getKnowledgeVersion(boardId, outcome.target, outcome.name, outcome.version - 1);
       if (previous === null) {
-        return invalidInput(`${item.id} created ${outcome.name}, which has no earlier version to restore; delete or edit it by hand`);
+        return invalidInput(`${id} created ${outcome.name}, which has no earlier version to restore; delete or edit it by hand`);
       }
       const content = outcome.target === 'doc' ? renderFrontmatter(previous) + previous.content : previous.content;
       const written = await this.write(
         tx,
         email,
-        item.boardId,
-        [{ kind: outcome.target, name: outcome.name, content, layer: previous.layer, source: `kb:${item.id}:reopened` }],
-        item.id,
+        boardId,
+        [{ kind: outcome.target, name: outcome.name, content, layer: previous.layer, source: `kb:${id}:reopened` }],
+        id,
       );
       if (!written.ok) return written;
     }
-    const reopened: KbItem = {
-      ...item,
-      status: 'open',
-      decidedBy: null,
-      decidedAt: null,
-      decisionReason: null,
-      outcome: null,
-      effectCheck: null,
-    };
-    const next: KbItem = item.document !== null
-      ? { ...reopened, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, version: item.version + 1 }
-      : needsDraft(reopened);
-    if (!(await this.kb(tx).updateKbItem(next, item.version))) {
-      const current = await this.kb(tx).getKbItem(item.id);
-      return current === null ? notFound(`No KB item ${item.id}`) : stale(current);
+    if (!(await reopenDecidedLearning(tx, this.writes(tx), id, learning.glob.version))) {
+      const current = await this.current(tx, id);
+      return current === null ? notFound(`No KB item ${id}`) : stale(current);
     }
-    this.kbChanged(tx, item.boardId);
-    return ok(next);
+    this.kbChanged(tx, boardId);
+    return ok(await this.written(tx, id));
   }
 
   /**
    * Admins keep an open item weekly consolidation flagged stale: the flag is cleared and not raised again for
    * `STALE_KEEP_MS`. (Reject is the other answer to a stale flag; nothing closes an item for being stale.)
    */
-  async keepStale(email: string, itemId: string, version: number): Promise<Result<KbItem>> {
+  async keepStale(email: string, itemId: string, version: number): Promise<Result<LearningWire>> {
     return this.transaction(async (tx) => {
-      const item = await this.kb(tx).getKbItem(itemId);
-      if (item === null) return notFound(`No KB item ${itemId}`);
-      const actor = await adminOf(tx, email, item.boardId);
+      const learning = await readLearning(tx, itemId);
+      if (learning === null) return notFound(`No KB item ${itemId}`);
+      const { glob } = learning;
+      const actor = await adminOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const stale = (current: KbItem) =>
-        err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: current });
-      if (item.version !== version) return stale(item);
-      if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
-      if (item.staleSince === null) return invalidInput(`${item.id} isn't flagged stale`);
-      const next: KbItem = {
-        ...item,
-        staleSince: null,
-        staleReason: null,
-        staleDismissedAt: this.deps.clock.now(),
-        version: item.version + 1,
-      };
-      if (!(await this.kb(tx).updateKbItem(next, item.version))) {
-        const current = await this.kb(tx).getKbItem(itemId);
+      const stale = (current: LearningWire) => err({ code: 'version_conflict', message: `${glob.id} has changed`, currentItem: current });
+      if (glob.version !== version) return stale(learningWire(learning));
+      const status = learningStatus(glob, learning.artifacts);
+      if (status !== 'open') return invalidInput(`${glob.id} is already ${status}`);
+      if (learningStaleness(glob).since === null) return invalidInput(`${glob.id} isn't flagged stale`);
+      if (!(await dismissLearningStale(tx, this.writes(tx), itemId, glob.version, this.deps.clock.now()))) {
+        const current = await this.current(tx, itemId);
         return current === null ? notFound(`No KB item ${itemId}`) : stale(current);
       }
-      this.kbChanged(tx, item.boardId);
-      return ok(next);
+      this.kbChanged(tx, glob.boardId);
+      return ok(await this.written(tx, itemId));
     });
   }
 
@@ -1033,17 +1055,20 @@ export class KnowledgeService {
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
       if (!actor.ok) return actor;
-      const items = await this.kb(tx).listKbItems(boardId, 'approved');
+      const learnings = await boardLearnings(tx, boardId);
       return ok(
-        items
-          .filter((i) => i.outcome?.kind === 'learning')
-          .map((i) => ({
-            id: i.id,
-            type: i.type,
-            statement: i.statement,
-            sourceGlobIds: i.sourceGlobIds,
-            approvedAt: i.decidedAt ?? i.createdAt,
-          })),
+        learnings
+          .filter((l) => learningStatus(l.glob, l.artifacts) === 'approved' && learningOutcome(l.artifacts)?.kind === 'learning')
+          .map((l) => {
+            const facts = learningFacts(l.glob);
+            return {
+              id: l.glob.id,
+              type: facts.kind,
+              statement: l.glob.summary,
+              sourceGlobIds: facts.sourceGlobIds,
+              approvedAt: learningDecision(l.glob, l.artifacts).at ?? l.glob.createdAt,
+            };
+          }),
       );
     });
   }
@@ -1053,24 +1078,24 @@ export class KnowledgeService {
    * written through `write` in the same transaction as the decision, so they version the document,
    * and an agent-set file bumps the board's agent-set version.
    */
-  async approve(email: string, itemId: string, version: number, approval: Approval): Promise<Result<KbItem>> {
-    return this.decide(email, itemId, version, (tx, item) => this.approving(tx, email, item, approval));
+  async approve(email: string, itemId: string, version: number, approval: Approval): Promise<Result<LearningWire>> {
+    return this.decide(email, itemId, version, (tx, learning) => this.approving(tx, email, learning, approval));
   }
 
   /** The approval's checks and writes, shared by a person's approval and an agent's. */
   private async approving(
     tx: Tx,
     email: string,
-    item: KbItem,
+    learning: LearningRead,
     approval: Approval,
   ): Promise<Result<{ statement: string; outcome: KbOutcome; signal: KbSignal | null }>> {
     // A watched signal is claimed in `kb_signals` under mining's lock, so a mining run neither overwrites the claim
     // with the row it read before nor raises the signal meanwhile; taken first, so the measurement sees its rows.
-    if (approval.watchSignal !== undefined) await tx.lockBoardJob(item.boardId, 'mining');
+    if (approval.watchSignal !== undefined) await tx.lockBoardJob(learning.glob.boardId, 'mining');
     // Checked before anything is written: a refused decision commits nothing it wrote.
-    const watched = await this.watchedSignal(tx, item, approval.watchSignal);
+    const watched = await this.watchedSignal(tx, learning, approval.watchSignal);
     if (!watched.ok) return watched;
-    const applied = await this.applyApproval(tx, email, item, approval);
+    const applied = await this.applyApproval(tx, email, learning, approval);
     return applied.ok ? ok({ ...applied.value, signal: watched.value }) : applied;
   }
 
@@ -1087,7 +1112,7 @@ export class KnowledgeService {
     version: number,
     decision: 'approve' | 'reject',
     options: { readonly reason?: string; readonly editedDraft?: string } = {},
-  ): Promise<Result<KbItem>> {
+  ): Promise<Result<LearningWire>> {
     const via: KbVia = 'agent';
     const reason = options.reason?.trim() ?? '';
     if (decision === 'reject') {
@@ -1099,19 +1124,21 @@ export class KnowledgeService {
       email,
       itemId,
       version,
-      async (tx, item) => {
-        const board = await tx.getBoard(item.boardId);
-        if (board === null) return notFound(`No board ${item.boardId}`);
-        const kept = keptForPeople(item, board.agentKbApproval);
-        if (kept !== null) return forbidden(`${item.id} ${kept}: approve it on the Knowledge page, or reject it here`);
-        if (item.contradicts.length > 0 && reason === '') {
-          return invalidInput(`${item.id} contradicts existing knowledge: give a reason (why the contradiction is intended or resolved)`);
+      async (tx, learning) => {
+        const { id, boardId } = refOf(learning);
+        const board = await tx.getBoard(boardId);
+        if (board === null) return notFound(`No board ${boardId}`);
+        const kept = keptForPeople(learning, board.agentKbApproval);
+        if (kept !== null) return forbidden(`${id} ${kept}: approve it on the Knowledge page, or reject it here`);
+        const contradicting = learningLinks(learning.glob).contradicts.length > 0;
+        if (contradicting && reason === '') {
+          return invalidInput(`${id} contradicts existing knowledge: give a reason (why the contradiction is intended or resolved)`);
         }
         if (options.editedDraft !== undefined && options.editedDraft.trim() === '') return invalidInput('The edited draft is empty');
         const approval: Approval = options.editedDraft === undefined ? { as: 'draft' } : { as: 'draft', content: options.editedDraft };
-        const approved = await this.approving(tx, email, item, approval);
+        const approved = await this.approving(tx, email, learning, approval);
         if (!approved.ok) return approved;
-        return ok(item.contradicts.length > 0 ? { ...approved.value, reason } : approved.value);
+        return ok(contradicting ? { ...approved.value, reason } : approved.value);
       },
       via,
     );
@@ -1121,15 +1148,15 @@ export class KnowledgeService {
    * The board's KB items with the given status (open by default), for an admin's agent: the open queue in the page's
    * order, others newest decision first. Admins only, like deciding.
    */
-  async listItems(email: string, boardId: number, status: KbItemStatus = 'open'): Promise<Result<KbItemView[]>> {
+  async listItems(email: string, boardId: number, status: KbItemStatus = 'open'): Promise<Result<LearningWireView[]>> {
     const catalog = await this.deps.catalog.agentSet();
     return this.deps.store.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
       if (!actor.ok) return actor;
-      const items = await this.kb(tx).listKbItems(boardId, status);
-      if (status !== 'open') return ok(items.map((item) => view(item, null)));
-      const views: KbItemView[] = [];
-      for (const item of [...items].sort(byEvidence)) views.push(view(item, await this.preview(tx, catalog, item)));
+      const learnings = (await boardLearnings(tx, boardId)).filter((l) => learningStatus(l.glob, l.artifacts) === status);
+      if (status !== 'open') return ok(learnings.map((l) => learningWireView(l, null)));
+      const views: LearningWireView[] = [];
+      for (const learning of byEvidenceOrder(learnings)) views.push(learningWireView(learning, await this.preview(tx, catalog, learning)));
       return ok(views);
     });
   }
@@ -1148,38 +1175,42 @@ export class KnowledgeService {
   }
 
   /** The measured signal an admin chose to watch for a submitted item, or null when none was chosen. */
-  private async watchedSignal(tx: Tx, item: KbItem, key: string | undefined): Promise<Result<KbSignal | null>> {
+  private async watchedSignal(tx: Tx, learning: LearningRead, key: string | undefined): Promise<Result<KbSignal | null>> {
     if (key === undefined) return ok(null);
-    if (item.document !== null) return invalidInput(`${item.id} proposes a document; a document proposal doesn't watch a signal`);
+    const { id, boardId } = refOf(learning);
+    if (learningDocument(learning.glob, learning.artifacts) !== null) return invalidInput(`${id} proposes a document; a document proposal doesn't watch a signal`);
     if (!isEffectMeasured(key)) return invalidInput(`Effect checks don't measure ${key}`);
-    if (item.signal !== null) return invalidInput(`${item.id} already has a signal (${item.signal.label}); its effect check watches that`);
-    const signals = this.deps.signals === undefined ? [] : await this.deps.signals.measure(tx, item.boardId, this.deps.clock.now());
+    const { signal } = learningFacts(learning.glob);
+    if (signal !== null) return invalidInput(`${id} already has a signal (${signal.label}); its effect check watches that`);
+    const signals = this.deps.signals === undefined ? [] : await this.deps.signals.measure(tx, boardId, this.deps.clock.now());
     const found = signals.find((s) => s.key === key);
-    return found === undefined ? invalidInput(`No signal ${key} is measured on board ${item.boardId} now`) : ok(found);
+    return found === undefined ? invalidInput(`No signal ${key} is measured on board ${boardId} now`) : ok(found);
   }
 
   /** What an approval writes, and the statement and outcome it records. */
   private async applyApproval(
     tx: Tx,
     email: string,
-    item: KbItem,
+    learning: LearningRead,
     approval: Approval,
   ): Promise<Result<{ statement: string; outcome: KbOutcome }>> {
+    const item = refOf(learning);
+    const proposed = learningDocument(learning.glob, learning.artifacts);
     // A document proposal is its own draft.
-    if (approval.as === 'document' || (approval.as === 'draft' && item.document !== null)) {
-      if (item.document === null) return invalidInput(`${item.id} is not a document proposal`);
-      const document = checkDocument({ ...item.document, content: approval.content ?? item.document.content });
+    if (approval.as === 'document' || (approval.as === 'draft' && proposed !== null)) {
+      if (proposed === null) return invalidInput(`${item.id} is not a document proposal`);
+      const document = checkDocument({ ...proposed, content: approval.content ?? proposed.content });
       if (!document.ok) return document;
       const { name, content } = document.value;
       const outcome = await this.apply(tx, email, item, 'doc', name, renderFrontmatter(document.value) + content);
-      return outcome.ok ? ok({ statement: item.statement, outcome: outcome.value }) : outcome;
+      return outcome.ok ? ok({ statement: learning.glob.summary, outcome: outcome.value }) : outcome;
     }
-    if (item.document !== null) return invalidInput(`${item.id} proposes a document; approve it as that document`);
-    const statement = approval.statement?.trim() ?? item.statement;
+    if (proposed !== null) return invalidInput(`${item.id} proposes a document; approve it as that document`);
+    const statement = approval.statement?.trim() ?? learning.glob.summary;
     if (statement === '') return invalidInput('A learning needs a statement');
     if (approval.as === 'learning') return ok({ statement, outcome: { kind: 'learning' } });
     if (approval.as === 'draft') {
-      const outcome = await this.applyDraft(tx, email, item, approval);
+      const outcome = await this.applyDraft(tx, email, learning, approval);
       return outcome.ok ? ok({ statement, outcome: outcome.value }) : outcome;
     }
 
@@ -1213,7 +1244,7 @@ export class KnowledgeService {
   }
 
   /** Admins reject an open KB item with a reason; it is kept so repeats can be suppressed later. */
-  async reject(email: string, itemId: string, version: number, reason: string): Promise<Result<KbItem>> {
+  async reject(email: string, itemId: string, version: number, reason: string): Promise<Result<LearningWire>> {
     const trimmed = reason.trim();
     if (trimmed === '') return invalidInput('Rejecting needs a reason');
     return this.decide(email, itemId, version, () => Promise.resolve(ok({ reason: trimmed })));
@@ -1229,14 +1260,14 @@ export class KnowledgeService {
     version: number,
     decision: DecisionStep,
     via?: KbVia,
-  ): Promise<Result<KbItem>> {
-    const stale = (item: KbItem) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
+  ): Promise<Result<LearningWire>> {
+    const stale = (item: LearningWire) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
     try {
       return await this.transaction((tx) => this.decideIn(tx, email, itemId, version, decision, { ...(via === undefined ? {} : { via }), roles: ADMINS }));
     } catch (error) {
       // A concurrent agent-set change (another approval or import) is a conflict to retry, like a stale item.
       if (!(error instanceof StaleKbItem || error instanceof BoardChanged)) throw error;
-      const current = await this.deps.store.transaction((tx) => this.kb(tx).getKbItem(itemId));
+      const current = await this.deps.store.transaction((tx) => this.current(tx, itemId));
       if (current === null) return notFound(`No KB item ${itemId}`);
       return error instanceof BoardChanged
         ? err({ code: 'version_conflict', message: 'The board changed meanwhile; try again', currentItem: current })
@@ -1248,13 +1279,13 @@ export class KnowledgeService {
    * `approve` inside the caller's transaction (from `inTransaction`), for the decision glob that decides an item and its
    * glob together: `roles` says who may (POs too), and the glob is not synced here (the caller moves it itself).
    */
-  async approveIn(tx: Tx, email: string, itemId: string, version: number, approval: Approval, roles: readonly Role[]): Promise<Result<KbItem>> {
+  async approveIn(tx: Tx, email: string, itemId: string, version: number, approval: Approval, roles: readonly Role[]): Promise<Result<LearningWire>> {
     const edited = approval.as === 'draft' && approval.content !== undefined;
-    return this.decideIn(tx, email, itemId, version, (t, item) => this.approving(t, email, item, approval), { roles, edited });
+    return this.decideIn(tx, email, itemId, version, (t, learning) => this.approving(t, email, learning, approval), { roles, edited });
   }
 
   /** `reject` inside the caller's transaction (see `approveIn`). */
-  async rejectIn(tx: Tx, email: string, itemId: string, version: number, reason: string, roles: readonly Role[]): Promise<Result<KbItem>> {
+  async rejectIn(tx: Tx, email: string, itemId: string, version: number, reason: string, roles: readonly Role[]): Promise<Result<LearningWire>> {
     const trimmed = reason.trim();
     if (trimmed === '') return invalidInput('Rejecting needs a reason');
     return this.decideIn(tx, email, itemId, version, () => Promise.resolve(ok({ reason: trimmed })), { roles });
@@ -1272,39 +1303,48 @@ export class KnowledgeService {
     version: number,
     decision: DecisionStep,
     options: { readonly via?: KbVia; readonly roles: readonly Role[]; readonly edited?: boolean },
-  ): Promise<Result<KbItem>> {
+  ): Promise<Result<LearningWire>> {
     const { via } = options;
-    const stale = (item: KbItem) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
-    const item = await this.kb(tx).getKbItem(itemId);
-    if (item === null) return notFound(`No KB item ${itemId}`);
-    const actor = await roleOf(tx, email, item.boardId, options.roles);
+    const stale = (item: LearningWire) => err({ code: 'version_conflict', message: `${item.id} has changed`, currentItem: item });
+    const learning = await readLearning(tx, itemId);
+    if (learning === null) return notFound(`No KB item ${itemId}`);
+    const { id, boardId } = refOf(learning);
+    const actor = await roleOf(tx, email, boardId, options.roles);
     if (!actor.ok) return actor;
-    if (item.version !== version) return stale(item);
-    if (item.status !== 'open') return invalidInput(`${item.id} is already ${item.status}`);
-    const decided = await decision(tx, item);
+    if (learning.glob.version !== version) return stale(learningWire(learning));
+    const status = learningStatus(learning.glob, learning.artifacts);
+    if (status !== 'open') return invalidInput(`${id} is already ${status}`);
+    const decided = await decision(tx, learning);
     if (!decided.ok) return decided;
     const decidedAt = this.deps.clock.now();
-    const base = { ...item, decidedBy: email, decidedAt, version: item.version + 1 };
-    let next: KbItem;
+    // The write is the decision's own transition: the glob is accepted (with edits) or rejected with it.
+    let written: boolean;
     if (!('statement' in decided.value)) {
-      next = { ...base, status: 'rejected', decisionReason: decided.value.reason, ...(via === undefined ? {} : { outcome: { kind: 'rejected', via } }) };
-    }
-    else {
+      const outcome: KbOutcome | null = via === undefined ? null : { kind: 'rejected', via };
+      written = await recordLearningDecision(tx, this.writes(tx), id, version, { kind: 'rejected', by: email, at: decidedAt, reason: decided.value.reason, outcome });
+    } else {
       const { statement, outcome } = decided.value;
       const chosen = decided.value.signal ?? null;
-      const approvedReason = decided.value.reason ?? null;
-      const signal = chosen ?? item.signal;
+      const signal = chosen ?? learningFacts(learning.glob).signal;
       // An approved change with a signal the check measures is watched (the daily effect check).
-      const effectCheck = signal === null || !isEffectMeasured(signal.key) ? null : await this.effectCheckFor(tx, item.boardId, signal, outcome, decidedAt);
-      next = { ...base, status: 'approved', statement, ...(approvedReason === null ? {} : { decisionReason: approvedReason }), outcome: via === undefined ? outcome : { ...outcome, via }, signal, effectCheck };
-      if (chosen !== null) await this.claimSignal(tx, next, chosen);
+      const effectCheck = signal === null || !isEffectMeasured(signal.key) ? null : await this.effectCheckFor(tx, boardId, signal, outcome, decidedAt);
+      if (chosen !== null) await this.claimSignal(tx, { id, boardId }, chosen);
+      written = await recordLearningDecision(tx, this.writes(tx), id, version, {
+        kind: 'approved',
+        by: email,
+        at: decidedAt,
+        statement,
+        reason: decided.value.reason ?? null,
+        outcome: via === undefined ? outcome : { ...outcome, via },
+        signal,
+        effectCheck,
+        edited: options.edited === true,
+      });
     }
-    // The write is the decision's own transition: the glob is accepted (with edits) or rejected with it.
-    const write: KbWriteOptions = options.edited === true ? { edited: true } : {};
-    if (!(await this.kb(tx).updateKbItem(next, item.version, write))) throw new StaleKbItem(item.id);
-    this.kbChanged(tx, item.boardId);
+    if (!written) throw new StaleKbItem(id);
+    this.kbChanged(tx, boardId);
     // Decided, it has left the pipeline.
-    return ok(withProcessing(next, []));
+    return ok(await this.written(tx, id));
   }
 
   /**
@@ -1315,8 +1355,8 @@ export class KnowledgeService {
     const board = await tx.getBoard(boardId);
     if (board === null) throw new Error(`No board ${boardId}`);
     const originalId = effectItemOf(signal.key);
-    const original = originalId === null ? null : await this.kb(tx).getKbItem(originalId);
-    const watch = original?.effectCheck ?? original?.signal ?? signal;
+    const original = originalId === null ? null : await readLearning(tx, originalId);
+    const watch = (original === null ? null : (learningEffectCheck(original.artifacts) ?? learningFacts(original.glob).signal)) ?? signal;
     return startEffectCheck({ key: watch.key, label: watch.label }, effectBasisOf(outcome, decidedAt), board.effectCheckGlobs);
   }
 
@@ -1324,10 +1364,10 @@ export class KnowledgeService {
    * A signal an admin chose to watch belongs to the approved item from now on (`kb_signals`), so mining doesn't raise
    * it again while the effect check owns it; an open item already raised for it keeps it (mining refreshes that one).
    */
-  private async claimSignal(tx: Tx, item: KbItem, signal: KbSignal): Promise<void> {
+  private async claimSignal(tx: Tx, item: LearningRef, signal: KbSignal): Promise<void> {
     const row = (await tx.listKbSignals(item.boardId)).find((r) => r.key === signal.key);
-    const holder = row?.itemId == null ? null : await this.kb(tx).getKbItem(row.itemId);
-    if (holder?.status === 'open') return;
+    const holder = row?.itemId == null ? null : await readLearning(tx, row.itemId);
+    if (holder !== null && learningStatus(holder.glob, holder.artifacts) === 'open') return;
     await tx.upsertKbSignal({
       boardId: item.boardId,
       key: signal.key,
@@ -1346,30 +1386,31 @@ export class KnowledgeService {
   private async applyDraft(
     tx: Tx,
     email: string,
-    item: KbItem,
+    learning: LearningRead,
     approval: Extract<Approval, { as: 'draft' }>,
   ): Promise<Result<KbOutcome>> {
-    const { target } = item;
+    const item = refOf(learning);
+    const target = learningTarget(learning.glob).routed;
     if (target === null) return invalidInput(`${item.id} has no target yet`);
+    const drafted = learningDraft(learning.artifacts);
     const draft =
       approval.content === undefined
-        ? item.draft
+        ? (drafted?.draft ?? null)
         : {
-            section: approval.section === undefined ? (item.draft?.section ?? null) : cleanHeading(approval.section),
+            section: approval.section === undefined ? (drafted?.draft.section ?? null) : cleanHeading(approval.section),
             content: approval.content,
           };
     if (draft === null) return invalidInput(`${item.id} has no draft yet`);
     if (draft.content.trim() === '') return invalidInput('The draft is empty');
     const state = await targetState(tx, await this.deps.catalog.agentSet(), item.boardId, target);
     if (state === null) return notFound(`${target.name} is no longer on board ${item.boardId}; choose another target under Edit`);
-    if (item.draft !== null && item.draftedAgainstVersion !== null && state.version !== item.draftedAgainstVersion) {
-      const requeued = needsDraft(item);
-      if (!(await this.kb(tx).updateKbItem(requeued, item.version))) throw new StaleKbItem(item.id);
+    if (drafted !== null && drafted.targetVersion !== null && state.version !== drafted.targetVersion) {
+      if (!(await requeueLearningDraft(tx, this.writes(tx), item.id, learning.glob.version))) throw new StaleKbItem(item.id);
       this.kbChanged(tx, item.boardId);
       return err({
         code: 'version_conflict',
         message: `${target.name} changed since ${item.id} was drafted; it is being drafted again`,
-        currentItem: requeued,
+        currentItem: await this.written(tx, item.id),
       });
     }
     if (target.kind === 'local_run') {
@@ -1394,14 +1435,14 @@ export class KnowledgeService {
     return this.applyAgentSetEdit(tx, email, item, target.kind, target.name, after, state.existing);
   }
 
-  /** What approving an open item's draft would change now; null without a draft or a target. */
-  private async preview(tx: Tx, catalog: CatalogAgentSet, item: KbItem): Promise<DraftPreview | null> {
-    return draftPreview(tx, catalog, item);
+  /** What approving an open learning's draft would change now; null without a draft or a target. */
+  private async preview(tx: Tx, catalog: CatalogAgentSet, learning: LearningRead): Promise<DraftPreview | null> {
+    return draftPreview(tx, catalog, previewInputOf(learning));
   }
 
-  /** `preview` for one item, reading the catalog itself: the diff a decision glob shows beside its proposal. */
-  async previewFor(tx: Tx, item: KbItem): Promise<DraftPreview | null> {
-    return draftPreview(tx, await this.deps.catalog.agentSet(), item);
+  /** `preview` for one learning, reading the catalog itself: the diff a decision glob shows beside its proposal. */
+  async previewFor(tx: Tx, learning: LearningRead): Promise<DraftPreview | null> {
+    return draftPreview(tx, await this.deps.catalog.agentSet(), previewInputOf(learning));
   }
 
   /** An admin's target, checked against the board: an existing document, a new one with its metadata, or a prose agent file. */
@@ -1445,7 +1486,7 @@ export class KnowledgeService {
   private async applyAgentSetEdit(
     tx: Tx,
     email: string,
-    item: KbItem,
+    item: LearningRef,
     kind: KnowledgeKind,
     name: string,
     content: string,
@@ -1483,7 +1524,7 @@ export class KnowledgeService {
   private async apply(
     tx: Tx,
     email: string,
-    item: KbItem,
+    item: LearningRef,
     kind: KnowledgeKind,
     name: string,
     content: string,
@@ -1619,12 +1660,13 @@ export class KnowledgeService {
     changed: readonly { kind: KnowledgeKind; name: string }[],
     decidingItem: string | null,
   ): Promise<void> {
-    for (const item of await this.kb(tx).listKbItems(boardId, 'open')) {
-      const { target } = item;
-      if (item.id === decidingItem || item.processing !== 'drafted' || item.document !== null || target === null) continue;
+    for (const { glob, artifacts, jobs } of await boardLearnings(tx, boardId)) {
+      if (glob.id === decidingItem || learningStatus(glob, artifacts) !== 'open') continue;
+      const target = learningTarget(glob).routed;
+      if (pipelineState(glob, artifacts, jobs).processing !== 'drafted' || learningDocument(glob, artifacts) !== null || target === null) continue;
       if (!changed.some((c) => c.kind === target.kind && c.name === target.name)) continue;
-      // A lost conditional write means the item changed meanwhile; approving it still checks the version.
-      await this.kb(tx).updateKbItem(needsDraft(item), item.version);
+      // A lost conditional write means the learning changed meanwhile; approving it still checks the version.
+      await requeueLearningDraft(tx, this.writes(tx), glob.id, glob.version);
     }
   }
 }

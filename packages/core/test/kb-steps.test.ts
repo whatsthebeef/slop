@@ -1,55 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { kbItems, kbJobHint } from '../src/app/kb-items.js';
+import { retryLearningStep } from '../src/app/learning-writes.js';
 import { MAX_PROCESSING_ATTEMPTS } from '../src/app/kb-pipeline.js';
 import { claimLeaseMs, laneOf, LLM_CLAIM_LEASE_MS, maxAttemptsOf, outboxBackoffMs } from '../src/domain/events.js';
-import type { OutboxJob } from '../src/domain/events.js';
-import { kbEffectsFor, kbStepOf, kbStepOfKind, UNPROCESSED, withProcessing } from '../src/domain/kb.js';
-import type { KbItem, KbTarget } from '../src/domain/kb.js';
+import { kbEffectsFor, kbStepOf, kbStepOfKind, withProcessing } from '../src/domain/kb.js';
+import type { KbItem } from '../src/domain/kb.js';
 import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 import { MemoryStore } from '../src/testing/memory-store.js';
 import { assessmentOf } from '../src/domain/decision-glob.js';
 import { NOW } from './fixtures.js';
-
-const TARGET: KbTarget = { kind: 'doc', name: 'build_test_lint', section: 'Test', newDocument: null };
-const OTHER: KbTarget = { ...TARGET, section: 'Lint' };
-
-const item = (patch: Partial<KbItem> = {}): KbItem => ({
-  id: 's1k1',
-  boardId: 1,
-  status: 'open',
-  type: 'gotcha',
-  statement: 'Generated files live in src/gen/',
-  evidence: 'A review finding',
-  suggestedTarget: null,
-  sourceGlobIds: ['s1t1'],
-  source: 'submitted',
-  signal: null,
-  agentSetVersion: null,
-  submittedBy: 'dev@example.com',
-  createdAt: NOW,
-  decidedBy: null,
-  decidedAt: null,
-  decisionReason: null,
-  document: null,
-  outcome: null,
-  ...UNPROCESSED,
-  version: 1,
-  ...patch,
-});
-const routed = (patch: Partial<KbItem> = {}) => item({ target: TARGET, processing: 'routed', ...patch });
-const drafted = (patch: Partial<KbItem> = {}) => routed({ draft: { section: 'Test', content: '## Test\n' }, processing: 'drafted', ...patch });
-const document = { name: 'architecture', area: 'architecture', audience: [], description: 'Layout', content: '# A\n' };
-
-const job = (patch: Partial<OutboxJob> = {}): OutboxJob => ({
-  id: 1,
-  globId: 's1k1',
-  kind: 'kb_route',
-  state: 'pending',
-  attempts: 0,
-  lastError: null,
-  runAfter: NOW,
-  ...patch,
-});
+import { document, drafted, full, item, job, newStore, OTHER, routed } from './kb-fixtures.js';
 
 describe('the KB pipeline steps on the outbox', () => {
   it('runs both steps on the llm lane, giving up after the pipeline\'s three attempts, with the outbox backoff', () => {
@@ -140,8 +100,9 @@ describe('the KB pipeline steps on the outbox', () => {
     store.state.outboxJobs = store.state.outboxJobs.map((j) => (j.kind === 'kb_draft' ? { ...j, state: 'failed', attempts: 3, lastError: 'Sonnet is down' } : j));
     const failed = await store.transaction((tx) => kbItems(tx).getKbItem('s1k1'));
     expect(failed).toMatchObject({ processing: 'failed', processingError: 'Sonnet is down' });
-    const retried = await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).retryStep(routed({ target: OTHER, version: 3 })));
-    expect(retried).toMatchObject({ processing: 'routed', processingAttempts: 0, processingError: null });
+    expect(await store.transaction((tx) => retryLearningStep(tx, TEST_KB_WRITES, 's1k1', 3))).toBe(true);
+    const retried = await store.transaction((tx) => kbItems(tx).getKbItem('s1k1'));
+    expect(retried).toMatchObject({ processing: 'routed', processingAttempts: 0, processingError: null, version: 4 });
     expect(kinds()).toEqual([['kb_route', 'pending'], ['kb_draft', 'failed'], ['kb_draft', 'pending']]);
   });
 
@@ -151,52 +112,6 @@ describe('the KB pipeline steps on the outbox', () => {
   });
 
   describe('a learning is its decision glob', () => {
-    const newStore = async () => {
-      const store = new MemoryStore();
-      await store.transaction((tx) =>
-        tx.insertBoard({ name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] }),
-      );
-      return store;
-    };
-    const signal = {
-      key: 'finding:x',
-      kind: 'finding' as const,
-      agent: 'implementer',
-      label: 'Findings',
-      window: { from: NOW, to: NOW },
-      figures: { affected: 3, eligible: 10, rate: 0.3, count: 4 },
-      globIds: ['s1t1'],
-      examples: ['an example'],
-      measuredAt: NOW,
-    };
-    const full = (patch: Partial<KbItem> = {}): KbItem =>
-      drafted({
-        suggestedTarget: 'build doc',
-        sourceGlobIds: ['s1t1', 's1t2'],
-        source: 'mined',
-        signal,
-        agentSetVersion: 7,
-        catalogCandidate: true,
-        catalogReason: 'Holds anywhere',
-        occurrenceCount: 3,
-        extraEvidence: [
-          { itemId: 's1k8', globIds: ['s1t3'], evidence: 'More', submittedBy: 'a@example.com', at: '2026-10-05T12:01:00.000Z' },
-          { itemId: 's1k8', globIds: [], evidence: 'Again', submittedBy: 'b@example.com', at: '2026-10-05T12:02:00.000Z' },
-        ],
-        possiblyCoveredBy: { kind: 'item', id: 's1k5', quote: 'q', shortQuote: true, claim: 'duplicate', ownQuote: 'o', tooShort: 'both', alsoTarget: { quote: 't', reason: 'r' }, via: 's1k6' },
-        contradicts: [
-          { kind: 'knowledge', ref: 'build_test_lint § Test', note: 'Says vitest' },
-          { kind: 'item', ref: 's1k4', note: 'Conflicts' },
-          { kind: 'knowledge', ref: 'other', note: 'Also' },
-        ],
-        draftedAgainstVersion: 4,
-        rationale: 'Why',
-        staleSince: NOW,
-        staleReason: 'no_recent_evidence',
-        staleDismissedAt: null,
-        keptApartFrom: ['s1k9'],
-        ...patch,
-      });
     const read = (store: MemoryStore, id = 's1k1') => store.transaction((tx) => kbItems(tx).getKbItem(id));
 
     it('round-trips every field through the glob, its artifacts, attachments and links', async () => {

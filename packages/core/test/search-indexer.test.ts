@@ -263,6 +263,83 @@ describe('SearchIndexer', () => {
     expect(items().map((i) => i.boardId)).toEqual([other]);
   });
 
+  it('indexes only approved learnings that are not documents or decisions, with the fields the adapter reads (s15t72)', async () => {
+    await addGlob({ id: 's1t1', title: 'Sync retries', summary: 'Retry failed syncs three times.' });
+    const decided = { decidedBy: 'admin@example.com', decidedAt: at(5_000), processing: 'none' as const, version: 2 };
+    const learning = (id: string, patch: Partial<KbItem>): KbItem => ({
+      id,
+      boardId,
+      status: 'open',
+      type: 'gotcha',
+      statement: `Statement of ${id}.\nA second line.`,
+      evidence: `Evidence of ${id}.`,
+      suggestedTarget: null,
+      sourceGlobIds: ['s1t1', 's1t9'],
+      source: 'submitted',
+      signal: null,
+      agentSetVersion: null,
+      submittedBy: 'dev@example.com',
+      createdAt: START,
+      decidedBy: null,
+      decidedAt: null,
+      decisionReason: null,
+      document: null,
+      outcome: null,
+      ...UNPROCESSED,
+      version: 1,
+      ...patch,
+    });
+    const all = [
+      learning('s1k1', { status: 'approved', outcome: { kind: 'learning' }, ...decided }),
+      learning('s1k2', { processing: 'drafted' }),
+      learning('s1k3', { status: 'rejected', outcome: { kind: 'rejected', via: 'agent' }, ...decided }),
+      learning('s1k4', { status: 'merged', duplicateOf: 's1k1', processing: 'none' }),
+      learning('s1k5', { status: 'approved', type: 'decision', ...decided }),
+      learning('s1k6', {
+        status: 'approved',
+        document: { name: 'architecture', area: 'architecture', audience: [], description: 'Layout', content: '# A\n' },
+        ...decided,
+      }),
+      // Submitted later, with near-duplicate evidence merged in (an attachment, not part of the indexed evidence).
+      learning('s1k7', {
+        status: 'approved',
+        createdAt: at(1_000),
+        processing: 'none',
+        extraEvidence: [{ itemId: 's1k8', globIds: ['s1t1'], evidence: 'Seen again.', submittedBy: 'b@example.com', at: at(2_000) }],
+        version: 2,
+      }),
+    ];
+    await store.transaction(async (tx) => {
+      for (const i of all) if (!(await kbItems(tx, TEST_KB_WRITES).insertKbItem(i))) throw new Error(`${i.id} not inserted`);
+    });
+    // What the adapter's approved listing gave the indexer before the switch, mapped as it was.
+    const expected = (await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'approved')))
+      .filter((i) => i.document === null && i.type !== 'decision')
+      .map((i) => ({
+        externalRef: `learning:${i.id}`,
+        title: (i.statement.trim().split(/\r?\n/)[0] ?? '').slice(0, 80),
+        occurredAt: i.decidedAt ?? i.createdAt,
+        globIds: i.sourceGlobIds.filter((id) => id === 's1t1'),
+        text: `${i.statement}\n\nEvidence: ${i.evidence}`,
+      }));
+    expect(expected.map((e) => e.externalRef)).toEqual(['learning:s1k1', 'learning:s1k7']);
+
+    await indexer.syncBoard(boardId);
+    const indexed = items()
+      .filter((i) => i.sourceType === 'learning')
+      .sort((a, b) => a.externalRef.localeCompare(b.externalRef))
+      .map((i) => ({
+        externalRef: i.externalRef,
+        title: i.title,
+        occurredAt: i.occurredAt,
+        globIds: i.globIds,
+        text: chunksOf(i.externalRef)
+          .map((c) => c.text)
+          .join('\n\n'),
+      }));
+    expect(indexed).toEqual(expected);
+  });
+
   describe('embedding', () => {
     it('embeds chunks in batches, header and text together', async () => {
       const g = await addGlob({ id: 's1t1', summary: 'One.' });

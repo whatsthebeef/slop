@@ -4,9 +4,10 @@ import * as machine from '../domain/machine.js';
 import type { Context } from '../domain/machine.js';
 import { decisionOf } from '../domain/decision-glob.js';
 import { knowledgePageEffect } from '../domain/events.js';
-import { isKbGlob } from '../domain/kb-glob.js';
 import type { DecisionOutcomeKind } from '../domain/attributes.js';
-import type { DraftPreview, KbDraft, KbItem, KbTarget } from '../domain/kb.js';
+import type { DraftPreview, KbDraft, KbTarget } from '../domain/kb.js';
+import { isLearning, learningAssessmentFacts, learningDocument, learningDraft, learningStatus, learningTarget, pipelineState } from '../domain/learning.js';
+import type { LearningRead } from '../domain/learning.js';
 import { isAgentSetKind } from '../domain/knowledge.js';
 import type { Artifact, KnowledgeKind } from '../domain/knowledge.js';
 import type { Glob, Role } from '../domain/types.js';
@@ -15,7 +16,7 @@ import { memberOf, roleOf } from './access.js';
 import { applyDecisionStep, createDecisionForExtracted, decisionContext, writeAssessment } from './decision-glob.js';
 import type { GlobService } from './glob-service.js';
 import type { Approval, KnowledgeService, TargetChange } from './knowledge-service.js';
-import { kbItems } from './kb-items.js';
+import { readLearning } from './learning-reads.js';
 
 /** Who may decide a decision glob, and so a KB item through it. */
 const DECIDERS: readonly Role[] = ['admin', 'po'];
@@ -128,7 +129,7 @@ export class DecisionGlobService {
     }
 
     // A learning's decision is the KB item itself (same ID).
-    const itemId = isKbGlob(seen) ? seen.id : null;
+    const itemId = isLearning(seen) ? seen.id : null;
     let hints: readonly Hint[] = [];
     let result: Result<Glob>;
     try {
@@ -213,50 +214,54 @@ export class DecisionGlobService {
    * itself (accept, accept with edits, reject). A decision with no learning records the outcome only.
    */
   private async writeItem(tx: Tx, email: string, glob: Glob, role: Role, input: DecideRequest): Promise<Result<boolean>> {
-    const itemId = isKbGlob(glob) ? glob.id : null;
+    const itemId = isLearning(glob) ? glob.id : null;
     if (input.outcome === 'needs_work') return ok(false);
     if (itemId === null) {
       return input.outcome === 'accept_with_edits' || input.outcome === 'retarget'
         ? invalidInput('This decision has no knowledge item, so there is nothing to edit or retarget')
         : ok(false);
     }
-    const item = await kbItems(tx).getKbItem(itemId);
-    if (item === null) return notFound(`No KB item ${itemId}`);
-    if (item.status !== 'open') {
+    const learning = await readLearning(tx, itemId);
+    if (learning === null) return notFound(`No KB item ${itemId}`);
+    const { version } = learning.glob;
+    const status = learningStatus(learning.glob, learning.artifacts);
+    if (status !== 'open') {
       // A reopened decision whose item was approved stays accepted: accepting again only records the outcome.
-      if (item.status === 'approved' && input.outcome === 'accept') return ok(false);
-      return invalidInput(`${item.id} is already ${item.status}: change it on the Knowledge page first`);
+      if (status === 'approved' && input.outcome === 'accept') return ok(false);
+      return invalidInput(`${itemId} is already ${status}: change it on the Knowledge page first`);
     }
     if (role === 'po') {
-      const refusal = keptForAdmins(input.outcome === 'retarget' ? input.target?.kind : item.target?.kind);
-      if (refusal !== null && input.outcome !== 'reject') return forbidden(`${item.id} ${refusal}: an admin decides it`);
+      const refusal = keptForAdmins(input.outcome === 'retarget' ? input.target?.kind : learningTarget(learning.glob).routed?.kind);
+      if (refusal !== null && input.outcome !== 'reject') return forbidden(`${itemId} ${refusal}: an admin decides it`);
     }
     const knowledge = this.deps.knowledge;
     switch (input.outcome) {
       case 'accept':
       case 'accept_with_edits': {
-        const approval = this.approvalFor(item, input);
+        const approval = this.approvalFor(learning, input);
         if (!approval.ok) return approval;
-        const approved = await knowledge.approveIn(tx, email, item.id, item.version, approval.value, DECIDERS);
+        const approved = await knowledge.approveIn(tx, email, itemId, version, approval.value, DECIDERS);
         return approved.ok ? ok(true) : approved;
       }
       case 'retarget': {
         if (input.target === undefined) return invalidInput('Retarget needs the new target');
-        const moved = await knowledge.changeTargetIn(tx, email, item.id, item.version, input.target, DECIDERS);
+        const moved = await knowledge.changeTargetIn(tx, email, itemId, version, input.target, DECIDERS);
         return moved.ok ? ok(false) : moved;
       }
       case 'reject': {
-        const rejected = await knowledge.rejectIn(tx, email, item.id, item.version, input.reason ?? '', DECIDERS);
+        const rejected = await knowledge.rejectIn(tx, email, itemId, version, input.reason ?? '', DECIDERS);
         return rejected.ok ? ok(true) : rejected;
       }
     }
   }
 
-  /** Accept applies the draft; an item the pipeline never drafted (routing gave up) is kept as a learning; one still routing waits. */
-  private approvalFor(item: KbItem, input: DecideRequest): Result<Approval> {
+  /** Accept applies the draft; a learning the pipeline never drafted (routing gave up) is kept as a learning; one still routing waits. */
+  private approvalFor(learning: LearningRead, input: DecideRequest): Result<Approval> {
     if (input.outcome === 'accept_with_edits') return ok({ as: 'draft', content: input.editedDraft ?? '' });
-    if (item.document !== null || item.draft !== null) return ok({ as: 'draft' });
-    if (item.processing === 'pending' || item.processing === 'routed') return invalidInput(`${item.id} is not drafted yet: wait for the pipeline, or retarget it`);
+    const { glob, artifacts } = learning;
+    if (learningDocument(glob, artifacts) !== null || learningDraft(artifacts) !== null) return ok({ as: 'draft' });
+    const { processing } = pipelineState(glob, artifacts, learning.jobs);
+    if (processing === 'pending' || processing === 'routed') return invalidInput(`${glob.id} is not drafted yet: wait for the pipeline, or retarget it`);
     return ok({ as: 'learning' });
   }
 
@@ -307,10 +312,12 @@ export class DecisionGlobService {
       if (attributes === null) return invalidInput(`${id} is not a decision glob`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const item = isKbGlob(glob) ? await kbItems(tx).getKbItem(glob.id) : null;
-      const preview = item === null ? null : await this.deps.knowledge.previewFor(tx, item);
-      const draft = item?.document == null ? (item?.draft ?? null) : { section: null, content: item.document.content };
-      return ok({ target: item?.target ?? null, currentVersion: preview?.version ?? null, preview, draft });
+      const learning = isLearning(glob) ? await readLearning(tx, glob.id) : null;
+      if (learning === null) return ok({ target: null, currentVersion: null, preview: null, draft: null });
+      const preview = await this.deps.knowledge.previewFor(tx, learning);
+      const document = learningDocument(learning.glob, learning.artifacts);
+      const draft = document === null ? (learningDraft(learning.artifacts)?.draft ?? null) : { section: null, content: document.content };
+      return ok({ target: learningTarget(learning.glob).routed, currentVersion: preview?.version ?? null, preview, draft });
     });
   }
 
@@ -322,9 +329,9 @@ export class DecisionGlobService {
       if (decisionOf(glob) === null) return invalidInput(`${id} is not a decision glob`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const item = isKbGlob(glob) ? await kbItems(tx).getKbItem(glob.id) : null;
-      const preview = item === null ? null : await this.deps.knowledge.previewFor(tx, item);
-      const changed = await writeAssessment(tx, { clock: this.deps.clock }, glob, item, preview);
+      const learning = isLearning(glob) ? await readLearning(tx, glob.id) : null;
+      const preview = learning === null ? null : await this.deps.knowledge.previewFor(tx, learning);
+      const changed = await writeAssessment(tx, { clock: this.deps.clock }, glob, learning === null ? null : learningAssessmentFacts(learning), preview);
       const latest = (await tx.artifactVersions(id, 'assessment', '')).at(-1);
       return latest === undefined ? invalidInput('No assessment could be written') : ok({ artifact: latest, changed, boardId: glob.boardId });
     });
