@@ -5,14 +5,14 @@ import { actionsFor, citedGlobs, globScope, isChatShortcut, MESSAGE_LIST, mentio
 import { takeSseEvents } from '../src/lib/sse';
 
 const cite = (patch: Partial<ChatCitation>): ChatCitation => ({
-  n: 1, source: 'decision', sourceLabel: 'Decision', title: 'T', date: '2026-10-01T00:00:00.000Z', link: null, globId: null, status: 'active', supersededBy: null, ...patch,
+  n: 1, source: 'decision', sourceLabel: 'Choice', title: 'T', date: '2026-10-01T00:00:00.000Z', link: null, globId: null, status: 'active', supersededBy: null, ...patch,
 });
 
 describe('the chat panel helpers', () => {
-  it('marks a decision current or superseded by the newer one, and leaves other sources unmarked', () => {
+  it('marks a choice current or replaced by the newer one, and leaves other sources unmarked', () => {
     expect(stateLabel(cite({}))).toBe('current');
-    expect(stateLabel(cite({ status: 'superseded', supersededBy: { title: 'Newer', date: null } }))).toBe('superseded by Newer');
-    expect(stateLabel(cite({ status: 'superseded' }))).toBe('superseded');
+    expect(stateLabel(cite({ status: 'superseded', supersededBy: { title: 'Newer', date: null } }))).toBe('replaced by Newer');
+    expect(stateLabel(cite({ status: 'superseded' }))).toBe('replaced');
     expect(stateLabel(cite({ source: 'glob_plan' }))).toBeNull();
   });
 

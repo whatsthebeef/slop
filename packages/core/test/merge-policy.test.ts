@@ -120,7 +120,7 @@ describe('the merge policy through the KB', () => {
     unwrap(
       await knowledge.submitLearning(DEV, boardId, {
         sourceGlobId: globId,
-        type: 'decision',
+        type: 'pattern',
         statement: 'Only one open glob may change apps/server/drizzle at a time',
         evidence: 's15f11',
         ...patch,

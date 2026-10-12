@@ -9,15 +9,15 @@ import { Button } from './ui/button';
 
 const day = (iso: string) => iso.slice(0, 10);
 
-/** A citation back to where the decision was made: an in-app link (a glob or the Knowledge page) with the source's name. */
+/** A citation back to where the choice was made: an in-app link (a glob or the Knowledge page) with the source's name. */
 const Source = ({ label, url }: { label: string; url: string | null }) =>
   url === null ? <span>{label}</span> : <Link className='underline' to={url}>{label}</Link>;
 
 /**
- * The glob view's decisions: the choices taken on this glob (from its implementation record, plan.md, clarifications
- * and approved learnings), each with who decided, when and a link to its source. A decision a newer one replaced is
+ * The glob view's choices: the choices taken on this glob (from its implementation record, plan.md, clarifications
+ * and approved learnings), each with who decided, when and a link to its source. A choice a newer one replaced is
  * struck through and says by what and when; a replacement the model proposed but could not verify is shown as
- * proposed, for a member to confirm or dismiss. Decision text comes from documents and models, so it is plain text.
+ * proposed, for a member to confirm or dismiss. Choice text comes from documents and models, so it is plain text.
  * `glob.decisions` hints and reconnects refresh it.
  */
 export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: string }) => {
@@ -30,7 +30,7 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
     onSuccess: () => void client.invalidateQueries({ queryKey: globDecisionsKey(globId) }),
     onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not save'),
   });
-  // A decision a person may want decided on the board: it becomes a decision glob in Planning (the same one if asked again).
+  // A choice a person may want decided on the board: it becomes a decision glob in Planning (the same one if asked again).
   const promote = useMutation({
     mutationFn: (id: number) => api.promoteDecision(boardId, id),
     onSuccess: ({ glob }) => {
@@ -82,7 +82,7 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
         {replaced && newer !== null && (
           <p className='flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground' data-testid='decision-superseded'>
             <span>
-              Superseded by “{newer.statement}” on {day(newer.decidedAt)}
+              Replaced by “{newer.statement}” on {day(newer.decidedAt)}
             </span>
             {buttons(d.id, newer.state)}
           </p>
@@ -100,8 +100,8 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
   };
 
   return (
-    <section className='grid gap-2' aria-label='Decisions' data-testid='glob-decisions'>
-      <h3 className='text-xs font-semibold text-muted-foreground'>Decisions</h3>
+    <section className='grid gap-2' aria-label='Choices' data-testid='glob-decisions'>
+      <h3 className='text-xs font-semibold text-muted-foreground'>Choices</h3>
       <ul className='grid gap-2'>{decisions.map(row)}</ul>
     </section>
   );

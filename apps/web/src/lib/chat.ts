@@ -12,10 +12,10 @@ export const unavailableNotice = (error: unknown): string | null => {
   return reason === '' ? lead : `${lead} (${reason}${error.body.fix === undefined ? '' : `: ${error.body.fix}`})`;
 };
 
-/** A superseded decision says what replaced it; a current one says so; other sources carry no state. */
+/** A replaced choice says what replaced it; a current one says so; other sources carry no state. */
 export const stateLabel = (c: ChatCitation): string | null => {
   if (c.source !== 'decision') return c.status === 'legacy' ? 'legacy' : null;
-  if (c.status === 'superseded') return c.supersededBy === null ? 'superseded' : `superseded by ${c.supersededBy.title}`;
+  if (c.status === 'superseded') return c.supersededBy === null ? 'replaced' : `replaced by ${c.supersededBy.title}`;
   return 'current';
 };
 
@@ -79,7 +79,7 @@ export const suggestionsFor = (page: PageContext): string[] => {
     case 'inbox':
       return page.id === undefined
         ? ['Which items are waiting for a person?', 'What came in this week?']
-        : ['Which globs does this relate to?', 'What decisions does this mention?'];
+        : ['Which globs does this relate to?', 'What choices does this mention?'];
     case 'signed_off':
       return ['What was signed off this week?', 'What changed this week?'];
     case 'settings':

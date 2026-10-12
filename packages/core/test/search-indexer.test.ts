@@ -294,7 +294,7 @@ describe('SearchIndexer', () => {
       learning('s1k2', { processing: 'drafted' }),
       learning('s1k3', { status: 'rejected', outcome: { kind: 'rejected', via: 'agent' }, ...decided }),
       learning('s1k4', { status: 'merged', duplicateOf: 's1k1', processing: 'none' }),
-      learning('s1k5', { status: 'approved', type: 'decision', ...decided }),
+      learning('s1k5', { status: 'approved', type: 'pattern', ...decided }),
       learning('s1k6', {
         status: 'approved',
         document: { name: 'architecture', area: 'architecture', audience: [], description: 'Layout', content: '# A\n' },
@@ -314,7 +314,7 @@ describe('SearchIndexer', () => {
     });
     // What the adapter's approved listing gave the indexer before the switch, mapped as it was.
     const expected = (await store.transaction((tx) => learningSeed(tx).listSeeded(boardId, 'approved')))
-      .filter((i) => i.document === null && i.type !== 'decision')
+      .filter((i) => i.document === null)
       .map((i) => ({
         externalRef: `learning:${i.id}`,
         title: (i.statement.trim().split(/\r?\n/)[0] ?? '').slice(0, 80),
@@ -322,7 +322,7 @@ describe('SearchIndexer', () => {
         globIds: i.sourceGlobIds.filter((id) => id === 's1t1'),
         text: `${i.statement}\n\nEvidence: ${i.evidence}`,
       }));
-    expect(expected.map((e) => e.externalRef)).toEqual(['learning:s1k1', 'learning:s1k7']);
+    expect(expected.map((e) => e.externalRef)).toEqual(['learning:s1k1', 'learning:s1k5', 'learning:s1k7']);
 
     await indexer.syncBoard(boardId);
     const indexed = items()

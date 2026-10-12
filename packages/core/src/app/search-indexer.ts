@@ -295,8 +295,6 @@ export class SearchIndexer {
       // A whole-document proposal became a knowledge document; its text is indexed as that.
       if (learningDocument(glob, artifacts) !== null) continue;
       const facts = learningFacts(glob);
-      // A decision learning is indexed as a decision (DecisionPipeline), so search doesn't return it twice.
-      if (facts.kind === 'decision') continue;
       push({
         sourceType: 'learning',
         externalRef: `learning:${glob.id}`,
