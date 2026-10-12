@@ -420,6 +420,10 @@ export interface NewLearningGlob {
   readonly document: ProposedDocument | null;
   /** Set for a document proposal (its document); a statement is routed by the pipeline. */
   readonly target: KbTarget | null;
+  /** Slop raised it from board activity (mining, effect checks, escalation outcomes) rather than an agent: default submitted. */
+  readonly source?: 'submitted' | 'mined';
+  /** Mined learnings: the signal that raised it and the figures behind it. */
+  readonly signal?: KbSignal | null;
 }
 
 /**
@@ -436,16 +440,18 @@ export const createLearning = async (
   const parsed = parseId(id);
   if (board === null || parsed?.letter !== 'k' || parsed.boardId !== boardId)
     throw new Error(`${id} is not a KB item ID on board ${String(boardId)}`);
+  const source = input.source ?? 'submitted';
   const attributes: DecisionAttributes = {
     scope: defaultScope(input.type),
-    origin: { kind: 'submitted' },
-    channel: 'agent',
+    origin: { kind: source },
+    channel: source === 'mined' ? 'mined' : 'agent',
     outcome: null,
     kind: input.type,
     sourceGlobs: input.sourceGlobIds,
     target: { suggested: input.suggestedTarget, routed: target },
     evidenceCount: 1,
     ...(input.agentSetVersion === null ? {} : { agentSetVersion: input.agentSetVersion }),
+    ...(input.signal == null ? {} : { signal: input.signal }),
     ...(document === null
       ? {}
       : {
@@ -487,7 +493,7 @@ export const createLearning = async (
         id,
         createdAt: input.createdAt,
         submittedBy: input.submittedBy,
-        source: 'submitted',
+        source,
         agentSetVersion: input.agentSetVersion,
       },
       payload: proposalText({ statement, evidence, document }),
@@ -528,6 +534,8 @@ interface LearningEdit {
   readonly links?: (links: readonly GlobLink[]) => GlobLink[];
   /** A new statement: the glob's summary, title and payload follow it. */
   readonly statement?: string;
+  /** New evidence text for a statement: the payload follows it. */
+  readonly evidence?: string;
   /** Back to drafting: the draft is cleared (a document proposal is its own draft, and keeps it). */
   readonly requeue?: true;
   readonly clearMergeNote?: true;
@@ -609,7 +617,7 @@ const editLearning = async (
   const outcome = edit.outcome;
   const stateAfter: LearningArtifactState = {
     ...stateBefore,
-    payload: proposalText({ statement, evidence: learningEvidence(glob, artifacts), document }),
+    payload: proposalText({ statement, evidence: edit.evidence ?? learningEvidence(glob, artifacts), document }),
     ...(clearsDraft ? { draft: null, draftedAgainstVersion: null, rationale: null } : {}),
     ...(outcome === undefined
       ? {}
@@ -1082,3 +1090,37 @@ export const queueDueLearningSteps = async (tx: Tx, boardId: number): Promise<nu
   await tx.enqueueEffects(due);
   return due.length;
 };
+
+/** A mined learning's new figures and a line of evidence (new evidence clears the stale flag; an admin's Keep stays). */
+export interface MinedRefresh {
+  /** The signal's new figures; null leaves the learning's own. */
+  readonly signal: KbSignal | null;
+  readonly evidence: string;
+  readonly sourceGlobIds: readonly string[];
+}
+
+/** Writes `refresh` to an open learning if its glob is still at `expectedVersion`; false otherwise. */
+export const refreshMinedLearning = (
+  tx: Tx,
+  ctx: LearningWriteContext,
+  id: string,
+  expectedVersion: number,
+  refresh: MinedRefresh,
+): Promise<boolean> =>
+  editLearning(tx, ctx, id, expectedVersion, {
+    evidence: refresh.evidence,
+    attributes: (a) => ({
+      ...withStale(a, null, null),
+      ...(refresh.signal === null ? {} : { signal: refresh.signal }),
+      sourceGlobs: refresh.sourceGlobIds,
+    }),
+  });
+
+/** The effect check's verdict on an approved learning, written if its glob is still at `expectedVersion`; false otherwise. */
+export const recordLearningEffectCheck = (
+  tx: Tx,
+  ctx: LearningWriteContext,
+  id: string,
+  expectedVersion: number,
+  check: EffectCheck,
+): Promise<boolean> => editLearning(tx, ctx, id, expectedVersion, { effectCheck: check });

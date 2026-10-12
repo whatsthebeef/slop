@@ -11,14 +11,12 @@ import {
   recordKey,
 } from '../domain/escalation-learning.js';
 import type { EscalationCandidate, EscalationRecord, EscalationView } from '../domain/escalation-learning.js';
-import { UNPROCESSED } from '../domain/kb.js';
-import type { KbItem } from '../domain/kb.js';
 import type { Board } from '../domain/types.js';
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 import { newKbItemId } from './knowledge-service.js';
 import type { RiskAreaService } from './risk-area-service.js';
-import { kbItems } from './kb-items.js';
+import { createLearning } from './learning-writes.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** How far back the learning reads events: an outcome older than this is settled. */
@@ -143,32 +141,28 @@ export class EscalationLearningService {
     records: readonly EscalationRecord[],
   ): Promise<Hint[]> {
     const id = await newKbItemId(tx, board.id);
-    const item: KbItem = {
-      id,
-      boardId: board.id,
-      status: 'open',
-      type: 'agent-behaviour',
-      statement: guidanceStatement(candidate.criterion, stance),
-      evidence: guidanceEvidence(candidate.criterion, records),
-      suggestedTarget: 'risk_and_size',
-      sourceGlobIds: [candidate.globId],
-      // Slop raised it from outcomes, as mining does: a mined proposal.
-      source: 'mined',
-      signal: null,
-      agentSetVersion: board.agentSetVersion,
-      submittedBy: SUBMITTED_BY,
-      createdAt: this.deps.clock.now(),
-      decidedBy: null,
-      decidedAt: null,
-      decisionReason: null,
-      document: null,
-      outcome: null,
-      ...UNPROCESSED,
-      version: 1,
-    };
     const hints: Hint[] = [];
-    const inserted = await kbItems(tx, { clock: this.deps.clock, raise: (h) => hints.push(h) }).insertKbItem(item);
-    if (!inserted) throw new Error(`KB item ${id} already exists`);
+    // Slop raised it from outcomes, as mining does: a mined proposal.
+    const created = await createLearning(
+      tx,
+      { clock: this.deps.clock, raise: (h) => hints.push(h) },
+      {
+        id,
+        boardId: board.id,
+        type: 'agent-behaviour',
+        statement: guidanceStatement(candidate.criterion, stance),
+        evidence: guidanceEvidence(candidate.criterion, records),
+        suggestedTarget: 'risk_and_size',
+        sourceGlobIds: [candidate.globId],
+        agentSetVersion: board.agentSetVersion,
+        submittedBy: SUBMITTED_BY,
+        createdAt: this.deps.clock.now(),
+        document: null,
+        target: null,
+        source: 'mined',
+      },
+    );
+    if (!created) throw new Error(`KB item ${id} already exists`);
     return hints;
   }
 
