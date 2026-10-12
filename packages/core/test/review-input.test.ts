@@ -106,7 +106,7 @@ describe('renderHistoryBriefing', () => {
         decisions: [{ globId: 's1t1', statement: 'Use X', date: NOW, superseded: true }],
       },
     ]);
-    expect(out).toContain('Superseded decision (history only)');
+    expect(out).toContain('Replaced choice (history only)');
   });
 });
 
@@ -311,7 +311,7 @@ describe('ReviewInputService', () => {
     expect(context).toContain('Added retries because jobs were lost');
     expect(context).toContain('Retry loop never stops');
     expect(context).toContain('failed 2 tests');
-    expect(context).toContain('Superseded decision (history only)');
+    expect(context).toContain('Replaced choice (history only)');
     expect(context).not.toContain('Not this file');
     expect(context).not.toContain('already merged');
     expect(context).not.toContain('About another file');

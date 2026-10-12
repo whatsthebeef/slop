@@ -180,7 +180,7 @@ export const learningSeed = (tx: Tx, context?: KbWriteContext): LearningSeed => 
           summary: item.statement,
           type: 'same',
           category: 'decision',
-          attributes: { scope: defaultScope(item.type), origin: { kind: item.source }, channel: channelOf(item), outcome: null, ...kbAttributesOf(open) },
+          attributes: { scope: defaultScope(), origin: { kind: item.source }, channel: channelOf(item), outcome: null, ...kbAttributesOf(open) },
           group: null,
           environment: null,
           autoTrigger: false,

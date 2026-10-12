@@ -640,7 +640,7 @@ export class ChatService {
     const sources = (reply.citations ?? []).map((c) => `[${String(c.n)}] ${c.sourceLabel}: ${c.title} (${c.date.slice(0, 10)})`).join('\n');
     return submit(email, boardId, {
       sourceGlobId,
-      type: 'decision',
+      type: 'pattern',
       statement: reply.content,
       evidence: `Answer from the board chat${asked === undefined ? '' : ` to "${asked.content}"`}, saved by ${email}.${sources === '' ? '' : `\nSources:\n${sources}`}`,
     });

@@ -67,7 +67,7 @@ const AttachDialog = ({
       <DialogContent title="Attach to globs">
         <div className="grid gap-3">
           <p className="text-sm text-muted-foreground">
-            It appears on each glob as an attachment, in its context, and its decisions are read
+            It appears on each glob as an attachment, in its context, and its choices are read
             from it.
           </p>
           {suggested.map((s) => (

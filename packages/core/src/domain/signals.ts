@@ -817,7 +817,7 @@ const independentlyReviewedGlobs = (activity: BoardActivity): Set<string> =>
 const reviewFalsePositive = define({
   kind: 'review_false_positive',
   agent: null,
-  type: 'decision',
+  type: 'pattern',
   suggestedTarget: `the review guide (area ${REVIEW_GUIDE_AREA}): what the independent reviewer should stop flagging`,
   threshold: 'at least 3 globs with the same category of finding marked wrong',
   eligibleGlobs: independentlyReviewedGlobs,

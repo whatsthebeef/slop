@@ -696,7 +696,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .describe('The glob the learning came from; required unless a document is proposed'),
         type: z
           .enum(LEARNING_TYPES)
-          .describe('decision, gotcha, pattern, or agent-behaviour (something an instruction would have prevented)'),
+          .describe("gotcha, pattern, or agent-behaviour (something an instruction would have prevented). Choices are not learnings: record them in your implementation record's ## Decisions"),
         statement: z.string().min(1).describe('The learning, as one rule or fact'),
         evidence: z.string().min(1).describe('What showed it: files, review findings, failures, a developer correction'),
         suggestedTarget: z
@@ -739,7 +739,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a superseded one says what replaced it and when), `authority` (which source wins when they disagree: merged code and the implementation record, then current decisions newest first, then plan.md, then older discussion; superseded decisions are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current decisions first, superseded ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
+        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a replaced one says what replaced it and when; the field keeps its old name), `authority` (which source wins when they disagree: merged code and the implementation record, then current choices newest first, then plan.md, then older discussion; replaced choices are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current choices first, replaced ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {
@@ -762,13 +762,13 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   const sourceTypes = z
     .array(z.enum(SOURCE_TYPES))
     .optional()
-    .describe('Only these kinds of source (glob_plan, implementation_plan, local_review, kb_doc, learning, decision, ...)');
+    .describe('Only these kinds of source (glob_plan, implementation_plan, local_review, kb_doc, learning, decision (a choice; the wire name is kept), ...)');
 
   server.registerTool(
     'search_text',
     {
       description:
-        "Keyword search over the board's plans, implementation records, reviews, knowledge, learnings and decisions: exact words, names, identifiers and file paths. Returns at most 10 cited chunks (source, date, title, link, glob), best first, a current decision ahead of the older ones it replaced; superseded or legacy items are labelled (`superseded by \"<title>\" on <date>`). In current mode superseded decisions rank last; all_time mode shows both. The board's search index; member of the board required.",
+        "Keyword search over the board's plans, implementation records, reviews, knowledge, learnings and choices: exact words, names, identifiers and file paths. Returns at most 10 cited chunks (source, date, title, link, glob), best first, a current choice ahead of the older ones it replaced; replaced or legacy items are labelled (`replaced by \"<title>\" on <date>`). In current mode replaced choices rank last; all_time mode shows both. The board's search index; member of the board required.",
       inputSchema: { ...searchFields, query: z.string().min(1).max(MAX_QUERY_LENGTH), sourceTypes },
     },
     async (p) => reply(await deps.search.text(email, toRequest(p))),
@@ -788,7 +788,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'ask_board',
     {
       description:
-        "Ask a question about the board in plain words (e.g. \"why did we decide X?\") and get an answer written only from the board's own records, with `citations` (source, title, date, link, glob, status; a superseded decision names what replaced it). `answered` is false, with \"I couldn't find anything about that in the board's records.\", when the records don't answer. Current material is preferred; pass `globId` to scope it to one glob. One-off: nothing is added to the person's chat panel. Fails with llm_unavailable while the chat model is busy or down; use search_text then. Member of the board required.",
+        "Ask a question about the board in plain words (e.g. \"why did we decide X?\") and get an answer written only from the board's own records, with `citations` (source, title, date, link, glob, status; a replaced choice names what replaced it). `answered` is false, with \"I couldn't find anything about that in the board's records.\", when the records don't answer. Current material is preferred; pass `globId` to scope it to one glob. One-off: nothing is added to the person's chat panel. Fails with llm_unavailable while the chat model is busy or down; use search_text then. Member of the board required.",
       inputSchema: {
         board: searchFields.board,
         question: z.string().min(1).max(MAX_QUERY_LENGTH),

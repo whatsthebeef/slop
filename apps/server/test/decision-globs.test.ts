@@ -116,7 +116,7 @@ describe('decision globs', () => {
     });
   const json = async <T>(response: Response): Promise<T> => (await response.json()) as T;
   const view = async (id: string) => json<View>(await call(ADMIN, 'GET', `/api/globs/${id}`));
-  const submit = async (statement: string, type: 'decision' | 'gotcha' = 'decision') =>
+  const submit = async (statement: string, type: 'pattern' | 'gotcha' = 'pattern') =>
     unwrap(await knowledge.submitLearning(DEV, boardId, { sourceGlobId, type, statement, evidence: 'Seen in review', suggestedTarget: null, document: null }));
   /** An item the pipeline gave up routing is kept as a learning when accepted (no drafting needed). */
   /** The pipeline gave up on routing the item: its job failed (it can still be decided as a learning). */
@@ -150,7 +150,7 @@ describe('decision globs', () => {
       expect(await ids('decisions')).not.toContain(work.id);
       expect(await ids('all')).toEqual(expect.arrayContaining([globId, work.id]));
       const stored = await store.transaction((tx) => tx.getGlob(globId));
-      expect(stored?.attributes).toMatchObject({ scope: { kind: 'project', ref: null }, channel: 'agent', outcome: null });
+      expect(stored?.attributes).toMatchObject({ scope: { kind: 'future_work', ref: null }, channel: 'agent', outcome: null });
     });
   });
 
@@ -158,7 +158,7 @@ describe('decision globs', () => {
     it('submit_learning returns the glob ID over MCP and creates a Planning decision with the proposal as its payload', async () => {
       const result = await client.callTool({
         name: 'submit_learning',
-        arguments: { board: boardId, sourceGlobId, type: 'decision', statement: 'Use cursors for every list endpoint', evidence: 'Review found offset paging' },
+        arguments: { board: boardId, sourceGlobId, type: 'pattern', statement: 'Use cursors for every list endpoint', evidence: 'Review found offset paging' },
       });
       const [first] = result.content as { text: string }[];
       const reply = JSON.parse(first?.text ?? 'null') as { id: string; globId: string };
@@ -170,6 +170,14 @@ describe('decision globs', () => {
       expect(glob.id).toBe(reply.id);
       const [plan] = await store.transaction((tx) => tx.listArtifacts(reply.globId, 'plan'));
       expect(plan?.content).toContain('Use cursors');
+    });
+
+    it('submit_learning over MCP refuses the removed decision type, pointing at the implementation record', async () => {
+      const result = await client.callTool({
+        name: 'submit_learning',
+        arguments: { board: boardId, sourceGlobId, type: 'decision', statement: 'Use cursors', evidence: 'Review found offset paging' },
+      });
+      expect(result.isError).toBe(true);
     });
 
     it('create_glob over MCP and REST refuse the decision category', async () => {

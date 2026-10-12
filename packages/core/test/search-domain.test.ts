@@ -179,11 +179,11 @@ describe('ranking', () => {
     const current = candidate({ chunkId: 2, relevance: 0.2, sourceType: 'decision', authority: 'decision', occurredAt: daysAgo(400) });
     const ranked = rankCandidates([old, current], 'current', NOW);
     expect(ranked.map((h) => h.itemId)).toEqual([2, 1]);
-    expect(ranked[1]?.label).toBe('superseded by "Use queues" on 2026-09-30');
+    expect(ranked[1]?.label).toBe('replaced by "Use queues" on 2026-09-30');
     expect(ranked[1]?.supersededBy).toEqual({ title: 'Use queues', date: '2026-09-30T10:00:00.000Z' });
     const all = rankCandidates([old, current], 'all_time', NOW);
     expect(all.map((h) => h.itemId)).toEqual([1, 2]);
-    expect(all[0]?.label).toBe('superseded by "Use queues" on 2026-09-30');
+    expect(all[0]?.label).toBe('replaced by "Use queues" on 2026-09-30');
   });
 
   it('down-ranks and labels superseded items, in both modes', () => {
@@ -191,12 +191,12 @@ describe('ranking', () => {
     const active = candidate({ chunkId: 2, relevance: 0.3 });
     const current = rankCandidates([superseded, active], 'current', NOW);
     expect(current.map((h) => h.itemId)).toEqual([2, 1]);
-    expect(current[1]?.label).toBe('superseded by "New design"');
+    expect(current[1]?.label).toBe('replaced by "New design"');
     expect(current[1]?.supersededBy).toEqual({ title: 'New design', date: null });
     const all = rankCandidates([superseded, active], 'all_time', NOW);
     // All-time stops penalising it (its relevance wins) but still labels it.
     expect(all.map((h) => h.itemId)).toEqual([1, 2]);
-    expect(all[0]?.label).toBe('superseded by "New design"');
+    expect(all[0]?.label).toBe('replaced by "New design"');
   });
 
   it('ranks legacy material last in current mode, however well it matches', () => {

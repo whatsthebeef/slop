@@ -167,7 +167,7 @@ export interface InboxContextItem {
 
 /** What `get_context` tells an agent about conflicting sources. */
 export const AUTHORITY_STATEMENT =
-  'When sources disagree: merged code and the implementation record win, then current decisions (newest first), then plan.md, then older discussion. Superseded decisions are history: read them for why, not for what to do. Accepted decisions in scopedDecisions govern this glob by their scope, broadest first.';
+  'When sources disagree: merged code and the implementation record win, then current choices (newest first), then plan.md, then older discussion. Replaced choices are history: read them for why, not for what to do. Accepted decisions in scopedDecisions govern this glob by their scope, broadest first.';
 
 /** The most decisions one context bundle carries. */
 const CONTEXT_DECISIONS = 30;

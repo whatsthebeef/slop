@@ -157,7 +157,7 @@ const renderFile = (file: FileHistory): string => {
   for (const problem of file.problems.slice(0, HISTORY_PROBLEMS_PER_FILE))
     out.push(`- Past problem: ${clip(problem, LINE_LIMIT)}`);
   for (const decision of file.decisions.slice(0, HISTORY_DECISIONS_PER_FILE)) {
-    const label = decision.superseded ? 'Superseded decision (history only)' : 'Decision';
+    const label = decision.superseded ? 'Replaced choice (history only)' : 'Choice';
     out.push(
       `- ${label} ${day(decision.date)}${decision.globId === null ? '' : ` (${decision.globId})`}: ${clip(decision.statement, LINE_LIMIT)}`,
     );

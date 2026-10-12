@@ -100,14 +100,14 @@ describe('ChatService', () => {
     await seed('noise', 'retry backoff appears here too', { title: 'Noise', sourceType: 'glob_plan' });
     // Which number the decision got is read from the prompt the model saw.
     unwrap(await ask());
-    const n = Number(/\[(\d)\] Decision: Use backoff/.exec(llm.requests[0]?.prompt ?? '')?.[1]);
+    const n = Number(/\[(\d)\] Choice: Use backoff/.exec(llm.requests[0]?.prompt ?? '')?.[1]);
     expect(n).toBeGreaterThan(0);
     llm.next = `Exponential [${n}]`;
     const answered = unwrap(await ask());
     expect(answered.answered).toBe(true);
     expect(answered.reply.content).toBe(`Exponential [${n}]`);
     expect(answered.reply.citations).toEqual([
-      expect.objectContaining({ source: 'decision', sourceLabel: 'Decision', title: 'Use backoff', link: '/boards/1/globs/use-backoff', status: 'active', supersededBy: null }),
+      expect.objectContaining({ source: 'decision', sourceLabel: 'Choice', title: 'Use backoff', link: '/boards/1/globs/use-backoff', status: 'active', supersededBy: null }),
     ]);
   });
 
@@ -141,7 +141,7 @@ describe('ChatService', () => {
     await seed('a', 'retry backoff alpha', { title: 'Alpha' });
     await seed('b', 'retry backoff beta', { title: 'Beta' });
     unwrap(await ask());
-    const num = (title: string) => Number(new RegExp(`\\[(\\d+)\\] Decision: ${title}`).exec(llm.requests[0]?.prompt ?? '')?.[1]);
+    const num = (title: string) => Number(new RegExp(`\\[(\\d+)\\] Choice: ${title}`).exec(llm.requests[0]?.prompt ?? '')?.[1]);
     const [na, nb] = [num('Alpha'), num('Beta')];
     llm.next = `x [${nb}] [5] [${na}]`;
     const cites = unwrap(await ask()).reply.citations ?? [];
@@ -197,7 +197,7 @@ describe('ChatService', () => {
     const result = unwrap(await ask());
     const prompt = llm.requests[0]?.prompt ?? '';
     expect(prompt.indexOf('Jittered backoff')).toBeLessThan(prompt.indexOf('Fixed backoff'));
-    expect(prompt).toContain('superseded by "Jittered backoff"');
+    expect(prompt).toContain('replaced by "Jittered backoff"');
     const [current, superseded] = result.reply.citations ?? [];
     expect(current).toMatchObject({ title: 'Jittered backoff', status: 'active', supersededBy: null });
     expect(superseded).toMatchObject({ title: 'Fixed backoff', status: 'superseded', supersededBy: { title: 'Jittered backoff' } });
@@ -400,9 +400,9 @@ describe('ChatService', () => {
       const saved = unwrap(await chat.saveToKnowledge(DEV, boardId, thread.id, reply.id));
       expect(saved).toEqual({ id: 's1k1' });
       expect(learnings).toHaveLength(1);
-      expect(learnings[0]?.learning).toMatchObject({ sourceGlobId: expect.stringMatching(/^s1t1$|^$/) as string, type: 'decision', statement: 'Exponential [1]' });
+      expect(learnings[0]?.learning).toMatchObject({ sourceGlobId: expect.stringMatching(/^s1t1$|^$/) as string, type: 'pattern', statement: 'Exponential [1]' });
       expect(learnings[0]?.learning.evidence).toContain('"retry backoff"');
-      expect(learnings[0]?.learning.evidence).toContain('[1] Decision: Use backoff');
+      expect(learnings[0]?.learning.evidence).toContain('[1] Choice: Use backoff');
     });
 
     it('needs a glob, an answer that is not "don\'t know", and the person\'s own conversation', async () => {

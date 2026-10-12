@@ -776,8 +776,11 @@ export class KnowledgeService {
     const evidence = learning.evidence.trim();
     const suggestedTarget = learning.suggestedTarget?.trim() ?? '';
     const agentSetVersion = learning.agentSetVersion ?? null;
+    if (learning.type === 'decision') {
+      return invalidInput("The decision learning type is gone: record choices in your implementation record's ## Decisions; learnings are guidance (gotcha, pattern or agent-behaviour)");
+    }
     if (!isLearningType(learning.type)) {
-      return invalidInput(`Unknown learning type "${learning.type}"; use decision, gotcha, pattern or agent-behaviour`);
+      return invalidInput(`Unknown learning type "${learning.type}"; use gotcha, pattern or agent-behaviour`);
     }
     if (statement === '') return invalidInput('A learning needs a statement');
     if (evidence === '') return invalidInput('A learning needs evidence');

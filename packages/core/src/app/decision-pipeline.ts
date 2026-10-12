@@ -13,7 +13,6 @@ import type { Decision, DecisionSource, DecisionSourceKind } from '../domain/dec
 import { inboxLink, inboxTitle } from '../domain/inbox.js';
 import { knowledgePageEffect } from '../domain/events.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
-import { learningDecision, learningDocument, learningFacts, learningStatus } from '../domain/learning.js';
 import { sameHeading, sectionText } from '../domain/sections.js';
 import { MAX_QUERY_LENGTH } from '../domain/search.js';
 import type { Candidate } from '../domain/search.js';
@@ -25,7 +24,6 @@ import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 import { hash } from './text-hash.js';
-import { boardLearnings } from './learning-reads.js';
 
 /** Haiku answers in seconds; a stalled call fails the attempt well inside the lease. */
 export const DECISIONS_LLM_TIMEOUT_MS = 60_000;
@@ -257,33 +255,9 @@ export class DecisionPipeline {
         queued++;
       }
       const live = new Set(sources.map((s) => s.ref));
+      // Accepted learnings are no longer recorded as choices; the choices earlier learnings created stay as they are.
+      for (const choice of all) if (choice.sourceRef.startsWith('learning:')) live.add(choice.sourceRef);
       const globs = new Set<string>();
-      let written = 0;
-      for (const { glob, artifacts } of await boardLearnings(tx, boardId)) {
-        if (learningStatus(glob, artifacts) !== 'approved') continue;
-        if (learningFacts(glob).kind !== 'decision' || learningDocument(glob, artifacts) !== null || glob.summary.trim() === '') continue;
-        const ref = `learning:${glob.id}`;
-        live.add(ref);
-        const quote = glob.summary.trim();
-        const decided = learningDecision(glob, artifacts);
-        const outcome = await this.store(
-          tx,
-          boardId,
-          {
-            ref,
-            kind: 'kb_item',
-            label: '',
-            globId: null,
-            group: null,
-            url: `/boards/${String(boardId)}/knowledge`,
-          },
-          // A long enough statement is its own quote; a short one still stands as a decision, it just can't back a supersession.
-          [{ statement: quote.slice(0, STATEMENT_LIMIT), quote, decidedBy: decided.by, decidedAt: decided.at ?? glob.createdAt }],
-          now,
-          all,
-        );
-        written += outcome.written;
-      }
       for (const [ref] of rows) if (!live.has(ref)) await tx.deleteDecisionSource(boardId, ref);
       let removed = 0;
       for (const decision of all) {
@@ -292,7 +266,7 @@ export class DecisionPipeline {
         removed++;
         if (decision.globId !== null) globs.add(decision.globId);
       }
-      return { queued, written, removed, globs };
+      return { queued, written: 0, removed, globs };
     });
     for (const globId of result.globs) this.deps.notifier.publish({ kind: 'glob.decisions', boardId, globId });
     return { queued: result.queued, written: result.written, removed: result.removed };

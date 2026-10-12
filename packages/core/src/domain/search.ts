@@ -33,7 +33,7 @@ export const SOURCE_LABELS: Readonly<Record<SourceType, string>> = {
   implementation_plan: 'Implementation record',
   postplan: 'Postplan (legacy)',
   decision_log: 'Decision log (legacy)',
-  decision: 'Decision',
+  decision: 'Choice',
   local_review: 'Local review',
   independent_review: 'Independent review',
   attachment: 'Attachment',
@@ -209,8 +209,8 @@ export const scoreOf = (c: Candidate, mode: SearchMode, now: string): number => 
 
 const labelOf = (c: Candidate): string | null => {
   if (c.status === 'superseded') {
-    if (c.supersededByTitle === null) return 'superseded';
-    return `superseded by "${c.supersededByTitle}"${c.supersededByAt === null ? '' : ` on ${c.supersededByAt.slice(0, 10)}`}`;
+    if (c.supersededByTitle === null) return 'replaced';
+    return `replaced by "${c.supersededByTitle}"${c.supersededByAt === null ? '' : ` on ${c.supersededByAt.slice(0, 10)}`}`;
   }
   return isLegacy(c) ? 'legacy' : null;
 };
