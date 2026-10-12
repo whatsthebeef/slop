@@ -2,6 +2,7 @@ import { decisionViews, isSuperseded } from '../domain/decisions.js';
 import type { Decision, DecisionView } from '../domain/decisions.js';
 import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import { knowledgePageEffect } from '../domain/events.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
 
@@ -52,6 +53,8 @@ export class DecisionService {
       }
       await tx.updateDecision(d.id, { replaceState: 'confirmed' });
       await tx.setItemSupersession(d.itemId, 'superseded', newer.itemId);
+      // A replaced decision leaves the decisions in force.
+      await tx.enqueueEffects([knowledgePageEffect(d.boardId)]);
       return ok(await this.viewOf(tx, d.id, [d.globId, newer.globId]));
     });
     return this.published(result);
@@ -67,6 +70,7 @@ export class DecisionService {
       const newer = d.replacedBy === null ? null : await tx.getDecision(d.replacedBy);
       await tx.updateDecision(d.id, { replaceState: 'undone' });
       await tx.setItemSupersession(d.itemId, 'active', null);
+      await tx.enqueueEffects([knowledgePageEffect(d.boardId)]);
       return ok(await this.viewOf(tx, d.id, [d.globId, newer?.globId ?? null]));
     });
     return this.published(result);

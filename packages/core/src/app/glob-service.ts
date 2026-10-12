@@ -10,7 +10,7 @@ import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import type { Actor, Board, Category, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
-import { recheckOverlapsEffect } from '../domain/events.js';
+import { knowledgePageEffect, recheckOverlapsEffect } from '../domain/events.js';
 import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
 import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
@@ -1100,7 +1100,9 @@ export class GlobService {
         // A status change, a push or a merge may change which open globs overlap: queue the board's recheck (coalesced).
         const moved =
           changed && (transition.value.glob.status !== glob.status || events.some((e) => e.type === 'CommitPushed' || e.type === 'Merged'));
-        const effects = moved ? [...transition.value.effects, recheckOverlapsEffect(glob.boardId)] : transition.value.effects;
+        // A work glob signed off is a recent change on the board's knowledge page (decisions queue their own).
+        const signedOff = changed && glob.category !== 'decision' && glob.status !== 'signed_off' && transition.value.glob.status === 'signed_off';
+        const effects = [...transition.value.effects, ...(moved ? [recheckOverlapsEffect(glob.boardId)] : []), ...(signedOff ? [knowledgePageEffect(glob.boardId)] : [])];
         if (!changed) {
           await tx.appendEvents(events);
           await tx.enqueueEffects(effects);

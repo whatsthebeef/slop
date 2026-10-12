@@ -3,6 +3,7 @@ import type { Result } from '../domain/errors.js';
 import * as machine from '../domain/machine.js';
 import type { Context } from '../domain/machine.js';
 import { decisionOf } from '../domain/decision-glob.js';
+import { knowledgePageEffect } from '../domain/events.js';
 import { isKbGlob } from '../domain/kb-glob.js';
 import type { DecisionOutcomeKind } from '../domain/attributes.js';
 import type { DraftPreview, KbDraft, KbItem, KbTarget } from '../domain/kb.js';
@@ -151,6 +152,8 @@ export class DecisionGlobService {
         }
         const written = await this.writeItem(tx, email, glob, actor.value.role, input);
         if (!written.ok) return written;
+        // Accepting or rejecting changes the decisions in force: the knowledge page regenerates (coalesced, and not sooner than its interval).
+        if (input.outcome === 'accept' || input.outcome === 'accept_with_edits' || input.outcome === 'reject') await tx.enqueueEffects([knowledgePageEffect(glob.boardId)]);
         // Writing the item rewrites this very glob, so the step is applied to the glob as it is now.
         const fresh = await tx.getGlob(id);
         if (fresh === null) throw new StaleDecisionGlob(id);

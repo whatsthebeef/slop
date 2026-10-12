@@ -1,4 +1,4 @@
-import type { ArtifactService, BoardService, Catalog, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
+import type { ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, SubLimitService, DependencyLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { ARTIFACT_KINDS, WORK_CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
@@ -95,6 +95,8 @@ export const mountKnowledge = (
     sizeCheck?: SizeCheckService;
     /** Intake's accuracy (System page); absent: its route isn't mounted. */
     intakeLearning?: IntakeLearningService;
+    /** The generated knowledge page; absent: its routes aren't mounted. */
+    knowledgePage?: KnowledgePageService;
     /** The server's error log (console and the `errors` table), for Run now's background run. */
     logError: (task: string, message: string) => void;
   },
@@ -196,6 +198,22 @@ export const mountKnowledge = (
   // The board's self-improvement jobs (weekly mining and consolidation, daily effect checks, the hourly sub limit) with their last runs;
   // admins run one now.
   app.get('/api/boards/:b/kb/jobs', async (c) => send(c, await deps.jobs.jobs(c.get('email'), Number(c.req.param('b')))));
+
+  // The board's generated knowledge page: the current version with the history and whether a regeneration waits, one earlier
+  // version, and (admins) a full rebuild that skips the minimum interval.
+  const { knowledgePage } = deps;
+  if (knowledgePage !== undefined) {
+    app.get('/api/boards/:b/knowledge-page', async (c) => send(c, await knowledgePage.view(c.get('email'), Number(c.req.param('b')))));
+    app.get('/api/boards/:b/knowledge-page/versions/:version', async (c) => {
+      const parsed = z.coerce.number().int().min(1).safeParse(c.req.param('version'));
+      if (!parsed.success) return c.json({ code: 'invalid_input', message: 'version is a whole number from 1' }, 422);
+      return send(c, await knowledgePage.version(c.get('email'), Number(c.req.param('b')), parsed.data));
+    });
+    app.post('/api/boards/:b/knowledge-page/rebuild', async (c) => {
+      const result = await knowledgePage.requestRebuild(c.get('email'), Number(c.req.param('b')));
+      return result.ok ? c.json(result.value, 202) : send(c, result);
+    });
+  }
 
   // The board's learned sub size limit, its bounds and its history (board settings), for members.
   const { subLimit } = deps;

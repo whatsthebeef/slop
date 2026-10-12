@@ -15,6 +15,7 @@ import type { GlobReportFacts } from './domain/time-tracking.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
+import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from './domain/knowledge-page.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
 import type { NewSizeCalibrationChange, SizeCalibration, SizeCalibrationChange, SizeRecord } from './domain/size-forecast.js';
@@ -90,7 +91,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'subLimitStep' | 'effectCheckGlobs' | 'agentKbApproval' | 'autoInvestigate' | 'review' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'subLimitStep' | 'effectCheckGlobs' | 'agentKbApproval' | 'autoInvestigate' | 'knowledgePageIntervalMinutes' | 'review' | 'deploy' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   /**
    * Sets the board's learned sub size limit to `to` if it is still `from`; returns false otherwise. It has no board
@@ -218,6 +219,14 @@ export interface Tx {
   latestArtifacts(globIds: readonly string[], kinds: readonly ArtifactKind[]): Promise<Artifact[]>;
   /** The newest outbox job (any state) per glob and kind, of the given globs and kinds: one read for many globs. */
   latestOutboxJobs(globIds: readonly string[], kinds: readonly EffectKind[]): Promise<OutboxJob[]>;
+
+  /** Adds a knowledge page version; false when the board already has that version number (a concurrent regeneration won). */
+  insertKnowledgePageVersion(version: KnowledgePageVersion): Promise<boolean>;
+  /** The board's newest knowledge page version; null before the first. */
+  latestKnowledgePageVersion(boardId: number): Promise<KnowledgePageVersion | null>;
+  getKnowledgePageVersion(boardId: number, version: number): Promise<KnowledgePageVersion | null>;
+  /** The board's versions without their sections, newest first, at most `limit`. */
+  listKnowledgePageVersions(boardId: number, limit: number): Promise<KnowledgePageHistoryEntry[]>;
 
   getDeploy(id: string): Promise<Deploy | null>;
   /** Writes deploys (insert or replace by ID). */

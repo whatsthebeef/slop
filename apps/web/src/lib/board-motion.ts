@@ -20,7 +20,7 @@ const describeRemote = (before: GlobView, after: GlobView): string => {
   if (after.implementer !== null && after.implementer !== before.implementer)
     return `picked up by ${initialsOf(after.implementer)}`;
   const run = after.currentRun;
-  if (run !== null && run.state !== 'ended') return 'started for a routine';
+  if (run !== null && run.state !== 'ended') return run.purpose === 'investigate' ? 'investigating' : 'started for a routine';
   return 'moved';
 };
 

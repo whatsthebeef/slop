@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, kbJobHint } from '@slop/core';
+import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -11,6 +11,7 @@ import { createApp } from './http/app.js';
 import { mountKnowledge } from './http/knowledge.js';
 import { OutboxRunner } from './jobs/outbox.js';
 import { kbExecutors } from './kb-executors.js';
+import { knowledgePageExecutors } from './knowledge-page-executors.js';
 import { mountMcp } from './mcp/server.js';
 import { readyGate } from './ready-gate.js';
 import { GitHub } from './github/client.js';
@@ -175,6 +176,8 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
   // The KB pipeline's routing and drafting (the `llm` lane); `kbPipeline` and the health tracker are built below and
   // only called once a job runs. The pipeline pauses on its own models only: intake's model says nothing about them.
   ...kbExecutors({ runStep: (itemId, step) => kbPipeline.runStep(itemId, step) }, { isDown: () => llmHealth.isDown(kbModels) }),
+  // The knowledge page's regeneration (the `llm` lane); `knowledgePage` is built below and only called once a job runs.
+  ...knowledgePageExecutors({ regenerate: (boardId, full) => knowledgePage.regenerate(boardId, full) }),
 };
 // `default` carries every effect but the slow model calls, which go in `llm` so they never hold up the others.
 // `decisionGlobs` is built below, after the knowledge service it needs; it is only called once an effect runs.
@@ -232,17 +235,21 @@ const kbRouteLlm = trackLlm(
   config.KB_ROUTE_MODEL,
 );
 const kbModels = [config.KB_ROUTE_MODEL, config.KB_DRAFT_MODEL];
+const kbDraftLlm = trackLlm(
+  new BedrockLlm({ id: config.KB_DRAFT_MODEL, configKey: 'KB_DRAFT_MODEL' }, config.BEDROCK_REGION, logUsage, null),
+  config.KB_DRAFT_MODEL,
+);
 const kbPipeline = new KbPipeline({
   store,
   clock,
   catalog,
   notifier: hub,
   route: kbRouteLlm,
-  draft: trackLlm(
-    new BedrockLlm({ id: config.KB_DRAFT_MODEL, configKey: 'KB_DRAFT_MODEL' }, config.BEDROCK_REGION, logUsage, null),
-    config.KB_DRAFT_MODEL,
-  ),
+  draft: kbDraftLlm,
 });
+// The knowledge page's decisions section is written by the KB draft model (it is prose over the board's decisions); the
+// page's own jobs only ask it about what changed. Its health follows the KB models, so a down model waits like a KB job.
+const knowledgePage = new KnowledgePageService({ store, clock, notifier: hub, llm: kbDraftLlm, model: config.KB_DRAFT_MODEL, spend, knowledge });
 
 // Haiku: splitting and classifying review findings, and checking bug reports for the learned sub limit.
 const findingsLlm = trackLlm(
@@ -411,7 +418,7 @@ const app = createApp({
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
-mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, logError });
+mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, knowledgePage, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
 const awsSignIn =

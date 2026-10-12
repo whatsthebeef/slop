@@ -506,7 +506,6 @@ export const GlobCard = ({
         'card-edge relative cursor-pointer rounded-md border px-3 py-2.5 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
         AGING_STYLE[age],
         failed && 'border-red-soft',
-        decision && 'border-l-4 border-l-primary',
         lock === 'local' && 'lock-local',
         lock === 'remote' && 'lock-remote',
         bump !== undefined && 'wall-bump',

@@ -13,7 +13,15 @@ import type { GlobView } from './api';
 /** One problem on a glob, in plain words: what the card shows in a line and the glob view shows in full. */
 export interface StatusLine {
   readonly kind:
-    'provisioning' | 'base-red' | 'checks' | 'failure' | 'stuck' | 'behind' | 'ready' | 'merge-waits';
+    | 'provisioning'
+    | 'base-red'
+    | 'checks'
+    | 'failure'
+    | 'investigation-failed'
+    | 'stuck'
+    | 'behind'
+    | 'ready'
+    | 'merge-waits';
   /** One line, cut short: the card's text. */
   readonly text: string;
   /** The whole sentence, for the glob view. */
@@ -28,6 +36,9 @@ export interface StatusLine {
   /** The routine session doing it. */
   readonly sessionUrl: string | null;
 }
+
+/** True for an investigate-only run: it never started the glob (`purpose` is absent on implementing runs). */
+export const isInvestigateRun = (run: { readonly purpose?: string }): boolean => run.purpose === 'investigate';
 
 /** Cut to one line of at most `max` characters. */
 export const oneLine = (text: string, max = 90): string => {
@@ -44,6 +55,7 @@ const ALSO = {
   'base-red': 'the base branch is red',
   checks: 'checks failed',
   failure: 'the routine run failed',
+  'investigation-failed': 'the investigation failed',
   stuck: 'looks stuck',
   behind: 'the branch is behind the base',
   ready: '',
@@ -61,6 +73,7 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
   const reason = failure?.kind === 'needs_pairing' ? `Needs a person: ${decision === undefined || decision === '' ? failure.reason : decision}` : (failure?.reason ?? 'Routine run failed');
   const run = glob.currentRun ?? null;
   const session = run?.sessionUrl ?? null;
+  const investigationFailed = run !== null && isInvestigateRun(run) && run.state === 'ended' && run.outcome === 'failed';
   const provisioningFailed = glob.provisioning === 'failed' && glob.failure?.kind === 'provisioning';
   const candidates: StatusLine[] = [];
   const make = (
@@ -121,6 +134,19 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
   if (failed && !provisioningFailed) {
     const tip = `${reason}${/^(Routine run never started|The run's session never reached slop)/.test(glob.failure?.reason ?? '') && session !== null ? `\nSession: ${session}` : ''}`;
     candidates.push(make({ kind: 'failure', full: reason, tone: 'text-red', tip }));
+  }
+  // An investigation is an artifact, not the glob's work: its failure is a note, never the red failure of an implementation.
+  if (investigationFailed) {
+    const why = run.failureReason ?? 'no reason recorded';
+    candidates.push(
+      make({
+        kind: 'investigation-failed',
+        full: `Investigation failed: ${why}`,
+        tone: 'text-muted-foreground',
+        tip: `Investigation failed: ${why}${session === null ? '' : `\nSession: ${session}`}`,
+        sessionUrl: session,
+      }),
+    );
   }
   if (hint !== null)
     candidates.push(
@@ -280,7 +306,7 @@ export const viewStatusLine = (
 
 /** What slop or a routine is doing on its own, in one label: the card's chip and the glob view's, from the same function. */
 export interface Activity {
-  readonly kind: 'merging' | 'checks' | 'working' | 'watching' | 'queued' | 'picked_up';
+  readonly kind: 'merging' | 'checks' | 'investigating' | 'working' | 'watching' | 'queued' | 'picked_up';
   readonly text: string;
   /** The detail: session link, owner, who triggered it, the queued notice. */
   readonly tip: string;
@@ -349,6 +375,9 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
       };
     }
     return null;
+  }
+  if (isInvestigateRun(live)) {
+    return { kind: 'investigating', text: 'Investigating', tip: ['Investigating the plan; the glob has not started', ...runDetail].join('\n'), spinning: true };
   }
   if (live.state === 'active') {
     return { kind: 'working', text: 'Routine working', tip: runDetail.join('\n'), spinning: true };

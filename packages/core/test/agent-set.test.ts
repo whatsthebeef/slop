@@ -189,6 +189,8 @@ describe('layered agent set on a board', () => {
     expect(await knowledge.syncCatalogAgentSet()).toEqual({ bumped: [boardId], failed: [] });
     const after = await board();
     expect(after).toMatchObject({ agentSetVersion: 2, agentCatalogHash: 'h2' });
+    // The bump queues the knowledge page's regeneration.
+    expect(store.state.outbox.filter((e) => e.kind === 'regenerate_knowledge_page')).toHaveLength(1);
     expect(notifier.hints).toContainEqual({ kind: 'board.changed', boardId });
     // The new catalog file reaches the board with no copy.
     expect(unwrap(await knowledge.agentSet(DEV, boardId)).files.map((f) => f.path)).toContain('agents/new.md');

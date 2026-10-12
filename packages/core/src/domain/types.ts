@@ -388,6 +388,8 @@ export interface Board {
   readonly agentKbApproval: AgentKbApproval;
   /** Slop starts an investigate-only run by itself on a glob in Planning that intake flagged as big (on by default). */
   readonly autoInvestigate: boolean;
+  /** The knowledge page regenerates at most this often, in minutes (5 to 1440); a rebuild ignores it. */
+  readonly knowledgePageIntervalMinutes: number;
   /** The independent reviewer's settings (on, model, severity, ignored paths, tool cap). */
   readonly review: ReviewBoardSettings;
   readonly version: number;
