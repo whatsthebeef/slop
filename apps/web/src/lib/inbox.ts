@@ -12,6 +12,26 @@ export const pendingCount = (items: readonly InboxItemView[]): number =>
 export const visibleItems = (items: readonly InboxItemView[], onlyNew: boolean): InboxItemView[] =>
   items.filter((i) => i.status !== 'discarded' && (!onlyNew || i.status === 'new'));
 
+/** The imported view lists this many items at first, and this many more on each "Show more". */
+export const IMPORTED_PAGE = 50;
+
+/** The imported items whose title, source, summary or excerpt contain every word of `query` (any case); all of them for an empty query. */
+export const filterImported = (items: readonly InboxItemView[], query: string): InboxItemView[] => {
+  const words = query.toLowerCase().split(/\s+/).filter((w) => w !== '');
+  if (words.length === 0) return [...items];
+  return items.filter((i) => {
+    const hay = [i.title, i.source, i.sourceLabel, i.summary, i.excerpt].join('\n').toLowerCase();
+    return words.every((w) => hay.includes(w));
+  });
+};
+
+/** The imported items to render: the first `shown`, plus `pinned` (the item a link opens) when the page doesn't reach it, so it is always visible. */
+export const importedPage = (items: readonly InboxItemView[], shown: number, pinned: number | null): InboxItemView[] => {
+  const page = items.slice(0, shown);
+  const target = pinned === null || page.some((i) => i.id === pinned) ? undefined : items.find((i) => i.id === pinned);
+  return target === undefined ? page : [target, ...page];
+};
+
 /** The globs an item can still be attached to: open ones on the board that it isn't on yet, by ID. */
 export const attachableGlobs = <G extends { readonly id: string; readonly status: string }>(
   globs: readonly G[],

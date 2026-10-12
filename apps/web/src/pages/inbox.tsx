@@ -8,10 +8,20 @@ import { PasteIntoInbox } from '@/components/paste-into-inbox';
 import { Button } from '@/components/ui/button';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
-import { Select } from '@/components/ui/input';
+import { Input, Select } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { BoardView, GlobView, InboxItemView, NewGlob } from '@/lib/api';
-import { attachableGlobs, inboxCreateKey, inboxRequest, pendingCount, processingNote, visibleItems } from '@/lib/inbox';
+import {
+  attachableGlobs,
+  filterImported,
+  IMPORTED_PAGE,
+  importedPage,
+  inboxCreateKey,
+  inboxRequest,
+  pendingCount,
+  processingNote,
+  visibleItems,
+} from '@/lib/inbox';
 import { globsKey, inboxKey, useLiveInbox } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
 import { cn } from '@/lib/utils';
@@ -186,10 +196,11 @@ const Card = ({
   const note = processingNote(item);
   const suggestions = item.suggestions ?? [];
   const attached = item.attachedTo ?? [];
+  const origin = item.status === 'archived' || (item.source !== undefined && item.source !== 'paste') ? (item.source ?? 'Import') : 'Paste';
   const source =
     item.sourceLabel === undefined || item.sourceLabel === ''
-      ? 'Paste'
-      : `Paste · ${item.sourceLabel}`;
+      ? origin
+      : `${origin} · ${item.sourceLabel}`;
   return (
     <li
       id={`inbox-${String(item.id)}`}
@@ -379,6 +390,26 @@ export const InboxPage = () => {
   usePageContext({ type: 'inbox', ...(Number.isInteger(target) && target > 0 ? { id: String(target) } : {}) });
   const [pasting, setPasting] = useState(false);
   const [onlyNew, setOnlyNew] = useState(false);
+  const [imported, setImported] = useState(false);
+  const [filter, setFilter] = useState('');
+  const [limit, setLimit] = useState(IMPORTED_PAGE);
+  const link = Number.isInteger(target) && target > 0 ? target : null;
+  // The imported items are always loaded: their count labels the toggle, and the text filter runs over them here.
+  const archived = useQuery({
+    queryKey: [...inboxKey(boardId), 'archived'],
+    queryFn: () => api.inbox(boardId, 'archived'),
+  });
+  // An `?item=` link opens its item whatever its status: an archived one switches to the imported view.
+  const linked = useQuery({
+    queryKey: [...inboxKey(boardId), 'linked', link],
+    queryFn: () => api.inboxItem(boardId, link ?? 0),
+    enabled: link !== null,
+    retry: false,
+  });
+  const linkedArchived = linked.data?.status === 'archived';
+  useEffect(() => {
+    if (linkedArchived) setImported(true);
+  }, [linkedArchived, link]);
   const items = useQuery({
     queryKey: inboxKey(boardId),
     queryFn: () => api.inbox(boardId),
@@ -391,6 +422,8 @@ export const InboxPage = () => {
     void client.invalidateQueries({ queryKey: globsKey(boardId) });
   };
   const shown = visibleItems(items.data ?? [], onlyNew);
+  const matches = filterImported(archived.data ?? [], filter);
+  const importedShown = importedPage(matches, limit, linkedArchived ? link : null);
 
   return (
     <div className="mx-auto grid max-w-3xl gap-3 px-5 py-4" data-testid="inbox" data-live={live}>
@@ -408,11 +441,68 @@ export const InboxPage = () => {
         onOpenChange={setPasting}
         onAdded={changed}
       />
-      <label className="flex items-center gap-2 text-xs text-muted-foreground">
-        <input type="checkbox" checked={onlyNew} onChange={(e) => setOnlyNew(e.target.checked)} />
-        Only items that are new
-      </label>
-      {items.isError ? (
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        {!imported && (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input type="checkbox" checked={onlyNew} onChange={(e) => setOnlyNew(e.target.checked)} />
+            Only items that are new
+          </label>
+        )}
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input type="checkbox" checked={imported} onChange={(e) => setImported(e.target.checked)} />
+          Imported ({archived.data === undefined ? '…' : archived.data.length})
+        </label>
+        {imported && (
+          <Input
+            className="max-w-xs"
+            type="search"
+            aria-label="Filter imported items"
+            placeholder="Filter by title or text"
+            value={filter}
+            onChange={(e) => {
+              setFilter(e.target.value);
+              setLimit(IMPORTED_PAGE);
+            }}
+          />
+        )}
+      </div>
+      {imported ? (
+        archived.isError ? (
+          <p className="text-sm text-red">Could not load the imported items.</p>
+        ) : archived.data === undefined ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : matches.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {filter.trim() === '' ? 'Nothing has been imported.' : 'No imported item matches.'}
+          </p>
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground" data-testid="imported-count">
+              {matches.length === archived.data.length
+                ? `${String(matches.length)} imported`
+                : `${String(matches.length)} of ${String(archived.data.length)} imported`}
+            </p>
+            <ul className="grid gap-3">
+              {importedShown.map((item) => (
+                <Card
+                  key={item.id}
+                  boardId={boardId}
+                  board={board.data}
+                  item={item}
+                  globs={globs.data ?? []}
+                  highlighted={item.id === target}
+                  onChanged={changed}
+                />
+              ))}
+            </ul>
+            {matches.length > limit && (
+              <Button variant="outline" size="sm" onClick={() => setLimit((l) => l + IMPORTED_PAGE)}>
+                Show more ({matches.length - limit} left)
+              </Button>
+            )}
+          </>
+        )
+      ) : items.isError ? (
         <p className="text-sm text-red">Could not load the inbox.</p>
       ) : items.data === undefined ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
