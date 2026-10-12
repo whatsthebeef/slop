@@ -2212,6 +2212,45 @@ export const decideDecision = (glob: Glob, input: DecideInput, ctx: Context): Re
   return b.event('DecisionDecided', { outcome: outcomeJson(outcome) }).done();
 };
 
+/**
+ * Confirm or dismiss an unverified replacement (a decision glob of origin `replacement`), from Planning or Doing: no
+ * pick-up is needed, there is nothing to apply but the pair. Confirm records an accepted outcome and Dismiss a rejected
+ * one; either way the glob is Signed off and archived. The caller has applied the choice rows in the same transaction.
+ */
+export const decideReplacement = (glob: Glob, input: { readonly confirm: boolean; readonly reason?: string }, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'decision') return notDecision(glob, actor);
+  if (!mayDecide(actor)) return forbidden('Only admins and POs can decide a decision');
+  if (glob.status !== 'planning' && glob.status !== 'in_progress') return invalidTransition(glob, actor, 'This replacement has already been decided');
+  const attributes = decisionAttributesOf(glob);
+  if (attributes.origin.kind !== 'replacement') return invalidTransition(glob, actor, 'Only a replacement is confirmed or dismissed');
+  const reason = input.reason?.trim() ?? '';
+  const outcome: DecisionOutcome = {
+    kind: input.confirm ? 'accept' : 'reject',
+    by: actor.email,
+    at: ctx.now,
+    ...(reason === '' ? {} : { reason }),
+  };
+  return new Builder(glob, ctx)
+    .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
+    .status('signed_off')
+    .event('DecisionDecided', { outcome: outcomeJson(outcome) })
+    .done();
+};
+
+/** The pair a replacement asks about changed before anyone decided (a choice was replaced or deleted): the card closes itself, archived. */
+export const closeReplacement = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (glob.category !== 'decision' || glob.status === 'signed_off') return unchanged(glob);
+  const attributes = decisionAttributesOf(glob);
+  if (attributes.origin.kind !== 'replacement') return unchanged(glob);
+  const outcome: DecisionOutcome = { kind: 'closed', by: 'slop', at: ctx.now, reason: 'No longer relevant: one of the choices was replaced or deleted' };
+  return new Builder(glob, ctx)
+    .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
+    .status('signed_off')
+    .event('DecisionDecided', { outcome: outcomeJson(outcome) })
+    .done();
+};
+
 /** Row D6: the work glob a needs-work decision waits on merged; the decision moves to Reviewing. A repeat changes nothing. */
 export const decisionWorkLanded = (glob: Glob, ctx: Context): Result<Transition> => {
   if (glob.category !== 'decision' || glob.status !== 'in_progress') return unchanged(glob);

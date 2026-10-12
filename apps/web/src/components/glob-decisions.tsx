@@ -17,7 +17,7 @@ const Source = ({ label, url }: { label: string; url: string | null }) =>
  * The glob view's choices: the choices taken on this glob (from its implementation record, plan.md, clarifications
  * and approved learnings), each with who decided, when and a link to its source. A choice a newer one replaced is
  * struck through and says by what and when; a replacement the model proposed but could not verify is shown as
- * proposed, for a member to confirm or dismiss. Choice text comes from documents and models, so it is plain text.
+ * proposed, with a link to the decision glob where an admin or PO confirms or dismisses it. Choice text comes from documents and models, so it is plain text.
  * `glob.decisions` hints and reconnects refresh it.
  */
 export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: string }) => {
@@ -76,7 +76,13 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
             <span>
               Proposed: replaced by “{newer.statement}” ({day(newer.decidedAt)}){newer.reason === null || newer.reason === '' ? '' : ` — ${newer.reason}`}
             </span>
-            {buttons(d.id, 'hint')}
+            {newer.cardGlobId == null ? (
+              buttons(d.id, 'hint')
+            ) : (
+              <Link className='underline' to={`/boards/${String(boardId)}?glob=${encodeURIComponent(newer.cardGlobId)}`} data-testid='decision-card-link'>
+                Decide on {newer.cardGlobId}
+              </Link>
+            )}
           </p>
         )}
         {replaced && newer !== null && (
@@ -92,7 +98,13 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
               <span>
                 {r.state === 'hint' ? 'May replace' : 'Replaces'} “{r.statement}” ({day(r.decidedAt)})
               </span>
-              {buttons(r.id, r.state)}
+              {r.state === 'hint' && r.cardGlobId != null ? (
+                <Link className='underline' to={`/boards/${String(boardId)}?glob=${encodeURIComponent(r.cardGlobId)}`}>
+                  Decide on {r.cardGlobId}
+                </Link>
+              ) : (
+                buttons(r.id, r.state)
+              )}
             </p>
         ))}
       </li>
