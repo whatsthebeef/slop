@@ -894,6 +894,40 @@ describe('inbox', () => {
       expect(llm.calls).toEqual([]);
     });
 
+    it('indexes imported items at the legacy tier and pasted ones as discussion', async () => {
+      await run(jira('APP-9', 'Retry policy for the sync store.'));
+      const imported = await keyed('APP-9');
+      const pasted = await paste();
+      expect(searchItem(imported.id)?.authority).toBe('legacy');
+      expect(searchItem(pasted)?.authority).toBe('discussion');
+    });
+
+    it('keeps an imported item legacy once it is attached to a glob', async () => {
+      await run(jira('APP-10', 'Retry policy for the sync store.'));
+      const imported = await keyed('APP-10');
+      const g = await addGlob({ id: 's1t9' });
+      unwrap(await inbox.attach(DEV, boardId, imported.id, [g.id]));
+      expect(searchItem(imported.id)).toMatchObject({ authority: 'legacy', globIds: ['s1t9'] });
+    });
+
+    it('weighs the choices taken from an attached imported item as legacy', async () => {
+      const quote = 'the sync jobs will be pushed over a websocket connection instead of polling';
+      await run(jira('APP-11', `Decision: ${quote} for every client.`));
+      const imported = await keyed('APP-11');
+      const g = await addGlob({ id: 's1t8' });
+      unwrap(await inbox.attach(DEV, boardId, imported.id, [g.id]));
+      llm.extraction = JSON.stringify({
+        decisions: [{ statement: 'Push sync jobs over a websocket.', quote, decidedBy: null, decidedAt: null }],
+      });
+      const decisions = new DecisionPipeline({ store, clock, notifier, llm, embedder });
+      await decisions.syncBoard(boardId);
+      while ((await decisions.processNext()) !== null) {
+        // Extracts the source, then checks the decision.
+      }
+      const choice = [...store.state.searchItems.values()].find((i) => i.sourceType === 'decision');
+      expect(choice?.authority).toBe('legacy');
+    });
+
     it('skips an unchanged item on a re-run and updates a changed one in place, re-indexing it', async () => {
       await run(jira('APP-1', 'first version about websockets'));
       const before = await keyed('APP-1');

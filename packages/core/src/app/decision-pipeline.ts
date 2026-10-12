@@ -11,12 +11,12 @@ import {
 import { DEFAULT_CONTEXT_SETTINGS } from '../domain/context-settings.js';
 import { choiceAuthority } from '../domain/decisions.js';
 import type { Decision, DecisionSource, DecisionSourceKind } from '../domain/decisions.js';
-import { inboxLink, inboxTitle } from '../domain/inbox.js';
+import { inboxAuthority, inboxLink, inboxTitle } from '../domain/inbox.js';
 import { knowledgePageEffect } from '../domain/events.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import { sameHeading, sectionText } from '../domain/sections.js';
 import { MAX_QUERY_LENGTH } from '../domain/search.js';
-import type { Candidate } from '../domain/search.js';
+import type { AuthorityTier, Candidate } from '../domain/search.js';
 import type { Clock, Embedder, Hint, Notifier, Store, Tx } from '../ports.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm } from './intake-service.js';
@@ -100,6 +100,8 @@ interface SourceText {
   readonly hash: string;
   readonly createdAt: string;
   readonly url: string;
+  /** Set when the source weighs less than its kind says (an imported inbox item is legacy). */
+  readonly authority?: AuthorityTier;
 }
 
 /** The decisions the model found whose quote is in `shown` and long enough to rest on; `decidedAt` falls back to the source's date. */
@@ -356,6 +358,7 @@ export class DecisionPipeline {
           // A decision without a date is taken on the day of the meeting.
           createdAt: item.occurredAt,
           url: inboxLink(boardId, item.id),
+          ...(inboxAuthority(item) === 'legacy' ? {authority: 'legacy' as const} : {}),
         });
       }
     }
@@ -457,7 +460,7 @@ export class DecisionPipeline {
   private async store(
     tx: Tx,
     boardId: number,
-    source: Pick<SourceText, 'ref' | 'kind' | 'label' | 'globId' | 'group' | 'url'>,
+    source: Pick<SourceText, 'ref' | 'kind' | 'label' | 'globId' | 'group' | 'url' | 'authority'>,
     found: readonly Found[],
     now: string,
     /** The board's decisions, read once by the caller (a source's own rows are all this needs). */
@@ -472,7 +475,11 @@ export class DecisionPipeline {
       const body = decisionText(f);
       const globIds = source.globId === null ? [] : [source.globId];
       const input = { sourceType: 'decision', date: f.decidedAt, title, text: body } as const;
-      const itemHash = hash([contentHash(input), globIds.join(','), source.group ?? '', source.url, sourceLabel].join('|'));
+      const authority = source.authority ?? choiceAuthority(source.kind);
+      // The tier joins the hash only when the source overrides its kind's, so other choices aren't rewritten.
+      const itemHash = hash(
+        [contentHash(input), globIds.join(','), source.group ?? '', source.url, sourceLabel, ...(source.authority === undefined ? [] : [source.authority])].join('|'),
+      );
       const existing = await tx.getItemByRef(boardId, externalRef);
       if (existing?.contentHash === itemHash) {
         const row = all.find((d) => d.itemId === existing.id);
@@ -488,7 +495,7 @@ export class DecisionPipeline {
           externalRef,
           title,
           occurredAt: f.decidedAt,
-          authority: choiceAuthority(source.kind),
+          authority,
           // replaceItem overwrites these: a re-extracted decision keeps what a supersession set on it.
           status: existing?.status ?? 'active',
           supersededBy: existing?.supersededBy ?? null,
