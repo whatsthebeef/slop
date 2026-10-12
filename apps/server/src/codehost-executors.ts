@@ -235,7 +235,8 @@ export const codeHostExecutors = (
       if (board === null || repo === null || !host.configured) return 'dropped';
       const head = await host.headOf(repo, repo.base);
       if (head === null) return 'dropped';
-      const result = await host.commitChecks(repo, head.sha);
+      // Only checks the push triggered: an issue_comment or review workflow borrows the base head's sha and says nothing about it.
+      const result = await host.commitChecks(repo, head.sha, { pushedOnly: true });
       // The calls above reached the repo, so the App can see it again.
       await notifications?.clear(board.id, REPO_ACCESS_SOURCE);
       // Still running: the check's completion sends another event.

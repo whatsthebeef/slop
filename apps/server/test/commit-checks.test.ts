@@ -16,10 +16,11 @@ const run = (patch: Record<string, unknown>) => ({
 });
 
 /** A fake GitHub: check runs for the commit, and the job's steps and log by job ID. */
-const fakeGitHub = (opts: { runs: unknown[]; steps?: unknown[]; log?: string | Error }): { request: Request; calls: string[] } => {
+const fakeGitHub = (opts: { runs: unknown[]; steps?: unknown[]; log?: string | Error; workflowRuns?: unknown[] }): { request: Request; calls: string[] } => {
   const calls: string[] = [];
   const request: Request = (route) => {
     calls.push(route);
+    if (route.endsWith('/actions/runs')) return Promise.resolve({ data: { workflow_runs: opts.workflowRuns ?? [] } });
     if (route.endsWith('/check-runs')) return Promise.resolve({ data: { check_runs: opts.runs } });
     if (route.endsWith('/logs')) {
       return opts.log instanceof Error || opts.log === undefined ? Promise.reject(opts.log ?? new Error('404')) : Promise.resolve({ data: opts.log });
@@ -36,6 +37,23 @@ const LOG = [
 ].join('\n');
 
 describe('reading why a commit failed', () => {
+  it('with pushedOnly, ignores a failure from a workflow that only borrowed the head (an issue_comment run) and still sees a push failure', async () => {
+    const comment = run({ id: 21, name: 'claude', conclusion: 'failure', check_suite: { id: 900 } });
+    const test = run({ id: 22, name: 'Check', conclusion: 'success', check_suite: { id: 901 } });
+    const workflowRuns = [
+      { id: 1, event: 'issue_comment', check_suite_id: 900 },
+      { id: 2, event: 'push', check_suite_id: 901 },
+    ];
+    const borrowed = fakeGitHub({ runs: [comment, test], workflowRuns });
+    expect((await readCommitChecks(borrowed.request, repo, 'abc', { pushedOnly: true })).state).toBe('passed');
+    expect((await readCommitChecks(borrowed.request, repo, 'abc')).state).toBe('failed');
+
+    const pushed = run({ id: 23, name: 'Check', conclusion: 'failure', check_suite: { id: 901 } });
+    const result = await readCommitChecks(fakeGitHub({ runs: [comment, pushed], workflowRuns }).request, repo, 'abc', { pushedOnly: true });
+    expect(result.state).toBe('failed');
+    expect(result.failure?.name).toBe('Check');
+  });
+
   it('leaves slop\'s own neutral review check out: alone it is no sign of CI, beside a passing check it changes nothing', async () => {
     const review = run({ id: 12, name: 'slop-review', conclusion: 'neutral' });
     expect((await readCommitChecks(fakeGitHub({ runs: [review] }).request, repo, 'abc')).state).toBe('passed');
