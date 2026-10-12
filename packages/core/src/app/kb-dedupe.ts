@@ -51,14 +51,15 @@ export const longEnoughQuote = (quote: string): boolean => {
 };
 
 /** The items whose evidence `item` holds: itself and every item merged into it (directly or through another). */
-const holding = (item: KbItem): string[] => [item.id, ...item.extraEvidence.map((e) => e.itemId)];
+type Holder = Pick<KbItem, 'id' | 'keptApartFrom' | 'extraEvidence'>;
+const holding = (item: Holder): string[] => [item.id, ...item.extraEvidence.map((e) => e.itemId)];
 
 /**
  * Whether an admin separated the two (by reopening a merge): either keeps apart an item whose evidence the other
  * holds. A merge carries both items' `keptApartFrom` and evidence onto the survivor, so this holds through any
  * chain of merges, in one run or across runs: a model-verified merge never joins what an admin split.
  */
-export const keptApart = (a: KbItem, b: KbItem): boolean =>
+export const keptApart = (a: Holder, b: Holder): boolean =>
   holding(a).some((id) => b.keptApartFrom.includes(id)) ||
   holding(b).some((id) => a.keptApartFrom.includes(id));
 
@@ -100,21 +101,4 @@ export const addEvidenceTo = async (
 ): Promise<boolean> => {
   // The write bumps its version, so a step running on it now finds it changed and runs again at once.
   return kb.updateKbItem(adjust(withEvidenceFrom(into, from)), into.version);
-};
-
-/**
- * Merges `loser` into `survivor` (both as read in this transaction): the survivor gains the loser's evidence
- * (`adjust` changes anything else it takes), and the loser is written as `closed`. Both writes are conditional on
- * the versions read; false when either changed, and the caller must roll the transaction back (the first write
- * may have landed).
- */
-export const mergeItems = async (
-  kb: KbItems,
-  survivor: KbItem,
-  loser: KbItem,
-  closed: KbItem,
-  adjust: (merged: KbItem) => KbItem = (m) => m,
-): Promise<boolean> => {
-  if (!(await addEvidenceTo(kb, survivor, loser, adjust))) return false;
-  return kb.updateKbItem({ ...closed, version: loser.version + 1 }, loser.version);
 };
