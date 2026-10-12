@@ -737,8 +737,9 @@ export const api = {
   confirmDecision: (boardId: number, id: number) => request<DecisionView>('POST', `/api/boards/${boardId}/decisions/${id}/confirm`),
   /** Undoes a replacement, or dismisses a proposed one. */
   undoDecision: (boardId: number, id: number) => request<DecisionView>('POST', `/api/boards/${boardId}/decisions/${id}/undo`),
-  /** The board's inbox: new, attached and kept items (newest first). */
-  inbox: (boardId: number) => request<{ items: InboxItemView[] }>('GET', `/api/boards/${boardId}/inbox`).then((r) => r.items),
+  /** The board's inbox: new, attached and kept items (newest first), or the ones with `status` (e.g. `archived`, the imported ones). */
+  inbox: (boardId: number, status?: InboxStatus) =>
+    request<{ items: InboxItemView[] }>('GET', `/api/boards/${boardId}/inbox${status === undefined ? '' : `?status=${status}`}`).then((r) => r.items),
   inboxItem: (boardId: number, id: number) => request<InboxItemView>('GET', `/api/boards/${boardId}/inbox/${id}`),
   addToInbox: (boardId: number, paste: NewInboxPaste) => request<{ id: number; created: boolean }>('POST', `/api/boards/${boardId}/inbox`, paste),
   attachInbox: (boardId: number, id: number, globIds: readonly string[]) =>
