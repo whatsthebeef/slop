@@ -1,4 +1,5 @@
 import { hash } from '../app/text-hash.js';
+import type { AuthorityTier } from './search.js';
 
 /**
  * Decisions (spec, Decisions and supersession): choices a team made, found in the implementation record's
@@ -8,6 +9,23 @@ import { hash } from '../app/text-hash.js';
 
 export const DECISION_SOURCE_KINDS = ['implementation_plan', 'plan', 'attachment', 'kb_item', 'inbox'] as const;
 export type DecisionSourceKind = (typeof DECISION_SOURCE_KINDS)[number];
+
+/**
+ * A choice weighs what its source weighs: the implementation record keeps the decision tier, plans, attachments and
+ * accepted learnings the approved-plan tier, and pasted meetings, threads and documents the discussion tier.
+ */
+export const choiceAuthority = (kind: DecisionSourceKind): AuthorityTier => {
+  switch (kind) {
+    case 'implementation_plan':
+      return 'decision';
+    case 'inbox':
+      return 'discussion';
+    case 'plan':
+    case 'attachment':
+    case 'kb_item':
+      return 'approved_plan';
+  }
+};
 
 /**
  * How a decision relates to the newer one that replaces it. `hint`: the model proposed it but a quote failed the

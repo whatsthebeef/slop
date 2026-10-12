@@ -1,6 +1,6 @@
 import { invalidInput, llmUnavailable, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
-import { MAX_QUERY_LENGTH, matchesFilters, rankCandidates, rrfFuse, toHit, withinBudget } from '../domain/search.js';
+import { AUTHORITY_WEIGHTS, MAX_QUERY_LENGTH, matchesFilters, rankCandidates, rrfFuse, toHit, withinBudget } from '../domain/search.js';
 import type { Candidate, SearchHit, SearchMode, SearchQuery } from '../domain/search.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Embedder, Store, Tx } from '../ports.js';
@@ -14,6 +14,8 @@ const RELATED_POOL = 30;
 export const RELATED_LIMIT = 5;
 /** How many current decisions `related` puts first, before the other hits. */
 export const RELATED_DECISIONS = 3;
+/** Only choices from records and plans lead `related`; discussion choices compete as ordinary results. */
+const LEADING_AUTHORITY = AUTHORITY_WEIGHTS.approved_plan;
 /** `get_context` must stay quick when the embedder is slow: past this the related section is keyword-only. */
 const RELATED_EMBED_TIMEOUT_MS = 5_000;
 
@@ -97,7 +99,7 @@ export class SearchService {
       // Related is a bonus on the context bundle: a slow or failing embedder must not fail it.
     }
     const notOwn = (c: Candidate) => !c.globIds.includes(glob.id);
-    const current = await this.fuse(tx, { ...q, sourceTypes: ['decision'] }, q.query, embedding, RELATED_POOL, (c) => notOwn(c) && c.status === 'active');
+    const current = await this.fuse(tx, { ...q, sourceTypes: ['decision'] }, q.query, embedding, RELATED_POOL, (c) => notOwn(c) && c.status === 'active' && AUTHORITY_WEIGHTS[c.authority] >= LEADING_AUTHORITY);
     const first = current.hits.slice(0, RELATED_DECISIONS);
     const { hits } = await this.fuse(tx, q, q.query, embedding, RELATED_POOL, notOwn);
     const seen = new Set(first.map((h) => h.itemId));
