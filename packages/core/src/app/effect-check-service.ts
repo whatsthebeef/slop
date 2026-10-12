@@ -15,8 +15,15 @@ import type {
   EffectGlob,
   EffectState,
 } from '../domain/effect-check.js';
-import { UNPROCESSED } from '../domain/kb.js';
-import type { KbItem } from '../domain/kb.js';
+import {
+  learningDecision,
+  learningEffectCheck,
+  learningFacts,
+  learningOutcome,
+  learningStatus,
+  learningTarget,
+} from '../domain/learning.js';
+import type { LearningRead } from '../domain/learning.js';
 import { MAX_SIGNAL_GLOBS, signalKindOf } from '../domain/signals.js';
 import type { BoardActivity, BoardJobResult, KbSignal } from '../domain/signals.js';
 import type { Board } from '../domain/types.js';
@@ -24,7 +31,8 @@ import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { newKbItemId } from './knowledge-service.js';
 import { MINED_BY } from './mining-service.js';
 import type { MiningService } from './mining-service.js';
-import { kbItems } from './kb-items.js';
+import { boardLearnings, readLearning } from './learning-reads.js';
+import { createLearning, recordLearningEffectCheck } from './learning-writes.js';
 
 export type EffectCheckResult = Extract<BoardJobResult, { kind: 'effect_check' }>;
 
@@ -37,12 +45,17 @@ export const EFFECT_LOOKBACK_DAYS = 365;
  * Whether an item's effect check still runs: approved with a signal the check measures, and absent (approved before
  * checks) or watching.
  */
-const isWatched = (item: KbItem): boolean =>
-  item.status === 'approved' &&
-  item.signal !== null &&
-  isEffectMeasured(item.signal.key) &&
-  item.decidedAt !== null &&
-  (item.effectCheck === null || item.effectCheck.state === 'watching');
+const isWatched = ({ glob, artifacts }: LearningRead): boolean => {
+  const signal = learningFacts(glob).signal;
+  const check = learningEffectCheck(artifacts);
+  return (
+    learningStatus(glob, artifacts) === 'approved' &&
+    signal !== null &&
+    isEffectMeasured(signal.key) &&
+    learningDecision(glob, artifacts).at !== null &&
+    (check === null || check.state === 'watching')
+  );
+};
 
 /** A conditional write lost to another writer; thrown so the item's transaction (and any raised item) rolls back. */
 class EffectCheckConflict extends Error {
@@ -66,11 +79,11 @@ export class EffectCheckService {
     const read = await this.deps.store.transaction(async (tx) => {
       const board = await tx.getBoard(boardId);
       if (board === null) throw new Error(`No board ${boardId}`);
-      const items = (await kbItems(tx).listKbItems(boardId)).filter(
-        (i) => isWatched(i) && (only === undefined || only.includes(i.id)),
+      const items = (await boardLearnings(tx, boardId)).filter(
+        (i) => isWatched(i) && (only === undefined || only.includes(i.glob.id)),
       );
       if (items.length === 0) return null;
-      const earliest = Math.min(...items.map((i) => Date.parse(i.decidedAt ?? now)));
+      const earliest = Math.min(...items.map((i) => Date.parse(learningDecision(i.glob, i.artifacts).at ?? now)));
       const from = new Date(earliest - EFFECT_LOOKBACK_DAYS * DAY_MS).toISOString();
       const activity = await this.deps.mining.activity(tx, boardId, now, null, from);
       return { board, items, activity };
@@ -84,7 +97,7 @@ export class EffectCheckService {
     const decided: { id: string; state: EffectState }[] = [];
     const raised: string[] = [];
     const hints: Hint[] = [];
-    for (const item of items) {
+    for (const { glob: item } of items) {
       let outcome: { state: EffectState; raisedItemId: string | null } | null;
       try {
         outcome = await this.deps.store.transaction((tx) =>
@@ -120,33 +133,35 @@ export class EffectCheckService {
     hints: Hint[],
   ): Promise<{ state: EffectState; raisedItemId: string | null } | null> {
     await tx.lockBoardJob(board.id, 'effect_check');
-    const item = await kbItems(tx).getKbItem(itemId);
-    if (item === null || !isWatched(item) || item.signal === null || item.decidedAt === null)
-      return null;
+    const item = await readLearning(tx, itemId);
+    if (item === null || !isWatched(item)) return null;
+    const { glob, artifacts } = item;
+    const signal = learningFacts(glob).signal;
+    const decidedAt = learningDecision(glob, artifacts).at;
+    if (signal === null || decidedAt === null) return null;
     // Approved before effect checks: watched from the approval, by its outcome.
     const started =
-      item.effectCheck ??
-      startEffectCheck(
-        item.signal,
-        effectBasisOf(item.outcome, item.decidedAt),
-        board.effectCheckGlobs,
-      );
+      learningEffectCheck(artifacts) ??
+      startEffectCheck(signal, effectBasisOf(learningOutcome(artifacts), decidedAt), board.effectCheckGlobs);
     // A watching check follows the board's setting; a final one keeps the N it was decided on.
     const watched = { ...started, n: board.effectCheckGlobs };
     const check: EffectCheck = {
       ...watched,
-      ...evaluateEffect(activity, globs, watched, item.decidedAt),
+      ...evaluateEffect(activity, globs, watched, decidedAt),
       checkedAt: now,
     };
     const raisedItemId = raisesItem(check.state)
-      ? await this.raise(tx, board, item, item.signal, check, now, hints)
+      ? await this.raise(tx, board, item, signal, decidedAt, check, now, hints)
       : null;
-    const updated: KbItem = {
-      ...item,
-      effectCheck: { ...check, raisedItemId },
-      version: item.version + 1,
-    };
-    if (!(await kbItems(tx, { clock: { now: () => now }, raise: (h) => hints.push(h) }).updateKbItem(updated, item.version))) throw new EffectCheckConflict(item.id);
+    // The glob's version moved if the pipeline or a person wrote it meanwhile: roll back with any raised item.
+    const written = await recordLearningEffectCheck(
+      tx,
+      { clock: { now: () => now }, raise: (h) => hints.push(h) },
+      glob.id,
+      glob.version,
+      { ...check, raisedItemId },
+    );
+    if (!written) throw new EffectCheckConflict(glob.id);
     return { state: check.state, raisedItemId };
   }
 
@@ -154,57 +169,51 @@ export class EffectCheckService {
   private async raise(
     tx: Tx,
     board: Board,
-    original: KbItem,
+    original: LearningRead,
     watched: KbSignal,
+    decidedAt: string,
     check: EffectCheck,
     now: string,
     hints: Hint[],
   ): Promise<string> {
     const { after } = check;
-    if (after === null || original.decidedAt === null)
-      throw new Error(`${original.id}'s effect check has no figures`);
+    const { glob } = original;
+    if (after === null) throw new Error(`${glob.id}'s effect check has no figures`);
     const id = await newKbItemId(tx, board.id);
     const signal: KbSignal = {
-      key: effectSignalKey(original.id),
+      key: effectSignalKey(glob.id),
       kind: signalKindOf(check.key) ?? watched.kind,
       agent: watched.agent,
       label: check.label,
-      window: { from: original.decidedAt, to: now },
+      window: { from: decidedAt, to: now },
       figures: signalFigures(after),
       globIds: after.affectedGlobIds.slice(0, MAX_SIGNAL_GLOBS),
       examples: [],
       measuredAt: now,
     };
-    const item: KbItem = {
-      id,
-      boardId: board.id,
-      status: 'open',
-      type: original.type,
-      statement: effectStatement(original, check),
-      evidence: effectEvidence({ id: original.id, decidedAt: original.decidedAt }, check),
-      suggestedTarget: targetOf(original),
-      sourceGlobIds: [
-        ...new Set([
-          ...after.affectedGlobIds,
-          ...check.worse.flatMap((w) => w.after.affectedGlobIds),
-        ]),
-      ].slice(0, MAX_SIGNAL_GLOBS),
-      source: 'mined',
-      signal,
-      agentSetVersion: board.agentSetVersion,
-      submittedBy: MINED_BY,
-      createdAt: now,
-      decidedBy: null,
-      decidedAt: null,
-      decisionReason: null,
-      document: null,
-      outcome: null,
-      // Unprocessed: the KB pipeline routes, dedupes and drafts it like any mined item; humans decide.
-      ...UNPROCESSED,
-      version: 1,
-    };
-    const inserted = await kbItems(tx, { clock: { now: () => now }, raise: (h) => hints.push(h) }).insertKbItem(item);
-    if (!inserted) throw new Error(`KB item ${id} already exists`);
+    const created = await createLearning(
+      tx,
+      { clock: { now: () => now }, raise: (h) => hints.push(h) },
+      {
+        id,
+        boardId: board.id,
+        type: learningFacts(glob).kind,
+        statement: effectStatement({ id: glob.id, statement: glob.summary }, check),
+        evidence: effectEvidence({ id: glob.id, decidedAt }, check),
+        suggestedTarget: targetOf(original),
+        sourceGlobIds: [
+          ...new Set([...after.affectedGlobIds, ...check.worse.flatMap((w) => w.after.affectedGlobIds)]),
+        ].slice(0, MAX_SIGNAL_GLOBS),
+        agentSetVersion: board.agentSetVersion,
+        submittedBy: MINED_BY,
+        createdAt: now,
+        document: null,
+        target: null,
+        source: 'mined',
+        signal,
+      },
+    );
+    if (!created) throw new Error(`KB item ${id} already exists`);
     return id;
   }
 }
@@ -217,7 +226,8 @@ const signalFigures = (f: EffectFigures): KbSignal['figures'] => ({
 });
 
 /** Where the original change went: the document or agent file it was applied to, else its target or the submitter's hint. */
-const targetOf = (item: KbItem): string | null =>
-  item.outcome?.kind === 'applied'
-    ? item.outcome.name
-    : (item.target?.name ?? item.suggestedTarget);
+const targetOf = ({ glob, artifacts }: LearningRead): string | null => {
+  const outcome = learningOutcome(artifacts);
+  const target = learningTarget(glob);
+  return outcome?.kind === 'applied' ? outcome.name : (target.routed?.name ?? target.suggested);
+};

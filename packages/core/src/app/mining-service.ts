@@ -1,6 +1,6 @@
-import { UNPROCESSED } from '../domain/kb.js';
-import type { KbItem } from '../domain/kb.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
+import { learningDecision, learningEvidence, learningFacts, learningLinks, learningStatus } from '../domain/learning.js';
+import type { LearningRead } from '../domain/learning.js';
 import {
   measureSignals,
   SIGNAL_QUIET_MS,
@@ -19,7 +19,8 @@ import type {
 } from '../domain/signals.js';
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { newKbItemId } from './knowledge-service.js';
-import { kbItems } from './kb-items.js';
+import { boardLearnings, readLearning } from './learning-reads.js';
+import { createLearning, refreshMinedLearning } from './learning-writes.js';
 
 export type MiningResult = Extract<BoardJobResult, { kind: 'mining' }>;
 
@@ -74,7 +75,7 @@ export class MiningService {
     const findings = await tx.listBoardFindings(boardId, from, now);
     const reviewFeedback = await tx.listReviewFeedback(boardId, from, now);
     const knowledge = await tx.listKnowledge(boardId, ['doc']);
-    const items = await kbItems(tx).listKbItems(boardId);
+    const learnings = await boardLearnings(tx, boardId);
     return {
       window: { from, to: now },
       globs: globs.map((g) => ({ id: g.id, type: g.type, status: g.status, createdAt: g.createdAt })),
@@ -84,7 +85,10 @@ export class MiningService {
       reviewFeedback,
       manifestChanges,
       documents: knowledge.map((d) => ({ name: d.name, content: d.content })),
-      learnings: items.filter((i) => i.source === 'submitted').map((i) => ({ globIds: i.sourceGlobIds, agentSetVersion: i.agentSetVersion })),
+      learnings: learnings.flatMap(({ glob }) => {
+        const facts = learningFacts(glob);
+        return facts.source === 'submitted' ? [{ globIds: facts.sourceGlobIds, agentSetVersion: facts.agentSetVersion }] : [];
+      }),
     };
   }
 
@@ -146,22 +150,28 @@ export class MiningService {
           if (row !== undefined) await record(m.key, { ...measured, belowThresholdRuns: row.belowThresholdRuns + 1 });
           continue;
         }
-        const original = row?.itemId == null ? null : await kbItems(tx).getKbItem(row.itemId);
-        const item = original === null ? null : await surviving(tx, original);
-        if (item === null) {
+        const original = row?.itemId == null ? null : await readLearning(tx, row.itemId);
+        const survivor = original === null ? null : await surviving(tx, original);
+        if (survivor === null) {
           await record(m.key, { ...measured, itemId: await raise(m), raisedAt: now, belowThresholdRuns: 0 });
           continue;
         }
-        if (item.status === 'open') {
-          if (await this.refresh(tx, item, m, signalOf(m), now)) refreshed.push(item.id);
+        const { glob: item } = survivor;
+        const status = learningStatus(item, survivor.artifacts);
+        if (status === 'open') {
+          if (await this.refresh(tx, survivor, m, signalOf(m), now)) refreshed.push(item.id);
           await record(m.key, { ...measured, belowThresholdRuns: 0 });
           continue;
         }
-        if (item.status === 'rejected' || item.status === 'suppressed') {
-          const quietSince = item.decidedAt ?? row?.raisedAt ?? item.createdAt;
+        if (status === 'rejected' || status === 'suppressed') {
+          const quietSince = learningDecision(item, survivor.artifacts).at ?? row?.raisedAt ?? item.createdAt;
+          const signal = learningFacts(item).signal;
           // Rates of different signals aren't comparable: a survivor raised for another signal doesn't count.
           const rateThen =
-            (item.signal?.key === m.key ? item.signal.figures.rate : undefined) ?? original?.signal?.figures.rate ?? row?.lastFigures?.rate ?? 0;
+            (signal?.key === m.key ? signal.figures.rate : undefined) ??
+            (original === null ? undefined : learningFacts(original.glob).signal?.figures.rate) ??
+            row?.lastFigures?.rate ??
+            0;
           const quiet = Date.parse(now) - Date.parse(quietSince) >= SIGNAL_QUIET_MS;
           if (quiet && m.figures.rate >= rateThen * SIGNAL_RERAISE_FACTOR) {
             await record(m.key, { ...measured, itemId: await raise(m), raisedAt: now, belowThresholdRuns: 0 });
@@ -210,57 +220,50 @@ export class MiningService {
   private async insertItem(tx: Tx, boardId: number, agentSetVersion: number, m: Measurement, signal: KbSignal, now: string, hints: Hint[]): Promise<string> {
     const definition = signalDefinition(m.key);
     const id = await newKbItemId(tx, boardId);
-    const item: KbItem = {
-      id,
-      boardId,
-      status: 'open',
-      type: definition?.type ?? 'agent-behaviour',
-      statement: definition?.statement(m) ?? m.label,
-      evidence: evidenceOf(m, signal, definition?.threshold ?? null),
-      suggestedTarget: definition?.suggestedTarget ?? null,
-      sourceGlobIds: m.globIds,
-      source: 'mined',
-      signal,
-      agentSetVersion,
-      submittedBy: MINED_BY,
-      createdAt: now,
-      decidedBy: null,
-      decidedAt: null,
-      decisionReason: null,
-      document: null,
-      outcome: null,
-      // Unprocessed, like a submitted item: the KB pipeline routes, dedupes and drafts it.
-      ...UNPROCESSED,
-      version: 1,
-    };
-    // The item is its decision glob, so mined proposals are decided where the board looks.
-    const inserted = await kbItems(tx, { clock: { now: () => now }, raise: (h) => hints.push(h) }).insertKbItem(item);
+    // The item is its decision glob, so mined proposals are decided where the board looks; the KB pipeline routes, dedupes and drafts it.
+    const created = await createLearning(
+      tx,
+      { clock: { now: () => now }, raise: (h) => hints.push(h) },
+      {
+        id,
+        boardId,
+        type: definition?.type ?? 'agent-behaviour',
+        statement: definition?.statement(m) ?? m.label,
+        evidence: evidenceOf(m, signal, definition?.threshold ?? null),
+        suggestedTarget: definition?.suggestedTarget ?? null,
+        sourceGlobIds: m.globIds,
+        agentSetVersion,
+        submittedBy: MINED_BY,
+        createdAt: now,
+        document: null,
+        target: null,
+        source: 'mined',
+        signal,
+      },
+    );
     // The counter is atomic, so a clash means the counter and the globs disagree.
-    if (!inserted) throw new Error(`KB item ${id} already exists`);
+    if (!created) throw new Error(`KB item ${id} already exists`);
     return id;
   }
 
   /** The open item's new figures and a line of evidence for the week; its draft stands. False if nothing changed. */
-  private async refresh(tx: Tx, item: KbItem, m: Measurement, signal: KbSignal, now: string): Promise<boolean> {
-    const own = item.signal === null || item.signal.key === m.key;
+  private async refresh(tx: Tx, item: LearningRead, m: Measurement, signal: KbSignal, now: string): Promise<boolean> {
+    const { glob } = item;
+    const facts = learningFacts(glob);
+    const own = facts.signal === null || facts.signal.key === m.key;
     const week = `of ${now.slice(0, 10)}: ${own ? '' : `${m.label}: `}${String(m.figures.affected)}/${String(m.figures.eligible)} (${percent(m.figures.rate)})`;
     // On someone's submitted item the line is slop's, not the submitter's.
-    const line = item.source === 'mined' ? `Week ${week}` : `Mined by ${MINED_BY}, week ${week}`;
-    const lines = item.evidence.split('\n');
+    const line = facts.source === 'mined' ? `Week ${week}` : `Mined by ${MINED_BY}, week ${week}`;
+    const evidence = learningEvidence(glob, item.artifacts);
     // A second run on the same day with the same figures (a Run now after the weekly run) adds nothing.
-    if (lines.at(-1) === line) return false;
-    const updated: KbItem = {
-      ...item,
-      signal: own ? signal : item.signal,
-      evidence: `${item.evidence}\n${line}`,
-      sourceGlobIds: [...new Set([...item.sourceGlobIds, ...m.globIds])],
-      // New evidence clears a stale flag (the signal crossed its threshold again).
-      staleSince: null,
-      staleReason: null,
-      version: item.version + 1,
-    };
+    if (evidence.split('\n').at(-1) === line) return false;
     // A conflicting write (the pipeline has it) leaves the refresh to next week.
-    return kbItems(tx, { clock: { now: () => now } }).updateKbItem(updated, item.version);
+    return refreshMinedLearning(tx, { clock: { now: () => now } }, glob.id, glob.version, {
+      // New evidence clears a stale flag (the signal crossed its threshold again).
+      signal: own ? signal : null,
+      evidence: `${evidence}\n${line}`,
+      sourceGlobIds: [...new Set([...facts.sourceGlobIds, ...m.globIds])],
+    });
   }
 }
 
@@ -281,18 +284,20 @@ const signalFrom = (m: Measurement, activity: BoardActivity, now: string): KbSig
  * The item that stands for `item` now: itself, or the one it was merged into or covered by; null when there is
  * none (a merged item whose survivor is gone, or more than `MAX_HOPS` links).
  */
-const surviving = async (tx: Tx, item: KbItem): Promise<KbItem | null> => {
+const surviving = async (tx: Tx, item: LearningRead): Promise<LearningRead | null> => {
   let current = item;
   for (let hop = 0; hop < MAX_HOPS; hop++) {
+    const status = learningStatus(current.glob, current.artifacts);
+    const links = learningLinks(current.glob);
     const next =
-      current.status === 'merged' && current.duplicateOf !== null
-        ? current.duplicateOf
-        : current.status === 'covered' && current.coveredBy?.kind === 'item'
-          ? current.coveredBy.id
+      status === 'merged' && links.duplicateOf !== null
+        ? links.duplicateOf
+        : status === 'covered' && links.coveredBy?.kind === 'item'
+          ? links.coveredBy.id
           : null;
-    if (next === null) return current.status === 'merged' ? null : current;
-    const found = await kbItems(tx).getKbItem(next);
-    if (found === null) return current.status === 'merged' ? null : current;
+    if (next === null) return status === 'merged' ? null : current;
+    const found = await readLearning(tx, next);
+    if (found === null) return status === 'merged' ? null : current;
     current = found;
   }
   // A chain this long (or a loop) has lost its survivor: raise the signal again rather than go silent.
