@@ -10,6 +10,41 @@ export interface BarRows {
   readonly loose: BoardView | undefined;
 }
 
+const EDITABLE = 'input, textarea, select, [contenteditable]';
+
+const inEditable = (el: unknown): boolean => {
+  const node = el as { closest?: (selector: string) => unknown; isContentEditable?: boolean } | null;
+  if (node === null || typeof node !== 'object') return false;
+  return node.isContentEditable === true || (typeof node.closest === 'function' && node.closest(EDITABLE) !== null);
+};
+
+/**
+ * The board a number key opens: key 1–9 is the session in that place of the bar. Null for anything but a plain press
+ * (modifiers, a held key, IME composition), while typing (the target or the focused element is, or is inside, an input,
+ * textarea, select or contenteditable), for a number with no session, and for the board already shown.
+ */
+export const sessionForKey = (
+  e: {
+    key: string;
+    ctrlKey: boolean;
+    metaKey: boolean;
+    altKey: boolean;
+    shiftKey: boolean;
+    repeat?: boolean;
+    isComposing?: boolean;
+    target: unknown;
+  },
+  sessions: readonly BoardView[],
+  current: number | undefined,
+  active: unknown = typeof document === 'undefined' ? null : document.activeElement,
+): BoardView | null => {
+  if (!/^[1-9]$/.test(e.key)) return null;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat === true || e.isComposing === true) return null;
+  if (inEditable(e.target) || inEditable(active)) return null;
+  const board = sessions[Number(e.key) - 1];
+  return board === undefined || board.id === current ? null : board;
+};
+
 const viewedAt = (b: BoardView): number => {
   const at = b.lastViewedAt ?? null;
   return at === null ? Number.NEGATIVE_INFINITY : Date.parse(at);

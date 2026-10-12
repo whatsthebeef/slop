@@ -305,6 +305,7 @@ export const BoardBar = ({ current }: { current?: number }) => {
           to={`/boards/${board.id}`}
           aria-current={selected ? 'page' : undefined}
           className={ROW}
+          title={kind === 'session' ? `Press ${number}` : undefined}
           data-testid={`board-tab-${board.id}`}
         >
           <span className="font-mono text-[13px] opacity-70">{number}</span>
