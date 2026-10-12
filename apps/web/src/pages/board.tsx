@@ -49,6 +49,8 @@ const MOVE_DESCRIPTIONS: Partial<Record<Action, string>> = {
  * through labels, so those lists have no moves.
  */
 const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
+  // No moves while slop is still creating the glob's branch and PR: a second action then would race the setup.
+  if (glob.provisioning === 'pending') return [];
   const allowed = glob.allowedActions ?? [];
   const make = (action: Action, direction: Direction, target: List) => {
     const name = actionLabel(action, glob.type, ACTION_LABELS, glob.status);
