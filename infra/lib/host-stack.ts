@@ -127,7 +127,7 @@ export class HostStack extends Stack {
         resources: [this.formatArn({ service: 'ssm', resource: 'parameter', resourceName: `slop/${stage}/*` })],
       }),
     );
-    // The models slop calls are US cross-region inference profiles, which Bedrock serves from several regions.
+    // The models slop calls are global inference profiles, which Bedrock serves from several regions.
     role.addToPolicy(
       new PolicyStatement({
         actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],

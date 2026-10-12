@@ -240,7 +240,12 @@ export class InboxPipeline {
     try {
       const answer = await completeWithDeadline(
         this.deps.llm,
-        { system: INBOX_SYSTEM, prompt: promptOf(item, candidates), maxTokens: MAX_TOKENS },
+        {
+          system: INBOX_SYSTEM,
+          prompt: promptOf(item, candidates),
+          maxTokens: MAX_TOKENS,
+          spend: { boardId: item.boardId, source: 'inbox' },
+        },
         this.deps.llmTimeoutMs ?? INBOX_LLM_TIMEOUT_MS,
       );
       const parsed = parseSummary(answer, new Set(candidates.map((c) => c.globId)));

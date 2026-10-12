@@ -45,6 +45,7 @@ describe('learned size check', () => {
   let boardId: number;
   let llmMode: 'ok' | 'unavailable' | 'junk';
   let calls: string[];
+  let spends: LlmRequest['spend'][];
   let service: SizeCheckService;
   let clockNow: string;
   /** What the judge answers; the default says five parts, three of them buildable at the same time. */
@@ -55,6 +56,7 @@ describe('learned size check', () => {
   const llm: Llm = {
     complete: (request: LlmRequest) => {
       calls.push(request.system.startsWith('You judge') ? 'judge' : 'propose');
+      spends.push(request.spend);
       if (llmMode === 'unavailable') return Promise.reject(new LlmUnavailable('down', 'wait'));
       if (llmMode === 'junk') return Promise.resolve('no json here');
       return Promise.resolve(
@@ -96,6 +98,7 @@ describe('learned size check', () => {
       { title: 'CLI', summary: 'c', plan: '## Tasks\n4. CLI command in apps/server/drizzle', after: [0] },
     ];
     calls = [];
+    spends = [];
     clockNow = NOW;
     const notifier = new RecordingNotifier();
     const clock = { now: () => clockNow };
@@ -125,6 +128,9 @@ describe('learned size check', () => {
     expect(check?.proposal?.parts.map((p) => p.after)).toEqual([[], [0], [0]]);
     // Part 0 is the shared contract: two parts that need only it, and the proposal shows the shape.
     expect(check?.proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
+    // The judge and the split proposal both go to the board's ledger as the size check.
+    expect(calls).toEqual(['judge', 'propose']);
+    expect(spends).toEqual([{ boardId, source: 'size_check' }, { boardId, source: 'size_check' }]);
   });
 
   it('does not flag a small plan, and makes no model call for a trivial one', async () => {

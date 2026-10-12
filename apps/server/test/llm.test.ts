@@ -1,9 +1,11 @@
-import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import { LlmBusy, LlmUnavailable } from '@slop/core';
+import type { LlmSpendTag } from '@slop/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BEDROCK_CLIENT_RETRY, BedrockLlm, shownModelId } from '../src/llm.js';
+import { BEDROCK_CLIENT_RETRY, BedrockLlm, shownModelId, spendRecorder } from '../src/llm.js';
+import type { LlmUsage } from '../src/llm.js';
 
-const MODEL = 'us.anthropic.claude-opus-5-5';
+const MODEL = 'global.anthropic.claude-opus-5-5';
 
 /** An SDK-style error: the SDK tells failures apart by `name`. */
 const sdkError = (name: string, message: string): Error => Object.assign(new Error(message), { name });
@@ -110,5 +112,123 @@ describe('BedrockLlm error classification', () => {
 
   it('retries adaptively, up to five attempts', () => {
     expect(BEDROCK_CLIENT_RETRY).toEqual({ retryMode: 'adaptive', maxAttempts: 5 });
+  });
+});
+
+/**
+ * Makes `send` resolve with `output`. Its last overload (callback style) returns void, so the typed mock helpers expect
+ * void; BedrockLlm only uses the promise overload.
+ */
+const respondWith = (output: object) =>
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- the promise overload of send, see above
+  vi.spyOn(BedrockRuntimeClient.prototype, 'send').mockImplementation(() => Promise.resolve(output));
+
+describe('BedrockLlm usage and the spend tag', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const TAG: LlmSpendTag = { boardId: 7, source: 'chat', globId: 's7t1' };
+
+  /** Records each usage report with its tag. */
+  const listener = () => {
+    const heard: { usage: LlmUsage; spend: LlmSpendTag | undefined }[] = [];
+    return { heard, onUsage: (usage: LlmUsage, spend?: LlmSpendTag) => void heard.push({ usage, spend }) };
+  };
+
+  it('hands the tag to the usage listener, and never puts it in the Converse command (the prompt is unchanged)', async () => {
+    const send = respondWith({
+      output: { message: { role: 'assistant', content: [{ text: 'ok' }] } },
+      usage: { inputTokens: 12, outputTokens: 3 },
+    });
+    const { heard, onUsage } = listener();
+    const llm = new BedrockLlm({ id: MODEL, configKey: 'CHAT_MODEL' }, 'us-east-1', onUsage, null);
+    expect(await llm.complete({ system: 's', prompt: 'p', maxTokens: 10, spend: TAG })).toBe('ok');
+    expect(heard).toEqual([{ usage: { model: MODEL, input: 12, output: 3 }, spend: TAG }]);
+    const command = send.mock.calls[0]?.[0];
+    expect(command).toBeInstanceOf(ConverseCommand);
+    expect(command?.input).toEqual({
+      modelId: MODEL,
+      system: [{ text: 's' }],
+      messages: [{ role: 'user', content: [{ text: 'p' }] }],
+      inferenceConfig: { maxTokens: 10 },
+    });
+    expect(JSON.stringify(command?.input)).not.toContain('spend');
+    expect(JSON.stringify(command?.input)).not.toContain('s7t1');
+  });
+
+  it('hands the tag over from a stream too, with no spend in the ConverseStream command', async () => {
+    // `for await` reads a plain array like the SDK's event stream.
+    const events = [
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'Hel' } } },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'lo' } } },
+      { metadata: { usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 }, metrics: { latencyMs: 1 } } },
+    ];
+    const send = respondWith({ stream: events });
+    const { heard, onUsage } = listener();
+    const llm = new BedrockLlm({ id: MODEL, configKey: 'CHAT_MODEL' }, 'us-east-1', onUsage, null);
+    const pieces: string[] = [];
+    expect(await llm.stream({ system: 's', prompt: 'p', maxTokens: 10, spend: TAG }, (t) => pieces.push(t))).toBe('Hello');
+    expect(pieces).toEqual(['Hel', 'lo']);
+    expect(heard).toEqual([{ usage: { model: MODEL, input: 5, output: 2 }, spend: TAG }]);
+    const command = send.mock.calls[0]?.[0];
+    expect(command).toBeInstanceOf(ConverseStreamCommand);
+    expect(command?.input).not.toHaveProperty('spend');
+    expect(JSON.stringify(command?.input)).not.toContain('s7t1');
+  });
+
+  it('reports an untagged call without a tag, and a failing listener never fails the call', async () => {
+    respondWith({
+      output: { message: { role: 'assistant', content: [{ text: 'ok' }] } },
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { heard, onUsage } = listener();
+    expect(await new BedrockLlm({ id: MODEL, configKey: 'CHAT_MODEL' }, 'us-east-1', onUsage).complete({ system: 's', prompt: 'p', maxTokens: 10 })).toBe('ok');
+    expect(heard).toEqual([{ usage: { model: MODEL, input: 1, output: 1 }, spend: undefined }]);
+    const throwing = new BedrockLlm({ id: MODEL, configKey: 'CHAT_MODEL' }, 'us-east-1', () => {
+      throw new Error('listener broke');
+    });
+    expect(await throwing.complete({ system: 's', prompt: 'p', maxTokens: 10, spend: TAG })).toBe('ok');
+    const rejecting = new BedrockLlm({ id: MODEL, configKey: 'CHAT_MODEL' }, 'us-east-1', () => Promise.reject(new Error('ledger down')));
+    expect(await rejecting.complete({ system: 's', prompt: 'p', maxTokens: 10, spend: TAG })).toBe('ok');
+    await vi.waitFor(() => expect(errors).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe('spendRecorder', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const USAGE: LlmUsage = { model: MODEL, input: 1_000, output: 200 };
+
+  it('writes one ledger row for a tagged call, with its board, source and glob', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const record = vi.fn(() => Promise.resolve());
+    const log = vi.fn();
+    await spendRecorder({ record }, log)(USAGE, { boardId: 3, source: 'intake' });
+    await spendRecorder({ record }, log)(USAGE, { boardId: 3, source: 'kb_draft', globId: 's3k1' });
+    expect(record.mock.calls).toEqual([
+      [{ boardId: 3, globId: null, source: 'intake', model: MODEL, inputTokens: 1_000, outputTokens: 200, ref: null }],
+      [{ boardId: 3, globId: 's3k1', source: 'kb_draft', model: MODEL, inputTokens: 1_000, outputTokens: 200, ref: null }],
+    ]);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('only logs an untagged call (reviews, the knowledge page and the sign-in probe write no row here)', async () => {
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const record = vi.fn(() => Promise.resolve());
+    await spendRecorder({ record }, vi.fn())(USAGE);
+    expect(record).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith(`[llm] ${MODEL} in=1000 out=200`);
+  });
+
+  it('logs a ledger error instead of throwing it', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const record = vi.fn(() => Promise.reject(new Error('connection refused')));
+    const log = vi.fn();
+    await expect(spendRecorder({ record }, log)(USAGE, { boardId: 3, source: 'chat' })).resolves.toBeUndefined();
+    expect(log).toHaveBeenCalledWith('Could not record chat spend for board 3: connection refused');
   });
 });

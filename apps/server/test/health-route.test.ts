@@ -94,7 +94,7 @@ describe('GET /api/health', () => {
 
     const tracked = health.track(
       { complete: () => Promise.reject(new LlmUnavailable('AWS sign-in expired', 'Run `aws sso login`')) },
-      'us.anthropic.claude-opus-5-5',
+      'global.anthropic.claude-opus-5-5',
     );
     await expect(tracked.complete({ system: 's', prompt: 'p', maxTokens: 1 })).rejects.toBeInstanceOf(LlmUnavailable);
     expect(await (await get(signedIn)).json()).toMatchObject({

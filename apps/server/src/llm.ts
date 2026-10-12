@@ -1,6 +1,45 @@
 import { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import { LlmBusy, LlmUnavailable } from '@slop/core';
-import type { Llm, LlmRequest } from '@slop/core';
+import type { Llm, LlmRequest, LlmSpendTag, SpendService } from '@slop/core';
+
+/** One call's token usage as Bedrock reports it. */
+export interface LlmUsage {
+  readonly model: string;
+  readonly input: number;
+  readonly output: number;
+}
+
+/**
+ * Hears each call's usage with the request's spend tag (absent for board-less and self-recording calls). It may
+ * return a promise: `BedrockLlm` never waits on it, so a slow or failing listener can't hold up or fail a call.
+ */
+export type UsageListener = (usage: LlmUsage, spend?: LlmSpendTag) => void | Promise<void>;
+
+/**
+ * The usage listener that logs every call and writes one ledger row per tagged call (priced by `SpendService.record`,
+ * or unpriced). A ledger error is logged, never thrown: spend accounting must not fail a model call.
+ */
+export const spendRecorder =
+  (spend: Pick<SpendService, 'record'>, log: (message: string) => void): UsageListener =>
+  (usage, tag) => {
+    console.log(
+      `[llm] ${usage.model}${tag === undefined ? '' : ` ${tag.source} board=${String(tag.boardId)}`} in=${String(usage.input)} out=${String(usage.output)}`,
+    );
+    if (tag === undefined) return Promise.resolve();
+    return spend
+      .record({
+        boardId: tag.boardId,
+        globId: tag.globId ?? null,
+        source: tag.source,
+        model: usage.model,
+        inputTokens: usage.input,
+        outputTokens: usage.output,
+        ref: null,
+      })
+      .catch((error: unknown) => {
+        log(`Could not record ${tag.source} spend for board ${String(tag.boardId)}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+  };
 
 /** A Bedrock model and the setting that chose it (named in the fix when the model can't be used). */
 export interface BedrockModel {
@@ -133,7 +172,7 @@ export class BedrockLlm implements Llm {
   constructor(
     model: BedrockModel,
     region: string,
-    private readonly onUsage: (usage: { model: string; input: number; output: number }) => void = () => undefined,
+    private readonly onUsage: UsageListener = () => undefined,
     /** Sampling temperature; null sends none (Sonnet and Opus 5.5 refuse non-default sampling values). */
     private readonly temperature: number | null = 0,
   ) {
@@ -161,11 +200,10 @@ export class BedrockLlm implements Llm {
     } catch (error) {
       throw classifyBedrockError(error, this.site) ?? error;
     }
-    this.onUsage({
-      model: this.modelId,
-      input: response.usage?.inputTokens ?? 0,
-      output: response.usage?.outputTokens ?? 0,
-    });
+    this.report(
+      { model: this.modelId, input: response.usage?.inputTokens ?? 0, output: response.usage?.outputTokens ?? 0 },
+      request.spend,
+    );
     return (response.output?.message?.content ?? []).map((block) => block.text ?? '').join('');
   }
 
@@ -192,13 +230,27 @@ export class BedrockLlm implements Llm {
           onText(piece);
         }
         if (event.metadata?.usage !== undefined) {
-          this.onUsage({ model: this.modelId, input: event.metadata.usage.inputTokens ?? 0, output: event.metadata.usage.outputTokens ?? 0 });
+          this.report(
+            { model: this.modelId, input: event.metadata.usage.inputTokens ?? 0, output: event.metadata.usage.outputTokens ?? 0 },
+            request.spend,
+          );
         }
       }
     } catch (error) {
       throw classifyBedrockError(error, this.site) ?? error;
     }
     return whole;
+  }
+
+  /** Hands usage to the listener without waiting on it; the tag stays local (it is never in the command sent to Bedrock). */
+  private report(usage: LlmUsage, spend: LlmSpendTag | undefined): void {
+    try {
+      void Promise.resolve(this.onUsage(usage, spend)).catch((error: unknown) => {
+        console.error(`[llm] usage listener failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    } catch (error) {
+      console.error(`[llm] usage listener failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }
 
@@ -209,5 +261,5 @@ export class BedrockLlm implements Llm {
 export const reviewerLlm = (
   modelId: string,
   region: string,
-  onUsage?: (usage: { model: string; input: number; output: number }) => void,
+  onUsage?: UsageListener,
 ): BedrockLlm => new BedrockLlm({ id: modelId, configKey: 'REVIEW_MODEL' }, region, onUsage, 0);

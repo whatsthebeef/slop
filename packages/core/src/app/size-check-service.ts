@@ -168,7 +168,12 @@ export class SizeCheckService implements SizeAssessor {
       try {
         const answer = await completeWithDeadline(
           this.deps.llm,
-          { system: JUDGE_SYSTEM, prompt: `Plan:\n<<<\n${plan.slice(0, MAX_PLAN_CHARS)}\n>>>`, maxTokens: 300 },
+          {
+            system: JUDGE_SYSTEM,
+            prompt: `Plan:\n<<<\n${plan.slice(0, MAX_PLAN_CHARS)}\n>>>`,
+            maxTokens: 300,
+            spend: { boardId, source: 'size_check' },
+          },
           this.deps.llmTimeoutMs ?? SIZE_LLM_TIMEOUT_MS,
         );
         const parsed = parseJson(answer);
@@ -181,7 +186,7 @@ export class SizeCheckService implements SizeAssessor {
     }
     let reasons = oversizedReasons(estimate, threshold);
     const evidence = evidenceOf(estimate);
-    let proposal = reasons.length > 0 ? await this.propose(plan) : null;
+    let proposal = reasons.length > 0 ? await this.propose(boardId, plan) : null;
     // A split whose parts would wait on each other in one line saves nothing: the glob stays whole, and the evidence says why.
     if (proposal !== null && isChain(proposal)) {
       evidence.push(`Not oversized: a split would be a chain of ${proposal.parts.length} parts (critical path ${proposal.criticalPath ?? proposal.parts.length}), with nothing to build in parallel`);
@@ -192,12 +197,17 @@ export class SizeCheckService implements SizeAssessor {
   }
 
   /** The model's split of a flagged plan; null when it is unavailable or gives fewer than 2 usable parts. */
-  private async propose(plan: string): Promise<SizeProposal | null> {
+  private async propose(boardId: number, plan: string): Promise<SizeProposal | null> {
     if (this.deps.llm === undefined) return null;
     try {
       const answer = await completeWithDeadline(
         this.deps.llm,
-        { system: PROPOSE_SYSTEM, prompt: `Plan:\n<<<\n${plan.slice(0, MAX_PLAN_CHARS)}\n>>>`, maxTokens: 4000 },
+        {
+          system: PROPOSE_SYSTEM,
+          prompt: `Plan:\n<<<\n${plan.slice(0, MAX_PLAN_CHARS)}\n>>>`,
+          maxTokens: 4000,
+          spend: { boardId, source: 'size_check' },
+        },
         this.deps.llmTimeoutMs ?? SIZE_LLM_TIMEOUT_MS,
       );
       return buildProposal(plan, parseParts(answer));
@@ -335,6 +345,7 @@ export class SizeCheckService implements SizeAssessor {
             system: FOOTPRINT_SYSTEM,
             prompt: `Plan:\n<<<\n${plan.slice(0, MAX_PLAN_CHARS)}\n>>>\n${transcript.length === 0 ? '' : `\nWhat you have seen so far:\n${transcript.join('\n')}\n`}${last ? '\nYou may not look any more: answer with action "done".' : ''}`,
             maxTokens: 1500,
+            spend: { boardId, source: 'size_check' },
           },
           this.deps.llmTimeoutMs ?? SIZE_LLM_TIMEOUT_MS,
         );

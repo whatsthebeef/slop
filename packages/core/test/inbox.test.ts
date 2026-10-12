@@ -246,6 +246,7 @@ describe('inbox', () => {
       const prompt = llm.summaries()[0]?.prompt ?? '';
       expect(prompt).toContain(`[${wanted.id}] ${wanted.title}`);
       expect(prompt).toContain('<<<');
+      expect(llm.summaries()[0]?.spend).toEqual({ boardId, source: 'inbox' });
       expect(searchItem(id)?.sourceType).toBe('thread');
       const view = unwrap(await inbox.list(DEV, boardId))[0];
       expect(view?.suggestions[0]).toMatchObject({ globId: 's1t1', title: wanted.title });

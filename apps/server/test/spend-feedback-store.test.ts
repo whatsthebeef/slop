@@ -1,6 +1,9 @@
+import { SpendService } from '@slop/core';
+import { sql } from 'drizzle-orm';
 import type { NewReviewFeedback, Store } from '@slop/core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PgStore } from '../src/db/store.js';
+import { spendRecorder } from '../src/llm.js';
 import type { Database } from '../src/db/store.js';
 import { createTestDatabase } from './support/database.js';
 
@@ -68,6 +71,8 @@ const behaves = (
       );
       expect(again.unpricedCalls).toBe(2);
       expect(Object.keys(again.bySource).sort()).toEqual(['kb', 'review']);
+      // It is named in unpricedBySource instead, with each source's unpriced count.
+      expect(again.unpricedBySource).toEqual({ review: 1, 'unpriced-only': 1 });
       expect(
         await store.transaction((tx) =>
           tx.sumLlmSpend(boardId + 1, '2026-10-01T00:00:00.000Z', '2026-10-31T00:00:00.000Z'),
@@ -76,6 +81,7 @@ const behaves = (
         usd: 0,
         unpricedCalls: 0,
         bySource: {},
+        unpricedBySource: {},
       });
     });
 
@@ -165,6 +171,87 @@ describe('board review settings in the store (s15f43)', () => {
       expect(await store.transaction((tx) => tx.updateBoard(next, board.version))).toBe(true);
       expect((await store.transaction((tx) => tx.getBoard(board.id)))?.review).toEqual(next.review);
     } finally {
+      await dropDb();
+    }
+  });
+});
+
+describe('tagged model calls reach the Postgres spend ledger (s15f60)', () => {
+  it('writes a row per tagged call with its board, source and glob, prices it or counts it unpriced, and skips untagged calls', async () => {
+    const { database: db, drop: dropDb } = await createTestDatabase('spendtag');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const store = new PgStore(db.db);
+      const board = await store.transaction((tx) => tx.insertBoard(boardInput));
+      const other = await store.transaction((tx) =>
+        tx.insertBoard({ ...boardInput, name: 'other' }),
+      );
+      const spend = new SpendService({ store, clock: { now: () => '2026-10-12T10:00:00.000Z' } });
+      const errors: string[] = [];
+      const record = spendRecorder(spend, (m) => errors.push(m));
+
+      // Regional Haiku: 1000 * 1.1 + 2000 * 5.5 per million.
+      await record(
+        { model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', input: 1000, output: 2000 },
+        { boardId: board.id, source: 'chat' },
+      );
+      // Global Sonnet: 1000 * 2 + 1000 * 10 per million.
+      await record(
+        { model: 'global.anthropic.claude-sonnet-5-5', input: 1000, output: 1000 },
+        { boardId: board.id, source: 'intake', globId: 's1f2' },
+      );
+      // An older Claude has no price: the row is kept with a null cost.
+      await record(
+        { model: 'anthropic.claude-3-haiku-20240307-v1:0', input: 500, output: 100 },
+        { boardId: board.id, source: 'kb_draft', globId: 's1f3' },
+      );
+      // Untagged (review, knowledge page): logged only, no row.
+      await record(
+        { model: 'global.anthropic.claude-opus-5-5', input: 9000, output: 9000 },
+        undefined,
+      );
+      // Another board's call stays on that board.
+      await record(
+        { model: 'global.anthropic.claude-opus-5-5', input: 1000, output: 1000 },
+        { boardId: other.id, source: 'chat' },
+      );
+      expect(errors).toEqual([]);
+
+      const month = await spend.monthToDate(board.id);
+      expect(month.ok).toBe(true);
+      if (!month.ok) return;
+      expect(month.value.month).toBe('2026-10');
+      expect(month.value.usd).toBeCloseTo(0.0121 + 0.012, 10);
+      expect(month.value.unpricedCalls).toBe(1);
+      expect(Object.keys(month.value.bySource).sort()).toEqual(['chat', 'intake']);
+      expect(month.value.bySource.chat).toBeCloseTo(0.0121, 10);
+      expect(month.value.bySource.intake).toBeCloseTo(0.012, 10);
+      expect(month.value.unpricedBySource).toEqual({ kb_draft: 1 });
+
+      const rows = await db.db.execute(
+        sql`select source, glob_id, model, input_tokens, output_tokens, cost_usd from llm_spend where board_id = ${board.id} order by source`,
+      );
+      expect(
+        rows.map((r) => [
+          r.source,
+          r.glob_id,
+          r.model,
+          Number(r.input_tokens),
+          Number(r.output_tokens),
+          r.cost_usd === null,
+        ]),
+      ).toEqual([
+        ['chat', null, 'us.anthropic.claude-haiku-4-5-20251001-v1:0', 1000, 2000, false],
+        ['intake', 's1f2', 'global.anthropic.claude-sonnet-5-5', 1000, 1000, false],
+        ['kb_draft', 's1f3', 'anthropic.claude-3-haiku-20240307-v1:0', 500, 100, true],
+      ]);
+
+      const otherMonth = await spend.monthToDate(other.id);
+      expect(otherMonth.ok && otherMonth.value.bySource).toEqual({
+        chat: (1000 * 4 + 1000 * 20) / 1_000_000,
+      });
+    } finally {
+      log.mockRestore();
       await dropDb();
     }
   });

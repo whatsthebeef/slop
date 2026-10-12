@@ -740,15 +740,17 @@ export class PgStore implements Store {
           .where(and(eq(s.boardId, boardId), gte(s.createdAt, new Date(from)), lte(s.createdAt, new Date(to))))
           .groupBy(s.source);
         const bySource: Record<string, number> = {};
+        const unpricedBySource: Record<string, number> = {};
         let usd = 0;
         let unpricedCalls = 0;
         for (const r of rows) {
-          // Like the in-memory store, a source with no priced rows is left out.
+          // Like the in-memory store, a source with no priced (or no unpriced) rows is left out of that map.
           if (r.priced > 0) bySource[r.source] = r.usd;
+          if (r.unpriced > 0) unpricedBySource[r.source] = r.unpriced;
           usd += r.usd;
           unpricedCalls += r.unpriced;
         }
-        return { usd, unpricedCalls, bySource };
+        return { usd, unpricedCalls, bySource, unpricedBySource };
       },
       insertReviewFeedback: async (row) => {
         const rows = await t

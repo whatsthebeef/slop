@@ -24,13 +24,13 @@ const START = '2026-10-05T12:00:00.000Z';
 
 /** A fake LLM answering from a queue of canned answers (or errors), recording each request. */
 class FakeLlm implements Llm {
-  readonly calls: { system: string; prompt: string }[] = [];
+  readonly calls: Pick<LlmRequest, 'system' | 'prompt' | 'spend'>[] = [];
   constructor(private readonly answers: (string | Error)[] = []) {}
   answer(...answers: (string | Error)[]): void {
     this.answers.push(...answers);
   }
   complete(request: LlmRequest): Promise<string> {
-    this.calls.push({ system: request.system, prompt: request.prompt });
+    this.calls.push({ system: request.system, prompt: request.prompt, spend: request.spend });
     const next = this.answers.shift();
     if (next === undefined) return Promise.reject(new Error('No canned answer'));
     return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
@@ -204,6 +204,7 @@ describe('Findings pipeline', () => {
     expect(call?.prompt).toContain('src/job.ts:10');
     expect(call?.prompt).toContain('The job retries forever.');
     expect(call?.prompt).not.toContain('Missing test for the retry path.');
+    expect(call?.spend).toEqual({ boardId, source: 'findings', globId });
     expect(await finding(first?.id ?? 0)).toMatchObject({
       class: 'edge-case',
       classNote: 'Retries without a limit',
@@ -229,6 +230,7 @@ describe('Findings pipeline', () => {
     await pipeline.processNext();
     expect(llm.calls[0]?.system).toBe(SPLIT_SYSTEM);
     expect(llm.calls[0]?.prompt).toContain('nothing tests the retry path');
+    expect(llm.calls[0]?.spend).toEqual({ boardId, source: 'findings', globId });
     expect((await stored()).map((f) => ({ severity: f.severity, path: f.path, line: f.line, text: f.text }))).toEqual([
       { severity: 'in_scope', path: 'src/job.ts', line: '10', text: 'Retries forever.' },
       // No text of its own: the quote stands in.

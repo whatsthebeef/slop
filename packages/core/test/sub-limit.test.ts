@@ -486,6 +486,7 @@ describe('SubLimitService', () => {
         /Does this bug report say the defect was introduced by s1t1 \(Change s1t1\)\?/,
       );
       expect(llm.requests[0]?.prompt).toContain('Cards overflow.');
+      expect(llm.requests[0]?.spend).toEqual({ boardId, source: 'sub_limit', globId: 's1t1' });
     });
 
     it("doesn't lower on 'caused: false', and doesn't ask about that bug again", async () => {
