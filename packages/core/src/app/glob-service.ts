@@ -13,12 +13,14 @@ import { mergeImplied } from '../domain/exclusive-paths.js';
 import { knowledgePageEffect, recheckOverlapsEffect } from '../domain/events.js';
 import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
 import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
+import type { InboxItem } from '../domain/inbox.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { applicableDecisions, DECISIONS_LABEL, decisionsAttachment, scopedDecision } from '../domain/decision-glob.js';
 import type { ScopedDecision } from '../domain/decision-glob.js';
 import { addArtifact } from './artifact-service.js';
 import { DECISION_SYSTEM_ACTOR } from './decision-glob.js';
+import { AttachConflict, linkInboxItem } from './inbox-service.js';
 import { findHolds } from './hold-service.js';
 import { recordTypeCorrection } from './type-learning-service.js';
 import type { DependencyLearningService } from './dependency-learning-service.js';
@@ -75,6 +77,8 @@ export interface CreateGlobInput {
   readonly intake?: IntakeRecord | null;
   /** Where the glob is created from, for the snapshot when intake didn't run (default: `api`). */
   readonly source?: SnapshotSource;
+  /** An inbox item of the board to attach to the new glob in the same transaction; refused when it is another board's or discarded. */
+  readonly inboxItem?: number;
 }
 
 /** One part of a split. Part 0 is the original glob (it keeps its ID); the others become new globs in its group. */
@@ -278,6 +282,15 @@ export class GlobService {
   // Commands from people (each carries the version the client read)
 
   async create(email: string, input: CreateGlobInput): Promise<Result<Glob>> {
+    try {
+      return await this.createWithItem(email, input);
+    } catch (e) {
+      if (e instanceof AttachConflict) return invalidInput('The inbox item changed: try again');
+      throw e;
+    }
+  }
+
+  private async createWithItem(email: string, input: CreateGlobInput): Promise<Result<Glob>> {
     // Decisions come from knowledge proposals, the inbox and the backfill: never through the work form.
     if (input.category === 'decision') return invalidInput('A decision glob is created from a knowledge proposal or an inbox item, not directly');
     // A glob about to start waits for open globs that may change the same exclusive paths (read before the transaction:
@@ -303,6 +316,13 @@ export class GlobService {
       if (input.idempotencyKey !== null) {
         const existing = await tx.findGlobByCreationKey(board.id, input.idempotencyKey);
         if (existing !== null) return ok({ glob: existing, changed: false, events: [], effects: [] });
+      }
+      // Checked before anything is written, so a bad item creates nothing.
+      let item: InboxItem | null = null;
+      if (input.inboxItem !== undefined) {
+        item = await tx.getInboxItem(board.id, input.inboxItem);
+        if (item === null) return notFound(`No inbox item ${String(input.inboxItem)} on board ${String(board.id)}`);
+        if (item.status === 'discarded') return invalidInput('A discarded item cannot be attached');
       }
       const letter = letterOf(input.category);
       const n = await tx.nextNumber(board.id, letter);
@@ -374,11 +394,17 @@ export class GlobService {
           by: 'sessionator',
         });
       }
+      // Attached last, so the item is in the glob's context from the start; a racing write throws and rolls the glob back too.
+      if (item !== null) await linkInboxItem(tx, this.deps.clock, email, board.id, item, [glob]);
       return ok({ ...transition.value, glob, changed: true });
     });
     if (!result.ok) return result;
     if (result.value.changed) {
       this.publish(result.value.glob);
+      if (input.inboxItem !== undefined) {
+        this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: input.boardId, globId: result.value.glob.id });
+        this.deps.notifier.publish({ kind: 'board.inbox', boardId: input.boardId });
+      }
       // The forecast from the code and history is made in the background: creating a glob never waits on it.
       if (result.value.glob.status === 'planning') this.refreshSizeInBackground(result.value.glob.id);
       // The caller's first write carries the version it got back, so it must be the one after the automatic run.

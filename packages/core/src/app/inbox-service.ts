@@ -4,6 +4,7 @@ import {
   INBOX_TEXT_LIMIT,
   MAX_ATTACH_GLOBS,
   inboxChunks,
+  inboxCreationKey,
   inboxContentHash,
   inboxItemOf,
   inboxLabel,
@@ -83,7 +84,7 @@ export interface NewDelivery extends NewPaste {
 }
 
 /** The item changed (or was linked) under an attach: thrown to roll the transaction back. */
-class AttachConflict extends Error {
+export class AttachConflict extends Error {
   constructor() {
     super('The inbox item changed during attach');
   }
@@ -456,38 +457,22 @@ export class InboxService {
     return ok(result.value.view);
   }
 
+  private link(tx: Tx, email: string, boardId: number, item: InboxItem, globs: readonly Glob[]): Promise<{ linked: string[]; current: InboxItem }> {
+    return linkInboxItem(tx, this.deps.clock, email, boardId, item, globs);
+  }
+
   /**
-   * Links `item` to each of `globs` in the caller's transaction: a link attachment on the glob, a link row, the search item's
-   * globs, and the item `attached`. A glob already linked is skipped. Throws `AttachConflict` on a racing write so
-   * everything written rolls back.
+   * The glob this item was turned into (creation key `inbox:<id>`), so the board can offer to open it instead of making
+   * a second one. Null when none was made.
    */
-  private async link(tx: Tx, email: string, boardId: number, item: InboxItem, globs: readonly Glob[]): Promise<{ linked: string[]; current: InboxItem }> {
-    const id = item.id;
-    const existing = await tx.listInboxLinks(boardId);
-    const linkedBefore = new Set(existing.filter((l) => l.inboxId === id).map((l) => l.globId));
-    const now = this.deps.clock.now();
-    const linked: string[] = [];
-    for (const glob of globs) {
-      if (linkedBefore.has(glob.id)) continue;
-      const artifact = await addAttachment(tx, this.deps.clock, glob, email, {
-        label: await labelFor(tx, glob.id, item),
-        content: '',
-        link: inboxLink(boardId, id),
-      });
-      // A racing attach got there first: roll everything back rather than leave a second attachment.
-      if (!(await tx.insertInboxLink({ inboxId: id, globId: glob.id, artifactId: artifact.id, linkedBy: email, linkedAt: now }))) throw new AttachConflict();
-      linked.push(glob.id);
-    }
-    let current = item;
-    if (linked.length > 0) {
-      const all = [...linkedBefore, ...linked];
-      // Metadata only: the item's content hash doesn't cover its links, so nothing is chunked again.
-      if (item.itemId !== null) await tx.setItemLinks(item.itemId, all, await groupOf(tx, all));
-      current = { ...item, status: 'attached', updatedAt: now };
-      // Throws so the attachments and links written above roll back with it.
-      if (!(await tx.updateInboxItem(current, item.version))) throw new AttachConflict();
-    }
-    return { linked, current };
+  async createdGlob(email: string, boardId: number, id: number): Promise<Result<{ globId: string | null }>> {
+    return this.deps.store.transaction(async (tx): Promise<Result<{ globId: string | null }>> => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      if ((await tx.getInboxItem(boardId, id)) === null) return notFound(`No inbox item ${String(id)}`);
+      const glob = await tx.findGlobByCreationKey(boardId, inboxCreationKey(id));
+      return ok({ globId: glob?.id ?? null });
+    });
   }
 
   /**
@@ -589,6 +574,40 @@ export class InboxService {
     return inboxView(item, links, globs);
   }
 }
+
+/**
+ * Links `item` to each of `globs` in the caller's transaction: a link attachment on the glob, a link row, the search item's
+ * globs, and the item `attached`. A glob already linked is skipped. Throws `AttachConflict` on a racing write so
+ * everything written rolls back.
+ */
+export const linkInboxItem = async (tx: Tx, clock: Clock, email: string, boardId: number, item: InboxItem, globs: readonly Glob[]): Promise<{ linked: string[]; current: InboxItem }> => {
+  const id = item.id;
+  const existing = await tx.listInboxLinks(boardId);
+  const linkedBefore = new Set(existing.filter((l) => l.inboxId === id).map((l) => l.globId));
+  const now = clock.now();
+  const linked: string[] = [];
+  for (const glob of globs) {
+    if (linkedBefore.has(glob.id)) continue;
+    const artifact = await addAttachment(tx, clock, glob, email, {
+      label: await labelFor(tx, glob.id, item),
+      content: '',
+      link: inboxLink(boardId, id),
+    });
+    // A racing attach got there first: roll everything back rather than leave a second attachment.
+    if (!(await tx.insertInboxLink({ inboxId: id, globId: glob.id, artifactId: artifact.id, linkedBy: email, linkedAt: now }))) throw new AttachConflict();
+    linked.push(glob.id);
+  }
+  let current = item;
+  if (linked.length > 0) {
+    const all = [...linkedBefore, ...linked];
+    // Metadata only: the item's content hash doesn't cover its links, so nothing is chunked again.
+    if (item.itemId !== null) await tx.setItemLinks(item.itemId, all, await groupOf(tx, all));
+    current = { ...item, status: 'attached', updatedAt: now };
+    // Throws so the attachments and links written above roll back with it.
+    if (!(await tx.updateInboxItem(current, item.version))) throw new AttachConflict();
+  }
+  return { linked, current };
+};
 
 /** The attachment's label on a glob: a different item with the same title on it gets the item's number, so versions of one label never mix two items. */
 const labelFor = async (tx: Tx, globId: string, item: InboxItem): Promise<string> => {

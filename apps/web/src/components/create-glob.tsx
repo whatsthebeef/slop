@@ -27,6 +27,7 @@ export const CreateGlobDialog = ({
   groups,
   open,
   initialRequest = '',
+  fromInbox,
   onOpenChange,
   onCreate,
 }: {
@@ -35,6 +36,8 @@ export const CreateGlobDialog = ({
   open: boolean;
   /** Free text to start the request box with (a chat answer); Process turns it into the fields. */
   initialRequest?: string;
+  /** The inbox item the glob is made from: it is attached on create, under this creation key. */
+  fromInbox?: { id: number; title: string; key: string };
   onOpenChange: (open: boolean) => void;
   onCreate: (input: NewGlob) => Promise<void>;
 }) => {
@@ -99,6 +102,7 @@ export const CreateGlobDialog = ({
       const after = afterText.split(/[\s,]+/).filter((id) => id !== '');
       await onCreate({
         ...form,
+        ...(fromInbox === undefined ? {} : { inboxItem: fromInbox.id, idempotencyKey: fromInbox.key }),
         group: form.group?.trim() === '' ? null : form.group,
         ...(after.length === 0 ? {} : { after }),
         ...(insight === null
@@ -130,6 +134,11 @@ export const CreateGlobDialog = ({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title='New glob'>
+        {fromInbox !== undefined && (
+          <p className='mb-3 text-xs text-muted-foreground' data-testid='from-inbox'>
+            From the inbox: {fromInbox.title}. The item will be attached.
+          </p>
+        )}
         <div className='mb-4 grid gap-2 border-b pb-4'>
           <Label>
             Describe the work (optional)

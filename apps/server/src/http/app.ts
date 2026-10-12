@@ -126,6 +126,8 @@ export const createGlobSchema = z.object({
   start: z.boolean().optional(),
   idempotencyKey: z.string().min(1).nullable().default(null),
   plan: z.string().optional(),
+  /** An inbox item of the board to attach to the new glob in the same transaction. */
+  inboxItem: z.number().int().positive().optional(),
   /** IDs of globs on the board this one needs: their code must be on main first, so the glob waits for them to merge. */
   needs: z.array(z.string().min(1)).max(20).optional(),
   /** Alias of `needs`. */
