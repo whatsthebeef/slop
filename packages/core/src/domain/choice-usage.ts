@@ -1,6 +1,7 @@
 import { DEFAULT_CONTEXT_SETTINGS } from './context-settings.js';
 import type { ContextSettings } from './context-settings.js';
 import type { DecisionSourceKind } from './decisions.js';
+import type { AuthorityTier, SourceType } from './search.js';
 
 /**
  * Choice usage (spec, Choices that keep mattering): how often a choice is returned to an agent or to chat, counted
@@ -27,6 +28,14 @@ export interface ChoiceUsageRow {
   /** `YYYY-MM-DD`, UTC. */
   readonly day: string;
   readonly globId: string;
+  readonly count: number;
+}
+
+/** One day's retrievals of knowledge items of one source type and ranking tier (the context report's "what agents get"). */
+export interface ContextRetrievalRow {
+  readonly day: string;
+  readonly sourceType: SourceType;
+  readonly tier: AuthorityTier;
   readonly count: number;
 }
 

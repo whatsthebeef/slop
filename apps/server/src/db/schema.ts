@@ -433,6 +433,24 @@ export const choiceUsage = pgTable(
   (t) => [primaryKey({ columns: [t.decisionId, t.day, t.globId] }), index('choice_usage_board_day_idx').on(t.boardId, t.day)],
 );
 
+/**
+ * How often knowledge items of each source type and ranking tier were returned to an agent or chat, per day. One
+ * counter row per combination, pruned after `CHOICE_USAGE_RETENTION_DAYS`; the context report reads it.
+ */
+export const contextRetrievals = pgTable(
+  'context_retrievals',
+  {
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    day: date('day', { mode: 'string' }).notNull(),
+    sourceType: text('source_type', { enum: SOURCE_TYPES }).notNull(),
+    tier: text('tier', { enum: AUTHORITY_TIERS }).notNull(),
+    count: integer('count').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.boardId, t.day, t.sourceType, t.tier] })],
+);
+
 /** A board's stored context settings (one row per key that differs from the default; the core clamps to the bounds on read). */
 export const contextSettings = pgTable(
   'context_settings',

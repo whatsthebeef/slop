@@ -17,7 +17,7 @@ import type { IdLetter } from './domain/ids.js';
 import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
 import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from './domain/knowledge-page.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
-import type { ChoiceUsageRow } from './domain/choice-usage.js';
+import type { ChoiceUsageRow, ContextRetrievalRow } from './domain/choice-usage.js';
 import type { ContextSettingChange, ContextSettingKey, ContextSettings, NewContextSettingChange } from './domain/context-settings.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
 import type { NewSizeCalibrationChange, SizeCalibration, SizeCalibrationChange, SizeRecord } from './domain/size-forecast.js';
@@ -314,6 +314,12 @@ export interface Tx {
   listChoiceUsage(boardId: number, fromDay: string): Promise<ChoiceUsageRow[]>;
   /** Deletes a board's usage rows before `day`. */
   pruneChoiceUsage(boardId: number, beforeDay: string): Promise<void>;
+  /** Adds `count` retrievals on `day` for each source type and tier pair given (a cheap counter per pair). */
+  recordContextRetrievals(boardId: number, day: string, rows: readonly Omit<ContextRetrievalRow, 'day'>[]): Promise<void>;
+  /** A board's retrieval counters on or after `fromDay`. */
+  listContextRetrievals(boardId: number, fromDay: string): Promise<ContextRetrievalRow[]>;
+  /** Deletes a board's retrieval counters before `day`. */
+  pruneContextRetrievals(boardId: number, beforeDay: string): Promise<void>;
   /** The board's context settings: stored values clamped to their bounds, the default where nothing is stored. */
   getContextSettings(boardId: number): Promise<ContextSettings>;
   /** Stores one setting's value for the board (the caller keeps it within bounds; reads clamp anyway). */

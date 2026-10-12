@@ -150,6 +150,7 @@ export class MiningService {
       // The lease keeps runs apart only while it lasts: a second run waits here and then reads the first's rows.
       await tx.lockBoardJob(boardId, 'mining');
       await tx.pruneChoiceUsage(boardId, usageFrom(now, CHOICE_USAGE_RETENTION_DAYS));
+      await tx.pruneContextRetrievals(boardId, usageFrom(now, CHOICE_USAGE_RETENTION_DAYS));
       const board = await tx.getBoard(boardId);
       if (board === null) throw new Error(`No board ${boardId}`);
       const activity = await this.activity(tx, boardId, now, options.manifestChanges ?? null);

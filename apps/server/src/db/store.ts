@@ -1595,6 +1595,23 @@ export class PgStore implements Store {
         const u = schema.choiceUsage;
         await t.delete(u).where(and(eq(u.boardId, boardId), lt(u.day, beforeDay)));
       },
+      recordContextRetrievals: async (boardId, day, rows) => {
+        if (rows.length === 0) return;
+        const r = schema.contextRetrievals;
+        await t
+          .insert(r)
+          .values(rows.map((row) => ({ boardId, day, sourceType: row.sourceType, tier: row.tier, count: row.count })))
+          .onConflictDoUpdate({ target: [r.boardId, r.day, r.sourceType, r.tier], set: { count: sql`${r.count} + excluded.count` } });
+      },
+      listContextRetrievals: async (boardId, fromDay) => {
+        const r = schema.contextRetrievals;
+        const rows = await t.select().from(r).where(and(eq(r.boardId, boardId), gte(r.day, fromDay)));
+        return rows.map(({ day, sourceType, tier, count }) => ({ day, sourceType, tier, count }));
+      },
+      pruneContextRetrievals: async (boardId, beforeDay) => {
+        const r = schema.contextRetrievals;
+        await t.delete(r).where(and(eq(r.boardId, boardId), lt(r.day, beforeDay)));
+      },
       getContextSettings: async (boardId) => {
         const rows = await t.select().from(schema.contextSettings).where(eq(schema.contextSettings.boardId, boardId));
         return resolveContextSettings(Object.fromEntries(rows.map((r) => [r.key, r.value])));

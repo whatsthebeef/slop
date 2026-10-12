@@ -2,7 +2,7 @@ import { decisionOf } from '../domain/decision-glob.js';
 import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { CONTEXT_SETTING_KEYS, CONTEXT_SETTING_SPECS, isContextSettingKey } from '../domain/context-settings.js';
-import type { ContextSettingChange, ContextSettingKey, ContextSettingSpec } from '../domain/context-settings.js';
+import type { ContextSettingKey, ContextSettingsView } from '../domain/context-settings.js';
 import { NO_GLOB, usageFrom } from '../domain/choice-usage.js';
 import { namesChoice, tuneContext } from '../domain/context-tuning.js';
 import type { AttachFact, CardFact, ChoiceFact, PromotionFact, RetrievalFact, TuningFacts } from '../domain/context-tuning.js';
@@ -17,21 +17,19 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Usage rows are kept this long (`CHOICE_USAGE_RETENTION_DAYS`), so no older retrieval can be read. */
 const RETRIEVAL_WINDOW_DAYS = 90;
 
-/** One setting as the admin page shows it. */
-export interface ContextSettingView extends ContextSettingSpec {
-  readonly value: number;
-}
-
-export interface ContextSettingsView {
-  readonly settings: readonly ContextSettingView[];
-  /** Every move and reset, newest first. */
-  readonly history: readonly ContextSettingChange[];
-}
-
 const idOfChoiceKey = (key: string): number | null => {
   const [kind, id] = key.split(':');
   const n = Number(id);
   return kind === 'choice_in_use' && Number.isInteger(n) ? n : null;
+};
+
+/** The board's settings with their specs and the history of moves, inside the caller's transaction (the caller checked access). */
+export const contextSettingsView = async (tx: Tx, boardId: number): Promise<ContextSettingsView> => {
+  const values = await tx.getContextSettings(boardId);
+  return {
+    settings: CONTEXT_SETTING_KEYS.map((key) => ({ ...CONTEXT_SETTING_SPECS[key], value: values[key] })),
+    history: await tx.listContextSettingChanges(boardId),
+  };
 };
 
 /**
@@ -43,7 +41,7 @@ export class ContextTuningService {
   constructor(private readonly deps: { store: Store; clock: Clock; notifier: Notifier }) {}
 
   /** The facts the rules read, from what the board has stored. */
-  private async facts(tx: Tx, boardId: number, now: string): Promise<TuningFacts> {
+  async facts(tx: Tx, boardId: number, now: string): Promise<TuningFacts> {
     const settings = await tx.getContextSettings(boardId);
     const lastChangeAt: Partial<Record<ContextSettingKey, string>> = {};
     // Newest first: the first row of a key is its last change.
@@ -140,12 +138,8 @@ export class ContextTuningService {
     });
   }
 
-  private async viewIn(tx: Tx, boardId: number): Promise<ContextSettingsView> {
-    const values = await tx.getContextSettings(boardId);
-    return {
-      settings: CONTEXT_SETTING_KEYS.map((key) => ({ ...CONTEXT_SETTING_SPECS[key], value: values[key] })),
-      history: await tx.listContextSettingChanges(boardId),
-    };
+  private viewIn(tx: Tx, boardId: number): Promise<ContextSettingsView> {
+    return contextSettingsView(tx, boardId);
   }
 
   /** Admins: puts one setting back on its default and files the reset in the history. */

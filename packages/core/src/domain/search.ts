@@ -180,6 +180,8 @@ export interface SearchHit {
   readonly score: number;
   readonly citation: Citation;
   readonly status: ItemStatus;
+  /** The tier the item ranks under (the context report counts retrievals by it). */
+  readonly authority: AuthorityTier;
   readonly supersededBy: { readonly title: string; readonly date: string | null } | null;
   /** `superseded by "..." on <date>` or `legacy`, so a reader can tell history from current truth. */
   readonly label: string | null;
@@ -228,6 +230,7 @@ export const toHit = (c: Candidate, score: number): SearchHit => ({
   score,
   citation: { source: c.sourceType, date: c.occurredAt, title: c.title, link: c.externalUrl, globId: c.globIds[0] ?? null },
   status: isLegacy(c) ? 'legacy' : c.status,
+  authority: c.authority,
   supersededBy: c.supersededByTitle === null ? null : { title: c.supersededByTitle, date: c.supersededByAt },
   label: labelOf(c),
 });

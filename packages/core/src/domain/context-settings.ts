@@ -238,3 +238,14 @@ export interface ContextSettingChange {
 }
 
 export type NewContextSettingChange = Omit<ContextSettingChange, 'id'>;
+
+/** One setting as the admin page shows it. */
+export interface ContextSettingView extends ContextSettingSpec {
+  readonly value: number;
+}
+
+export interface ContextSettingsView {
+  readonly settings: readonly ContextSettingView[];
+  /** Every move and reset, newest first. */
+  readonly history: readonly ContextSettingChange[];
+}

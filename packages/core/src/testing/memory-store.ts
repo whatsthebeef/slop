@@ -16,7 +16,7 @@ import type { KnowledgePageHistoryEntry, KnowledgePageVersion } from '../domain/
 import { DEFAULT_REVIEW_BOARD_SETTINGS } from '../domain/review-settings.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import { NO_GLOB } from '../domain/choice-usage.js';
-import type { ChoiceUsageRow } from '../domain/choice-usage.js';
+import type { ChoiceUsageRow, ContextRetrievalRow } from '../domain/choice-usage.js';
 import { resolveContextSettings } from '../domain/context-settings.js';
 import type { ContextSettingChange } from '../domain/context-settings.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
@@ -72,6 +72,7 @@ interface State {
   findings: ReviewFinding[];
   kbSignals: Map<string, KbSignalState>;
   choiceUsage: (ChoiceUsageRow & { boardId: number })[];
+  contextRetrievals: (ContextRetrievalRow & { boardId: number })[];
   contextSettings: Map<string, number>;
   contextSettingChanges: ContextSettingChange[];
   boardJobs: Map<string, BoardJob>;
@@ -167,6 +168,7 @@ const clone = (state: State): State => ({
   findings: [...state.findings],
   kbSignals: new Map(state.kbSignals),
   choiceUsage: state.choiceUsage.map((r) => ({ ...r })),
+  contextRetrievals: state.contextRetrievals.map((r) => ({ ...r })),
   contextSettings: new Map(state.contextSettings),
   contextSettingChanges: [...state.contextSettingChanges],
   boardJobs: new Map(state.boardJobs),
@@ -227,6 +229,7 @@ export class MemoryStore implements Store {
     findings: [],
     kbSignals: new Map(),
     choiceUsage: [],
+    contextRetrievals: [],
     contextSettings: new Map(),
     contextSettingChanges: [],
     boardJobs: new Map(),
@@ -857,6 +860,21 @@ export class MemoryStore implements Store {
       },
       pruneChoiceUsage: (boardId, beforeDay) => {
         s.choiceUsage = s.choiceUsage.filter((r) => r.boardId !== boardId || r.day >= beforeDay);
+        return Promise.resolve();
+      },
+      recordContextRetrievals: (boardId, day, rows) => {
+        for (const row of rows) {
+          const i = s.contextRetrievals.findIndex((r) => r.boardId === boardId && r.day === day && r.sourceType === row.sourceType && r.tier === row.tier);
+          const found = s.contextRetrievals[i];
+          if (found === undefined) s.contextRetrievals.push({ boardId, day, ...row });
+          else s.contextRetrievals[i] = { ...found, count: found.count + row.count };
+        }
+        return Promise.resolve();
+      },
+      listContextRetrievals: (boardId, fromDay) =>
+        Promise.resolve(s.contextRetrievals.filter((r) => r.boardId === boardId && r.day >= fromDay).map(({ day, sourceType, tier, count }) => ({ day, sourceType, tier, count }))),
+      pruneContextRetrievals: (boardId, beforeDay) => {
+        s.contextRetrievals = s.contextRetrievals.filter((r) => r.boardId !== boardId || r.day >= beforeDay);
         return Promise.resolve();
       },
       getContextSettings: (boardId) => {

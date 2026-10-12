@@ -1,7 +1,7 @@
 import { invalidInput, llmUnavailable, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { AUTHORITY_WEIGHTS, MAX_QUERY_LENGTH, matchesFilters, rankCandidates, rrfFuse, toHit, withinBudget } from '../domain/search.js';
-import type { Candidate, SearchHit, SearchMode, SearchQuery } from '../domain/search.js';
+import type { AuthorityTier, Candidate, SearchHit, SearchMode, SearchQuery, SourceType } from '../domain/search.js';
 import { usageDay } from '../domain/choice-usage.js';
 import { DEFAULT_CONTEXT_SETTINGS } from '../domain/context-settings.js';
 import type { ContextSettings } from '../domain/context-settings.js';
@@ -75,7 +75,17 @@ export class SearchService {
    */
   async recordUse(tx: Tx, boardId: number, hits: readonly SearchHit[], globId: string | null): Promise<void> {
     if (hits.length === 0) return;
-    await tx.recordChoiceUsage(boardId, [...new Set(hits.map((h) => h.itemId))], globId, usageDay(this.deps.clock.now()));
+    const day = usageDay(this.deps.clock.now());
+    // One counter per source type and tier among the hits, for the context report's "what agents get".
+    const counts = new Map<string, { sourceType: SourceType; tier: AuthorityTier; count: number }>();
+    for (const h of hits) {
+      const key = `${h.citation.source}:${h.authority}`;
+      const found = counts.get(key);
+      if (found === undefined) counts.set(key, { sourceType: h.citation.source, tier: h.authority, count: 1 });
+      else found.count += 1;
+    }
+    await tx.recordContextRetrievals(boardId, day, [...counts.values()]);
+    await tx.recordChoiceUsage(boardId, [...new Set(hits.map((h) => h.itemId))], globId, day);
   }
 
   /** `search_changes`: merged changes with the reason they were made, newest first, within the date range. */

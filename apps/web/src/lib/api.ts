@@ -11,6 +11,8 @@ import type {
   BoardSession,
   BoardJob,
   BoardJobStatus,
+  ContextReport,
+  ContextSettingsView,
   CatalogUpdate,
   Category,
   ChatCitation,
@@ -665,6 +667,11 @@ export const api = {
   sizeCalibration: (boardId: number) => request<SizeCalibrationView>('GET', `/api/boards/${boardId}/size-calibration`),
   /** Admins: puts the size threshold back on the defaults (the history keeps the reset). */
   resetSizeThreshold: (boardId: number) => request<SizeThresholdView>('POST', `/api/boards/${boardId}/size-threshold/reset`, {}),
+  /** What agents were handed, what became of the choices and the context settings with their history (members). */
+  contextReport: (boardId: number) => request<ContextReport>('GET', `/api/boards/${boardId}/context-report`),
+  /** Admins: puts one context setting back on its default (the history keeps the reset). */
+  resetContextSetting: (boardId: number, key: string) =>
+    request<ContextSettingsView>('POST', `/api/boards/${boardId}/context-settings/${encodeURIComponent(key)}/reset`, {}),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */
   keepWhole: (id: string) => request<GlobView>('POST', `/api/globs/${id}/keep-whole`, {}),
   /** Whether the board has an active integration token (members); the secret is never returned here. */
