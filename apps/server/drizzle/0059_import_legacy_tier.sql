@@ -1,0 +1,2 @@
+UPDATE "knowledge_items" k SET "authority" = 'legacy' FROM "inbox_items" i WHERE i."item_id" = k."id" AND i."source" IN ('jira', 'gdoc') AND k."authority" <> 'legacy';--> statement-breakpoint
+UPDATE "knowledge_items" k SET "authority" = 'legacy' FROM "inbox_items" i WHERE k."source_type" = 'decision' AND k."board_id" = i."board_id" AND k."external_ref" LIKE 'decision:inbox:' || i."id" || ':%' AND i."source" IN ('jira', 'gdoc') AND k."authority" <> 'legacy';

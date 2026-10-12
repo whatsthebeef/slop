@@ -76,7 +76,7 @@ export const AUTHORITY_WEIGHTS: Readonly<Record<AuthorityTier, number>> = {
   legacy: 0.3,
 };
 
-/** `superseded`: a decision a newer one replaced (decision supersession); `legacy` is reserved for imports, nothing sets it yet. */
+/** `superseded`: a decision a newer one replaced (decision supersession); `legacy` marks imported history (Jira issues, Google Docs); the same tier is set as their `authority`. */
 export const ITEM_STATUSES = ['active', 'superseded', 'legacy'] as const;
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
 
