@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { writeLearningArtifacts } from '../src/app/learning-writes.js';
 import type { LearningArtifactState } from '../src/app/learning-writes.js';
 import { startEffectCheck } from '../src/domain/effect-check.js';
@@ -12,7 +12,7 @@ import { item, newStore } from './kb-fixtures.js';
 
 /**
  * The rows `writeLearningArtifacts` inserts, for a new learning and for each kind of change: kind, label, content, time
- * and full provenance. The expected values are what the KB item adapter wrote before s15t72 moved its writer here.
+ * and full provenance. The expected values are what the old KB item adapter wrote before s15t72 moved its writer here.
  */
 
 const AT = '2026-10-05T13:00:00.000Z';
@@ -57,7 +57,7 @@ const state = (patch: Partial<LearningArtifactState> = {}): LearningArtifactStat
 /** A store with learning s1k1's glob, and the rows a write inserts after it. */
 const setup = async (): Promise<{ store: MemoryStore; glob: Glob }> => {
   const store = await newStore();
-  await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(item()));
+  await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).insertSeeded(item()));
   const glob = await store.transaction((tx) => tx.getGlob('s1k1'));
   if (glob === null) throw new Error('missing s1k1');
   return { store, glob };

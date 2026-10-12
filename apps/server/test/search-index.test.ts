@@ -1,5 +1,5 @@
-import { FakeEmbedder, GlobService, SearchIndexer, UNPROCESSED, kbItems } from '@slop/core';
-import type { ChangeSource, KbItem, Llm } from '@slop/core';
+import { FakeEmbedder, GlobService, SearchIndexer, UNPROCESSED, learningSeed } from '@slop/core';
+import type { ChangeSource, LearningWire, Llm } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as schema from '../src/db/schema.js';
@@ -90,7 +90,7 @@ describe('search index backfill', () => {
         updatedBy: DEV,
         updatedAt: new Date().toISOString(),
       });
-      const learning: KbItem = {
+      const learning: LearningWire = {
         id: 's1k1',
         boardId,
         status: 'approved',
@@ -113,7 +113,7 @@ describe('search index backfill', () => {
         processing: 'drafted',
         version: 2,
       };
-      await kbItems(tx, KB_WRITES).insertKbItem(learning);
+      await learningSeed(tx, KB_WRITES).insertSeeded(learning);
       await tx.appendEvents([{ type: 'Merged', globId, actor: null, at: new Date().toISOString(), data: { sha: SHA } }]);
     });
   });

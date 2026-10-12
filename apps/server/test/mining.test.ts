@@ -1,4 +1,4 @@
-import { ArtifactService, GlobService, LearningJobService, MiningService, kbItems } from '@slop/core';
+import { ArtifactService, GlobService, LearningJobService, MiningService, learningSeed } from '@slop/core';
 import type { Board, DomainEvent, KbSignalState, NewFinding, NewReviewSource, Result, Store } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -248,7 +248,7 @@ describe('Mining reads and board jobs in Postgres', () => {
     const first = await mining.mine(boardId, NOW);
     expect(first.raised).toHaveLength(1);
     const raised = first.raised[0];
-    const item = await store.transaction((tx) => kbItems(tx).getKbItem(raised ?? ''));
+    const item = await store.transaction((tx) => learningSeed(tx).readSeeded(raised ?? ''));
     expect(item).toMatchObject({
       source: 'mined',
       submittedBy: 'slop',
@@ -305,7 +305,7 @@ describe('Mining reads and board jobs in Postgres', () => {
     expect(activity.reviewFeedback.map((f) => f.globId)).toEqual(reviewed);
     const result = await mining.mine(otherBoardId, NOW);
     expect(result.raised).toHaveLength(1);
-    const item = await store.transaction((tx) => kbItems(tx).getKbItem(result.raised[0] ?? ''));
+    const item = await store.transaction((tx) => learningSeed(tx).readSeeded(result.raised[0] ?? ''));
     expect(item?.signal).toMatchObject({
       key: 'review_false_positive:convention',
       kind: 'review_false_positive',
@@ -355,7 +355,7 @@ describe('Learning jobs on two servers at once (s15f8)', () => {
       new LearningJobService({ store: new PgStore(database.db), clock, notifier, mining: new MiningService({ store: new PgStore(database.db), notifier }), manifests: null });
     const [a, b] = await Promise.all([server().runDue(), server().runDue()]);
     expect([...a, ...b]).toHaveLength(1);
-    expect((await store.transaction((tx) => kbItems(tx).listKbItems(boardId))).filter((i) => i.source === 'mined')).toHaveLength(1);
+    expect((await store.transaction((tx) => learningSeed(tx).listSeeded(boardId))).filter((i) => i.source === 'mined')).toHaveLength(1);
     expect(await store.transaction((tx) => tx.getBoardJob(boardId, 'mining'))).toMatchObject({ lastRunAt: NOW, runningUntil: null, lastResult: { kind: 'mining', raised: [expect.any(String)] } });
 
   });
@@ -476,7 +476,7 @@ describe('Mining runs at once without a lease (s15f8)', () => {
     const [a, b] = await Promise.all([first, second]);
     expect([...a.raised, ...b.raised]).toHaveLength(1);
     expect(b.refreshed).toEqual(a.raised);
-    const mined = (await store.transaction((tx) => kbItems(tx).listKbItems(boardId))).filter((i) => i.source === 'mined');
+    const mined = (await store.transaction((tx) => learningSeed(tx).listSeeded(boardId))).filter((i) => i.source === 'mined');
     expect(mined).toHaveLength(1);
     expect((await store.transaction((tx) => tx.listKbSignals(boardId))).find((r) => r.key === 'run_superseded')?.itemId).toBe(mined[0]?.id);
   });

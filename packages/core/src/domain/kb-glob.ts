@@ -1,6 +1,6 @@
 import type { DecisionAttributes } from './attributes.js';
 import { UNPROCESSED } from './kb.js';
-import type { KbItem } from './kb.js';
+import type { LearningWire } from './kb.js';
 import {
   EVIDENCE_HEADING,
   contradictionLinks,
@@ -25,16 +25,16 @@ import type { LearningArtifacts } from './learning.js';
 import type { Glob, GlobLink } from './types.js';
 
 /**
- * The KB item adapter's mapping (until part 6): a KB item from a learning's helpers (`kbItemFrom`), and back to the
- * glob's attributes, links and payload for the adapter's writes.
+ * The mapping between a learning's glob and its wire form: the wire form from the learning's helpers
+ * (`learningWireFrom`), and back to the glob's attributes, links and payload for the test seeding helper (`learningSeed`).
  */
 
 /** The payload (plan.md) of a learning: its statement and evidence, or a proposed document's body. Kept exact so it parses back. */
-export const proposalText = (item: Pick<KbItem, 'statement' | 'evidence' | 'document'>): string =>
+export const proposalText = (item: Pick<LearningWire, 'statement' | 'evidence' | 'document'>): string =>
   item.document !== null ? item.document.content : `${item.statement}${EVIDENCE_HEADING}${item.evidence}`;
 
 /** The KB fields of a learning's decision attributes (the decision rows own scope, origin, channel, outcome and archived). */
-export const kbAttributesOf = (item: KbItem): Partial<DecisionAttributes> => {
+export const kbAttributesOf = (item: LearningWire): Partial<DecisionAttributes> => {
   const stale = item.staleSince !== null || item.staleReason !== null || item.staleDismissedAt !== null;
   return {
     kind: item.type,
@@ -73,7 +73,7 @@ export const KB_ATTRIBUTE_KEYS = [
 ] as const;
 
 /** How a learning relates to others, as links: what closed it, a hint naming another learning, contradictions, pairs kept apart. */
-export const kbLinksOf = (item: KbItem): GlobLink[] => {
+export const kbLinksOf = (item: LearningWire): GlobLink[] => {
   const links: GlobLink[] = [];
   if (item.duplicateOf !== null) links.push({ id: item.duplicateOf, kind: 'duplicate_of', source: 'pipeline' });
   if (item.suppressedBy !== null) links.push({ id: item.suppressedBy, kind: 'suppressed_by', source: 'pipeline' });
@@ -87,7 +87,7 @@ export const kbLinksOf = (item: KbItem): GlobLink[] => {
  * The KB item a learning is, from the glob and its artifacts by role, each field from its helper (`domain/learning.ts`).
  * Its pipeline fields are placeholders: `withProcessing` fills them in from its status and its jobs.
  */
-export const kbItemFrom = (glob: Glob, a: LearningArtifacts): KbItem => {
+export const learningWireFrom = (glob: Glob, a: LearningArtifacts): LearningWire => {
   const facts = learningFacts(glob);
   const decision = learningDecision(glob, a);
   const target = learningTarget(glob);
@@ -140,5 +140,5 @@ export const kbItemFrom = (glob: Glob, a: LearningArtifacts): KbItem => {
 };
 
 /** A merge note as the attachment's readable text. */
-export const mergeNoteText = (note: NonNullable<KbItem['mergeNote']>): string =>
+export const mergeNoteText = (note: NonNullable<LearningWire['mergeNote']>): string =>
   `Closed by ${note.by} at ${note.at}: this learning says "${note.quote}"; the other says "${note.survivorQuote}".`;

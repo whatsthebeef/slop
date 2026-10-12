@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { kbItems, kbJobHint } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
+import { kbJobHint } from '../src/app/kb-job-hint.js';
 import { retryLearningStep } from '../src/app/learning-writes.js';
 import { MAX_PROCESSING_ATTEMPTS } from '../src/app/kb-pipeline.js';
 import { claimLeaseMs, laneOf, LLM_CLAIM_LEASE_MS, maxAttemptsOf, outboxBackoffMs } from '../src/domain/events.js';
 import { kbEffectsFor, kbStepOf, kbStepOfKind, withProcessing } from '../src/domain/kb.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 import { MemoryStore } from '../src/testing/memory-store.js';
 import { assessmentOf } from '../src/domain/decision-glob.js';
@@ -85,23 +86,23 @@ describe('the KB pipeline steps on the outbox', () => {
     );
     const kinds = () => store.state.outboxJobs.map((j) => [j.kind, j.state]);
     await store.transaction(async (tx) => {
-      expect(await kbItems(tx, TEST_KB_WRITES).insertKbItem(item())).toBe(true);
-      expect(await kbItems(tx, TEST_KB_WRITES).insertKbItem(item())).toBe(false);
+      expect(await learningSeed(tx, TEST_KB_WRITES).insertSeeded(item())).toBe(true);
+      expect(await learningSeed(tx, TEST_KB_WRITES).insertSeeded(item())).toBe(false);
     });
     expect(kinds()).toEqual([['kb_route', 'pending']]);
     await store.transaction(async (tx) => {
-      expect(await kbItems(tx, TEST_KB_WRITES).updateKbItem(routed({ version: 2 }), 1)).toBe(true);
+      expect(await learningSeed(tx, TEST_KB_WRITES).updateSeeded(routed({ version: 2 }), 1)).toBe(true);
       // A stale version writes nothing and queues nothing.
-      expect(await kbItems(tx, TEST_KB_WRITES).updateKbItem(routed({ target: OTHER, version: 2 }), 1)).toBe(false);
+      expect(await learningSeed(tx, TEST_KB_WRITES).updateSeeded(routed({ target: OTHER, version: 2 }), 1)).toBe(false);
       // A retarget while the draft job still waits queues no second one.
-      expect(await kbItems(tx, TEST_KB_WRITES).updateKbItem(routed({ target: OTHER, version: 3 }), 2)).toBe(true);
+      expect(await learningSeed(tx, TEST_KB_WRITES).updateSeeded(routed({ target: OTHER, version: 3 }), 2)).toBe(true);
     });
     expect(kinds()).toEqual([['kb_route', 'pending'], ['kb_draft', 'pending']]);
     store.state.outboxJobs = store.state.outboxJobs.map((j) => (j.kind === 'kb_draft' ? { ...j, state: 'failed', attempts: 3, lastError: 'Sonnet is down' } : j));
-    const failed = await store.transaction((tx) => kbItems(tx).getKbItem('s1k1'));
+    const failed = await store.transaction((tx) => learningSeed(tx).readSeeded('s1k1'));
     expect(failed).toMatchObject({ processing: 'failed', processingError: 'Sonnet is down' });
     expect(await store.transaction((tx) => retryLearningStep(tx, TEST_KB_WRITES, 's1k1', 3))).toBe(true);
-    const retried = await store.transaction((tx) => kbItems(tx).getKbItem('s1k1'));
+    const retried = await store.transaction((tx) => learningSeed(tx).readSeeded('s1k1'));
     expect(retried).toMatchObject({ processing: 'routed', processingAttempts: 0, processingError: null, version: 4 });
     expect(kinds()).toEqual([['kb_route', 'pending'], ['kb_draft', 'failed'], ['kb_draft', 'pending']]);
   });
@@ -112,12 +113,12 @@ describe('the KB pipeline steps on the outbox', () => {
   });
 
   describe('a learning is its decision glob', () => {
-    const read = (store: MemoryStore, id = 's1k1') => store.transaction((tx) => kbItems(tx).getKbItem(id));
+    const read = (store: MemoryStore, id = 's1k1') => store.transaction((tx) => learningSeed(tx).readSeeded(id));
 
     it('round-trips every field through the glob, its artifacts, attachments and links', async () => {
       const store = await newStore();
       const item = full();
-      await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(item));
+      await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).insertSeeded(item));
       expect(await read(store)).toEqual(item);
       const glob = await store.transaction((tx) => tx.getGlob('s1k1'));
       expect(glob?.links).toEqual([
@@ -129,26 +130,26 @@ describe('the KB pipeline steps on the outbox', () => {
       expect(store.state.artifacts.filter((a) => a.label.startsWith('evidence:')).map((a) => a.label)).toEqual(['evidence:s1k8', 'evidence:s1k8#2']);
 
       // An update writes only what changed, and reads back as written.
-      const next: KbItem = { ...item, evidence: 'Changed evidence', draft: null, draftedAgainstVersion: null, rationale: null, version: 2 };
+      const next: LearningWire = { ...item, evidence: 'Changed evidence', draft: null, draftedAgainstVersion: null, rationale: null, version: 2 };
       const before = store.state.artifacts.length;
-      await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem(next, 1));
+      await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded(next, 1));
       // (The assessment follows the draft.)
       expect(store.state.artifacts.slice(before).map((a) => [a.kind, a.content === ''])).toEqual([['plan', false], ['draft', true], ['assessment', false]]);
       expect(await read(store)).toMatchObject({ evidence: 'Changed evidence', draft: null, processing: 'routed', version: 2 });
       // Evidence merged in is never taken away.
-      await expect(store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...next, extraEvidence: [], version: 3 }, 2))).rejects.toThrow(/never taken away/);
+      await expect(store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...next, extraEvidence: [], version: 3 }, 2))).rejects.toThrow(/never taken away/);
     });
 
     it('reads each status from the decision rows, and a person\'s retitle survives the pipeline\'s writes', async () => {
       const store = await newStore();
       const decided = { decidedBy: 'admin@example.com', decidedAt: '2026-10-05T13:00:00.000Z' };
       await store.transaction(async (tx) => {
-        const kb = kbItems(tx, TEST_KB_WRITES);
-        await kb.insertKbItem(drafted({ id: 's1k1', status: 'approved', outcome: { kind: 'learning' }, decisionReason: 'Good', ...decided }));
-        await kb.insertKbItem(drafted({ id: 's1k2', status: 'rejected', decisionReason: 'No', ...decided }));
-        await kb.insertKbItem(drafted({ id: 's1k3', status: 'merged', duplicateOf: 's1k1', mergeNote: { by: 'intake', quote: 'a', survivorQuote: 'b', at: NOW } }));
-        await kb.insertKbItem(drafted({ id: 's1k4', status: 'covered', coveredBy: { kind: 'knowledge', knowledgeKind: 'doc', name: 'build_test_lint', section: null } }));
-        await kb.insertKbItem(drafted({ id: 's1k5', status: 'suppressed', suppressedBy: 's1k2' }));
+        const kb = learningSeed(tx, TEST_KB_WRITES);
+        await kb.insertSeeded(drafted({ id: 's1k1', status: 'approved', outcome: { kind: 'learning' }, decisionReason: 'Good', ...decided }));
+        await kb.insertSeeded(drafted({ id: 's1k2', status: 'rejected', decisionReason: 'No', ...decided }));
+        await kb.insertSeeded(drafted({ id: 's1k3', status: 'merged', duplicateOf: 's1k1', mergeNote: { by: 'intake', quote: 'a', survivorQuote: 'b', at: NOW } }));
+        await kb.insertSeeded(drafted({ id: 's1k4', status: 'covered', coveredBy: { kind: 'knowledge', knowledgeKind: 'doc', name: 'build_test_lint', section: null } }));
+        await kb.insertSeeded(drafted({ id: 's1k5', status: 'suppressed', suppressedBy: 's1k2' }));
       });
       expect(await read(store, 's1k1')).toMatchObject({ status: 'approved', outcome: { kind: 'learning' }, decisionReason: 'Good', ...decided });
       expect(await store.transaction((tx) => tx.getGlob('s1k1'))).toMatchObject({ status: 'reviewing', attributes: { outcome: { kind: 'accept', by: decided.decidedBy, at: decided.decidedAt } } });
@@ -161,18 +162,18 @@ describe('the KB pipeline steps on the outbox', () => {
       }
 
       const open = 's1k6';
-      await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(routed({ id: open })));
+      await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).insertSeeded(routed({ id: open })));
       const glob = await store.transaction((tx) => tx.getGlob(open));
       if (glob === null) throw new Error('missing');
       await store.transaction((tx) => tx.updateGlob({ ...glob, title: 'A better title', version: glob.version + 1 }, glob.version));
       const current = await read(store, open);
       if (current === null) throw new Error('missing');
-      await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, occurrenceCount: 2, version: current.version + 1 }, current.version));
+      await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, occurrenceCount: 2, version: current.version + 1 }, current.version));
       expect((await store.transaction((tx) => tx.getGlob(open)))?.title).toBe('A better title');
       // A new statement gives it a new title.
       const again = await read(store, open);
       if (again === null) throw new Error('missing');
-      await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...again, statement: 'A new statement', version: again.version + 1 }, again.version));
+      await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...again, statement: 'A new statement', version: again.version + 1 }, again.version));
       expect((await store.transaction((tx) => tx.getGlob(open)))?.title).toBe('A new statement');
     });
   });

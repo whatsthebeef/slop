@@ -1,5 +1,5 @@
 import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
@@ -7,7 +7,7 @@ import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { Approval, NewLearning } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
 import { UNPROCESSED } from '../src/domain/kb.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -107,7 +107,7 @@ describe('submit_learning', () => {
         }),
       ),
     );
-    const item = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+    const item = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     expect(item).toEqual({
       id,
       boardId,
@@ -131,16 +131,16 @@ describe('submit_learning', () => {
       // Its face on the board: the decision glob made with it.
       version: 1,
     });
-    const open = await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'open'));
+    const open = await store.transaction((tx) => learningSeed(tx).listSeeded(boardId, 'open'));
     expect(open.map((i) => i.id)).toEqual([id]);
-    expect(await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'approved'))).toEqual([]);
+    expect(await store.transaction((tx) => learningSeed(tx).listSeeded(boardId, 'approved'))).toEqual([]);
   });
 
   it('stores no agent-set version or target when none is given', async () => {
     const { id } = unwrap(
       await knowledge.submitLearning(DEV, boardId, learning({ suggestedTarget: '  ' })),
     );
-    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({
+    expect(await store.transaction((tx) => learningSeed(tx).readSeeded(id))).toMatchObject({
       agentSetVersion: null,
       suggestedTarget: null,
     });
@@ -204,7 +204,7 @@ describe('KB review', () => {
     ).id;
 
   const item = async (id: string) => {
-    const found = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+    const found = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
     if (found === null) throw new Error(`No KB item ${id}`);
     return found;
   };
@@ -334,7 +334,7 @@ describe('KB review', () => {
         publish: (hint) => {
           // A client refetching on the hint must find the change.
           if (hint.kind !== 'board.kb') return;
-          reads.push(store.transaction(async (tx) => (await kbItems(tx).listKbItems(boardId)).at(-1)?.status));
+          reads.push(store.transaction(async (tx) => (await learningSeed(tx).listSeeded(boardId)).at(-1)?.status));
         },
       },
     });
@@ -497,10 +497,10 @@ describe('KB review', () => {
     const ids: string[] = [];
     for (let n = 0; n < 3; n++) ids.push(await submit({ statement: `Rule ${n}` }));
     const decideAt = async (id: string, at: string) => {
-      const item = await store.transaction((tx) => kbItems(tx).getKbItem(id));
+      const item = await store.transaction((tx) => learningSeed(tx).readSeeded(id));
       if (item === null) throw new Error('no item');
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...item, status: 'rejected', decidedBy: ADMIN, decidedAt: at, decisionReason: 'No', version: item.version + 1 }, item.version),
+        learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...item, status: 'rejected', decidedBy: ADMIN, decidedAt: at, decisionReason: 'No', version: item.version + 1 }, item.version),
       );
     };
     // The newer submissions are decided first; the oldest one last.
@@ -584,11 +584,11 @@ describe('KB review', () => {
     const target = (kind: 'doc' | 'agent' | 'local_run', name: string) => ({ kind, name, section: null, newDocument: null });
 
     // An open, drafted item against `build` (or the given target), as the pipeline leaves it.
-    const drafted = async (patch: Partial<KbItem> = {}) => {
+    const drafted = async (patch: Partial<LearningWire> = {}) => {
       const id = await submit();
       const open = await item(id);
       await store.transaction((tx) =>
-        kbItems(tx, TEST_KB_WRITES).updateKbItem(
+        learningSeed(tx, TEST_KB_WRITES).updateSeeded(
           {
             ...open,
             processing: 'drafted',
@@ -638,7 +638,7 @@ describe('KB review', () => {
       expect((await doc('doc', 'build'))?.version).toBe(1);
     });
 
-    const kept: [string, Partial<KbItem>][] = [
+    const kept: [string, Partial<LearningWire>][] = [
       ['the local-run spec', { target: target('local_run', 'local-run') }],
       ['an agent-set file', { target: target('agent', 'agents/implementer.md') }],
       ['an item with contradicts flags', { contradicts: [{ kind: 'knowledge', ref: 'build', note: 'says otherwise' }] }],

@@ -1,5 +1,5 @@
 import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
-import { kbItems } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
 import { DecisionPipeline, EXTRACT_SYSTEM, MAX_DECISIONS_PER_SOURCE, SUPERSEDE_SYSTEM } from '../src/app/decision-pipeline.js';
@@ -13,7 +13,7 @@ import { decisionRef } from '../src/domain/decisions.js';
 import type { Decision } from '../src/domain/decisions.js';
 import type { Result } from '../src/domain/errors.js';
 import { UNPROCESSED } from '../src/domain/kb.js';
-import type { KbItem } from '../src/domain/kb.js';
+import type { LearningWire } from '../src/domain/kb.js';
 import type { Artifact, ArtifactKind } from '../src/domain/knowledge.js';
 import type { Glob } from '../src/domain/types.js';
 import { FakeEmbedder } from '../src/testing/fake-embedder.js';
@@ -213,7 +213,7 @@ describe('decisions', () => {
     });
 
     it('turns an approved decision learning into a decision without asking the model', async () => {
-      const learning = (id: string, type: KbItem['type'], statement: string): KbItem => ({
+      const learning = (id: string, type: LearningWire['type'], statement: string): LearningWire => ({
         id,
         boardId,
         status: 'approved',
@@ -237,8 +237,8 @@ describe('decisions', () => {
         version: 2,
       });
       await store.transaction(async (tx) => {
-        await kbItems(tx, TEST_KB_WRITES).insertKbItem(learning(`s${String(boardId)}k1`, 'decision', 'Dates are stored in UTC and shown in the board time zone.'));
-        await kbItems(tx, TEST_KB_WRITES).insertKbItem(learning(`s${String(boardId)}k2`, 'gotcha', 'The cache needs a restart after a config change.'));
+        await learningSeed(tx, TEST_KB_WRITES).insertSeeded(learning(`s${String(boardId)}k1`, 'decision', 'Dates are stored in UTC and shown in the board time zone.'));
+        await learningSeed(tx, TEST_KB_WRITES).insertSeeded(learning(`s${String(boardId)}k2`, 'gotcha', 'The cache needs a restart after a config change.'));
       });
       await run();
       expect(llm.calls).toHaveLength(0);
@@ -259,7 +259,7 @@ describe('decisions', () => {
     it('records only approved decision learnings, from the same fields the adapter read (s15t72)', async () => {
       const k = (n: number) => `s${String(boardId)}k${String(n)}`;
       const decided = { decidedBy: 'admin@example.com', decidedAt: '2026-08-02T00:00:00.000Z', processing: 'none' as const, version: 2 };
-      const learning = (n: number, patch: Partial<KbItem>): KbItem => ({
+      const learning = (n: number, patch: Partial<LearningWire>): LearningWire => ({
         id: k(n),
         boardId,
         status: 'open',
@@ -293,10 +293,10 @@ describe('decisions', () => {
         learning(8, { status: 'covered', coveredBy: { kind: 'item', id: k(1) }, processing: 'none' }),
       ];
       await store.transaction(async (tx) => {
-        for (const i of all) if (!(await kbItems(tx, TEST_KB_WRITES).insertKbItem(i))) throw new Error(`${i.id} not inserted`);
+        for (const i of all) if (!(await learningSeed(tx, TEST_KB_WRITES).insertSeeded(i))) throw new Error(`${i.id} not inserted`);
       });
       // What the adapter's approved listing gave the pipeline before the switch, mapped as it was.
-      const expected = (await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'approved')))
+      const expected = (await store.transaction((tx) => learningSeed(tx).listSeeded(boardId, 'approved')))
         .filter((i) => i.type === 'decision' && i.document === null && i.statement.trim() !== '')
         .map((i) => ({ sourceRef: `learning:${i.id}`, statement: i.statement.trim(), quote: i.statement.trim(), decidedBy: i.decidedBy, decidedAt: i.decidedAt ?? i.createdAt }));
       expect(expected.map((e) => e.sourceRef)).toEqual([`learning:${k(7)}`, `learning:${k(1)}`]);

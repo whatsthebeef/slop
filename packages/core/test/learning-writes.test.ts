@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { kbItems } from '../src/app/kb-items.js';
-import type { KbWriteOptions } from '../src/app/kb-items.js';
+import { learningSeed } from '../src/testing/learning-seed.js';
+import type { KbWriteOptions } from '../src/testing/learning-seed.js';
 import {
   createLearning,
   dismissLearningStale,
@@ -14,7 +14,7 @@ import {
 import type { LearningWriteContext, NewLearningGlob } from '../src/app/learning-writes.js';
 import { startEffectCheck } from '../src/domain/effect-check.js';
 import { KB_STEP_KIND, kbStepOf } from '../src/domain/kb.js';
-import type { KbItem, KbOutcome, KbTarget } from '../src/domain/kb.js';
+import type { LearningWire, KbOutcome, KbTarget } from '../src/domain/kb.js';
 import type { Actor } from '../src/domain/types.js';
 import type { Hint, Tx } from '../src/ports.js';
 import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
@@ -36,11 +36,11 @@ interface Twin {
   readonly ctx: LearningWriteContext;
 }
 
-const twin = async (seed: readonly KbItem[]): Promise<Twin> => {
+const twin = async (seed: readonly LearningWire[]): Promise<Twin> => {
   const store = await newStore();
   await store.transaction(async (tx) => {
     for (const i of seed)
-      if (!(await kbItems(tx, TEST_KB_WRITES).insertKbItem(i)))
+      if (!(await learningSeed(tx, TEST_KB_WRITES).insertSeeded(i)))
         throw new Error(`${i.id} not seeded`);
   });
   const hints: Hint[] = [];
@@ -56,8 +56,8 @@ const snapshot = ({ store, hints }: Twin) => ({
 });
 
 /** The item as the adapter reads it now. */
-const current = async (tx: Tx, id: string): Promise<KbItem> => {
-  const read = await kbItems(tx).getKbItem(id);
+const current = async (tx: Tx, id: string): Promise<LearningWire> => {
+  const read = await learningSeed(tx).readSeeded(id);
   if (read === null) throw new Error(`missing ${id}`);
   return read;
 };
@@ -66,12 +66,12 @@ const current = async (tx: Tx, id: string): Promise<KbItem> => {
 const adapterWrite = (
   t: Twin,
   id: string,
-  change: (i: KbItem) => KbItem,
+  change: (i: LearningWire) => LearningWire,
   options: KbWriteOptions = {},
 ) =>
   t.store.transaction(async (tx) => {
     const before = await current(tx, id);
-    return kbItems(tx, t.ctx).updateKbItem(
+    return learningSeed(tx, t.ctx).updateSeeded(
       { ...change(before), version: before.version + 1 },
       before.version,
       options,
@@ -79,7 +79,7 @@ const adapterWrite = (
   });
 
 /** The item with its draft cleared, back in the queue to be drafted again (the service's `needsDraft`, which s15t72 removed). */
-const needsDraft = (i: KbItem, target: KbTarget | null = i.target): KbItem => ({
+const needsDraft = (i: LearningWire, target: KbTarget | null = i.target): LearningWire => ({
   ...i,
   target,
   processing: 'routed',
@@ -99,7 +99,7 @@ const versionOf = async (t: Twin, id: string): Promise<number> => {
 
 /** Runs the old write on one twin and the new on the other, and compares what they left. */
 const parity = async (
-  seed: readonly KbItem[],
+  seed: readonly LearningWire[],
   old: (t: Twin) => Promise<unknown>,
   next: (t: Twin, tx: Tx) => Promise<boolean>,
   prepare?: (t: Twin) => void,
@@ -152,7 +152,7 @@ describe('the learning writes, against the adapter', () => {
     ] as const) {
       const a = await twin([]);
       const b = await twin([]);
-      await a.store.transaction((tx) => kbItems(tx, a.ctx).insertKbItem(old));
+      await a.store.transaction((tx) => learningSeed(tx, a.ctx).insertSeeded(old));
       expect(await b.store.transaction((tx) => createLearning(tx, b.ctx, created))).toBe(true);
       expect(snapshot(b)).toEqual(snapshot(a));
       // The ID is taken now.

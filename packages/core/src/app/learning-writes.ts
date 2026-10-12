@@ -4,7 +4,7 @@ import {
   decisionGlobTitle,
   decisionOf,
   defaultScope,
-  kbItemKey,
+  learningKey,
 } from '../domain/decision-glob.js';
 import type { LearningAssessmentFacts } from '../domain/decision-glob.js';
 import type { EffectCheck } from '../domain/effect-check.js';
@@ -17,8 +17,8 @@ import type {
   ExtraEvidence,
   KbContradiction,
   KbDraft,
-  KbItemSource,
-  KbItemStatus,
+  LearningSource,
+  LearningStatus,
   KbMergeNote,
   KbOutcome,
   KbPossibleCoverage,
@@ -70,7 +70,7 @@ import { boardLearnings, readLearning } from './learning-reads.js';
  * The writes to a learning's decision glob, as named operations: each applies the decision row it needs, changes the
  * glob's attributes and links and its artifacts, conditional on the glob's version, and queues the pipeline step the
  * change makes due in the same transaction. The rules every write shares (which step is due, the broader decisions a
- * learning conflicts with, when the assessment is rewritten) are the primitives below; the KB item adapter uses them too.
+ * learning conflicts with, when the assessment is rewritten) are the primitives below.
  */
 
 /** What writes need: the time, and where to raise live hints (published after the caller's commit). */
@@ -116,7 +116,7 @@ export const putLearningArtifact = async (
 export const learningConflicts = async (
   tx: Tx,
   scope: DecisionScope,
-  status: KbItemStatus,
+  status: LearningStatus,
   contradicts: readonly KbContradiction[],
 ): Promise<string[]> => {
   if (status !== 'open') return [];
@@ -179,7 +179,7 @@ export interface LearningOrigin {
   readonly id: string;
   readonly createdAt: string;
   readonly submittedBy: string;
-  readonly source: KbItemSource;
+  readonly source: LearningSource;
   readonly agentSetVersion: number | null;
 }
 
@@ -374,8 +374,8 @@ export const writeLearningArtifacts = async (
 
 /** What a write changed that decides whether the assessment is rewritten. */
 export interface AssessmentChange {
-  readonly statusBefore: KbItemStatus;
-  readonly statusAfter: KbItemStatus;
+  readonly statusBefore: LearningStatus;
+  readonly statusAfter: LearningStatus;
   readonly draftBefore: KbDraft | null;
   readonly draftAfter: KbDraft | null;
   readonly conflictsBefore: readonly string[];
@@ -397,8 +397,8 @@ export const refreshOnApproval = async (
   tx: Tx,
   ctx: LearningWriteContext,
   learning: { readonly id: string; readonly boardId: number },
-  statusBefore: KbItemStatus,
-  statusAfter: KbItemStatus,
+  statusBefore: LearningStatus,
+  statusAfter: LearningStatus,
 ): Promise<void> => {
   if (statusAfter === 'approved' && statusBefore !== 'approved')
     await refreshContradicting(tx, ctx, learning.id, learning.boardId);
@@ -481,7 +481,7 @@ export const createLearning = async (
   );
   if (!created.ok) throw new Error(`${id}: ${created.error.message}`);
   const glob: Glob = { ...created.value.glob, links: [], version: 1 };
-  if (!(await tx.insertGlob(glob, kbItemKey(id)))) return false;
+  if (!(await tx.insertGlob(glob, learningKey(id)))) return false;
   await tx.appendEvents(created.value.events);
   const evidence = input.evidence;
   await writeLearningArtifacts(
