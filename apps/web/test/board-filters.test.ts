@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
 import {
   activeCount,
+  defaultFilters,
   matchesFilters,
   parseFilters,
   toggleOption,
@@ -15,9 +16,33 @@ const parse = (q: string) => parseFilters(new URLSearchParams(q));
 
 describe('board filters', () => {
   it('passes every glob when no filter is on', () => {
-    expect(matchesFilters(view({ category: 'bug' }), {})).toBe(true);
-    expect(matchesFilters(view({ category: 'bug' }), parse('category=&id='))).toBe(true);
-    expect(activeCount({})).toBe(0);
+    expect(matchesFilters(view({ category: 'decision' }), {})).toBe(true);
+    expect(matchesFilters(view({ category: 'decision' }), parse('category=all'))).toBe(true);
+  });
+
+  it('defaults to feature, task and bug, hiding decisions', () => {
+    const values = parse('');
+    expect(values).toEqual({ category: 'feature,task,bug' });
+    expect(values).toEqual(defaultFilters());
+    expect(matchesFilters(view({ category: 'task' }), values)).toBe(true);
+    expect(matchesFilters(view({ category: 'decision' }), values)).toBe(false);
+    expect(parse('category=&id=')).toEqual(values);
+    expect(activeCount(values)).toBe(0);
+  });
+
+  it('keeps "show all" distinct from the default across a reload', () => {
+    const params = writeFilters(new URLSearchParams('glob=s1t1'), {});
+    expect(params.toString()).toBe('glob=s1t1&category=all');
+    expect(parse('category=all')).toEqual({});
+    expect(activeCount(parseFilters(params))).toBe(1);
+    expect(writeFilters(params, defaultFilters()).toString()).toBe('glob=s1t1');
+  });
+
+  it('writes an explicit selection and reads it back', () => {
+    const params = writeFilters(new URLSearchParams(), { category: 'decision' });
+    expect(params.toString()).toBe('category=decision');
+    expect(parseFilters(params)).toEqual({ category: 'decision' });
+    expect(activeCount({ category: 'decision' })).toBe(1);
   });
 
   it('matches any of several categories', () => {
@@ -31,7 +56,7 @@ describe('board filters', () => {
 
   it('ignores unknown categories and keeps a stable order', () => {
     expect(parse('category=bug,nope,Feature,bug')).toEqual({ category: 'feature,bug' });
-    expect(parse('category=nope')).toEqual({});
+    expect(parse('category=nope')).toEqual(defaultFilters());
   });
 
   it('matches IDs by case-insensitive substring', () => {
@@ -55,6 +80,7 @@ describe('board filters', () => {
     expect(matchesFilters(view({ id: 's1b1', category: 'task' }), values)).toBe(false);
     expect(matchesFilters(view({ id: 's1b2', category: 'bug' }), values)).toBe(false);
     expect(activeCount(values)).toBe(2);
+    expect(activeCount({ ...defaultFilters(), id: 'b1' })).toBe(1);
   });
 
   it('round-trips through the query and leaves other parameters alone', () => {
@@ -62,7 +88,7 @@ describe('board filters', () => {
     const params = writeFilters(new URLSearchParams('glob=s1t1&category=task'), values);
     expect(params.get('glob')).toBe('s1t1');
     expect(parseFilters(params)).toEqual(values);
-    expect(writeFilters(params, {}).toString()).toBe('glob=s1t1');
+    expect(writeFilters(params, defaultFilters()).toString()).toBe('glob=s1t1');
   });
 
   it('toggles a category option on and off', () => {
