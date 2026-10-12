@@ -5,6 +5,9 @@ import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
 import { createTestDatabase } from './support/database.js';
 
+/** KB items written in setup: their time doesn't matter. */
+const KB_WRITES = { clock: { now: () => '2026-10-05T12:00:00.000Z' } };
+
 const DEV = 'dev@example.com';
 const ADMIN = 'admin@example.com';
 
@@ -118,7 +121,7 @@ describe('KB items in Postgres', () => {
     const existing = await store.transaction((tx) => kbItems(tx).getKbItem(id));
     if (existing === null) throw new Error(`KB item ${id} was not stored`);
     expect(
-      await store.transaction((tx) => tx.insertKbItem({ ...existing, statement: 'Another' })),
+      await store.transaction((tx) => kbItems(tx, KB_WRITES).insertKbItem({ ...existing, statement: 'Another' })),
     ).toBe(false);
     expect((await store.transaction((tx) => kbItems(tx).getKbItem(id)))?.statement).toBe(
       'Run the formatter on changed files only',
@@ -148,10 +151,11 @@ describe('KB items in Postgres', () => {
       decisionReason: 'Too vague',
       version: 2,
     };
-    expect(await store.transaction((tx) => tx.updateKbItem(decided, 2))).toBe(false);
-    expect(await store.transaction((tx) => tx.updateKbItem(decided, 1))).toBe(true);
-    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toEqual(decided);
-    expect(await store.transaction((tx) => tx.updateKbItem({ ...decided, version: 3 }, 1))).toBe(false);
+    expect(await store.transaction((tx) => kbItems(tx, KB_WRITES).updateKbItem(decided, 2))).toBe(false);
+    expect(await store.transaction((tx) => kbItems(tx, KB_WRITES).updateKbItem(decided, 1))).toBe(true);
+    // Decided, it reads as out of the pipeline.
+    expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toEqual({ ...decided, processing: 'drafted' });
+    expect(await store.transaction((tx) => kbItems(tx, KB_WRITES).updateKbItem({ ...decided, version: 3 }, 1))).toBe(false);
     expect((await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'rejected'))).map((i) => i.id)).toContain(id);
   });
 

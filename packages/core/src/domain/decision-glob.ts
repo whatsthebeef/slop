@@ -44,7 +44,7 @@ export const scopeLabel = (scope: DecisionScope): string => {
   }
 };
 
-/** The idempotency keys of decision globs, one per proposal source, so any creation or backfill is safe to repeat. */
+/** The idempotency keys of decision globs, one per proposal source, so any creation is safe to repeat. */
 export const kbItemKey = (itemId: string): string => `kb:${itemId}`;
 export const inboxKey = (inboxId: number): string => `inbox:${String(inboxId)}`;
 export const extractedKey = (decisionId: number): string => `decision:${String(decisionId)}`;
@@ -55,14 +55,6 @@ export const extractedKey = (decisionId: number): string => `decision:${String(d
  */
 export const defaultScope = (type: LearningType): DecisionScope =>
   type === 'decision' ? { kind: 'project', ref: null } : { kind: 'future_work', ref: null };
-
-/** The proposal text a KB item's decision glob carries as its payload (plan.md): the statement, its evidence and the document. */
-export const proposalText = (item: KbItem): string => {
-  const parts = [item.statement.trim(), `## Evidence\n\n${item.evidence.trim()}`];
-  if (item.suggestedTarget !== null) parts.push(`Suggested target: ${item.suggestedTarget}`);
-  if (item.document !== null) parts.push(`## Proposed document: ${item.document.name}\n\n${item.document.content.trim()}`);
-  return `${parts.join('\n\n')}\n`;
-};
 
 /** An accepted decision binds: accepted (with or without edits), or whose needs-work glob merged; not archived. */
 export const isAccepted = (glob: Glob): boolean => {

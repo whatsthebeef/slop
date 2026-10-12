@@ -3,7 +3,7 @@ import type { Result } from '../domain/errors.js';
 import { formatId, parseId } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import type { Context, Transition } from '../domain/machine.js';
-import { assessmentOf, broaderConflicts, decisionOf, decisionGlobTitle, defaultScope, extractedKey, inboxKey, kbItemKey, proposalText } from '../domain/decision-glob.js';
+import { assessmentOf, decisionOf, decisionGlobTitle, extractedKey, inboxKey } from '../domain/decision-glob.js';
 import type { DecisionAttributes, DecisionChannel, DecisionScope } from '../domain/attributes.js';
 import type { Decision } from '../domain/decisions.js';
 import { INBOX_EXCERPT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
@@ -13,7 +13,6 @@ import type { Provenance } from '../domain/knowledge.js';
 import type { Actor, Glob } from '../domain/types.js';
 import type { Clock, Hint, Tx } from '../ports.js';
 import { addArtifact } from './artifact-service.js';
-import { kbItems } from './kb-items.js';
 
 /** The name slop's own writes carry (mined proposals, assessments, the backfill). */
 export const DECISION_SYSTEM_ACTOR = 'slop';
@@ -130,30 +129,6 @@ export const createDecisionInTx = async (tx: Tx, deps: DecisionDeps, input: NewD
   return ok({ glob, created: true, hints });
 };
 
-/**
- * Creates the decision glob that fronts a new KB item (before the item is inserted: the caller stores the glob's ID on
- * it). An agent's submission, a mined signal or an effect check's revision all come through here.
- */
-export const createDecisionForItem = async (
-  tx: Tx,
-  deps: DecisionDeps,
-  item: KbItem,
-  actor: Actor,
-  channel: 'agent' | 'mined',
-): Promise<Result<CreatedDecision>> =>
-  createDecisionInTx(tx, deps, {
-    boardId: item.boardId,
-    actor,
-    title: decisionGlobTitle(item.statement),
-    summary: item.statement,
-    payload: proposalText(item),
-    attributes: { scope: defaultScope(item.type), origin: { kind: 'kb_item', id: item.id }, channel, kbItemId: item.id, outcome: null },
-    id: item.id,
-    creationKey: kbItemKey(item.id),
-    at: item.createdAt,
-    assess: { item },
-  });
-
 /** What a person may set when promoting an inbox item: a title and statement of their own, and a scope. */
 export interface PromoteInput {
   readonly title?: string | undefined;
@@ -186,7 +161,6 @@ export const createDecisionForInbox = async (
       scope: input.scope ?? { kind: 'future_work', ref: null },
       origin: { kind: 'inbox', id: item.id },
       channel: 'inbox',
-      kbItemId: null,
       outcome: null,
     },
     creationKey: inboxKey(item.id),
@@ -195,8 +169,7 @@ export const createDecisionForInbox = async (
 
 /**
  * Creates the decision glob for a decision extracted from a glob's record or an inbox item (creation key
- * `decision:<id>`): a person promoting it (`human`) or the backfill (`migration`, backdated to the decision's date).
- * It governs the glob it was taken on, else the whole project.
+ * `decision:<id>`), when a person promotes it. It governs the glob it was taken on, else the whole project.
  */
 export const createDecisionForExtracted = async (
   tx: Tx,
@@ -216,7 +189,6 @@ export const createDecisionForExtracted = async (
       scope: decision.globId === null ? { kind: 'project', ref: null } : { kind: 'glob', ref: decision.globId },
       origin: { kind: 'extracted', decisionId: decision.id },
       channel,
-      kbItemId: null,
       outcome: null,
     },
     creationKey: extractedKey(decision.id),
@@ -282,85 +254,4 @@ export const applyDecisionStep = async (
     }
   }
   throw new Error(`Could not update decision ${id} after ${String(WRITE_RETRIES)} tries`);
-};
-
-/** The decision glob in front of a KB item: by the item's link, else by the creation key a backfill or retry left. */
-const globOfItem = async (tx: Tx, item: KbItem): Promise<Glob | null> => {
-  const linked = item.decisionGlobId === undefined || item.decisionGlobId === null ? null : await tx.getGlob(item.decisionGlobId);
-  return linked ?? (await tx.findGlobByCreationKey(item.boardId, kbItemKey(item.id)));
-};
-
-/** Recomputes which broader decisions the open item contradicts (by scope rank) and records the change. */
-const refreshConflicts = async (tx: Tx, clock: Clock, item: KbItem, glob: Glob): Promise<boolean> => {
-  const attributes = decisionOf(glob);
-  if (attributes === null) return false;
-  const globs = new Map<string, Glob>();
-  for (const c of item.contradicts) {
-    if (c.kind !== 'item') continue;
-    const other = await kbItems(tx).getKbItem(c.ref);
-    const otherGlob = other === null ? null : await globOfItem(tx, other);
-    if (otherGlob !== null) globs.set(c.ref, otherGlob);
-  }
-  const ids = broaderConflicts(attributes.scope, item, (itemId) => globs.get(itemId));
-  const result = await applyDecisionStep(tx, glob.id, (current) => machine.decisionConflicts(current, ids, decisionContext(clock, null)));
-  return result.ok && result.value.changed;
-};
-
-/** Channels whose assessments slop writes by itself as the pipeline works; a person's pasted notes are assessed on demand. */
-const AUTOMATED: readonly DecisionChannel[] = ['agent', 'mined'];
-
-/**
- * Brings the decision glob in front of a KB item in line with the item (the single entry point for the sync): an
- * open item reopens a closed glob and refreshes its conflict flags and assessment; an approved item accepts it, a rejected
- * one rejects it, one the pipeline closed (merged, suppressed, covered) archives it. Runs in the caller's transaction,
- * right after the item's own write, and returns what to publish after the commit. Nothing happens for an item without a glob.
- */
-export const syncDecisionFromItem = async (tx: Tx, clock: Clock, item: KbItem, preview: DraftPreview | null = null): Promise<Hint[]> => {
-  const found = await globOfItem(tx, item);
-  if (found === null || decisionOf(found) === null) return [];
-  const hints: Hint[] = [];
-  const changed = (glob: Glob) => hints.push({ kind: 'glob.changed', boardId: glob.boardId, globId: glob.id, version: glob.version });
-  const by = item.decidedBy ?? DECISION_SYSTEM_ACTOR;
-  const ctx = (): Context => decisionContext(clock, null);
-  const step = await applyDecisionStep(tx, found.id, (glob) => {
-    switch (item.status) {
-      case 'open':
-        return machine.decisionReopened(glob, ctx());
-      case 'approved':
-        return machine.decisionApproved(glob, { by }, ctx());
-      case 'rejected':
-        return machine.decisionRejected(glob, { by, reason: item.decisionReason ?? '' }, ctx());
-      case 'merged':
-      case 'suppressed':
-      case 'covered':
-        return machine.archiveDecision(glob, `The knowledge pipeline closed the item as ${item.status}`, ctx());
-    }
-  });
-  if (!step.ok) throw new Error(step.error.message);
-  if (step.value.changed) changed(step.value.glob);
-  let glob = step.value.glob;
-
-  if (item.status === 'open') {
-    const flagged = await refreshConflicts(tx, clock, item, glob);
-    if (flagged) {
-      glob = (await tx.getGlob(glob.id)) ?? glob;
-      changed(glob);
-    }
-    const attributes = decisionOf(glob);
-    const hasAssessment = (await tx.artifactVersions(glob.id, 'assessment', '')).length > 0;
-    // Written at creation, and again when the pipeline drafts (the diff is new information) or the conflict flags move.
-    if (attributes !== null && AUTOMATED.includes(attributes.channel) && (!hasAssessment || item.processing === 'drafted' || flagged)) {
-      if (await writeAssessment(tx, { clock }, glob, item, preview)) hints.push({ kind: 'glob.artifacts', boardId: glob.boardId, globId: glob.id });
-    }
-  } else if (item.status === 'approved') {
-    // A broader decision was accepted: the narrower open ones that contradict it may now conflict with it.
-    for (const other of await kbItems(tx).listKbItems(item.boardId, 'open')) {
-      if (!other.contradicts.some((c) => c.kind === 'item' && c.ref === item.id)) continue;
-      const otherGlob = await globOfItem(tx, other);
-      if (otherGlob !== null && (await refreshConflicts(tx, clock, other, otherGlob))) {
-        changed((await tx.getGlob(otherGlob.id)) ?? otherGlob);
-      }
-    }
-  }
-  return hints;
 };

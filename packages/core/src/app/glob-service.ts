@@ -1,6 +1,6 @@
 import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
-import { decisionOf } from '../domain/decision-glob.js';
+import { isKbGlob } from '../domain/kb-glob.js';
 import { validateScopeEdit } from '../domain/attributes.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
@@ -27,7 +27,6 @@ import { checkFrom } from './size-check-service.js';
 import type { SizeAssessor } from './size-check-service.js';
 import { needsInvestigation, unresolved } from '../domain/size-check.js';
 import type { SizeCheck } from '../domain/size-check.js';
-import { kbItems } from './kb-items.js';
 
 export interface GlobServiceDeps {
   readonly store: Store;
@@ -832,14 +831,9 @@ export class GlobService {
       if (board === null) return notFound(`No board ${glob.boardId}`);
       const transition = machine.remove(glob, await this.context(actor.value, board));
       if (!transition.ok) return transition;
-      // A decision fronting a knowledge item that is still open or approved can't go (the item would only bring it back,
-      // and an accepted one governs work): reject the item to remove the decision. A rejected item keeps its link, so a
-      // backfill sees the glob is gone and leaves it that way.
-      const itemId = glob.category === 'decision' ? decisionOf(glob)?.kbItemId ?? null : null;
-      const item = itemId === null ? null : await kbItems(tx).getKbItem(itemId);
-      if (item !== null && (item.status === 'open' || item.status === 'approved')) {
-        return invalidInput(`This decision belongs to a ${item.status} knowledge item; reject the item to remove it`);
-      }
+      // A learning an agent submitted or slop mined is a KB item: deleting it would lose the learning (and a rejected one
+      // suppresses repeats), so it is rejected instead. Decisions people made (inbox, extracted, manual) can go.
+      if (isKbGlob(glob)) return invalidInput('This decision is a knowledge item an agent submitted or slop mined; reject it instead of deleting it');
       await tx.deleteEvents(glob.id);
       await tx.deleteGlob(glob.id);
       // The deletion itself is logged without a glob, so reports lose the glob's time.

@@ -1,7 +1,6 @@
 import type { KbItem } from '../domain/kb.js';
-import type { Tx } from '../ports.js';
 import { text } from './llm-json.js';
-import { kbItems } from './kb-items.js';
+import type { KbItems } from './kb-items.js';
 
 /**
  * What the KB pipeline's intake dedupe and weekly consolidation share: the checks that keep a model's answer from
@@ -94,13 +93,13 @@ export const withEvidenceFrom = (into: KbItem, from: KbItem): KbItem => ({
  * changed meanwhile, and the caller rolls the transaction back.
  */
 export const addEvidenceTo = async (
-  tx: Tx,
+  kb: KbItems,
   into: KbItem,
   from: KbItem,
   adjust: (merged: KbItem) => KbItem = (m) => m,
 ): Promise<boolean> => {
   // The write bumps its version, so a step running on it now finds it changed and runs again at once.
-  return kbItems(tx).updateKbItem(adjust(withEvidenceFrom(into, from)), into.version);
+  return kb.updateKbItem(adjust(withEvidenceFrom(into, from)), into.version);
 };
 
 /**
@@ -110,12 +109,12 @@ export const addEvidenceTo = async (
  * may have landed).
  */
 export const mergeItems = async (
-  tx: Tx,
+  kb: KbItems,
   survivor: KbItem,
   loser: KbItem,
   closed: KbItem,
   adjust: (merged: KbItem) => KbItem = (m) => m,
 ): Promise<boolean> => {
-  if (!(await addEvidenceTo(tx, survivor, loser, adjust))) return false;
-  return kbItems(tx).updateKbItem({ ...closed, version: loser.version + 1 }, loser.version);
+  if (!(await addEvidenceTo(kb, survivor, loser, adjust))) return false;
+  return kb.updateKbItem({ ...closed, version: loser.version + 1 }, loser.version);
 };

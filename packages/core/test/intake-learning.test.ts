@@ -351,7 +351,7 @@ describe('intake learning through the services', () => {
       boardId,
       category: 'decision',
       type: 'same',
-      attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'manual' }, channel: 'human', kbItemId: null, outcome: null },
+      attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'manual' }, channel: 'human', outcome: null },
     });
     await store.transaction((tx) => tx.insertGlob(decision, null));
     store.state.intakeSnapshots = [];

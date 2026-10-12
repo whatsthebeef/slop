@@ -3,6 +3,7 @@ import type { Result } from '../domain/errors.js';
 import * as machine from '../domain/machine.js';
 import type { Context } from '../domain/machine.js';
 import { decisionOf } from '../domain/decision-glob.js';
+import { isKbGlob } from '../domain/kb-glob.js';
 import type { DecisionOutcomeKind } from '../domain/attributes.js';
 import type { DraftPreview, KbDraft, KbItem, KbTarget } from '../domain/kb.js';
 import { isAgentSetKind } from '../domain/knowledge.js';
@@ -10,7 +11,7 @@ import type { Artifact, KnowledgeKind } from '../domain/knowledge.js';
 import type { Glob, Role } from '../domain/types.js';
 import type { Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { memberOf, roleOf } from './access.js';
-import { applyDecisionStep, createDecisionForExtracted, decisionContext, writeAssessment, syncDecisionFromItem } from './decision-glob.js';
+import { applyDecisionStep, createDecisionForExtracted, decisionContext, writeAssessment } from './decision-glob.js';
 import type { GlobService } from './glob-service.js';
 import type { Approval, KnowledgeService, TargetChange } from './knowledge-service.js';
 import { kbItems } from './kb-items.js';
@@ -57,8 +58,9 @@ const keptForAdmins = (kind: KnowledgeKind | undefined): string | null => {
 };
 
 /**
- * Decision globs over the KB items behind them. The item stays the engine (routing, dedupe, drafting, approval); this
- * service maps the five outcomes onto it and keeps the glob and the item in step in one transaction.
+ * The five outcomes of a decision glob. A learning's decision *is* its KB item: accept, accept with edits and reject are
+ * the item's approval or rejection (whose write is the decision's transition), retarget points it at another target,
+ * and needs work links the glob that will make the change. A decision with no learning records the outcome only.
  */
 export class DecisionGlobService {
   constructor(
@@ -124,7 +126,8 @@ export class DecisionGlobService {
       linkedGlobId = created.value.id;
     }
 
-    const itemId = decisionOf(seen)?.kbItemId ?? null;
+    // A learning's decision is the KB item itself (same ID).
+    const itemId = isKbGlob(seen) ? seen.id : null;
     let hints: readonly Hint[] = [];
     let result: Result<Glob>;
     try {
@@ -148,9 +151,14 @@ export class DecisionGlobService {
         }
         const written = await this.writeItem(tx, email, glob, actor.value.role, input);
         if (!written.ok) return written;
-        // Writing the item can rewrite this very glob (a retarget refreshes its conflicts), so the step is applied to the glob as it is now.
+        // Writing the item rewrites this very glob, so the step is applied to the glob as it is now.
         const fresh = await tx.getGlob(id);
         if (fresh === null) throw new StaleDecisionGlob(id);
+        if (written.value) {
+          // An accept or reject of a learning: its write was the decision's transition (the step above only checked it may happen).
+          hints = [{ kind: 'glob.changed', boardId: fresh.boardId, globId: fresh.id, version: fresh.version }];
+          return ok(fresh);
+        }
         let step = transition.value;
         if (fresh.version !== glob.version) {
           const again = machine.decideDecision(fresh, machineInput, this.context(actor.value));
@@ -197,20 +205,23 @@ export class DecisionGlobService {
     return ok(linked);
   }
 
-  /** The knowledge-base side of an outcome, in the caller's transaction. A decision with no item records the outcome only. */
-  private async writeItem(tx: Tx, email: string, glob: Glob, role: Role, input: DecideRequest): Promise<Result<null>> {
-    const itemId = decisionOf(glob)?.kbItemId ?? null;
-    if (input.outcome === 'needs_work') return ok(null);
+  /**
+   * The knowledge-base side of an outcome, in the caller's transaction: true when the learning's write moved the decision
+   * itself (accept, accept with edits, reject). A decision with no learning records the outcome only.
+   */
+  private async writeItem(tx: Tx, email: string, glob: Glob, role: Role, input: DecideRequest): Promise<Result<boolean>> {
+    const itemId = isKbGlob(glob) ? glob.id : null;
+    if (input.outcome === 'needs_work') return ok(false);
     if (itemId === null) {
       return input.outcome === 'accept_with_edits' || input.outcome === 'retarget'
         ? invalidInput('This decision has no knowledge item, so there is nothing to edit or retarget')
-        : ok(null);
+        : ok(false);
     }
     const item = await kbItems(tx).getKbItem(itemId);
     if (item === null) return notFound(`No KB item ${itemId}`);
     if (item.status !== 'open') {
       // A reopened decision whose item was approved stays accepted: accepting again only records the outcome.
-      if (item.status === 'approved' && input.outcome === 'accept') return ok(null);
+      if (item.status === 'approved' && input.outcome === 'accept') return ok(false);
       return invalidInput(`${item.id} is already ${item.status}: change it on the Knowledge page first`);
     }
     if (role === 'po') {
@@ -224,16 +235,16 @@ export class DecisionGlobService {
         const approval = this.approvalFor(item, input);
         if (!approval.ok) return approval;
         const approved = await knowledge.approveIn(tx, email, item.id, item.version, approval.value, DECIDERS);
-        return approved.ok ? ok(null) : approved;
+        return approved.ok ? ok(true) : approved;
       }
       case 'retarget': {
         if (input.target === undefined) return invalidInput('Retarget needs the new target');
         const moved = await knowledge.changeTargetIn(tx, email, item.id, item.version, input.target, DECIDERS);
-        return moved.ok ? ok(null) : moved;
+        return moved.ok ? ok(false) : moved;
       }
       case 'reject': {
         const rejected = await knowledge.rejectIn(tx, email, item.id, item.version, input.reason ?? '', DECIDERS);
-        return rejected.ok ? ok(null) : rejected;
+        return rejected.ok ? ok(true) : rejected;
       }
     }
   }
@@ -274,7 +285,7 @@ export class DecisionGlobService {
       if (attributes === null) return invalidInput(`${id} is not a decision glob`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const item = attributes.kbItemId === null ? null : await kbItems(tx).getKbItem(attributes.kbItemId);
+      const item = isKbGlob(glob) ? await kbItems(tx).getKbItem(glob.id) : null;
       const preview = item === null ? null : await this.deps.knowledge.previewFor(tx, item);
       const draft = item?.document == null ? (item?.draft ?? null) : { section: null, content: item.document.content };
       return ok({ target: item?.target ?? null, currentVersion: preview?.version ?? null, preview, draft });
@@ -289,8 +300,7 @@ export class DecisionGlobService {
       if (decisionOf(glob) === null) return invalidInput(`${id} is not a decision glob`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const itemId = decisionOf(glob)?.kbItemId ?? null;
-      const item = itemId === null ? null : await kbItems(tx).getKbItem(itemId);
+      const item = isKbGlob(glob) ? await kbItems(tx).getKbItem(glob.id) : null;
       const preview = item === null ? null : await this.deps.knowledge.previewFor(tx, item);
       const changed = await writeAssessment(tx, { clock: this.deps.clock }, glob, item, preview);
       const latest = (await tx.artifactVersions(id, 'assessment', '')).at(-1);
@@ -317,15 +327,5 @@ export class DecisionGlobService {
     if (!result.ok) return result;
     for (const hint of result.value.hints) this.deps.notifier.publish(hint);
     return ok(result.value.glob);
-  }
-
-  /** Brings the glob in front of one KB item in line with it (a repair path and what the backfill's resync uses). */
-  async syncFromItem(itemId: string): Promise<void> {
-    const hints = await this.deps.store.transaction(async (tx) => {
-      const item = await kbItems(tx).getKbItem(itemId);
-      if (item === null) return [];
-      return syncDecisionFromItem(tx, this.deps.clock, item, await this.deps.knowledge.previewFor(tx, item));
-    });
-    for (const hint of hints) this.deps.notifier.publish(hint);
   }
 }

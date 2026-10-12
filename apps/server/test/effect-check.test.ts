@@ -30,6 +30,9 @@ import { SignedLinks } from '../src/signed-links.js';
 import { createTestDatabase } from './support/database.js';
 import { fakeCodeHost } from './support/fake-codehost.js';
 
+/** KB items written in setup: their time doesn't matter. */
+const KB_WRITES = { clock: { now: () => '2026-10-05T12:00:00.000Z' } };
+
 const DEV = 'dev@example.com';
 const ADMIN = 'admin@example.com';
 const HOUR = 60 * 60 * 1000;
@@ -187,6 +190,8 @@ describe('Effect checks in Postgres', () => {
     await database.db.execute(
       sql`update globs set data = data || jsonb_build_object('createdAt', ${work}::text, 'updatedAt', ${mergedAt}::text), updated_at = ${mergedAt} where id = ${id}`,
     );
+    // What it got at creation (the accepted decisions governing it, once a learning is approved) dates from then too.
+    await database.db.execute(sql`update artifacts set created_at = ${work} where glob_id = ${id}`);
     return id;
   };
 
@@ -216,7 +221,7 @@ describe('Effect checks in Postgres', () => {
         processing: 'drafted',
         version: 1,
       };
-      await tx.insertKbItem(item);
+      await kbItems(tx, KB_WRITES).insertKbItem(item);
       return item;
     });
   const get = async (id: string): Promise<KbItem> => {
@@ -225,17 +230,11 @@ describe('Effect checks in Postgres', () => {
     return found;
   };
 
-  it('the effect-check migration adds its columns with their defaults, and re-running it is harmless', async () => {
-    const migration = await readFile(
-      new URL(`../drizzle/${MIGRATION}.sql`, import.meta.url),
-      'utf8',
-    );
-    for (const statement of migration.split('--> statement-breakpoint'))
-      await database.db.execute(sql.raw(statement));
+  it('the effect-check migration adds the board column with its default, and its journal entry follows the one before', async () => {
+    // (Its kb_proposals column went with the table when the items became decision globs.)
     const columns = await database.db.execute(sql`
       select table_name, column_name, data_type, is_nullable, column_default from information_schema.columns
-      where (table_name = 'boards' and column_name = 'effect_check_globs') or (table_name = 'kb_proposals' and column_name = 'effect_check')
-      order by table_name`);
+      where table_name = 'boards' and column_name = 'effect_check_globs'`);
     expect([...columns]).toEqual([
       {
         table_name: 'boards',
@@ -244,21 +243,7 @@ describe('Effect checks in Postgres', () => {
         is_nullable: 'NO',
         column_default: '10',
       },
-      {
-        table_name: 'kb_proposals',
-        column_name: 'effect_check',
-        data_type: 'jsonb',
-        is_nullable: 'YES',
-        column_default: null,
-      },
     ]);
-    // A row from before the migration has no check.
-    const id = `s${String(boardId)}k9999`;
-    await database.db.execute(sql`
-      insert into kb_proposals (id, board_id, status, type, statement, evidence, source_glob_ids, source, submitted_by, created_at, version)
-      values (${id}, ${boardId}, 'rejected', 'gotcha', 'Old', 'Old', '[]'::jsonb, 'submitted', ${DEV}, now(), 1)`);
-    expect((await get(id)).effectCheck).toBeNull();
-    await database.db.execute(sql`delete from kb_proposals where id = ${id}`);
     const journal = JSON.parse(
       await readFile(new URL('../drizzle/meta/_journal.json', import.meta.url), 'utf8'),
     ) as {

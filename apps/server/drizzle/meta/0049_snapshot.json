@@ -1,6 +1,6 @@
 {
-  "id": "692e978f-5d51-4d11-8adc-eda2dc6cbe1a",
-  "prevId": "0256abe3-95f3-4907-bfe9-cf50a7b5a73d",
+  "id": "bb609d34-e7cd-41ec-bf91-9d8556e78dba",
+  "prevId": "692e978f-5d51-4d11-8adc-eda2dc6cbe1a",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -99,9 +99,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -194,37 +194,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "board_chat_messages_chat_id_board_chats_id_fk": {
           "name": "board_chat_messages_chat_id_board_chats_id_fk",
           "tableFrom": "board_chat_messages",
+          "tableTo": "board_chats",
           "columnsFrom": [
             "chat_id"
           ],
-          "tableTo": "board_chats",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "board_chat_messages_board_id_boards_id_fk": {
           "name": "board_chat_messages_board_id_boards_id_fk",
           "tableFrom": "board_chat_messages",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -298,24 +298,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "board_chats_board_id_boards_id_fk": {
           "name": "board_chats_board_id_boards_id_fk",
           "tableFrom": "board_chats",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -370,15 +370,15 @@
         "board_jobs_board_id_boards_id_fk": {
           "name": "board_jobs_board_id_boards_id_fk",
           "tableFrom": "board_jobs",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -472,24 +472,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "board_notifications_board_id_boards_id_fk": {
           "name": "board_notifications_board_id_boards_id_fk",
           "tableFrom": "board_notifications",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -558,15 +558,15 @@
         "board_risk_areas_board_id_boards_id_fk": {
           "name": "board_risk_areas_board_id_boards_id_fk",
           "tableFrom": "board_risk_areas",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -630,27 +630,27 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"board_sessions\".\"position\" is not null",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
         "board_sessions_board_id_email_members_board_id_email_fk": {
           "name": "board_sessions_board_id_email_members_board_id_email_fk",
           "tableFrom": "board_sessions",
+          "tableTo": "members",
           "columnsFrom": [
             "board_id",
             "email"
           ],
-          "tableTo": "members",
           "columnsTo": [
             "board_id",
             "email"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -677,15 +677,15 @@
           "primaryKey": true,
           "notNull": true,
           "identity": {
+            "type": "always",
             "name": "boards_id_seq",
+            "schema": "public",
             "increment": "1",
+            "startWith": "1",
             "minValue": "1",
             "maxValue": "2147483647",
-            "startWith": "1",
             "cache": "1",
-            "cycle": false,
-            "schema": "public",
-            "type": "always"
+            "cycle": false
           }
         },
         "name": {
@@ -893,8 +893,8 @@
           "primaryKey": false,
           "notNull": false,
           "generated": {
-            "type": "stored",
-            "as": "to_tsvector('english', header || ' ' || text)"
+            "as": "to_tsvector('english', header || ' ' || text)",
+            "type": "stored"
           }
         },
         "embedding": {
@@ -928,9 +928,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "chunks_board_idx": {
           "name": "chunks_board_idx",
@@ -943,9 +943,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "chunks_tsv_idx": {
           "name": "chunks_tsv_idx",
@@ -958,9 +958,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "gin",
-          "concurrently": false
+          "with": {}
         },
         "chunks_text_trgm_idx": {
           "name": "chunks_text_trgm_idx",
@@ -974,9 +974,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "gin",
-          "concurrently": false
+          "with": {}
         },
         "chunks_embedding_idx": {
           "name": "chunks_embedding_idx",
@@ -990,9 +990,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "hnsw",
-          "concurrently": false
+          "with": {}
         },
         "chunks_unembedded_idx": {
           "name": "chunks_unembedded_idx",
@@ -1005,25 +1005,25 @@
             }
           ],
           "isUnique": false,
-          "with": {},
-          "method": "btree",
           "where": "\"chunks\".\"embedding\" is null",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
         "chunks_item_id_knowledge_items_id_fk": {
           "name": "chunks_item_id_knowledge_items_id_fk",
           "tableFrom": "chunks",
+          "tableTo": "knowledge_items",
           "columnsFrom": [
             "item_id"
           ],
-          "tableTo": "knowledge_items",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1066,15 +1066,15 @@
         "code_files_board_id_boards_id_fk": {
           "name": "code_files_board_id_boards_id_fk",
           "tableFrom": "code_files",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -1132,24 +1132,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "code_imports_board_id_boards_id_fk": {
           "name": "code_imports_board_id_boards_id_fk",
           "tableFrom": "code_imports",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -1201,15 +1201,15 @@
         "code_index_board_id_boards_id_fk": {
           "name": "code_index_board_id_boards_id_fk",
           "tableFrom": "code_index",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1289,24 +1289,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "code_path_commits_board_id_boards_id_fk": {
           "name": "code_path_commits_board_id_boards_id_fk",
           "tableFrom": "code_path_commits",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -1372,15 +1372,15 @@
         "code_view_usage_board_id_boards_id_fk": {
           "name": "code_view_usage_board_id_boards_id_fk",
           "tableFrom": "code_view_usage",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -1477,9 +1477,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "decision_sources_queue_idx": {
           "name": "decision_sources_queue_idx",
@@ -1498,9 +1498,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "decision_sources_glob_idx": {
           "name": "decision_sources_glob_idx",
@@ -1513,24 +1513,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "decision_sources_board_id_boards_id_fk": {
           "name": "decision_sources_board_id_boards_id_fk",
           "tableFrom": "decision_sources",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1695,9 +1695,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "decisions_board_idx": {
           "name": "decisions_board_idx",
@@ -1716,9 +1716,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "decisions_glob_idx": {
           "name": "decisions_glob_idx",
@@ -1731,9 +1731,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "decisions_source_idx": {
           "name": "decisions_source_idx",
@@ -1752,9 +1752,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "decisions_check_idx": {
           "name": "decisions_check_idx",
@@ -1773,37 +1773,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "decisions_board_id_boards_id_fk": {
           "name": "decisions_board_id_boards_id_fk",
           "tableFrom": "decisions",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "decisions_item_id_knowledge_items_id_fk": {
           "name": "decisions_item_id_knowledge_items_id_fk",
           "tableFrom": "decisions",
+          "tableTo": "knowledge_items",
           "columnsFrom": [
             "item_id"
           ],
-          "tableTo": "knowledge_items",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1939,24 +1939,24 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "dependency_rule_changes_board_id_boards_id_fk": {
           "name": "dependency_rule_changes_board_id_boards_id_fk",
           "tableFrom": "dependency_rule_changes",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2013,15 +2013,15 @@
         "dependency_rules_board_id_boards_id_fk": {
           "name": "dependency_rules_board_id_boards_id_fk",
           "tableFrom": "dependency_rules",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -2157,9 +2157,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "deploys_glob_requested_idx": {
           "name": "deploys_glob_requested_idx",
@@ -2178,9 +2178,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "deploys_provider_ref_idx": {
           "name": "deploys_provider_ref_idx",
@@ -2193,9 +2193,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "deploys_one_running_idx": {
           "name": "deploys_one_running_idx",
@@ -2214,10 +2214,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"deploys\".\"state\" = 'running'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "deploys_one_waiting_idx": {
           "name": "deploys_one_waiting_idx",
@@ -2236,25 +2236,25 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"deploys\".\"state\" = 'waiting'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
         "deploys_board_id_boards_id_fk": {
           "name": "deploys_board_id_boards_id_fk",
           "tableFrom": "deploys",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2340,9 +2340,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "environment_deploys_board_env_at_idx": {
           "name": "environment_deploys_board_env_at_idx",
@@ -2367,24 +2367,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "environment_deploys_board_id_boards_id_fk": {
           "name": "environment_deploys_board_id_boards_id_fk",
           "tableFrom": "environment_deploys",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2508,24 +2508,24 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "escalation_records_board_id_boards_id_fk": {
           "name": "escalation_records_board_id_boards_id_fk",
           "tableFrom": "escalation_records",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2593,9 +2593,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -2682,24 +2682,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "glob_environments_board_id_boards_id_fk": {
           "name": "glob_environments_board_id_boards_id_fk",
           "tableFrom": "glob_environments",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -2775,37 +2775,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "glob_outcomes_glob_id_globs_id_fk": {
           "name": "glob_outcomes_glob_id_globs_id_fk",
           "tableFrom": "glob_outcomes",
+          "tableTo": "globs",
           "columnsFrom": [
             "glob_id"
           ],
-          "tableTo": "globs",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "glob_outcomes_board_id_boards_id_fk": {
           "name": "glob_outcomes_board_id_boards_id_fk",
           "tableFrom": "glob_outcomes",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2915,37 +2915,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "glob_size_checks_glob_id_globs_id_fk": {
           "name": "glob_size_checks_glob_id_globs_id_fk",
           "tableFrom": "glob_size_checks",
+          "tableTo": "globs",
           "columnsFrom": [
             "glob_id"
           ],
-          "tableTo": "globs",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "glob_size_checks_board_id_boards_id_fk": {
           "name": "glob_size_checks_board_id_boards_id_fk",
           "tableFrom": "glob_size_checks",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3007,37 +3007,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "glob_size_records_glob_id_globs_id_fk": {
           "name": "glob_size_records_glob_id_globs_id_fk",
           "tableFrom": "glob_size_records",
+          "tableTo": "globs",
           "columnsFrom": [
             "glob_id"
           ],
-          "tableTo": "globs",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "glob_size_records_board_id_boards_id_fk": {
           "name": "glob_size_records_board_id_boards_id_fk",
           "tableFrom": "glob_size_records",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3135,9 +3135,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "globs_creation_key_idx": {
           "name": "globs_creation_key_idx",
@@ -3156,24 +3156,24 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "globs_board_id_boards_id_fk": {
           "name": "globs_board_id_boards_id_fk",
           "tableFrom": "globs",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3385,9 +3385,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "inbox_items_source_ref_idx": {
           "name": "inbox_items_source_ref_idx",
@@ -3412,10 +3412,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"inbox_items\".\"source_ref\" <> ''",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "inbox_items_board_idx": {
           "name": "inbox_items_board_idx",
@@ -3440,9 +3440,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "inbox_items_queue_idx": {
           "name": "inbox_items_queue_idx",
@@ -3461,37 +3461,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "inbox_items_board_id_boards_id_fk": {
           "name": "inbox_items_board_id_boards_id_fk",
           "tableFrom": "inbox_items",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "inbox_items_item_id_knowledge_items_id_fk": {
           "name": "inbox_items_item_id_knowledge_items_id_fk",
           "tableFrom": "inbox_items",
+          "tableTo": "knowledge_items",
           "columnsFrom": [
             "item_id"
           ],
-          "tableTo": "knowledge_items",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3547,24 +3547,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "inbox_links_inbox_id_inbox_items_id_fk": {
           "name": "inbox_links_inbox_id_inbox_items_id_fk",
           "tableFrom": "inbox_links",
+          "tableTo": "inbox_items",
           "columnsFrom": [
             "inbox_id"
           ],
-          "tableTo": "inbox_items",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -3731,9 +3731,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "intake_snapshots_embedding_idx": {
           "name": "intake_snapshots_embedding_idx",
@@ -3747,37 +3747,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "hnsw",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "intake_snapshots_glob_id_globs_id_fk": {
           "name": "intake_snapshots_glob_id_globs_id_fk",
           "tableFrom": "intake_snapshots",
+          "tableTo": "globs",
           "columnsFrom": [
             "glob_id"
           ],
-          "tableTo": "globs",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "intake_snapshots_board_id_boards_id_fk": {
           "name": "intake_snapshots_board_id_boards_id_fk",
           "tableFrom": "intake_snapshots",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -3847,9 +3847,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "integration_tokens_active_idx": {
           "name": "integration_tokens_active_idx",
@@ -3862,375 +3862,25 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"integration_tokens\".\"revoked_at\" is null",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
         "integration_tokens_board_id_boards_id_fk": {
           "name": "integration_tokens_board_id_boards_id_fk",
           "tableFrom": "integration_tokens",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.kb_proposals": {
-      "name": "kb_proposals",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "board_id": {
-          "name": "board_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "type": {
-          "name": "type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "statement": {
-          "name": "statement",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "evidence": {
-          "name": "evidence",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "suggested_target": {
-          "name": "suggested_target",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "source_glob_ids": {
-          "name": "source_glob_ids",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source": {
-          "name": "source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "signal": {
-          "name": "signal",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "agent_set_version": {
-          "name": "agent_set_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "submitted_by": {
-          "name": "submitted_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "decided_by": {
-          "name": "decided_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "decided_at": {
-          "name": "decided_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "decision_reason": {
-          "name": "decision_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "document": {
-          "name": "document",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "outcome": {
-          "name": "outcome",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "processing": {
-          "name": "processing",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "processing_error": {
-          "name": "processing_error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "processing_attempts": {
-          "name": "processing_attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "process_after": {
-          "name": "process_after",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "target": {
-          "name": "target",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "catalog_candidate": {
-          "name": "catalog_candidate",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "catalog_reason": {
-          "name": "catalog_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "occurrence_count": {
-          "name": "occurrence_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "extra_evidence": {
-          "name": "extra_evidence",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "duplicate_of": {
-          "name": "duplicate_of",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "suppressed_by": {
-          "name": "suppressed_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "covered_by": {
-          "name": "covered_by",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "possibly_covered_by": {
-          "name": "possibly_covered_by",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "contradicts": {
-          "name": "contradicts",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "draft": {
-          "name": "draft",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "drafted_against_version": {
-          "name": "drafted_against_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "rationale": {
-          "name": "rationale",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "stale_since": {
-          "name": "stale_since",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "stale_reason": {
-          "name": "stale_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "stale_dismissed_at": {
-          "name": "stale_dismissed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "kept_apart_from": {
-          "name": "kept_apart_from",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "merge_note": {
-          "name": "merge_note",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "effect_check": {
-          "name": "effect_check",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "decision_glob_id": {
-          "name": "decision_glob_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "kb_proposals_board_status_idx": {
-          "name": "kb_proposals_board_status_idx",
-          "columns": [
-            {
-              "expression": "board_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "with": {},
-          "method": "btree",
-          "concurrently": false
-        },
-        "kb_proposals_decision_glob_idx": {
-          "name": "kb_proposals_decision_glob_idx",
-          "columns": [
-            {
-              "expression": "decision_glob_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "with": {},
-          "method": "btree",
-          "concurrently": false
-        },
-        "kb_proposals_processing_idx": {
-          "name": "kb_proposals_processing_idx",
-          "columns": [
-            {
-              "expression": "processing",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "with": {},
-          "method": "btree",
-          "concurrently": false
-        }
-      },
-      "foreignKeys": {
-        "kb_proposals_board_id_boards_id_fk": {
-          "name": "kb_proposals_board_id_boards_id_fk",
-          "tableFrom": "kb_proposals",
-          "columnsFrom": [
-            "board_id"
-          ],
-          "tableTo": "boards",
-          "columnsTo": [
-            "id"
-          ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4292,15 +3942,15 @@
         "kb_signals_board_id_boards_id_fk": {
           "name": "kb_signals_board_id_boards_id_fk",
           "tableFrom": "kb_signals",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -4400,15 +4050,15 @@
         "knowledge_board_id_boards_id_fk": {
           "name": "knowledge_board_id_boards_id_fk",
           "tableFrom": "knowledge",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -4540,9 +4190,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -4700,9 +4350,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "knowledge_items_board_source_idx": {
           "name": "knowledge_items_board_source_idx",
@@ -4727,9 +4377,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "knowledge_items_globs_idx": {
           "name": "knowledge_items_globs_idx",
@@ -4742,9 +4392,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "gin",
-          "concurrently": false
+          "with": {}
         },
         "knowledge_items_pending_idx": {
           "name": "knowledge_items_pending_idx",
@@ -4763,24 +4413,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "knowledge_items_board_id_boards_id_fk": {
           "name": "knowledge_items_board_id_boards_id_fk",
           "tableFrom": "knowledge_items",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4872,24 +4522,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "llm_spend_board_id_boards_id_fk": {
           "name": "llm_spend_board_id_boards_id_fk",
           "tableFrom": "llm_spend",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4933,37 +4583,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "members_board_id_boards_id_fk": {
           "name": "members_board_id_boards_id_fk",
           "tableFrom": "members",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "members_email_users_email_fk": {
           "name": "members_email_users_email_fk",
           "tableFrom": "members",
+          "tableTo": "users",
           "columnsFrom": [
             "email"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "email"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -5074,9 +4724,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -5199,9 +4849,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "review_feedback_board_created_idx": {
           "name": "review_feedback_board_created_idx",
@@ -5220,24 +4870,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "review_feedback_board_id_boards_id_fk": {
           "name": "review_feedback_board_id_boards_id_fk",
           "tableFrom": "review_feedback",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -5410,9 +5060,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "review_findings_queue_idx": {
           "name": "review_findings_queue_idx",
@@ -5431,9 +5081,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "review_findings_board_created_idx": {
           "name": "review_findings_board_created_idx",
@@ -5452,9 +5102,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "review_findings_glob_idx": {
           "name": "review_findings_glob_idx",
@@ -5467,37 +5117,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "review_findings_board_id_boards_id_fk": {
           "name": "review_findings_board_id_boards_id_fk",
           "tableFrom": "review_findings",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "review_findings_source_id_review_sources_id_fk": {
           "name": "review_findings_source_id_review_sources_id_fk",
           "tableFrom": "review_findings",
+          "tableTo": "review_sources",
           "columnsFrom": [
             "source_id"
           ],
-          "tableTo": "review_sources",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -5628,9 +5278,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "review_sources_external_idx": {
           "name": "review_sources_external_idx",
@@ -5643,9 +5293,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "review_sources_queue_idx": {
           "name": "review_sources_queue_idx",
@@ -5664,9 +5314,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "review_sources_glob_idx": {
           "name": "review_sources_glob_idx",
@@ -5679,24 +5329,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "review_sources_board_id_boards_id_fk": {
           "name": "review_sources_board_id_boards_id_fk",
           "tableFrom": "review_sources",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -5782,24 +5432,24 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "risk_area_changes_board_id_boards_id_fk": {
           "name": "risk_area_changes_board_id_boards_id_fk",
           "tableFrom": "risk_area_changes",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -5836,15 +5486,15 @@
         "sessions_email_users_email_fk": {
           "name": "sessions_email_users_email_fk",
           "tableFrom": "sessions",
+          "tableTo": "users",
           "columnsFrom": [
             "email"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "email"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -5936,24 +5586,24 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "size_calibration_changes_board_id_boards_id_fk": {
           "name": "size_calibration_changes_board_id_boards_id_fk",
           "tableFrom": "size_calibration_changes",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -5984,15 +5634,15 @@
         "size_calibrations_board_id_boards_id_fk": {
           "name": "size_calibrations_board_id_boards_id_fk",
           "tableFrom": "size_calibrations",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -6084,24 +5734,24 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "size_threshold_changes_board_id_boards_id_fk": {
           "name": "size_threshold_changes_board_id_boards_id_fk",
           "tableFrom": "size_threshold_changes",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -6138,15 +5788,15 @@
         "size_thresholds_board_id_boards_id_fk": {
           "name": "size_thresholds_board_id_boards_id_fk",
           "tableFrom": "size_thresholds",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -6245,24 +5895,24 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "sub_limit_changes_board_id_boards_id_fk": {
           "name": "sub_limit_changes_board_id_boards_id_fk",
           "tableFrom": "sub_limit_changes",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -6367,9 +6017,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "test_runs_board_env_sha_idx": {
           "name": "test_runs_board_env_sha_idx",
@@ -6394,9 +6044,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "test_runs_glob_idx": {
           "name": "test_runs_glob_idx",
@@ -6409,24 +6059,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "test_runs_board_id_boards_id_fk": {
           "name": "test_runs_board_id_boards_id_fk",
           "tableFrom": "test_runs",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -6512,24 +6162,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "type_corrections_board_id_boards_id_fk": {
           "name": "type_corrections_board_id_boards_id_fk",
           "tableFrom": "type_corrections",
+          "tableTo": "boards",
           "columnsFrom": [
             "board_id"
           ],
-          "tableTo": "boards",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -6592,10 +6242,10 @@
   },
   "enums": {},
   "schemas": {},
-  "views": {},
   "sequences": {},
   "roles": {},
   "policies": {},
+  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},

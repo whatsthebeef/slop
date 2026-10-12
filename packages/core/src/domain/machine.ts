@@ -2247,17 +2247,6 @@ export const reopenDecision = (glob: Glob, ctx: Context): Result<Transition> => 
     .done();
 };
 
-/** Row D10: the pipeline closed the item (merged, suppressed or covered): the decision ends Signed off and archived. */
-export const archiveDecision = (glob: Glob, reason: string, ctx: Context): Result<Transition> => {
-  if (glob.category !== 'decision' || glob.status === 'signed_off') return unchanged(glob);
-  const outcome: DecisionOutcome = { kind: 'closed', by: ctx.actor?.email ?? 'system', at: ctx.now, reason };
-  return new Builder(glob, ctx)
-    .set({ attributes: withOutcome(decisionAttributesOf(glob), outcome, true), signedOffAt: ctx.now })
-    .status('signed_off')
-    .event('DecisionDecided', { outcome: outcomeJson(outcome) })
-    .done();
-};
-
 /**
  * Row D10′: the KB pipeline closed the learning without a decision (merged into an open one, suppressed by a rejected one,
  * covered by approved knowledge). The decision ends Signed off and archived with a `closed` outcome, `closedAs`, and the
@@ -2308,23 +2297,23 @@ export const reopenClosedDecision = (glob: Glob, ctx: Context): Result<Transitio
 };
 
 /**
- * The item behind a decision was approved on the Knowledge page (or by an agent): the decision is accepted without a
- * person having picked it up. `to` is `signed_off` for the backfill, which migrates decided items as final.
+ * The learning was approved (on the Knowledge page, by an agent, or through the decision's own Accept): the decision is
+ * accepted, picked up or not, and moves to Reviewing. `kind` says whether the draft was edited first.
  */
 export const decisionApproved = (
   glob: Glob,
-  approval: { readonly by: string },
+  approval: { readonly by: string; readonly kind?: 'accept' | 'accept_with_edits'; readonly reason?: string | null },
   ctx: Context,
-  to: 'reviewing' | 'signed_off' = 'reviewing',
 ): Result<Transition> => {
   if (glob.category !== 'decision') return unchanged(glob);
   const attributes = decisionAttributesOf(glob);
-  const kind = attributes.outcome?.kind;
-  if (kind === 'accept' || kind === 'accept_with_edits') return unchanged(glob);
-  const outcome: DecisionOutcome = { kind: 'accept', by: approval.by, at: ctx.now };
+  const current = attributes.outcome?.kind;
+  if (current === 'accept' || current === 'accept_with_edits') return unchanged(glob);
+  const reason = approval.reason ?? null;
+  const outcome: DecisionOutcome = { kind: approval.kind ?? 'accept', by: approval.by, at: ctx.now, ...(reason === null ? {} : { reason }) };
   return new Builder(glob, ctx)
-    .set({ attributes: withOutcome(attributes, outcome, false), ...(to === 'signed_off' ? { signedOffAt: ctx.now } : {}) })
-    .status(to)
+    .set({ attributes: withOutcome(attributes, outcome, false) })
+    .status('reviewing')
     .event('DecisionDecided', { outcome: outcomeJson(outcome), via: 'knowledge' })
     .done();
 };
@@ -2343,8 +2332,8 @@ export const decisionRejected = (glob: Glob, rejection: { readonly by: string; r
 };
 
 /**
- * The item behind a decision is open again (reopened after the pipeline closed it, or after an agent's decision): the
- * decision goes back to Planning with no outcome. Nothing to do for a decision that is already open or waits on work.
+ * The learning is open again after an agent's decision was reopened: the decision goes back to Planning with no
+ * outcome. Nothing to do for a decision that is already open or waits on work. (One the pipeline closed is reopened by D12.)
  */
 export const decisionReopened = (glob: Glob, ctx: Context): Result<Transition> => {
   if (glob.category !== 'decision') return unchanged(glob);

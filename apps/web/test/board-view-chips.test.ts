@@ -7,7 +7,6 @@ const attributes = (patch: Partial<DecisionAttributes> = {}): DecisionAttributes
   scope: { kind: 'project', ref: null },
   origin: { kind: 'manual' },
   channel: 'human',
-  kbItemId: null,
   outcome: null,
   ...patch,
 });

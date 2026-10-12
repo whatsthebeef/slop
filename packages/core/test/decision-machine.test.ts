@@ -11,9 +11,8 @@ const qa: Actor = { email: 'qa@example.com', role: 'qa' };
 
 const attributes = (patch: Partial<DecisionAttributes> = {}): DecisionAttributes => ({
   scope: { kind: 'project', ref: null },
-  origin: { kind: 'kb_item', id: 's1k1' },
+  origin: { kind: 'submitted' },
   channel: 'agent',
-  kbItemId: 's1k1',
   outcome: null,
   ...patch,
 });
@@ -185,22 +184,15 @@ describe('D8 and D9: sign off and reopen', () => {
   });
 });
 
-describe('D10: closed by the pipeline, and sync from the item', () => {
-  it('archives from any open status, and leaves a signed-off decision alone', () => {
-    for (const status of ['planning', 'in_progress', 'reviewing'] as const) {
-      const t = unwrap(machine.archiveDecision(decision({ status }), 'covered', ctx(null)));
-      expect(t.glob).toMatchObject({ status: 'signed_off', signedOffAt: NOW });
-      expect(t.glob.attributes).toMatchObject({ archived: true, outcome: { kind: 'closed', by: 'system', reason: 'covered' } });
-    }
-    expect(unwrap(machine.archiveDecision(decision({ status: 'signed_off' }), 'covered', ctx(null))).changed).toBe(false);
-  });
-
+describe('a learning decided on the Knowledge page', () => {
   it('accepts a decision approved on the Knowledge page without a pick-up, once', () => {
     const t = unwrap(machine.decisionApproved(decision(), { by: admin.email }, ctx(null)));
     expect(t.glob.status).toBe('reviewing');
     expect(outcomeOf(t.glob)).toMatchObject({ kind: 'accept', by: admin.email });
     expect(machine.decisionApproved(t.glob, { by: admin.email }, ctx(null))).toMatchObject({ ok: true, value: { changed: false } });
-    expect(unwrap(machine.decisionApproved(decision(), { by: 'x' }, ctx(null), 'signed_off')).glob.status).toBe('signed_off');
+    const edited = unwrap(machine.decisionApproved(decision({ status: 'in_progress' }), { by: admin.email, kind: 'accept_with_edits', reason: 'Tidied' }, ctx(null)));
+    expect(edited.glob.status).toBe('reviewing');
+    expect(outcomeOf(edited.glob)).toMatchObject({ kind: 'accept_with_edits', by: admin.email, reason: 'Tidied' });
   });
 
   it('rejects a decision rejected on the Knowledge page, archived', () => {
@@ -209,8 +201,8 @@ describe('D10: closed by the pipeline, and sync from the item', () => {
     expect(t.glob.attributes).toMatchObject({ archived: true, outcome: { kind: 'reject', reason: 'No' } });
   });
 
-  it('reopens a closed or decided decision to Planning, but not one waiting on work or already open', () => {
-    const closed = unwrap(machine.archiveDecision(decision(), 'covered', ctx(null))).glob;
+  it('reopens a decided decision to Planning, but not one waiting on work or already open', () => {
+    const closed = unwrap(machine.decisionRejected(decision(), { by: admin.email, reason: 'No' }, ctx(null))).glob;
     const back = unwrap(machine.decisionReopened(closed, ctx(null)));
     expect(back.glob).toMatchObject({ status: 'planning', signedOffAt: null, implementer: null });
     expect(back.glob.attributes).toMatchObject({ outcome: null });
@@ -231,7 +223,7 @@ describe('D10: closed by the pipeline, and sync from the item', () => {
 
 describe("D10′ and D12: the KB pipeline closes a learning, an admin reopens it", () => {
   const kbAttributes = (patch: Partial<DecisionAttributes> = {}): DecisionAttributes =>
-    attributes({ origin: { kind: 'submitted' }, kbItemId: null, kind: 'gotcha', target: { suggested: null, routed: null }, evidenceCount: 2, ...patch });
+    attributes({ origin: { kind: 'submitted' }, kind: 'gotcha', target: { suggested: null, routed: null }, evidenceCount: 2, ...patch });
   const open = (patch: Partial<Glob> = {}) => decision({ attributes: kbAttributes(), ...patch });
   const pipelineLink = (id: string, kind: GlobLink['kind']): GlobLink => ({ id, kind, source: 'pipeline' });
 

@@ -9,9 +9,8 @@ import { NOW } from './fixtures.js';
 
 const decision = (patch: Record<string, unknown> = {}) => ({
   scope: { kind: 'project', ref: null },
-  origin: { kind: 'kb_item', id: 's1k1' },
+  origin: { kind: 'submitted' },
   channel: 'agent',
-  kbItemId: 's1k1',
   outcome: null,
   ...patch,
 });
@@ -72,11 +71,14 @@ describe('attribute schemas', () => {
 
   it('accepts a submitted or mined origin with no ID: the decision is the learning, same ID', () => {
     for (const kind of ['submitted', 'mined'] as const) {
-      const result = validateAttributes('decision', decision({ origin: { kind }, kbItemId: null }));
+      const result = validateAttributes('decision', decision({ origin: { kind } }));
       expect(result.ok && isDecisionAttributes(result.value) ? result.value.origin : null).toEqual({ kind });
     }
     expect(message(validateAttributes('decision', decision({ origin: { kind: 'carrier pigeon' } })))).toMatch(/origin.kind/);
     expect(message(validateAttributes('decision', decision({ source: { kind: 'manual' } })))).toMatch(/unknown keys: source/);
+    // The wrapper's link to a separate KB item is gone: the decision is the item.
+    expect(message(validateAttributes('decision', decision({ origin: { kind: 'kb_item', id: 's1k1' } })))).toMatch(/origin.kind/);
+    expect(message(validateAttributes('decision', decision({ kbItemId: 's1k1' })))).toMatch(/unknown keys: kbItemId/);
   });
 
   it('carries a KB learning\'s own fields, each checked when present', () => {
@@ -108,8 +110,8 @@ describe('attribute schemas', () => {
       possiblyCoveredByText: { knowledgeKind: 'doc', name: 'build_test_lint', section: 'Test', quote: 'Run vitest', reason: 'Says it' },
       contradictsText: [{ kind: 'knowledge', ref: 'build_test_lint', note: 'Says the opposite' }],
     };
-    const result = validateAttributes('decision', decision({ origin: { kind: 'mined' }, kbItemId: null, ...kb }));
-    expect(result.ok ? result.value : result.error).toEqual({ ...decision({ origin: { kind: 'mined' }, kbItemId: null }), ...kb });
+    const result = validateAttributes('decision', decision({ origin: { kind: 'mined' }, ...kb }));
+    expect(result.ok ? result.value : result.error).toEqual({ ...decision({ origin: { kind: 'mined' } }), ...kb });
     // Unrouted: a suggested target only.
     expect(validateAttributes('decision', decision({ target: { suggested: null, routed: null } })).ok).toBe(true);
     const bad: [Record<string, unknown>, RegExp][] = [

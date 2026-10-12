@@ -128,14 +128,9 @@ describe('decision globs', () => {
   const decide = async (id: string, body: Record<string, unknown>, email = ADMIN) =>
     call(email, 'POST', `/api/globs/${id}/decision`, { version: (await view(id)).version, ...body });
 
-  describe('migration 0046 and the store', () => {
-    it('adds the column and index, runs twice, and its journal entry is the newest', async () => {
-      const columns = await database.db.execute(sql`select column_name from information_schema.columns where table_name = 'kb_proposals' and column_name = 'decision_glob_id'`);
-      expect(columns).toHaveLength(1);
-      const indexes = await database.db.execute(sql`select indexname from pg_indexes where indexname = 'kb_proposals_decision_glob_idx'`);
-      expect(indexes).toHaveLength(1);
-      const migration = await readFile(new URL('../drizzle/0048_decision_globs.sql', import.meta.url), 'utf8');
-      for (const statement of migration.split('--> statement-breakpoint')) await database.db.execute(sql.raw(statement));
+  describe('the migrations', () => {
+    it('leave no kb_proposals table (the items are their decision globs), with the journal in order', async () => {
+      expect(await database.db.execute(sql`select to_regclass('kb_proposals') as t`)).toEqual([{ t: null }]);
       const journal = JSON.parse(await readFile(new URL('../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: { idx: number; when: number; tag: string }[] };
       const whens = journal.entries.map((e) => e.when);
       expect(whens).toEqual([...whens].sort((a, b) => a - b));
@@ -166,11 +161,12 @@ describe('decision globs', () => {
       });
       const [first] = result.content as { text: string }[];
       const reply = JSON.parse(first?.text ?? 'null') as { id: string; globId: string };
-      // The decision glob fronts the item under the item's own k ID.
+      // The item is its decision glob, under its own k ID.
       expect(reply.globId).toMatch(new RegExp(`^s${String(boardId)}k\\d+$`));
       expect(reply.globId).toBe(reply.id);
       const glob = await view(reply.globId);
-      expect(glob).toMatchObject({ category: 'decision', status: 'planning', attributes: { kbItemId: reply.id } });
+      expect(glob).toMatchObject({ category: 'decision', status: 'planning', attributes: { origin: { kind: 'submitted' } } });
+      expect(glob.id).toBe(reply.id);
       const [plan] = await store.transaction((tx) => tx.listArtifacts(reply.globId, 'plan'));
       expect(plan?.content).toContain('Use cursors');
     });

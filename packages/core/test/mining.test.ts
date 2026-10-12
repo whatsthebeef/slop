@@ -12,7 +12,7 @@ import type { BoardJob, BoardJobResult, ManifestChange, MergedCommit } from '../
 import type { Board } from '../src/domain/types.js';
 import type { Catalog, ManifestSource, Store } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
-import { MemoryKbQueue } from '../src/testing/kb-queue.js';
+import { MemoryKbQueue, TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 import { glob } from './fixtures.js';
 
 const ADMIN = 'admin@example.com';
@@ -80,7 +80,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
   };
   const decide = async (id: string, patch: Partial<KbItem>) => {
     const current = await item(id);
-    await store.transaction((tx) => tx.updateKbItem({ ...current, ...patch, version: current.version + 1 }, current.version));
+    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, ...patch, version: current.version + 1 }, current.version));
   };
   const signalRow = async (key: string) => (await store.transaction((tx) => tx.listKbSignals(board.id))).find((r) => r.key === key);
   const items = () => store.transaction((tx) => kbItems(tx).listKbItems(board.id));
@@ -98,14 +98,14 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     });
   });
 
-  it('gives a mined item its decision glob (channel mined, in Planning, assessed), linked both ways', async () => {
+  it('makes a mined item a decision glob (channel mined, in Planning, assessed) under its own ID', async () => {
     await runs(10, 3, later(-2 * DAY));
     const result = await mining.mine(board.id, START);
     const mined = await item(result.raised[0] ?? '');
-    expect(mined.decisionGlobId).toBe('s1k1');
+    expect(mined.id).toBe('s1k1');
     const decision = await store.transaction((tx) => tx.getGlob('s1k1'));
     expect(decision).toMatchObject({ category: 'decision', status: 'planning', planner: MINED_BY, createdAt: mined.createdAt });
-    expect(decision?.attributes).toMatchObject({ channel: 'mined', kbItemId: mined.id, scope: { kind: 'future_work', ref: null }, origin: { kind: 'kb_item', id: mined.id } });
+    expect(decision?.attributes).toMatchObject({ channel: 'mined', scope: { kind: 'future_work', ref: null }, origin: { kind: 'mined' } });
     expect(await store.transaction((tx) => tx.artifactVersions('s1k1', 'assessment', ''))).toHaveLength(1);
   });
 
@@ -249,7 +249,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     await runs(10, 3, later(-2 * DAY));
     const [mined] = (await mining.mine(board.id, START)).raised;
     const survivor: KbItem = { ...(await item(mined ?? '')), id: 's1k99', signal: null, evidence: 'Submitted', version: 1 };
-    await store.transaction((tx) => tx.insertKbItem(survivor));
+    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(survivor));
     await decide(mined ?? '', { status: 'merged', duplicateOf: survivor.id });
 
     expect(await mining.mine(board.id, later(WEEK))).toMatchObject({ raised: [], refreshed: [survivor.id] });
@@ -297,7 +297,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
       signal: base.signal === null ? null : { ...base.signal, key: 'failure:timeout', kind: 'failure', figures: { affected: 9, eligible: 10, rate: 0.9, count: 9 } },
       version: 1,
     };
-    await store.transaction((tx) => tx.insertKbItem(survivor));
+    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(survivor));
     await decide(mined ?? '', { status: 'merged', duplicateOf: survivor.id });
     // 45% is 1.5× run_superseded's 30%, though far below the survivor's 90%.
     const reRaisedAt = later(13 * WEEK);
@@ -311,7 +311,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     const base = await item(mined ?? '');
     // A loop: the mined item and a submitted one merged into each other.
     const other: KbItem = { ...base, id: 's1k80', status: 'merged', duplicateOf: base.id, signal: null, version: 1 };
-    await store.transaction((tx) => tx.insertKbItem(other));
+    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(other));
     await decide(base.id, { status: 'merged', duplicateOf: other.id });
     const again = await mining.mine(board.id, later(WEEK));
     expect(again.raised).toHaveLength(1);
@@ -368,7 +368,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
       processing: 'drafted',
       version: 1,
     };
-    await store.transaction((tx) => tx.insertKbItem(submitted));
+    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(submitted));
 
     route.answer(
       JSON.stringify({ target: { kind: 'document', name: 'build_test_lint', section: '## Test', newDocument: null }, catalogCandidate: false, catalogReason: null }),
@@ -398,7 +398,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     await runs(10, 3, later(-2 * DAY));
     const [mined] = (await mining.mine(board.id, START)).raised;
     const approved: KbItem = { ...(await item(mined ?? '')), id: 's1k60', status: 'approved', signal: null, decidedAt: START, version: 1 };
-    await store.transaction((tx) => tx.insertKbItem(approved));
+    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(approved));
     await decide(mined ?? '', { status: 'covered', coveredBy: { kind: 'item', id: approved.id } });
     await runs(4, 4, later(-DAY, later(30 * WEEK)));
     expect(await mining.mine(board.id, later(30 * WEEK))).toMatchObject({ crossed: 1, raised: [], refreshed: [] });
@@ -424,9 +424,10 @@ describe('Mining: mined KB items and the re-raise rules', () => {
         store.transaction((tx) =>
           work({
             ...tx,
-            getKbItem: async (itemId) => {
-              const found = await kbItems(tx).getKbItem(itemId);
-              return found === null || itemId !== id ? found : { ...found, version: found.version - 1 };
+            // The item is its glob: its reads are one version behind.
+            getGlob: async (globId) => {
+              const found = await tx.getGlob(globId);
+              return found === null || globId !== id ? found : { ...found, version: found.version - 1 };
             },
           }),
         ),

@@ -24,7 +24,6 @@ import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { newKbItemId } from './knowledge-service.js';
 import { MINED_BY } from './mining-service.js';
 import type { MiningService } from './mining-service.js';
-import { createDecisionForItem } from './decision-glob.js';
 import { kbItems } from './kb-items.js';
 
 export type EffectCheckResult = Extract<BoardJobResult, { kind: 'effect_check' }>;
@@ -147,7 +146,7 @@ export class EffectCheckService {
       effectCheck: { ...check, raisedItemId },
       version: item.version + 1,
     };
-    if (!(await kbItems(tx).updateKbItem(updated, item.version))) throw new EffectCheckConflict(item.id);
+    if (!(await kbItems(tx, { clock: { now: () => now }, raise: (h) => hints.push(h) }).updateKbItem(updated, item.version))) throw new EffectCheckConflict(item.id);
     return { state: check.state, raisedItemId };
   }
 
@@ -204,11 +203,8 @@ export class EffectCheckService {
       ...UNPROCESSED,
       version: 1,
     };
-    const decision = await createDecisionForItem(tx, { clock: { now: () => now } }, item, { email: MINED_BY, role: 'dev' }, 'mined');
-    if (!decision.ok) throw new Error(decision.error.message);
-    const inserted = await kbItems(tx).insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
+    const inserted = await kbItems(tx, { clock: { now: () => now }, raise: (h) => hints.push(h) }).insertKbItem(item);
     if (!inserted) throw new Error(`KB item ${id} already exists`);
-    hints.push(...decision.value.hints);
     return id;
   }
 }

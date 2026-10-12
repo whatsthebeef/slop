@@ -1,3 +1,5 @@
+import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
 import { DecisionPipeline, EXTRACT_SYSTEM, MAX_DECISIONS_PER_SOURCE, SUPERSEDE_SYSTEM } from '../src/app/decision-pipeline.js';
@@ -235,8 +237,8 @@ describe('decisions', () => {
         version: 2,
       });
       await store.transaction(async (tx) => {
-        await tx.insertKbItem(learning('k1', 'decision', 'Dates are stored in UTC and shown in the board time zone.'));
-        await tx.insertKbItem(learning('k2', 'gotcha', 'The cache needs a restart after a config change.'));
+        await kbItems(tx, TEST_KB_WRITES).insertKbItem(learning(`s${String(boardId)}k1`, 'decision', 'Dates are stored in UTC and shown in the board time zone.'));
+        await kbItems(tx, TEST_KB_WRITES).insertKbItem(learning(`s${String(boardId)}k2`, 'gotcha', 'The cache needs a restart after a config change.'));
       });
       await run();
       expect(llm.calls).toHaveLength(0);
@@ -245,7 +247,7 @@ describe('decisions', () => {
       expect(found[0]).toMatchObject({
         globId: null,
         sourceKind: 'kb_item',
-        sourceRef: 'learning:k1',
+        sourceRef: `learning:s${String(boardId)}k1`,
         decidedBy: 'admin@example.com',
         decidedAt: '2026-08-02T00:00:00.000Z',
         statement: 'Dates are stored in UTC and shown in the board time zone.',

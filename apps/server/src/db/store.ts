@@ -1,5 +1,5 @@
-import type { OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbItem, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { laneOf, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KB_ITEM_SOURCES, KB_ITEM_STATUSES, KB_PROCESSING_STATES, KB_STALE_REASONS, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, LEARNING_TYPES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
+import type { OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { laneOf, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -297,28 +297,11 @@ const toFinding = (row: typeof schema.reviewFindings.$inferSelect): ReviewFindin
   classifiedAt: row.classifiedAt?.toISOString() ?? null,
 });
 
-const toKbItem = ({ decisionGlobId, ...row }: typeof schema.kbProposals.$inferSelect): KbItem => ({
-  ...row,
-  // Absent until a decision glob exists (the memory store omits it too).
-  ...(decisionGlobId === null ? {} : { decisionGlobId }),
-  status: oneOf(KB_ITEM_STATUSES, row.status),
-  type: oneOf(LEARNING_TYPES, row.type),
-  source: oneOf(KB_ITEM_SOURCES, row.source),
-  processing: oneOf(KB_PROCESSING_STATES, row.processing),
-  createdAt: row.createdAt.toISOString(),
-  decidedAt: row.decidedAt?.toISOString() ?? null,
-  processAfter: row.processAfter?.toISOString() ?? null,
-  staleSince: row.staleSince?.toISOString() ?? null,
-  staleReason: row.staleReason === null ? null : oneOf(KB_STALE_REASONS, row.staleReason),
-  staleDismissedAt: row.staleDismissedAt?.toISOString() ?? null,
-});
-
 const toKbSignal = (row: typeof schema.kbSignals.$inferSelect): KbSignalState => ({
   ...row,
   lastMeasuredAt: row.lastMeasuredAt?.toISOString() ?? null,
   raisedAt: row.raisedAt?.toISOString() ?? null,
 });
-
 // The job's state stays out: only the job itself reads it (`getBoardJobState`).
 const toBoardJob = (row: typeof schema.boardJobs.$inferSelect): BoardJob => ({
   boardId: row.boardId,
@@ -326,45 +309,6 @@ const toBoardJob = (row: typeof schema.boardJobs.$inferSelect): BoardJob => ({
   lastResult: row.lastResult,
   lastRunAt: row.lastRunAt?.toISOString() ?? null,
   runningUntil: row.runningUntil?.toISOString() ?? null,
-});
-
-/** The columns a KB item writes (everything but its ID, board and creation, which never change). */
-const kbItemColumns = (item: KbItem) => ({
-  status: item.status,
-  statement: item.statement,
-  // Mined items' figures and evidence are refreshed weekly while they are open.
-  evidence: item.evidence,
-  signal: item.signal,
-  sourceGlobIds: [...item.sourceGlobIds],
-  decidedBy: item.decidedBy,
-  decidedAt: item.decidedAt === null ? null : new Date(item.decidedAt),
-  decisionReason: item.decisionReason,
-  outcome: item.outcome,
-  processing: item.processing,
-  processingError: item.processingError,
-  processingAttempts: item.processingAttempts,
-  processAfter: item.processAfter === null ? null : new Date(item.processAfter),
-  target: item.target,
-  catalogCandidate: item.catalogCandidate,
-  catalogReason: item.catalogReason,
-  occurrenceCount: item.occurrenceCount,
-  extraEvidence: [...item.extraEvidence],
-  duplicateOf: item.duplicateOf,
-  suppressedBy: item.suppressedBy,
-  coveredBy: item.coveredBy,
-  possiblyCoveredBy: item.possiblyCoveredBy,
-  contradicts: [...item.contradicts],
-  draft: item.draft,
-  draftedAgainstVersion: item.draftedAgainstVersion,
-  rationale: item.rationale,
-  staleSince: item.staleSince === null ? null : new Date(item.staleSince),
-  staleReason: item.staleReason,
-  staleDismissedAt: item.staleDismissedAt === null ? null : new Date(item.staleDismissedAt),
-  keptApartFrom: [...item.keptApartFrom],
-  mergeNote: item.mergeNote,
-  effectCheck: item.effectCheck,
-  decisionGlobId: item.decisionGlobId ?? null,
-  version: item.version,
 });
 
 const globColumns = (glob: Glob) => ({
@@ -1248,49 +1192,6 @@ export class PgStore implements Store {
             runAfter: row.runAfter.toISOString(),
           }),
         );
-      },
-
-      insertKbItem: async (item) => {
-        const rows = await t
-          .insert(schema.kbProposals)
-          .values({ ...item, ...kbItemColumns(item), createdAt: new Date(item.createdAt) })
-          .onConflictDoNothing()
-          .returning({ id: schema.kbProposals.id });
-        return rows.length === 1;
-      },
-      getKbItem: async (id) => {
-        const [row] = await t.select().from(schema.kbProposals).where(eq(schema.kbProposals.id, id));
-        return row === undefined ? null : toKbItem(row);
-      },
-      listKbItems: async (boardId, status) => {
-        const conditions = [eq(schema.kbProposals.boardId, boardId)];
-        if (status !== undefined) conditions.push(eq(schema.kbProposals.status, status));
-        const rows = await t
-          .select()
-          .from(schema.kbProposals)
-          .where(and(...conditions))
-          .orderBy(asc(schema.kbProposals.createdAt), asc(schema.kbProposals.id));
-        return rows.map(toKbItem);
-      },
-      listRecentKbItems: async (boardId, statuses, limit) => {
-        const where = and(eq(schema.kbProposals.boardId, boardId), inArray(schema.kbProposals.status, [...statuses]));
-        const rows = await t
-          .select()
-          .from(schema.kbProposals)
-          .where(where)
-          // Newest by decision (an item joins the decided group when decided); closed items have none.
-          .orderBy(desc(sql`coalesce(${schema.kbProposals.decidedAt}, ${schema.kbProposals.createdAt})`), desc(schema.kbProposals.id))
-          .limit(limit);
-        const [counted] = await t.select({ total: sql<number>`count(*)`.mapWith(Number) }).from(schema.kbProposals).where(where);
-        return { items: rows.map(toKbItem), total: counted?.total ?? 0 };
-      },
-      updateKbItem: async (item, expectedVersion) => {
-        const rows = await t
-          .update(schema.kbProposals)
-          .set(kbItemColumns(item))
-          .where(and(eq(schema.kbProposals.id, item.id), eq(schema.kbProposals.version, expectedVersion)))
-          .returning({ id: schema.kbProposals.id });
-        return rows.length === 1;
       },
 
       getDeploy: async (id) => {

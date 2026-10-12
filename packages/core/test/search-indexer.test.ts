@@ -1,3 +1,5 @@
+import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
+import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
@@ -142,7 +144,7 @@ describe('SearchIndexer', () => {
       processing: 'drafted',
       version: 2,
     };
-    await store.transaction((tx) => tx.insertKbItem(learning));
+    await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).insertKbItem(learning));
     await merge(task.id);
     return { task, sup };
   };

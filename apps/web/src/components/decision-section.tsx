@@ -12,6 +12,9 @@ import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { artifactKey, globDiffKey } from '@/lib/live';
 import { Tip } from './ui/tip';
 
+/** A learning an agent submitted or slop mined: the decision is a KB item (same ID), with a knowledge change to apply. */
+const isLearning = (attributes: DecisionAttributes): boolean => attributes.origin.kind === 'submitted' || attributes.origin.kind === 'mined';
+
 type Choice = Exclude<DecisionOutcomeKind, 'closed'>;
 
 const CHOICES: readonly { readonly outcome: Choice; readonly label: string; readonly tip: string }[] = [
@@ -172,7 +175,7 @@ const OutcomeForm = ({
     <div className='grid gap-2 rounded border p-3' data-testid={`outcome-form-${choice}`}>
       {choice === 'accept' && (
         <p className='text-xs text-muted-foreground'>
-          {attributes.kbItemId === null
+          {!isLearning(attributes)
             ? 'Records the decision as accepted; there is no knowledge change to apply.'
             : 'Applies the proposed change to its target, then moves this decision to Reviewing.'}
         </p>
@@ -351,7 +354,7 @@ export const DecisionSection = ({
   const canDecide = (glob.allowedActions ?? []).includes('decide');
   const conflicts = attributes.conflictsWith ?? [];
   const outcome = attributes.outcome;
-  const hasItem = attributes.kbItemId !== null;
+  const hasItem = isLearning(attributes);
   return (
     <section className='grid gap-3 rounded border border-edge p-3' data-testid='decision-section'>
       <div className='flex flex-wrap items-center gap-2 text-xs'>
@@ -359,9 +362,9 @@ export const DecisionSection = ({
           Applies to {scopeLabel(attributes.scope)}
         </span>
         <span className='text-muted-foreground'>via {attributes.channel}</span>
-        {attributes.kbItemId !== null && (
-          <Link className='font-mono underline-offset-2 hover:underline' to={`/boards/${String(glob.boardId)}/knowledge`}>
-            {attributes.kbItemId}
+        {hasItem && (
+          <Link className='underline-offset-2 hover:underline' to={`/boards/${String(glob.boardId)}/knowledge`}>
+            on the Knowledge page
           </Link>
         )}
         {conflicts.length > 0 && (

@@ -481,7 +481,8 @@ describe('KB pipeline: drafting and approving drafts', () => {
       version: failed.version + 1,
     });
     expect(await item(id)).toEqual(retried);
-    expect(notifier.hints).toEqual([{ kind: 'board.kb', boardId }]);
+    // The retry is a write to the learning's decision glob too.
+    expect(notifier.hints).toEqual([{ kind: 'glob.changed', boardId, globId: id, version: retried.version }, { kind: 'board.kb', boardId }]);
     // Only failed items can be retried.
     expect(errorOf(await knowledge.retryProcessing(ADMIN, id, retried.version))?.code).toBe('invalid_input');
     drafter.answer(draftAnswer('Test', '## Test\n\nRun vitest --reporter=dot.'));

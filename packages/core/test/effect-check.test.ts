@@ -1,3 +1,4 @@
+import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
@@ -235,7 +236,7 @@ describe('Effect checks', () => {
         version: 1,
         ...patch,
       };
-      await tx.insertKbItem(item);
+      await kbItems(tx, TEST_KB_WRITES).insertKbItem(item);
       return item;
     });
 
@@ -425,8 +426,8 @@ describe('Effect checks', () => {
     });
 
     const raised = await item(raisedId ?? '');
-    expect(raised.decisionGlobId).toBe(raised.id);
-    expect(await store.transaction((tx) => tx.getGlob(raised.id))).toMatchObject({ category: 'decision', status: 'planning', attributes: { kbItemId: raised.id, channel: 'mined' } });
+    // The item is its decision glob (same ID).
+    expect(await store.transaction((tx) => tx.getGlob(raised.id))).toMatchObject({ category: 'decision', status: 'planning', attributes: { origin: { kind: 'mined' }, channel: 'mined' } });
     expect(raised).toMatchObject({
       status: 'open',
       type: 'gotcha',
@@ -914,7 +915,7 @@ describe('Effect checks', () => {
       const id = await submitted();
       const current = await item(id);
       await store.transaction((tx) =>
-        tx.updateKbItem({ ...current, signal: CI, version: current.version + 1 }, current.version),
+        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, signal: CI, version: current.version + 1 }, current.version),
       );
       const refused = await knowledge.approve(ADMIN, id, current.version + 1, {
         as: 'learning',
@@ -997,7 +998,7 @@ describe('Effect checks', () => {
         const id = await submitted();
         const current = await item(id);
         await store.transaction((tx) =>
-          tx.updateKbItem(
+          kbItems(tx, TEST_KB_WRITES).updateKbItem(
             { ...current, signal: CI, version: current.version + 1 },
             current.version,
           ),
@@ -1083,7 +1084,7 @@ describe('Effect checks', () => {
       const id = await submitted();
       const current = await item(id);
       await store.transaction((tx) =>
-        tx.updateKbItem({ ...current, signal: CI, version: current.version + 1 }, current.version),
+        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, signal: CI, version: current.version + 1 }, current.version),
       );
       const versionBefore = unwrap(await boards.get(ADMIN, boardId)).board.agentSetVersion;
       const decided = unwrap(

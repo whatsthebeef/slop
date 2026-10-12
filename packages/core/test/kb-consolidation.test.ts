@@ -27,7 +27,7 @@ import type { KbItem } from '../src/domain/kb.js';
 import type { KbSignal } from '../src/domain/signals.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
-import { seedKbItem } from '../src/testing/kb-queue.js';
+import { seedKbItem, TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 
 const ADMIN = 'admin@example.com';
 const DEV = 'dev@example.com';
@@ -131,7 +131,7 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
   const update = async (id: string, patch: Partial<KbItem>) => {
     const current = await item(id);
     await store.transaction((tx) =>
-      tx.updateKbItem({ ...current, ...patch, version: current.version + 1 }, current.version),
+      kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, ...patch, version: current.version + 1 }, current.version),
     );
   };
 
@@ -1180,7 +1180,7 @@ describe('Weekly consolidation: merges on verified quotes, stale flags and the q
       llm.answer(pairs([a.id, d.id]), async () => {
         // An admin separates A from D while the pair is verified (and the version race is out of the way).
         const fresh = await item(d.id);
-        await store.transaction((tx) => tx.updateKbItem({ ...fresh, keptApartFrom: [a.id] }, fresh.version));
+        await store.transaction((tx) => kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...fresh, keptApartFrom: [a.id] }, fresh.version));
         return sameFact(quote, quote);
       });
       expect(await consolidation.consolidate(boardId)).toMatchObject({ verified: 1, merged: [], skipped: 1 });
@@ -1293,7 +1293,7 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
   it('records an outage met mid-run as skipped, without moving the last run, so the next check tries again', async () => {
     for (const id of ['s1k1', 's1k2']) {
       await store.transaction((tx) =>
-        tx.insertKbItem({
+        kbItems(tx, TEST_KB_WRITES).insertKbItem({
           id,
           boardId,
           status: 'open',
@@ -1358,7 +1358,7 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
     now = at(DAY);
     // Run now while the model is down mid-run: skipped, and the last run stays.
     await store.transaction((tx) =>
-      tx.insertKbItem({
+      kbItems(tx, TEST_KB_WRITES).insertKbItem({
         id: 's1k1',
         boardId,
         status: 'open',
@@ -1387,7 +1387,7 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
     );
     await store.transaction(async (tx) => {
       const first = await kbItems(tx).getKbItem('s1k1');
-      if (first !== null) await tx.insertKbItem({ ...first, id: 's1k2' });
+      if (first !== null) await kbItems(tx, TEST_KB_WRITES).insertKbItem({ ...first, id: 's1k2' });
     });
     llm.answer(new LlmUnavailable('AWS sign-in expired', 'Run aws sso login'));
     const skipped = unwrap(await jobs.runNow(ADMIN, boardId, 'consolidation'));
@@ -1409,7 +1409,7 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
     // Two candidates, so the pair call runs; its answer isn't JSON, which fails the run.
     for (const id of ['s1k1', 's1k2'])
       await store.transaction((tx) =>
-        tx.insertKbItem({
+        kbItems(tx, TEST_KB_WRITES).insertKbItem({
           id,
           boardId,
           status: 'open',
@@ -1472,7 +1472,7 @@ describe('Learning jobs: weekly consolidation after mining, paused while its AI 
     const HOUR = 60 * 60 * 1000;
     for (const id of ['s1k1', 's1k2'])
       await store.transaction((tx) =>
-        tx.insertKbItem({
+        kbItems(tx, TEST_KB_WRITES).insertKbItem({
           id,
           boardId,
           status: 'open',

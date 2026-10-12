@@ -184,10 +184,9 @@ describe('escalation learning service', () => {
     expect(proposed).toHaveLength(1);
     expect(proposed[0]).toMatchObject({ type: 'agent-behaviour', sourceGlobIds: ['s1t1'], status: 'open' });
     expect(proposed[0]?.statement).toContain('unnecessary');
-    // Fronted by its decision glob under the item's own ID, like every new KB item, and published after the commit.
+    // The item is its decision glob (same ID), like every new KB item, published after the commit.
     const itemId = proposed[0]?.id ?? '';
-    expect(proposed[0]?.decisionGlobId).toBe(itemId);
-    expect(await store.transaction((tx) => tx.getGlob(itemId))).toMatchObject({ category: 'decision', status: 'planning', attributes: { kbItemId: itemId, channel: 'mined' } });
+    expect(await store.transaction((tx) => tx.getGlob(itemId))).toMatchObject({ category: 'decision', status: 'planning', attributes: { origin: { kind: 'mined' }, channel: 'mined' } });
     expect(notifier.hints).toContainEqual({ kind: 'glob.changed', boardId, globId: itemId, version: 1 });
     // idempotent: a second pass records and proposes nothing
     expect(await service.learn(boardId, NOW)).toBe(0);

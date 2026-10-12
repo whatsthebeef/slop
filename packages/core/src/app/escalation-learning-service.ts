@@ -16,7 +16,6 @@ import type { KbItem } from '../domain/kb.js';
 import type { Board } from '../domain/types.js';
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
-import { createDecisionForItem } from './decision-glob.js';
 import { newKbItemId } from './knowledge-service.js';
 import type { RiskAreaService } from './risk-area-service.js';
 import { kbItems } from './kb-items.js';
@@ -153,7 +152,8 @@ export class EscalationLearningService {
       evidence: guidanceEvidence(candidate.criterion, records),
       suggestedTarget: 'risk_and_size',
       sourceGlobIds: [candidate.globId],
-      source: 'submitted',
+      // Slop raised it from outcomes, as mining does: a mined proposal.
+      source: 'mined',
       signal: null,
       agentSetVersion: board.agentSetVersion,
       submittedBy: SUBMITTED_BY,
@@ -166,11 +166,10 @@ export class EscalationLearningService {
       ...UNPROCESSED,
       version: 1,
     };
-    const decision = await createDecisionForItem(tx, { clock: this.deps.clock }, item, { email: SUBMITTED_BY, role: 'dev' }, 'mined');
-    if (!decision.ok) throw new Error(decision.error.message);
-    const inserted = await kbItems(tx).insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
+    const hints: Hint[] = [];
+    const inserted = await kbItems(tx, { clock: this.deps.clock, raise: (h) => hints.push(h) }).insertKbItem(item);
     if (!inserted) throw new Error(`KB item ${id} already exists`);
-    return [...decision.value.hints];
+    return hints;
   }
 
   /**

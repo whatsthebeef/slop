@@ -22,12 +22,12 @@ import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from 
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm, LlmRequest } from './intake-service.js';
 import { draftPreview, documentTarget, targetState } from './knowledge-service.js';
-import { syncDecisionFromItem } from './decision-glob.js';
 import type { TargetState } from './knowledge-service.js';
 import { addEvidenceTo, keptApart, longEnoughQuote, normalised, verifiedQuote } from './kb-dedupe.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 import { kbItems } from './kb-items.js';
+import type { KbItems } from './kb-items.js';
 
 /**
  * Failures at one stage (LLM errors or unusable answers) before an item is marked `failed`: the `llm` outbox lane's
@@ -229,6 +229,11 @@ export class KbPipeline {
     },
   ) {}
 
+  /** The KB items in `tx`, writing with the pipeline's clock and collecting the live hints for after the commit. */
+  private kb(tx: Tx, hints: Hint[]): KbItems {
+    return kbItems(tx, { clock: this.deps.clock, raise: (hint) => hints.push(hint) });
+  }
+
   /** One LLM call with a deadline; a timeout rejects with a readable reason, recorded like any other failure. */
   private complete(llm: Llm, request: Omit<LlmRequest, 'signal'>): Promise<string> {
     return completeWithDeadline(llm, request, this.deps.llmTimeoutMs ?? LLM_TIMEOUT_MS);
@@ -326,24 +331,25 @@ export class KbPipeline {
 
   /**
    * A conditional write of the item as the step read it: `changed` when it changed meanwhile (decided, retargeted), and
-   * `skipped` when `next` returns null (nothing to write). With `catalog`, the decision glob in front of the item is
-   * synced with the written item (and its draft's preview) in the same transaction.
+   * `skipped` when `next` returns null (nothing to write). With `catalog`, the draft's preview goes to the assessment.
    */
   private async write(
     item: KbItem,
     next: (current: KbItem, tx: Tx) => KbItem | null | Promise<KbItem | null>,
     catalog?: CatalogAgentSet,
   ): Promise<'written' | 'changed' | 'skipped'> {
-    let hints: readonly Hint[] = [];
+    let hints: Hint[] = [];
     const wrote = await this.deps.store.transaction(async (tx): Promise<'written' | 'changed' | 'skipped'> => {
-      const current = await kbItems(tx).getKbItem(item.id);
+      hints = [];
+      const kb = this.kb(tx, hints);
+      const current = await kb.getKbItem(item.id);
       if (current?.version !== item.version) return 'changed';
       const changed = await next(current, tx);
       if (changed === null) return 'skipped';
       const written: KbItem = { ...changed, version: current.version + 1 };
-      if (!(await kbItems(tx).updateKbItem(written, current.version))) return 'changed';
-      if (catalog !== undefined) hints = await syncDecisionFromItem(tx, this.deps.clock, written, await draftPreview(tx, catalog, written));
-      return 'written';
+      // The decision's assessment is refreshed with the new draft's diff.
+      const preview = catalog === undefined ? null : await draftPreview(tx, catalog, written);
+      return (await kb.updateKbItem(written, current.version, { preview })) ? 'written' : 'changed';
     });
     for (const hint of hints) this.deps.notifier.publish(hint);
     return wrote;
@@ -437,10 +443,12 @@ export class KbPipeline {
    * changed meanwhile, nothing is written and the step runs again at once.
    */
   private async finish(item: KbItem, decide: (tx: Tx) => Promise<{ routing: Routing; dedupe: Dedupe }>): Promise<EffectOutcome> {
-    let hints: readonly Hint[] = [];
+    let hints: Hint[] = [];
     try {
       await this.deps.store.transaction(async (tx) => {
-        const current = await kbItems(tx).getKbItem(item.id);
+        hints = [];
+        const kb = this.kb(tx, hints);
+        const current = await kb.getKbItem(item.id);
         if (current?.version !== item.version) throw new StaleItem(item.id);
         const { routing, dedupe } = await decide(tx);
         let next: KbItem = {
@@ -460,10 +468,10 @@ export class KbPipeline {
           status: 'open' | 'approved',
           adjust?: (merged: KbItem) => KbItem,
         ): Promise<boolean> => {
-          const other = await kbItems(tx).getKbItem(id);
+          const other = await kb.getKbItem(id);
           // An admin separated them (reopening a merge): the item stays open rather than joining it again.
           if (other?.status !== status || keptApart(other, current)) return false;
-          if (!(await addEvidenceTo(tx, other, current, adjust))) throw new StaleItem(id);
+          if (!(await addEvidenceTo(kb, other, current, adjust))) throw new StaleItem(id);
           return true;
         };
         // The verified quotes go on the closed item, so its card shows what it closed on.
@@ -478,16 +486,16 @@ export class KbPipeline {
         // back unchanged on the version read, so a change committed since fails it (and the item is retried), and
         // the row stays locked until this transaction commits.
         const stillRejected = async (id: string): Promise<boolean> => {
-          const other = await kbItems(tx).getKbItem(id);
+          const other = await kb.getKbItem(id);
           if (other?.status !== 'rejected' || keptApart(other, current)) return false;
-          if (!(await kbItems(tx).updateKbItem(other, other.version))) throw new StaleItem(id);
+          if (!(await kb.updateKbItem(other, other.version))) throw new StaleItem(id);
           return true;
         };
         // A short-quote hint on an item is only shown when an admin hasn't kept that item apart from this one, as a
         // closure on it would be refused; a target hint it hid is shown instead.
         const shownHint = async (hint: KbPossibleCoverage | null): Promise<KbPossibleCoverage | null> => {
           if (hint === null || hint.kind !== 'item') return hint;
-          const other = await kbItems(tx).getKbItem(hint.id);
+          const other = await kb.getKbItem(hint.id);
           if (other === null || !keptApart(other, current)) return hint;
           const { kind, name, section } = routing.target;
           return hint.alsoTarget === undefined ? null : { knowledgeKind: kind, name, section, ...hint.alsoTarget };
@@ -498,7 +506,7 @@ export class KbPipeline {
         // target's, so it stays behind.
         const hint = dedupe.possiblyCoveredBy;
         const rejectedHint = hint?.kind === 'item' && hint.claim === 'suppressed' ? hint : null;
-        const hinted = rejectedHint === null ? null : await kbItems(tx).getKbItem(rejectedHint.id);
+        const hinted = rejectedHint === null ? null : await kb.getKbItem(rejectedHint.id);
         const carryHint = (survivor: KbItem): KbItem => {
           if (rejectedHint === null || hinted === null) return survivor;
           if (survivor.possiblyCoveredBy !== null || keptApart(hinted, survivor)) return survivor;
@@ -526,9 +534,7 @@ export class KbPipeline {
           // open for an admin to decide.
           next = { ...next, possiblyCoveredBy: await shownHint(dedupe.possiblyCoveredBy), contradicts: dedupe.contradicts };
         }
-        if (!(await kbItems(tx).updateKbItem(next, current.version))) throw new StaleItem(item.id);
-        // Closed by the pipeline (merged, suppressed, covered), or flagged as contradicting: the decision glob follows.
-        hints = await syncDecisionFromItem(tx, this.deps.clock, next);
+        if (!(await kb.updateKbItem(next, current.version))) throw new StaleItem(item.id);
       });
     } catch (error) {
       // Decided or merged into meanwhile: the rerun re-reads it (and drops the job if it is no longer due).

@@ -26,13 +26,11 @@ export type DecisionScope =
 
 /**
  * Where the decision's proposal came from: a learning an agent submitted or slop mined (the decision *is* that KB item,
- * same ID), an inbox item, an extracted decision, or a person. `kb_item` is the wrapper's link to a separate KB item
- * (until the items move into globs).
+ * same ID), an inbox item, an extracted decision, or a person.
  */
 export type DecisionOrigin =
   | { readonly kind: 'submitted' }
   | { readonly kind: 'mined' }
-  | { readonly kind: 'kb_item'; readonly id: string }
   | { readonly kind: 'inbox'; readonly id: number }
   | { readonly kind: 'extracted'; readonly decisionId: number }
   | { readonly kind: 'manual' };
@@ -86,8 +84,6 @@ export interface DecisionAttributes {
   readonly scope: DecisionScope;
   readonly origin: DecisionOrigin;
   readonly channel: DecisionChannel;
-  /** The wrapper's KB item (until the items move into globs); null for every other decision. */
-  readonly kbItemId: string | null;
   readonly outcome: DecisionOutcome | null;
   /** Broader-scope decision globs this one contradicts. */
   readonly conflictsWith?: readonly string[];
@@ -172,10 +168,6 @@ const validateOrigin = (value: unknown): Result<DecisionOrigin> => {
     case 'submitted':
     case 'mined':
       return ok({ kind: value['kind'] });
-    case 'kb_item': {
-      const id = oneLine(value['id'], 'origin.id');
-      return id.ok ? ok({ kind: 'kb_item', id: id.value }) : id;
-    }
     case 'inbox': {
       const id = value['id'];
       return typeof id === 'number' && Number.isInteger(id) && id > 0 ? ok({ kind: 'inbox', id }) : invalidInput('origin.id must be an inbox item number');
@@ -187,7 +179,7 @@ const validateOrigin = (value: unknown): Result<DecisionOrigin> => {
         : invalidInput('origin.decisionId must be a decision number');
     }
     default:
-      return invalidInput('origin.kind must be submitted, mined, kb_item, inbox, extracted or manual');
+      return invalidInput('origin.kind must be submitted, mined, inbox, extracted or manual');
   }
 };
 
@@ -381,7 +373,7 @@ const KB_KEYS = [
   'possiblyCoveredByText',
   'contradictsText',
 ];
-const DECISION_KEYS = ['scope', 'origin', 'channel', 'kbItemId', 'outcome', 'conflictsWith', 'archived', ...KB_KEYS];
+const DECISION_KEYS = ['scope', 'origin', 'channel', 'outcome', 'conflictsWith', 'archived', ...KB_KEYS];
 
 /** Checks a decision's attributes in full (what services and the backfill write). */
 const validateDecision = (value: unknown): Result<DecisionAttributes> => {
@@ -394,12 +386,6 @@ const validateDecision = (value: unknown): Result<DecisionAttributes> => {
   if (!origin.ok) return origin;
   const channel = DECISION_CHANNELS.find((c) => c === value['channel']);
   if (channel === undefined) return invalidInput(`channel must be one of ${DECISION_CHANNELS.join(', ')}`);
-  let kbItemId: string | null = null;
-  if (value['kbItemId'] !== null && value['kbItemId'] !== undefined) {
-    const id = oneLine(value['kbItemId'], 'kbItemId');
-    if (!id.ok) return id;
-    kbItemId = id.value;
-  }
   const outcome = validateOutcome(value['outcome']);
   if (!outcome.ok) return outcome;
   const conflicts: string[] = [];
@@ -419,7 +405,6 @@ const validateDecision = (value: unknown): Result<DecisionAttributes> => {
     scope: scope.value,
     origin: origin.value,
     channel,
-    kbItemId,
     outcome: outcome.value,
     ...(conflicts.length === 0 ? {} : { conflictsWith: conflicts }),
     ...(value['archived'] === true ? { archived: true as const } : {}),

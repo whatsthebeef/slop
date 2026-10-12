@@ -5,6 +5,7 @@ import type { OutboxState } from '../domain/events.js';
 import { KB_STEP_KIND, kbStepOfKind } from '../domain/kb.js';
 import type { KbItem, KbStep } from '../domain/kb.js';
 import type { Clock, Notifier } from '../ports.js';
+import type { KbWriteContext } from '../app/kb-items.js';
 import type { MemoryOutboxJob, MemoryStore } from './memory-store.js';
 
 /**
@@ -120,7 +121,8 @@ export const seedKbItem = async (store: MemoryStore, item: KbItem): Promise<KbIt
   const cleared = { draft: null, draftedAgainstVersion: null, rationale: null };
   const seeded: KbItem = step === 'route' ? { ...item, ...cleared, target: null } : step === 'draft' ? { ...item, ...cleared } : item;
   await store.transaction(async (tx) => {
-    await tx.insertKbItem(seeded);
+    // The insert queues the item's step (`kbEffectsFor`); a repeat is dropped by the one-pending-job rule.
+    await kbItems(tx, { clock: { now: () => item.createdAt } }).insertKbItem(seeded);
     if (step !== null) await tx.enqueueEffects([{ kind: KB_STEP_KIND[step], globId: item.id }]);
   });
   if (step !== null && (item.processing === 'failed' || item.processingAttempts > 0 || item.processingError !== null)) {
@@ -143,3 +145,6 @@ export const seedKbItem = async (store: MemoryStore, item: KbItem): Promise<KbIt
   if (read === null) throw new Error(`Seeding ${item.id} failed`);
   return read;
 };
+
+/** What tests write KB items with when the time doesn't matter: a fixed clock, no live hints. */
+export const TEST_KB_WRITES: KbWriteContext = { clock: { now: () => '2026-10-05T12:00:00.000Z' } };

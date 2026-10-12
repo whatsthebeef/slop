@@ -400,7 +400,7 @@ export class KbConsolidation {
           staleReason: null,
         };
         const takesSignal = loser.signal !== null && survivor.signal === null;
-        const wrote = await mergeItems(tx, survivor, loser, closed, (m) =>
+        const wrote = await mergeItems(kbItems(tx, { clock: this.deps.clock }), survivor, loser, closed, (m) =>
           takesSignal ? { ...m, signal: loser.signal } : m,
         );
         if (!wrote) throw new MergeConflict(a.id, b.id);
@@ -455,7 +455,7 @@ export class KbConsolidation {
                 staleReason: reason,
                 version: item.version + 1,
               };
-        if (!(await kbItems(tx).updateKbItem(next, item.version))) continue;
+        if (!(await kbItems(tx, { clock: this.deps.clock }).updateKbItem(next, item.version))) continue;
         after[after.length - 1] = next;
         if (reason === null) cleared++;
         else if (item.staleSince === null) flagged++;

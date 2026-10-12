@@ -14,7 +14,6 @@ import type { GlobReportFacts } from './domain/time-tracking.js';
 import type { NewFinding, NewReviewSource, ReviewFinding, ReviewSource } from './domain/findings.js';
 import type { IdLetter } from './domain/ids.js';
 import type { GlobOutcome, IntakeSnapshot } from './domain/intake-learning.js';
-import type { KbItem, KbItemStatus } from './domain/kb.js';
 import type { Artifact, ArtifactKind, ArtifactSummary, KnowledgeDoc, KnowledgeKind } from './domain/knowledge.js';
 import type { ArtifactMeta, BoardJob, BoardJobName, KbSignalState, ManifestChange, MergedCommit } from './domain/signals.js';
 import type { NewSizeCalibrationChange, SizeCalibration, SizeCalibrationChange, SizeRecord } from './domain/size-forecast.js';
@@ -216,19 +215,6 @@ export interface Tx {
   latestArtifacts(globIds: readonly string[], kinds: readonly ArtifactKind[]): Promise<Artifact[]>;
   /** The newest outbox job (any state) per glob and kind, of the given globs and kinds: one read for many globs. */
   latestOutboxJobs(globIds: readonly string[], kinds: readonly EffectKind[]): Promise<OutboxJob[]>;
-
-  /** Inserts a new KB item; returns false if the ID already exists. */
-  insertKbItem(item: KbItem): Promise<boolean>;
-  getKbItem(id: string): Promise<KbItem | null>;
-  /** A board's KB items, oldest first, optionally with one status. */
-  listKbItems(boardId: number, status?: KbItemStatus): Promise<KbItem[]>;
-  /**
-   * A board's newest `limit` KB items with one of `statuses`, newest first by `decidedAt` (else
-   * `createdAt`), and how many there are in all.
-   */
-  listRecentKbItems(boardId: number, statuses: readonly KbItemStatus[], limit: number): Promise<{ items: KbItem[]; total: number }>;
-  /** Writes `item` if the stored version is still `expectedVersion`; returns false otherwise. */
-  updateKbItem(item: KbItem, expectedVersion: number): Promise<boolean>;
 
   getDeploy(id: string): Promise<Deploy | null>;
   /** Writes deploys (insert or replace by ID). */

@@ -1,5 +1,6 @@
 import type { ReviewStage } from './events.js';
-import type { KbMergeNote, KbTarget } from './kb.js';
+import type { EffectCheck } from './effect-check.js';
+import type { KbMergeNote, KbOutcome, KbTarget } from './kb.js';
 
 /**
  * The board's knowledge base: documents (conventions, build commands, architecture, review
@@ -241,18 +242,25 @@ export interface Provenance {
   readonly validation?: string;
   /** Independent reviews only: what was reviewed and how many findings it kept (the card's status reads it). */
   readonly independentReview?: IndependentReviewMeta;
-  /** Drafts only: the target version it was drafted against (0: the target doesn't exist yet) and the target itself. */
+  /** Drafts only: the section it replaces, the target and its version it was drafted against, and the one-line why. */
   readonly draft?: DraftMeta;
+  /** A learning's outcome artifact: what its approval did (or an agent's rejection). */
+  readonly kbOutcome?: KbOutcome;
+  /** A learning's effect-check artifact: whether the approved change worked. */
+  readonly effectCheck?: EffectCheck;
   /** Evidence attachments only: the near-duplicate learning that brought it and that learning's source globs. */
   readonly evidence?: EvidenceMeta;
   /** Merge-note attachments only: the verified quotes the pipeline closed the learning on. */
   readonly mergeNote?: KbMergeNote;
 }
 
-/** What a draft was made against, so a draft whose target moved since is redone. */
+/** A draft's section (null: append, or a new document's body), what it was made against (so a draft whose target moved since is redone), and why. */
 export interface DraftMeta {
-  readonly targetVersion: number;
+  readonly section: string | null;
+  /** The target's version it was drafted against (0: the target didn't exist yet). */
+  readonly targetVersion: number | null;
   readonly target: KbTarget | null;
+  readonly rationale: string | null;
 }
 
 /** Where an evidence attachment came from: a learning folded into this one. */

@@ -1,3 +1,4 @@
+import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 import { kbItems } from '../src/app/kb-items.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
@@ -128,7 +129,6 @@ describe('submit_learning', () => {
       outcome: null,
       ...UNPROCESSED,
       // Its face on the board: the decision glob made with it.
-      decisionGlobId: 's1k1',
       version: 1,
     });
     const open = await store.transaction((tx) => kbItems(tx).listKbItems(boardId, 'open'));
@@ -485,7 +485,7 @@ describe('KB review', () => {
       const item = await store.transaction((tx) => kbItems(tx).getKbItem(id));
       if (item === null) throw new Error('no item');
       await store.transaction((tx) =>
-        tx.updateKbItem({ ...item, status: 'rejected', decidedBy: ADMIN, decidedAt: at, decisionReason: 'No', version: item.version + 1 }, item.version),
+        kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...item, status: 'rejected', decidedBy: ADMIN, decidedAt: at, decisionReason: 'No', version: item.version + 1 }, item.version),
       );
     };
     // The newer submissions are decided first; the oldest one last.
@@ -573,7 +573,7 @@ describe('KB review', () => {
       const id = await submit();
       const open = await item(id);
       await store.transaction((tx) =>
-        tx.updateKbItem(
+        kbItems(tx, TEST_KB_WRITES).updateKbItem(
           {
             ...open,
             processing: 'drafted',

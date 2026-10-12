@@ -12,7 +12,6 @@ import type { ChatMessage, ChatThread } from '../domain/chat.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import { DEFAULT_REVIEW_BOARD_SETTINGS } from '../domain/review-settings.js';
-import type { KbItem } from '../domain/kb.js';
 import { ARTIFACT_KINDS_WITH_CONTENT } from '../domain/signals.js';
 import type { BoardJob, KbSignalState } from '../domain/signals.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
@@ -61,7 +60,6 @@ interface State {
   knowledge: Map<string, KnowledgeDoc>;
   knowledgeHistory: KnowledgeDoc[];
   artifacts: Artifact[];
-  kbItems: Map<string, KbItem>;
   deploys: Map<string, Deploy>;
   reviewSources: ReviewSource[];
   findings: ReviewFinding[];
@@ -153,7 +151,6 @@ const clone = (state: State): State => ({
   knowledge: new Map(state.knowledge),
   knowledgeHistory: [...state.knowledgeHistory],
   artifacts: [...state.artifacts],
-  kbItems: new Map(state.kbItems),
   deploys: new Map(state.deploys),
   reviewSources: [...state.reviewSources],
   findings: [...state.findings],
@@ -210,7 +207,6 @@ export class MemoryStore implements Store {
     knowledge: new Map(),
     knowledgeHistory: [],
     artifacts: [],
-    kbItems: new Map(),
     deploys: new Map(),
     reviewSources: [],
     findings: [],
@@ -618,30 +614,6 @@ export class MemoryStore implements Store {
           });
         }
         return Promise.resolve([...summaries.values()]);
-      },
-      insertKbItem: (item) => {
-        if (s.kbItems.has(item.id)) return Promise.resolve(false);
-        s.kbItems.set(item.id, item);
-        return Promise.resolve(true);
-      },
-      getKbItem: (id) => Promise.resolve(s.kbItems.get(id) ?? null),
-      listKbItems: (boardId, status) =>
-        Promise.resolve(
-          [...s.kbItems.values()].filter((i) => i.boardId === boardId && (status === undefined || i.status === status)),
-        ),
-      listRecentKbItems: (boardId, statuses, limit) => {
-        // Newest by decision, else by submission; later inserts first among equals.
-        const all = [...s.kbItems.values()]
-          .map((item, index) => ({ item, index }))
-          .filter(({ item }) => item.boardId === boardId && statuses.includes(item.status))
-          .sort((a, b) => (b.item.decidedAt ?? b.item.createdAt).localeCompare(a.item.decidedAt ?? a.item.createdAt) || b.index - a.index)
-          .map(({ item }) => item);
-        return Promise.resolve({ items: all.slice(0, limit), total: all.length });
-      },
-      updateKbItem: (item, expectedVersion) => {
-        if (s.kbItems.get(item.id)?.version !== expectedVersion) return Promise.resolve(false);
-        s.kbItems.set(item.id, item);
-        return Promise.resolve(true);
       },
       getDeploy: (id) => Promise.resolve(s.deploys.get(id) ?? null),
       saveDeploys: (deploys) => {

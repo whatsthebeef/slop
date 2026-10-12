@@ -19,7 +19,6 @@ import type {
 } from '../domain/signals.js';
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
 import { newKbItemId } from './knowledge-service.js';
-import { createDecisionForItem } from './decision-glob.js';
 import { kbItems } from './kb-items.js';
 
 export type MiningResult = Extract<BoardJobResult, { kind: 'mining' }>;
@@ -195,7 +194,6 @@ export class MiningService {
       };
     });
     for (const hint of hints) this.deps.notifier.publish(hint);
-    for (const hint of hints) this.deps.notifier.publish(hint);
     if (result.raised.length > 0 || result.refreshed.length > 0) this.deps.notifier.publish({ kind: 'board.kb', boardId });
     return result;
   }
@@ -235,13 +233,10 @@ export class MiningService {
       ...UNPROCESSED,
       version: 1,
     };
-    // Its face on the board: a decision glob, so mined proposals are decided where the board looks.
-    const decision = await createDecisionForItem(tx, { clock: { now: () => now } }, item, { email: MINED_BY, role: 'dev' }, 'mined');
-    if (!decision.ok) throw new Error(decision.error.message);
-    const inserted = await kbItems(tx).insertKbItem({ ...item, decisionGlobId: decision.value.glob.id });
-    // The counter is atomic, so a clash means the counter and the table disagree.
+    // The item is its decision glob, so mined proposals are decided where the board looks.
+    const inserted = await kbItems(tx, { clock: { now: () => now }, raise: (h) => hints.push(h) }).insertKbItem(item);
+    // The counter is atomic, so a clash means the counter and the globs disagree.
     if (!inserted) throw new Error(`KB item ${id} already exists`);
-    hints.push(...decision.value.hints);
     return id;
   }
 
@@ -265,7 +260,7 @@ export class MiningService {
       version: item.version + 1,
     };
     // A conflicting write (the pipeline has it) leaves the refresh to next week.
-    return kbItems(tx).updateKbItem(updated, item.version);
+    return kbItems(tx, { clock: { now: () => now } }).updateKbItem(updated, item.version);
   }
 }
 

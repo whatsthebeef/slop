@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, backfillDecisionGlobs, kbJobHint } from '@slop/core';
+import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -525,16 +525,6 @@ if (runs('catalog')) {
     }
   } catch (error) {
     logError('agent set sync', error instanceof Error ? (error.stack ?? error.message) : String(error));
-  }
-}
-
-// Decision globs for the KB items and extracted decisions that exist already; idempotent, so every start may run it.
-if (runs('kb')) {
-  try {
-    const counts = await backfillDecisionGlobs(store, clock);
-    console.log(`[decisions] backfill over ${String(counts.boards)} board(s): ${String(counts.open)} open, ${String(counts.decided)} decided, ${String(counts.extracted)} extracted created, ${String(counts.skipped)} skipped`);
-  } catch (error) {
-    logError('decision backfill', error instanceof Error ? (error.stack ?? error.message) : String(error));
   }
 }
 

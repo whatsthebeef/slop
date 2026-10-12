@@ -234,8 +234,6 @@ export interface KbItem {
   readonly mergeNote: KbMergeNote | null;
   /** `approved` with a signal: whether the change worked (`EffectCheck`), refreshed daily while watching. */
   readonly effectCheck: EffectCheck | null;
-  /** The decision glob that is this item's face on the board; absent or null before one exists (older items, backfill pending). */
-  readonly decisionGlobId?: string | null;
   /** For conditional writes (approve, reject). */
   readonly version: number;
 }
@@ -486,13 +484,12 @@ export const kbEffectsFor = (before: KbItem | null, after: KbItem): Effect[] => 
 /**
  * The item with its pipeline fields read from the outbox: its next step's newest job says whether it is waiting
  * (`pending` or `routed`, with the attempts spent, the last error or why it waits, and when it runs next) or `failed`.
- * An open item with no step is `drafted`; a decided or closed one keeps the fields it left the pipeline with. `jobs` may
- * hold other items' jobs.
+ * An item with no step (drafted, a document proposal, or no longer open) reads as out of the pipeline: `drafted`, with no
+ * error. `jobs` may hold other items' jobs.
  */
 export const withProcessing = (item: KbItem, jobs: readonly OutboxJob[]): KbItem => {
-  // A decided or closed item has left the pipeline: its fields stay as they were when it left.
-  if (item.status !== 'open') return item;
   const step = kbStepOf(item);
+  // Not open (decided or closed) or drafted: out of the pipeline.
   if (step === null) return { ...item, processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null };
   const kind = KB_STEP_KIND[step];
   const job = jobs.reduce<OutboxJob | null>((newest, j) => (j.globId === item.id && j.kind === kind && (newest === null || j.id > newest.id) ? j : newest), null);
