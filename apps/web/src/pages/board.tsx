@@ -23,6 +23,7 @@ import { withGlob } from '@/lib/glob-list';
 import { usePageContext } from '@/lib/page-context';
 import { deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
+import { useSstorCopy } from '@/components/sstor-notice';
 import { useToast } from '@/toast';
 
 const LIST_TITLES: Record<List, string> = {
@@ -321,6 +322,7 @@ export const BoardPage = () => {
     toast('Something went wrong');
   };
 
+  const copyCommand = useSstorCopy();
   const mutation = useMutation({
     mutationFn: (work: () => Promise<GlobView | null>) => work(),
     onSuccess: (glob) => {
@@ -333,8 +335,13 @@ export const BoardPage = () => {
   const act = async (glob: GlobView, action: Action): Promise<boolean> => {
     const path = ACTION_PATHS[action];
     if (path === null) return false;
+    // Copied before the request: browsers refuse clipboard writes once the click's user gesture has passed.
+    const finish = copyCommand(action, glob.id);
     return mutation.mutateAsync(() => api.action(glob.id, path, glob.version)).then(
-      () => true,
+      async () => {
+        await finish();
+        return true;
+      },
       () => false,
     );
   };

@@ -9,6 +9,7 @@ import type { GlobChanges, GlobView } from '@/lib/api';
 import { withGlob } from '@/lib/glob-list';
 import { globsKey, useLiveBoard } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
+import { useSstorCopy } from '@/components/sstor-notice';
 import { useToast } from '@/toast';
 
 /** How often the glob is read again; the board's live hints refresh the cards, not this page's glob. */
@@ -23,6 +24,7 @@ export const GlobPage = () => {
   const globId = params.globId ?? '';
   const client = useQueryClient();
   const toast = useToast();
+  const copyCommand = useSstorCopy();
   const navigate = useNavigate();
   const [search] = useSearchParams();
   useLiveBoard(boardId);
@@ -79,7 +81,13 @@ export const GlobPage = () => {
       onClose={toBoard}
       onAction={(action: Action, anyway?: boolean) => {
         const path = ACTION_PATHS[action];
-        return path === null ? Promise.resolve(false) : change(() => api.action(open.id, path, open.version, anyway));
+        if (path === null) return Promise.resolve(false);
+        // Copied before the request: browsers refuse clipboard writes once the click's user gesture has passed.
+        const finish = copyCommand(action, open.id);
+        return change(() => api.action(open.id, path, open.version, anyway)).then(async (ok) => {
+          if (ok) await finish();
+          return ok;
+        });
       }}
       onReviewLabel={(label: LabelName, command: LabelCommand) => change(() => api.reviewLabel(open.id, label, command, open.version))}
       onDecide={(input) => change(() => api.decide(open.id, open.version, input))}
