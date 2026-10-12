@@ -11,6 +11,30 @@ const schema = z.object({
   DATABASE_URL: z.string().default('postgres://slop:slop@localhost:5432/slop'),
   /** The public URL of this server, used for OAuth metadata and cookies. */
   PUBLIC_URL: z.string().default('http://localhost:3000'),
+  /**
+   * Other origins (comma-separated https URLs) that also reach this server, e.g. the old CloudFront address while a custom
+   * domain takes over. A client on an alias is served URLs, OAuth metadata and redirects on that alias.
+   */
+  PUBLIC_URL_ALIASES: z
+    .string()
+    .default('')
+    .transform((value, ctx) => {
+      const origins: string[] = [];
+      for (const raw of value.split(',').map((s) => s.trim().replace(/\/$/, '')).filter((s) => s !== '')) {
+        let url: URL | undefined;
+        try {
+          url = new URL(raw);
+        } catch {
+          url = undefined;
+        }
+        if (url === undefined || url.protocol !== 'https:' || url.origin !== raw) {
+          ctx.addIssue({ code: 'custom', message: `PUBLIC_URL_ALIASES entries must be https origins (got ${raw})` });
+          return z.NEVER;
+        }
+        origins.push(raw);
+      }
+      return origins;
+    }),
   /** `dev` signs people in by email with no password; never use it outside a laptop. */
   AUTH_MODE: z.enum(['dev', 'cognito']).default('dev'),
   COGNITO_USER_POOL_ID: z.string().optional(),

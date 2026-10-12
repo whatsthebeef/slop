@@ -38,6 +38,8 @@ export interface McpDeps {
   /** Refuses `mark_ready` for a branch that conflicts with its base. */
   readonly readyGate: ReadyGate;
   readonly publicUrl: string;
+  /** Other origins that reach this server (`PUBLIC_URL_ALIASES`); a client on one is served metadata and redirects on it. */
+  readonly publicUrlAliases?: readonly string[];
   /** Public values filled into agent-set files when served (slop's URL, the Claude Code client ID). */
   readonly agentSetValues: Record<string, string>;
   readonly links: SignedLinks;
@@ -1058,8 +1060,8 @@ export const mountMcp = (app: Hono<Env>, deps: McpDeps) => {
   // Protected-resource discovery: points MCP clients at the authorization server.
   app.get('/.well-known/oauth-protected-resource', (c) =>
     c.json({
-      resource: `${requestOrigin(c, deps.publicUrl)}/mcp`,
-      authorization_servers: [requestOrigin(c, deps.publicUrl)],
+      resource: `${requestOrigin(c, deps.publicUrl, deps.publicUrlAliases)}/mcp`,
+      authorization_servers: [requestOrigin(c, deps.publicUrl, deps.publicUrlAliases)],
       scopes_supported: scopes,
       bearer_methods_supported: ['header'],
     }),
@@ -1085,8 +1087,8 @@ export const mountMcp = (app: Hono<Env>, deps: McpDeps) => {
       token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
       scopes_supported: scopes,
     });
-    app.get('/.well-known/oauth-authorization-server', (c) => c.json(metadata(requestOrigin(c, deps.publicUrl))));
-    app.get('/.well-known/openid-configuration', (c) => c.json(metadata(requestOrigin(c, deps.publicUrl))));
+    app.get('/.well-known/oauth-authorization-server', (c) => c.json(metadata(requestOrigin(c, deps.publicUrl, deps.publicUrlAliases))));
+    app.get('/.well-known/openid-configuration', (c) => c.json(metadata(requestOrigin(c, deps.publicUrl, deps.publicUrlAliases))));
   }
 
   app.all('/mcp', async (c) => {
@@ -1094,10 +1096,10 @@ export const mountMcp = (app: Hono<Env>, deps: McpDeps) => {
     const email = header?.startsWith('Bearer ') === true ? await deps.auth.bearerEmail(header.slice(7)) : null;
     if (email === null) {
       return c.json({ error: 'unauthorized' }, 401, {
-        'WWW-Authenticate': `Bearer resource_metadata="${requestOrigin(c, deps.publicUrl)}/.well-known/oauth-protected-resource"`,
+        'WWW-Authenticate': `Bearer resource_metadata="${requestOrigin(c, deps.publicUrl, deps.publicUrlAliases)}/.well-known/oauth-protected-resource"`,
       });
     }
-    const server = buildServer(deps, email, requestOrigin(c, deps.publicUrl));
+    const server = buildServer(deps, email, requestOrigin(c, deps.publicUrl, deps.publicUrlAliases));
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

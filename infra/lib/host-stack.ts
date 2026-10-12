@@ -10,6 +10,7 @@ import {
   PriceClass,
   ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
+import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { BuildSpec, CfnProject, ComputeType, EventAction, FilterGroup, LinuxArmBuildImage, Project, Source } from 'aws-cdk-lib/aws-codebuild';
 import {
@@ -64,6 +65,12 @@ export interface HostStackProps extends StackProps {
    * `codebuild`); the server starts their builds with the instance role. None: boards can't deploy with CodeBuild.
    */
   readonly deployProjects?: readonly string[];
+  /**
+   * A custom domain for the distribution (`slopmux.example.com`) with an ACM certificate for it in us-east-1. It becomes
+   * the PublicUrl; the `*.cloudfront.net` address keeps working (the server's `PUBLIC_URL_ALIASES`) and is the DNS
+   * target (`CloudFrontUrl`). DNS is managed outside this stack. Without it the stack is unchanged.
+   */
+  readonly customDomain?: { readonly domainName: string; readonly certificateArn: string };
 }
 
 const APP_PORT = 3000;
@@ -193,6 +200,12 @@ export class HostStack extends Stack {
     });
     const distribution = new Distribution(this, 'Distribution', {
       comment: `slop ${stage}`,
+      ...(props.customDomain === undefined
+        ? {}
+        : {
+            domainNames: [props.customDomain.domainName],
+            certificate: Certificate.fromCertificateArn(this, 'DomainCertificate', props.customDomain.certificateArn),
+          }),
       priceClass: PriceClass.PRICE_CLASS_100,
       defaultBehavior: {
         origin,
@@ -217,7 +230,8 @@ export class HostStack extends Stack {
         },
       },
     });
-    const publicUrl = `https://${distribution.distributionDomainName}`;
+    const cloudFrontUrl = `https://${distribution.distributionDomainName}`;
+    const publicUrl = props.customDomain === undefined ? cloudFrontUrl : `https://${props.customDomain.domainName}`;
 
     const [owner, repo] = props.repo.split('/');
     if (owner === undefined || repo === undefined) throw new Error(`repo must be owner/name, not ${props.repo}`);
@@ -276,6 +290,8 @@ export class HostStack extends Stack {
         INSTANCE_ID: { value: instance.instanceId },
         REPOSITORY_URI: { value: repository.repositoryUri },
         PUBLIC_URL: { value: publicUrl },
+        // The old address keeps working while clients move to the custom domain.
+        ...(props.customDomain === undefined ? {} : { PUBLIC_URL_ALIASES: { value: cloudFrontUrl } }),
         BACKUP_BUCKET: { value: backups.bucketName },
       },
       timeout: Duration.minutes(30),
@@ -332,6 +348,7 @@ export class HostStack extends Stack {
 
     new CfnOutput(this, 'BackupBucket', { value: backups.bucketName, description: 'Nightly pg_dump files, kept 30 days' });
     new CfnOutput(this, 'PublicUrl', { value: publicUrl, description: "slop's address (the server's PUBLIC_URL)" });
+    new CfnOutput(this, 'CloudFrontUrl', { value: cloudFrontUrl, description: "The distribution's *.cloudfront.net address (the DNS CNAME target for a custom domain)" });
     new CfnOutput(this, 'InstanceId', { value: instance.instanceId, description: 'Open a shell with aws ssm start-session --target <id>' });
     new CfnOutput(this, 'RepositoryUri', { value: repository.repositoryUri });
     new CfnOutput(this, 'DeployProject', { value: project.projectName, description: 'First deploy: aws codebuild start-build --project-name <name>' });
