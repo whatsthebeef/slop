@@ -6,11 +6,12 @@ import { Link, useOutletContext, useParams, useSearchParams } from 'react-router
 import type { BoardShellContext } from '@/components/board-shell';
 import { PasteIntoInbox } from '@/components/paste-into-inbox';
 import { Button } from '@/components/ui/button';
+import { CreateGlobDialog } from '@/components/create-glob';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Select } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
-import type { GlobView, InboxItemView } from '@/lib/api';
-import { attachableGlobs, pendingCount, processingNote, visibleItems } from '@/lib/inbox';
+import type { BoardView, GlobView, InboxItemView, NewGlob } from '@/lib/api';
+import { attachableGlobs, inboxCreateKey, inboxRequest, pendingCount, processingNote, visibleItems } from '@/lib/inbox';
 import { globsKey, inboxKey, useLiveInbox } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
 import { cn } from '@/lib/utils';
@@ -111,12 +112,14 @@ const AttachDialog = ({
 
 const Card = ({
   boardId,
+  board,
   item,
   globs,
   highlighted,
   onChanged,
 }: {
   boardId: number;
+  board: BoardView | undefined;
   item: InboxItemView;
   globs: readonly GlobView[];
   highlighted: boolean;
@@ -127,6 +130,23 @@ const Card = ({
   // The globs ticked in the attach dialog while it is open.
   const [attaching, setAttaching] = useState<readonly string[] | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // Create glob: the dialog's request text and creation key once the item's text is loaded; `made` is the glob it already made.
+  const [creating, setCreating] = useState<{ request: string; key: string } | null>(null);
+  const [made, setMade] = useState<string | null>(null);
+  const prepare = useMutation({
+    mutationFn: async () => {
+      const [existing, full] = await Promise.all([
+        api.inboxGlob(boardId, item.id),
+        api.inboxItem(boardId, item.id),
+      ]);
+      return { existing: existing.globId, request: inboxRequest(item, full.text ?? '') };
+    },
+    onSuccess: ({ existing, request }) => {
+      if (existing !== null) setMade(existing);
+      else setCreating({ request, key: inboxCreateKey(item.id, false) });
+    },
+    onError: (e) => toast(message(e)),
+  });
   const detail = useQuery({
     queryKey: [...inboxKey(boardId), item.id],
     queryFn: () => api.inboxItem(boardId, item.id),
@@ -243,6 +263,9 @@ const Card = ({
             Attach to…
           </Button>
         )}
+        <Button size="sm" variant="outline" disabled={prepare.isPending} onClick={() => prepare.mutate()}>
+          Create glob
+        </Button>
         {item.status !== 'discarded' && (
           <Button size="sm" variant="outline" disabled={promote.isPending} onClick={() => promote.mutate()}>
             Promote to decision
@@ -287,6 +310,49 @@ const Card = ({
           {detail.isError ? 'Could not load the text.' : (detail.data?.text ?? 'Loading…')}
         </div>
       )}
+      {made !== null && (
+        <p className="flex flex-wrap items-center gap-2 text-xs" data-testid="inbox-already-made">
+          <span>
+            <Link className="underline" to={globLink(boardId, made)}>
+              {made}
+            </Link>{' '}
+            was already made from this item.
+          </span>
+          <Link className="underline" to={globLink(boardId, made)}>
+            Open it
+          </Link>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setMade(null);
+              setCreating({ request: inboxRequest(item, detail.data?.text ?? item.excerpt ?? ''), key: inboxCreateKey(item.id, true) });
+            }}
+          >
+            Create another
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setMade(null)}>
+            Cancel
+          </Button>
+        </p>
+      )}
+      {creating !== null && board !== undefined && (
+        <CreateGlobDialog
+          board={board}
+          groups={[...new Set(globs.flatMap((g) => (g.group === null ? [] : [g.group])))].sort()}
+          open
+          initialRequest={creating.request}
+          fromInbox={{ id: item.id, title: item.title, key: creating.key }}
+          onOpenChange={(o) => !o && setCreating(null)}
+          onCreate={async (input: NewGlob) => {
+            const glob = await api.createGlob(boardId, input).catch((error: unknown) => {
+              throw error instanceof RequestError ? new Error(error.body.message) : error;
+            });
+            toast(`Created ${glob.id} with this item attached`);
+            onChanged();
+          }}
+        />
+      )}
       {attaching !== null && (
         <AttachDialog
           boardId={boardId}
@@ -319,6 +385,7 @@ export const InboxPage = () => {
     refetchInterval: (q) => (pendingCount(q.state.data ?? []) > 0 ? POLL_MS : false),
   });
   const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId) });
+  const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
   const changed = () => {
     void client.invalidateQueries({ queryKey: inboxKey(boardId) });
     void client.invalidateQueries({ queryKey: globsKey(boardId) });
@@ -359,6 +426,7 @@ export const InboxPage = () => {
             <Card
               key={item.id}
               boardId={boardId}
+              board={board.data}
               item={item}
               globs={globs.data ?? []}
               highlighted={item.id === target}

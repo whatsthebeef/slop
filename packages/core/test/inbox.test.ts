@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
 import { DecisionPipeline, EXTRACT_SYSTEM } from '../src/app/decision-pipeline.js';
 import { InboxPipeline } from '../src/app/inbox-pipeline.js';
+import { GlobService } from '../src/app/glob-service.js';
+import type { CreateGlobInput } from '../src/app/glob-service.js';
 import { InboxService, MAX_IMPORT_ITEMS } from '../src/app/inbox-service.js';
 import type { ImportedItem } from '../src/app/inbox-service.js';
 import { LlmBusy, LlmUnavailable } from '../src/app/intake-service.js';
@@ -393,6 +395,97 @@ describe('inbox', () => {
       llm.queue.push(answer());
       await processAll();
       expect((await row(id)).state).toBe('done');
+    });
+  });
+
+  describe('create a glob from an item', () => {
+    let globs: GlobService;
+    let id: number;
+    const create = (patch: Partial<CreateGlobInput> = {}) =>
+      globs.create(DEV, {
+        boardId,
+        title: 'From notes',
+        summary: 'Do it',
+        type: 'same',
+        category: 'task',
+        group: null,
+        environment: null,
+        autoTrigger: false,
+        idempotencyKey: null,
+        ...patch,
+      });
+    beforeEach(async () => {
+      globs = new GlobService({ store, notifier, clock, ids: { runId: () => 'run-1' }, routines: { hasRoutine: () => Promise.resolve(true) } });
+      id = await paste(NOTES, { title: 'Sync standup' });
+    });
+
+    it('creates the glob and attaches the item together', async () => {
+      const glob = unwrap(await create({ inboxItem: id, idempotencyKey: `inbox:${String(id)}` }));
+      const attachments = await store.transaction((tx) => tx.listArtifacts(glob.id, 'attachment'));
+      expect(attachments.map((a) => a.label)).toContain('From the inbox: Sync standup');
+      expect((await row(id)).status).toBe('attached');
+      const links = await store.transaction((tx) => tx.listInboxLinks(boardId));
+      expect(links.map((l) => [l.inboxId, l.globId])).toEqual([[id, glob.id]]);
+      expect(unwrap(await inbox.createdGlob(DEV, boardId, id))).toEqual({ globId: glob.id });
+    });
+
+    it('an archived (imported) item becomes attached too', async () => {
+      const item = await row(id);
+      await store.transaction((tx) => tx.updateInboxItem({ ...item, status: 'archived' }, item.version));
+      unwrap(await create({ inboxItem: id }));
+      expect((await row(id)).status).toBe('attached');
+    });
+
+    it('with the same key a second create returns the same glob and attaches nothing more', async () => {
+      const key = `inbox:${String(id)}`;
+      const first = unwrap(await create({ inboxItem: id, idempotencyKey: key }));
+      const again = unwrap(await create({ inboxItem: id, idempotencyKey: key }));
+      expect(again.id).toBe(first.id);
+      expect(await store.transaction((tx) => tx.listInboxLinks(boardId))).toHaveLength(1);
+      const other = unwrap(await create({ inboxItem: id, idempotencyKey: `inbox:${String(id)}:again` }));
+      expect(other.id).not.toBe(first.id);
+      expect(await store.transaction((tx) => tx.listInboxLinks(boardId))).toHaveLength(2);
+    });
+
+    it('createdGlob is null before any glob was made', async () => {
+      expect(unwrap(await inbox.createdGlob(DEV, boardId, id))).toEqual({ globId: null });
+    });
+
+    it('refuses a discarded item, an unknown one and another board\'s, and creates nothing', async () => {
+      const other = await store.transaction(async (tx) => {
+        const b = await tx.insertBoard({ name: 'other', repo: 'acme/other', baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] });
+        await tx.upsertMember({ boardId: b.id, email: DEV, role: 'dev' });
+        return b.id;
+      });
+      const foreign = unwrap(await inbox.add(DEV, other, { text: 'Elsewhere notes' })).id;
+      unwrap(await inbox.discard(DEV, boardId, id));
+      expect(errorCode(await create({ inboxItem: id }))).toBe('invalid_input');
+      expect(errorCode(await create({ inboxItem: 9999 }))).toBe('not_found');
+      expect(errorCode(await create({ inboxItem: foreign }))).toBe('not_found');
+      expect(await store.transaction((tx) => tx.listGlobs(boardId, { include: 'all' }))).toHaveLength(0);
+    });
+
+    it('creates nothing when the item changes under the create', async () => {
+      const real = store.transaction.bind(store);
+      let raced = false;
+      store.transaction = (async (fn: Parameters<typeof real>[0]) =>
+        real(async (tx) => {
+          const original = tx.updateInboxItem.bind(tx);
+          tx.updateInboxItem = () => {
+            raced = true;
+            return Promise.resolve(false);
+          };
+          try {
+            return await fn(tx);
+          } finally {
+            tx.updateInboxItem = original;
+          }
+        })) as typeof store.transaction;
+      expect(errorCode(await create({ inboxItem: id }))).toBe('invalid_input');
+      store.transaction = real;
+      expect(raced).toBe(true);
+      expect(await store.transaction((tx) => tx.listGlobs(boardId, { include: 'all' }))).toHaveLength(0);
+      expect(await store.transaction((tx) => tx.listInboxLinks(boardId))).toHaveLength(0);
     });
   });
 

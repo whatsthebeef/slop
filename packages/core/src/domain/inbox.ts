@@ -132,6 +132,9 @@ export type ImportSource = (typeof IMPORT_SOURCES)[number];
 export const inboxRef = (id: number): string => `inbox:${String(id)}`;
 
 /** Where the inbox shows one item (the target of an attachment's link and of a citation). */
+/** The creation key of the glob made from an item: a second Create glob on it finds that glob instead of making another. */
+export const inboxCreationKey = (id: number): string => `inbox:${String(id)}`;
+
 export const inboxLink = (boardId: number, id: number): string =>
   `/boards/${String(boardId)}/inbox?item=${String(id)}`;
 

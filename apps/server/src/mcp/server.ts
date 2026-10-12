@@ -127,6 +127,12 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
             "One of the board's environments that allows branch deploys. Without one, intake suggests an environment the request targets (\"deploy to staging\"), and a sub gets the board's default for subs",
           ),
         autoTrigger: z.boolean().optional().describe('Same only: start a routine run straight away'),
+        inboxItem: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("An inbox item of the same board to attach to the new glob in the same step (it becomes `attached` and is in the glob's context from the start). Refused when it is another board's or discarded, and nothing is created"),
         start: z
           .boolean()
           .optional()
@@ -213,6 +219,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         ...(intakeRecord === null ? {} : { intake: intakeRecord }),
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
+        ...(input.inboxItem === undefined ? {} : { inboxItem: input.inboxItem }),
         ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
         ...(input.overlaps === undefined ? {} : { overlaps: input.overlaps }),
         ...(files.length === 0 ? {} : { files }),
