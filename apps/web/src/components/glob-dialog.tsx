@@ -8,6 +8,8 @@ import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
+import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
+import type { PendingAction } from '@/lib/pending-action';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { blockedLine, chainTip, viewStatusLine, waitingFor } from '@/lib/status-line';
 import {
@@ -97,7 +99,17 @@ export const GlobDetail = ({
   const decision = decisionOf(glob) !== null;
   const [draft, setDraft] = useState<GlobChanges>({});
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [running, setBusy] = useState(false);
+  // An action stays pending until the glob has moved (its version changes), not just until the request returns.
+  const [pending, setPending] = useState<PendingAction | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (pending === null) return undefined;
+    const timer = setTimeout(() => setNow(Date.now()), PENDING_TIMEOUT_MS - (Date.now() - pending.at) + 50);
+    return () => clearTimeout(timer);
+  }, [pending]);
+  const pendingNow = isPending(pending, glob.version, Math.max(now, pending?.at ?? 0));
+  const busy = running || pendingNow;
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
   const [failure, setFailure] = useState<EditFailure | null>(null);
   useEffect(() => {
@@ -208,12 +220,16 @@ export const GlobDetail = ({
                           setConfirmingOversized(action);
                           return;
                         }
-                        void run(async () => {
-                          await onAction(action);
-                        });
+                        void startAction(
+                          pending,
+                          running,
+                          { action, version: glob.version, at: Date.now() },
+                          () => onAction(action),
+                          setPending,
+                        );
                       }}
                     >
-                      {actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
+                      {busy && pending?.action === action ? 'Working…' : actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
                     </Button>
                   );
                   const tip = ACTION_TIPS[action];
