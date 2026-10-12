@@ -888,6 +888,6 @@ No open questions block the first build. These are later considerations:
 - [ ] Cowork works with a pre-registered client, if Cowork will be used.
 - [ ] A routine's cloud checkout registers the committed agent set at the start of its session, and the orchestrator's `get_agent_set` refresh writes and commits a newer version.
 - [x] Slop's GitHub App can create a branch with an empty first commit and open a draft PR with labels (verified 2026-10-04 on a sandbox repo, through to an observed merge moving the glob to Reviewing).
-- [ ] Run one test restore of the nightly Postgres backup.
+- [x] Run one test restore of the nightly Postgres backup (verified 2026-10-12). The newest nightly dump (`postgres/2026/10/12/slop-20261012T031716Z.dump`, 17 MB) was restored with `pg_restore --exit-on-error` into a fresh pgvector Postgres 17 container, with no errors. It had all 51 migrations, 4 boards, 321 globs (119 of them decision globs), 864 artifacts and 5,265 events. Its newest glob was updated 4 s before the dump was taken.
 - [ ] Search quality on a sample of real meetings and globs.
 - [x] Bedrock: Haiku 4.5 available in the region and reliable for structured intake output (verified 2026-10-04: valid JSON in 2–4 s, about 500 tokens per intake).
