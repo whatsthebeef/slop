@@ -269,7 +269,7 @@ export const useSessionWrite = () => {
 };
 
 /**
- * The app's top bar, like tmux's sessions: the boards you keep open, numbered by their place (name with its ID, when
+ * The app's top bar, like tmux's sessions: the boards you keep open, numbered by their own stable numbers (name with its ID, when
  * you last viewed it, and your counts: runs in progress, supers, globs waiting on you and on each sign-off review).
  * + adds a board at the end (opening one doesn't); × takes one out and the rest renumber. The current board, if it isn't in the bar,
  * shows after them with an add button. The All boards page, where boards are added, opens from the app settings button.
@@ -348,7 +348,7 @@ export const BoardBar = ({ current }: { current?: number }) => {
       <header className="flex items-stretch gap-3 px-3 pt-4 pb-2.5 sm:px-5">
         <nav className="min-w-0 flex-1" aria-label="Boards">
           <ul className="grid gap-0.5">
-            {sessions.map((b, i) => row(b, 'session', String(i + 1)))}
+            {sessions.map((b) => row(b, 'session', String(b.position)))}
             {loose !== undefined && row(loose, 'loose', '–')}
           </ul>
         </nav>

@@ -1060,26 +1060,11 @@ export class PgStore implements Store {
           .values({ email, boardId, lastViewedAt: new Date(at) })
           .onConflictDoUpdate({ target: [schema.boardSessions.email, schema.boardSessions.boardId], set: { lastViewedAt: new Date(at) } });
       },
-      setBoardSessionOrder: async (email, boardIds) => {
-        if (boardIds.length > 0) {
-          await t
-            .insert(schema.boardSessions)
-            .values(boardIds.map((boardId) => ({ email, boardId })))
-            .onConflictDoNothing();
-        }
-        // Clear first, then set: renumbering in one `position - 1` update can trip the unique index mid-statement.
+      setBoardSessionPosition: async (email, boardId, position) => {
         await t
-          .update(schema.boardSessions)
-          .set({ position: null })
-          .where(and(eq(schema.boardSessions.email, email), sql`${schema.boardSessions.position} is not null`));
-        if (boardIds.length === 0) return;
-        const values = sql.join(
-          boardIds.map((boardId, i) => sql`(${boardId}::integer, ${i + 1}::integer)`),
-          sql`, `,
-        );
-        await t.execute(
-          sql`update ${schema.boardSessions} set position = v.position from (values ${values}) as v(board_id, position) where ${schema.boardSessions.email} = ${email} and ${schema.boardSessions.boardId} = v.board_id`,
-        );
+          .insert(schema.boardSessions)
+          .values({ email, boardId, position })
+          .onConflictDoUpdate({ target: [schema.boardSessions.email, schema.boardSessions.boardId], set: { position } });
       },
 
       getUser: async (email): Promise<User | null> => {

@@ -195,10 +195,11 @@ export interface Tx {
   /** Records when the person last opened the board; leaves its place in the bar alone. Ignored for a non-member. */
   touchBoardSession(email: string, boardId: number, at: string): Promise<void>;
   /**
-   * Writes the person's bar: positions 1..n in the given order, null for the rest of their sessions. Creates the
-   * sessions that don't exist yet (with no view time). Every board must be one the person belongs to.
+   * Gives the person's session on the board this number in the bar, or null to take it out; no other session changes.
+   * Creates the session if it doesn't exist yet (with no view time). The board must be one the person belongs to, and a
+   * number is held by one session at a time.
    */
-  setBoardSessionOrder(email: string, boardIds: readonly number[]): Promise<void>;
+  setBoardSessionPosition(email: string, boardId: number, position: number | null): Promise<void>;
 
   getUser(email: string): Promise<User | null>;
   upsertUser(user: User): Promise<void>;
