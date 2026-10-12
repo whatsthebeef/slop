@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api } from '@/lib/api';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
+import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
 import { artifactKey, globDiffKey } from '@/lib/live';
 import { Tip } from './ui/tip';
 
@@ -332,6 +333,39 @@ export const DecisionAssessment = ({ glob }: { glob: GlobView }) => {
  * What a decision glob shows in place of a work glob's branch, PR and runs: its scope, the proposed change with its diff, the
  * conflict flag, the outcome so far and (for an admin or PO with it in Doing) the five outcomes.
  */
+/** What a learning is: its kind, target and evidence, how the pipeline closed it, and how it relates to other learnings. */
+const LearningFacts = ({ glob, attributes, deciders }: { glob: GlobView; attributes: DecisionAttributes; deciders: boolean }) => {
+  const target = targetText(attributes);
+  const closed = closedText(attributes);
+  const groups = linksByKind(glob.links);
+  const open = (id: string) => `/boards/${String(glob.boardId)}?glob=${encodeURIComponent(id)}`;
+  return (
+    <div className='grid gap-1 text-xs' data-testid='learning-facts'>
+      <p className='text-muted-foreground'>
+        {attributes.kind ?? 'learning'}
+        {target === null ? '' : ` → ${target}`}
+        {attributes.evidenceCount === undefined ? '' : ` · ${String(attributes.evidenceCount)} occurrence(s)`}
+        {attributes.stale?.since != null ? ' · flagged stale' : ''}
+      </p>
+      {closed !== null && <p data-testid='learning-closed'>{closed}{deciders ? '. An admin can reopen it.' : '.'}</p>}
+      {groups.map(({ kind, ids }) => (
+        <p key={kind} data-testid={`learning-links-${kind}`}>
+          {LINK_TEXT[kind]}{' '}
+          {ids.map((id, i) => (
+            <span key={id}>
+              {i > 0 && ', '}
+              <Link className='font-mono underline' to={open(id)}>
+                {id}
+              </Link>
+            </span>
+          ))}
+        </p>
+      ))}
+      {deciders && <p className='text-muted-foreground'>A learning is never deleted: reject it instead, so it suppresses its repeats.</p>}
+    </div>
+  );
+};
+
 export const DecisionSection = ({
   board,
   glob,
@@ -386,6 +420,8 @@ export const DecisionSection = ({
       </div>
 
       {deciders && glob.status !== 'signed_off' && <ScopeEditor glob={glob} attributes={attributes} busy={busy} onUpdate={onUpdate} />}
+
+      {hasItem && <LearningFacts glob={glob} attributes={attributes} deciders={deciders} />}
 
       {outcome !== null && (
         <p className='text-sm' data-testid='decision-outcome'>

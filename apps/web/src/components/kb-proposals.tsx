@@ -885,7 +885,15 @@ const ProposalCard = ({
       data-testid={`proposal-${item.id}`}
     >
       <div className='flex flex-wrap items-center gap-2'>
-        <span className='font-mono text-xs font-semibold'>{item.id}</span>
+        {/* The item is its decision glob: the ID opens it in the glob view. */}
+        <Link
+          className='font-mono text-xs font-semibold underline-offset-2 hover:underline'
+          to={`/boards/${String(item.boardId)}?glob=${encodeURIComponent(item.id)}`}
+          title='Open its decision in the glob view'
+          data-testid='decision-link'
+        >
+          {item.id}
+        </Link>
         <span className='rounded bg-muted px-1.5 text-xs'>{item.type}</span>
         {item.source === 'mined' && (
           <span className='rounded bg-muted px-1.5 text-xs font-medium' title='Raised by slop from its own data' data-testid='mined'>

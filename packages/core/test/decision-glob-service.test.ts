@@ -549,6 +549,30 @@ describe('decision globs', () => {
       expect(await attributesOf(made.globId)).toMatchObject({ archived: true, closedAs: 'merged', outcome: { kind: 'closed', by: 'slop' } });
       expect(await item(made.id)).toMatchObject({ status: 'merged', duplicateOf: other.id });
     });
+
+    it('reopens from the glob view: a closed learning as the Knowledge page does (admins), an accepted decision to choose again', async () => {
+      const made = await submit();
+      const other = await submit({ statement: 'Code in src/gen/ is generated' });
+      await store.transaction(async (tx) => {
+        const current = await kbItems(tx).getKbItem(made.id);
+        if (current === null) throw new Error('missing');
+        const target = { kind: 'doc' as const, name: 'build_test_lint', section: 'Test', newDocument: null };
+        await kbItems(tx, TEST_KB_WRITES).updateKbItem({ ...current, status: 'merged', target, duplicateOf: other.id, version: current.version + 1 }, current.version);
+      });
+      const closed = await glob(made.globId);
+      expect(errorCode(await decisions.reopen(PO, made.globId, closed.version))).toBe('forbidden');
+      expect(errorCode(await decisions.reopen(ADMIN, made.globId, closed.version - 1))).toBe('version_conflict');
+      const reopened = unwrap(await decisions.reopen(ADMIN, made.globId, closed.version));
+      expect(reopened).toMatchObject({ status: 'planning', links: [{ id: other.id, kind: 'kept_apart_from', source: 'explicit' }] });
+      expect(reopened.attributes).not.toHaveProperty('closedAs');
+      expect(await item(made.id)).toMatchObject({ status: 'open', processing: 'routed', keptApartFrom: [other.id] });
+      expect((await item(other.id)).keptApartFrom).toEqual([made.id]);
+
+      const accepted = await drafted();
+      await inDoing(accepted);
+      unwrap(await decide(accepted.globId, { outcome: 'accept' }));
+      expect(unwrap(await decisions.reopen(PO, accepted.globId, (await glob(accepted.globId)).version))).toMatchObject({ status: 'in_progress' });
+    });
   });
 
   describe('scope and conflicts', () => {
@@ -716,7 +740,8 @@ describe('decision globs', () => {
     it('shows a decision glob’s allowed actions and artifacts in its view', async () => {
       const made = await submit();
       const view = unwrap(await globs.get(ADMIN, made.globId));
-      expect(view.allowedActions).toEqual(['pick_up', 'delete']);
+      // A learning is never deleted (it is rejected instead).
+      expect(view.allowedActions).toEqual(['pick_up']);
       expect(view.artifacts.map((a) => a.kind)).toEqual(['plan', 'assessment']);
       expect(unwrap(await globs.get(DEV, made.globId)).allowedActions).toEqual([]);
     });

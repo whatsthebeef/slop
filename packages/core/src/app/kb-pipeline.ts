@@ -307,7 +307,7 @@ export class KbPipeline {
     }
     if (typeof drafted === 'string') throw new Error(drafted.slice(0, 500));
     const { draft, rationale } = drafted;
-    // The decision glob in front of the item gets its assessment refreshed with the new draft's diff.
+    // The decision's assessment is refreshed with the new draft's diff.
     const wrote = await this.write(item, async (current, tx) => {
       const now = await targetState(tx, catalog, item.boardId, target);
       // The target moved during the call: draft again against the new text.

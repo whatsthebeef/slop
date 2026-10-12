@@ -258,6 +258,25 @@ export class DecisionGlobService {
   }
 
   /**
+   * The glob view's Reopen: a learning the KB pipeline closed (merged, suppressed, covered) is reopened as the Knowledge
+   * page reopens it (admins; row D12, back to Planning, a merge kept apart), an accepted decision in Reviewing goes back
+   * to Doing to choose again (row D9). Conditional on the glob's version.
+   */
+  async reopen(email: string, id: string, version: number): Promise<Result<Glob>> {
+    const glob = await this.deps.store.transaction((tx) => tx.getGlob(id));
+    if (glob === null) return notFound(`No glob ${id}`);
+    if (decisionOf(glob)?.closedAs === undefined) return this.deps.globs.reopenDecision(email, id, version);
+    const reopened = await this.deps.knowledge.reopen(email, id, version);
+    if (!reopened.ok) {
+      if (reopened.error.code !== 'version_conflict') return reopened;
+      const current = await this.deps.store.transaction((tx) => tx.getGlob(id));
+      return current === null ? notFound(`No glob ${id}`) : err({ code: 'version_conflict', message: 'The glob has changed', current });
+    }
+    const current = await this.deps.store.transaction((tx) => tx.getGlob(id));
+    return current === null ? notFound(`No glob ${id}`) : ok(current);
+  }
+
+  /**
    * A work glob merged (the `release_waiting` effect): the needs-work decisions that waited on it move to Reviewing. Each is
    * its own version-checked write and a repeat changes nothing. Returns the decisions moved.
    */

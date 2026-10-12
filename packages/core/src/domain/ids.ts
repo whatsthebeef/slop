@@ -1,8 +1,8 @@
 import type { Category } from './types.js';
 
 /**
- * ID letters. `h` (hotfix) is reserved; `k` is used by KB items and the decision globs, which share one sequence per
- * board (a decision glob that fronts a KB item has the item's own ID).
+ * ID letters. `h` (hotfix) is reserved; `k` numbers the decision globs, one sequence per board (a KB item is its
+ * decision glob, under that ID).
  */
 export type IdLetter = 'f' | 't' | 'b' | 'h' | 'k';
 

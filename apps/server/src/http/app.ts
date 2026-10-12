@@ -1,4 +1,4 @@
-import type { BoardService, Glob, GlobService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
+import type { BoardService, DecisionGlobService, Glob, GlobService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
 import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -30,6 +30,8 @@ export interface AppDeps {
   readonly readyGate?: ReadyGate;
   /** Signs the board sign-in `state`. */
   readonly links: SignedLinks;
+  /** Reopens a decision: one the KB pipeline closed through the Knowledge page's reopen; absent: only accepted ones (row D9). */
+  readonly decisions?: Pick<DecisionGlobService, 'reopen'>;
   /** Runs after a board is created (forks the catalog's agent set into it). */
   readonly onBoardCreated: (email: string, boardId: number) => Promise<void>;
   /** How long the board's event stream may sit idle before it sends a `ping` event (default 25 s; CloudFront's origin read timeout is 60 s). */
@@ -532,7 +534,7 @@ export const createApp = (deps: AppDeps) => {
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),
     // Decision globs (the outcome has its own route: POST /api/globs/:id/decision).
     'sign-off': (email: string, id: string, b: ActionBody) => globs.signOffDecision(email, id, b.version),
-    reopen: (email: string, id: string, b: ActionBody) => globs.reopenDecision(email, id, b.version),
+    reopen: (email: string, id: string, b: ActionBody) => (deps.decisions ?? { reopen: (e: string, i: string, v: number) => globs.reopenDecision(e, i, v) }).reopen(email, id, b.version),
     'pick-up': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, false, b.environment),
     'take-over': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, true, b.environment),
     'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),

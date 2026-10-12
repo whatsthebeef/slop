@@ -2368,7 +2368,12 @@ const decisionActions = (glob: Glob, actor: Actor): Action[] => {
       if (outcome === null || outcome.kind === 'needs_work') actions.push('decide');
     }
     if (glob.status === 'reviewing') actions.push('sign_off', 'reopen');
-    actions.push('delete');
+    const attributes = glob.attributes !== undefined && isDecisionAttributes(glob.attributes) ? glob.attributes : null;
+    // A learning the KB pipeline closed: admins reopen it (row D12).
+    if (glob.status === 'signed_off' && attributes?.closedAs !== undefined && actor.role === 'admin') actions.push('reopen');
+    // A learning an agent submitted or slop mined is never deleted: it is rejected instead.
+    const learning = attributes?.origin.kind === 'submitted' || attributes?.origin.kind === 'mined';
+    if (!learning) actions.push('delete');
   }
   return actions;
 };

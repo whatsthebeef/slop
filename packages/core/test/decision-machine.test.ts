@@ -321,14 +321,26 @@ describe('changing a decision', () => {
 describe('allowed actions', () => {
   it('offers only pick up, decide, sign off, reopen and delete, by role and status', () => {
     const actions = (g: Glob, actor: Actor) => machine.allowedActions(g, actor);
-    expect(actions(decision(), admin)).toEqual(['pick_up', 'delete']);
-    expect(actions(decision(), dev)).toEqual([]);
-    expect(actions(decision({ status: 'in_progress', implementer: admin.email }), admin)).toEqual(['decide', 'delete']);
-    expect(actions(decision({ status: 'in_progress', implementer: admin.email }), po)).toEqual(['pick_up', 'decide', 'delete']);
-    expect(actions(decision({ status: 'reviewing' }), po)).toEqual(['sign_off', 'reopen', 'delete']);
-    expect(actions(decision({ status: 'signed_off' }), admin)).toEqual(['delete']);
+    // A person's decision (here, a manual one).
+    const manual = (patch: Partial<Glob> = {}) => decision({ attributes: attributes({ origin: { kind: 'manual' }, channel: 'human' }), ...patch });
+    expect(actions(manual(), admin)).toEqual(['pick_up', 'delete']);
+    expect(actions(manual(), dev)).toEqual([]);
+    expect(actions(manual({ status: 'in_progress', implementer: admin.email }), admin)).toEqual(['decide', 'delete']);
+    expect(actions(manual({ status: 'in_progress', implementer: admin.email }), po)).toEqual(['pick_up', 'decide', 'delete']);
+    expect(actions(manual({ status: 'reviewing' }), po)).toEqual(['sign_off', 'reopen', 'delete']);
+    expect(actions(manual({ status: 'signed_off' }), admin)).toEqual(['delete']);
     const waiting = decision({ status: 'in_progress', implementer: admin.email, attributes: attributes({ outcome: { kind: 'needs_work', by: 'a', at: NOW, linkedGlobId: 's1t2' } }) });
     expect(actions(waiting, admin)).toContain('decide');
+  });
+
+  it('never offers to delete a learning, and offers admins Reopen on one the pipeline closed', () => {
+    const actions = (g: Glob, actor: Actor) => machine.allowedActions(g, actor);
+    expect(actions(decision(), admin)).toEqual(['pick_up']);
+    expect(actions(decision({ status: 'reviewing' }), po)).toEqual(['sign_off', 'reopen']);
+    const closed = unwrap(machine.closeDecision(decision(), 'covered', null, ctx(null))).glob;
+    expect(actions(closed, admin)).toEqual(['reopen']);
+    expect(actions(closed, po)).toEqual([]);
+    expect(actions(decision({ status: 'signed_off' }), admin)).toEqual([]);
   });
 
   it('leaves work globs unchanged', () => {

@@ -84,6 +84,7 @@ describe('decision globs', () => {
       hub,
       outbox: new OutboxRunner(database.db, { globs }, {}, () => undefined),
       onBoardCreated: () => Promise.resolve(),
+      decisions: decisionGlobs,
     });
     mountDecisionGlobs(app, { decisions: decisionGlobs, globs });
     mountInbox(app, { inbox, decisionGlobs });
@@ -260,6 +261,28 @@ describe('decision globs', () => {
       expect((await decide(work.id, { outcome: 'reject', reason: 'x' })).status).toBe(422);
       const start = await call(ADMIN, 'POST', `/api/globs/${globId}/actions/start`, { version: 1 });
       expect(start.status).toBe(409);
+    });
+  });
+
+  describe('a learning the pipeline closed', () => {
+    it('is reopened by an admin from the glob view (back to Planning), and never deleted', async () => {
+      const { globId, id } = await submit('Close me', 'gotcha');
+      const { id: other } = await submit('The survivor', 'gotcha');
+      await store.transaction(async (tx) => {
+        const current = await kbItems(tx).getKbItem(id);
+        if (current === null) throw new Error('missing');
+        const target = { kind: 'doc' as const, name: 'build', section: null, newDocument: null };
+        await kbItems(tx, { clock: { now: () => new Date().toISOString() } }).updateKbItem({ ...current, status: 'merged', target, duplicateOf: other, version: current.version + 1 }, current.version);
+      });
+      const closed = await json<View>(await call(ADMIN, 'GET', `/api/globs/${globId}`));
+      expect(closed).toMatchObject({ status: 'signed_off', attributes: { closedAs: 'merged' }, links: [{ id: other, kind: 'duplicate_of' }] });
+      expect(closed.allowedActions).toEqual(['reopen']);
+      expect((await call(ADMIN, 'DELETE', `/api/globs/${globId}`, { version: closed.version })).status).toBe(422);
+      expect((await call(PO, 'POST', `/api/globs/${globId}/actions/reopen`, { version: closed.version })).status).toBe(403);
+      const reopened = await call(ADMIN, 'POST', `/api/globs/${globId}/actions/reopen`, { version: closed.version });
+      expect(reopened.status).toBe(200);
+      expect(await json<View>(reopened)).toMatchObject({ status: 'planning', links: [{ id: other, kind: 'kept_apart_from', source: 'explicit' }] });
+      expect(await store.transaction((tx) => kbItems(tx).getKbItem(id))).toMatchObject({ status: 'open', keptApartFrom: [other] });
     });
   });
 

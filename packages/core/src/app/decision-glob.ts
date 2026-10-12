@@ -49,12 +49,9 @@ export interface NewDecisionGlob {
   /** plan.md v1: the proposal text (statement and evidence, Markdown). */
   readonly payload: string;
   readonly attributes: DecisionAttributes;
-  /**
-   * The glob's ID when it fronts a KB item: the item's own `k` ID (items and decision globs share the board's `k`
-   * sequence). Left out, the glob takes the next `k` number.
-   */
+  /** An explicit `k` ID on the board (checked); left out, the glob takes the next `k` number. */
   readonly id?: string;
-  /** Makes creation idempotent: `kb:<item>`, `inbox:<id>`, `decision:<id>`. */
+  /** Makes creation idempotent: `inbox:<id>`, `decision:<id>` (a KB item's glob has `kb:<id>`, see `kbItems`). */
   readonly creationKey: string;
   readonly group?: string | null;
   /** Backdates the glob's creation (the backfill keeps the original date). */
