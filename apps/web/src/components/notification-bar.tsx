@@ -67,22 +67,22 @@ const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: numbe
   return (
     <div
       role={item.severity === 'critical' ? 'alert' : 'status'}
-      className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 px-4 not-first:border-t not-first:border-edge', STYLE[item.severity], flash && 'notification-flash')}
+      className={cn('flex items-center gap-x-3 gap-y-1 px-4 not-first:border-t not-first:border-edge', item.source !== 'main-red' && 'flex-wrap', STYLE[item.severity], flash && 'notification-flash')}
       data-testid={`notification-${item.source}`}
       data-severity={item.severity}
     >
-      <span className={cn(item.source === 'main-red' && 'min-w-0 max-w-full truncate whitespace-nowrap text-left')} title={item.source === 'main-red' ? `${item.title}\n${item.detail}` : undefined}>
+      <span className={cn(item.source === 'main-red' ? 'min-w-0 flex-1 truncate whitespace-nowrap text-left' : undefined)} title={item.source === 'main-red' ? `${item.title}\n${item.detail}` : undefined}>
         {item.title}
       </span>
       {item.source !== 'main-red' && <span className={cn('font-normal', item.severity === 'critical' && 'text-sm')}>{item.detail}</span>}
       {action?.kind === 'aws-sign-in' && <AwsSignInAction />}
       {action !== null && action.kind !== 'aws-sign-in' && (
-        <a className='text-sm font-normal underline' href={action.href} {...linkTarget(action.href)} rel='noreferrer'>
+        <a className='shrink-0 text-sm font-normal underline' href={action.href} {...linkTarget(action.href)} rel='noreferrer'>
           {action.label}
         </a>
       )}
       {canDismiss(item) && (
-        <button type='button' className='ml-auto text-sm font-normal underline' disabled={dismiss.isPending} onClick={() => dismiss.mutate()}>
+        <button type='button' className='ml-auto shrink-0 text-sm font-normal underline' disabled={dismiss.isPending} onClick={() => dismiss.mutate()}>
           Dismiss
         </button>
       )}
