@@ -38,6 +38,11 @@ export interface MoveOptions {
   /** Who is looking: without one every due step is `human`, never `you`. */
   readonly viewer?: HumanStepViewer;
   readonly thresholds?: StallThresholds;
+  /**
+   * Whether `machineSteps` holds every fact (effects, deploys, uploads). When `false`, a glob nobody seems to be on is `idle`
+   * ("not enough facts"), not stalled: its activity may be in the facts that are missing. Failed steps and quiet runs still stall.
+   */
+  readonly complete?: boolean;
 }
 
 /** Two states a person is the one to move in, whatever steps say: sign-off labels asked for, an escalation. */
@@ -140,10 +145,12 @@ export const whoseMove = (
     return stalled(slow.state === 'queued' ? 'queued' : 'quiet', quietReason(slow, minutes), slow.lastProgressAt ?? slow.startedAt, minutes);
   }
   if (glob.implementer !== null && (glob.status === 'implementing' || glob.status === 'in_progress')) {
+    if (options.complete === false) return { holder: 'idle', reason: 'Not enough facts to say', since: null };
     const minutes = Math.max(0, Math.floor((Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000));
     if (minutes < thresholds.pickedUp) return { holder: 'human', reason: 'Picked up', since: glob.updatedAt, who: glob.implementer };
     return stalled('nobody', `picked up ${String(minutes)} min ago, no session`, glob.updatedAt, minutes);
   }
+  if (options.complete === false) return { holder: 'idle', reason: 'Not enough facts to say', since: null };
   return stalled('nobody', 'nobody is on this', glob.updatedAt);
 };
 
