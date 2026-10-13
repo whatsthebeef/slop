@@ -253,12 +253,13 @@ export const GlobDetail = ({
   // Starting a flagged glob asks first: it is likely more than one PR's worth of work.
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   useEffect(() => setConfirmingOversized(null), [glob.id]);
-  // Decide has its own panel with the five outcomes.
   // deescalate and make_super are reached through the type popover.
-  const allActions = (glob.allowedActions ?? []).filter(
-    (a) => a !== 'delete' && a !== 'decide' && actionPresentation(a, glob).placement !== 'none',
+  const shownActions = (glob.allowedActions ?? []).filter(
+    (a) => a !== 'delete' && actionPresentation(a, glob).placement !== 'none',
   );
-  const main = mainAction(allActions, glob, decision);
+  // Decide has its own panel with the five outcomes: it can be the main button (which goes to the panel), never a More entry.
+  const allActions = shownActions.filter((a) => a !== 'decide');
+  const main = mainAction(shownActions, glob, decision);
   const actions = orderActions(allActions, main);
   const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
@@ -325,6 +326,12 @@ export const GlobDetail = ({
   };
 
   const begin = (action: Action) => {
+    if (action === 'decide') {
+      const panel = findSection(document, 'decision');
+      panel?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      panel?.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+      return;
+    }
     if (action === 'mark_ready') {
       if (reviewedAtHead) void markReady();
       else setConfirmingReady(true);
