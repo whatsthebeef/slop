@@ -287,6 +287,15 @@ describe('card interaction', () => {
     return { ...props, onAct };
   };
 
+  it('filters to the group when its tag is clicked, without opening the card', async () => {
+    const user = userEvent.setup();
+    const onFilterGroup = vi.fn();
+    const { onOpen } = renderCard(view({ group: 'glob-groups' }), { onFilterGroup });
+    await user.click(screen.getByTestId('group-chip'));
+    expect(onFilterGroup).toHaveBeenCalledWith('glob-groups');
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
   it('has no title edit affordance: the title is plain wrapping text and clicking it opens the glob', async () => {
     const user = userEvent.setup();
     const { onOpen } = renderCard(view());

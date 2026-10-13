@@ -130,7 +130,7 @@ export const GlobChips = ({
         <TypeChip ctx={ctx} state={actions} />
       )}
       <EscalationChip ctx={ctx} />
-      {glob.group !== null && <GroupChip name={glob.group} />}
+      {glob.group !== null && <GroupChip name={glob.group} to={`/boards/${String(glob.boardId)}?group=${encodeURIComponent(glob.group)}`} />}
       {!decision && <LabelChips glob={glob} />}
       <span className="ml-auto text-xs text-muted-foreground">
         {!decision && (
