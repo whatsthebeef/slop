@@ -12,7 +12,7 @@ With slop, sstor is used exclusively with slop and becomes a thinner workspace t
 - **Changed:** instances are named after glob IDs and check out the branch slop created; `sstor init <board>` replaces copying `.claude/` from the sessionator repo; merging goes through PRs instead of local merges into master.
 - **Moved to slop:** the agent definitions, the `/run-task` command, reference docs and learnings. Jira is removed entirely; slop is the board.
 
-Sessionator stays one replaceable implementation tool. This document is authoritative for sstor's local command behaviour; the slop spec is authoritative for lifecycle, contracts and rules. Wherever this document says master, it means the board's base branch (e.g. master or main), read from the board's settings. Routines run the same board agent set in the cloud from the copy committed in the repo; their orchestrator refreshes it from slop at the start of each run.
+Sessionator stays one replaceable implementation tool. This document is authoritative for sstor's local command behaviour; the slop spec is authoritative for lifecycle, contracts and rules. Wherever this document says master, it means the board's base branch (e.g. master or main), read from the board's settings. Routines run the same board agent set in the cloud from the copy committed in the repo; when slop's set is newer, the orchestrator only notes both versions, and slop commits the newer set itself through an "Agent set vN" glob.
 
 ## Commands
 
@@ -41,6 +41,8 @@ The tmux and worktree machinery is preserved as-is; only naming, the agent setup
 
 `sstor init <board>` keeps today's `merge_claude_config` logic but changes its source: instead of copying `$SSTOR_DIR/.claude/`, it fetches the board's agent set from slop with `get_agent_set`, using sstor's own sign-in (see sstor's slop sign-in). On a first install it also writes the slop server entry into `.mcp.json` from sstor's own configuration (slop's URL and the Claude Code client ID), so Claude Code can authenticate. The board ID comes from an argument, an environment variable, or `.sstor/sstor.conf` (`SLOP_BOARD`, replacing `JIRA_CLOUD_ID` and `JIRA_PROJECT_KEY`).
 
+With `--committed` (`slop init --committed`, which sstor passes when it launches a glob) a checkout whose `.claude/slop-agent-set.json` is tracked by git keeps its committed agent set: no managed file, settings, CLAUDE.md section or manifest is written, only `.sstor/local-run.json`, and one line names the committed and the board's version. Without a tracked manifest it installs as plain `init` does.
+
 | Step today | With slop |
 | --- | --- |
 | rsync agents, commands and memory from the sessionator repo | Write the board's agents, commands and hooks into `.claude/` |
@@ -53,9 +55,9 @@ The tmux and worktree machinery is preserved as-is; only naming, the agent setup
 
 The merge scripts already use only Bash, rsync and Python, so `sstor init` runs the same way in any checkout. Board knowledge other than the agent set is not written to disk; agents fetch it through the MCP at run time.
 
-**When it runs:** on every sstor command that launches or relaunches Claude (`--glob`, `--new`, `--sync`, and attaching to a session whose Claude has exited), always before the launch, so new agents and commands register. `--ready` and `--derge` do not restart Claude. Routines don't run it: they use the committed copy, and their orchestrator writes and commits a newer version from `get_agent_set` when there is one.
+**When it runs:** on every sstor command that launches or relaunches Claude (`--glob`, `--new`, `--sync`, and attaching to a session whose Claude has exited), always before the launch, so new agents and commands register. `--ready` and `--derge` do not restart Claude. Routines don't run it: they use the committed copy, and their orchestrator writes nothing when `get_agent_set` is newer (it records both versions); the newer set reaches the repo through the "Agent set vN" glob slop opens and commits.
 
-**Committed agent set:** files written during a session's start only register in the next session, so the agent set is committed in the project repo. Cloud checkouts register it at startup; `sstor init` overwrites it with the current version, and changes show up as small diffs in whichever glob commit picks them up. The project's `.gitignore` tracks `.claude/agents/`, `.claude/commands/`, `.claude/hooks/` and `.claude/settings.json`, and ignores `.claude/settings.local.json` and `.reviews/`.
+**Committed agent set:** files written during a session's start only register in the next session, so the agent set is committed in the project repo. Cloud checkouts register it at startup; `sstor init` overwrites it with the current version, and a new version reaches the repo through the "Agent set vN" glob slop commits. The project's `.gitignore` tracks `.claude/agents/`, `.claude/commands/`, `.claude/hooks/` and `.claude/settings.json`, and ignores `.claude/settings.local.json` and `.reviews/`.
 
 **Safe refresh:** a manifest lists every file sstor manages; only those are replaced or removed, so obsolete managed files are deleted and local files are never touched. The new agent set is written to a temporary folder and swapped in only when complete. On a first run with no committed copy, `sstor init` fails loudly instead of continuing without agents. The first run on an existing checkout also removes the legacy files listed in slop's `catalog/agents/README.md`.
 

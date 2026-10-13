@@ -400,8 +400,8 @@ follow() {
     dirty="$(git -C "$root" status --porcelain --untracked-files=no)"
     if [[ -n "$dirty" ]]; then
       if ! grep -qvE '^.. (\.claude/|CLAUDE\.md$)' <<<"$dirty"; then
-        hold "the main checkout has uncommitted agent-set files (.claude/, CLAUDE.md), likely from a Claude session's agent-set refresh" \
-          "git -C $root checkout -- .claude CLAUDE.md to discard them; follow carries on by itself"
+        hold "the main checkout has uncommitted changes under .claude/ or CLAUDE.md (nothing writes them by itself: a person or sstor init did)" \
+          "Commit them on a branch, or git -C $root checkout -- .claude CLAUDE.md to discard them; follow carries on by itself"
       else
         hold "the main checkout has uncommitted changes" "Commit or discard them in $root; follow carries on by itself"
       fi

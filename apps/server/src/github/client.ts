@@ -4,7 +4,7 @@ import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
 import { REVIEW_CHECK } from '../codehost.js';
-import type { AppSettings, BehindBase, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
+import type { AppSettings, BehindBase, BranchFile, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -441,6 +441,32 @@ export class GitHub implements CodeHost, CommitGraph {
       throw error;
     }
     return 'reverted';
+  }
+
+  async commitToBranch(
+    repo: Repo,
+    branch: string,
+    files: readonly BranchFile[],
+    deletions: readonly string[],
+    message: string,
+  ): Promise<{ sha: string; changed: boolean }> {
+    const gh = await this.octokit(repo);
+    const r = { owner: repo.owner, repo: repo.name };
+    const { data: ref } = await gh.request('GET /repos/{owner}/{repo}/git/ref/{ref}', { ...r, ref: `heads/${branch}` });
+    const { data: head } = await gh.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', { ...r, commit_sha: ref.object.sha });
+    const blobs = await Promise.all(
+      files.map(async (file) => {
+        const { data } = await gh.request('POST /repos/{owner}/{repo}/git/blobs', { ...r, content: file.content, encoding: 'utf-8' });
+        return { path: file.path, mode: file.executable === true ? ('100755' as const) : ('100644' as const), type: 'blob' as const, sha: data.sha };
+      }),
+    );
+    // `sha: null` removes a path (one the head doesn't have is ignored by the host).
+    const removed = deletions.map((path) => ({ path, mode: '100644' as const, type: 'blob' as const, sha: null }));
+    const { data: tree } = await gh.request('POST /repos/{owner}/{repo}/git/trees', { ...r, base_tree: head.tree.sha, tree: [...blobs, ...removed] });
+    if (tree.sha === head.tree.sha) return { sha: head.sha, changed: false };
+    const { data: made } = await gh.request('POST /repos/{owner}/{repo}/git/commits', { ...r, message, tree: tree.sha, parents: [head.sha] });
+    await gh.request('PATCH /repos/{owner}/{repo}/git/refs/{ref}', { ...r, ref: `heads/${branch}`, sha: made.sha, force: false });
+    return { sha: made.sha, changed: true };
   }
 
   async markReady(repo: Repo, prNumber: number): Promise<{ wasDraft: boolean; sha: string }> {

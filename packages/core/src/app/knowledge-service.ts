@@ -2,7 +2,7 @@ import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js'
 import type { Result } from '../domain/errors.js';
 import { formatId } from '../domain/ids.js';
 import { composeAgentSet, contextDiff, overlayProblem } from '../domain/agent-set.js';
-import { knowledgePageEffect } from '../domain/events.js';
+import { agentSetCommitEffect, knowledgePageEffect } from '../domain/events.js';
 import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../domain/agent-set.js';
 import { byEvidence, isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE } from '../domain/kb.js';
 import type {
@@ -1573,7 +1573,7 @@ export class KnowledgeService {
         const next: Board = { ...board, agentSetVersion: board.agentSetVersion + 1, version: board.version + 1, agentCatalogHash: hash };
         if (!(await tx.updateBoard(next, board.version))) return { kind: 'conflict' as const };
         // A new agent-set version is a change on the knowledge page.
-        await tx.enqueueEffects([knowledgePageEffect(boardId)]);
+        await tx.enqueueEffects([knowledgePageEffect(boardId), agentSetCommitEffect(boardId)]);
         return { kind: 'bumped' as const, version: next.agentSetVersion };
       });
       if (outcome.kind === 'missing') return null;
@@ -1651,7 +1651,7 @@ export class KnowledgeService {
     if (agentSetChanged) {
       const next: Board = { ...board, agentSetVersion: board.agentSetVersion + 1, version: board.version + 1 };
       if (!(await tx.updateBoard(next, board.version))) throw new BoardChanged(boardId);
-      await tx.enqueueEffects([knowledgePageEffect(boardId)]);
+      await tx.enqueueEffects([knowledgePageEffect(boardId), agentSetCommitEffect(boardId)]);
       // The board row itself changed (its agent-set version).
       this.hint(tx, { kind: 'board.changed', boardId });
     }

@@ -46,6 +46,8 @@ const NOT_GENERATION_CHECKED: readonly EffectKind[] = [
   'suggest_decision',
   // Board-wide like the others above; the executor re-reads the board.
   'regenerate_knowledge_page',
+  // Board-wide; the executor re-reads the board and its open agent-set glob.
+  'commit_agent_set',
 ];
 
 /**
