@@ -1,7 +1,7 @@
 import type { Action } from '@slop/core';
 import { copyOrSelect } from '@/lib/plan-text';
 
-/** The sstor command that starts the person's own session after Pick up or Take over; null for any other action. */
+/** The sstor command that starts the person's own session after Pick up; null for any other action. */
 export const sstorCommand = (action: Action, globId: string): string | null => {
   if (action === 'pick_up') return `sstor --glob ${globId}`;
   if (action === 'take_over') return `sstor --glob ${globId} --take-over`;

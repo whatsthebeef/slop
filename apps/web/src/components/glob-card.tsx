@@ -1,7 +1,8 @@
 import { decisionOf, findingsLabel, reviewOutdated, scopeLabel } from '@slop/core';
 import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
-import { Bot, Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
+import { Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
@@ -98,7 +99,7 @@ export const ActivityLabel = ({ glob }: { glob: GlobView }) => {
         data-testid='activity-label'
         data-kind={activity.kind}
       >
-        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <Bot className='h-3 w-3' />}
+        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <ActorIcon actor={activity.icon ?? 'machine'} className='h-3 w-3' decorative />}
         {activity.text}
       </span>
     </Tip>
@@ -543,8 +544,11 @@ export const GlobCard = ({
         <OversizedChip glob={glob} />
         {glob.escalation != null && (
           <Tip text={`Needs a human: ${glob.escalation.reason}`}>
-            <span className='font-mono text-[11px] text-required' data-testid='escalation-chip'>
-              needs a human
+            <span className='inline-flex items-center gap-1 font-mono text-[11px] text-required' data-testid='escalation-chip'>
+              <span className='sr-only'>Needs a human: {glob.escalation.reason}</span>
+              <span aria-hidden className='inline-flex items-center gap-1'>
+                needs a <HumanIcon className='h-3 w-3' decorative />
+              </span>
             </span>
           </Tip>
         )}

@@ -6,12 +6,13 @@ import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
-import { ACTION_LABELS } from '@/lib/api';
+import { actionPresentation } from '@/lib/action-presentation';
+import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
 import type { PendingAction } from '@/lib/pending-action';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
-import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
+import { startAgainConfirmation } from '@/lib/start-again';
 import { blockedLine, chainTip, viewStatusLine, waitingFor } from '@/lib/status-line';
 import {
   categoryOptions,
@@ -57,16 +58,6 @@ const DECISION_STATUS_TEXT: Partial<Record<GlobView['status'], string>> = {
 
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
 
-const ACTION_TIPS: Partial<Record<Action, string>> = {
-  investigate: 'Starts a routine run that investigates the plan (no branch, no commits) and attaches the result; starting later reuses it when the plan and files are unchanged',
-  review_now: 'An independent AI reviewer reads the change as it would land on main and posts its findings on the glob and the PR. It never blocks merging.',
-  start_anyway: 'Starts now, before what it waits for has merged; its branch will lack those changes',
-  merge_continue: "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
-  mark_ready: 'Takes the PR out of draft: the work is done. A sub then merges by itself once its checks pass; a same or super waits for you to merge. Refused while the branch conflicts with main.',
-  retry_autofix: 'Starts a new routine run that watches this PR and fixes its failed checks on the same branch',
-  resolve_conflict: 'Asks the Claude GitHub App, in a PR comment, to merge the base branch into this branch and resolve the conflicts',
-};
-
 /** The glob view: a page in the board's main area (never a modal), with a back arrow to the board. */
 export const GlobDetail = ({
   board,
@@ -90,7 +81,7 @@ export const GlobDetail = ({
   /** Loads the glob's latest values into the view (after a version conflict). */
   onReload: () => Promise<void>;
   /** Resolves false when the action failed. */
-  /** `anyway` goes ahead of unmerged prerequisites (Retrigger). */
+  /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
   /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
@@ -173,12 +164,12 @@ export const GlobDetail = ({
   const tiers = actionTiers(allActions);
   const disabled = waitingFor(glob, actions, board.role);
   const status = viewStatusLine(glob, new Date().toISOString(), disabled);
-  // Mark done (PR ready) changes nothing until GitHub confirms, so say it was asked for meanwhile.
+  // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
   const [readyAsked, setReadyAsked] = useState(false);
   const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
   // A super's local review normally comes first (/finalise); the board warns, then allows.
   const [confirmingReady, setConfirmingReady] = useState(false);
-  // Start again throws the PR and branch away, so it says what it will do first.
+  // Discard throws the PR and branch away, so it says what it will do first.
   const [confirmingAgain, setConfirmingAgain] = useState(false);
   // The header's border shows once the page has scrolled under it.
   const topRef = useRef<HTMLDivElement>(null);
@@ -259,14 +250,18 @@ export const GlobDetail = ({
                         );
                       }}
                     >
-                      {busy && pending?.action === action ? 'Working…' : actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
+                      {busy && pending?.action === action ? (
+                        'Working…'
+                      ) : (
+                        <>
+                          <ActorIcon actor={actionPresentation(action, glob).icon} decorative />
+                          {actionPresentation(action, glob).label}
+                        </>
+                      )}
                     </Button>
                   );
-                  const tip = ACTION_TIPS[action];
-                  return tip === undefined ? (
-                    button
-                  ) : (
-                    <Tip key={action} text={tip}>
+                  return (
+                    <Tip key={action} text={actionPresentation(action, glob).tip}>
                       {button}
                     </Tip>
                   );
@@ -364,7 +359,7 @@ export const GlobDetail = ({
           )}
           {(glob.failure?.conflict ?? glob.conflict) != null && glob.implementer !== null && (
             <div className='grid gap-1 rounded border border-edge p-2 text-sm'>
-              <span>Resolve it locally, then push (Start again stays available):</span>
+              <span>Resolve it locally, then push (Discard stays available):</span>
               <code className='block whitespace-pre-wrap font-mono text-xs'>
                 {`sstor --glob ${glob.id} --resolve\n# or by hand:\ngit fetch origin ${(glob.failure?.conflict ?? glob.conflict)?.base ?? ''} && git checkout ${glob.branch} && git merge origin/${(glob.failure?.conflict ?? glob.conflict)?.base ?? ''}\n# resolve the conflicts, commit\ngit push origin ${glob.branch}`}
               </code>
@@ -373,7 +368,12 @@ export const GlobDetail = ({
 
           {glob.escalation != null && (
             <div className='grid gap-1 rounded border border-edge p-2 text-sm' data-testid='escalation-note'>
-              <span>Needs a human: {glob.escalation.reason}</span>
+              <span>
+                <span className='sr-only'>Needs a human: {glob.escalation.reason}</span>
+                <span aria-hidden title={`Needs a human: ${glob.escalation.reason}`} className='inline-flex items-center gap-1'>
+                  needs a <HumanIcon decorative />: {glob.escalation.reason}
+                </span>
+              </span>
               {glob.escalation.evidence !== undefined && <span className='text-xs text-muted-foreground'>{glob.escalation.evidence}</span>}
               <span className='text-xs text-muted-foreground'>Escalated by {glob.escalation.by}</span>
             </div>
@@ -482,7 +482,7 @@ export const GlobDetail = ({
                 {disabled.map(({ action, tip }) => (
                   <Tip key={action} text={tip}>
                     <Button variant='outline' size='sm' disabled>
-                      {actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
+                      {actionPresentation(action, glob).label}
                     </Button>
                   </Tip>
                 ))}
@@ -510,13 +510,13 @@ export const GlobDetail = ({
                 <div role='alert' className='flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs'>
                   <span className='flex-1'>
                     No local review is recorded at the PR head: the change_reviewer and /finalise haven't run for{' '}
-                    {glob.pr?.headSha?.slice(0, 7) ?? 'the head'}. Mark it ready anyway?
+                    {glob.pr?.headSha?.slice(0, 7) ?? 'the head'}. Mark it done anyway?
                   </span>
                   <Button size='sm' variant='ghost' onClick={() => setConfirmingReady(false)}>
                     Cancel
                   </Button>
                   <Button size='sm' disabled={busy} onClick={() => void markReady()} data-testid='confirm-ready'>
-                    Mark done (PR ready)
+                    Done
                   </Button>
                 </div>
               )}
@@ -540,7 +540,7 @@ export const GlobDetail = ({
                       })
                     }
                   >
-                    Start anyway
+                    Start as it is
                   </Button>
                 </div>
               )}
@@ -563,7 +563,7 @@ export const GlobDetail = ({
                       })
                     }
                   >
-                    Retrigger anyway
+                    Retry anyway
                   </Button>
                 </div>
               )}
@@ -587,7 +587,7 @@ export const GlobDetail = ({
                       })
                     }
                   >
-                    {actionLabel('start_again', glob.type, ACTION_LABELS, glob.status)}
+                    {actionPresentation('start_again', glob).label}
                   </Button>
                 </div>
               )}

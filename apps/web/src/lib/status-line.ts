@@ -196,8 +196,8 @@ export interface Waiting {
 
 const MERGE_WAIT_LABELS: Partial<Record<Action, string>> = {
   merge: 'Merge',
-  merge_continue: 'Merge and continue',
-  mark_ready: 'Mark done (PR ready)',
+  merge_continue: 'Merge & keep working',
+  mark_ready: 'Done',
 };
 
 const failedWhy = (glob: GlobView, head: string): string => {
@@ -214,7 +214,7 @@ const failedWhy = (glob: GlobView, head: string): string => {
 
 /**
  * Actions the glob is heading for but can't take yet: merging waits for the checks on the PR head, and a super's
- * Merge and continue and Mark done (PR ready) wait for the latest implementation record at the head.
+ * Merge & keep working and Done wait for the latest implementation record at the head.
  */
 export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Role): Waiting[] => {
   // QA and PO can't take these actions at all, so a reason would mislead them.
@@ -309,6 +309,8 @@ export const viewStatusLine = (
 export interface Activity {
   readonly kind: 'merging' | 'checks' | 'investigating' | 'working' | 'watching' | 'queued' | 'picked_up' | 'agent_set';
   readonly text: string;
+  /** Who is acting, shown as an icon before the text: the machine (Bot) or a person (Brain). */
+  readonly icon?: 'machine' | 'human';
   /** The detail: session link, owner, who triggered it, the queued notice. */
   readonly tip: string;
   /** Spins while something is running. */
@@ -392,8 +394,9 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     if (glob.status === 'in_progress' && glob.implementer !== null && glob.type !== 'super' && idle >= PICKED_UP_IDLE_MINUTES) {
       return {
         kind: 'picked_up',
-        text: 'Picked up, no routine run',
-        tip: `${glob.implementer} picked this up and no routine run is working on it. A local session isn't visible to slop. Hand to routine starts a run.`,
+        text: 'picked up, no run',
+        icon: 'human',
+        tip: `${glob.implementer} picked this up and no machine run is working on it. A local session isn't visible to slop. Start hands it to the machine.`,
         spinning: false,
       };
     }
@@ -403,12 +406,13 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     return { kind: 'investigating', text: 'Investigating', tip: ['Investigating the plan; the glob has not started', ...runDetail].join('\n'), spinning: true };
   }
   if (live.state === 'active') {
-    return { kind: 'working', text: 'Routine working', tip: runDetail.join('\n'), spinning: true };
+    return { kind: 'working', text: 'working', icon: 'machine', tip: runDetail.join('\n'), spinning: true };
   }
   if (live.state === 'watching') {
     return {
       kind: 'watching',
-      text: 'Routine watching the PR',
+      text: 'watching PR',
+      icon: 'machine',
       tip: ['Auto-fixing CI failures and review comments', ...runDetail].join('\n'),
       spinning: false,
     };
@@ -417,7 +421,8 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
   const long = minutes >= QUEUED_NOTICE_MINUTES;
   return {
     kind: 'queued',
-    text: long ? `Queued for ${String(minutes)} min` : 'Queued',
+    text: long ? `queued for ${String(minutes)} min` : 'queued',
+    icon: 'machine',
     tip: [
       long
         ? `Routine run queued for ${String(minutes)} min: ${live.sessionUrl === null ? 'no session yet' : 'open the session'}`

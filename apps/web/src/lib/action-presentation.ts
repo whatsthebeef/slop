@@ -1,0 +1,138 @@
+import type { Action } from '@slop/core';
+import type { GlobView } from './api';
+
+/** Who does the work: the machine (slop or its agents) or a human in their own session. No icon for bookkeeping or destructive actions. */
+export type ActionIcon = 'machine' | 'human';
+
+/** Where the glob view puts an action: a candidate for the main button, the More menu, or the Reset area. */
+export type ActionPlacement = 'main' | 'more' | 'reset' | 'none';
+
+export interface ActionPresentation {
+  readonly label: string;
+  readonly icon: ActionIcon | null;
+  /** One line: the tooltip, the menu description and the card move's description. */
+  readonly tip: string;
+  readonly placement: ActionPlacement;
+}
+
+type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'>;
+
+const prRef = (glob: Subject): string => (glob.pr === null ? 'the PR' : `PR #${glob.pr.number}`);
+
+/** What Discard does to the glob's PR and branch. */
+const discardTip = (glob: Subject, then: string): string =>
+  `${glob.pr === null ? 'Deletes' : `Closes ${prRef(glob)} and deletes`} the branch${then}`;
+
+/**
+ * The one place an action's name, icon, tooltip and placement come from, so the glob view, the card moves
+ * and every hint say the same thing. A few actions mean different things by glob state: Start now vs Start
+ * (start_anyway), three kinds of Pick up, and three kinds of Discard.
+ */
+export const actionPresentation = (action: Action, glob: Subject): ActionPresentation => {
+  switch (action) {
+    case 'start':
+      return { label: 'Start', icon: 'machine', tip: 'The machine implements it', placement: 'main' };
+    case 'start_anyway':
+      // On a glob a person picked up, it is a hand-over to the machine; in Planning it jumps what the glob waits for.
+      return glob.status === 'in_progress'
+        ? {
+            label: 'Start',
+            icon: 'machine',
+            tip: `The machine takes over${glob.implementer === null ? '' : ` from ${glob.implementer}`}`,
+            placement: 'more',
+          }
+        : {
+            label: 'Start now',
+            icon: 'machine',
+            tip: 'Starts before what it waits for has merged; its branch lacks their changes',
+            placement: 'more',
+          };
+    case 'pick_up':
+      return glob.status === 'planning'
+        ? {
+            label: 'Pick up',
+            icon: 'human',
+            tip: 'You implement it in your own session',
+            placement: glob.type === 'super' ? 'main' : 'more',
+          }
+        : {
+            label: 'Pick up',
+            icon: 'human',
+            tip: `You take it over from ${glob.implementer ?? 'the machine'}`,
+            placement: 'more',
+          };
+    case 'take_over':
+      return { label: 'Pick up', icon: 'human', tip: 'Stops the machine; you continue on its branch', placement: 'more' };
+    case 'retrigger':
+      return { label: 'Retry', icon: 'machine', tip: 'A new machine run on the same branch', placement: 'main' };
+    case 'retry_autofix':
+      return { label: 'Fix checks', icon: 'machine', tip: 'The machine watches the PR and fixes the failed checks', placement: 'main' };
+    case 'resolve_conflict':
+      return {
+        label: 'Fix conflict',
+        icon: 'machine',
+        tip: 'The GitHub App merges the base branch and resolves the conflicts (once per conflict)',
+        placement: 'main',
+      };
+    case 'retry_merge':
+      return { label: 'Retry merge', icon: 'machine', tip: 'Tries the merge again', placement: 'main' };
+    case 'mark_ready':
+      return {
+        label: 'Done',
+        icon: 'human',
+        tip: 'Takes the PR out of draft. A sub then merges by itself; a same or super waits for Merge',
+        placement: 'main',
+      };
+    case 'merge':
+      return { label: 'Merge', icon: 'machine', tip: `Squash-merges ${prRef(glob)}`, placement: 'main' };
+    case 'merge_continue':
+      return {
+        label: 'Merge & keep working',
+        icon: 'machine',
+        tip: 'Lands what is done; the glob stays in Doing for a new PR',
+        placement: 'more',
+      };
+    case 'investigate':
+      return {
+        label: 'Investigate plan',
+        icon: 'machine',
+        tip: 'Reads the plan and the code and attaches proposals; no branch or commits',
+        placement: 'more',
+      };
+    case 'review_now':
+      return {
+        label: 'Review code',
+        icon: 'machine',
+        tip: "An independent model reviews the PR's code as it would land on the base branch and posts findings; never blocks merging",
+        placement: 'more',
+      };
+    case 'start_again':
+      if (glob.type === 'sub') {
+        return {
+          label: 'Discard & restart',
+          icon: 'machine',
+          tip: discardTip(glob, ', then a new machine run starts from the base branch'),
+          placement: 'reset',
+        };
+      }
+      return glob.type === 'same'
+        ? { label: 'Discard & back to Planning', icon: null, tip: discardTip(glob, ''), placement: 'reset' }
+        : { label: 'Discard & start over', icon: 'human', tip: discardTip(glob, '; it stays with you'), placement: 'reset' };
+    case 'delete':
+      return { label: 'Delete', icon: null, tip: 'Deletes the glob', placement: 'reset' };
+    case 'decide':
+      return { label: 'Decide', icon: 'human', tip: 'Records the outcome of this decision', placement: 'main' };
+    case 'sign_off':
+      return { label: 'Sign off', icon: 'human', tip: 'Confirms the decision is final; it moves to Signed Off', placement: 'main' };
+    case 'reopen':
+      return { label: 'Reopen', icon: null, tip: 'Reopens the decision', placement: 'more' };
+    // Replaced by the type popover.
+    case 'deescalate':
+      return { label: 'Make it a sub', icon: 'machine', tip: 'Clears "needs a human"; the machine merges it itself', placement: 'none' };
+    case 'make_super':
+      return { label: 'Pair on it', icon: 'human', tip: 'A human pairs with the machine', placement: 'none' };
+  }
+};
+
+/** An action's name for this glob. */
+export const actionLabel = (action: Action, glob: Subject): string => actionPresentation(action, glob).label;
