@@ -748,7 +748,7 @@ export const GlobDetail = ({
               )}
             </div>
           )}
-          {actions.length + disabled.length > 0 && (
+          {(main !== null || actions.length + disabled.length > 0) && (
             <div className="grid gap-1">
               <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
                 {main !== null && (
