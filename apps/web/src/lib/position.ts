@@ -11,6 +11,8 @@ export interface Position {
   readonly holder: 'human' | 'machine' | 'waiting' | 'stalled';
   /** One short line: "implementing", "queued 3 min", "checks running on abc1234", "stalled: ...". */
   readonly text: string;
+  /** The card's single line: a few words (the move's short label where it has one), never a file path or a sentence. */
+  readonly label: string;
   readonly tip: string;
   /** Spins while the machine is running. */
   readonly spinning: boolean;
@@ -93,6 +95,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
     return {
       holder: 'machine',
       text: `committing agent set v${String(agentSetVersionOfTitle(glob.title))}`,
+      label: `committing agent set v${String(agentSetVersionOfTitle(glob.title))}`,
       tip: 'Slop commits the agent set to this branch shortly after the board changes it, then marks the PR ready. Nobody works on it.',
       spinning: false,
       tone: 'text-muted-foreground',
@@ -112,6 +115,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       return {
         holder: 'machine',
         text,
+        label: text,
         tip: tip.join('\n'),
         spinning: lead?.state === 'running',
         tone: 'text-muted-foreground',
@@ -126,6 +130,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       return {
         holder: 'waiting',
         text: armed && checks ? 'merging when checks pass' : move.reason,
+        label: armed && checks ? 'merging when checks pass' : move.reason,
         tip: armed && checks
           ? 'Slop merges the PR as soon as the checks on its head pass. If they fail or the PR conflicts, it stops and says why. Cancel merge stops it.'
           : `Waiting: ${move.reason}`,
@@ -140,6 +145,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       return {
         holder: 'stalled',
         text: `stalled: ${move.reason}`,
+        label: move.label ?? `stalled: ${move.reason}`,
         tip: `Stalled: ${move.reason}\nNobody is moving this glob. The first step in Your turn gets it going.${session === null ? '' : `\nSession: ${session}`}`,
         spinning: false,
         tone: 'text-required',
@@ -154,6 +160,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       return {
         holder: 'human',
         text: move.reason === 'Picked up' ? 'picked up, no machine run' : move.reason,
+        label: move.reason === 'Picked up' ? 'picked up, no machine run' : (move.label ?? move.reason),
         tip:
           move.reason === 'Picked up'
             ? `${move.who ?? 'Someone'} picked this up and no machine run is working on it. A local session isn't visible to slop. Start hands it to the machine.`

@@ -54,16 +54,71 @@ const ConflictBox = ({
   );
 };
 
-/** The conflict section: shown while a glob with an implementer has a merge conflict with its base. */
+/**
+ * What the conflict section says about a conflict with the base, in its own wording (the card only says "conflicts with
+ * main"): the cause, the files, and for a person's glob where to resolve it.
+ */
+const ConflictFacts = ({
+  base,
+  since,
+  files,
+}: {
+  base: string;
+  since: string | null;
+  files: readonly string[];
+}) => (
+  <div className="grid gap-1 text-sm" data-testid="conflict-facts">
+    <span>
+      This PR conflicts with {base}
+      {since === null ? '' : `, since ${since} merged`}.
+    </span>
+    {files.length > 0 && (
+      <ul className="list-disc pl-5 font-mono text-xs" data-testid="conflict-files">
+        {files.map((f) => (
+          <li key={f}>{f}</li>
+        ))}
+      </ul>
+    )}
+  </div>
+);
+
+/** The conflict section: a conflict with the base branch (its files, and for a glob with an implementer how to resolve it) and a clash with another glob. */
 export const ConflictSection = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {
-  const conflict = glob.failure?.conflict ?? glob.conflict;
-  if (conflict == null || glob.implementer === null) return null;
+  const open = glob.conflict ?? null;
+  const conflict = glob.failure?.conflict ?? open;
+  const clash = glob.clash ?? null;
+  if (conflict == null && clash === null) return null;
   return (
-    <ConflictBox
-      globId={glob.id}
-      branch={glob.branch}
-      base={conflict.base}
-      canTakeOver={(glob.allowedActions ?? []).includes('take_over')}
-    />
+    <div className="grid gap-2">
+      {conflict != null && (
+        <ConflictFacts
+          base={conflict.base}
+          since={open?.since ?? null}
+          files={conflict.files}
+        />
+      )}
+      {clash !== null && (
+        <div className="grid gap-1 text-sm" data-testid="conflict-clash">
+          <span>
+            {clash.with} also changes some of the same files; whichever merges second will conflict.
+          </span>
+          {clash.paths.length > 0 && (
+            <ul className="list-disc pl-5 font-mono text-xs">
+              {clash.paths.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {conflict != null && glob.implementer !== null && (
+        <ConflictBox
+          globId={glob.id}
+          branch={glob.branch}
+          base={conflict.base}
+          canTakeOver={(glob.allowedActions ?? []).includes('take_over')}
+        />
+      )}
+    </div>
   );
 };

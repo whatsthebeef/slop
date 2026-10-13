@@ -274,3 +274,29 @@ describe('glob view: a decision in Doing', () => {
     expect(cb.onAction).not.toHaveBeenCalled();
   });
 });
+
+describe('glob view: the conflict section', () => {
+  const section = () => document.querySelector('[data-section="conflict"]') as HTMLElement;
+
+  it('lists the files and the cause of a conflict with the base, which the card leaves out', () => {
+    const files = ['apps/web/src/a.ts', 'apps/web/src/b.ts'];
+    renderGlob(
+      view({
+        status: 'pr_open',
+        list: 'doing',
+        pr: { number: 7, state: 'ready', headSha: 'abc1234' },
+        conflict: { base: 'main', files, since: 's1t9', at: '2026-01-01T00:00:00Z' },
+      }),
+    );
+    const facts = within(section()).getByTestId('conflict-facts');
+    expect(facts.textContent).toContain('conflicts with main, since s1t9 merged');
+    expect(within(section()).getByTestId('conflict-files').textContent).toBe(files.join(''));
+  });
+
+  it("shows a clash with another glob and the files both change, even with no implementer", () => {
+    renderGlob(view({ status: 'planning', clash: { with: 's1t2', paths: ['apps/web/src/c.ts'] } }));
+    const clash = within(section()).getByTestId('conflict-clash');
+    expect(clash.textContent).toContain('s1t2 also changes some of the same files');
+    expect(clash.textContent).toContain('apps/web/src/c.ts');
+  });
+});

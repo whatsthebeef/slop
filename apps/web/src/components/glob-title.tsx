@@ -1,9 +1,8 @@
 import type { EditFailure } from '@slop/core';
 import { Pencil } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import type { GlobChanges } from '@/lib/api';
-import { decideTitle } from '@/lib/title-edit';
+import { useTitleEdit } from '@/lib/title-edit';
 
 /** The glob's ID and title as the page heading; the title edits in place when `editable`. */
 export const GlobTitle = ({
@@ -19,59 +18,12 @@ export const GlobTitle = ({
   onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
   onReload: () => Promise<void>;
 }) => {
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(title);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<EditFailure | null>(null);
-  const [emptyRefused, setEmptyRefused] = useState(false);
-  const input = useRef<HTMLInputElement>(null);
-  // Set when Esc cancels, so the blur that follows the input unmounting doesn't save.
-  const cancelled = useRef(false);
-
-  useEffect(() => {
-    setEditing(false);
-    setError(null);
-    setEmptyRefused(false);
-  }, [id]);
-  useEffect(() => {
-    if (editing) input.current?.select();
-  }, [editing]);
-
-  const begin = () => {
-    cancelled.current = false;
-    setText(title);
-    setError(null);
-    setEmptyRefused(false);
-    setEditing(true);
-  };
-  const cancel = () => {
-    cancelled.current = true;
-    setEditing(false);
-    setError(null);
-    setEmptyRefused(false);
-  };
-  const commit = async () => {
-    if (saving || cancelled.current) return;
-    const decision = decideTitle(title, text);
-    if (decision.kind === 'empty') {
-      setEmptyRefused(true);
-      input.current?.focus();
-      return;
-    }
-    if (decision.kind === 'unchanged') {
-      setEditing(false);
-      return;
-    }
-    setSaving(true);
-    const refused = await onUpdate({ title: decision.title });
-    setSaving(false);
-    if (refused === null) {
-      setEditing(false);
-      setError(null);
-    } else {
-      setError(refused);
-    }
-  };
+  const { editing, text, saving, error, emptyRefused, field, begin, commit, change, onKeyDown, reload } = useTitleEdit({
+    title,
+    resetKey: id,
+    onUpdate,
+    onReload,
+  });
 
   if (!editing) {
     return (
@@ -99,7 +51,7 @@ export const GlobTitle = ({
       <h1 className='flex items-baseline gap-1.5 text-base font-semibold'>
         <span className='shrink-0 font-mono text-muted-foreground'>{id}</span>
         <input
-          ref={input}
+          ref={field}
           autoFocus
           value={text}
           disabled={saving}
@@ -107,24 +59,9 @@ export const GlobTitle = ({
           aria-invalid={emptyRefused || error !== null}
           data-testid='glob-title-input'
           className='min-w-0 flex-1 rounded border bg-card px-1 text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring'
-          onChange={(e) => {
-            setText(e.target.value);
-            setEmptyRefused(false);
-            setError(null);
-          }}
-          onBlur={() => void commit()}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              void commit();
-            } else if (e.key === 'Escape') {
-              // Esc ends the edit and nothing more (the page's own Esc handling must not also run).
-              e.preventDefault();
-              e.stopPropagation();
-              e.nativeEvent.stopImmediatePropagation();
-              cancel();
-            }
-          }}
+          onChange={(e) => change(e.target.value)}
+          onBlur={commit}
+          onKeyDown={onKeyDown}
         />
         {saving && (
           <span role='status' className='shrink-0 text-xs font-normal text-muted-foreground'>
@@ -146,12 +83,7 @@ export const GlobTitle = ({
               size='sm'
               disabled={saving}
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                void (async () => {
-                  await onReload();
-                  cancel();
-                })()
-              }
+              onClick={() => void reload()}
             >
               Reload latest
             </Button>

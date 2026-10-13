@@ -123,6 +123,22 @@ describe('whoseMove: stalled', () => {
     expect(move(queued)).toMatchObject({ holder: 'stalled', cause: 'queued', reason: 'queued for 25 min' });
   });
 
+  it('gives each stall a short label from its cause, and keeps the long reason', () => {
+    const conflict = glob({
+      status: 'failed',
+      failure: { reason: 'Merge conflict with main in apps/web/src/a.ts, apps/web/src/b.ts', at: NOW, kind: 'merge', conflict: { base: 'main', files: ['apps/web/src/a.ts', 'apps/web/src/b.ts'] } },
+    });
+    expect(move(conflict)).toMatchObject({ holder: 'stalled', label: 'stalled · merge conflict', reason: 'Merge conflict with main in apps/web/src/a.ts, apps/web/src/b.ts' });
+    expect(move(glob({ status: 'failed', failure: { reason: 'run gave up', at: NOW } })).label).toBe('stalled · run failed');
+    const checks = glob({ status: 'failed', failure: { reason: 'run gave up', at: NOW }, headChecks: { sha: 'a', state: 'failed' } });
+    expect(move(checks).label).toBe('stalled · checks failed');
+    const queued = glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null, queuedAt: minutesAgo(25), lastProgressAt: null })] });
+    expect(move(queued).label).toBe('stalled · queued 25 min');
+    const quiet = glob({ status: 'in_progress', runs: [run({ startedAt: minutesAgo(300), lastProgressAt: minutesAgo(50) })] });
+    expect(move(quiet).label).toBe('stalled · no progress 50 min');
+    expect(move(glob({ status: 'in_progress', type: 'sub', updatedAt: minutesAgo(3) })).label).toBe('stalled · nobody on it');
+  });
+
   it('a stale step does not hide a live one', () => {
     const g = glob({ status: 'in_progress', runs: [run({ lastProgressAt: minutesAgo(300) })] });
     const live = { effects: [{ kind: 'review_change', state: 'running' as const, since: minutesAgo(1) }] };

@@ -1,6 +1,6 @@
 import { decisionOf, dueText, findingsLabel, reviewOutdated, scopeLabel, upcomingSteps } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
-import { AlertTriangle, Bug, Hourglass, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
+import { AlertTriangle, Bug, GitBranch, Hourglass, ListChecks, Loader2, Pencil, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
@@ -9,17 +9,20 @@ import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { ActionIcon } from '@/lib/action-presentation';
 import type { MoveTag } from '@/lib/board-motion';
-import { onStandby, positionOf } from '@/lib/position';
 import type { Position } from '@/lib/position';
-import { blockedParts, chainTip, statusLine } from '@/lib/status-line';
-import type { StatusLine } from '@/lib/status-line';
+import { positionOf } from '@/lib/position';
+import { cardActions, cardStatus, cornerMarker, hasBlocker, turnButton } from '@/lib/card-rows';
+import type { CornerMarker } from '@/lib/card-rows';
+import { useTitleEdit } from '@/lib/title-edit';
+import type { EditFailure } from '@slop/core';
+import type { GlobChanges } from '@/lib/api';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
 import { mainAction } from '@/lib/main-action';
 import { workingLabel } from '@/lib/card-pending';
 import { splitChip } from '@/lib/split-chip';
-import { positionClick, CONFIRM_MS, clickTip, prUrl, statusClick, turnStep, yourTurnClick } from '@/lib/chip-actions';
+import { CONFIRM_MS, clickTip, prUrl, turnStep } from '@/lib/chip-actions';
 import type { ChipClick } from '@/lib/chip-actions';
 import { cardTargets } from '@/lib/card-targets';
 import type { GlobTarget } from '@/lib/glob-section';
@@ -92,7 +95,7 @@ export const GroupChip = ({ name }: { name: string }) => {
   };
   return (
     <Tip text={`Group: ${name}`}>
-      <span className='sticker rounded-sm px-1.5 font-mono text-[10px] font-semibold' style={colours}>
+      <span className='sticker max-w-full truncate whitespace-nowrap rounded-sm px-1.5 font-mono text-[10px] font-semibold' style={colours}>
         {name}
       </span>
     </Tip>
@@ -100,55 +103,59 @@ export const GroupChip = ({ name }: { name: string }) => {
 };
 
 /**
- * The one position indicator, shared with the glob view: who has the ball and what they are doing. The viewer's own turn is
- * the Your turn chip, so this shows nothing for it. Standby stays a small muted marker beside whatever holds the ball.
+ * The card's one corner marker (see `cornerMarker`): a single line that never wraps, truncated with the full text in its
+ * tooltip, anchored right. Stalled hides standby; the tooltip says it instead.
  */
-export const PositionLabel = ({
-  glob,
-  repo,
-  viewer,
+const CornerMarkerView = ({
+  marker,
+  position,
   onAct,
   onOpenSection,
 }: {
-  glob: GlobView;
-  repo?: string;
-  viewer?: HumanStepViewer;
+  marker: CornerMarker;
+  position: Position | null;
   onAct?: (action: Action) => void;
-  onOpenSection?: (target: GlobTarget) => void;
+  onOpenSection: (target: GlobTarget) => void;
 }) => {
-  const now = new Date().toISOString();
-  const position = positionOf(glob, now, viewer);
-  const standby = onStandby(glob);
-  if (position === null && standby === null) return null;
-  const click = position === null ? null : positionClick(position, glob, repo);
-  const open = click === null || onOpenSection === undefined ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
+  const click = marker.click;
+  const open = click === null ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
+  const needsHuman = marker.kind === 'needs-human';
   return (
-    <>
-      {position !== null && click !== null && (
-        <Tip text={open === undefined ? position.tip : `${position.tip}\n${clickTip(click)}`}>
-          <ChipButton onOpen={open} className={cn('inline-flex items-center gap-1 font-mono text-[11px]', position.tone)} testId='position' dataKind={position.holder}>
-            <PositionIcon position={position} />
-            {position.text}
-          </ChipButton>
-        </Tip>
-      )}
-      {standby !== null && position?.holder !== 'machine' && (
-        <Tip text="Machine on standby: fixes new CI failures or review comments until it's merged.">
-          <span className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' data-testid='standby'>
-            <ActorIcon actor='machine' className='h-3 w-3' decorative />
-            standby
-          </span>
-        </Tip>
-      )}
-    </>
+    <span className='inline-flex min-w-0 max-w-[45%] justify-end' data-testid='corner-marker' data-kind={marker.kind}>
+      <Tip text={open === undefined || click === null || needsHuman ? marker.tip : `${marker.tip}\n${clickTip(click)}`}>
+        <ChipButton
+          onOpen={open}
+          className={cn('inline-flex min-w-0 items-center gap-1 text-right font-mono text-[11px]', marker.tone)}
+          testId={needsHuman ? 'escalation-chip' : 'position'}
+          dataKind={marker.kind}
+          ariaLabel={needsHuman ? 'Needs a person' : undefined}
+        >
+          {needsHuman ? (
+            // The visible words are hidden: the button's label names it and the Tip's description gives the reason.
+            <span aria-hidden className='inline-flex items-center gap-1'>
+              needs a <HumanIcon className='h-3 w-3' decorative />
+            </span>
+          ) : (
+            <>
+              {marker.kind === 'standby' ? (
+                <ActorIcon actor='machine' className='h-3 w-3 shrink-0' decorative />
+              ) : position === null ? null : (
+                <PositionIcon position={position} />
+              )}
+              <span className='truncate'>{marker.text}</span>
+            </>
+          )}
+        </ChipButton>
+      </Tip>
+    </span>
   );
 };
 
 const PositionIcon = ({ position }: { position: Position }) => {
-  if (position.spinning) return <Loader2 className='h-3 w-3 animate-spin' aria-hidden />;
-  if (position.holder === 'waiting') return <Hourglass className='h-3 w-3' aria-hidden />;
-  if (position.holder === 'stalled') return <AlertTriangle className='h-3 w-3' aria-hidden />;
-  return <ActorIcon actor={position.holder === 'human' ? 'human' : 'machine'} className='h-3 w-3' decorative />;
+  if (position.spinning) return <Loader2 className='h-3 w-3 shrink-0 animate-spin' aria-hidden />;
+  if (position.holder === 'waiting') return <Hourglass className='h-3 w-3 shrink-0' aria-hidden />;
+  if (position.holder === 'stalled') return <AlertTriangle className='h-3 w-3 shrink-0' aria-hidden />;
+  return <ActorIcon actor={position.holder === 'human' ? 'human' : 'machine'} className='h-3 w-3 shrink-0' decorative />;
 };
 
 /** A button on the card that stops its click and key from reaching the card, which opens the glob at the top. */
@@ -207,13 +214,13 @@ export const ChipButton = ({
   children: ReactNode;
 }) =>
   onOpen === undefined ? (
-    <span className={className} data-testid={testId} data-kind={dataKind} aria-describedby={describedBy}>
+    <span className={cn('max-w-full truncate whitespace-nowrap', className)} data-testid={testId} data-kind={dataKind} aria-describedby={describedBy}>
       {children}
     </span>
   ) : (
     <CardButton
       onOpen={onOpen}
-      className={cn(className, 'cursor-pointer rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring')}
+      className={cn('max-w-full truncate whitespace-nowrap', className, 'cursor-pointer rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring')}
       testId={testId}
       dataKind={dataKind}
       ariaLabel={ariaLabel}
@@ -362,7 +369,7 @@ export const EnvironmentChips = ({ environments }: { environments: readonly Envi
       return (
         <Tip key={env.environment} text={tip}>
           <span
-            className={cn('font-mono text-[11px]', warned ? 'text-required' : 'text-signal-strong')}
+            className={cn('whitespace-nowrap font-mono text-[11px]', warned ? 'text-required' : 'text-signal-strong')}
             data-testid='environment-chip'
             data-warning={env.warning}
           >
@@ -395,7 +402,7 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
   const tone = failing ? 'text-red' : current.length > 0 ? 'text-signal-strong' : 'text-muted-foreground';
   const tip = runs.map((r) => `${atfLine(r)} · ${new Date(r.at).toLocaleString()}`).join('\n');
   const chip = (
-    <span className={cn('font-mono text-[11px]', tone)} data-testid='atf-chip' data-failing={failing}>
+    <span className={cn('whitespace-nowrap font-mono text-[11px]', tone)} data-testid='atf-chip' data-failing={failing}>
       {text}
     </span>
   );
@@ -439,51 +446,6 @@ const GlobLinks = ({ boardId, ids }: { boardId: number; ids: readonly string[] }
 );
 
 /**
- * A glob held for others to merge: "waits for s15t7", or the reason when the board's merge policy held it. Each ID opens
- * that glob on the board.
- */
-export const AfterChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) => {
-  const blocked = blockedParts(glob);
-  if (blocked !== null) {
-    return (
-      <Tip text={`Waits for, in order: ${chainTip(glob)}${onOpen === undefined ? '' : `. "blocked by" opens this glob's prerequisites; each ID opens that glob`}`}>
-        <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
-          <ChipButton onOpen={onOpen} className='font-mono' testId='after-chip-open'>
-            blocked by
-          </ChipButton>{' '}
-          <GlobLinks boardId={glob.boardId} ids={blocked.ids} />
-          {blocked.more > 0 && ` +${String(blocked.more)}`}
-          {blocked.next !== null && (
-            <>
-              {' · next: '}
-              <GlobLinks boardId={glob.boardId} ids={[blocked.next]} />
-            </>
-          )}
-        </span>
-      </Tip>
-    );
-  }
-  if (glob.status !== 'planning') return null;
-  // Only needs hold a glob: explicit `after` and needs slop learned from a failed run. Overlaps show in OverlapChip.
-  const learned = (glob.impliedAfter ?? []).filter((i) => i.overridden !== true && i.kind === 'needs');
-  const ids = [...new Set([...(glob.after ?? []), ...learned.map((i) => i.id)])];
-  if (ids.length === 0) return null;
-  const reason = learned.map((i) => `${i.id}: ${i.evidence ?? 'a run failed without it'}`).join('; ');
-  return (
-    <Tip
-      text={`${reason === '' ? `Waits for ${ids.join(', ')} to merge` : `Waits for ${reason}`}${onOpen === undefined ? '' : `. "waits for" opens this glob's prerequisites; each ID opens that glob`}`}
-    >
-      <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
-        <ChipButton onOpen={onOpen} className='font-mono' testId='after-chip-open'>
-          waits for
-        </ChipButton>{' '}
-        <GlobLinks boardId={glob.boardId} ids={ids} />
-      </span>
-    </Tip>
-  );
-};
-
-/**
  * Globs that may change the same files as this one (predicted from the board's merge policy, or set by a person): a note
  * that the later merge rebases, never a hold. Each ID opens that glob on the board.
  */
@@ -493,7 +455,7 @@ export const OverlapChip = ({ glob }: { glob: GlobView }) => {
   const reason = overlaps.map((i) => (i.paths.length === 0 ? i.id : `${i.id}: both may change ${i.paths.join(', ')}`)).join('; ');
   return (
     <Tip text={`Overlaps ${reason}. Only the merge order matters: the later one rebases on main`}>
-      <span className='font-mono text-[11px] text-muted-foreground' data-testid='overlap-chip'>
+      <span className='max-w-full truncate whitespace-nowrap font-mono text-[11px] text-muted-foreground' data-testid='overlap-chip'>
         overlaps{' '}
         {overlaps.map((o, i) => (
           <span key={o.id}>
@@ -523,19 +485,26 @@ export const OversizedChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () =>
     </Tip>
   ) : null;
 
-/** "split from <source>" on a part after the first, with the part number and the other parts in the tooltip. */
+/**
+ * "split from <source>" on a part after the first, with the part number and the other parts in the tooltip. A small pill
+ * (muted background, sans text, a branch icon) so it is never read as a status.
+ */
 export const SplitChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) => {
   const chip = splitChip(glob);
   if (chip === null) return null;
   return (
     <Tip text={onOpen === undefined ? chip.tip : `${chip.tip}. "split from" opens this glob's split; ${chip.source} opens that glob`}>
-      <span className='font-mono text-[11px] text-muted-foreground' data-testid='split-chip'>
-        <ChipButton onOpen={onOpen} className='font-mono' testId='split-chip-open'>
+      <span
+        className='inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full border bg-muted px-1.5 py-0.5 font-sans text-[11px] text-muted-foreground'
+        data-testid='split-chip'
+      >
+        <GitBranch className='h-3 w-3 shrink-0' aria-hidden />
+        <ChipButton onOpen={onOpen} className='font-sans' testId='split-chip-open'>
           split from
         </ChipButton>{' '}
         <Link
           to={boardGlobHref(glob.boardId, chip.source, { section: 'size' })}
-          className='underline-offset-2 hover:underline'
+          className='truncate underline-offset-2 hover:underline'
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -614,21 +583,20 @@ const runChip = (click: ChipClick, onAct: (action: Action) => void, onOpenSectio
 };
 
 /**
- * Your turn: a button that runs its step. Merge asks for a second click (Confirm merge, for a few seconds; Esc or the
- * timeout reverts it); steps that need input open the glob view where they are done. The click never reaches the card.
+ * Your turn as a button in the actions row, for the two steps the card runs itself: Merge asks for a second click (Confirm
+ * merge, for a few seconds; Esc, blur or the timeout reverts it) and Done runs at once. Steps that need input are the status
+ * line's link into the glob view, not a button. The click never reaches the card.
  */
-const YourTurnChip = ({
+const TurnButton = ({
   glob,
-  status,
+  turn,
   pending,
   onAct,
-  onOpenSection,
 }: {
   glob: GlobView;
-  status: StatusLine;
+  turn: NonNullable<ReturnType<typeof turnButton>>;
   pending?: Action;
   onAct: (action: Action) => void;
-  onOpenSection: (target: GlobTarget) => void;
 }) => {
   const [confirming, setConfirming] = useState(false);
   useEffect(() => {
@@ -636,20 +604,20 @@ const YourTurnChip = ({
     const timer = setTimeout(() => setConfirming(false), CONFIRM_MS);
     return () => clearTimeout(timer);
   }, [confirming]);
-  const click = yourTurnClick(status, glob);
-  const busy = pending !== undefined && click.kind === 'act';
+  const { status, click } = turn;
+  const busy = pending !== undefined;
   const pr = glob.pr === null ? '' : ` #${String(glob.pr.number)}`;
-  const verb = click.kind === 'act' && click.action === 'merge' ? 'Merge' : status.text;
+  const verb = click.action === 'merge' ? 'Merge' : 'Done';
   return (
     <Tip text={`${status.tip}\n${clickTip(click, confirming)}`}>
       <button
         type='button'
         className={cn(
-          'inline-flex cursor-pointer items-center gap-1 rounded-sm bg-foreground px-1.5 py-0.5 font-mono text-[11px] font-medium text-background hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60',
+          'inline-flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-sm bg-foreground px-1.5 py-0.5 font-mono text-[11px] font-medium text-background hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60',
           confirming && 'bg-required',
         )}
         disabled={busy}
-        aria-label={click.kind === 'act' ? `Your turn: ${verb} PR${pr}` : `Your turn: ${status.text}`}
+        aria-label={`Your turn: ${verb} PR${pr}`}
         data-testid='your-turn-chip'
         data-kind={status.kind}
         data-confirming={confirming ? 'true' : undefined}
@@ -661,7 +629,7 @@ const YourTurnChip = ({
             return;
           }
           setConfirming(false);
-          runChip(click, onAct, onOpenSection);
+          onAct(click.action);
         }}
         onKeyDown={(e) => {
           e.stopPropagation();
@@ -670,17 +638,102 @@ const YourTurnChip = ({
         onBlur={() => setConfirming(false)}
       >
         {busy ? <Loader2 className='h-3 w-3 animate-spin' aria-hidden /> : <HumanIcon className='h-3 w-3' decorative />}
-        {busy ? (
-          workingLabel(pending)
-        ) : confirming ? (
-          `Confirm merge${pr}`
-        ) : (
-          <>
-            Your turn <span className='font-normal opacity-70'>· {status.text}</span>
-          </>
-        )}
+        {busy ? workingLabel(pending) : confirming ? `Confirm merge${pr}` : verb}
       </button>
     </Tip>
+  );
+};
+
+/**
+ * The card's title: it wraps over as many lines as it needs (the only text on the card that does) and edits in place, with the
+ * glob view's edit logic. Clicks and keys inside it never reach the card, which would open the glob.
+ */
+const CardTitle = ({
+  glob,
+  editable,
+  onUpdate,
+  onReload,
+}: {
+  glob: GlobView;
+  editable: boolean;
+  onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
+  onReload: () => Promise<void>;
+}) => {
+  const edit = useTitleEdit({ title: glob.title, resetKey: glob.id, onUpdate, onReload });
+  const { field, text } = edit;
+  // Grow with the text, so the whole title shows while it is typed.
+  useEffect(() => {
+    const el = field.current;
+    if (el === null) return;
+    el.style.height = 'auto';
+    el.style.height = `${String(el.scrollHeight)}px`;
+  }, [field, text, edit.editing]);
+
+  if (!edit.editing) {
+    return editable ? (
+      <button
+        type='button'
+        className='group flex w-full min-w-0 cursor-text items-start gap-1 rounded-sm text-left leading-snug font-medium break-words hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring'
+        aria-label={`Edit title: ${glob.title}`}
+        data-testid='card-title-edit'
+        onClick={(e) => {
+          e.stopPropagation();
+          edit.begin();
+        }}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <span className='min-w-0 flex-1 break-words'>{glob.title}</span>
+        <Pencil aria-hidden className='mt-0.5 size-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100' />
+      </button>
+    ) : (
+      <div className='leading-snug font-medium break-words' data-testid='card-title'>
+        {glob.title}
+      </div>
+    );
+  }
+  return (
+    <div className='min-w-0' onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <textarea
+        ref={field}
+        rows={1}
+        autoFocus
+        value={text}
+        disabled={edit.saving}
+        aria-label='Title'
+        aria-invalid={edit.emptyRefused || edit.error !== null}
+        data-testid='card-title-input'
+        className='block w-full resize-none overflow-hidden rounded border bg-card px-1 text-sm leading-snug font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring'
+        onChange={(e) => edit.change(e.target.value)}
+        onBlur={edit.commit}
+        onKeyDown={edit.onKeyDown}
+      />
+      {edit.saving && (
+        <p role='status' className='text-xs font-normal text-muted-foreground'>
+          Saving…
+        </p>
+      )}
+      {edit.emptyRefused && (
+        <p role='alert' className='text-xs text-red'>
+          The title can't be empty.
+        </p>
+      )}
+      {edit.error !== null && (
+        <div role='alert' className='flex flex-wrap items-center gap-2 text-xs text-red'>
+          <span>{edit.error.message}</span>
+          {edit.error.conflict && (
+            <button
+              type='button'
+              className='rounded-sm border px-1.5 py-0.5 text-foreground hover:bg-muted'
+              disabled={edit.saving}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void edit.reload()}
+            >
+              Reload latest
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -704,6 +757,8 @@ export const GlobCard = ({
   environments,
   atf,
   viewer,
+  onUpdateTitle,
+  onReload,
 }: {
   glob: GlobView;
   onOpen: () => void;
@@ -737,14 +792,25 @@ export const GlobCard = ({
   atf?: readonly AtfRun[];
   /** Who is looking: Your turn shows the steps that are theirs. */
   viewer?: HumanStepViewer;
+  /** Saves a new title (the glob view's update call); without it the title is plain text. */
+  onUpdateTitle?: (changes: GlobChanges) => Promise<EditFailure | null>;
+  /** Loads the glob's latest values after a title save met a newer version. */
+  onReload?: () => Promise<void>;
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
-  const status = statusLine(glob, new Date().toISOString(), viewer);
+  const now = new Date().toISOString();
   const preview = moves.find((m) => m.action === previewing);
   // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status.
   const decision = decisionOf(glob) !== null;
+  const marker = cornerMarker(glob, now, viewer, repo);
+  const position = positionOf(glob, now, viewer);
+  const line = cardStatus(glob, now, viewer, repo);
+  const blocked = hasBlocker(glob, now, viewer);
+  const turn = turnButton(glob, now, viewer, blocked);
+  const shown = cardActions(moves, glob, decision, blocked);
+  const editable = onUpdateTitle !== undefined && glob.status !== 'signed_off';
 
   return (
     <div
@@ -769,7 +835,7 @@ export const GlobCard = ({
         if (!e.currentTarget.contains(e.relatedTarget)) onPreview(null);
       }}
       className={cn(
-        'card-edge relative cursor-pointer rounded-md border px-3 py-2.5 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+        'card-edge relative flex cursor-pointer flex-col gap-1.5 rounded-md border px-3 py-2.5 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
         AGING_STYLE[age],
         failed && 'border-red-soft',
         lock === 'local' && 'lock-local',
@@ -781,18 +847,55 @@ export const GlobCard = ({
       data-glob-id={glob.id}
       data-testid={`card-${glob.id}`}
     >
-      <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground'>
-        <span>
-          {glob.id} · {decision ? 'decision' : glob.type}
-          {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
-        </span>
-        <span className='inline-flex items-center gap-1.5'>
-          <PositionLabel glob={glob} repo={repo} viewer={viewer} onAct={onAct} onOpenSection={onOpenSection} />
+      <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground' data-testid='card-header'>
+        <span className='inline-flex min-w-0 items-center gap-1.5'>
+          <span className='whitespace-nowrap'>
+            {glob.id} · {decision ? 'decision' : glob.type}
+            {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
+          </span>
           <CategoryIcon category={glob.category} />
+          <Avatar email={person} planner={glob.implementer === null} />
         </span>
+        {marker !== null && <CornerMarkerView marker={marker} position={position} onAct={onAct} onOpenSection={onOpenSection} />}
       </div>
-      <div className='mt-1 leading-snug font-medium break-words'>{glob.title}</div>
-      <div className='mt-2 flex flex-wrap items-center gap-1.5'>
+      <CardTitle glob={glob} editable={editable} onUpdate={onUpdateTitle ?? (() => Promise.resolve(null))} onReload={onReload ?? (() => Promise.resolve())} />
+      {line !== null && (
+        <Tip text={line.tip} className='w-full'>
+          <div
+            className='w-full min-w-0 truncate whitespace-nowrap text-left font-mono text-[11px]'
+            data-testid='status-line'
+            data-kind={line.kind}
+          >
+            {line.head !== null && (
+              <ChipButton
+                onOpen={() => runChip(line.head?.click ?? { kind: 'section', target: cardTargets.actions() }, () => undefined, onOpenSection)}
+                className={cn('inline text-left', line.head.tone)}
+                testId='status-line-open'
+                dataKind={line.head.kind}
+              >
+                {line.head.text}
+              </ChipButton>
+            )}
+            {line.head !== null && line.waiting !== null && <span className='text-muted-foreground'> · </span>}
+            {line.waiting !== null && (
+              <span className='text-muted-foreground' data-testid='waiting-on'>
+                <ChipButton onOpen={() => onOpenSection(cardTargets.prerequisites())} className='inline' testId='waiting-on-open'>
+                  waiting on
+                </ChipButton>{' '}
+                <GlobLinks boardId={glob.boardId} ids={line.waiting.ids} />
+                {line.waiting.more > 0 && ` +${String(line.waiting.more)}`}
+                {line.waiting.next !== null && (
+                  <>
+                    {' · next: '}
+                    <GlobLinks boardId={glob.boardId} ids={[line.waiting.next]} />
+                  </>
+                )}
+              </span>
+            )}
+          </div>
+        </Tip>
+      )}
+      <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
         {glob.group !== null && <GroupChip name={glob.group} />}
         {decision ? (
           <DecisionChips glob={glob} onOpen={() => onOpenSection(cardTargets.decision())} />
@@ -800,13 +903,12 @@ export const GlobCard = ({
           <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
         )}
         <ArtifactIcons glob={glob} onOpen={onOpenSection} />
-        <AfterChip glob={glob} onOpen={() => onOpenSection(cardTargets.prerequisites())} />
         <OverlapChip glob={glob} />
         <SplitChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
         <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
         <UpcomingStepsChip glob={glob} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
         {glob.clash != null && (
-          <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict. Opens the conflict`}>
+          <Tip text={`${glob.clash.with} also changes some of the same files; whichever merges second will conflict. Opens the conflict`}>
             <ChipButton onOpen={() => onOpenSection(cardTargets.conflict())} className='font-mono text-[11px] text-required' testId='clash-chip'>
               clashes with {glob.clash.with}
             </ChipButton>
@@ -815,21 +917,6 @@ export const GlobCard = ({
         {deploy !== undefined && <DeployChip deploy={deploy} onOpen={() => onOpenSection(cardTargets.deploys())} />}
         {environments !== undefined && <EnvironmentChips environments={environments} />}
         {atf !== undefined && <AtfChip runs={atf} />}
-        {status !== null && !decision && status.kind === 'ready' && (
-          <YourTurnChip glob={glob} status={status} pending={pending} onAct={(action) => onAct?.(action)} onOpenSection={onOpenSection} />
-        )}
-        {status !== null && !decision && status.kind !== 'ready' && (
-          <Tip text={`${status.tip}\n${clickTip(statusClick(status))}`}>
-            <ChipButton
-              onOpen={() => runChip(statusClick(status), () => undefined, onOpenSection)}
-              className={cn('font-mono text-[11px]', status.tone)}
-              testId='status-line'
-              dataKind={status.kind}
-            >
-              {status.text}
-            </ChipButton>
-          </Tip>
-        )}
         {age !== 'neutral' && glob.pr?.state === 'draft' && (
           <Tip text='Two or more days in Doing and the PR is still a draft'>
             <ChipButton
@@ -848,29 +935,17 @@ export const GlobCard = ({
             </ChipButton>
           </Tip>
         )}
-        <span className='ml-auto inline-flex items-center gap-1'>
-          {glob.escalation != null && glob.status === 'planning' && (
-            // The visible words are hidden: the button's label names it and the Tip's description gives the reason.
-            <Tip text={`Needs a person: ${glob.escalation.reason}. Opens the reason`}>
-              <ChipButton
-                onOpen={() => onOpenSection(cardTargets.escalation())}
-                className='inline-flex items-center gap-1 font-mono text-[11px] text-required'
-                testId='escalation-chip'
-                ariaLabel='Needs a person'
-              >
-                <span aria-hidden className='inline-flex items-center gap-1'>
-                  needs a <HumanIcon className='h-3 w-3' decorative />
-                </span>
-              </ChipButton>
-            </Tip>
-          )}
+      </div>
+      {(pending !== undefined || turn !== null || shown.length > 0) && (
+        <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-testid='card-actions'>
           {pending !== undefined && (
-            <span className='inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
+            <span className='inline-flex items-center gap-1 whitespace-nowrap font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
               <Loader2 className='size-3 animate-spin' aria-hidden />
               {workingLabel(pending)}
             </span>
           )}
-          {moves.map((move, _i, all) => (
+          {turn !== null && <TurnButton glob={glob} turn={turn} pending={pending} onAct={(action) => onAct?.(action)} />}
+          {shown.map((move, _i, all) => (
             <MoveButton
               key={move.action}
               move={move}
@@ -881,12 +956,11 @@ export const GlobCard = ({
               onMove={onMove}
             />
           ))}
-          <Avatar email={person} planner={glob.implementer === null} />
-        </span>
-      </div>
+        </div>
+      )}
       {tag !== undefined && (
         // Keyed by the move, so a second move's tag restarts its fade.
-        <div key={tag.n} className='move-tag mt-1.5 font-mono text-[10px] text-muted-foreground' role='status'>
+        <div key={tag.n} className='move-tag font-mono text-[10px] text-muted-foreground' role='status'>
           ▸ {tag.text}
         </div>
       )}

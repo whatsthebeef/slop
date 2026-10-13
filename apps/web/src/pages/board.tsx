@@ -1,5 +1,5 @@
-import { LISTS, bySignedOffNewest, decisionOf, latestSignedOff } from '@slop/core';
-import type { Action, LabelCommand, LabelName, List } from '@slop/core';
+import { LISTS, bySignedOffNewest, decisionOf, describeEditFailure, latestSignedOff } from '@slop/core';
+import type { Action, HumanStepViewer, LabelCommand, LabelName, List } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -14,8 +14,9 @@ import type { BoardShellContext } from '@/components/board-shell';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
-import type { GlobView, NewGlob } from '@/lib/api';
+import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, actionPresentation, haltedBy, presentedActions } from '@/lib/action-presentation';
+import { cardActions, hasBlocker } from '@/lib/card-rows';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { mergeOutcomeText, runCardAction } from '@/lib/card-pending';
@@ -45,9 +46,10 @@ type Direction = 'left' | 'right';
 /**
  * The moves a glob can make, each a state-machine action it allows: right takes a glob from
  * Planning into Doing. Discard isn't a card move (it is in the glob view). Leaving Doing happens through the merge and signing off
- * through labels, so those lists have no moves.
+ * through labels, so those lists have no moves. The same rule as the card's buttons decides which show (none with a blocker,
+ * else the main action), so ← → and Enter never preview a move the card has no button for.
  */
-const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
+const movesFor = (glob: GlobView, viewer?: HumanStepViewer): { move: CardMove; target: List }[] => {
   // No moves while slop is still creating the glob's branch and PR: a second action then would race the setup.
   if (glob.provisioning === 'pending') return [];
   const allowed = presentedActions(glob.allowedActions ?? []);
@@ -65,9 +67,16 @@ const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
     };
   };
   if (glob.list === 'planning') {
-    return (['start', 'start_anyway', 'pick_up', 'take_over', 'retrigger'] as const)
+    const all = (['start', 'start_anyway', 'pick_up', 'take_over', 'retrigger'] as const)
       .filter((a) => allowed.includes(a))
       .map((a) => make(a, 'right', 'doing'));
+    const shown = cardActions(
+      all.map((m) => m.move),
+      glob,
+      decisionOf(glob) !== null,
+      hasBlocker(glob, new Date().toISOString(), viewer),
+    );
+    return all.filter((m) => shown.includes(m.move));
   }
   return [];
 };
@@ -417,7 +426,7 @@ export const BoardPage = () => {
 
   /** ← / → on a focused card: cycle its moves that way, or bump the wall when there are none. */
   const arrow = (glob: GlobView, direction: Direction) => {
-    const options = movesFor(glob).filter((m) => m.move.direction === direction);
+    const options = movesFor(glob, viewer).filter((m) => m.move.direction === direction);
     if (options.length === 0) {
       setBumps((b) => ({ ...b, [glob.id]: direction }));
       setTimeout(() => setBumps((b) => Object.fromEntries(Object.entries(b).filter(([id]) => id !== glob.id))), 210);
@@ -487,7 +496,7 @@ export const BoardPage = () => {
             return (
               <Column key={list} list={list} count={items.length} total={total} boardId={boardId} ghost={preview?.target === list ? preview : null} filtered={filtering > 0}>
                 {items.map((glob) => {
-                  const moves = movesFor(glob);
+                  const moves = movesFor(glob, viewer);
                   return (
                     <GlobCard
                       key={glob.id}
@@ -516,6 +525,16 @@ export const BoardPage = () => {
                       environments={deployState.data?.environments?.[glob.id]}
                       atf={deployState.data?.atf?.[glob.id]}
                       viewer={viewer}
+                      onUpdateTitle={async (changes: GlobChanges) => {
+                        try {
+                          store(await api.updateGlob(glob.id, glob.version, changes));
+                          return null;
+                        } catch (error) {
+                          // The card keeps the draft and shows why; a version conflict is reloaded on request.
+                          return describeEditFailure(error instanceof RequestError ? error.body : { message: 'Something went wrong' });
+                        }
+                      }}
+                      onReload={() => api.glob(glob.id).then(store).then(() => undefined)}
                     />
                   );
                 })}

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { MemoryRouter } from 'react-router';
-import { GlobCard, PositionLabel } from '../src/components/glob-card';
+import { GlobCard } from '../src/components/glob-card';
 import type { CardMove } from '../src/components/glob-card';
 import { HumanIcon, MachineIcon } from '../src/components/actor-icons';
 import { actionPresentation } from '../src/lib/action-presentation';
@@ -136,18 +136,18 @@ describe('status-line activity icons (s15f88)', () => {
   });
 
   it('renders the standby marker with a decorative icon beside the text', () => {
-    const html = renderToStaticMarkup(
-      createElement(PositionLabel, { glob: view({ status: 'pr_open', ...live('watching') }) }),
-    );
-    expect(html).toContain('standby');
+    const html = card(view({ type: 'sub', status: 'pr_open', pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' }, ...live('watching') }));
+    expect(html).toContain('data-kind="standby"');
+    expect(html).toContain('>standby<');
     expect(html).toContain('aria-hidden="true"');
     expect(html).not.toContain('aria-label="machine"');
   });
 
-  it('shows exactly one position indicator on a card, with the standby marker beside it', () => {
+  it('shows exactly one position indicator on a card, and no standby beside it', () => {
     const html = card(view({ status: 'in_progress', ...live('active') }));
     expect(html.split('data-testid="position"')).toHaveLength(2);
-    expect(html).not.toContain('data-testid="standby"');
+    expect(html.split('data-testid="corner-marker"')).toHaveLength(2);
+    expect(html).not.toContain('>standby<');
   });
 });
 
@@ -171,16 +171,16 @@ describe('escalation chip (s15f88)', () => {
     );
   });
 
-  it('sits in the right-aligned group, after the status chips', () => {
+  it('is the one corner marker, in the header and not among the chips', () => {
     const html = card(
       view({
         status: 'planning',
         escalation: { reason: 'touches billing', at: NOW } as GlobView['escalation'],
       }),
     );
-    const group = html.indexOf('class="ml-auto inline-flex items-center gap-1"');
-    expect(group).toBeGreaterThan(-1);
-    expect(html.indexOf('data-testid="escalation-chip"')).toBeGreaterThan(group);
+    expect(html.split('data-testid="corner-marker"')).toHaveLength(2);
+    expect(html).toContain('data-kind="needs-human"');
+    expect(html.indexOf('data-testid="escalation-chip"')).toBeLessThan(html.indexOf('data-testid="card-chips"'));
   });
 
   it('shows no escalation chip outside Planning', () => {
