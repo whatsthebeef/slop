@@ -86,7 +86,6 @@ export const GlobDetail = ({
     onAction,
     onUpdate,
     onDismiss,
-    onCompleteStep,
     ...(email === undefined ? {} : { email }),
   });
   const { decision, busy, disabled } = actionState;

@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -162,14 +162,7 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
     ...exclusivePathExecutors(store, branchFiles, boardOf),
-    // `rolloutService` is built below and only called once a job runs.
-    ...rolloutExecutors(
-      new CodeHostChanges(github, logError),
-      boardOf,
-      async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).rolloutPaths,
-      logError,
-      { run: (globId, sha) => rolloutService.run(globId, sha) },
-    ),
+    ...rolloutExecutors(new CodeHostChanges(github, logError), boardOf, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).rolloutPaths, logError),
     // The independent reviewer: `artifacts`, `trackLlm` and the config exist by the time the first job runs.
     ...reviewExecutors(github, boardOf, (glob, resolved) =>
       makeRunReview({
@@ -302,16 +295,6 @@ const findingsLlm = trackLlm(
   config.FINDINGS_MODEL,
 );
 const findingsPipeline = new FindingsPipeline({ store, clock, notifier: hub, llm: findingsLlm });
-// Rollout steps (Haiku, tagged `rollout` in the spend ledger): a merge that touches the rollout paths gets its steps written, or "No rollout needed", by the machine.
-const rolloutService = new RolloutService({
-  store,
-  clock,
-  globs,
-  changes: new CodeHostChanges(github, logError),
-  llm: findingsLlm,
-  model: config.FINDINGS_MODEL,
-  rolloutPathsOf: async (board) => rolloutPathsOf({ rolloutPaths: (await store.transaction((tx) => readMergePolicy(tx, board.id))).rolloutPaths }),
-});
 
 // The search index (spec, Knowledge and context): derived from the board's own material, so it syncs by content hash
 // (the start-up run is the backfill). Titan embeds chunks; Haiku writes each merged change's "why". Both wait while
@@ -645,17 +628,6 @@ if (runs('llm') || runs('kb')) {
     .finally(() => {
       if (!stopping) llmOutbox.start();
     });
-  // Backfill: merged globs still showing "Rollout steps not written" get the rollout job (it replaces the step). Idempotent: a glob
-  // whose job is pending or whose rollout is written queues nothing more.
-  void store
-    .transaction((tx) => tx.listAllBoards())
-    .then(async (all) => {
-      for (const b of all) {
-        const queued = await rolloutService.backfill(b.id);
-        if (queued > 0) console.log(`[rollout] queued the rollout job for ${String(queued)} glob(s) on board ${String(b.id)} that had no rollout steps written`);
-      }
-    })
-    .catch((error: unknown) => logError('rollout', error instanceof Error ? error.message : String(error)));
 }
 const runWatch = new RunWatch(store, globs, logError);
 if (runs('runs')) runWatch.start();

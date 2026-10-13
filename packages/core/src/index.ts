@@ -121,7 +121,6 @@ export * from './app/inbox-service.js';
 export * from './app/decision-glob.js';
 export * from './app/decision-glob-service.js';
 export * from './app/suggest-service.js';
-export * from './app/rollout-service.js';
 export * from './app/integration-token-service.js';
 export * from './app/inbox-pipeline.js';
 export * from './app/report-service.js';

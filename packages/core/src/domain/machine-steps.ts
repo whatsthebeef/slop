@@ -21,7 +21,6 @@ export const MACHINE_STEP_KINDS = [
   'merge',
   'deploy',
   'agent_set_commit',
-  'rollout_check',
   'checks',
   'upload_wait',
 ] as const;
@@ -87,7 +86,6 @@ const EFFECT_STEP: Readonly<Record<string, MachineStepKind>> = {
   revert_merge: 'merge',
   evaluate_sub_gate: 'merge',
   commit_agent_set: 'agent_set_commit',
-  write_rollout_steps: 'rollout_check',
 };
 
 const short = (sha: string): string => sha.slice(0, 7);

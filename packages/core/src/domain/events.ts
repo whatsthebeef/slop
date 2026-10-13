@@ -183,15 +183,9 @@ export type Effect =
   | { readonly kind: 'release_waiting'; readonly globId: string; readonly generation: number }
   /**
    * A glob merged for good: read the merge commit's files and, when they touch the board's rollout paths while the
-   * implementation record has no `## Rollout`, queue `write_rollout_steps`. Once only; a failed read queues nothing.
+   * implementation record has no `## Rollout`, add the "Rollout steps not written" step. Once only; a failed read flags nothing.
    */
   | { readonly kind: 'check_rollout_paths'; readonly globId: string; readonly generation: number; readonly sha: string }
-  /**
-   * The merge touched a rollout path and the record has no `## Rollout`: a model reads the diff and writes the rollout
-   * steps, records "No rollout needed: <reason>", or (only when it can't tell) adds one specific question step. `llm`
-   * lane. Not generation-checked: a backfill queues it for globs merged long ago.
-   */
-  | { readonly kind: 'write_rollout_steps'; readonly globId: string; readonly sha: string }
   /** Read which exclusive paths the glob's branch changes and whether another open glob changes them too. */
   | { readonly kind: 'check_exclusive_paths'; readonly globId: string; readonly generation: number }
   /**
@@ -252,7 +246,7 @@ export const OUTBOX_LANES: readonly OutboxLane[] = ['default', 'llm'];
  * `llm`: the KB pipeline's routing and drafting and the knowledge page's regeneration. The `llm` runner starts with the `llm` job switch (or `kb`), so a new
  * llm-lane kind runs wherever those are on.
  */
-const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm', suggest_decision: 'llm', regenerate_knowledge_page: 'llm', write_rollout_steps: 'llm' };
+const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm', suggest_decision: 'llm', regenerate_knowledge_page: 'llm' };
 
 export const laneOf = (kind: EffectKind): OutboxLane => LANE_OF_KIND[kind] ?? 'default';
 
@@ -316,9 +310,6 @@ export const recheckOverlapsEffect = (boardId: number): Effect => ({ kind: 'rech
 
 /** Remove an attachment's object from storage; queued in the transaction that stops referring to it. */
 export const deleteObjectEffect = (globId: string, key: string): Effect => ({ kind: 'delete_object', globId, key });
-
-/** Have the model write (or rule out) the rollout steps of the merge `sha`. */
-export const writeRolloutEffect = (globId: string, sha: string): Effect => ({ kind: 'write_rollout_steps', globId, sha });
 
 /** Suggest for a decision glob (an on-demand model recommendation). */
 export const suggestEffect = (globId: string): Effect => ({ kind: 'suggest_decision', globId });

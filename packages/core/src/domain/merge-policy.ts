@@ -19,13 +19,8 @@ export interface MergePolicy {
   readonly rolloutPaths?: readonly string[];
 }
 
-/**
- * The rollout paths a board gets when its policy lists none: what the image deploy alone doesn't ship. Drizzle
- * migrations run on server start and workflows deploy with the merge, so neither is a default; a board can still list
- * them in its policy. A path only triggers the rollout check (a model reads the diff): `config.ts` needs a person only
- * when a setting has no default or is production-only.
- */
-export const DEFAULT_ROLLOUT_PATHS: readonly string[] = ['infra/**', 'apps/server/src/config.ts'];
+/** The rollout paths a board gets when its policy lists none: what the image deploy alone doesn't ship. */
+export const DEFAULT_ROLLOUT_PATHS: readonly string[] = ['infra/**', 'apps/server/src/config.ts', '.github/workflows/**', '**/drizzle/**'];
 
 /** The path globs whose merge asks for a rollout: the policy's own list, or the defaults when it has none. */
 export const rolloutPathsOf = (policy: { readonly rolloutPaths?: readonly string[] } | null | undefined): readonly string[] =>

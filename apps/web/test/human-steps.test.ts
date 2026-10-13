@@ -10,7 +10,6 @@ import {
   defaultStepsOpen,
   dismissReason,
   mainStep,
-  stepMain,
   rolloutLine,
   scriptArtifactPath,
   scriptCopyText,
@@ -61,23 +60,6 @@ describe('main step', () => {
     expect(mainStep(merged([step({ state: 'pending' })]), admin)).toBeNull();
     expect(mainStep(merged([step({ blocks: [] })]), admin)).toBeNull();
     expect(blockingTurn([step({ id: 'machine:merge', blocks: ['reviewing'], who: 'anyone' })], glob(), admin)).toBeNull();
-  });
-});
-
-describe('main step action', () => {
-  it('copies the command for a script step, then offers Mark done', () => {
-    expect(stepMain(step({ script: { path: 'infra/deploy/host-deploy.sh' } }))).toEqual({ kind: 'copy', label: 'Copy rollout command', then: 'Mark done' });
-  });
-  it('is Mark done with the text visible for a setting or manual step', () => {
-    expect(stepMain(step({ detail: 'Add SLOP_X to /slop/prod/server-env' }))).toEqual({ kind: 'done', label: 'Mark done', text: 'Add SLOP_X to /slop/prod/server-env' });
-    expect(stepMain(step())).toEqual({ kind: 'done', label: 'Mark done', text: null });
-  });
-  it('is disabled with the reason when slop ticks the step itself (a capability check), even for a script', () => {
-    expect(stepMain(step({ check: 'fileAttachments', script: { path: 'x.sh' } }))).toEqual({
-      kind: 'wait',
-      label: 'Mark done',
-      reason: 'waits for fileAttachments to turn on; slop ticks this itself',
-    });
   });
 });
 

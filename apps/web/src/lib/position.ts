@@ -40,7 +40,6 @@ const DOING: Readonly<Record<MachineStepKind, string>> = {
   merge: 'merging',
   deploy: 'deploying',
   agent_set_commit: 'committing the agent set',
-  rollout_check: 'checking rollout',
   checks: 'checks running',
   upload_wait: 'waiting for an upload',
 };
