@@ -555,7 +555,7 @@ describe('Mining: mined KB items and the re-raise rules', () => {
         });
         if (source === null) throw new Error('No source');
         const finding = { boardId: board.id, globId: id, sourceId: source.id, source: 'local_review' as const, commitSha: null, agentSetVersion: null };
-        await tx.insertFindings([{ ...finding, severity: 'in_scope', round: 1, path: null, line: null, text: 'Misses the empty case', fingerprint: 'empty' }], START);
+        await tx.insertFindings([{ ...finding, severity: 'in_scope', round: 1, path: null, line: null, text: 'Misses the empty case', resolved: false, fingerprint: 'empty' }], START);
         const [split] = await tx.listFindings(id);
         if (split === undefined) throw new Error('No finding');
         await tx.updateFinding({ ...split, state: 'classified', class: 'edge-case', classifiedAt: START, version: split.version + 1 }, split.version);

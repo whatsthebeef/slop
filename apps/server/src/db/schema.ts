@@ -425,6 +425,7 @@ export const reviewFindings = pgTable(
     path: text('path'),
     line: text('line'),
     text: text('text').notNull(),
+    resolved: boolean('resolved').notNull().default(false),
     fingerprint: text('fingerprint').notNull(),
     class: text('class', { enum: FINDING_CLASSES }),
     classNote: text('class_note'),

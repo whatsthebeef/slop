@@ -253,6 +253,7 @@ describe('ReviewInputService', () => {
             severity: 'in_scope',
             path: 'src/job.ts',
             text: 'Retry loop never stops',
+            resolved: false,
             fingerprint: 'a',
           },
           {
@@ -260,6 +261,7 @@ describe('ReviewInputService', () => {
             severity: 'in_scope',
             path: 'src/queue.ts',
             text: 'About another file',
+            resolved: false,
             fingerprint: 'b',
           },
           {
@@ -267,6 +269,7 @@ describe('ReviewInputService', () => {
             severity: 'suggestion',
             path: 'src/job.ts',
             text: 'Rename it',
+            resolved: false,
             fingerprint: 'c',
           },
         ],
