@@ -245,4 +245,27 @@ describe('MCP get_context include and get_artifact', () => {
     const bad = await call('create_glob', { board: boardId, title: 'No such item', category: 'task', type: 'same', inboxItem: 99999, idempotencyKey: 'bad-item' });
     expect(bad.isError).toBe(true);
   });
+
+  it('create_glob stores attachments with the glob, refuses a bad one and does not duplicate them on retry', async () => {
+    const args = {
+      board: boardId,
+      title: 'With files',
+      category: 'task',
+      type: 'same',
+      idempotencyKey: 'with-attachments',
+      attachments: [{ label: 'Notes', text: 'pasted notes' }, { label: 'Spec', link: 'https://example.com/spec' }],
+    };
+    const made = (await call('create_glob', args)).body as unknown as { id: string };
+    const ctx = (await call('get_context', { id: made.id, include: ['all'] })).body as unknown as { attachments: { label: string; content: string; link: string | null }[] };
+    const mine = ctx.attachments.filter((a) => ['Notes', 'Spec'].includes(a.label));
+    expect(mine.find((a) => a.label === 'Notes')).toMatchObject({ content: 'pasted notes', link: null });
+    expect(mine.find((a) => a.label === 'Spec')).toMatchObject({ link: 'https://example.com/spec' });
+    const again = (await call('create_glob', args)).body as unknown as { id: string };
+    expect(again.id).toBe(made.id);
+    const stored = await store.transaction((tx) => tx.listArtifacts(made.id, 'attachment'));
+    expect(stored.filter((x) => x.label === 'Notes').map((x) => x.version)).toEqual([1]);
+    const bad = await call('create_glob', { ...args, title: 'Bad', idempotencyKey: 'bad-attachment', attachments: [{ label: 'Empty' }] });
+    expect(bad.isError).toBe(true);
+    expect(await store.transaction((tx) => tx.findGlobByCreationKey(boardId, 'bad-attachment'))).toBeNull();
+  });
 });

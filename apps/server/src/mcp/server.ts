@@ -135,6 +135,19 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .positive()
           .optional()
           .describe("An inbox item of the same board to attach to the new glob in the same step (it becomes `attached` and is in the glob's context from the start). Refused when it is another board's or discarded, and nothing is created"),
+        attachments: z
+          .array(
+            z.object({
+              label: z.string().min(1),
+              text: z.string().max(100_000).optional(),
+              link: z.url().regex(/^https?:\/\//i).optional(),
+            }),
+          )
+          .max(10)
+          .optional()
+          .describe(
+            "Files or notes to store on the new glob in the same step, so its first run has them. Each needs a label and text or an http(s) link. To send files or notes the user shared (pasted text, a document's text, a link), pass them here: their text, not a summary. Binary files (images, PDFs) can't be stored: transcribe or describe what matters, or pass a link. One invalid item refuses the create. A retry with the same idempotency key doesn't add them again",
+          ),
         start: z
           .boolean()
           .optional()
@@ -222,6 +235,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
         ...(input.inboxItem === undefined ? {} : { inboxItem: input.inboxItem }),
+        ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
         ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
         ...(input.overlaps === undefined ? {} : { overlaps: input.overlaps }),
         ...(files.length === 0 ? {} : { files }),
