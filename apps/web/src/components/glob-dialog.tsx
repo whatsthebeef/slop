@@ -33,6 +33,7 @@ import { PlanEditor } from './plan-editor';
 import { OversizedGlob, isOversized } from './oversized-glob';
 import { SplitGlob, canSplit } from './split-glob';
 import { GlobDecisions } from './glob-decisions';
+import { GlobTitle } from './glob-title';
 import { ReviewFindings } from './review-findings';
 import { cn } from '@/lib/utils';
 import { Tip } from './ui/tip';
@@ -292,9 +293,7 @@ export const GlobDetail = ({
             <ArrowLeft className='h-4 w-4' />
           </Link>
         </Tip>
-        <h1 className='min-w-0 truncate text-base font-semibold' title={glob.title} data-testid='glob-heading'>
-          <span className='font-mono text-muted-foreground'>{glob.id}</span> {glob.title}
-        </h1>
+        <GlobTitle id={glob.id} title={glob.title} editable={glob.status !== 'signed_off'} onUpdate={onUpdate} onReload={onReload} />
       </div>
         <div className='grid gap-4'>
           <div className='flex flex-wrap items-center gap-2 text-sm'>
@@ -601,10 +600,6 @@ export const GlobDetail = ({
           )}
 
           <div className='grid gap-3'>
-            <Label>
-              Title
-              <Input value={merged.title} onChange={(e) => edit({ title: e.target.value })} />
-            </Label>
             <Label>
               Summary
               <Textarea value={merged.summary} onChange={(e) => edit({ summary: e.target.value })} />
