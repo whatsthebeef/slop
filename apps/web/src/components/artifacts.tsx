@@ -10,6 +10,7 @@ import type { ArtifactSummaryView } from '@/lib/api';
 import { checkAttachment, readTextFile } from '@/lib/attachment';
 import { inboxLinkTarget, isInboxLink } from '@/lib/inbox';
 import { artifactKey, globsKey, inboxKey } from '@/lib/live';
+import { listedArtifacts } from '@/lib/plan-text';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
 import { Button } from './ui/button';
@@ -58,21 +59,25 @@ export const ArtifactsSection = ({
   globId,
   boardId,
   artifacts,
+  signedOff,
   selected,
   onSelect,
 }: {
   globId: string;
   boardId: number;
   artifacts: readonly ArtifactSummaryView[];
+  signedOff: boolean;
   selected: ArtifactRef | null;
   onSelect: (artifact: ArtifactRef | null) => void;
 }) => {
   const [adding, setAdding] = useState(false);
-  if (artifacts.length === 0) return null;
+  const listed = listedArtifacts(artifacts, signedOff);
+  // plan.md can still be opened from the plan field's history link while it is not listed.
   const current =
     selected === null
       ? undefined
       : artifacts.find((a) => a.kind === selected.kind && a.label === selected.label);
+  if (listed.length === 0 && current === undefined) return null;
   return (
     <div className="grid gap-2" data-testid="artifacts">
       <div className="flex items-center gap-2">
@@ -94,7 +99,7 @@ export const ArtifactsSection = ({
         />
       )}
       <div className="flex flex-wrap gap-1.5">
-        {artifacts.map((a) => {
+        {listed.map((a) => {
           const Icon = ARTIFACT_META[a.kind].icon;
           const active = current === a;
           return (
