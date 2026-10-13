@@ -6,7 +6,10 @@ import { groupFromTitle } from '../domain/group.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
-import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, humanSteps, isHumanStepDue, storedBlockProgress } from '../domain/human-steps.js';
+import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, humanSteps, isHumanStepDue, isMerged, storedBlockProgress } from '../domain/human-steps.js';
+import { isCapabilityName } from '../domain/capabilities.js';
+import type { Capabilities } from '../domain/capabilities.js';
+import { ROLLOUT_NOT_WRITTEN_TITLE, ROLLOUT_PATHS_ORIGIN, ROLLOUT_SCRIPT_KIND, ROLLOUT_SECTION_ORIGIN, parseRollout, rolloutScriptLabel } from '../domain/rollout.js';
 import type { HumanStep, HumanStepBlock, HumanStepKind, HumanStepScript, StoredHumanStep } from '../domain/human-steps.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
@@ -16,6 +19,7 @@ import type { Handover } from '../domain/handover.js';
 import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect } from '../domain/events.js';
+import type { DomainEvent } from '../domain/events.js';
 import { defaultAreas, matchRiskAreas, splitEvidence } from '../domain/risk-area.js';
 import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
 import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
@@ -465,6 +469,152 @@ export class GlobService {
       return true;
     });
     if (added) this.deps.notifier.publish({ kind: 'glob.changed', boardId: glob.boardId, globId: id, version: glob.version });
+  }
+
+  /** A rollout work step in the shape every system writer uses: after the merge, holding back sign-off and dependants. */
+  private rolloutStep(glob: Glob, origin: string, createdBy: string, now: string, fields: Pick<StoredHumanStep, 'title' | 'detail' | 'check' | 'script'>): StoredHumanStep {
+    return {
+      id: `hs_${this.deps.ids.runId()}`,
+      boardId: glob.boardId,
+      globId: glob.id,
+      kind: 'rollout',
+      who: 'anyone',
+      due: 'after_merge',
+      state: 'open',
+      blocks: ['sign_off', 'dependants'],
+      origin,
+      createdBy,
+      createdAt: now,
+      doneBy: null,
+      doneAt: null,
+      dismissedReason: null,
+      ...fields,
+    };
+  }
+
+  /**
+   * An implementation record arrived: its `## Rollout` section becomes the glob's rollout steps. The steps this section
+   * wrote before are matched by title: a still-open one that is gone is dismissed, one that is still there is updated in
+   * place, a done or dismissed one stays as it is, and a new one is added. Real steps replace the investigator's
+   * placeholder. A script step's body is stored as a `rollout_script` artifact (one label per step). Reading the same
+   * record again changes nothing.
+   */
+  async reconcileRollout(
+    email: string,
+    id: string,
+    record: string,
+    source: { readonly commitSha: string | null; readonly runId: string | null; readonly agentSetVersion: number | null },
+  ): Promise<void> {
+    const parsed = parseRollout(record);
+    const changed = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      if (glob === null) return null;
+      const now = this.deps.clock.now();
+      const stored = await tx.listHumanSteps(glob.boardId, [id]);
+      const own = stored.filter((s) => s.origin === ROLLOUT_SECTION_ORIGIN);
+      const events: DomainEvent[] = [];
+      const save: StoredHumanStep[] = [];
+      const note = (step: StoredHumanStep, change: string) =>
+        events.push({ type: 'HumanStepChanged', globId: id, actor: email, at: now, data: { step: step.id, kind: step.kind, title: step.title, change } });
+      let scripts = false;
+      for (const step of parsed) {
+        let script: HumanStepScript | null = null;
+        if (step.script !== null && step.script.trim() !== '') {
+          const label = rolloutScriptLabel(step.title);
+          script = { artifact: label };
+          const latest = (await tx.artifactVersions(id, ROLLOUT_SCRIPT_KIND, label)).at(-1);
+          if (latest?.content !== step.script) {
+            await addArtifact(tx, this.deps.clock, glob, email, { kind: ROLLOUT_SCRIPT_KIND, label, content: step.script, link: null, commitSha: source.commitSha, runId: source.runId, agentSetVersion: source.agentSetVersion, reviewStats: null });
+            scripts = true;
+          }
+        }
+        const fields = { title: step.title, detail: step.detail, check: step.check, script };
+        const existing = own.find((s) => s.title === step.title);
+        if (existing === undefined) {
+          const added = this.rolloutStep(glob, ROLLOUT_SECTION_ORIGIN, email, now, fields);
+          save.push(added);
+          note(added, 'added');
+        } else if (existing.state === 'open' && (existing.detail !== step.detail || existing.check !== step.check || JSON.stringify(existing.script) !== JSON.stringify(script))) {
+          const updated = { ...existing, detail: step.detail, check: step.check, script };
+          save.push(updated);
+          note(updated, 'updated');
+        }
+      }
+      for (const step of own) {
+        if (step.state !== 'open' || parsed.some((p) => p.title === step.title)) continue;
+        const dismissed: StoredHumanStep = { ...step, state: 'dismissed', dismissedReason: 'No longer in the implementation record' };
+        save.push(dismissed);
+        note(dismissed, 'dismissed');
+      }
+      if (parsed.length > 0) {
+        for (const step of stored) {
+          const placeholder = step.origin === 'investigation' && step.title === PREDICTED_ROLLOUT_TITLE;
+          if (!(placeholder || step.origin === ROLLOUT_PATHS_ORIGIN) || step.state !== 'open') continue;
+          const dismissed: StoredHumanStep = { ...step, state: 'dismissed', dismissedReason: 'Replaced by the steps in the implementation record' };
+          save.push(dismissed);
+          note(dismissed, 'dismissed');
+        }
+      }
+      if (save.length > 0) await tx.saveHumanSteps(save);
+      if (events.length > 0) await tx.appendEvents(events);
+      return { steps: save.length > 0, scripts, boardId: glob.boardId };
+    });
+    if (changed === null) return;
+    if (changed.scripts) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: changed.boardId, globId: id });
+    if (changed.steps) await this.afterStepsChanged(id);
+  }
+
+  /**
+   * A glob merged and its diff touched the board's rollout paths: when its record has no rollout steps, adds the step that
+   * asks someone to check what the change needs. Once only, and never when the record has a Rollout section.
+   */
+  async flagUnwrittenRollout(id: string): Promise<boolean> {
+    const added = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      if (glob === null) return null;
+      const steps = await tx.listHumanSteps(glob.boardId, [id]);
+      if (steps.some((s) => s.origin === ROLLOUT_SECTION_ORIGIN || s.origin === ROLLOUT_PATHS_ORIGIN)) return null;
+      const record = (await tx.listArtifacts(id, 'implementation_plan')).find((a) => a.label === '');
+      if (record !== undefined && parseRollout(record.content).length > 0) return null;
+      const now = this.deps.clock.now();
+      const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: ROLLOUT_NOT_WRITTEN_TITLE, detail: null, check: null, script: null });
+      await tx.saveHumanSteps([step]);
+      await tx.appendEvents([{ type: 'HumanStepChanged', globId: id, actor: null, at: now, data: { step: step.id, kind: step.kind, title: step.title, change: 'added' } }]);
+      return glob;
+    });
+    if (added === null) return false;
+    this.deps.notifier.publish({ kind: 'glob.changed', boardId: added.boardId, globId: id, version: added.version });
+    return true;
+  }
+
+  /**
+   * Capabilities changed or were re-read: every open step whose `check` capability is on, and whose due-ness has arrived
+   * (a merged glob's after-merge step; a step due now), is ticked by slop. Nothing is ticked before the merge, and a step
+   * already done or dismissed is left alone, so running it again changes nothing. Returns how many steps it ticked.
+   */
+  async tickCapabilitySteps(boardId: number, capabilities: Capabilities): Promise<number> {
+    const isOn = (s: StoredHumanStep): boolean => s.check !== null && isCapabilityName(s.check) && capabilities[s.check] === true;
+    const candidates = (await this.deps.store.transaction((tx) => tx.listOpenHumanSteps(boardId))).filter(isOn);
+    let ticked = 0;
+    for (const globId of new Set(candidates.map((s) => s.globId))) {
+      const done = await this.deps.store.transaction(async (tx) => {
+        const glob = await tx.getGlob(globId);
+        if (glob === null) return 0;
+        const now = this.deps.clock.now();
+        const ready = (await tx.listHumanSteps(boardId, [globId])).filter(
+          (s) => s.state === 'open' && isOn(s) && (s.due === 'now' || (s.due === 'after_merge' && isMerged(glob))),
+        );
+        if (ready.length === 0) return 0;
+        await tx.saveHumanSteps(ready.map((s): StoredHumanStep => ({ ...s, state: 'done', doneBy: 'slop', doneAt: now })));
+        await tx.appendEvents(
+          ready.map((s): DomainEvent => ({ type: 'HumanStepChanged', globId, actor: null, at: now, data: { step: s.id, kind: s.kind, title: s.title, change: 'done', checked: true, check: s.check } })),
+        );
+        return ready.length;
+      });
+      if (done > 0) await this.afterStepsChanged(globId);
+      ticked += done;
+    }
+    return ticked;
   }
 
   /** The globs on a board whose oversized flag nobody has answered yet, for the card's chip. */

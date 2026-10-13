@@ -1,5 +1,5 @@
 import { awsSignInApplies, forbidden, needingAttention } from '@slop/core';
-import type { BoardService, Result } from '@slop/core';
+import type { BoardService, Capabilities, Result } from '@slop/core';
 import type { Hono } from 'hono';
 import type { AwsSignIn } from '../aws-sso.js';
 import type { IntegrationRegistry } from '../integration-health.js';
@@ -22,6 +22,8 @@ interface Deps {
   readonly integrations?: IntegrationRegistry;
   /** The in-app AWS sign-in; null unless the server runs with an SSO profile (local development). */
   readonly signIn?: AwsSignIn | null;
+  /** What slop can verify about its own deployment (file attachments, Slack...); absent: not reported. */
+  readonly capabilities?: { read(): Promise<Capabilities> };
 }
 
 /** Whether slop's integrations are usable, for a member of any board; an admin of any board can start the AWS sign-in. */
@@ -42,6 +44,7 @@ export const mountHealth = (app: Hono<Env>, deps: Deps): void => {
       }));
       body.awsSignIn = signIn === null ? null : { canStart: memberRoles.includes('admin'), ...signIn.status() };
     }
+    if (deps.capabilities !== undefined) body.capabilities = await deps.capabilities.read();
     return c.json(body);
   });
 
