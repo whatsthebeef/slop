@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
-import { FILTER_TOGGLE_ID, FilterPane, FilterToggle, useFilterPaneOpen } from '@/components/board-filter-pane';
+import { FILTER_TEXT_ID, FILTER_TOGGLE_ID, FilterPane, FilterToggle, useFilterPaneOpen } from '@/components/board-filter-pane';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
@@ -21,7 +21,8 @@ import { activeCount, matchesFilters, parseFilters, writeFilters } from '@/lib/b
 import { browserStore, clearFilterMemory, hasFilterParams, loadFilterMemory, saveFilterMemory } from '@/lib/board-filter-memory';
 import type { FilterValues } from '@/lib/board-filters';
 import { withGlob } from '@/lib/glob-list';
-import { usePageContext } from '@/lib/page-context';
+import { isSlashShortcut } from '@/lib/chat';
+import { useCurrentPage, usePageContext } from '@/lib/page-context';
 import { deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useSstorCopy } from '@/components/sstor-notice';
@@ -271,6 +272,30 @@ export const BoardPage = () => {
     setSearchParams((params) => new URLSearchParams([...params, ...saved]), { replace: true });
   }, [boardId, query]);
   const [filterOpen, setFilterOpen] = useFilterPaneOpen();
+  // `/` opens the filter pane if needed and focuses the text filter, selecting what is in it. Only while this page is
+  // the current one: with a glob open over the board the page context is the glob's and `/` belongs to the chat.
+  const currentPage = useCurrentPage();
+  const [focusFilter, setFocusFilter] = useState(0);
+  useEffect(() => {
+    if (currentPage.type !== 'board') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!isSlashShortcut(e)) return;
+      e.preventDefault();
+      setFilterOpen(true);
+      setFocusFilter((n) => n + 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [currentPage.type]);
+  // After the commit, so a pane that was closed (and inert) has opened.
+  useEffect(() => {
+    if (focusFilter === 0) return;
+    const input = document.getElementById(FILTER_TEXT_ID);
+    if (input instanceof HTMLInputElement) {
+      input.focus();
+      input.select();
+    }
+  }, [focusFilter]);
   // "Create glob" under a chat answer arrives with the answer's text, to start the form from.
   const location = useLocation();
   const [createFrom, setCreateFrom] = useState('');

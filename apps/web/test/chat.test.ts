@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RequestError } from '../src/lib/api';
 import type { ChatCitation } from '../src/lib/api';
-import { actionsFor, citedGlobs, globScope, isChatShortcut, MESSAGE_LIST, mentionedGlobs, openGlobOf, saveLabel, scopeLabel, scopeName, scopeOf, showScopeChip, sourceTone, stateLabel, suggestionsFor, unavailableNotice, WRAP_LONG, withCiteLinks } from '../src/lib/chat';
+import { actionsFor, citedGlobs, globScope, isChatShortcut, isSlashShortcut, MESSAGE_LIST, mentionedGlobs, openGlobOf, saveLabel, scopeLabel, scopeName, scopeOf, showScopeChip, sourceTone, stateLabel, suggestionsFor, unavailableNotice, WRAP_LONG, withCiteLinks } from '../src/lib/chat';
 import { takeSseEvents } from '../src/lib/sse';
 
 const cite = (patch: Partial<ChatCitation>): ChatCitation => ({
@@ -32,15 +32,29 @@ describe('opening the chat', () => {
     key: k, metaKey: false, ctrlKey: false, altKey: false, target: null, ...mods,
   });
 
-  it('opens on / and on ⌘K or Ctrl+K, and on nothing else', () => {
-    expect(isChatShortcut(key('/'))).toBe(true);
-    expect(isChatShortcut(key('k', { metaKey: true }))).toBe(true);
-    expect(isChatShortcut(key('K', { ctrlKey: true }))).toBe(true);
-    expect(isChatShortcut(key('k'))).toBe(false);
-    expect(isChatShortcut(key('/', { ctrlKey: true }))).toBe(false);
-    expect(isChatShortcut(key('a'))).toBe(false);
+  it('opens on ⌘K or Ctrl+K on every page, and on nothing else', () => {
+    for (const page of ['board', 'glob', 'inbox'] as const) {
+      expect(isChatShortcut(key('k', { metaKey: true }), page)).toBe(true);
+      expect(isChatShortcut(key('K', { ctrlKey: true }), page)).toBe(true);
+    }
+    expect(isChatShortcut(key('k'), 'glob')).toBe(false);
+    expect(isChatShortcut(key('a'), 'glob')).toBe(false);
   });
 
+  it('opens on / everywhere but the board, where / focuses the filter', () => {
+    expect(isChatShortcut(key('/'), 'board')).toBe(false);
+    expect(isChatShortcut(key('/'))).toBe(false);
+    for (const page of ['glob', 'knowledge', 'inbox', 'signed_off', 'settings'] as const) {
+      expect(isChatShortcut(key('/'), page)).toBe(true);
+    }
+    expect(isChatShortcut(key('/', { ctrlKey: true }), 'glob')).toBe(false);
+  });
+
+  it('treats a bare / outside typing as the slash shortcut', () => {
+    expect(isSlashShortcut(key('/'))).toBe(true);
+    expect(isSlashShortcut(key('/', { metaKey: true }))).toBe(false);
+    expect(isSlashShortcut(key('a'))).toBe(false);
+  });
 });
 
 describe('the scope chip', () => {

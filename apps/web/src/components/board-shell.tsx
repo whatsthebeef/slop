@@ -66,7 +66,7 @@ const BoardTabs = ({
           className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:text-foreground'
           aria-label='Ask the board chat'
           aria-pressed={chatOpen}
-          title='Ask the board chat (/ or ⌘K). 1–9 switch boards.'
+          title='Ask the board chat (⌘K). 1–9 switch boards.'
           data-testid='chat-toggle'
           onClick={onChat}
         >
@@ -125,13 +125,13 @@ export const BoardShell = () => {
   useEffect(() => {
     if (!isBoard) return;
     const onKey = (e: KeyboardEvent) => {
-      if (!isChatShortcut(e)) return;
+      if (!isChatShortcut(e, page.type)) return;
       e.preventDefault();
       openChat();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isBoard]);
+  }, [isBoard, page.type]);
   // 1–9 open the board in that place of the bar, as clicking it does (the navigation closes any open glob view).
   const navigate = useNavigate();
   const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });

@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 
 const PANE_ID = 'board-filter-pane';
 export const FILTER_TOGGLE_ID = 'board-filter-toggle';
+export const FILTER_TEXT_ID = 'board-filter-text';
 const OPEN_KEY = 'slop.board-filter-open';
 
 /** Whether the pane is open is the viewer's own preference; storage can be missing or blocked, so it is only a convenience. */
@@ -74,15 +75,33 @@ const Control = ({
 }) => {
   if (filter.control === 'text') {
     return (
-      <input
-        type="text"
-        value={value}
-        placeholder={filter.placeholder}
-        aria-label={filter.label}
-        className="h-7 w-44 rounded border border-edge bg-card px-2 text-sm"
-        data-testid={`filter-${filter.key}`}
-        onChange={(e) => onChange(e.target.value)}
-      />
+      <span className="relative inline-flex items-center">
+        <input
+          type="text"
+          id={filter.key === 'id' ? FILTER_TEXT_ID : undefined}
+          value={value}
+          placeholder={filter.placeholder}
+          aria-label={filter.label}
+          aria-keyshortcuts={filter.key === 'id' ? '/' : undefined}
+          className="h-7 w-44 rounded border border-edge bg-card pr-6 pl-2 text-sm"
+          data-testid={`filter-${filter.key}`}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            // Escape leaves the field first; the pane's own Escape (close) then applies to the rest of the pane.
+            if (e.key !== 'Escape') return;
+            e.stopPropagation();
+            e.currentTarget.blur();
+          }}
+        />
+        {filter.key === 'id' && value === '' && (
+          <kbd
+            className="pointer-events-none absolute right-1.5 rounded border border-edge px-1 text-[10px] leading-4 text-muted-foreground"
+            aria-hidden
+          >
+            /
+          </kbd>
+        )}
+      </span>
     );
   }
   const on = selectedOptions(value);
