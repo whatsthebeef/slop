@@ -1,4 +1,4 @@
-import { AlertTriangle, MessageCircle } from 'lucide-react';
+import { MessageCircle } from 'lucide-react';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useLocation, useNavigate, useParams } from 'react-router';
@@ -12,8 +12,7 @@ import { spendBreakdown, spendLine } from '@/lib/review-settings';
 import { newCount } from '@/lib/inbox';
 import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
 import type { PageContext } from '@/lib/page-context';
-import { globsKey, inboxKey } from '@/lib/live';
-import { stalledCount, yourTurnCount } from '@/lib/board-filters';
+import { inboxKey } from '@/lib/live';
 import { activeTab, BOARD_TABS, pollInterval } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
 
@@ -38,15 +37,6 @@ const BoardTabs = ({
   // The Inbox tab counts items waiting for a person; hints refresh it on the pages that listen, and a slow poll covers the rest.
   const inbox = useQuery({ queryKey: inboxKey(boardId), queryFn: () => api.inbox(boardId), refetchInterval: pollInterval(false) });
   const waiting = newCount(inbox.data ?? []);
-  // Your turn: due human steps that are yours, from the board's glob list (shared with the board page, so its hints keep it live).
-  const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId), refetchInterval: pollInterval(false) });
-  const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });
-  const turn =
-    globs.data === undefined || board.data === undefined || me.data === undefined
-      ? 0
-      : yourTurnCount(globs.data, { email: me.data.email, role: board.data.role });
-  const stalled = globs.data === undefined ? 0 : stalledCount(globs.data);
   // A slow poll: every board model call adds to the figure, but a few minutes' lag is fine for a monthly total.
   const spend = useQuery({ queryKey: ['spend', boardId], queryFn: () => api.spend(boardId), refetchInterval: 5 * 60_000 });
   return (
@@ -63,30 +53,6 @@ const BoardTabs = ({
             {tab === 'inbox' && waiting > 0 && <span className='ml-1.5 rounded-full bg-muted px-1.5 text-xs text-muted-foreground'>{waiting}</span>}
           </Link>
         ))}
-        {turn > 0 && (
-          <Link
-            to={`/boards/${String(boardId)}?yourTurn=1`}
-            className='-mb-px inline-flex items-center gap-1 border-b-2 border-transparent pb-1.5 text-signal-strong hover:text-foreground'
-            title={`${String(turn)} human ${turn === 1 ? 'step is' : 'steps are'} due for you: show them on the board`}
-            aria-label={`Your turn: ${String(turn)} due`}
-            data-testid='your-turn-count'
-          >
-            <span aria-hidden>🧠</span>
-            {turn}
-          </Link>
-        )}
-        {stalled > 0 && (
-          <Link
-            to={`/boards/${String(boardId)}?move=stalled`}
-            className='-mb-px inline-flex items-center gap-1 border-b-2 border-transparent pb-1.5 text-amber hover:text-foreground'
-            title={`${String(stalled)} ${stalled === 1 ? 'glob is' : 'globs are'} stalled: show them on the board`}
-            aria-label={`Stalled: ${String(stalled)}`}
-            data-testid='stalled-count'
-          >
-            <AlertTriangle className='h-3.5 w-3.5' aria-hidden />
-            {stalled}
-          </Link>
-        )}
       </nav>
       <div className='ml-auto flex items-center gap-1 pb-1.5'>
         {spend.data !== undefined && (

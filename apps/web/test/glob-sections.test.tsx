@@ -79,6 +79,45 @@ afterEach(() => {
 });
 
 describe('glob view: escalation, dependencies and edit fields', () => {
+  /** The page's text without the screen-reader-only spans (the tooltip's description is read, never shown). */
+  const visibleText = () => {
+    const copy = document.body.cloneNode(true) as HTMLElement;
+    copy.querySelectorAll('.sr-only').forEach((el) => el.remove());
+    return copy.textContent;
+  };
+
+  const escalated = () =>
+    view({
+      escalation: {
+        at: '2026-10-13T00:00:00Z',
+        by: 'dev@example.com',
+        reason: 'Touches auth',
+        evidence: 'From the split of s1t0: files a.ts',
+        criterion: 'risk_area',
+      },
+    });
+
+  it('shows the escalation once, as a header chip, with the reason in the disclosure only', () => {
+    renderGlob(escalated());
+    expect(screen.getAllByTestId('escalation-chip')).toHaveLength(1);
+    expect(screen.getByTestId('escalation-note').textContent).toContain('Touches auth');
+    expect(screen.getByTestId('escalation-note').textContent).toContain('From the split of s1t0');
+    expect(visibleText().split('Touches auth')).toHaveLength(2);
+  });
+
+  it('keeps the chip text out of the visible and accessible text but names it for screen readers', () => {
+    renderGlob(escalated());
+    expect(screen.getByRole('img', { name: 'Needs a person' })).toBeTruthy();
+    expect(visibleText()).not.toMatch(/needs a ?:/i);
+    expect(screen.getByTestId('escalation-chip').getAttribute('aria-describedby')).not.toBeNull();
+  });
+
+  it('leaves the chip and the disclosure out without an escalation', () => {
+    renderGlob(view());
+    expect(screen.queryByTestId('escalation-chip')).toBeNull();
+    expect(screen.queryByTestId('escalation-note')).toBeNull();
+  });
+
   const escalation = {
     at: '2026-10-13T00:00:00Z',
     by: 'dev@example.com',
@@ -86,23 +125,6 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     evidence: 'From the split of s1t0: files a.ts',
     criterion: 'risk_area',
   } as const;
-
-  it('shows the escalation once, as a header chip with the split evidence behind "Why a person?"', () => {
-    renderGlob(view({ escalation }));
-    expect(screen.getAllByTestId('escalation-chip')).toHaveLength(1);
-    expect(screen.queryByTestId('escalation-note')).toBeNull();
-    const why = screen.getByTestId('escalation-why');
-    expect(why.textContent).toContain('Why a person?');
-    expect(why.textContent).toContain('From the split of s1t0');
-    // The accessible name is there, and the visible words don't spell the reason out.
-    expect(screen.getByLabelText('Needs a person')).toBeTruthy();
-    expect(screen.getByTestId('escalation-chip').textContent).not.toMatch(/needs a:/);
-  });
-
-  it('leaves the escalation chip out without an escalation', () => {
-    renderGlob(view());
-    expect(screen.queryByTestId('escalation-chip')).toBeNull();
-  });
 
   const NOW = '2026-10-13T20:00:00Z';
   const failedChecks = {
@@ -141,7 +163,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
 
   it('escalated glob with failed checks and an active fix run: the machine holds the ball, the failure shows once', () => {
     renderGlob(fixing);
-    expect(screen.getByTestId('now-headline').textContent).toMatch(/fixing CI/i);
+    expect(screen.getByTestId('now-headline').textContent).toMatch(/fix(ing)? (CI|checks)/i);
     expect(screen.getByTestId('now-panel').getAttribute('data-holder')).toBe('machine');
     expect(screen.queryByText(/Why you're needed/)).toBeNull();
     expect(screen.queryByTestId('handover-box')).toBeNull();

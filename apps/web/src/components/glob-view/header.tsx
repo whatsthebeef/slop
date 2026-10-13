@@ -8,8 +8,8 @@ import { LabelChips } from '../labels';
 import { Tip } from '../ui/tip';
 import type { GlobView } from '@/lib/api';
 import type { GlobViewContext } from './context';
-import { EscalationChip } from './escalation';
 import { TypeChip } from './actions';
+import { EscalationChip } from './escalation';
 import type { GlobActionsState } from './actions';
 
 const STATUS_TEXT: Record<GlobView['status'], string> = {

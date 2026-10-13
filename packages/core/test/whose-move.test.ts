@@ -79,6 +79,21 @@ describe('whoseMove: priority', () => {
     expect(move(escalated).reason).toBe('Needs a human: touches auth');
   });
 
+  it('an escalation never outranks the machine: failed checks with a watching run, or a run working', () => {
+    const escalation = { reason: 'touches auth', by: dev.email, at: NOW };
+    const failedChecks = { sha: head, state: 'failed' as const, at: NOW };
+    const fixing = ready({ type: 'same', escalation, headChecks: failedChecks, runs: [run({ state: 'watching' })] });
+    expect(move(fixing)).toMatchObject({ holder: 'machine', reason: 'fix checks' });
+    const working = glob({ status: 'implementing', type: 'same', escalation, runs: [run()] });
+    expect(move(working).holder).toBe('machine');
+    // with nothing on it, the escalation is still the person's turn, ahead of the open-PR next steps
+    expect(move(ready({ type: 'same', escalation, headChecks: failedChecks }))).toMatchObject({ holder: 'you', reason: 'Needs a human: touches auth' });
+    const conflict = { base: 'main', files: [], since: null, at: NOW };
+    expect(move(ready({ type: 'same', escalation, conflict, implementer: null }))).toMatchObject({ reason: 'Needs a human: touches auth' });
+    expect(move(ready({ type: 'sub', escalation, implementer: null }))).toMatchObject({ reason: 'Needs a human: touches auth' });
+    expect(move(glob({ status: 'implementing', type: 'same', runs: [], escalation }))).toMatchObject({ holder: 'you', reason: 'Needs a human: touches auth' });
+  });
+
   it('done and idle show nothing', () => {
     expect(move(glob({ status: 'signed_off', signedOffAt: NOW })).holder).toBe('done');
     expect(move(glob({ status: 'planning' })).holder).toBe('idle');

@@ -15,6 +15,7 @@ import type { SubLimitService } from './sub-limit-service.js';
 import type { IntakeLearningService } from './intake-learning-service.js';
 import type { SizeCheckService } from './size-check-service.js';
 import type { ContextTuningService } from './context-tuning-service.js';
+import type { HotspotService } from './hotspot-service.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -42,6 +43,7 @@ const INTERVALS: readonly (readonly [BoardJobName, number])[] = [
   ['intake_outcome', SUB_LIMIT_INTERVAL_MS],
   ['size_threshold', SUB_LIMIT_INTERVAL_MS],
   ['context_tuning', CONTEXT_TUNING_INTERVAL_MS],
+  ['hotspots', SUB_LIMIT_INTERVAL_MS],
 ];
 /** A board job's lease: another server doesn't start the same job meanwhile. */
 export const BOARD_JOB_LEASE_MS = 30 * 60 * 1000;
@@ -115,6 +117,8 @@ export class LearningJobService {
       sizeCheck?: SizeCheckService;
       /** Absent: the context settings aren't tuned. */
       contextTuning?: ContextTuningService;
+      /** Absent: conflict hotspots aren't listed. */
+      hotspots?: HotspotService;
       /** Null without a code host: the dependency signal isn't measured. */
       manifests: ManifestSource | null;
       /** Runs just before mining reads the board's activity (the server collects review feedback from the code host); best effort. */
@@ -134,6 +138,7 @@ export class LearningJobService {
       ...(this.deps.intakeLearning === undefined ? [] : ['intake_outcome' as const]),
       ...(this.deps.sizeCheck === undefined ? [] : ['size_threshold' as const]),
       ...(this.deps.contextTuning === undefined ? [] : ['context_tuning' as const]),
+      ...(this.deps.hotspots === undefined ? [] : ['hotspots' as const]),
     ];
   }
 
@@ -253,6 +258,11 @@ export class LearningJobService {
       const { contextTuning } = this.deps;
       if (contextTuning === undefined) throw new Error('The context-tuning job is not wired');
       return contextTuning.tune(board.id, started);
+    }
+    if (job === 'hotspots') {
+      const { hotspots } = this.deps;
+      if (hotspots === undefined) throw new Error('The hotspots job is not wired');
+      return hotspots.run(board.id, started);
     }
     try {
       await this.deps.beforeMining?.(board, started);
