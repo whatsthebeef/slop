@@ -578,7 +578,13 @@ export const GlobCard = ({
               data-kind={status.kind}
             >
               {status.kind === 'ready' && <Brain className='h-3 w-3' />}
-              {status.text}
+              {status.kind === 'ready' ? (
+                <>
+                  Your turn <span className='font-normal opacity-70'>· {status.text}</span>
+                </>
+              ) : (
+                status.text
+              )}
             </span>
           </Tip>
         )}

@@ -446,7 +446,7 @@ export const readyStatus = (glob: Glob, reviewSha: string | null = null): ReadyS
   if (checks !== null && checks.sha === head && checks.state === 'passed') {
     const merge = `Sames and supers are merged by a person: Merge here or sstor -i ${glob.id} --merge.`;
     const why = glob.escalation == null ? '' : `\nNeeds a person because: ${glob.escalation.reason}`;
-    return { kind: 'ready', text: 'Merge', tip: `Checks passed at ${head.slice(0, 7)}. ${merge}${why}${stale}` };
+    return { kind: 'ready', text: 'Merge', tip: `Merge: checks passed at ${head.slice(0, 7)}. ${merge}${why}${stale}` };
   }
   return { kind: 'waiting', text: 'Waiting for checks', tip: `Checks are still running on ${head.slice(0, 7)}.${stale}` };
 };

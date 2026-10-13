@@ -15,7 +15,7 @@ describe('readyStatus', () => {
   it('says Merge (your turn) for a ready same with passed checks', () => {
     const s = readyStatus(ready());
     expect(s).toMatchObject({ kind: 'ready', text: 'Merge' });
-    expect(s?.tip).toMatch(/passed at a2a88c8/);
+    expect(s?.tip).toMatch(/^Merge: checks passed at a2a88c8/);
     expect(s?.tip).toMatch(/--merge/);
     expect(s?.tip).not.toMatch(/auto-fix/);
   });
