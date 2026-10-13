@@ -7,7 +7,7 @@ import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
-import { actionPresentation } from '@/lib/action-presentation';
+import { actionPresentation, presentedActions } from '@/lib/action-presentation';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
@@ -256,7 +256,7 @@ export const GlobDetail = ({
   useEffect(() => setConfirmingOversized(null), [glob.id]);
   // Decide has its own panel with the five outcomes.
   // deescalate and make_super are reached through the type popover.
-  const allActions = (glob.allowedActions ?? []).filter(
+  const allActions = presentedActions(glob.allowedActions ?? []).filter(
     (a) => a !== 'delete' && a !== 'decide' && actionPresentation(a, glob).placement !== 'none',
   );
   const actions = orderActions(allActions);
