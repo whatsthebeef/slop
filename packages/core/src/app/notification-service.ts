@@ -1,7 +1,7 @@
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { isDismissedBy, isDismissible, isExpired, mainRedNotification, MAIN_RED_SOURCE, notificationId, sortNotifications } from '../domain/notifications.js';
-import type { BoardNotification, NotificationClears, NotificationSink, RaisedNotification } from '../domain/notifications.js';
+import type { BoardNotification, MainRedFix, NotificationClears, NotificationSink, RaisedNotification } from '../domain/notifications.js';
 import { isReadinessFailingSource, readinessNotifications, READINESS_SOURCE } from '../domain/readiness.js';
 import type { ReadinessItem } from '../domain/readiness.js';
 import type { BaseChecks } from '../domain/types.js';
@@ -13,9 +13,20 @@ export interface NotificationServiceDeps {
   readonly clock: Clock;
 }
 
+/** A record without one person's entry. */
+const without = <T>(record: Readonly<Record<string, T>>, email: string): Record<string, T> =>
+  Object.fromEntries(Object.entries(record).filter(([key]) => key !== email));
+
 /** A personal notification raised again keeps the dismissals people already made (they stay valid for the items they saw). */
-const withDismissals = (clears: NotificationClears, existing: BoardNotification | null): NotificationClears =>
-  clears.kind === 'personal' && existing?.clears.kind === 'personal' ? { ...clears, dismissed: existing.clears.dismissed } : clears;
+const withDismissals = (clears: NotificationClears, existing: BoardNotification | null): NotificationClears => {
+  const before = existing?.clears;
+  if (clears.kind === 'personal' && before?.kind === 'personal') return { ...clears, dismissed: before.dismissed };
+  // A snooze is kept across a re-raise; it stops covering the notification once the condition key differs.
+  if ((clears.kind === 'condition' || clears.kind === 'until') && (before?.kind === 'condition' || before?.kind === 'until') && before.dismissed !== undefined) {
+    return { ...clears, dismissed: before.dismissed };
+  }
+  return clears;
+};
 
 /**
  * Board notifications: board-wide incidents that need a person, kept beside the board (no glob version) and shown in
@@ -56,8 +67,8 @@ export class NotificationService implements NotificationSink {
   }
 
   /** Raises or clears the main-red notification to match the base branch's latest check result. Idempotent. */
-  async syncMainRed(boardId: number, baseBranch: string, checks: BaseChecks | null | undefined): Promise<void> {
-    const raised = mainRedNotification(boardId, baseBranch, checks);
+  async syncMainRed(boardId: number, baseBranch: string, checks: BaseChecks | null | undefined, fix?: MainRedFix): Promise<void> {
+    const raised = mainRedNotification(boardId, baseBranch, checks, fix);
     if (raised === null) await this.clear(boardId, MAIN_RED_SOURCE);
     else await this.raise(raised);
   }
@@ -90,17 +101,52 @@ export class NotificationService implements NotificationSink {
     });
   }
 
-  /** A person dismisses a notification (a personal one for themselves only); only dismissible ones (never one whose condition still holds). */
+  /** The notifications this person has dismissed and that still hold (for the bar's "dismissed (n)" control). */
+  async listDismissed(email: string, boardId: number): Promise<Result<BoardNotification[]>> {
+    const now = this.deps.clock.now();
+    return this.deps.store.transaction(async (tx) => {
+      if ((await tx.getMember(boardId, email)) === null) return forbidden(`You are not a member of board ${String(boardId)}`);
+      const live = (await tx.listNotifications(boardId)).filter((n) => !isExpired(n, now));
+      return ok(sortNotifications(live.filter((n) => isDismissedBy(n, email))));
+    });
+  }
+
+  /**
+   * A person dismisses a notification, for themselves only: a personal one until an item joins it, a condition-held one
+   * until its condition key changes. A `dismissible` one goes away for everyone, as before.
+   */
   async dismiss(email: string, boardId: number, id: string): Promise<Result<null>> {
     const result = await this.deps.store.transaction(async (tx): Promise<Result<null>> => {
       if ((await tx.getMember(boardId, email)) === null) return forbidden(`You are not a member of board ${String(boardId)}`);
       const found = await tx.getNotification(id);
       if (found === null || (found.boardId !== null && found.boardId !== boardId)) return notFound(`No notification ${id}`);
-      if (!isDismissible(found)) return invalidInput('This notification clears by itself when its cause is fixed');
-      // A personal dismissal hides it for this person only, until an item joins it.
-      if (found.clears.kind === 'personal') {
-        await tx.saveNotification({ ...found, clears: { ...found.clears, dismissed: { ...found.clears.dismissed, [email]: found.clears.items } } });
+      if (!isDismissible(found)) return invalidInput('This notification cannot be dismissed');
+      const clears = found.clears;
+      if (clears.kind === 'personal') {
+        await tx.saveNotification({ ...found, clears: { ...clears, dismissed: { ...clears.dismissed, [email]: clears.items } } });
+      } else if (clears.kind === 'condition' || clears.kind === 'until') {
+        await tx.saveNotification({ ...found, clears: { ...clears, dismissed: { ...clears.dismissed, [email]: clears.key ?? '' } } });
       } else await tx.deleteNotification(id);
+      return ok(null);
+    });
+    if (result.ok) this.hint(boardId);
+    return result;
+  }
+
+  /** Undoes this person's dismissal: the notification shows for them again. */
+  async restore(email: string, boardId: number, id: string): Promise<Result<null>> {
+    const result = await this.deps.store.transaction(async (tx): Promise<Result<null>> => {
+      if ((await tx.getMember(boardId, email)) === null) return forbidden(`You are not a member of board ${String(boardId)}`);
+      const found = await tx.getNotification(id);
+      if (found === null || (found.boardId !== null && found.boardId !== boardId)) return notFound(`No notification ${id}`);
+      const clears = found.clears;
+      if (clears.kind === 'personal') {
+        const rest = without(clears.dismissed, email);
+        await tx.saveNotification({ ...found, clears: { ...clears, dismissed: rest } });
+      } else if ((clears.kind === 'condition' || clears.kind === 'until') && clears.dismissed !== undefined) {
+        const rest = without(clears.dismissed, email);
+        await tx.saveNotification({ ...found, clears: { ...clears, dismissed: rest } });
+      }
       return ok(null);
     });
     if (result.ok) this.hint(boardId);

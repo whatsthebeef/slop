@@ -265,6 +265,19 @@ export const BoardPage = () => {
   const location = useLocation();
   const [createFrom, setCreateFrom] = useState('');
   const fromChat = (location.state as { createFrom?: unknown } | null)?.createFrom;
+  // The notification bar's "Create fix glob" (`?newGlob=<title>&run=<url>`) opens the form with the failing test and run link.
+  const fixTitle = searchParams.get('newGlob');
+  const fixRun = searchParams.get('run');
+  useEffect(() => {
+    if (fixTitle === null) return;
+    setCreateFrom(fixRun === null ? fixTitle : `${fixTitle}\n\nFailing run: ${fixRun}`);
+    setCreating(true);
+    setSearchParams((params) => {
+      params.delete('newGlob');
+      params.delete('run');
+      return params;
+    }, { replace: true });
+  }, [fixTitle, fixRun, setSearchParams]);
   useEffect(() => {
     if (typeof fromChat !== 'string') return;
     setCreateFrom(fromChat);
