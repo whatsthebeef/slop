@@ -2,7 +2,7 @@ import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js'
 import type { Result } from '../domain/errors.js';
 import * as machine from '../domain/machine.js';
 import type { Context } from '../domain/machine.js';
-import { decisionOf } from '../domain/decision-glob.js';
+import { decisionOf, hotspotOf, hotspotRefactorKey } from '../domain/decision-glob.js';
 import type { EffectCheck } from '../domain/effect-check.js';
 import { knowledgePageEffect } from '../domain/events.js';
 import type { DecisionOutcomeKind } from '../domain/attributes.js';
@@ -118,6 +118,11 @@ export class DecisionGlobService {
         const check = machine.decideDecision(glob, { outcome: 'needs_work', ...(input.reason === undefined ? {} : { reason: input.reason }), linkedGlobId: glob.id }, this.context(actor.value));
         if (!check.ok) return check;
       }
+      // Accepting a hotspot makes the refactor glob below: check the request would be accepted first, for the same reason.
+      if (hotspotOf(glob) !== null && input.outcome === 'accept' && glob.version === version) {
+        const check = machine.decideDecision(glob, { outcome: 'accept', linkedGlobId: glob.id }, this.context(actor.value));
+        if (!check.ok) return check;
+      }
       const plan = (await tx.listArtifacts(id, 'plan'))[0]?.content ?? '';
       return ok({ glob, plan });
     });
@@ -137,6 +142,26 @@ export class DecisionGlobService {
         autoTrigger: false,
         idempotencyKey: `decision-work:${seen.id}`,
         plan: `Make the change decision ${seen.id} asks for.\n\n${input.reason === undefined ? '' : `Why it needs work: ${input.reason.trim()}\n\n`}${plan}`,
+        planBy: 'human',
+      });
+      if (!created.ok) return created;
+      linkedGlobId = created.value.id;
+    }
+
+    // Accepting a hotspot creates the refactor glob, which waits for the globs now changing the file (idempotent on the decision).
+    const hotFile = hotspotOf(seen);
+    if (hotFile !== null && input.outcome === 'accept' && seen.version === version && seen.status === 'in_progress') {
+      const created = await this.deps.globs.create(email, {
+        boardId: seen.boardId,
+        title: `Refactor ${hotFile.split('/').at(-1) ?? hotFile} so parallel work stops conflicting`.slice(0, 200),
+        type: 'same',
+        category: 'task',
+        group: seen.group,
+        environment: null,
+        autoTrigger: false,
+        idempotencyKey: hotspotRefactorKey(seen.id),
+        after: await this.deps.globs.openGlobsTouching(seen.boardId, hotFile),
+        plan: `Refactor \`${hotFile}\`, a conflict hotspot (decision ${seen.id}).\n\n${plan.trim()}\n\n## Files\n\n- ${hotFile}\n`,
         planBy: 'human',
       });
       if (!created.ok) return created;

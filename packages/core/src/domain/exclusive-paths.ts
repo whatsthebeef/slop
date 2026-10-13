@@ -63,6 +63,9 @@ export const namesExclusivePath = (policy: MergePolicy, plan: string): boolean =
   });
 };
 
+/** Whether a plan's Tasks or Files sections name the file (a mention in prose elsewhere predicts nothing). */
+export const plannedChangesName = (plan: string, path: string): boolean => changeSections(plan).includes(path);
+
 /** Whether a person dismissed this edge for the plan as it is now: a changed plan lets it be inferred again. */
 export const isDismissedFor = (edge: ImpliedAfter, planHash: string): boolean =>
   edge.overridden === true && edge.dismissedPlanHash === planHash;

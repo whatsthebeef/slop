@@ -48,6 +48,65 @@ export const scopeLabel = (scope: DecisionScope): string => {
 export const learningKey = (itemId: string): string => `kb:${itemId}`;
 export const inboxKey = (inboxId: number): string => `inbox:${String(inboxId)}`;
 export const extractedKey = (decisionId: number): string => `decision:${String(decisionId)}`;
+/** A hotspot decision's key: one per file per raising (a rejected or finished one is raised again once its window has passed). */
+export const hotspotKey = (path: string, raisedAt: string): string => `hotspot:${path}:${raisedAt}`;
+/** The refactor glob an accepted hotspot decision creates. */
+export const hotspotRefactorKey = (decisionId: string): string => `hotspot-refactor:${decisionId}`;
+
+/** The file a hotspot decision asks about, or null for any other glob. */
+export const hotspotOf = (glob: Glob): string | null => {
+  const origin = decisionOf(glob)?.origin;
+  return origin?.kind === 'hotspot' ? origin.path : null;
+};
+
+/** The first line of a hotspot decision: what is hot, in numbers. */
+export const hotspotHeadline = (h: { readonly path: string; readonly conflicts: number; readonly globs: number; readonly windowDays: number; readonly merges: number | null; readonly lines: number | null }): string => {
+  const name = h.path.split('/').at(-1) ?? h.path;
+  const facts = [
+    `${String(h.conflicts)} ${h.conflicts === 1 ? 'conflict' : 'conflicts'} across ${String(h.globs)} ${h.globs === 1 ? 'glob' : 'globs'} in ${String(h.windowDays)} days`,
+    ...(h.merges === null ? [] : [`${String(h.merges)} merges`]),
+    ...(h.lines === null ? [] : [`${h.lines.toLocaleString('en-US')} lines`]),
+  ];
+  return `${name} is a conflict hotspot: ${facts.join(', ')}`;
+};
+
+/** A work glob that has not merged. */
+const isOpenWork = (glob: Glob | undefined): glob is Glob => glob !== undefined && glob.status !== 'signed_off' && glob.status !== 'merging';
+
+/**
+ * Why a file needs no new hotspot decision, or null when it does: a decision about it is still open (or waits on its
+ * work), it was rejected inside the window, or the refactor it created has not merged yet. A rejection older than the
+ * window, or a refactor that has merged, covers nothing: if the file is still hot, it is raised again.
+ */
+export const hotspotCovered = (
+  path: string,
+  decisions: readonly Glob[],
+  globOf: (id: string) => Glob | undefined,
+  windowFrom: string,
+): 'open' | 'rejected' | 'refactor_open' | null => {
+  for (const decision of decisions) {
+    const attributes = decisionOf(decision);
+    if (attributes === null || hotspotOf(decision) !== path) continue;
+    const { outcome } = attributes;
+    if (outcome === null || (outcome.kind === 'needs_work' && outcome.workLanded !== true)) return 'open';
+    if (outcome.kind === 'reject' && outcome.at >= windowFrom) return 'rejected';
+    if ((outcome.kind === 'accept' || outcome.kind === 'accept_with_edits') && isOpenWork(globOf(outcome.linkedGlobId ?? ''))) return 'refactor_open';
+  }
+  return null;
+};
+
+/** The open refactor globs of accepted hotspot decisions, with the file each is for. */
+export const openRefactors = (decisions: readonly Glob[], globOf: (id: string) => Glob | undefined): { readonly path: string; readonly glob: Glob }[] => {
+  const found: { path: string; glob: Glob }[] = [];
+  for (const decision of decisions) {
+    const path = hotspotOf(decision);
+    const outcome = decisionOf(decision)?.outcome;
+    if (path === null || (outcome?.kind !== 'accept' && outcome?.kind !== 'accept_with_edits')) continue;
+    const glob = globOf(outcome.linkedGlobId ?? '');
+    if (isOpenWork(glob)) found.push({ path, glob });
+  }
+  return found;
+};
 /** The replacement a decision glob asks about, or null for any other glob. */
 export const replacementOf = (glob: Glob): { readonly oldId: number; readonly newId: number } | null => {
   const origin = decisionOf(glob)?.origin;
@@ -69,7 +128,8 @@ export const isAccepted = (glob: Glob): boolean => {
 /** Whether an accepted decision governs a work glob, by its scope. Future work means globs created after the decision. */
 export const appliesTo = (decision: Glob, work: Glob): boolean => {
   const attributes = decisionOf(decision);
-  if (attributes === null || !isAccepted(decision) || work.category === 'decision') return false;
+  // A hotspot decision is about one file, not a rule for later work.
+  if (attributes === null || attributes.origin.kind === 'hotspot' || !isAccepted(decision) || work.category === 'decision') return false;
   const { scope } = attributes;
   switch (scope.kind) {
     case 'glob':

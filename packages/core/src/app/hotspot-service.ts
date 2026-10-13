@@ -7,6 +7,7 @@ import type { BoardJobResult } from '../domain/signals.js';
 import type { Store } from '../ports.js';
 import { memberOf } from './access.js';
 import type { CodeView } from './code-view.js';
+import type { HotspotDecisions } from './hotspot-decisions.js';
 
 export type HotspotsResult = Extract<BoardJobResult, { kind: 'hotspots' }>;
 
@@ -29,6 +30,8 @@ export class HotspotService {
       clock: { now(): string };
       /** Absent: merges and lines are not filled in. */
       codeView?: Pick<CodeView, 'history' | 'read'>;
+      /** Absent: the job lists hotspots but raises no decisions. */
+      decisions?: HotspotDecisions;
     },
   ) {}
 
@@ -65,10 +68,13 @@ export class HotspotService {
 
   /** The hotspots job: what is hot at `now`, for the Knowledge page's last-run line. */
   async run(boardId: number, now: string): Promise<HotspotsResult> {
-    const { hotspots } = await this.hotspots(boardId, now, false);
+    const { decisions } = this.deps;
+    const { hotspots, windowDays } = await this.hotspots(boardId, now, decisions !== undefined);
+    const raised = decisions === undefined ? [] : await decisions.raise(boardId, hotspots, windowDays, now);
     return {
       kind: 'hotspots',
       hot: hotspots.length,
+      ...(raised.length === 0 ? {} : { raised }),
       files: hotspots
         .slice(0, RESULT_FILES)
         .map((h) => ({ path: h.path, conflicts: h.conflicts, globs: h.globs.length })),

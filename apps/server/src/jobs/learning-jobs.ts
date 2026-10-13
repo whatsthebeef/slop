@@ -41,7 +41,7 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
         `${result.held} left as they were`,
       ].join('; ');
     case 'hotspots':
-      return `${result.hot} hot ${result.hot === 1 ? 'file' : 'files'}${result.files.map((f) => `; ${f.path} ${f.conflicts} conflicts across ${f.globs} globs`).join('')}`;
+      return `${(result.raised ?? []).length > 0 ? `${(result.raised ?? []).join(', ')} raised; ` : ''}${result.hot} hot ${result.hot === 1 ? 'file' : 'files'}${result.files.map((f) => `; ${f.path} ${f.conflicts} conflicts across ${f.globs} globs`).join('')}`;
     case 'skipped':
       return `skipped (${result.reason}); the next check tries again`;
   }
