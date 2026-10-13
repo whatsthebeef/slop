@@ -625,13 +625,13 @@ export const checksExplanation = (glob: Glob): ChecksExplanation | null => {
 /** After this long queued, the card says how long (the run may have never started). */
 const QUEUED_NOTICE_MINUTES = 10;
 
-/** `Routine run queued for 25 min: open the session`, once a run has waited a while without calling slop; else null. */
+/** `Machine run queued for 25 min: open the session`, once a run has waited a while without calling slop; else null. */
 export const queuedRunNotice = (glob: Glob, now: string): string | null => {
   const run = glob.runs[glob.runs.length - 1];
   if (run === undefined || run.state !== 'queued') return null;
   const minutes = Math.floor((Date.parse(now) - Date.parse(run.queuedAt)) / 60_000);
   if (minutes < QUEUED_NOTICE_MINUTES) return null;
-  return `Routine run queued for ${String(minutes)} min: ${run.sessionUrl === null ? 'no session yet' : `open the session ${run.sessionUrl}`}`;
+  return `Machine run queued for ${String(minutes)} min: ${run.sessionUrl === null ? 'no session yet' : `open the session ${run.sessionUrl}`}`;
 };
 
 /** What a card says about a ready same or super PR: merge it, or wait for its checks. */
