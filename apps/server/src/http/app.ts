@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, IntakeService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
-import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep } from '@slop/core';
+import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -307,14 +307,6 @@ export const createApp = (deps: AppDeps) => {
       memberships.map(async (m) => {
         const listed = await globs.list(email, m.board.id, { status: open, include: 'all' });
         const list = (listed.ok ? listed.value : []).filter((g) => isMine(g, email));
-        // Stalled: nobody is moving the glob (a failed step, a quiet run, nobody on it). Derived from the glob alone here;
-        // the board's list adds effects, deploys and uploads for the full picture.
-        const stored = await globs.humanStepsOf(m.board.id);
-        const now = new Date().toISOString();
-        const thresholds = stallThresholds(m.board);
-        const stalled = list.filter(
-          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), new Map(), now, { viewer: { email, role: m.role }, thresholds }).holder === 'stalled',
-        ).length;
         const reviews = Object.fromEntries(
           LABEL_NAMES.map((name) => [
             name,
@@ -324,9 +316,31 @@ export const createApp = (deps: AppDeps) => {
             }).length,
           ]),
         );
+        // Your turn: the due steps that are yours to do, over every open glob on the board (not only your own).
+        const everyone = await globs.listWithArtifacts(email, m.board.id, { status: open, include: 'all' });
+        const stored = await globs.humanStepsOf(m.board.id);
+        const viewer = { email, role: m.role };
+        // Stalled: nobody is moving the glob (a failed step, a quiet run, nobody on it). Derived from the glob alone here;
+        // the board's list adds effects, deploys and uploads for the full picture.
+        const now = new Date().toISOString();
+        const thresholds = stallThresholds(m.board);
+        const stalled = list.filter(
+          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), new Map(), now, { viewer, thresholds }).holder === 'stalled',
+        ).length;
+        const yourTurn = (everyone.ok ? everyone.value : []).reduce(
+          (n, { glob, artifacts }) =>
+            n +
+            stepsForViewer(
+              humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }) }, stored.get(glob.id) ?? []).filter((s) => s.state === 'due'),
+              glob,
+              viewer,
+            ).length,
+          0,
+        );
         return {
           ...m.board,
           role: m.role,
+          yourTurn,
           // Your board bar: the board's place in it (null: not in it) and when you last opened it. Yours only.
           position: m.position,
           lastViewedAt: m.lastViewedAt,

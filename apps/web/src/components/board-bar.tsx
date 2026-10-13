@@ -71,6 +71,16 @@ export const Attention = ({ count }: { count: number }) => (
   <Count count={count} word="WAITING" tip={needs(count)} on="bg-red-soft" />
 );
 
+/** How many due human steps on the board are yours to do. */
+export const YourTurn = ({ count }: { count: number }) => (
+  <Count
+    count={count}
+    word="YOUR TURN"
+    tip={`${count} human ${count === 1 ? 'step is' : 'steps are'} due for you`}
+    on="bg-signal-strong"
+  />
+);
+
 const REVIEW_TITLES: Record<LabelName, string> = {
   FR: 'functional review',
   CR: 'code review',
@@ -88,9 +98,9 @@ export const Reviews = ({ name, count }: { name: LabelName; count: number }) => 
   />
 );
 
-/** Board rows' columns: number, name with its ID and last-viewed label, running, supers, waiting, reviews. */
+/** Board rows' columns: number, name with its ID and last-viewed label, running, supers, waiting, your turn, reviews. */
 const ROW =
-  'grid grid-cols-[2rem_minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)_7rem_7rem_7rem_3.5rem_3.5rem_3.5rem]';
+  'grid grid-cols-[2rem_minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)_7rem_7rem_7rem_8rem_3.5rem_3.5rem_3.5rem]';
 
 const MENU_ITEM =
   'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted';
@@ -321,6 +331,7 @@ export const BoardBar = ({ current }: { current?: number }) => {
           <Running count={board.running ?? 0} />
           <Supers count={board.supers ?? 0} />
           <Attention count={board.attention ?? 0} />
+          <YourTurn count={board.yourTurn ?? 0} />
           {LABEL_NAMES.map((name) => (
             <Reviews key={name} name={name} count={board.reviews?.[name] ?? 0} />
           ))}
