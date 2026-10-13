@@ -21,6 +21,8 @@ import { activeCount, matchesFilters, parseFilters, writeFilters } from '@/lib/b
 import { browserStore, clearFilterMemory, hasFilterParams, loadFilterMemory, saveFilterMemory } from '@/lib/board-filter-memory';
 import type { FilterValues } from '@/lib/board-filters';
 import { withGlob } from '@/lib/glob-list';
+import { globPath, globQuery, globTargetOf } from '@/lib/glob-section';
+import type { GlobTarget } from '@/lib/glob-section';
 import { isSlashShortcut } from '@/lib/chat';
 import { useCurrentPage, usePageContext } from '@/lib/page-context';
 import { deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
@@ -307,11 +309,12 @@ export const BoardPage = () => {
     void navigate(location.pathname, { replace: true, state: null });
   }, [fromChat]);
   const linked = searchParams.get('glob');
+  // The link's section, artifact and label go with it to the glob's page.
+  const linkedTarget = globQuery(globTargetOf(searchParams));
   useEffect(() => {
-    if (linked !== null) void navigate(`/boards/${boardId}/globs/${encodeURIComponent(linked)}`, { replace: true });
-  }, [linked, boardId, navigate]);
-  const openGlob = (id: string, artifact?: string) =>
-    void navigate(`/boards/${String(boardId)}/globs/${encodeURIComponent(id)}${artifact === undefined ? '' : `?artifact=${encodeURIComponent(artifact)}`}`);
+    if (linked !== null) void navigate(globPath(boardId, linked) + linkedTarget, { replace: true });
+  }, [linked, linkedTarget, boardId, navigate]);
+  const openGlob = (id: string, target: GlobTarget = {}) => void navigate(globPath(boardId, id, target));
   // Deploy state (branch deploys, and the release and integration environments each glob is in) lives beside the
   // globs; read it for the globs on the board.
   const boardGlobIds = (globs.data ?? []).map((g) => g.id).sort();
@@ -490,7 +493,7 @@ export const BoardPage = () => {
                       key={glob.id}
                       glob={glob}
                       onOpen={() => openGlob(glob.id)}
-                      onOpenArtifact={(kind) => openGlob(glob.id, kind)}
+                      onOpenArtifact={(kind) => openGlob(glob.id, { artifact: kind })}
                       onReviewLabel={reviewLabel(glob)}
                       moves={moves.map((m) => m.move)}
                       previewing={preview?.glob.id === glob.id ? preview.move.action : null}
