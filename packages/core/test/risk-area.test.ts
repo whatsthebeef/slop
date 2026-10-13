@@ -11,7 +11,9 @@ import {
   DEFAULT_RISK_AREAS,
   applyOutcome,
   defaultAreas,
+  matchRiskAreas,
   pathsMatchArea,
+  splitEvidence,
   subSafe,
 } from '../src/domain/risk-area.js';
 import type { RiskArea, RiskOutcome } from '../src/domain/risk-area.js';
@@ -261,5 +263,28 @@ describe('RiskAreaService', () => {
     // Refreshing the outcome doesn't count it again.
     await learning.run(boardId, now);
     expect((await areas()).find((a) => a.source === 'learned')?.strength).toBe(CORRECTION_WEIGHT);
+  });
+});
+
+describe('matchRiskAreas and splitEvidence', () => {
+  const areas = defaultAreas(1, NOW);
+
+  it('matches the areas the plan files fall under and lists only those files', () => {
+    const plan = 'Change `apps/server/src/auth/token.ts` and `infra/iam.tf`, then `docs/readme.md`.';
+    const match = matchRiskAreas(areas, plan);
+    expect(match.areas.map((a) => a.name)).toEqual(['Auth and security', 'Infrastructure and production']);
+    expect(match.paths).toEqual(['apps/server/src/auth/token.ts', 'infra/iam.tf']);
+  });
+
+  it('matches nothing when the plan names no files or only unrelated ones', () => {
+    expect(matchRiskAreas(areas, 'Tidy the wording.')).toEqual({ areas: [], paths: [] });
+    expect(matchRiskAreas(areas, 'Edit `docs/guide/intro.md`.')).toEqual({ areas: [], paths: [] });
+  });
+
+  it('formats the evidence with the source glob, files and areas, capping the files', () => {
+    const match = { areas: [{ name: 'Auth and security' }], paths: ['a/auth/1.ts', 'a/auth/2.ts'] };
+    expect(splitEvidence('s1t1', match)).toBe('From the split of s1t1: files a/auth/1.ts, a/auth/2.ts, areas Auth and security');
+    const many = { areas: [{ name: 'X' }, { name: 'Y' }], paths: ['a/1.ts', 'a/2.ts', 'a/3.ts', 'a/4.ts', 'a/5.ts', 'a/6.ts', 'a/7.ts'] };
+    expect(splitEvidence('s1t1', many)).toBe('From the split of s1t1: files a/1.ts, a/2.ts, a/3.ts, a/4.ts, a/5.ts (+2 more), areas X, Y');
   });
 });

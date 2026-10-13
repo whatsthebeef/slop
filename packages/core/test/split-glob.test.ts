@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
 import { BoardService } from '../src/app/board-service.js';
-import { GlobService, fillPartIds } from '../src/app/glob-service.js';
+import { GlobService, fillPartIds, splitEscalations } from '../src/app/glob-service.js';
 import type { SplitInput, SplitPart } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
+import { defaultAreas } from '../src/domain/risk-area.js';
 import type { Glob } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -153,7 +154,178 @@ describe('split a glob into parts', () => {
     expect(sub?.runs).toHaveLength(0);
   });
 
+  describe('risk areas per part', () => {
+    const AUTH = 'Change `apps/server/src/auth/token.ts`.';
+    const INFRA = 'Change `infra/iam.tf`.';
+    const DOCS = 'Tidy `docs/guide/intro.md`.';
+    const eventsOf = async (type: 'Escalated' | 'Deescalated') =>
+      store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', [type]));
+    const makeSub = async (): Promise<Glob> =>
+      unwrap(
+        await globs.create(DEV, {
+          boardId,
+          title: 'Sub',
+          summary: 'x',
+          type: 'sub',
+          after: [original.id],
+          category: 'task',
+          group: 'grp',
+          environment: null,
+          autoTrigger: false,
+          idempotencyKey: null,
+          plan: 'Everything',
+        }),
+      );
+
+    it('escalates the parts that hit a risk area with their own evidence and clears the original', async () => {
+      const sub = await makeSub();
+      unwrap(
+        await globs.escalateToSame(DEV, sub.id, {
+          reason: 'Whole feature',
+          evidence: 'risk tier high, 46 files',
+          criterion: 'auth_permissions',
+        }),
+      );
+      const escalated = await current(sub.id);
+      const result = unwrap(
+        await globs.split(
+          DEV,
+          sub.id,
+          escalated.version,
+          input([
+            part({ plan: DOCS }),
+            part({ plan: AUTH, after: [0] }),
+            part({ plan: DOCS, after: [0], type: 'sub' }),
+          ]),
+        ),
+      );
+      expect(result[0]?.escalation ?? null).toBeNull();
+      expect(result[1]?.type).toBe('same');
+      expect(result[1]?.escalation?.reason).toBe(
+        "Touches the board's risk areas: Auth and security",
+      );
+      expect(result[1]?.escalation?.evidence).toBe(
+        `From the split of ${sub.id}: files apps/server/src/auth/token.ts, areas Auth and security`,
+      );
+      expect(result[1]?.escalation?.criterion).toBe('auth_permissions');
+      expect(result[2]?.type).toBe('sub');
+      expect(result[2]?.escalation ?? null).toBeNull();
+      expect((await eventsOf('Deescalated')).map((e) => e.globId)).toEqual([sub.id]);
+      expect((await eventsOf('Escalated')).map((e) => e.globId)).toContain(result[1]?.id);
+    });
+
+    it('escalates a matching part of an unescalated glob, even one the proposal made a sub', async () => {
+      const result = unwrap(
+        await globs.split(
+          DEV,
+          original.id,
+          original.version,
+          input([part({ plan: DOCS }), part({ plan: INFRA, after: [0], type: 'sub' })]),
+        ),
+      );
+      expect(result[0]?.escalation ?? null).toBeNull();
+      expect(result[1]?.type).toBe('same');
+      expect(result[1]?.escalation?.reason).toContain('Infrastructure and production');
+      expect(await eventsOf('Deescalated')).toEqual([]);
+      expect(await eventsOf('Escalated')).toHaveLength(1);
+    });
+
+    it('escalates part 1 itself when it matches, turning a sub into a same', async () => {
+      const sub = await makeSub();
+      const result = unwrap(
+        await globs.split(
+          DEV,
+          sub.id,
+          sub.version,
+          input([part({ plan: AUTH }), part({ plan: DOCS, after: [0] })]),
+        ),
+      );
+      expect(result[0]?.type).toBe('same');
+      expect(result[0]?.escalation?.evidence).toContain('apps/server/src/auth/token.ts');
+      expect(result[1]?.escalation ?? null).toBeNull();
+    });
+
+    it('carries the original escalation on part 1 when no part matches on its own', async () => {
+      const sub = await makeSub();
+      unwrap(
+        await globs.escalateToSame(DEV, sub.id, {
+          reason: 'Whole feature',
+          evidence: 'risk tier high, 46 files',
+          criterion: 'auth_permissions',
+        }),
+      );
+      const escalated = await current(sub.id);
+      const result = unwrap(
+        await globs.split(
+          DEV,
+          sub.id,
+          escalated.version,
+          input([part({ plan: DOCS }), part({ plan: DOCS, after: [0] })]),
+        ),
+      );
+      expect(result[0]?.escalation?.reason).toBe('Whole feature');
+      expect(result[0]?.escalation?.evidence).toBe(
+        `carried from ${sub.id}; no part matched on its own`,
+      );
+      expect(result[0]?.type).toBe('same');
+      expect(result[1]?.escalation ?? null).toBeNull();
+      expect(await eventsOf('Deescalated')).toEqual([]);
+      expect((await eventsOf('Escalated')).filter((e) => e.globId === sub.id)).toHaveLength(2);
+    });
+
+    it('records nothing when no part matches and nothing was escalated', async () => {
+      unwrap(
+        await globs.split(
+          DEV,
+          original.id,
+          original.version,
+          input([part({ plan: DOCS }), part({ plan: DOCS, after: [0] })]),
+        ),
+      );
+      expect(await eventsOf('Escalated')).toEqual([]);
+      expect(await eventsOf('Deescalated')).toEqual([]);
+    });
+  });
+
   it('fills placeholders, leaving unknown parts as written', () => {
     expect(fillPartIds('{part:0} {part:1} {part:9}', ['a', 'b'])).toBe('a b {part:9}');
+  });
+});
+
+describe('splitEscalations', () => {
+  const NOW = '2026-10-13T12:00:00.000Z';
+  const areas = defaultAreas(1, NOW);
+  const AUTH = 'Change `apps/server/src/auth/token.ts`.';
+  const DOCS = 'Tidy `docs/guide/intro.md`.';
+  const original = (escalation?: Glob['escalation']): Glob =>
+    ({ id: 's1f1', type: 'same', ...(escalation === undefined ? {} : { escalation }) }) as unknown as Glob;
+  const whole = { reason: 'Whole feature', criterion: 'auth_permissions', evidence: 'risk tier high, 46 files', by: 'x', at: NOW } as const;
+
+  it('replaces the original evidence on part 0 when it matches, keeping the criterion', () => {
+    const [first] = splitEscalations(original(whole), [{ plan: AUTH, type: 'same' }, { plan: DOCS, type: 'same' }], areas, 'dev', NOW);
+    expect(first?.escalation?.criterion).toBe('auth_permissions');
+    expect(first?.escalation?.evidence).toContain('apps/server/src/auth/token.ts');
+    expect(first?.escalation?.evidence).not.toContain('46 files');
+    expect(first?.change?.kind).toBe('Escalated');
+  });
+
+  it('does not carry onto part 0 when a later part matches, and de-escalates part 0', () => {
+    const result = splitEscalations(original(whole), [{ plan: DOCS, type: 'same' }, { plan: AUTH, type: 'same' }], areas, 'dev', NOW);
+    expect(result[0]?.escalation).toBeNull();
+    expect(result[0]?.change?.kind).toBe('Deescalated');
+    expect(result[1]?.escalation?.evidence).toContain('apps/server/src/auth/token.ts');
+  });
+
+  it('leaves supers alone', () => {
+    const result = splitEscalations(original(), [{ plan: AUTH, type: 'super' }, { plan: AUTH, type: 'same' }], areas, 'dev', NOW);
+    expect(result[0]?.type).toBe('super');
+    expect(result[0]?.escalation).toBeNull();
+    expect(result[0]?.change).toBeNull();
+    expect(result[1]?.escalation).not.toBeNull();
+  });
+
+  it('changes nothing when nothing matches and nothing was escalated', () => {
+    const result = splitEscalations(original(), [{ plan: DOCS, type: 'sub' }, { plan: DOCS, type: 'sub' }], areas, 'dev', NOW);
+    expect(result.map((r) => [r.type, r.escalation, r.change])).toEqual([['sub', null, null], ['sub', null, null]]);
   });
 });

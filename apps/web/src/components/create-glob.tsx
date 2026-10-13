@@ -1,11 +1,17 @@
 import { isValidCombination, SLOP_TYPES, WORK_CATEGORIES } from '@slop/core';
 import type { Category, SlopType } from '@slop/core';
+import { useQueryClient } from '@tanstack/react-query';
+import { X } from 'lucide-react';
 import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api } from '@/lib/api';
+import { globsKey } from '@/lib/live';
+import { attachFile, checkFile } from '@/lib/upload';
+import { useToast } from '@/toast';
+import { FileDropZone } from './file-drop';
 import type { BoardView, IntakeProposalView, NewGlob } from '@/lib/api';
 
 const empty = (): NewGlob => ({
@@ -39,8 +45,13 @@ export const CreateGlobDialog = ({
   /** The inbox item the glob is made from: it is attached on create, under this creation key. */
   fromInbox?: { id: number; title: string; key: string };
   onOpenChange: (open: boolean) => void;
-  onCreate: (input: NewGlob) => Promise<void>;
+  /** Creates the glob; the files staged in the dialog are uploaded to the glob it returns. */
+  onCreate: (input: NewGlob) => Promise<{ id: string } | undefined>;
 }) => {
+  const client = useQueryClient();
+  const toast = useToast();
+  const [staged, setStaged] = useState<File[]>([]);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [form, setForm] = useState<NewGlob>(empty);
   const [request, setRequest] = useState(initialRequest);
   // A new text from outside (another chat answer) replaces what was typed.
@@ -94,13 +105,30 @@ export const CreateGlobDialog = ({
     }
   };
 
+  const uploadStaged = (globId: string, files: readonly File[]) => {
+    void Promise.allSettled(files.map((file) => attachFile(globId, file).then(() => toast(`${file.name} uploaded to ${globId}`)))).then((results) => {
+      const failed = results.flatMap((r, i) => (r.status === 'rejected' ? [`${files[i]?.name ?? 'A file'}: ${r.reason instanceof Error ? r.reason.message : 'failed'}`] : []));
+      if (failed.length > 0) toast(`${globId}: ${failed.join('; ')}. Upload it from the glob view.`, 10000);
+      void client.invalidateQueries({ queryKey: globsKey(board.id) });
+    });
+  };
+
+  const stage = (files: File[]) => {
+    const problems = files.flatMap((f) => {
+      const problem = checkFile(f);
+      return problem === null ? [] : [problem];
+    });
+    setFileError(problems.length === 0 ? null : problems.join('. '));
+    setStaged((all) => [...all, ...files.filter((f) => checkFile(f) === null)]);
+  };
+
   const submit = async (event: SyntheticEvent) => {
     event.preventDefault();
     setBusy(true);
     setError(null);
     try {
       const after = afterText.split(/[\s,]+/).filter((id) => id !== '');
-      await onCreate({
+      const created = await onCreate({
         ...form,
         ...(fromInbox === undefined ? {} : { inboxItem: fromInbox.id, idempotencyKey: fromInbox.key }),
         group: form.group?.trim() === '' ? null : form.group,
@@ -118,6 +146,11 @@ export const CreateGlobDialog = ({
               },
             }),
       });
+      // The glob exists now: its files go up in the background. One that fails stays on the glob as a
+      // "never uploaded" note, and a person can upload it from the glob view.
+      if (created !== undefined && staged.length > 0) uploadStaged(created.id, staged);
+      setStaged([]);
+      setFileError(null);
       setForm(empty());
       setAfterText('');
       setRequest('');
@@ -279,6 +312,31 @@ export const CreateGlobDialog = ({
               A {form.category} cannot be a {form.type}.
             </p>
           )}
+          <div className='grid gap-1.5' data-testid='create-files'>
+            <FileDropZone onFiles={stage} disabled={busy} hint='They upload to the glob once it is created.' />
+            {fileError !== null && (
+              <p className='text-xs text-destructive' role='alert'>
+                {fileError}
+              </p>
+            )}
+            {staged.length > 0 && (
+              <ul className='grid gap-0.5 text-xs'>
+                {staged.map((file, i) => (
+                  <li key={`${file.name}:${String(i)}`} className='flex items-center gap-1'>
+                    <span className='truncate'>{file.name}</span>
+                    <button
+                      type='button'
+                      aria-label={`Remove ${file.name}`}
+                      className='rounded p-0.5 hover:bg-muted'
+                      onClick={() => setStaged((all) => all.filter((_, j) => j !== i))}
+                    >
+                      <X className='h-3 w-3' />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           {error !== null && <p className='text-sm text-red'>{error}</p>}
           <div className='flex justify-end gap-2'>
             <Button type='button' variant='outline' onClick={() => onOpenChange(false)}>

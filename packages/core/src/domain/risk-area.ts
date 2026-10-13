@@ -1,3 +1,4 @@
+import { extractPlanFeatures } from './intake-learning.js';
 import { matchesGlob } from './sub-gate.js';
 
 /**
@@ -131,6 +132,35 @@ export const pathsMatchArea = (area: Pick<RiskArea, 'pathPatterns'>, paths: read
 /** The areas any of `paths` falls under. */
 export const areasMatching = <A extends Pick<RiskArea, 'pathPatterns'>>(areas: readonly A[], paths: readonly string[]): A[] =>
   areas.filter((a) => pathsMatchArea(a, paths));
+
+/** The most paths and area names the evidence line lists. */
+const EVIDENCE_PATHS = 5;
+
+/** What a piece of work (a part's plan) touches in the board's risk areas. */
+export interface RiskMatch<A extends Pick<RiskArea, 'name' | 'pathPatterns'> = RiskArea> {
+  /** The areas the plan's files fall under; empty when none. */
+  readonly areas: readonly A[];
+  /** The plan's files that fall under any matched area, in plan order (the evidence). */
+  readonly paths: readonly string[];
+}
+
+/**
+ * Matches one part's plan text against the board's risk areas: the files the plan names (as intake reads them) that
+ * fall under each area. The same matcher intake and the outcome learning use, for a part rather than a whole request.
+ */
+export const matchRiskAreas = <A extends Pick<RiskArea, 'name' | 'pathPatterns'>>(areas: readonly A[], plan: string): RiskMatch<A> => {
+  const files = extractPlanFeatures(plan).filePaths;
+  const matched = areasMatching(areas, files);
+  const paths = files.filter((p) => matched.some((a) => pathsMatchArea(a, [p])));
+  return { areas: matched, paths };
+};
+
+/** The evidence line for a part's escalation: "From the split of s1t1: files a.ts, b.ts, areas Auth and security". */
+export const splitEvidence = (sourceId: string, match: { readonly areas: readonly Pick<RiskArea, 'name'>[]; readonly paths: readonly string[] }): string => {
+  const shown = match.paths.slice(0, EVIDENCE_PATHS).join(', ');
+  const more = match.paths.length > EVIDENCE_PATHS ? ` (+${match.paths.length - EVIDENCE_PATHS} more)` : '';
+  return `From the split of ${sourceId}: files ${shown}${more}, areas ${match.areas.map((a) => a.name).join(', ')}`;
+};
 
 /** A default area clean subs have shown safe: kept (it is a default), but intake leans `sub` there. */
 export const subSafe = (area: RiskArea): boolean => area.source === 'default' && area.strength === 0 && area.cleanCount >= CLEAN_TO_REMOVE;
