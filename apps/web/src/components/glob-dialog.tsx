@@ -47,7 +47,8 @@ import { ArtifactsSection } from './artifacts';
 import { DecisionAssessment, DecisionSection } from './decision-section';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
 import type { ArtifactRef } from './artifacts';
-import { ActivityLabel, GroupChip } from './glob-card';
+import { GroupChip } from './glob-card';
+import { moveOf, positionOf, stepLabel, stepsOf, stepWords } from '@/lib/position';
 import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
@@ -136,6 +137,56 @@ const ConflictBox = ({
           {conflictByHand(globId, branch, base)}
         </code>
       </details>
+    </div>
+  );
+};
+
+/** The "Now" row at the top of the actions area: who has the ball, why and for how long, and the machine steps behind it. */
+const NowRow = ({ glob }: { glob: GlobView }) => {
+  const now = new Date().toISOString();
+  const position = positionOf(glob, now);
+  const move = moveOf(glob, now);
+  const steps = stepsOf(glob).filter((s) => s.state !== 'done');
+  if (position === null && steps.length === 0 && move.holder !== 'you') return null;
+  const holder =
+    move.holder === 'you'
+      ? 'Your turn'
+      : position === null
+        ? ''
+        : { human: 'Their turn', machine: 'Machine', waiting: 'Waiting', stalled: 'Stalled' }[position.holder];
+  const minutes = position?.minutes ?? null;
+  return (
+    <div className="text-sm" data-testid="now-row" data-holder={move.holder}>
+      <p className={cn('font-medium', position?.tone)}>
+        <span className="text-muted-foreground">Now: </span>
+        {holder}
+        {move.reason !== '' && ` · ${move.reason}`}
+        {minutes !== null && minutes > 0 && (
+          <span className="font-normal text-muted-foreground"> · {minutes} min</span>
+        )}
+      </p>
+      {steps.length > 0 && (
+        <details data-testid="machine-steps">
+          <summary className="cursor-pointer text-xs text-muted-foreground">
+            Machine steps ({steps.length})
+          </summary>
+          <ul className="mt-1 space-y-0.5 text-xs">
+            {steps.map((step) => (
+              <li key={step.id} data-kind={step.kind} data-state={step.state}>
+                {stepLabel(step)} <span className="text-muted-foreground">{stepWords(step, now)}</span>
+                {step.detail !== null && /^https?:\/\//.test(step.detail) && (
+                  <>
+                    {' '}
+                    <a className="underline" href={step.detail} target="_blank" rel="noreferrer">
+                      open
+                    </a>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 };
@@ -468,7 +519,6 @@ export const GlobDetail = ({
               onChange={(option) => run(() => changeType(option))}
             />
           )}
-          <ActivityLabel glob={glob} />
           {glob.group !== null && <GroupChip name={glob.group} />}
           {!decision && <LabelChips glob={glob} />}
           <span className="ml-auto text-xs text-muted-foreground">
@@ -495,6 +545,7 @@ export const GlobDetail = ({
           </span>
         </div>
 
+        {!decision && <NowRow glob={glob} />}
         {status !== null && (
           <p
             className={cn('text-sm font-medium', status.tone)}
@@ -751,7 +802,7 @@ export const GlobDetail = ({
               )}
             </div>
           )}
-          {actions.length + disabled.length > 0 && (
+          {(main !== null || actions.length + disabled.length > 0) && (
             <div className="grid gap-1">
               <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
                 {main !== null && (

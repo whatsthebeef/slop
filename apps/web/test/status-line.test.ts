@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
 import {
-  activityLabel,
   blockedLine,
   blockedParts,
   dependencySummary,
@@ -10,6 +9,7 @@ import {
   viewStatusLine,
   waitingFor,
 } from '../src/lib/status-line';
+import { onStandby, positionOf } from '../src/lib/position';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -103,13 +103,14 @@ describe('shared status line', () => {
     expect(top(g)).toEqual(statusLine(g, NOW));
   });
 
-  it('keeps waiting for checks off the status line: the activity label carries it', () => {
+  it('keeps waiting for checks off the status line: the position indicator carries it', () => {
     const g = prOpen({ headChecks: { sha: head, state: 'pending' }, allowedActions: [] });
     expect(statusLine(g, NOW)).toBeNull();
     expect(top(g)).toBeNull();
-    expect(activityLabel(g, NOW)).toMatchObject({
-      kind: 'checks',
-      text: 'Checks running on d16d563',
+    expect(positionOf(g, NOW)).toMatchObject({
+      holder: 'waiting',
+      text: 'checks running on d16d563',
+      onChecks: true,
     });
   });
 
@@ -178,34 +179,29 @@ describe('provisioning failure', () => {
   });
 });
 
-describe('activity label', () => {
-  const live = (state: 'queued' | 'active' | 'watching', patch = {}) => ({
-    currentRun: run({ state, ...patch }),
+describe('position indicator', () => {
+  const withRun = (state: 'queued' | 'active' | 'watching', patch = {}, over: Partial<GlobView> = {}) => {
+    const r = run({ state, ...patch });
+    return view({ runs: [r], currentRun: r, ...over });
+  };
+  const later = (minutes: number) => new Date(Date.parse(NOW) + minutes * 60_000).toISOString();
+
+  it('shows nothing when no run is live and nobody has stalled the glob', () => {
+    expect(positionOf(view({ status: 'planning', list: 'planning' }), NOW)).toBeNull();
+    expect(positionOf(view({ status: 'planning', list: 'planning', runs: [run({ state: 'ended' })], currentRun: run({ state: 'ended' }) }), NOW)).toBeNull();
   });
 
-  it('is null when nothing runs on its own', () => {
-    expect(activityLabel(view(), NOW)).toBeNull();
-    expect(activityLabel(view({ currentRun: run({ state: 'ended' }) }), NOW)).toBeNull();
-  });
-
-  it('says a picked-up glob has no session once it has sat untouched, and not while a run is live', () => {
-    const later = new Date(Date.parse(NOW) + 30 * 60_000).toISOString();
-    const picked = view({
-      status: 'in_progress',
-      implementer: 'dev@example.com',
-      updatedAt: NOW,
-      currentRun: null,
+  it('says a picked-up glob has no machine run, then stalls it once it sits too long, and not while a run is live', () => {
+    const picked = view({ status: 'in_progress', implementer: 'dev@example.com', updatedAt: NOW, currentRun: null, runs: [] });
+    expect(positionOf(picked, NOW)).toMatchObject({ holder: 'human', text: 'picked up, no machine run' });
+    expect(positionOf(picked, later(60))).toMatchObject({ holder: 'stalled' });
+    expect(positionOf(withRun('active', {}, { status: 'in_progress', implementer: 'dev@example.com' }), later(1))).toMatchObject({
+      holder: 'machine',
+      text: 'implementing',
     });
-    expect(activityLabel(picked, NOW)).toBeNull();
-    expect(activityLabel(picked, later)).toMatchObject({
-      kind: 'picked_up',
-      text: 'picked up, no machine run',
-    });
-    expect(activityLabel({ ...picked, ...live('active') }, later)?.kind).toBe('working');
   });
 
   it("labels slop's agent-set glob by what slop did, not as picked up with no session", () => {
-    const later = new Date(Date.parse(NOW) + 30 * 60_000).toISOString();
     const agentSet = view({
       title: 'Agent set v58',
       category: 'task',
@@ -214,66 +210,66 @@ describe('activity label', () => {
       implementer: 'slop',
       updatedAt: NOW,
       currentRun: null,
+      runs: [],
     });
-    expect(activityLabel(agentSet, later)).toMatchObject({
-      kind: 'agent_set',
-      text: 'Committing agent set v58',
-    });
-    const open = {
-      ...agentSet,
-      status: 'pr_open' as const,
-      pr: { number: 3, state: 'ready' as const, headSha: head },
-      headChecks: { sha: head, state: 'passed' as const },
-    };
-    expect(activityLabel(open, later)).toMatchObject({
-      kind: 'agent_set',
-      text: 'Slop committed agent set v58: review and merge',
-    });
-    expect(
-      activityLabel({ ...open, headChecks: { sha: head, state: 'failed' as const } }, later),
-    ).toBeNull();
+    expect(positionOf(agentSet, later(30))).toMatchObject({ holder: 'machine', text: 'committing agent set v58' });
   });
 
-  it('puts merging over checks over the run', () => {
-    const base = prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') });
-    expect(activityLabel(base, NOW)?.kind).toBe('checks');
-    expect(activityLabel({ ...base, status: 'merging' }, NOW)?.text).toBe('Merging');
-  });
-
-  it('shows an armed merge as a machine step: merging when checks pass, spinning while they run, no wait line', () => {
-    const armed = prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'], ...live('watching') });
-    expect(activityLabel(armed, NOW)).toMatchObject({ kind: 'merging', text: 'Merging when checks pass', spinning: true });
+  it('puts merging when checks pass ahead of the plain checks wait', () => {
+    const armed = prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'] });
+    expect(positionOf(armed, NOW)).toMatchObject({ holder: 'waiting', text: 'merging when checks pass', spinning: true });
     expect(waitingFor(armed, armed.allowedActions ?? [], 'dev')).toEqual([]);
     const settled = { ...armed, headChecks: { sha: head, state: 'passed' as const } };
-    expect(activityLabel(settled, NOW)).toMatchObject({ kind: 'merging', spinning: false });
+    expect(positionOf(settled, NOW)).toMatchObject({ holder: 'machine', text: 'merging' });
   });
 
-  it('puts checks over the run, and says waiting before the checks have started', () => {
-    expect(activityLabel(prOpen({ headChecks: null, ...live('active') }), NOW)).toMatchObject({
-      kind: 'checks',
-      text: 'Waiting for checks on d16d563',
+  it('says a ready PR is waiting for checks before they have started', () => {
+    expect(positionOf(prOpen({ headChecks: null }), NOW)).toMatchObject({
+      holder: 'waiting',
+      text: 'checks running on d16d563',
+      spinning: false,
     });
+  });
+
+  it('shows a run on standby as a muted marker that holds nothing', () => {
+    const g = prOpen({ headChecks: { sha: head, state: 'passed' }, allowedActions: ['merge'], runs: [run({ state: 'watching' })], currentRun: run({ state: 'watching' }) });
+    expect(onStandby(g)).not.toBeNull();
+    expect(positionOf(g, NOW)?.holder).not.toBe('machine');
   });
 
   it('names the run states', () => {
-    expect(activityLabel(view(live('active')), NOW)?.text).toBe('working');
-    expect(activityLabel(view(live('watching')), NOW)?.text).toBe('standby');
-    expect(activityLabel(view(live('queued')), NOW)?.text).toBe('queued');
+    expect(positionOf(withRun('active', {}, { status: 'in_progress' }), NOW)?.text).toBe('implementing');
+    expect(positionOf(withRun('queued', {}, { status: 'in_progress' }), NOW)?.text).toBe('queued');
   });
 
-  it('says how long a run has been queued past 10 minutes', () => {
-    const later = new Date(Date.parse(NOW) + 25 * 60_000).toISOString();
-    const g = view(live('queued', { queuedAt: NOW }));
-    expect(activityLabel(g, later)?.text).toBe('queued for 25 min');
-    expect(activityLabel(g, later)?.tip).toMatch(/^Machine run queued for 25 min/);
-    expect(activityLabel(view(live('queued')), NOW)?.tip).toMatch(/^Machine run queued/);
+  it('says how long a run has been queued', () => {
+    const g = withRun('queued', { queuedAt: NOW }, { status: 'in_progress' });
+    expect(positionOf(g, later(3))?.text).toBe('queued 3 min');
+    expect(positionOf(g, later(3))?.tip).toMatch(/^Machine run queued/);
+  });
+
+  it('stalls a run that has been queued past the threshold, in the warning tone', () => {
+    const g = withRun('queued', { queuedAt: NOW, lastProgressAt: NOW }, { status: 'in_progress' });
+    expect(positionOf(g, later(25))).toMatchObject({ holder: 'stalled', tone: 'text-required' });
+    expect(positionOf(g, later(25))?.text).toMatch(/^stalled: queued for 25 min/);
+  });
+
+  it('names what a run on an open PR is fixing', () => {
+    const open = (state: 'passed' | 'failed') =>
+      withRun('active', {}, { status: 'pr_open', pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state } });
+    expect(positionOf(open('failed'), NOW)).toMatchObject({ holder: 'machine', text: 'fixing CI' });
+    expect(positionOf(open('passed'), NOW)).toMatchObject({ holder: 'machine', text: 'implementing' });
   });
 
   it('shows nothing once the checks have settled, and leaves problems to the status line', () => {
-    expect(activityLabel(prOpen({ headChecks: { sha: head, state: 'passed' } }), NOW)).toBeNull();
+    expect(positionOf(prOpen({ headChecks: { sha: head, state: 'passed' }, allowedActions: ['merge'] }), NOW)).toBeNull();
     const failed = prOpen({ headChecks: failedChecks });
-    expect(activityLabel(failed, NOW)).toBeNull();
     expect(statusLine(failed, NOW)?.kind).toBe('checks');
+  });
+
+  it("prefers the server's move over deriving one", () => {
+    const g = view({ move: { holder: 'waiting', reason: 'waiting on s15f82', since: null, waitingOn: ['s15f82'] } });
+    expect(positionOf(g, NOW)).toMatchObject({ holder: 'waiting', text: 'waiting on s15f82' });
   });
 });
 
@@ -281,21 +277,21 @@ describe('investigate runs', () => {
   const planning = (r: ReturnType<typeof run>) =>
     view({ status: 'planning', list: 'planning', runs: [r], currentRun: r });
 
-  it('says Investigating while queued or active, never started or working', () => {
+  it('says investigating while queued or active, never started or working', () => {
     for (const state of ['queued', 'active'] as const) {
-      const label = activityLabel(
-        planning(run({ state, purpose: 'investigate', sessionUrl: 'https://claude.ai/code/s' })),
+      const label = positionOf(
+        planning(run({ state, purpose: 'investigate', sessionUrl: 'https://claude.ai/code/s', queuedAt: NOW })),
         NOW,
       );
-      expect(label?.kind).toBe('investigating');
-      expect(label?.text).toBe('Investigating');
-      expect(label?.tip).toContain('https://claude.ai/code/s');
+      expect(label?.holder).toBe('machine');
+      expect(label?.text).toBe(state === 'queued' ? 'queued' : 'investigating');
+      expect(label?.sessionUrl).toBe('https://claude.ai/code/s');
     }
   });
 
   it('shows nothing run-like once a completed investigation has ended', () => {
     const g = planning(run({ state: 'ended', outcome: 'completed', purpose: 'investigate' }));
-    expect(activityLabel(g, NOW)).toBeNull();
+    expect(positionOf(g, NOW)).toBeNull();
     expect(statusLine(g, NOW)).toBeNull();
   });
 
@@ -317,10 +313,8 @@ describe('investigate runs', () => {
   });
 
   it('leaves an implementation run unchanged', () => {
-    expect(activityLabel(view({ currentRun: run({ state: 'active' }) }), NOW)?.kind).toBe(
-      'working',
-    );
-    expect(activityLabel(view({ currentRun: run({ state: 'queued' }) }), NOW)?.kind).toBe('queued');
+    const r = run({ state: 'active' });
+    expect(positionOf(view({ status: 'in_progress', runs: [r], currentRun: r }), NOW)?.text).toBe('implementing');
     expect(
       statusLine(
         view({ currentRun: run({ state: 'ended', outcome: 'failed', failureReason: 'x' }) }),

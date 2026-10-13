@@ -3,8 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { GlobCard } from '../src/components/glob-card';
 import type { GlobView } from '../src/lib/api';
-import { activityClick, checksUrl, statusClick, turnStep, yourTurnClick } from '../src/lib/chip-actions';
-import { activityLabel, statusLine } from '../src/lib/status-line';
+import { positionClick, checksUrl, statusClick, turnStep, yourTurnClick } from '../src/lib/chip-actions';
+import { positionOf } from '../src/lib/position';
+import { statusLine } from '../src/lib/status-line';
 import type { StatusLine } from '../src/lib/status-line';
 import { NOW, glob } from '../../../packages/core/test/fixtures';
 
@@ -51,13 +52,15 @@ describe('Your turn click', () => {
 
 describe('status chips', () => {
   it('open the run session when working, and the PR checks while checks run', () => {
-    const working = view({ status: 'implementing', currentRun: { ...glob().runs[0], state: 'active', sessionUrl: 'https://claude.ai/code/x' } as never });
-    const activity = activityLabel(working, NOW);
-    expect(activity).not.toBeNull();
-    if (activity !== null) expect(activityClick(activity, working, 'a/b')).toEqual({ kind: 'link', url: 'https://claude.ai/code/x' });
+    const r = { ...glob().runs[0], state: 'active', sessionUrl: 'https://claude.ai/code/x' } as never;
+    const working = view({ status: 'implementing', runs: [r], currentRun: r });
+    const position = positionOf(working, NOW);
+    expect(position).not.toBeNull();
+    if (position !== null) expect(positionClick(position, working, 'a/b')).toEqual({ kind: 'link', url: 'https://claude.ai/code/x' });
     const checking = ready({ headChecks: { sha: head, state: 'pending' } });
-    const checks = activityLabel(checking, NOW);
-    if (checks !== null) expect(activityClick(checks, checking, 'a/b')).toEqual({ kind: 'link', url: 'https://github.com/a/b/pull/289/checks' });
+    const checks = positionOf(checking, NOW);
+    expect(checks).not.toBeNull();
+    if (checks !== null) expect(positionClick(checks, checking, 'a/b')).toEqual({ kind: 'link', url: 'https://github.com/a/b/pull/289/checks' });
     expect(checksUrl(undefined, checking)).toBeNull();
   });
 
