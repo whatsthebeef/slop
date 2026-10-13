@@ -92,7 +92,9 @@ describe('card rows', () => {
   it('shows a merge-conflict stall once, short, with no file names; the tooltip has the full reason', () => {
     const html = markup(stalledByConflict());
     const text = withoutTips(html);
-    expect(text).toContain('stalled · merge conflict');
+    expect(text).toContain('stalled');
+    expect(text).toContain('merge conflict');
+    expect(text).not.toContain('stalled · merge conflict');
     expect(text.match(/conflict/g)).toHaveLength(1);
     expect(text).not.toMatch(/\.tsx?|apps\/|Merge conflict with main in/);
     const line = dom(html).querySelector('[data-testid="status-line"]')?.textContent ?? '';
