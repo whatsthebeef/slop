@@ -158,7 +158,6 @@ describe('inbox', () => {
       const made = await globs.create(email, {
         boardId: board,
         title,
-        summary: title,
         type: 'same',
         category: 'task',
         group: 'sync',

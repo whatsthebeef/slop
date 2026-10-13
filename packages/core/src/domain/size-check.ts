@@ -188,7 +188,6 @@ export const evidenceOf = (estimate: SizeEstimate): string[] => [
 /** One part of a proposed split, in the shape `GlobService.split` takes (part 0 is the original glob). */
 export interface ProposedPart {
   readonly title: string;
-  readonly summary: string;
   readonly plan: string;
   /** Indexes of earlier parts this one needs merged before it starts (`after` in split_glob's shape): direct prerequisites only. */
   readonly after: readonly number[];
@@ -253,7 +252,6 @@ export const unresolved = (check: SizeCheck | null): boolean => check !== null &
 
 export interface ModelPart {
   readonly title: string;
-  readonly summary: string;
   readonly plan: string;
   readonly after: readonly number[];
 }
@@ -294,7 +292,7 @@ export const buildProposal = (plan: string, modelParts: readonly ModelPart[]): S
     .map((p) => {
       const missing = context.filter((section) => !lower(p.plan).includes(lower(section.heading)));
       const carried = [p.plan.trim(), ...missing.map((section) => `## ${section.heading}\n\n${section.body}`)].join('\n\n');
-      return { title: p.title.trim().slice(0, 120), summary: p.summary.trim(), plan: carried, own: p.plan.trim(), after: p.after };
+      return { title: p.title.trim().slice(0, 120), plan: carried, own: p.plan.trim(), after: p.after };
     });
   if (parts.length < 2) return null;
   // Everything each part needs, directly or through others, to cut direct needs down and keep overlaps from repeating them.
@@ -310,7 +308,6 @@ export const buildProposal = (plan: string, modelParts: readonly ModelPart[]): S
     }
     return {
       title: p.title,
-      summary: p.summary,
       plan: p.plan,
       after: direct.sort((a, b) => a - b),
       overlaps,

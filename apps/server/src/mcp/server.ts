@@ -110,17 +110,16 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work: a feature, task or bug) on a board; decision globs are created by slop from learnings, never here. Pass the request as `input` and slop proposes the title, summary, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (a person can split it); an explicit `type` always wins. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work: a feature, task or bug) on a board; decision globs are created by slop from learnings, never here. Pass the request as `input` and slop proposes the title, plan, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (a person can split it); an explicit `type` always wins. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
         input: z.string().optional().describe('The request in free text; used for intake when no title is given'),
         title: z.string().min(1).optional(),
-        summary: z.string().optional().describe('One or two sentences for the card; the spec goes in plan. Without a plan, it is also plan.md v1'),
         plan: z
           .string()
           .optional()
-          .describe('The full spec, stored verbatim as plan.md v1; without it plan.md v1 is the write-up intake makes of the input, else the summary as given'),
+          .describe('The full spec, stored verbatim as plan.md v1; without it plan.md v1 is the write-up intake makes of the input, else the title'),
         type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing)'),
         category: z.enum(WORK_CATEGORIES).optional(),
         group: z.string().optional(),
@@ -172,7 +171,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .max(20)
           .optional()
           .describe(
-            'Alias of `needs`: IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
+            'Alias of `needs`: IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the plan',
           ),
       },
     },
@@ -187,7 +186,6 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       }
       let fields = {
         title: input.title ?? '',
-        summary: input.summary ?? '',
         type: input.type ?? ('sub' as const),
         category: input.category ?? ('task' as const),
         group: input.group ?? null,
@@ -198,7 +196,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       // Intake's guesses: files the work changes (they can hold it for the merge policy) and globs the request waits for (only reported).
       let files: readonly string[] = [];
       let suggestedAfter: readonly string[] = [];
-      // The write-up intake made from the request: plan.md v1 unless the caller gave a plan or summary.
+      // The write-up intake made from the request: plan.md v1 unless the caller gave a plan.
       let proposedPlan: string | null = null;
       // What intake saw and decided, for the glob's snapshot.
       let intakeRecord: IntakeRecord | null = null;
@@ -209,7 +207,6 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         const proposal = await deps.intake.propose(email, input.board, {
           text: input.input,
           explicit: {
-            ...(input.summary === undefined ? {} : { summary: input.summary }),
             ...(input.type === undefined ? {} : { type: input.type }),
             ...(input.category === undefined ? {} : { category: input.category }),
             ...(input.group === undefined ? {} : { group: input.group }),
@@ -239,7 +236,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         boardId: input.board,
         ...fields,
         ...(start === undefined ? {} : { start }),
-        plan: input.plan ?? proposedPlan ?? input.summary ?? input.input ?? '',
+        plan: input.plan ?? proposedPlan ?? input.input ?? '',
         planBy: 'sessionator',
         source: 'mcp',
         ...(intakeRecord === null ? {} : { intake: intakeRecord }),
@@ -273,7 +270,6 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         category: glob.category,
         group: glob.group,
         environment: glob.environment,
-        summary: glob.summary,
         ...(glob.after === undefined || glob.after.length === 0 ? {} : { after: glob.after }),
         ...(glob.waiting == null ? {} : { waiting: true }),
         ...(glob.impliedAfter === undefined || glob.impliedAfter.length === 0 ? {} : { impliedAfter: glob.impliedAfter }),
@@ -289,7 +285,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'split_glob',
     {
       description:
-        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title, summary and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` (needs) between them. Write `{part:N}` in a plan or summary for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel. Name only direct prerequisites in `after` (a shared schema or contract as part 0, each consumer needing just part 0); parts that touch the same files go in `overlaps`, which orders merges and never blocks a start. A same part that needs another starts its routine by itself when its last need merges (`autoStart`; turn it off with update_glob).",
+        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` (needs) between them. Write `{part:N}` in a plan for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel. Name only direct prerequisites in `after` (a shared schema or contract as part 0, each consumer needing just part 0); parts that touch the same files go in `overlaps`, which orders merges and never blocks a start. A same part that needs another starts its routine by itself when its last need merges (`autoStart`; turn it off with update_glob).",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -298,7 +294,6 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .array(
             z.object({
               title: z.string().min(1),
-              summary: z.string(),
               plan: z.string().min(1).describe("This part's share of plan.md (Markdown); {part:N} stands for part N's glob ID"),
               category: z.enum(WORK_CATEGORIES).optional(),
               type: z.enum(SLOP_TYPES).optional(),
@@ -364,7 +359,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   server.registerTool(
     'list_globs',
     {
-      description: 'Glob summaries on a board, optionally filtered.',
+      description: 'Globs on a board (ID, title, status), optionally filtered.',
       inputSchema: {
         board: z.number().int(),
         status: z.array(z.enum(STATUSES)).optional(),
@@ -403,12 +398,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'update_glob',
     {
       description:
-        "Change a glob's title, summary, type, category, group, environment or `after` (the globs it waits for to merge; only before it has started; a sub changed from a same waits for them). Pass the version you read. The spec (plan.md) is not the summary: edit it with save_plan.",
+        "Change a glob's title, type, category, group, environment or `after` (the globs it waits for to merge; only before it has started; a sub changed from a same waits for them). Pass the version you read. The spec (plan.md) is not a field: edit it with save_plan.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
         title: z.string().optional(),
-        summary: z.string().optional(),
         type: z.enum(SLOP_TYPES).optional(),
         category: z.enum(WORK_CATEGORIES).optional(),
         group: z.string().nullable().optional(),
@@ -569,7 +563,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'report_failure',
     {
       description:
-        "Report that the glob cannot be finished. Routines pass their run ID; pass the agent-set version from .claude/slop-agent-set.json. Pass kind: 'needs_pairing' (with the decision you would have had to guess) when the work needs a person's decision, not more effort: the card then offers Make it a super and slop does not retry the run.",
+        "Report that the glob cannot be finished. Routines pass their run ID; pass the agent-set version from .claude/slop-agent-set.json. Pass kind: 'needs_pairing' (with the decision you would have had to guess) when the work needs a person's decision, not more effort: the card then offers to pick it up as a super and slop does not retry the run.",
       inputSchema: {
         id: z.string(),
         reason: z.string().min(1),
@@ -590,7 +584,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'escalate_to_same',
     {
       description:
-        "Flag a running sub as needing a human: it becomes a same in place (same branch and PR, no auto-merge) with the reason shown on its card, and the owner is told. Only for a concrete reason: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth/permissions/secrets changes, weakened or deleted tests, changed agent instructions, scope well beyond the plan, or in-scope review findings still open after the allowed rounds. Otherwise let the sub merge. Routines pass their run ID (a superseded run's call is ignored). A person can make it a sub again.",
+        "Flag a running sub as needing a human: it becomes a same in place (same branch and PR, no auto-merge) with the reason shown on its card, and the owner is told. Only for a concrete reason: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth/permissions/secrets changes, weakened or deleted tests, changed agent instructions, scope well beyond the plan, or in-scope review findings still open after the allowed rounds. Otherwise let the sub merge. Routines pass their run ID (a superseded run's call is ignored). A person can set its type back to sub.",
       inputSchema: {
         id: z.string(),
         reason: z.string().min(1).describe('What a human should check, in one or two sentences'),
@@ -791,7 +785,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a replaced one says what replaced it and when; the field keeps its old name), `authority` (which source wins when they disagree: merged code and the implementation record, then current choices newest first, then plan.md, then older discussion; replaced choices are history), and `related`: up to 5 cited search results for the glob's title and summary (what the board already knows, current choices first, replaced ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
+        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a replaced one says what replaced it and when; the field keeps its old name), `authority` (which source wins when they disagree: merged code and the implementation record, then current choices newest first, then plan.md, then older discussion; replaced choices are history), and `related`: up to 5 cited search results for the glob's title and plan (what the board already knows, current choices first, replaced ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {

@@ -1,6 +1,6 @@
 import { decisionOf, findingsLabel, reviewOutdated, scopeLabel } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
-import { Bot, Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
+import { Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -8,15 +8,18 @@ import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { activityLabel, blockedParts, chainTip, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
+import { HumanIcon, MachineIcon } from './actor-icons';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
 import { actionTiers } from '@/lib/action-style';
+import { workingLabel } from '@/lib/card-pending';
 import { splitChip } from '@/lib/split-chip';
 import { cardTargets } from '@/lib/card-targets';
 import type { GlobTarget } from '@/lib/glob-section';
 import { Tip } from './ui/tip';
 import { LabelPopover } from './labels';
 import type { ReviewLabel } from './labels';
+import { boardGlobHref } from '@/lib/glob-section';
 
 /** The glob's category as a small icon in the card's corner. */
 export const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> = {
@@ -100,7 +103,7 @@ export const ActivityLabel = ({ glob }: { glob: GlobView }) => {
         data-testid='activity-label'
         data-kind={activity.kind}
       >
-        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <Bot className='h-3 w-3' />}
+        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <MachineIcon className='h-3 w-3' decorative />}
         {activity.text}
       </span>
     </Tip>
@@ -201,12 +204,14 @@ const MoveButton = ({
   move,
   hot,
   primary,
+  disabled,
   onPreview,
   onMove,
 }: {
   move: CardMove;
   hot: boolean;
   primary: boolean;
+  disabled: boolean;
   onPreview: (move: CardMove | null) => void;
   onMove: (move: CardMove) => void;
 }) => (
@@ -216,8 +221,10 @@ const MoveButton = ({
     className={cn(
       'rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
       hot ? 'border-foreground bg-lcd text-lcd-foreground' : primary ? 'border-primary bg-primary text-primary-foreground hover:opacity-90' : 'border-foreground/70 bg-card text-foreground hover:bg-muted',
+      'disabled:pointer-events-none disabled:opacity-50',
     )}
     aria-label={move.description}
+    disabled={disabled}
     data-testid={`move-${move.action}`}
     onMouseEnter={() => onPreview(move)}
     onMouseLeave={() => onPreview(null)}
@@ -443,7 +450,7 @@ export const SplitChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => voi
           split from
         </ChipButton>{' '}
         <Link
-          to={`/boards/${glob.boardId}?glob=${encodeURIComponent(chip.source)}`}
+          to={boardGlobHref(glob.boardId, chip.source, { section: 'size' })}
           className='underline-offset-2 hover:underline'
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
@@ -499,6 +506,7 @@ export const GlobCard = ({
   onOpenSection,
   onReviewLabel,
   moves,
+  pending,
   previewing,
   onPreview,
   onMove,
@@ -517,6 +525,8 @@ export const GlobCard = ({
   onReviewLabel: ReviewLabel;
   /** Only the moves this glob can make; none means no buttons at all. */
   moves: readonly CardMove[];
+  /** The move in flight on this glob, if any: the card shows it working and takes no other move. */
+  pending?: Action;
   /** The move whose ghost piece is showing, if it is this card's. */
   previewing: Action | null;
   onPreview: (move: CardMove | null) => void;
@@ -557,7 +567,7 @@ export const GlobCard = ({
         } else if (e.key === 'Enter') {
           e.preventDefault();
           if (preview === undefined) onOpen();
-          else onMove(preview);
+          else if (pending === undefined) onMove(preview);
         } else if (e.key === 'Escape' && preview !== undefined) {
           onPreview(null);
         }
@@ -574,6 +584,7 @@ export const GlobCard = ({
         bump !== undefined && 'wall-bump',
       )}
       style={bump === undefined ? undefined : bumpStyle(bump)}
+      aria-busy={pending !== undefined}
       data-glob-id={glob.id}
       data-testid={`card-${glob.id}`}
     >
@@ -600,10 +611,10 @@ export const GlobCard = ({
         <OverlapChip glob={glob} />
         <SplitChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
         <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
-        {glob.escalation != null && (
-          <Tip text={`Needs a human: ${glob.escalation.reason}. Opens the reason`}>
+        {glob.escalation != null && glob.status === 'planning' && (
+          <Tip text={`Needs a person: ${glob.escalation.reason}. Opens the reason`}>
             <ChipButton onOpen={() => onOpenSection(cardTargets.escalation())} className='font-mono text-[11px] text-required' testId='escalation-chip'>
-              needs a human
+              needs a <HumanIcon className='inline h-3 w-3' />
             </ChipButton>
           </Tip>
         )}
@@ -619,8 +630,22 @@ export const GlobCard = ({
         {atf !== undefined && <AtfChip runs={atf} />}
         {status !== null && !decision && (
           <Tip text={status.tip}>
-            <span className={cn('font-mono text-[11px]', status.tone)} data-testid='status-line' data-kind={status.kind}>
-              {status.text}
+            <span
+              className={cn(
+                'font-mono text-[11px]',
+                status.kind === 'ready' ? 'inline-flex items-center gap-1 rounded-sm bg-foreground px-1.5 py-0.5 font-medium text-background' : status.tone,
+              )}
+              data-testid={status.kind === 'ready' ? 'your-turn-chip' : 'status-line'}
+              data-kind={status.kind}
+            >
+              {status.kind === 'ready' && <HumanIcon className='h-3 w-3' decorative />}
+              {status.kind === 'ready' ? (
+                <>
+                  Your turn <span className='font-normal opacity-70'>· {status.text}</span>
+                </>
+              ) : (
+                status.text
+              )}
             </span>
           </Tip>
         )}
@@ -635,11 +660,18 @@ export const GlobCard = ({
           </Tip>
         )}
         <span className='ml-auto inline-flex items-center gap-1'>
+          {pending !== undefined && (
+            <span className='inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
+              <Loader2 className='size-3 animate-spin' aria-hidden />
+              {workingLabel(pending)}
+            </span>
+          )}
           {moves.map((move, _i, all) => (
             <MoveButton
               key={move.action}
               move={move}
               hot={move.action === previewing}
+              disabled={pending !== undefined}
               primary={actionTiers(all.map((m) => m.action)).get(move.action) === 'primary'}
               onPreview={onPreview}
               onMove={onMove}

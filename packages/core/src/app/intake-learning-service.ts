@@ -54,9 +54,8 @@ export const snapshotOf = (
   globId: glob.id,
   version,
   boardId: glob.boardId,
-  request: intake?.request ?? glob.summary,
+  request: intake?.request ?? plan,
   title: glob.title,
-  summary: glob.summary,
   plan,
   creator: glob.creator,
   source: intake?.source ?? source,
@@ -152,7 +151,7 @@ export class IntakeLearningService {
       for (const e of await tx.listBoardEvents(boardId, EPOCH, ['GlobCreated'])) created.set(e.globId, e);
       for (const glob of missing) {
         const plans = await tx.artifactVersions(glob.id, 'plan', '');
-        const plan = plans.find((a) => a.version === 1)?.content ?? glob.summary;
+        const plan = plans.find((a) => a.version === 1)?.content ?? '';
         const data = created.get(glob.id)?.data;
         const type = data?.type === 'sub' || data?.type === 'same' || data?.type === 'super' ? data.type : glob.type;
         const category = data?.category === 'feature' || data?.category === 'task' || data?.category === 'bug' ? data.category : glob.category;
@@ -160,7 +159,7 @@ export class IntakeLearningService {
         await tx.insertIntakeSnapshot(
           {
             ...base,
-            request: `${glob.title}\n${plan.trim() === '' ? glob.summary : plan}`.trim(),
+            request: `${glob.title}\n${plan}`.trim(),
             decisions: { ...base.decisions, type, category },
             backfilled: true,
           },
@@ -239,7 +238,7 @@ export class IntakeLearningService {
           now,
           reviewStats: reviews.get(globId) ?? null,
           findings: (await tx.listFindings(globId)).map((f) => ({ severity: f.severity, class: f.class })),
-          bugs: bugs.map((b) => ({ id: b.id, title: b.title, summary: b.summary, createdAt: b.createdAt })),
+          bugs: bugs.map((b) => ({ id: b.id, title: b.title, createdAt: b.createdAt })),
         });
         await tx.upsertGlobOutcome(outcome);
         const type = outcome.corrections.type;

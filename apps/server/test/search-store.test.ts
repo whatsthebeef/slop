@@ -282,7 +282,6 @@ describe('search store', () => {
     const created = await globs.create(DEV, {
       boardId,
       title: 'Doomed',
-      summary: '',
       type: 'same',
       category: 'task',
       group: null,
@@ -308,7 +307,6 @@ describe('search store', () => {
     const created = await globs.create(DEV, {
       boardId,
       title: 'Artifacts',
-      summary: '',
       type: 'same',
       category: 'task',
       group: null,

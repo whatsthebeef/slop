@@ -16,7 +16,6 @@ import type { BoardView, IntakeProposalView, NewGlob } from '@/lib/api';
 
 const empty = (): NewGlob => ({
   title: '',
-  summary: '',
   type: 'same',
   category: 'task',
   group: null,
@@ -81,7 +80,6 @@ export const CreateGlobDialog = ({
       const proposal = await api.intake(board.id, request);
       setForm({
         title: proposal.title,
-        summary: proposal.summary,
         plan: proposal.plan,
         type: restricted && proposal.type === 'super' ? 'same' : proposal.type,
         category: proposal.category,
@@ -198,8 +196,8 @@ export const CreateGlobDialog = ({
             <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus />
           </Label>
           <Label>
-            Summary
-            <Textarea value={form.summary} onChange={(e) => setForm({ ...form, summary: e.target.value })} />
+            Plan
+            <Textarea value={form.plan ?? ''} onChange={(e) => setForm({ ...form, plan: e.target.value })} />
           </Label>
           <div className='grid grid-cols-2 gap-3'>
             <Label>

@@ -56,7 +56,6 @@ describe('sign-off label checklists in Postgres', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Checklist',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,

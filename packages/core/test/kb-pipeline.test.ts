@@ -165,7 +165,6 @@ describe('KB pipeline: routing and dedupe', () => {
         await globs.create(ADMIN, {
           boardId,
           title: 'Work',
-          summary: '',
           type: 'same',
           category: 'task',
           group: null,

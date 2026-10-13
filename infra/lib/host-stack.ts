@@ -359,7 +359,7 @@ export class HostStack extends Stack {
     new CfnOutput(this, 'CloudFrontUrl', { value: cloudFrontUrl, description: "The distribution's *.cloudfront.net address (the DNS CNAME target for a custom domain)" });
     new CfnOutput(this, 'InstanceId', { value: instance.instanceId, description: 'Open a shell with aws ssm start-session --target <id>' });
     new CfnOutput(this, 'RepositoryUri', { value: repository.repositoryUri });
-    new CfnOutput(this, 'DeployProject', { value: project.projectName, description: 'First deploy: aws codebuild start-build --project-name <name>' });
+    new CfnOutput(this, 'DeployProject', { value: project.projectName, description: 'First deploy: aws codebuild start-build --project-name <name> --environment-variables-override name=SLOP_FIRST_DEPLOY,value=1 (a new install only: without it a deploy fails when the data disk holds no database)' });
     new CfnOutput(this, 'ServerEnvParameter', {
       value: `/slop/${stage}/server-env`,
       description: 'SSM parameter (String, KEY=VALUE per line) read at each deploy: AUTH_MODE and the COGNITO_* settings',

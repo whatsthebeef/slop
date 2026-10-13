@@ -118,7 +118,6 @@ const settingsSchema = z.object({
 
 export const createGlobSchema = z.object({
   title: z.string().min(1),
-  summary: z.string().default(''),
   type: z.enum(SLOP_TYPES).default('same'),
   category: z.enum(WORK_CATEGORIES).default('task'),
   group: z.string().min(1).nullable().default(null),
@@ -158,7 +157,6 @@ export const splitGlobSchema = z.object({
     .array(
       z.object({
         title: z.string().min(1),
-        summary: z.string().default(''),
         plan: z.string().min(1),
         category: z.enum(WORK_CATEGORIES).optional(),
         type: z.enum(SLOP_TYPES).optional(),
@@ -174,7 +172,6 @@ export const splitGlobSchema = z.object({
 const updateGlobSchema = z.object({
   version: z.number().int(),
   title: z.string().min(1).optional(),
-  summary: z.string().optional(),
   type: z.enum(SLOP_TYPES).optional(),
   category: z.enum(WORK_CATEGORIES).optional(),
   group: z.string().min(1).nullable().optional(),
@@ -459,7 +456,6 @@ export const createApp = (deps: AppDeps) => {
       ...(needs === undefined && fields.after === undefined ? {} : { after: needs ?? fields.after ?? [] }),
       source: 'web',
       ...(intake === undefined ? {} : { intake: { ...intake, source: 'web' } }),
-      plan: body.plan ?? body.summary,
       boardId: Number(c.req.param('b')),
     });
     if (!created.ok) return send(c, created);
@@ -569,6 +565,19 @@ export const createApp = (deps: AppDeps) => {
     },
   } as const;
 
+  const BACKGROUND_DRAIN: ReadonlySet<keyof typeof actions> = new Set([
+    'review-now',
+    'start',
+    'start-anyway',
+    'investigate',
+    'retrigger',
+    'retry-autofix',
+    'resolve-conflict',
+    'pick-up',
+    'take-over',
+    'start-again',
+  ]);
+
   app.post('/api/globs/:id/actions/:action', async (c) => {
     const action = z.enum(Object.keys(actions) as [keyof typeof actions]).safeParse(c.req.param('action'));
     if (!action.success) return c.json({ code: 'not_found', message: 'Unknown action' }, 404);
@@ -577,8 +586,10 @@ export const createApp = (deps: AppDeps) => {
     const result = await actions[action.data](c.get('email'), c.req.param('id'), body);
     if (result.ok) {
       const drained = deps.outbox.drain(result.value.id);
-      // A review takes minutes: it runs in the background, and the glob view answers at once.
-      if (action.data === 'review-now') void drained.catch(() => undefined);
+      // A review takes minutes, and starting or handing over a glob provisions its branch and PR and fires a routine (GitHub
+      // calls, seconds): those run in the background and the glob view answers at once, with provisioning still pending.
+      // The board's live hint shows the result, and the outbox poller picks the jobs up if this drain is cut short.
+      if (BACKGROUND_DRAIN.has(action.data)) void drained.catch(() => undefined);
       else await drained;
     }
     return withView(c, result);

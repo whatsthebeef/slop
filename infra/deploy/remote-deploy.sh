@@ -14,8 +14,21 @@ cd /opt/slop
 exec 9>/opt/slop/.deploy.lock
 flock -w 300 9
 
+# deploy-guards.sh arrives with the image, like this script.
+. /opt/slop/deploy-guards.sh
+
 PREVIOUS=""
 if [ -f current-image ]; then PREVIOUS="$(cat current-image)"; fi
+
+# Never replace a newer release with an older one (builds run in parallel and can finish out of order).
+# COMMIT_TIME is the commit time of this build, from deploy.sh; current-commit-time is that of the running release.
+if [ -f current-commit-time ] && is_older_than_running "${COMMIT_TIME:-}" "$(cat current-commit-time)"; then
+  echo "Skipping $IMAGE: it is older than the running release $PREVIOUS"
+  exit 0
+fi
+
+# An empty or missing data disk must fail the deploy; it must not start a new, empty database.
+data_disk_guard /var/lib/slop
 
 # Postgres' password is made once and lives on the data disk, so it survives a replaced instance.
 PASSWORD_FILE=/var/lib/slop/postgres-password
@@ -102,6 +115,7 @@ docker pull "$IMAGE"
 compose "$IMAGE" up -d --remove-orphans
 if wait_healthy; then
   echo "$IMAGE" > current-image
+  if [ -n "${COMMIT_TIME:-}" ]; then echo "$COMMIT_TIME" > current-commit-time; fi
   echo "Deployed $IMAGE"
   docker image prune -f >/dev/null || true
   exit 0

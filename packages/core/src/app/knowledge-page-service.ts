@@ -1,4 +1,4 @@
-import { decisionOf, isAccepted, scopeLabel } from '../domain/decision-glob.js';
+import { decisionOf, decisionStatement, isAccepted, scopeLabel } from '../domain/decision-glob.js';
 import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { knowledgePageEffect } from '../domain/events.js';
@@ -72,6 +72,8 @@ Respond with one JSON object and nothing else:
 /** A decision in force, with what the page remembers about it. */
 interface InForce {
   readonly glob: Glob;
+  /** The decision's one-line statement, from its plan.md. */
+  readonly statement: string;
   readonly fingerprint: string;
   readonly at: string;
 }
@@ -101,10 +103,10 @@ const sameRecord = (a: Readonly<Record<string, string>>, b: Readonly<Record<stri
 };
 
 /** What the decisions section says about a decision: any change to it makes the decision "changed" for the delta. */
-const fingerprintOf = (glob: Glob): string => {
+const fingerprintOf = (glob: Glob, statement: string): string => {
   const d = decisionOf(glob);
   return hash(
-    [glob.title, glob.summary, d === null ? '' : scopeLabel(d.scope), d?.outcome?.kind ?? '', d?.outcome?.reason ?? '', d?.outcome?.at ?? ''].join('\u0000'),
+    [glob.title, statement, d === null ? '' : scopeLabel(d.scope), d?.outcome?.kind ?? '', d?.outcome?.reason ?? '', d?.outcome?.at ?? ''].join('\u0000'),
   );
 };
 
@@ -114,7 +116,7 @@ const promptLine = (d: InForce): string => {
   return JSON.stringify({
     id: d.glob.id,
     title: d.glob.title,
-    statement: clip(oneLine(d.glob.summary), STATEMENT_MAX),
+    statement: clip(oneLine(d.statement), STATEMENT_MAX),
     rationale: clip(oneLine(attributes?.outcome?.reason ?? ''), RATIONALE_MAX),
     scope: attributes === null ? null : scopeLabel(attributes.scope),
     area: d.glob.group ?? attributes?.target?.routed?.name ?? null,
@@ -396,12 +398,15 @@ export class KnowledgePageService {
     const feedback = await tx.listKnowledgePageFeedback(boardId);
     // A decision glob taken from an extracted decision stops being in force when a newer decision replaced it.
     const replaced = new Set(decisionRows.filter((d) => d.replaceState === 'applied' || d.replaceState === 'confirmed').map((d) => d.id));
+    const plans = new Map<string, string>();
+    for (const a of await tx.listLatestArtifacts(boardId)) if (a.kind === 'plan') plans.set(a.globId, a.content);
     const agentDecisions = globs
       .filter(isAccepted)
       .flatMap((glob): InForce[] => {
         const origin = decisionOf(glob)?.origin;
         const superseded = origin?.kind === 'extracted' && replaced.has(origin.decisionId);
-        return superseded ? [] : [{ glob, fingerprint: fingerprintOf(glob), at: decisionOf(glob)?.outcome?.at ?? glob.updatedAt }];
+        const statement = decisionStatement(glob, plans.get(glob.id));
+        return superseded ? [] : [{ glob, statement, fingerprint: fingerprintOf(glob, statement), at: decisionOf(glob)?.outcome?.at ?? glob.updatedAt }];
       })
       .sort((a, b) => b.at.localeCompare(a.at) || a.glob.id.localeCompare(b.glob.id));
     // A learning that targets a file of the agent set is in the agent set already; the page keeps project decisions.

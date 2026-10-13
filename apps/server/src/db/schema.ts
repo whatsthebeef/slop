@@ -849,7 +849,6 @@ export const intakeSnapshots = pgTable(
       .references(() => boards.id, { onDelete: 'cascade' }),
     request: text('request').notNull(),
     title: text('title').notNull(),
-    summary: text('summary').notNull(),
     plan: text('plan').notNull(),
     creator: text('creator').notNull(),
     source: text('source', { enum: SNAPSHOT_SOURCES }).notNull(),

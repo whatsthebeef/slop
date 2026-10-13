@@ -4,7 +4,7 @@ import type { Result } from '../domain/errors.js';
 import { suggestEffect } from '../domain/events.js';
 import type { EffectOutcome, RetryLater } from '../domain/events.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
-import { isLearning, learningAssessmentFacts, learningDraft, learningEvidence, learningTarget } from '../domain/learning.js';
+import { isLearning, learningAssessmentFacts, learningDraft, learningEvidence, learningStatement, learningTarget } from '../domain/learning.js';
 import type { LearningRead } from '../domain/learning.js';
 import { markdownHeadings, sectionText } from '../domain/sections.js';
 import {
@@ -134,7 +134,7 @@ export class SuggestService {
       const { suggested, flags } = assessmentOf({ attributes, item: learning === null ? null : learningAssessmentFacts(learning), preview, conflicts: attributes.conflictsWith ?? [] });
       return { suggestedOutcome: suggested, flags };
     };
-    const base = { glob: { id: glob.id, title: glob.title, summary: cut(glob.summary, SUGGEST_STATEMENT_MAX) } };
+    const base = { glob: { id: glob.id, title: glob.title } };
     if (learning === null) {
       return { inputs: { ...base, learning: null, siblings: [], merges: [], outcomes: [], flags: flagsOf(null) }, stamp: { draftVersion: null, targetVersion: null, promptVersion: SUGGEST_PROMPT_VERSION } };
     }
@@ -150,11 +150,12 @@ export class SuggestService {
     const text = state?.text ?? null;
     const sectionOnly = text !== null && section !== null ? sectionText(text, section) : null;
     const facts = learningPromptFacts(learning);
-    const area = [target?.name ?? '', section ?? '', glob.summary];
+    const statement = learningStatement(glob, learning.artifacts);
+    const area = [target?.name ?? '', section ?? '', statement];
     const inputs: SuggestInputs = {
       ...base,
       learning: {
-        statement: cut(glob.summary, SUGGEST_STATEMENT_MAX),
+        statement: cut(statement, SUGGEST_STATEMENT_MAX),
         type: facts.type,
         evidence: cut(learningEvidence(glob, learning.artifacts), SUGGEST_DRAFT_MAX),
         sourceGlobs: facts.sourceGlobs,

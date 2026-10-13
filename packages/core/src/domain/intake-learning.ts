@@ -13,7 +13,7 @@ import type { Category, SlopType } from './types.js';
  */
 
 /** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples, v2 the prompt with them, v3 the broader sub definition, v4 optimistic: a sub unless a risk area or the board's learned sub size says otherwise. */
-export const INTAKE_PROMPT_VERSION = 5;
+export const INTAKE_PROMPT_VERSION = 6;
 
 /** Intake's own confidence in the category it chose. */
 export const CONFIDENCES = ['high', 'medium', 'low'] as const;
@@ -190,7 +190,6 @@ export interface IntakeSnapshot {
   readonly boardId: number;
   readonly request: string;
   readonly title: string;
-  readonly summary: string;
   readonly plan: string;
   readonly creator: string;
   readonly source: SnapshotSource;
@@ -257,8 +256,8 @@ export interface OutcomeInput {
   /** From the latest local review; null when it had none. */
   readonly reviewStats: ReviewStats | null;
   readonly findings: readonly FindingFacts[];
-  /** The board's bug globs (id, title, summary, createdAt) the post-merge fixes are found in. */
-  readonly bugs: readonly { readonly id: string; readonly title: string; readonly summary: string; readonly createdAt: string }[];
+  /** The board's bug globs (id, title, createdAt) the post-merge fixes are found in. */
+  readonly bugs: readonly { readonly id: string; readonly title: string; readonly createdAt: string }[];
 }
 
 const tally = (values: readonly (string | null)[]): Record<string, number> => {
@@ -307,7 +306,7 @@ export const collectOutcome = (input: OutcomeInput): GlobOutcome => {
   const fixGlobs = input.bugs
     .filter((b) => {
       const created = Date.parse(b.createdAt);
-      return created >= mergedMs && created <= mergedMs + OUTCOME_FINAL_DAYS * DAY_MS && namesGlob(`${b.title}\n${b.summary}`, snapshot.globId);
+      return created >= mergedMs && created <= mergedMs + OUTCOME_FINAL_DAYS * DAY_MS && namesGlob(b.title, snapshot.globId);
     })
     .map((b) => b.id);
   const createdMs = Date.parse(snapshot.createdAt);

@@ -93,7 +93,7 @@ export const codeHostExecutors = (
       }
       const name = `${repo.owner}/${repo.name}`;
       try {
-        const result = await host.provision(repo, glob);
+        const result = await host.provision(repo, glob, await globs.peekPlan(glob.id));
         await globs.applyEvent(glob.id, (g, ctx) => machine.provisioned(g, result, ctx));
         await notifications?.clear(glob.boardId, REPO_ACCESS_SOURCE);
         return 'done';
@@ -143,7 +143,7 @@ export const codeHostExecutors = (
       const reopened = glob.pr === null ? 'missing' : await host.reopenPr(repo, glob.pr.number, glob.id);
       if (reopened === 'missing') {
         // The branch was deleted: provision a fresh branch and draft PR.
-        const result = await host.provision(repo, glob);
+        const result = await host.provision(repo, glob, await globs.peekPlan(glob.id));
         await globs.applyEvent(glob.id, (g, ctx) => machine.provisioned(g, result, ctx));
       }
       return 'done';
@@ -154,7 +154,7 @@ export const codeHostExecutors = (
       if (glob === null || glob.pr !== null || glob.status !== 'in_progress') return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null || !host.configured) return 'dropped';
-      const pr = await host.openDraftPr(repo, glob);
+      const pr = await host.openDraftPr(repo, glob, await globs.peekPlan(glob.id));
       // Nothing to merge yet: the next push tries again.
       if (pr === null) return 'done';
       // The `opened` webhook may have recorded it first; recording it again is a no-op.
@@ -193,7 +193,11 @@ export const codeHostExecutors = (
       }
       // The head's checks: re-read them when slop has no result for this head (the effect records it like a webhook would).
       const now = await globs.peek(glob.id);
-      if (now?.status === 'pr_open' && (now.headChecks === null || now.headChecks.sha !== pr.headSha || now.headChecks.state === 'pending')) {
+      if (now?.status === 'pr_open' && (now.headChecks === null ||
+          now.headChecks.sha !== pr.headSha ||
+          now.headChecks.state === 'pending' ||
+          // Recorded as failed with no detail while the PR conflicts: that was the conflict, not the checks.
+          (now.conflict != null && now.headChecks.state === 'failed' && now.headChecks.failure === undefined))) {
         log('reconcile', `${glob.id} rereading head checks (no result recorded)`);
         await globs.applyEvent(glob.id, (g, ctx) => machine.checksChanged(g, ctx));
       }
@@ -220,6 +224,8 @@ export const codeHostExecutors = (
       const conflict = state === 'conflict' ? { base: repo.base, files: await host.conflictFiles(repo, glob.pr.number) } : undefined;
       // Say what failed, and whether the base branch fails the same way (then it isn't this glob's change).
       const failure = state === 'failed' ? await explainFailure(repo, sha) : null;
+      // A conflict says nothing about the head's own checks: read what its check runs report (GitHub usually runs none).
+      const real = state === 'conflict' ? await host.commitChecks(repo, sha) : undefined;
       await globs.applyEvent(glob.id, (g, ctx) =>
         machine.checksCompleted(
           g,
@@ -227,6 +233,7 @@ export const codeHostExecutors = (
             sha,
             passed,
             ...(conflict !== undefined && { conflict }),
+            ...(real !== undefined && { real }),
             ...(failure !== null && { failure, base: board?.baseChecks ?? null, baseBranch: repo.base }),
           },
           ctx,

@@ -109,7 +109,6 @@ describe('KB routes: retrying failed items and catalog updates', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Source',
-        summary: '',
         type: 'super',
         category: 'feature',
         group: null,

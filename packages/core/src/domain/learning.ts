@@ -28,7 +28,7 @@ import type { Glob, GlobLink } from './types.js';
 /**
  * A learning is a decision glob an agent submitted or slop mined (`s<board>k<n>`). These pure helpers read one value of a
  * learning each, from the glob and its artifacts (and, for its pipeline state, its outbox jobs), so every derived value
- * is worked out in exactly one place. The glob holds the statement (`summary`), the learning's fields (attributes), how it
+ * is worked out in exactly one place. The glob holds the statement (its plan.md), the learning's fields (attributes), how it
  * relates to other learnings (`links`), its outcome and status (the decision rows); its artifacts hold the payload
  * (statement and evidence, or a proposed document), the draft, the approval's outcome, the effect check, and attachments
  * for evidence merged in from near-duplicates and the merge note.
@@ -57,6 +57,16 @@ export const evidenceOfPayload = (statement: string, payload: string): string =>
   payload.startsWith(`${statement}${EVIDENCE_HEADING}`)
     ? payload.slice(statement.length + EVIDENCE_HEADING.length)
     : payload;
+
+/**
+ * A learning's statement: the text before the evidence heading in its plan.md payload (`proposalText` writes it so). A
+ * payload a person rewrote without the heading, a document proposal and a learning with no plan yet fall back to the title.
+ */
+export const learningStatement = (glob: Pick<Glob, 'title'>, a: Pick<LearningArtifacts, 'plan'>): string => {
+  const payload = a.plan?.content;
+  const at = payload?.indexOf(EVIDENCE_HEADING) ?? -1;
+  return payload === undefined || at < 0 ? glob.title : payload.slice(0, at);
+};
 
 /** The attachment labels a learning uses. */
 export const MERGE_NOTE_LABEL = 'merge_note';
@@ -205,7 +215,7 @@ export const learningDocument = (
   a: Pick<LearningArtifacts, 'plan'>,
 ): ProposedDocument | null => {
   const meta = attributesOf(glob)?.document;
-  return meta === undefined ? null : { ...meta, content: a.plan?.content ?? glob.summary };
+  return meta === undefined ? null : { ...meta, content: a.plan?.content ?? '' };
 };
 
 /** The submission's evidence: from a statement's payload, or a document proposal's evidence attachment. */
@@ -214,7 +224,7 @@ export const learningEvidence = (
   a: Pick<LearningArtifacts, 'plan' | 'documentEvidence'>,
 ): string =>
   attributesOf(glob)?.document === undefined
-    ? evidenceOfPayload(glob.summary, a.plan?.content ?? glob.summary)
+    ? evidenceOfPayload(learningStatement(glob, a), a.plan?.content ?? '')
     : (a.documentEvidence?.content ?? '');
 
 /** Evidence near-duplicates added, in the order it was added. */

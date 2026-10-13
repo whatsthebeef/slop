@@ -4,6 +4,7 @@ import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
+import type { IntakeRecord } from '../src/domain/intake-learning.js';
 import { agentSetKind, catalogFork, catalogUpdates, docName, parseFrontmatter } from '../src/domain/knowledge.js';
 import type { Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -166,7 +167,7 @@ describe('knowledge and artifacts', () => {
 
   it('stores an investigation, and keeps a malformed one as text with a validation note', async () => {
     const glob = unwrap(
-      await globs.create(DEV, { boardId, title: 'Investigate me', summary: 'x', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+      await globs.create(DEV, { boardId, title: 'Investigate me', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
     );
     const good = [
       '# Investigation',
@@ -214,7 +215,6 @@ describe('knowledge and artifacts', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Plan me',
-        summary: 'First idea',
         type: 'same',
         category: 'task',
         group: null,
@@ -223,11 +223,11 @@ describe('knowledge and artifacts', () => {
         idempotencyKey: null,
       }),
     );
-    expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 0, content: 'First idea' });
+    expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 1, content: 'Plan me' });
     unwrap(await artifacts.putPlan(DEV, glob.id, '# Plan\n\nDone when: it works.'));
     unwrap(await artifacts.attach(DEV, glob.id, { label: 'Meeting', text: 'We decided X.', link: null }));
     const context = unwrap(await artifacts.context(DEV, glob.id));
-    expect(context.plan).toEqual({ version: 1, content: '# Plan\n\nDone when: it works.' });
+    expect(context.plan).toEqual({ version: 2, content: '# Plan\n\nDone when: it works.' });
     // Other attachments are listed, not sent in full; Clarifications and Assumptions stay inline.
     expect(context.attachments).toEqual([]);
     expect(context.available).toEqual([
@@ -251,7 +251,7 @@ describe('knowledge and artifacts', () => {
     expect(unwrap(await artifacts.artifact(DEV, glob.id, 'implementation_plan', '')).content).toBe('# Impl\n\nDetails');
     expect(unwrap(await artifacts.artifact(DEV, glob.id, 'attachment', 'Meeting')).content).toBe('We decided X.');
     expect((await artifacts.artifact(DEV, glob.id, 'local_review', '')).ok).toBe(false);
-    expect(unwrap(await artifacts.plan(DEV, glob.id, null)).versions).toHaveLength(1);
+    expect(unwrap(await artifacts.plan(DEV, glob.id, null)).versions).toHaveLength(2);
   });
 
   it('keeps plan.md and the implementation record apart; a postplan write is an alias for the record', async () => {
@@ -259,7 +259,6 @@ describe('knowledge and artifacts', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Pair on it',
-        summary: 'Idea',
         type: 'super',
         category: 'feature',
         group: null,
@@ -269,12 +268,12 @@ describe('knowledge and artifacts', () => {
       }),
     );
     unwrap(await artifacts.putPlan(DEV, glob.id, '# Plan from the PO'));
-    expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 1, content: '# Plan from the PO' });
+    expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 2, content: '# Plan from the PO' });
     expect(unwrap(await artifacts.plan(DEV, glob.id, null))).toMatchObject({ kind: 'plan', current: { content: '# Plan from the PO' } });
 
     unwrap(await artifacts.putArtifact(DEV, glob.id, 'postplan', '# What was built', { commitSha: 'abc', runId: null, agentSetVersion: null }));
     const context = unwrap(await artifacts.context(DEV, glob.id));
-    expect(context.plan).toEqual({ version: 1, content: '# Plan from the PO' });
+    expect(context.plan).toEqual({ version: 2, content: '# Plan from the PO' });
     expect(context.implementationRecord).toEqual({ version: 1, commitSha: 'abc', content: '# What was built' });
     expect(unwrap(await artifacts.plan(DEV, glob.id, null))).toMatchObject({ kind: 'plan', current: { content: '# Plan from the PO' } });
     // A later put of either kind is the next version of the one record.
@@ -288,7 +287,6 @@ describe('knowledge and artifacts', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Sub',
-        summary: '',
         type: 'sub',
         category: 'task',
         group: null,
@@ -301,7 +299,7 @@ describe('knowledge and artifacts', () => {
       await artifacts.putArtifact(DEV, glob.id, 'implementation_plan', 'plan', { commitSha: null, runId: 'old', agentSetVersion: 1 }),
     );
     expect(stale).toMatchObject({ ignored: true });
-    expect(store.state.events.filter((e) => e.type === 'ArtifactAdded')).toHaveLength(0);
+    expect(store.state.events.filter((e) => e.type === 'ArtifactAdded' && e.data.kind !== 'plan')).toHaveLength(0);
     expect(notifier.hints.filter((h) => h.kind === 'glob.artifacts')).toHaveLength(0);
     const fresh = unwrap(
       await artifacts.putArtifact(DEV, glob.id, 'implementation_plan', 'plan', { commitSha: 'abc', runId: 'run-1', agentSetVersion: 1 }),
@@ -314,7 +312,6 @@ describe('knowledge and artifacts', () => {
       await globs.create(DEV, {
         boardId,
         title,
-        summary: '',
         type,
         category: 'task',
         group: null,
@@ -335,7 +332,7 @@ describe('knowledge and artifacts', () => {
       }),
     );
     expect(review).toMatchObject({ kind: 'local_review', version: 1, provenance: { by: 'sessionator' } });
-    const added = store.state.events.filter((e) => e.type === 'ArtifactAdded');
+    const added = store.state.events.filter((e) => e.type === 'ArtifactAdded' && e.data.kind !== 'plan');
     expect(added).toEqual([
       {
         type: 'ArtifactAdded',
@@ -364,7 +361,7 @@ describe('knowledge and artifacts', () => {
 
     const view = unwrap(await globs.get(DEV, glob.id));
     expect(view.artifacts.map((a) => [a.kind, a.version, a.versions, a.commitSha])).toEqual([
-      ['plan', 1, 1, null],
+      ['plan', 2, 2, null],
       ['implementation_plan', 1, 1, 'bbb'],
       ['local_review', 2, 2, 'bbb'],
     ]);
@@ -379,7 +376,7 @@ describe('knowledge and artifacts', () => {
 
     const board = unwrap(await globs.listWithArtifacts(DEV, boardId, {}));
     const kinds = Object.fromEntries(board.map((g) => [g.glob.id, g.artifacts.map((a) => a.kind)]));
-    expect(kinds).toEqual({ [glob.id]: ['plan', 'implementation_plan', 'local_review'], [other.id]: ['implementation_plan'] });
+    expect(kinds).toEqual({ [glob.id]: ['plan', 'implementation_plan', 'local_review'], [other.id]: ['plan', 'implementation_plan'] });
     // Globs the board doesn't show are dropped before their summaries are read.
     const shown = unwrap(await globs.listWithArtifacts(DEV, boardId, {}, (g) => g.id === other.id));
     expect(shown.map((g) => g.glob.id)).toEqual([other.id]);
@@ -387,11 +384,10 @@ describe('knowledge and artifacts', () => {
   });
 
   describe('plan.md v1 at creation (s15f16)', () => {
-    const create = (patch: { summary?: string; plan?: string | null; planBy?: 'human' | 'sessionator' }) =>
+    const create = (patch: { plan?: string | null; planBy?: 'human' | 'sessionator'; intake?: IntakeRecord }) =>
       globs.create(DEV, {
         boardId,
         title: 'New',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,
@@ -401,33 +397,24 @@ describe('knowledge and artifacts', () => {
         ...patch,
       });
 
-    it('stores `plan` verbatim, leaving the summary alone', async () => {
-      const glob = unwrap(await create({ summary: 'Short', plan: '# Spec\n\nDone when: x.\n', planBy: 'sessionator' }));
-      expect(glob.summary).toBe('Short');
+    it('stores `plan` verbatim', async () => {
+      const glob = unwrap(await create({ plan: '# Spec\n\nDone when: x.\n', planBy: 'sessionator' }));
       const plan = unwrap(await artifacts.plan(DEV, glob.id, null));
       expect(plan.current).toMatchObject({ version: 1, content: '# Spec\n\nDone when: x.\n', provenance: { by: 'sessionator', actor: DEV } });
     });
 
-    it('stores the summary or the intake input when that is what it is given', async () => {
-      const fromSummary = unwrap(await create({ summary: 'The summary', plan: 'The summary' }));
-      expect(unwrap(await artifacts.plan(DEV, fromSummary.id, null)).current).toMatchObject({
-        version: 1,
-        content: 'The summary',
-        provenance: { by: 'human' },
-      });
-      const fromInput = unwrap(await create({ plan: 'Fix the login timeout, please' }));
-      expect(unwrap(await artifacts.plan(DEV, fromInput.id, null)).current?.content).toBe('Fix the login timeout, please');
+    it('stores the intake input when there is no plan', async () => {
+      const intake: IntakeRecord = { request: 'Fix the login timeout, please', source: 'web', categoryConfidence: null, reason: null, model: null, promptVersion: null, examples: [] };
+      const fromInput = unwrap(await create({ intake }));
+      expect(unwrap(await artifacts.plan(DEV, fromInput.id, null)).current).toMatchObject({ version: 1, content: 'Fix the login timeout, please', provenance: { by: 'human' } });
     });
 
-    it('stores nothing for an empty plan, and get_context still shows the summary as version 0', async () => {
-      const glob = unwrap(await create({ summary: 'Only a summary' }));
-      expect(unwrap(await artifacts.plan(DEV, glob.id, null)).current).toBeNull();
-      expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 0, content: 'Only a summary' });
-    });
-
-    it('get_context returns the same text for a new glob as the summary-only path did', async () => {
-      const glob = unwrap(await create({ summary: 'Same text', plan: 'Same text' }));
-      expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 1, content: 'Same text' });
+    it('stores the title when it is given nothing else, so every glob has a plan', async () => {
+      for (const patch of [{}, { plan: null }, { plan: '  \n' }]) {
+        const glob = unwrap(await create(patch));
+        expect(unwrap(await artifacts.plan(DEV, glob.id, null)).current).toMatchObject({ version: 1, content: 'New' });
+        expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 1, content: 'New' });
+      }
     });
 
     it('save_plan makes v2 and later, and refuses a stale version', async () => {
@@ -438,10 +425,10 @@ describe('knowledge and artifacts', () => {
       expect(unwrap(await artifacts.context(DEV, glob.id)).plan).toEqual({ version: 3, content: 'v3 text' });
     });
 
-    it('a glob with no plan saved yet is at version 0', async () => {
-      const glob = unwrap(await create({ summary: 'Old style' }));
-      expect(errorCode(await artifacts.putPlan(DEV, glob.id, 'x', 1))).toBe('version_conflict');
-      expect(unwrap(await artifacts.putPlan(DEV, glob.id, 'First', 0))).toMatchObject({ version: 1 });
+    it('a new glob is at plan version 1', async () => {
+      const glob = unwrap(await create({}));
+      expect(errorCode(await artifacts.putPlan(DEV, glob.id, 'x', 0))).toBe('version_conflict');
+      expect(unwrap(await artifacts.putPlan(DEV, glob.id, 'Second', 1))).toMatchObject({ version: 2 });
     });
   });
 
