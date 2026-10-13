@@ -52,6 +52,10 @@ When a run ID is given:
 - **A red base branch is not yours to fix.** When the PR's checks fail (auto-fix), call `get_glob` first. If `headChecks.inheritedFrom` is set (or `failedChecks.inherited` is true), the base branch fails the same way: do not patch its error in this branch (a second fix collides with the one the base's owner pushes). Do not push. Record it in the run's notes (an `Assumptions` attachment): the failing check and first error, and that it is inherited from the base since the glob named in `inheritedFrom.since`. Slop brings the branch up to date and re-runs the checks when the base goes green. If the checks still fail afterwards with `inheritedFrom` unset, the failure is this glob's: fix it.
 - Pick the investigator's recommended proposal.
 
+## Handover
+
+`get_glob` and `get_context` return `handover`: why a person is needed on this glob (`why`, one sentence per cause, most actionable first), what to do first (`next`) and the extra lines (`detail`); it is null when nothing is wrong. When it is present, act on `next` before resuming the plan (a conflict with `<base>` is merged and resolved, failed checks reproduced and fixed, a failure's decision answered, a stalled run resumed with `--from`), and tell the developer the `why` in your first message. Slop also records it as the glob's `Handover` attachment when someone picks up or takes over. `slop handover <id>` prints it.
+
 ## Interactive start
 
 In an interactive session, call `pick_up(id, version)` before Phase 1. If you are already the implementer this is a no-op. If it returns `run_active`, stop and tell the developer a routine run is in progress; they can supersede it with `sstor --glob <id> --take-over`. Do not pass `takeOver` yourself unless the developer explicitly asks.
