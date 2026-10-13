@@ -1,5 +1,6 @@
 import { failureSummary, isSetupFailure } from './checks.js';
-import type { BaseChecks } from './types.js';
+import type { Move } from './whose-move.js';
+import type { BaseChecks, Glob } from './types.js';
 
 export const NOTIFICATION_SEVERITIES = ['critical', 'warning', 'info'] as const;
 export type NotificationSeverity = (typeof NOTIFICATION_SEVERITIES)[number];
@@ -105,6 +106,29 @@ export const mainRedNotification = (boardId: number, baseBranch: string, checks:
     detail: `${failure === undefined ? 'Its checks fail.' : `${failureSummary(failure)}.`} Globs failing the same way are waiting for it; don't fix it in their branches.`,
     link: failure?.url ?? null,
     action: failure?.url == null ? null : { label: 'Open the run', href: failure.url },
+    clears: { kind: 'condition' },
+  };
+};
+
+export const STALLED_SOURCE_PREFIX = 'stalled:';
+
+export const stalledSource = (globId: string): string => `${STALLED_SOURCE_PREFIX}${globId}`;
+
+/**
+ * The warning for a stalled glob, or null while it isn't stalled. Notifications are board-wide with no recipient, so it
+ * names whom it is for (the implementer, or the planner while nobody implements). One per glob: a source raising again
+ * replaces its own, so it keeps its `since` and is raised once per stall; it clears when the glob stops being stalled.
+ */
+export const stalledNotification = (glob: Pick<Glob, 'id' | 'boardId' | 'title' | 'implementer' | 'planner'>, move: Move): RaisedNotification | null => {
+  if (move.holder !== 'stalled') return null;
+  return {
+    boardId: glob.boardId,
+    source: stalledSource(glob.id),
+    severity: 'warning',
+    title: `${glob.id} is stalled: ${move.reason}`,
+    detail: `${glob.title}. For ${glob.implementer ?? glob.planner}: open the glob to retry, hand it to the machine or pick it up.`,
+    link: `/boards/${String(glob.boardId)}`,
+    action: null,
     clears: { kind: 'condition' },
   };
 };
