@@ -62,6 +62,17 @@ describe('get_context hotspots', () => {
     expect(asked).toEqual([[boardId, '2026-10-13T12:00:00.000Z']]);
   });
 
+  it('matches whole paths only: data.ts does not name a.ts', async () => {
+    const glob = await create('Change data.ts, src/a.tsx and lib/a.ts.');
+    const artifacts = new ArtifactService({
+      store,
+      clock,
+      notifier: new RecordingNotifier(),
+      hotspots: () => Promise.resolve({ windowDays: 7, hotspots: [hot('a.ts', ['s1t8']), hot('src/a.tsx', ['s1t8']), hot('lib/a.ts', ['s1t8'])] }),
+    });
+    expect(unwrap(await artifacts.context(DEV, glob.id)).hotspots?.map((h) => h.path)).toEqual(['src/a.tsx', 'lib/a.ts']);
+  });
+
   it('is empty when none of the glob\'s files is hot', async () => {
     const glob = await create('Change z.ts');
     const artifacts = new ArtifactService({ store, clock, notifier: new RecordingNotifier(), hotspots: () => Promise.resolve(view) });
