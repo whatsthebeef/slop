@@ -98,7 +98,7 @@ describe('shared status line', () => {
 
   it('shows a same that is ready as ready, with no wait', () => {
     const g = prOpen({ headChecks: { sha: head, state: 'passed' }, allowedActions: ['merge'] });
-    expect(top(g)).toMatchObject({ kind: 'ready', full: 'Ready to merge' });
+    expect(top(g)).toMatchObject({ kind: 'ready', full: 'Merge' });
     expect(top(g)).toEqual(statusLine(g, NOW));
   });
 
@@ -235,7 +235,7 @@ describe('activity label', () => {
 
   it('names the run states', () => {
     expect(activityLabel(view(live('active')), NOW)?.text).toBe('Routine working');
-    expect(activityLabel(view(live('watching')), NOW)?.text).toBe('Routine watching the PR');
+    expect(activityLabel(view(live('watching')), NOW)?.text).toBe('standby');
     expect(activityLabel(view(live('queued')), NOW)?.text).toBe('Queued');
   });
 

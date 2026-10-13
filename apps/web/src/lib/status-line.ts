@@ -424,13 +424,15 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     };
   }
   if (live.state === 'active') {
-    return { kind: 'working', text: 'Routine working', tip: runDetail.join('\n'), spinning: true };
+    // On an open PR the run is a fix run: say what it is fixing.
+    const fixing = glob.status === 'pr_open' ? (checks?.state === 'failed' ? 'fixing CI' : 'answering review') : null;
+    return { kind: 'working', text: fixing ?? 'Routine working', tip: runDetail.join('\n'), spinning: true };
   }
   if (live.state === 'watching') {
     return {
       kind: 'watching',
-      text: 'Routine watching the PR',
-      tip: ['Auto-fixing CI failures and review comments', ...runDetail].join('\n'),
+      text: 'standby',
+      tip: ["Machine on standby: fixes new CI failures or review comments until it's merged.", ...runDetail].join('\n'),
       spinning: false,
     };
   }
