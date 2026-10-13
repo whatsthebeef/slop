@@ -1,4 +1,4 @@
-import { LISTS, bySignedOffNewest, decisionOf, describeEditFailure, latestSignedOff } from '@slop/core';
+import { LISTS, bySignedOffNewest, decisionOf, latestSignedOff } from '@slop/core';
 import type { Action, HumanStepViewer, LabelCommand, LabelName, List } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
@@ -14,7 +14,7 @@ import type { BoardShellContext } from '@/components/board-shell';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
-import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
+import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, haltedBy } from '@/lib/action-presentation';
 import { cardMoves } from '@/lib/card-moves';
 import { hasBlocker } from '@/lib/card-rows';
@@ -508,16 +508,6 @@ export const BoardPage = () => {
                       environments={deployState.data?.environments?.[glob.id]}
                       atf={deployState.data?.atf?.[glob.id]}
                       viewer={viewer}
-                      onUpdateTitle={async (changes: GlobChanges) => {
-                        try {
-                          store(await api.updateGlob(glob.id, glob.version, changes));
-                          return null;
-                        } catch (error) {
-                          // The card keeps the draft and shows why; a version conflict is reloaded on request.
-                          return describeEditFailure(error instanceof RequestError ? error.body : { message: 'Something went wrong' });
-                        }
-                      }}
-                      onReload={() => api.glob(glob.id).then(store).then(() => undefined)}
                     />
                   );
                 })}

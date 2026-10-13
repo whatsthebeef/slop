@@ -29,6 +29,9 @@ const DECISION_STATUS_TEXT: Partial<Record<GlobView['status'], string>> = {
   reviewing: 'Decided; awaiting sign-off',
 };
 
+/** The CSS variable on the page holding the sticky header's height; sections scroll to just below it. */
+export const HEADER_HEIGHT_VAR = '--glob-header-height';
+
 /** The sticky header: back to the board and the title (editable until signed off). */
 export const GlobHeader = ({
   ctx,
@@ -52,11 +55,27 @@ export const GlobHeader = ({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+  // The bar grows with a wrapping title: its measured height is published for the sections' scroll margin.
+  const barRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const bar = barRef.current;
+    const page = bar?.parentElement;
+    if (bar === null || page === null || page === undefined || typeof ResizeObserver === 'undefined') return undefined;
+    const publish = () => page.style.setProperty(HEADER_HEIGHT_VAR, `${String(bar.offsetHeight)}px`);
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(bar);
+    return () => {
+      observer.disconnect();
+      page.style.removeProperty(HEADER_HEIGHT_VAR);
+    };
+  }, []);
   return (
     <>
       <div ref={topRef} aria-hidden className="h-0" />
       <div
-        className={`sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex h-10 items-center gap-3 border-b bg-background px-5 ${scrolled ? 'border-border' : 'border-transparent'}`}
+        ref={barRef}
+        className={`sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex min-h-10 items-start py-1.5 gap-3 border-b bg-background px-5 ${scrolled ? 'border-border' : 'border-transparent'}`}
         data-testid="glob-header"
       >
         <Tip text="Back to the board (Esc)">

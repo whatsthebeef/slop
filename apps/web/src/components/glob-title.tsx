@@ -1,10 +1,11 @@
 import type { EditFailure } from '@slop/core';
 import { Pencil } from 'lucide-react';
+import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import type { GlobChanges } from '@/lib/api';
 import { useTitleEdit } from '@/lib/title-edit';
 
-/** The glob's ID and title as the page heading; the title edits in place when `editable`. */
+/** The glob's ID and title as the page heading: the title wraps over as many lines as it needs and edits in place (a textarea) when `editable`. */
 export const GlobTitle = ({
   id,
   title,
@@ -25,6 +26,14 @@ export const GlobTitle = ({
     onReload,
   });
 
+  // Grow with the text, so the whole title shows while it is typed.
+  useEffect(() => {
+    const el = field.current;
+    if (el === null) return;
+    el.style.height = 'auto';
+    el.style.height = `${String(el.scrollHeight)}px`;
+  }, [field, text, editing]);
+
   if (!editing) {
     return (
       <h1 className='group flex min-w-0 flex-1 items-baseline gap-1.5 text-base font-semibold' data-testid='glob-title'>
@@ -32,33 +41,34 @@ export const GlobTitle = ({
         {editable ? (
           <button
             type='button'
-            className='flex min-w-0 items-baseline gap-1.5 rounded text-left font-semibold hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+            className='flex min-w-0 items-baseline gap-1.5 rounded text-left font-semibold break-words hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
             onClick={begin}
             aria-label={`Edit title: ${title}`}
             data-testid='glob-title-edit'
           >
-            <span className='truncate' title={title}>{title}</span>
+            <span className='min-w-0 break-words'>{title}</span>
             <Pencil aria-hidden className='size-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' />
           </button>
         ) : (
-          <span className='truncate'>{title}</span>
+          <span className='min-w-0 break-words'>{title}</span>
         )}
       </h1>
     );
   }
   return (
     <div className='relative min-w-0 flex-1'>
-      <h1 className='flex items-baseline gap-1.5 text-base font-semibold'>
+      <h1 className='flex items-start gap-1.5 text-base font-semibold'>
         <span className='shrink-0 font-mono text-muted-foreground'>{id}</span>
-        <input
+        <textarea
           ref={field}
+          rows={1}
           autoFocus
           value={text}
           disabled={saving}
           aria-label='Title'
           aria-invalid={emptyRefused || error !== null}
           data-testid='glob-title-input'
-          className='min-w-0 flex-1 rounded border bg-card px-1 text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring'
+          className='block min-w-0 flex-1 resize-none overflow-hidden rounded border bg-card px-1 text-base leading-snug font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring'
           onChange={(e) => change(e.target.value)}
           onBlur={commit}
           onKeyDown={onKeyDown}
