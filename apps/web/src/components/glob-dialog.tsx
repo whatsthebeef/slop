@@ -1,5 +1,5 @@
-import { decisionOf, isValidCombination, machine } from '@slop/core';
-import type { Action, Category, EditFailure, LabelName, SuggestionPrefill } from '@slop/core';
+import { decisionOf, machine } from '@slop/core';
+import type { Action, EditFailure, LabelName, SuggestionPrefill } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ArrowLeft, ChevronDown, Loader2 } from 'lucide-react';
@@ -11,11 +11,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Input, Label, Select } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { actionPresentation, presentedActions } from '@/lib/action-presentation';
 import { mainAction } from '@/lib/main-action';
-import { ActorIcon, HumanIcon } from '@/components/actor-icons';
+import { ActorIcon } from '@/components/actor-icons';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
 import type { GlobSection } from '@/lib/glob-section';
@@ -31,19 +30,21 @@ import {
   readHandoverAcknowledged,
   writeHandoverAcknowledged,
 } from '@/lib/handover';
-import { conflictByHand, conflictCommand, copySstorCommand } from '@/lib/sstor-command';
 import {
-  blockedLine,
   chainTip,
-  dependencySummary,
-  statusWords,
   viewStatusLine,
   waitingFor,
   mergeWarning,
 } from '@/lib/status-line';
-import { categoryOptions, saveCategory, typeOptions } from '@/lib/type-change';
+import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
-import { ArtifactsSection } from './artifacts';
+import { ConflictSection } from './glob-view/conflict';
+import type { GlobViewContext } from './glob-view/context';
+import { DependenciesSection } from './glob-view/dependencies';
+import { EditFieldsSection, useGlobEdits } from './glob-view/edit-fields';
+import { EscalationSection } from './glob-view/escalation';
+import { SizeSection } from './glob-view/size';
+import { ARTIFACT_META, ArtifactsSection } from './artifacts';
 import { DecisionAssessment, DecisionSection } from './decision-section';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
 import type { ArtifactRef } from './artifacts';
@@ -51,8 +52,7 @@ import { ActivityLabel, GroupChip } from './glob-card';
 import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { PlanEditor } from './plan-editor';
-import { OversizedGlob, isOversized } from './oversized-glob';
-import { SplitGlob, canSplit } from './split-glob';
+import { isOversized } from './oversized-glob';
 import { GlobDecisions } from './glob-decisions';
 import { GlobTitle } from './glob-title';
 import { ReviewFindings } from './review-findings';
@@ -87,59 +87,6 @@ const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) 
 );
 
 /** The glob view: a page in the board's main area (never a modal), with a back arrow to the board. */
-/** The conflict box: the command that starts the glob's Claude session on the merge, with the by-hand route collapsed below. */
-const ConflictBox = ({
-  globId,
-  branch,
-  base,
-  canTakeOver,
-}: {
-  globId: string;
-  branch: string;
-  base: string;
-  canTakeOver: boolean;
-}) => {
-  const command = conflictCommand(globId, canTakeOver);
-  const copy = () => {
-    const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
-    void (
-      copySstorCommand(canTakeOver ? 'take_over' : 'pick_up', globId, clipboard) ??
-      Promise.resolve(null)
-    );
-  };
-  return (
-    <div className="grid gap-1 rounded border border-edge p-2 text-sm" data-testid="conflict-box">
-      <span>
-        {canTakeOver ? 'Pick up and let your Claude session' : 'Let your Claude session'} merge{' '}
-        {base}: it resolves additive conflicts and asks you about the rest.
-      </span>
-      <span className="flex items-center gap-2">
-        <code
-          className="block select-all whitespace-pre-wrap font-mono text-xs"
-          data-testid="conflict-command"
-        >
-          {command}
-        </code>
-        <button
-          type="button"
-          className="rounded border px-1.5 py-0.5 text-xs hover:bg-muted"
-          onClick={copy}
-        >
-          Copy
-        </button>
-      </span>
-      <details data-testid="conflict-by-hand">
-        <summary className="cursor-pointer text-xs text-muted-foreground">
-          Resolve by hand instead (advanced)
-        </summary>
-        <code className="block whitespace-pre-wrap font-mono text-xs">
-          {conflictByHand(globId, branch, base)}
-        </code>
-      </details>
-    </div>
-  );
-};
-
 export const GlobDetail = ({
   board,
   glob,
@@ -177,7 +124,7 @@ export const GlobDetail = ({
 }) => {
   // A decision glob has no branch, PR, runs, deploys or labels: those parts of the view are left out.
   const decision = decisionOf(glob) !== null;
-  const [draft, setDraft] = useState<GlobChanges>({});
+  const edits = useGlobEdits(glob.id);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [running, setBusy] = useState(false);
   // An action stays pending until the glob has moved (its version changes), not just until the request returns.
@@ -197,35 +144,14 @@ export const GlobDetail = ({
   // Suggest's Apply: the decision form opens pre-filled; reset when another glob opens.
   const [applied, setApplied] = useState<SuggestionPrefill | null>(null);
   useEffect(() => setApplied(null), [glob.id]);
-  const [failure, setFailure] = useState<EditFailure | null>(null);
   useEffect(() => {
-    setDraft({});
-    setFailure(null);
     setConfirmingAgain(false);
     setTypeFailure(null);
-    setCategoryNote(null);
   }, [glob.id]);
-  /** Edits the draft; a refusal shown earlier no longer applies to what the person is typing. */
-  const edit = (changes: GlobChanges) => {
-    setDraft((d) => ({ ...d, ...changes }));
-    setFailure(null);
-  };
   const [confirmingRetrigger, setConfirmingRetrigger] = useState(false);
   // The type chip's popover says what follows before it changes the type.
   const [typeFailure, setTypeFailure] = useState<EditFailure | null>(null);
   const typeChoices = typeOptions(glob, board.role);
-  // Category saves when it changes, and says so with an Undo.
-  const [categoryNote, setCategoryNote] = useState<{ undo: Category } | null>(null);
-  const changeCategory = async (to: Category, from: Category) => {
-    const result = await saveCategory(onUpdate, from, to);
-    if (result.saved) {
-      setFailure(null);
-      setCategoryNote({ undo: result.undo });
-    } else {
-      setFailure(result.failure);
-      setCategoryNote(null);
-    }
-  };
   const changeType = async (option: TypeOption) => {
     setTypeFailure(null);
     if (option.via === 'update') {
@@ -241,23 +167,9 @@ export const GlobDetail = ({
     return scrollWhenReady(() => findSection(document, section));
   }, [glob.id, section]);
 
-  // The globs it waits for can change until it has a branch.
-  const canEditAfter =
-    glob.status === 'planning' && glob.provisioning === 'none' && glob.type !== 'super';
-  const [afterText, setAfterText] = useState((glob.after ?? []).join(', '));
-  const [showChain, setShowChain] = useState(false);
-  const summary = dependencySummary(glob);
-  const deps =
-    summary !== null || canEditAfter
-      ? (summary ?? { needs: [], alsoAhead: [], overlaps: [], waitedOnBy: [] })
-      : null;
-  useEffect(() => setAfterText((glob.after ?? []).join(', ')), [glob.id, glob.after]);
-  const merged = { ...glob, ...draft };
-  const dirty = Object.keys(draft).length > 0;
   const [splitting, setSplitting] = useState(false);
   useEffect(() => setSplitting(false), [glob.id]);
   const oversized = isOversized(glob);
-  const splittable = canSplit(glob) && (glob.allowedActions ?? []).includes('delete') && !oversized;
   // Starting a flagged glob asks first: it is likely more than one PR's worth of work.
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   useEffect(() => setConfirmingOversized(null), [glob.id]);
@@ -332,7 +244,6 @@ export const GlobDetail = ({
       setConfirmingReady(false);
       if (await onAction('mark_ready')) setReadyAsked(true);
     });
-  const deployable = board.environments.filter((e) => e.allowBranchDeploy);
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -341,6 +252,19 @@ export const GlobDetail = ({
     } finally {
       setBusy(false);
     }
+  };
+
+  const ctx: GlobViewContext = {
+    board,
+    glob,
+    busy,
+    onAction,
+    onUpdate,
+    onOpenSection: (target) => {
+      const kind = Object.keys(ARTIFACT_META).find((k): k is ArtifactRef['kind'] => k === target.artifact);
+      if (kind !== undefined) setArtifact({ kind, label: target.label ?? '' });
+      if (target.section !== undefined) findSection(document, target.section)?.scrollIntoView();
+    },
   };
 
   const begin = (action: Action) => {
@@ -528,40 +452,11 @@ export const GlobDetail = ({
           </p>
         )}
         <Anchor name="conflict">
-          {(glob.failure?.conflict ?? glob.conflict) != null && glob.implementer !== null && (
-            <ConflictBox
-              globId={glob.id}
-              branch={glob.branch}
-              base={(glob.failure?.conflict ?? glob.conflict)?.base ?? ''}
-              canTakeOver={(glob.allowedActions ?? []).includes('take_over')}
-            />
-          )}
+          <ConflictSection ctx={ctx} />
         </Anchor>
 
         <Anchor name="escalation">
-          {glob.escalation != null && (
-            <div
-              className="grid gap-1 rounded border border-edge p-2 text-sm"
-              data-testid="escalation-note"
-            >
-              <span>
-                <span className="sr-only">Needs a person: {glob.escalation.reason}</span>
-                <span
-                  aria-hidden
-                  title={`Needs a person: ${glob.escalation.reason}`}
-                  className="inline-flex items-center gap-1"
-                >
-                  needs a <HumanIcon decorative />: {glob.escalation.reason}
-                </span>
-              </span>
-              {glob.escalation.evidence !== undefined && (
-                <span className="text-xs text-muted-foreground">{glob.escalation.evidence}</span>
-              )}
-              <span className="text-xs text-muted-foreground">
-                Escalated by {glob.escalation.by}
-              </span>
-            </div>
-          )}
+          <EscalationSection ctx={ctx} />
         </Anchor>
 
         <Anchor name="labels">
@@ -569,127 +464,19 @@ export const GlobDetail = ({
         </Anchor>
 
         <Anchor name="prerequisites">
-          {!decision && deps !== null && (
-            <div className="grid gap-2 rounded border p-2 text-sm" data-testid="dependencies">
-              <span className="font-medium">Dependencies</span>
-              {blockedLine(glob) !== null && (
-                <span className="text-xs text-muted-foreground">{blockedLine(glob)}</span>
-              )}
-              {deps.needs.length > 0 && (
-                <div data-testid="waits-for">
-                  <span className="font-medium">Waits for</span>
-                  <ul className="ml-4 list-disc">
-                    {deps.needs.map((n) => (
-                      <li key={n.id}>
-                        <GlobLink boardId={glob.boardId} id={n.id} />
-                        {n.status !== null && (
-                          <span className="text-muted-foreground"> · {n.status}</span>
-                        )}{' '}
-                        <span className="text-muted-foreground">{n.why}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {deps.alsoAhead.length > 0 && (
-                <div data-testid="also-ahead">
-                  <button
-                    type="button"
-                    className="text-xs text-muted-foreground underline"
-                    aria-expanded={showChain}
-                    onClick={() => setShowChain(!showChain)}
-                  >
-                    {showChain ? '▾' : '▸'} {deps.alsoAhead.length} more ahead
-                  </button>
-                  {showChain && (
-                    <ul className="ml-4 list-disc">
-                      {deps.alsoAhead.map((b) => (
-                        <li key={b.id} style={{ marginLeft: `${String((b.depth - 2) * 12)}px` }}>
-                          <GlobLink boardId={glob.boardId} id={b.id} />{' '}
-                          <span className="text-muted-foreground">· {statusWords(b.status)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-              {deps.overlaps.length > 0 && (
-                <div data-testid="overlaps">
-                  <span className="font-medium">Overlaps</span>{' '}
-                  <span className="text-xs text-muted-foreground">
-                    merge order only; never blocks
-                  </span>
-                  <ul className="ml-4 list-disc">
-                    {deps.overlaps.map((o) => (
-                      <li key={o.id}>
-                        <GlobLink boardId={glob.boardId} id={o.id} />
-                        {o.paths.length > 0 && (
-                          <span className="text-muted-foreground"> · {o.paths.join(', ')}</span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {deps.waitedOnBy.length > 0 && (
-                <div data-testid="waited-on-by">
-                  <span className="font-medium">Waited on by</span>{' '}
-                  {deps.waitedOnBy.map((id, i) => (
-                    <span key={id}>
-                      {i > 0 && ', '}
-                      <GlobLink boardId={glob.boardId} id={id} />
-                    </span>
-                  ))}
-                </div>
-              )}
-              {canEditAfter && (
-                <Label>
-                  Waits for (glob IDs)
-                  <Input
-                    value={afterText}
-                    placeholder="s15t7, s15b18"
-                    onChange={(e) => {
-                      setAfterText(e.target.value);
-                      edit({ after: e.target.value.split(/[\s,]+/).filter((id) => id !== '') });
-                    }}
-                  />
-                </Label>
-              )}
-              {(glob.blockedBy?.length ?? 0) > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Picking it up goes ahead without them: the branch will lack their changes.
-                </p>
-              )}
-            </div>
+          {!decision && (
+            <DependenciesSection ctx={ctx} onEditAfter={(after) => edits.edit({ after })} />
           )}
         </Anchor>
 
         <Anchor name="size">
-          {!decision && splittable && !splitting && (
-            <div>
-              <Tip text="Cut this glob into parts: part 1 stays here, the others are created with their share of the plan">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  data-testid="split-glob"
-                  onClick={() => setSplitting(true)}
-                >
-                  Split
-                </Button>
-              </Tip>
-            </div>
-          )}
-          {!decision && oversized && (
-            <OversizedGlob
-              glob={glob}
-              canKeep={board.role !== 'qa' || glob.type === 'sub'}
-              onDone={() => onClose()}
-            />
-          )}
-          {splitting && (
-            <SplitGlob glob={glob} onCancel={() => setSplitting(false)} onDone={() => onClose()} />
-          )}
+          <SizeSection
+            ctx={ctx}
+            decision={decision}
+            splitting={splitting}
+            onSplitting={setSplitting}
+            onClose={onClose}
+          />
         </Anchor>
 
         <Anchor name="actions">
@@ -905,123 +692,13 @@ export const GlobDetail = ({
           )}
         </Anchor>
 
-        <div className="grid gap-3">
-          <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-3">
-            {!decision && (
-              <Label>
-                Category
-                <Select
-                  value={glob.category}
-                  disabled={busy}
-                  data-testid="category"
-                  onChange={(e) =>
-                    void run(() => changeCategory(e.target.value as Category, glob.category))
-                  }
-                >
-                  {categoryOptions(glob.type).map((c) => (
-                    <option key={c}>{c}</option>
-                  ))}
-                </Select>
-              </Label>
-            )}
-            <Label>
-              Group
-              <Input
-                value={merged.group ?? ''}
-                onChange={(e) => edit({ group: e.target.value === '' ? null : e.target.value })}
-              />
-            </Label>
-            {!decision && (
-              <Label>
-                Environment
-                <Select
-                  value={merged.environment ?? ''}
-                  onChange={(e) =>
-                    edit({ environment: e.target.value === '' ? null : e.target.value })
-                  }
-                >
-                  <option value="">None</option>
-                  {deployable.map((env) => (
-                    <option key={env.name}>{env.name}</option>
-                  ))}
-                </Select>
-              </Label>
-            )}
-          </div>
-          {categoryNote !== null && failure === null && (
-            <div
-              role="status"
-              className="flex items-center justify-end gap-2 text-xs text-muted-foreground"
-              data-testid="category-saved"
-            >
-              <span>Saved</span>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={busy}
-                onClick={() =>
-                  void run(() =>
-                    changeCategory(categoryNote.undo, glob.category).then(() =>
-                      setCategoryNote(null),
-                    ),
-                  )
-                }
-              >
-                Undo
-              </Button>
-            </div>
-          )}
-          {failure !== null && (
-            <div
-              role="alert"
-              className="flex flex-wrap items-center justify-end gap-2 text-sm text-red"
-            >
-              <span>{failure.message}</span>
-              {failure.conflict && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      await onReload();
-                      setFailure(null);
-                    })
-                  }
-                >
-                  Reload latest
-                </Button>
-              )}
-            </div>
-          )}
-          {dirty && (
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setDraft({});
-                  setFailure(null);
-                }}
-              >
-                Discard
-              </Button>
-              <Button
-                size="sm"
-                disabled={busy || !isValidCombination(merged.type, merged.category)}
-                onClick={() =>
-                  void run(async () => {
-                    const refused = await onUpdate(draft);
-                    setFailure(refused);
-                    if (refused === null) setDraft({});
-                  })
-                }
-              >
-                Save
-              </Button>
-            </div>
-          )}
-        </div>
+        <EditFieldsSection
+          ctx={ctx}
+          decision={decision}
+          edits={edits}
+          run={run}
+          onReload={onReload}
+        />
 
         <Anchor name="plan">
           <PlanEditor
@@ -1278,12 +955,3 @@ export const GlobDetail = ({
     </article>
   );
 };
-
-const GlobLink = ({ boardId, id }: { boardId: number; id: string }) => (
-  <Link
-    to={`/boards/${String(boardId)}?glob=${encodeURIComponent(id)}`}
-    className="font-mono underline"
-  >
-    {id}
-  </Link>
-);
