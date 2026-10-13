@@ -1187,6 +1187,35 @@ describe('checks and merging (slice 2)', () => {
     const human = glob({ status: 'pr_open', pr, conflict, implementer: 'a@b.c', runs: [run({ state: 'watching' })] });
     expect(m.allowedActions(human, dev)).not.toContain('resolve_conflict');
   });
+
+  it('resolve conflict: a conflict fix that has started is not superseded by another request or a base merge', () => {
+    const pr = { number: 7, state: 'ready' as const, headSha: 'abc1234' };
+    const conflict = { base: 'main', files: [], since: 's1t2', at: NOW };
+    const fixing = glob({
+      status: 'pr_open',
+      pr,
+      conflict,
+      runs: [run({ state: 'watching', purpose: 'resolve_conflict' })],
+    });
+    expect(m.allowedActions(fixing, dev)).not.toContain('resolve_conflict');
+    expect(errorCode(m.resolveConflict(fixing, ctx()))).toBe('run_active');
+    // A merge to main only re-checks the conflict; it never queues or ends a run.
+    const merged = value(m.baseMerged(fixing, { since: 's1t9' }, ctx()));
+    expect(merged.glob.runs).toHaveLength(1);
+    expect(merged.glob.runs[0]).toMatchObject({ state: 'watching' });
+    // Once the fix ends, a remaining conflict queues exactly one new fix.
+    const ended = glob({
+      status: 'pr_open',
+      pr,
+      conflict,
+      runs: [run({ state: 'ended', outcome: 'completed', purpose: 'resolve_conflict' })],
+    });
+    expect(m.allowedActions(ended, dev)).toContain('resolve_conflict');
+    expect(value(m.resolveConflict(ended, ctx())).glob.runs).toHaveLength(2);
+    // A person's action still ends the fix.
+    const taken = value(m.pickUp(fixing, ctx(dev), board, { takeOver: true }));
+    expect(taken.glob.runs[0]).toMatchObject({ state: 'ended', outcome: 'superseded' });
+  });
 });
 
 describe('how far a branch is behind the base', () => {
