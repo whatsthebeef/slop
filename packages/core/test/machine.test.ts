@@ -1035,16 +1035,20 @@ describe('checks and merging (slice 2)', () => {
     expect(fail.glob.status).toBe('failed');
   });
 
-  it('a conflict after updating the branch fails the glob as a merge conflict, not failing checks', () => {
+  it('a conflict after updating the branch returns the glob to pr_open with the conflict recorded, no failure', () => {
     const merging = { ...ready, status: 'merging' as const };
     const conflict = { base: 'main', files: ['a.ts', 'b.ts'] };
-    const failed = value(m.checksCompleted(merging, { sha: 'bbb', passed: false, conflict }, ctx(null))).glob;
-    expect(failed.status).toBe('failed');
-    expect(failed.failure?.reason).toBe('Merge conflict with main in a.ts, b.ts');
-    expect(failed.failure?.conflict).toEqual(conflict);
+    const t = value(m.checksCompleted(merging, { sha: 'bbb', passed: false, conflict }, ctx(null)));
+    expect(t.glob.status).toBe('pr_open');
+    expect(t.glob.failure).toBeNull();
+    expect(t.glob.mergeMode).toBeNull();
+    expect(t.glob.conflict).toMatchObject(conflict);
+    expect(t.events.map((e) => e.type)).toContain('MergeFailed');
     const noFiles = value(m.checksCompleted(merging, { sha: 'bbb', passed: false, conflict: { base: 'main', files: [] } }, ctx(null)));
-    expect(noFiles.glob.failure?.reason).toBe('Merge conflict with main');
+    expect(noFiles.glob.status).toBe('pr_open');
+    expect(noFiles.glob.conflict?.files).toEqual([]);
     const checks = value(m.checksCompleted(merging, { sha: 'bbb', passed: false }, ctx(null))).glob;
+    expect(checks.status).toBe('failed');
     expect(checks.failure?.reason).toBe('Checks failed after updating the branch');
     expect(checks.failure?.conflict).toBeUndefined();
   });

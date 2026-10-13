@@ -173,7 +173,7 @@ describe('a sub whose PR is ready', () => {
     }
   });
 
-  it('a conflict found while merging fails the glob as a merge conflict naming the files', async () => {
+  it('a conflict found while merging returns the glob to pr_open with the conflict recorded', async () => {
     await handle(readyForReview());
     await globs.applyEvent(globId, (g, ctx) => machine.subGateCompleted(g, { sha: HEAD, passed: true, reason: null }, ctx));
     expect((await current()).status).toBe('merging');
@@ -181,9 +181,9 @@ describe('a sub whose PR is ready', () => {
     host.conflicting = ['src/a.ts'];
     expect(await run('refresh_checks')).toEqual(['done']);
     const glob = await current();
-    expect(glob.status).toBe('failed');
-    expect(glob.failure?.reason).toBe('Merge conflict with main in src/a.ts');
-    expect(glob.failure?.conflict).toEqual({ base: 'main', files: ['src/a.ts'] });
+    expect(glob.status).toBe('pr_open');
+    expect(glob.failure).toBeNull();
+    expect(glob.conflict).toMatchObject({ base: 'main', files: ['src/a.ts'] });
     host.conflicting = [];
   });
 

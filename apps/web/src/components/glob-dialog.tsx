@@ -25,6 +25,7 @@ import {
   statusWords,
   viewStatusLine,
   waitingFor,
+  mergeWarning,
 } from '@/lib/status-line';
 import {
   categoryOptions,
@@ -321,6 +322,7 @@ export const GlobDetail = ({
   const renderActions = (list: Action[]) =>
     list.map((action) => {
       const shown = actionPresentation(action, glob);
+      const warning = action === 'merge' ? mergeWarning(glob) : null;
       const button = (
         <Button
           key={action}
@@ -381,7 +383,7 @@ export const GlobDetail = ({
         </Button>
       );
       return (
-        <Tip key={action} text={shown.tip}>
+        <Tip key={action} text={warning === null ? shown.tip : `${shown.tip}\n${warning}`}>
           {button}
         </Tip>
       );
