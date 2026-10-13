@@ -186,7 +186,10 @@ export class SizeCheckService implements SizeAssessor {
     }
     let reasons = oversizedReasons(estimate, threshold);
     const evidence = evidenceOf(estimate);
-    let proposal = reasons.length > 0 ? await this.propose(boardId, plan) : null;
+    const proposed = reasons.length > 0 ? await this.propose(boardId, plan) : null;
+    let proposal = proposed?.proposal ?? null;
+    // Say why a flagged plan has no proposal, so the card isn't silent about it.
+    if (proposed !== null && proposal === null && proposed.why !== null) evidence.push(`No split was proposed: ${proposed.why}`);
     // A split whose parts would wait on each other in one line saves nothing: the glob stays whole, and the evidence says why.
     if (proposal !== null && isChain(proposal)) {
       evidence.push(`Not oversized: a split would be a chain of ${proposal.parts.length} parts (critical path ${proposal.criticalPath ?? proposal.parts.length}), with nothing to build in parallel`);
@@ -196,9 +199,9 @@ export class SizeCheckService implements SizeAssessor {
     return { planHash: hash(plan), estimate, evidence, threshold, flagged: reasons.length > 0, reasons, proposal };
   }
 
-  /** The model's split of a flagged plan; null when it is unavailable or gives fewer than 2 usable parts. */
-  private async propose(boardId: number, plan: string): Promise<SizeProposal | null> {
-    if (this.deps.llm === undefined) return null;
+  /** The model's split of a flagged plan; no proposal, with the reason, when it is unavailable, slow or gives fewer than 2 usable parts. */
+  private async propose(boardId: number, plan: string): Promise<{ proposal: SizeProposal | null; why: string | null }> {
+    if (this.deps.llm === undefined) return { proposal: null, why: 'the model is unavailable' };
     try {
       const answer = await completeWithDeadline(
         this.deps.llm,
@@ -210,9 +213,69 @@ export class SizeCheckService implements SizeAssessor {
         },
         this.deps.llmTimeoutMs ?? SIZE_LLM_TIMEOUT_MS,
       );
-      return buildProposal(plan, parseParts(answer));
+      const proposal = buildProposal(plan, parseParts(answer));
+      return { proposal, why: proposal === null ? 'the model gave fewer than 2 usable parts' : null };
+    } catch (error) {
+      return { proposal: null, why: error instanceof Error && error.message.includes('did not answer') ? 'the model timed out' : 'the model is unavailable or gave no usable answer' };
+    }
+  }
+
+  private readonly reproposing = new Set<string>();
+
+  /**
+   * Members: asks for the split proposal of a flagged glob in Planning to be made again on its current plan.md. Refused once
+   * the glob has started or the flag was answered; a request while one is running is a no-op. The work itself is
+   * `runRepropose`, which the caller starts in the background.
+   */
+  async repropose(email: string, globId: string): Promise<Result<SizeCheck>> {
+    return this.deps.store.transaction(async (tx): Promise<Result<SizeCheck>> => {
+      const glob = await tx.getGlob(globId);
+      if (glob === null) return notFound(`No glob ${globId}`);
+      const actor = await memberOf(tx, email, glob.boardId);
+      if (!actor.ok) return actor;
+      if (actor.value.role === 'qa' && glob.type !== 'sub') return forbidden('QA members can only decide subs');
+      const check = await tx.getSizeCheck(globId);
+      if (check === null || !check.flagged) return invalidInput(`${globId} is not flagged oversized`);
+      if (glob.status !== 'planning') return invalidInput(`${globId} has started, so the flag can no longer be answered`);
+      if (check.decision !== null) return invalidInput(`${globId}'s flag was already answered`);
+      this.reproposing.add(globId);
+      return ok(check);
+    });
+  }
+
+  /** Whether a proposal is being made for the glob right now. */
+  isReproposing(globId: string): boolean {
+    return this.reproposing.has(globId);
+  }
+
+  /** Re-runs the assessment and the proposal on the glob's current plan, whatever its hash, and stores the result like a check. Never throws. */
+  async runRepropose(globId: string): Promise<void> {
+    try {
+      const read = await this.deps.store.transaction(async (tx) => {
+        const glob = await tx.getGlob(globId);
+        if (glob === null || glob.status !== 'planning') return null;
+        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? glob.summary;
+        return { boardId: glob.boardId, plan };
+      });
+      if (read === null) return;
+      const assessment = await this.assess(read.boardId, read.plan);
+      const written = await this.deps.store.transaction(async (tx) => {
+        const glob = await tx.getGlob(globId);
+        const previous = await tx.getSizeCheck(globId);
+        // Answered or started while the model worked: the person's answer stands.
+        if (glob === null || glob.status !== 'planning' || previous === null || previous.decision !== null) return false;
+        await tx.updateSizeAssessment(checkFrom(globId, read.boardId, assessment, previous, this.deps.clock.now()));
+        return true;
+      });
+      if (written) {
+        await this.deps.onRechecked?.(globId);
+        this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: read.boardId, globId });
+        await this.forecast(globId);
+      }
     } catch {
-      return null;
+      // Best effort: the stored check stands.
+    } finally {
+      this.reproposing.delete(globId);
     }
   }
 

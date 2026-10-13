@@ -2,7 +2,6 @@ import {
   behindAdvice,
   behindWarning,
   checksExplanation,
-  chainSummary,
   agentSetVersionOfTitle,
   isAgentSetGlob,
   machine,
@@ -429,11 +428,35 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
   };
 };
 
-/** "Blocked: 3 ahead, next: s15f38" for a glob with unmerged prerequisites; null when none. */
-export const blockedLine = (glob: GlobView): string | null => {
-  const ahead = glob.blockedBy ?? [];
+/** How many blocking IDs the card and dialog name before folding the rest into "+N". */
+const SHOWN_AHEAD = 2;
+
+export interface BlockedParts {
+  /** The IDs to name, direct prerequisites first, then the transitive ones. */
+  readonly ids: readonly string[];
+  /** How many more are ahead, not named. */
+  readonly more: number;
+  /** The startable glob to show after the IDs, unless it is already named; null otherwise. */
+  readonly next: string | null;
+}
+
+/** What a blocked glob's line names: "s15f82, s15f84 +2", then the glob to start next. Null when nothing is ahead. */
+export const blockedParts = (glob: GlobView): BlockedParts | null => {
+  const ahead = [...(glob.blockedBy ?? [])].sort((a, b) => a.depth - b.depth);
   if (ahead.length === 0) return null;
-  return chainSummary({ blockedBy: ahead, nextStartable: glob.nextStartable ?? null });
+  const all = ahead.map((b) => b.id);
+  // Three or more fold to two names and a count, but never fold away the glob to start next.
+  const ids = all.length > SHOWN_AHEAD + 1 ? all.slice(0, SHOWN_AHEAD) : all;
+  const next = glob.nextStartable ?? null;
+  return { ids, more: all.length - ids.length, next: next === null || ids.includes(next) ? null : next };
+};
+
+/** "blocked by s15f82, s15f84 +2 · next: s15f38" for a glob with unmerged prerequisites; null when none. */
+export const blockedLine = (glob: GlobView): string | null => {
+  const parts = blockedParts(glob);
+  if (parts === null) return null;
+  const more = parts.more > 0 ? ` +${String(parts.more)}` : '';
+  return `blocked by ${parts.ids.join(', ')}${more}${parts.next === null ? '' : ` · next: ${parts.next}`}`;
 };
 
 /** The chain for a tip, nearest first, each with its state: "s15f41 (Planning), s15f40 (Planning, 2 links away)". */
