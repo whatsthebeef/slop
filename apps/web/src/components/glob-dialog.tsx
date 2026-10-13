@@ -7,7 +7,8 @@ import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
-import { ACTION_LABELS } from '@/lib/api';
+import { actionPresentation } from '@/lib/action-presentation';
+import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
 import type { GlobSection } from '@/lib/glob-section';
@@ -15,7 +16,7 @@ import { workingLabel } from '@/lib/card-pending';
 import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
 import type { PendingAction } from '@/lib/pending-action';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
-import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
+import { startAgainConfirmation } from '@/lib/start-again';
 import { conflictByHand, conflictCommand, copySstorCommand } from '@/lib/sstor-command';
 import {
   blockedLine,
@@ -69,23 +70,6 @@ const DECISION_STATUS_TEXT: Partial<Record<GlobView['status'], string>> = {
 
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
 
-const ACTION_TIPS: Partial<Record<Action, string>> = {
-  investigate:
-    'Starts a routine run that investigates the plan (no branch, no commits) and attaches the result; starting later reuses it when the plan and files are unchanged',
-  review_now:
-    'An independent AI reviewer reads the change as it would land on main and posts its findings on the glob and the PR. It never blocks merging.',
-  start_anyway:
-    'Starts now, before what it waits for has merged; its branch will lack those changes',
-  merge_continue:
-    "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
-  mark_ready:
-    'Takes the PR out of draft: the work is done. A sub then merges by itself once its checks pass; a same or super waits for you to merge. Refused while the branch conflicts with main.',
-  retry_autofix:
-    'Starts a new routine run that watches this PR and fixes its failed checks on the same branch',
-  resolve_conflict:
-    'Starts a routine run that merges the base branch into this branch, resolves the conflicts and pushes; a failed attempt can be tried again',
-};
-
 /** A section's anchor: found by `?section=`, and left below the sticky header (h-10) when scrolled to. Hidden while empty. */
 const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) => (
   <div id={`section-${name}`} data-section={name} className="scroll-mt-12 empty:hidden">
@@ -117,7 +101,7 @@ const ConflictBox = ({
   return (
     <div className="grid gap-1 rounded border border-edge p-2 text-sm" data-testid="conflict-box">
       <span>
-        {canTakeOver ? 'Take over and let your Claude session' : 'Let your Claude session'} merge{' '}
+        {canTakeOver ? 'Pick up and let your Claude session' : 'Let your Claude session'} merge{' '}
         {base}: it resolves additive conflicts and asks you about the rest.
       </span>
       <span className="flex items-center gap-2">
@@ -175,7 +159,7 @@ export const GlobDetail = ({
   /** Loads the glob's latest values into the view (after a version conflict). */
   onReload: () => Promise<void>;
   /** Resolves false when the action failed. */
-  /** `anyway` goes ahead of unmerged prerequisites (Retrigger). */
+  /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
   /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
@@ -273,12 +257,12 @@ export const GlobDetail = ({
   const tiers = actionTiers(allActions);
   const disabled = waitingFor(glob, actions, board.role);
   const status = viewStatusLine(glob, new Date().toISOString(), disabled);
-  // Mark done (PR ready) changes nothing until GitHub confirms, so say it was asked for meanwhile.
+  // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
   const [readyAsked, setReadyAsked] = useState(false);
   const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
   // A super's local review normally comes first (/finalise); the board warns, then allows.
   const [confirmingReady, setConfirmingReady] = useState(false);
-  // Start again throws the PR and branch away, so it says what it will do first.
+  // Discard throws the PR and branch away, so it says what it will do first.
   const [confirmingAgain, setConfirmingAgain] = useState(false);
   // The header's border shows once the page has scrolled under it.
   const topRef = useRef<HTMLDivElement>(null);
@@ -336,6 +320,7 @@ export const GlobDetail = ({
 
   const renderActions = (list: Action[]) =>
     list.map((action) => {
+      const shown = actionPresentation(action, glob);
       const button = (
         <Button
           key={action}
@@ -388,15 +373,15 @@ export const GlobDetail = ({
               {workingLabel(action)}
             </>
           ) : (
-            actionLabel(action, glob.type, ACTION_LABELS, glob.status)
+            <>
+              <ActorIcon actor={shown.icon} decorative />
+              {shown.label}
+            </>
           )}
         </Button>
       );
-      const tip = ACTION_TIPS[action];
-      return tip === undefined ? (
-        button
-      ) : (
-        <Tip key={action} text={tip}>
+      return (
+        <Tip key={action} text={shown.tip}>
           {button}
         </Tip>
       );
@@ -526,7 +511,16 @@ export const GlobDetail = ({
               className="grid gap-1 rounded border border-edge p-2 text-sm"
               data-testid="escalation-note"
             >
-              <span>Needs a human: {glob.escalation.reason}</span>
+              <span>
+                <span className="sr-only">Needs a person: {glob.escalation.reason}</span>
+                <span
+                  aria-hidden
+                  title={`Needs a person: ${glob.escalation.reason}`}
+                  className="inline-flex items-center gap-1"
+                >
+                  needs a <HumanIcon decorative />: {glob.escalation.reason}
+                </span>
+              </span>
               {glob.escalation.evidence !== undefined && (
                 <span className="text-xs text-muted-foreground">{glob.escalation.evidence}</span>
               )}
@@ -686,10 +680,11 @@ export const GlobDetail = ({
                     </Button>
                   </Tip>
                 ))}
-                {disabled.map(({ action, tip }) => (
+                {disabled.map(({ action, label, icon, tip }) => (
                   <Tip key={action} text={tip}>
                     <Button variant="outline" size="sm" disabled>
-                      {actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
+                      <ActorIcon actor={icon} decorative />
+                      {label}
                     </Button>
                   </Tip>
                 ))}
@@ -728,7 +723,7 @@ export const GlobDetail = ({
                 >
                   <span className="flex-1">
                     No local review is recorded at the PR head: the change_reviewer and /finalise
-                    haven't run for {glob.pr?.headSha?.slice(0, 7) ?? 'the head'}. Mark it ready
+                    haven't run for {glob.pr?.headSha?.slice(0, 7) ?? 'the head'}. Mark it done
                     anyway?
                   </span>
                   <Button size="sm" variant="ghost" onClick={() => setConfirmingReady(false)}>
@@ -740,7 +735,7 @@ export const GlobDetail = ({
                     onClick={() => void markReady()}
                     data-testid="confirm-ready"
                   >
-                    Mark done (PR ready)
+                    Done
                   </Button>
                 </div>
               )}
@@ -768,8 +763,8 @@ export const GlobDetail = ({
                       })
                     }
                   >
-                    Start anyway
-                  </Button>
+                   Start as it is
+                   </Button>
                 </div>
               )}
               {confirmingRetrigger && (
@@ -794,8 +789,8 @@ export const GlobDetail = ({
                       })
                     }
                   >
-                    Retrigger anyway
-                  </Button>
+                   Retry anyway
+                   </Button>
                 </div>
               )}
               {confirmingAgain && (
@@ -821,7 +816,7 @@ export const GlobDetail = ({
                       })
                     }
                   >
-                    {actionLabel('start_again', glob.type, ACTION_LABELS, glob.status)}
+                    {actionPresentation('start_again', glob).label}
                   </Button>
                 </div>
               )}
@@ -1092,7 +1087,7 @@ export const GlobDetail = ({
 
         {glob.runs.length > 0 && (
           <div className="grid gap-1">
-            <h3 className="text-xs font-semibold text-muted-foreground">Routine runs</h3>
+            <h3 className="text-xs font-semibold text-muted-foreground">Machine runs</h3>
             {[...glob.runs].reverse().map((run) => (
               <div
                 key={run.id}

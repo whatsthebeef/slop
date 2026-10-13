@@ -130,6 +130,17 @@ describe('shared status line', () => {
     expect(top(g)?.full).toBe('Merge waits: main is red since s15t11');
   });
 
+  it('says a conflict with the base is why a same with passing checks cannot merge', () => {
+    const g = prOpen({
+      headChecks: { sha: head, state: 'passed' },
+      conflict: { base: 'main', files: [], since: 's1t2', at: NOW },
+      allowedActions: [],
+    });
+    expect(waitingFor(g, [], 'dev')).toMatchObject([
+      { action: 'merge', why: ': conflicts with main' },
+    ]);
+  });
+
   it('says a super waits for the implementation record', () => {
     const g = view({
       type: 'super',
@@ -138,7 +149,9 @@ describe('shared status line', () => {
       headChecks: { sha: head, state: 'passed' },
       allowedActions: ['merge'],
     });
-    expect(top(g)?.full).toBe('Merge and continue waits for the implementation record at the head');
+    expect(top(g)?.full).toBe(
+      'Merge & keep working waits for the implementation record at the head',
+    );
   });
 
   it('gives QA and PO no wait', () => {
@@ -185,7 +198,7 @@ describe('activity label', () => {
     expect(activityLabel(picked, NOW)).toBeNull();
     expect(activityLabel(picked, later)).toMatchObject({
       kind: 'picked_up',
-      text: 'Picked up, no routine run',
+      text: 'picked up, no machine run',
     });
     expect(activityLabel({ ...picked, ...live('active') }, later)?.kind).toBe('working');
   });
@@ -234,15 +247,17 @@ describe('activity label', () => {
   });
 
   it('names the run states', () => {
-    expect(activityLabel(view(live('active')), NOW)?.text).toBe('Routine working');
+    expect(activityLabel(view(live('active')), NOW)?.text).toBe('working');
     expect(activityLabel(view(live('watching')), NOW)?.text).toBe('standby');
-    expect(activityLabel(view(live('queued')), NOW)?.text).toBe('Queued');
+    expect(activityLabel(view(live('queued')), NOW)?.text).toBe('queued');
   });
 
   it('says how long a run has been queued past 10 minutes', () => {
     const later = new Date(Date.parse(NOW) + 25 * 60_000).toISOString();
     const g = view(live('queued', { queuedAt: NOW }));
-    expect(activityLabel(g, later)?.text).toBe('Queued for 25 min');
+    expect(activityLabel(g, later)?.text).toBe('queued for 25 min');
+    expect(activityLabel(g, later)?.tip).toMatch(/^Machine run queued for 25 min/);
+    expect(activityLabel(view(live('queued')), NOW)?.tip).toMatch(/^Machine run queued/);
   });
 
   it('shows nothing once the checks have settled, and leaves problems to the status line', () => {

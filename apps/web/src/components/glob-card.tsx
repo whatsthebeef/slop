@@ -2,13 +2,14 @@ import { decisionOf, findingsLabel, reviewOutdated, scopeLabel } from '@slop/cor
 import type { Action, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
 import { Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
+import type { ActionIcon } from '@/lib/action-presentation';
 import type { MoveTag } from '@/lib/board-motion';
 import { activityLabel, blockedParts, chainTip, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
-import { HumanIcon, MachineIcon } from './actor-icons';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
 import { actionTiers } from '@/lib/action-style';
@@ -103,7 +104,7 @@ export const ActivityLabel = ({ glob }: { glob: GlobView }) => {
         data-testid='activity-label'
         data-kind={activity.kind}
       >
-        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <MachineIcon className='h-3 w-3' decorative />}
+        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <ActorIcon actor={activity.icon ?? 'machine'} className='h-3 w-3' decorative />}
         {activity.text}
       </span>
     </Tip>
@@ -148,12 +149,15 @@ export const ChipButton = ({
   onOpen,
   className,
   testId,
+  ariaLabel,
   'aria-describedby': describedBy,
   children,
 }: {
   onOpen?: () => void;
   className: string;
   testId: string;
+  /** The button's name, for chips whose visible words are hidden from screen readers. */
+  ariaLabel?: string;
   'aria-describedby'?: string;
   children: ReactNode;
 }) =>
@@ -166,6 +170,7 @@ export const ChipButton = ({
       onOpen={onOpen}
       className={cn(className, 'cursor-pointer rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring')}
       testId={testId}
+      ariaLabel={ariaLabel}
       aria-describedby={describedBy}
     >
       {children}
@@ -226,6 +231,8 @@ export interface CardMove {
   readonly label: string;
   /** What it does, for screen readers and the tooltip. */
   readonly description: string;
+  /** Who does the work, from actionPresentation; decorative, since the description says it in words. */
+  readonly icon: ActionIcon | null;
 }
 
 const MoveButton = ({
@@ -247,7 +254,7 @@ const MoveButton = ({
   <button
     type='button'
     className={cn(
-      'rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
+      'inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
       hot ? 'border-foreground bg-lcd text-lcd-foreground' : primary ? 'border-primary bg-primary text-primary-foreground hover:opacity-90' : 'border-foreground/70 bg-card text-foreground hover:bg-muted',
       'disabled:pointer-events-none disabled:opacity-50',
     )}
@@ -264,6 +271,7 @@ const MoveButton = ({
     }}
     onKeyDown={(e) => e.stopPropagation()}
   >
+    <ActorIcon actor={move.icon} className='h-3 w-3' decorative />
     {move.label}
   </button>
   </Tip>
@@ -643,9 +651,17 @@ export const GlobCard = ({
         <SplitChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
         <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
         {glob.escalation != null && glob.status === 'planning' && (
+          // The visible words are hidden: the button's label names it and the Tip's description gives the reason.
           <Tip text={`Needs a person: ${glob.escalation.reason}. Opens the reason`}>
-            <ChipButton onOpen={() => onOpenSection(cardTargets.escalation())} className='font-mono text-[11px] text-required' testId='escalation-chip'>
-              needs a <HumanIcon className='inline h-3 w-3' />
+            <ChipButton
+              onOpen={() => onOpenSection(cardTargets.escalation())}
+              className='inline-flex items-center gap-1 font-mono text-[11px] text-required'
+              testId='escalation-chip'
+              ariaLabel='Needs a person'
+            >
+              <span aria-hidden className='inline-flex items-center gap-1'>
+                needs a <HumanIcon className='h-3 w-3' decorative />
+              </span>
             </ChipButton>
           </Tip>
         )}

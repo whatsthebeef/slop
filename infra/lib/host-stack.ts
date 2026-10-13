@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Size, Stack } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import {
   AllowedMethods,
@@ -16,6 +16,7 @@ import { BuildSpec, CfnProject, ComputeType, EventAction, FilterGroup, LinuxArmB
 import {
   BlockDeviceVolume,
   CfnInstance,
+  CfnVolumeAttachment,
   EbsDeviceVolumeType,
   Instance,
   InstanceClass,
@@ -28,6 +29,7 @@ import {
   SecurityGroup,
   SubnetType,
   UserData,
+  Volume,
   Vpc,
 } from 'aws-cdk-lib/aws-ec2';
 import { Repository, TagStatus } from 'aws-cdk-lib/aws-ecr';
@@ -72,6 +74,18 @@ export interface HostStackProps extends StackProps {
    * target (`CloudFrontUrl`). DNS is managed outside this stack. Without it the stack is unchanged.
    */
   readonly customDomain?: { readonly domainName: string; readonly certificateArn: string };
+  /**
+   * The AMI the instance runs (`-c hostAmiId=ami-...`). Required in prod: resolving the latest Amazon Linux 2023 image at
+   * each deploy replaced the production instance whenever a new image was published. Take it from the running instance
+   * (`aws ec2 describe-instances --instance-ids <id> --query 'Reservations[].Instances[].ImageId'`); changing it later
+   * replaces the instance, so do that deliberately (infra/deploy/HOST.md). Other stages default to the latest image.
+   */
+  readonly amiId?: string;
+  /**
+   * The existing data volume to attach (`-c hostDataVolumeId=vol-...`). Required in prod: the stack never creates
+   * production's data disk, it only attaches this one. Other stages create a fresh volume when it is absent.
+   */
+  readonly dataVolumeId?: string;
 }
 
 const APP_PORT = 3000;
@@ -165,28 +179,52 @@ export class HostStack extends Stack {
       new PolicyStatement({ actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'Slop/Backup' } } }),
     );
 
+    if (stage === 'prod' && (props.amiId === undefined || props.dataVolumeId === undefined)) {
+      throw new Error(
+        'prod needs -c hostAmiId=ami-... (the AMI the instance runs now) and -c hostDataVolumeId=vol-... (its data volume); see infra/deploy/HOST.md',
+      );
+    }
+    const machineImage =
+      props.amiId === undefined
+        ? MachineImage.latestAmazonLinux2023({ cpuType: AmazonLinuxCpuType.ARM_64 })
+        : MachineImage.genericLinux({ [this.region]: props.amiId });
+
     const instance = new Instance(this, 'Host', {
       vpc,
       vpcSubnets: { subnetType: SubnetType.PUBLIC },
       associatePublicIpAddress: true,
       instanceType: InstanceType.of(InstanceClass.T4G, InstanceSize.SMALL),
-      machineImage: MachineImage.latestAmazonLinux2023({ cpuType: AmazonLinuxCpuType.ARM_64 }),
+      machineImage,
       securityGroup,
       role,
       requireImdsv2: true,
       blockDevices: [
         { deviceName: '/dev/xvda', volume: BlockDeviceVolume.ebs(30, { volumeType: EbsDeviceVolumeType.GP3, encrypted: true }) },
-        // Postgres' data: kept when the instance is replaced or deleted (s15f33 snapshots it).
-        {
-          deviceName: '/dev/sdf',
-          volume: BlockDeviceVolume.ebs(30, { volumeType: EbsDeviceVolumeType.GP3, encrypted: true, deleteOnTermination: false }),
-        },
       ],
       userData: UserData.custom(readFileSync(new URL('../deploy/instance-setup.sh', import.meta.url), 'utf8')),
       userDataCausesReplacement: false,
     });
     // The weekly snapshot policy below selects the instance by this tag.
     Tags.of(instance).add('slop:snapshot', 'weekly');
+
+    // Postgres' data disk is its own resource, never part of the instance's block device mapping, so replacing the
+    // instance can't give it an empty disk. Production attaches the existing volume by ID; the stack never creates it.
+    const dataVolume =
+      props.dataVolumeId === undefined
+        ? new Volume(this, 'DataVolume', {
+            availabilityZone: instance.instanceAvailabilityZone,
+            size: Size.gibibytes(30),
+            volumeType: EbsDeviceVolumeType.GP3,
+            encrypted: true,
+            removalPolicy: retain,
+          })
+        : Volume.fromVolumeAttributes(this, 'DataVolume', { volumeId: props.dataVolumeId, availabilityZone: instance.instanceAvailabilityZone });
+    if (props.dataVolumeId === undefined) Tags.of(dataVolume).add('slop:snapshot', 'weekly');
+    new CfnVolumeAttachment(this, 'DataVolumeAttachment', {
+      device: '/dev/sdf',
+      instanceId: instance.instanceId,
+      volumeId: dataVolume.volumeId,
+    });
     // Containers reach the instance role's credentials through the metadata service, one hop further than the host.
     const cfnInstance = instance.node.defaultChild;
     if (!(cfnInstance instanceof CfnInstance)) throw new Error('Expected the EC2 instance resource');
