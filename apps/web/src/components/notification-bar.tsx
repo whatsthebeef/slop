@@ -2,10 +2,10 @@ import type { BoardNotification } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { api, healthKey, notificationsKey } from '@/lib/api';
+import { api, dismissedNotificationsKey, healthKey, notificationsKey } from '@/lib/api';
 import { signInPoll, signInView } from '@/lib/aws-sign-in';
 import type { SignInView } from '@/lib/aws-sign-in';
-import { barView, canDismiss, linkTarget, pollInterval, shownRows, toggleLabel } from '@/lib/notification-bar';
+import { barView, canDismiss, dismissedLabel, linkTarget, pollInterval, shownRows, toggleLabel } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
 
 const OUTLINE: Record<BoardNotification['severity'], string> = { critical: 'border-red', warning: 'border-amber', info: 'border-edge' };
@@ -61,26 +61,28 @@ const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: numbe
   const client = useQueryClient();
   const dismiss = useMutation({
     mutationFn: () => api.dismissNotification(boardId, item.id),
-    onSuccess: () => client.invalidateQueries({ queryKey: notificationsKey(boardId) }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['notifications', boardId] }),
   });
   const action = item.action;
   return (
     <div
       role={item.severity === 'critical' ? 'alert' : 'status'}
-      className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 px-4 not-first:border-t not-first:border-edge', STYLE[item.severity], flash && 'notification-flash')}
+      className={cn('flex items-center gap-x-3 gap-y-1 px-4 not-first:border-t not-first:border-edge', item.source !== 'main-red' && 'flex-wrap', STYLE[item.severity], flash && 'notification-flash')}
       data-testid={`notification-${item.source}`}
       data-severity={item.severity}
     >
-      <span>{item.title}</span>
-      <span className={cn('font-normal', item.severity === 'critical' && 'text-sm')}>{item.detail}</span>
+      <span className={cn(item.source === 'main-red' ? 'min-w-0 flex-1 truncate whitespace-nowrap text-left' : undefined)} title={item.source === 'main-red' ? `${item.title}\n${item.detail}` : undefined}>
+        {item.title}
+      </span>
+      {item.source !== 'main-red' && <span className={cn('font-normal', item.severity === 'critical' && 'text-sm')}>{item.detail}</span>}
       {action?.kind === 'aws-sign-in' && <AwsSignInAction />}
       {action !== null && action.kind !== 'aws-sign-in' && (
-        <a className='text-sm font-normal underline' href={action.href} {...linkTarget(action.href)} rel='noreferrer'>
+        <a className='shrink-0 text-sm font-normal underline' href={action.href} {...linkTarget(action.href)} rel='noreferrer'>
           {action.label}
         </a>
       )}
       {canDismiss(item) && (
-        <button type='button' className='ml-auto text-sm font-normal underline' disabled={dismiss.isPending} onClick={() => dismiss.mutate()}>
+        <button type='button' className='ml-auto shrink-0 text-sm font-normal underline' disabled={dismiss.isPending} onClick={() => dismiss.mutate()}>
           Dismiss
         </button>
       )}
@@ -90,7 +92,7 @@ const Row = ({ item, boardId, flash }: { item: BoardNotification; boardId: numbe
 
 /**
  * One bar across the top of every board page for board-wide incidents that need a person. The most severe shows in
- * full (critical is big and red, flashes once on arrival and can't be dismissed while its condition holds); the
+ * full (critical is big and red, flashes once on arrival; every notification can be dismissed per person); the
  * others sit behind "more… (N)" just below it, which grows them into one attached stack with "Show less" in the same place below. It sits above the tabs.
  */
 export const NotificationBar = ({ boardId }: { boardId: number }) => {
@@ -101,8 +103,30 @@ export const NotificationBar = ({ boardId }: { boardId: number }) => {
     // A hint refetches at once; the poll is the backstop.
     refetchInterval: (query) => pollInterval((query.state.data?.length ?? 0) > 0),
   });
+  const dismissed = useQuery({ queryKey: dismissedNotificationsKey(boardId), queryFn: () => api.dismissedNotifications(boardId) });
+  const client = useQueryClient();
+  const restore = useMutation({
+    mutationFn: async (ids: string[]) => {
+      for (const id of ids) await api.restoreNotification(boardId, id);
+    },
+    onSuccess: () => client.invalidateQueries({ queryKey: ['notifications', boardId] }),
+  });
+  const hidden = dismissed.data ?? [];
   const view = barView(items.data ?? []);
-  if (view === null) return null;
+  const undo =
+    hidden.length === 0 ? null : (
+      <button
+        type='button'
+        className='mt-1 block text-sm font-normal text-muted-foreground underline'
+        data-testid='notifications-dismissed'
+        title={hidden.map((n) => n.title).join('\n')}
+        disabled={restore.isPending}
+        onClick={() => restore.mutate(hidden.map((n) => n.id))}
+      >
+        {dismissedLabel(hidden.length)}
+      </button>
+    );
+  if (view === null) return undo === null ? null : <div className='mx-5 mt-1.5'>{undo}</div>;
   return (
     <div className='mx-5 mt-1.5' data-testid='notification-bar'>
       {/* One stack: the rows share the outer border and are split by hairlines. Keyed by id so a new arrival flashes once. */}
@@ -124,6 +148,7 @@ export const NotificationBar = ({ boardId }: { boardId: number }) => {
           </button>
         </div>
       )}
+      {undo}
     </div>
   );
 };

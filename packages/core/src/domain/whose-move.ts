@@ -184,6 +184,10 @@ export const whoseMove = (
     if (glob.type === 'sub' && glob.conflict == null && checks?.state === 'passed' && checks.sha === glob.pr.headSha) {
       return { holder: 'waiting', reason: 'merges by itself', since: checks.at ?? null, waitingOn: ['merge'] };
     }
+    // Failing the same way as the base: waiting for the base to be fixed, not stalled and not this glob's failure.
+    if (checks?.state === 'failed' && checks.inheritedFrom !== undefined) {
+      return { holder: 'waiting', reason: `${checks.inheritedFrom.base} is red`, since: checks.at ?? null, waitingOn: ['base'] };
+    }
     if (checks?.state === 'failed' && checks.inheritedFrom === undefined) {
       // A watching run is about to answer failed checks; otherwise it is a person's.
       if (standby !== undefined) return { holder: 'machine', reason: 'fix checks', since: checks.at ?? null };

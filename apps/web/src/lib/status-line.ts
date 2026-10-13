@@ -117,15 +117,14 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
       (l) => l !== '',
     );
     if (checks.inherited) {
-      const head =
-        /^(.*?not this glob's change)/.exec(checks.text)?.[1] ??
-        "The base branch is red: not this glob's change";
+      // Never the inherited failure's text: the short waiting line; the failing test and the run are in the tooltip.
+      const base = glob.headChecks?.inheritedFrom?.base ?? 'main';
       candidates.push(
         make({
           kind: 'base-red',
-          full: head,
+          full: `⏳ waiting · ${base} is red`,
           tone: 'text-required',
-          tip: details.join('\n'),
+          tip: [`Waiting: ${base} is red, not this glob's change`, ...details].join('\n'),
           url: checks.url,
           doing: 'this branch is updated when the base is fixed',
         }),

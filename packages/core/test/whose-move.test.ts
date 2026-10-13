@@ -32,6 +32,17 @@ describe('whoseMove: priority', () => {
     expect(move(conflict, {}, { viewer: undefined })).toMatchObject({ holder: 'human' });
   });
 
+  it('waiting, not stalled: checks failing the same way as a red base', () => {
+    const inherited = {
+      sha: head,
+      state: 'failed' as const,
+      failure: { name: 'Check', step: 'Test', lines: ['FAIL a > b'], url: null },
+      inheritedFrom: { base: 'main', since: 's1t1' },
+    };
+    const g = glob({ status: 'pr_open', type: 'sub', pr: { number: 49, state: 'ready', headSha: head }, headChecks: inherited, implementer: null, runs: [] });
+    expect(move(g, {}, { viewer: undefined })).toMatchObject({ holder: 'waiting', reason: 'main is red' });
+  });
+
   it('you beats machine: a due step wins while a run works', () => {
     expect(move(ready({ runs: [run({ state: 'watching' })] }))).toMatchObject({ holder: 'you' });
     const working = glob({ type: 'super', status: 'planning', runs: [run({ purpose: 'investigate' })] });
