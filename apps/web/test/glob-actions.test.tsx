@@ -110,12 +110,27 @@ describe('glob view: main button', () => {
         status: 'pr_open',
         list: 'reviewing',
         pr: { number: 7, state: 'ready', headSha: 'aaa' },
-        // GlobView has no checks field: the server reflects passed checks by allowing merge.
+        headChecks: { sha: 'aaa', state: 'passed' },
         allowedActions: ['merge', 'start_again', 'delete'],
       }),
     );
     const main = mainButton();
     expect(main?.textContent).toBe('Merge');
+    expectMachineIcon(main);
+  });
+
+  it('is Merge when checks pass while the checks are pending', () => {
+    renderGlob(
+      view({
+        status: 'pr_open',
+        list: 'reviewing',
+        pr: { number: 7, state: 'ready', headSha: 'aaa' },
+        headChecks: { sha: 'aaa', state: 'pending' },
+        allowedActions: ['merge', 'start_again', 'delete'],
+      }),
+    );
+    const main = mainButton();
+    expect(main?.textContent).toBe('Merge when checks pass');
     expectMachineIcon(main);
   });
 
