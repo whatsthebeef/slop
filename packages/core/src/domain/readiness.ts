@@ -92,17 +92,31 @@ export const runsClaudeAction = (workflow: string): boolean => workflow.includes
 export const allowsBot = (workflow: string, bot: string): boolean => {
   const match = /^\s*allowed_bots\s*:\s*(.*)$/m.exec(workflow);
   if (match === null) return false;
-  const value = (match[1] ?? '').replace(/\s+#.*$/, '').trim().replace(/^(['"])(.*)\1$/, '$2');
-  const bare = (name: string): string => name.trim().toLowerCase().replace(/\[bot\]$/, '');
-  return value.split(',').some((name) => name.trim() === '*' || (bare(name) !== '' && bare(name) === bare(bot)));
+  const value = (match[1] ?? '')
+    .replace(/\s+#.*$/, '')
+    .trim()
+    .replace(/^(['"])(.*)\1$/, '$2');
+  const bare = (name: string): string =>
+    name
+      .trim()
+      .toLowerCase()
+      .replace(/\[bot\]$/, '');
+  return value
+    .split(',')
+    .some((name) => name.trim() === '*' || (bare(name) !== '' && bare(name) === bare(bot)));
 };
 
 /** The required events (in their given order) that the App's subscribed `events` lack. */
-export const missingAppEvents = (required: readonly string[], subscribed: readonly string[]): string[] =>
-  required.filter((event) => !subscribed.includes(event));
+export const missingAppEvents = (
+  required: readonly string[],
+  subscribed: readonly string[],
+): string[] => required.filter((event) => !subscribed.includes(event));
 
 /** The App's permissions-and-events settings page: an organization's when the App is owned by one. */
-export const appSettingsUrl = (slug: string, owner: { readonly login: string; readonly type: string }): string =>
+export const appSettingsUrl = (
+  slug: string,
+  owner: { readonly login: string; readonly type: string },
+): string =>
   owner.type === 'Organization'
     ? `https://github.com/organizations/${owner.login}/settings/apps/${slug}/permissions`
     : `https://github.com/settings/apps/${slug}/permissions`;
@@ -114,15 +128,29 @@ const claudeWorkflowFix = (repo: string | null): string =>
  * Which readiness item a routine failure points to, and its fix, from the failure's reason.
  * Null when the reason doesn't match a known setup problem.
  */
-export const routineFailureFix = (reason: string): { key: ManualReadinessKey; fix: string } | null => {
-  if (/resource not accessible by integration|workflows? permission|claude github app/i.test(reason)) {
-    return { key: 'claude_app', fix: "Install the Claude GitHub App on the repo, with the workflows permission" };
+export const routineFailureFix = (
+  reason: string,
+): { key: ManualReadinessKey; fix: string } | null => {
+  if (
+    /resource not accessible by integration|workflows? permission|claude github app/i.test(reason)
+  ) {
+    return {
+      key: 'claude_app',
+      fix: 'Install the Claude GitHub App on the repo, with the workflows permission',
+    };
   }
-  if (/repository not found|not (have )?access(ible)? to (the )?repo|could not read from remote|permission to \S+ denied|not in the routine'?s repositories/i.test(reason)) {
+  if (
+    /repository not found|not (have )?access(ible)? to (the )?repo|could not read from remote|permission to \S+ denied|not in the routine'?s repositories/i.test(
+      reason,
+    )
+  ) {
     return { key: 'routine_repo', fix: "Add the repo to the routine's repositories" };
   }
   if (/routine (fire )?(failed|not found)|fire (url|token)|no routine/i.test(reason)) {
-    return { key: 'routines', fix: 'Check the routine and its fire URL and token in .routines.json' };
+    return {
+      key: 'routines',
+      fix: 'Check the routine and its fire URL and token in .routines.json',
+    };
   }
   return null;
 };
@@ -133,7 +161,14 @@ const item = (
   state: ReadinessState,
   detail: string,
   fix: ReadinessFix | null,
-): ReadinessItem => ({ key, title, state, detail, fix, manual: MANUAL_READINESS_KEYS.some((k) => k === key) });
+): ReadinessItem => ({
+  key,
+  title,
+  state,
+  detail,
+  fix,
+  manual: MANUAL_READINESS_KEYS.some((k) => k === key),
+});
 
 /** The readiness checklist, in the order a board is set up. */
 export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
@@ -144,13 +179,25 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
 
   items.push(
     repo === null
-      ? item('repo_app', "slop's GitHub App on the repo", 'missing', 'The board has no repository', settings)
+      ? item(
+          'repo_app',
+          "slop's GitHub App on the repo",
+          'missing',
+          'The board has no repository',
+          settings,
+        )
       : facts.repoConnected === null
-        ? item('repo_app', "slop's GitHub App on the repo", 'unknown', "slop's GitHub App isn't set up yet", {
-            kind: 'link',
-            label: 'Set up the GitHub App',
-            href: '/setup/github-app',
-          })
+        ? item(
+            'repo_app',
+            "slop's GitHub App on the repo",
+            'unknown',
+            "slop's GitHub App isn't set up yet",
+            {
+              kind: 'link',
+              label: 'Set up the GitHub App',
+              href: '/setup/github-app',
+            },
+          )
         : facts.repoConnected
           ? item('repo_app', "slop's GitHub App on the repo", 'ok', `Connected to ${repo}`, null)
           : item(
@@ -158,7 +205,9 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
               "slop's GitHub App on the repo",
               'missing',
               `slop can't reach ${repo}`,
-              facts.installUrl === null ? settings : { kind: 'link', label: 'Install the app', href: facts.installUrl },
+              facts.installUrl === null
+                ? settings
+                : { kind: 'link', label: 'Install the app', href: facts.installUrl },
             ),
   );
 
@@ -167,12 +216,24 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     facts.subGateWorkflow === null
       ? item('sub_gate', 'Sub-gate workflow', 'unknown', "slop can't read the repo yet", null)
       : facts.subGateWorkflow
-        ? item('sub_gate', 'Sub-gate workflow', 'ok', `${subGatePath} is on ${board.baseBranch}; make checks (.github/workflows/checks.yml, run on every PR) and sub-gate required status checks on ${board.baseBranch} so merges honour them`, null)
-        : item('sub_gate', 'Sub-gate workflow', 'missing', `Subs can't merge themselves without ${subGatePath} on ${board.baseBranch}`, {
-            kind: 'link',
-            label: 'Add the workflow',
-            href: `https://github.com/${repo ?? ''}/new/${board.baseBranch}?filename=${subGatePath}`,
-          }),
+        ? item(
+            'sub_gate',
+            'Sub-gate workflow',
+            'ok',
+            `${subGatePath} is on ${board.baseBranch}; make checks (.github/workflows/checks.yml, run on every PR) and sub-gate required status checks on ${board.baseBranch} so merges honour them`,
+            null,
+          )
+        : item(
+            'sub_gate',
+            'Sub-gate workflow',
+            'missing',
+            `Subs can't merge themselves without ${subGatePath} on ${board.baseBranch}`,
+            {
+              kind: 'link',
+              label: 'Add the workflow',
+              href: `https://github.com/${repo ?? ''}/new/${board.baseBranch}?filename=${subGatePath}`,
+            },
+          ),
   );
 
   const claudeTitle = `Claude workflow on ${board.baseBranch}`;
@@ -181,8 +242,20 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
       ? item('claude_workflow', claudeTitle, 'unknown', "slop can't read the repo yet", null)
       : facts.claudeWorkflow
         ? facts.slopBot !== null && facts.claudeAllowsSlop === false
-          ? item('claude_workflow', claudeTitle, 'missing', `A workflow runs ${CLAUDE_ACTION}, but it ignores slop's @claude comments (merge-conflict requests) because slop's App is not allowed to trigger it. Add this under \`with:\`: allowed_bots: "${facts.slopBot}"`, null)
-          : item('claude_workflow', claudeTitle, 'ok', `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so @claude comments get a response (it also needs the Claude GitHub App)`, null)
+          ? item(
+              'claude_workflow',
+              claudeTitle,
+              'missing',
+              `A workflow runs ${CLAUDE_ACTION}, but it ignores slop's @claude comments (merge-conflict requests) because slop's App is not allowed to trigger it. Add this under \`with:\`: allowed_bots: "${facts.slopBot}"`,
+              null,
+            )
+          : item(
+              'claude_workflow',
+              claudeTitle,
+              'ok',
+              `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so @claude comments get a response (it also needs the Claude GitHub App)`,
+              null,
+            )
         : item('claude_workflow', claudeTitle, 'missing', claudeWorkflowFix(repo), {
             kind: 'link',
             label: 'Add the workflow',
@@ -194,9 +267,21 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
   const events = facts.appEvents;
   items.push(
     events === null
-      ? item('app_events', eventsTitle, 'unknown', "slop can't read its GitHub App's settings yet", null)
+      ? item(
+          'app_events',
+          eventsTitle,
+          'unknown',
+          "slop can't read its GitHub App's settings yet",
+          null,
+        )
       : events.missing.length === 0
-        ? item('app_events', eventsTitle, 'ok', 'The App is subscribed to every event slop needs', null)
+        ? item(
+            'app_events',
+            eventsTitle,
+            'ok',
+            'The App is subscribed to every event slop needs',
+            null,
+          )
         : item(
             'app_events',
             eventsTitle,
@@ -211,45 +296,117 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     committed === 'unknown'
       ? item('agent_set', 'Agent set in the repo', 'unknown', "slop can't read the repo yet", null)
       : committed === 'unreadable'
-        ? item('agent_set', 'Agent set in the repo', 'missing', `.claude/slop-agent-set.json on ${board.baseBranch} isn't valid: run slop init ${String(board.id)} and commit it`, {
-            kind: 'knowledge',
-            label: 'Agent set',
-          })
+        ? item(
+            'agent_set',
+            'Agent set in the repo',
+            'missing',
+            `.claude/slop-agent-set.json on ${board.baseBranch} isn't valid: run slop init ${String(board.id)} and commit it`,
+            {
+              kind: 'knowledge',
+              label: 'Agent set',
+            },
+          )
         : committed === null
-      ? item('agent_set', 'Agent set in the repo', 'missing', `No .claude/slop-agent-set.json on ${board.baseBranch}: run slop init ${String(board.id)} in a checkout and commit it`, {
-          kind: 'knowledge',
-          label: 'Agent set',
-        })
-      : committed < board.agentSetVersion
-        ? item('agent_set', 'Agent set in the repo', 'missing', `The repo has version ${String(committed)}; the board's is ${String(board.agentSetVersion)}. Routines update it on their next run, or run slop init ${String(board.id)}`, {
-            kind: 'knowledge',
-            label: 'Agent set',
-          })
-        : item('agent_set', 'Agent set in the repo', 'ok', `Version ${String(committed)}`, null),
+          ? item(
+              'agent_set',
+              'Agent set in the repo',
+              'missing',
+              `No .claude/slop-agent-set.json on ${board.baseBranch}: run slop init ${String(board.id)} in a checkout and commit it`,
+              {
+                kind: 'knowledge',
+                label: 'Agent set',
+              },
+            )
+          : committed < board.agentSetVersion
+            ? item(
+                'agent_set',
+                'Agent set in the repo',
+                'missing',
+                `The repo has version ${String(committed)}; the board's is ${String(board.agentSetVersion)}. Routines update it on their next run, or run slop init ${String(board.id)}`,
+                {
+                  kind: 'knowledge',
+                  label: 'Agent set',
+                },
+              )
+            : item(
+                'agent_set',
+                'Agent set in the repo',
+                'ok',
+                `Version ${String(committed)}`,
+                null,
+              ),
   );
 
   const knowledge: ReadinessFix = { kind: 'knowledge', label: 'Knowledge' };
   const missing = (area: CoreDocArea) => facts.missingCoreAreas.includes(area);
   items.push(
     missing('build')
-      ? item('build_doc', 'Build doc', 'missing', `Agents have to guess the build, test and lint commands. ${missingCoreDocNotice('build', board.id)}`, knowledge)
+      ? item(
+          'build_doc',
+          'Build doc',
+          'missing',
+          `Agents have to guess the build, test and lint commands. ${missingCoreDocNotice('build', board.id)}`,
+          knowledge,
+        )
       : item('build_doc', 'Build doc', 'ok', 'Agents get the build, test and lint commands', null),
     missing('conventions')
-      ? item('conventions_doc', 'Conventions doc', 'missing', missingCoreDocNotice('conventions', board.id), knowledge)
-      : item('conventions_doc', 'Conventions doc', 'ok', 'Agents get the conventions as practised', null),
+      ? item(
+          'conventions_doc',
+          'Conventions doc',
+          'missing',
+          missingCoreDocNotice('conventions', board.id),
+          knowledge,
+        )
+      : item(
+          'conventions_doc',
+          'Conventions doc',
+          'ok',
+          'Agents get the conventions as practised',
+          null,
+        ),
     missing('architecture')
-      ? item('architecture_doc', 'Architecture doc', 'missing', missingCoreDocNotice('architecture', board.id), knowledge)
-      : item('architecture_doc', 'Architecture doc', 'ok', 'Agents get an overview of how the code is laid out', null),
+      ? item(
+          'architecture_doc',
+          'Architecture doc',
+          'missing',
+          missingCoreDocNotice('architecture', board.id),
+          knowledge,
+        )
+      : item(
+          'architecture_doc',
+          'Architecture doc',
+          'ok',
+          'Agents get an overview of how the code is laid out',
+          null,
+        ),
   );
 
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
   const subDefault = board.environments.find((e) => e.subDefault === true);
   items.push(
     deployable.length === 0
-      ? item('environments', 'Environments', 'missing', 'No environment takes branch deploys', settings)
+      ? item(
+          'environments',
+          'Environments',
+          'missing',
+          'No environment takes branch deploys',
+          settings,
+        )
       : subDefault === undefined
-        ? item('environments', 'Environments', 'missing', 'No environment is the default for subs', settings)
-        : item('environments', 'Environments', 'ok', `${deployable.map((e) => e.name).join(', ')}; subs default to ${subDefault.name}`, null),
+        ? item(
+            'environments',
+            'Environments',
+            'missing',
+            'No environment is the default for subs',
+            settings,
+          )
+        : item(
+            'environments',
+            'Environments',
+            'ok',
+            `${deployable.map((e) => e.name).join(', ')}; subs default to ${subDefault.name}`,
+            null,
+          ),
   );
 
   const MANUAL: Record<ManualReadinessKey, string> = {
@@ -261,19 +418,49 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     const failure = facts.recentFailures.find((f) => routineFailureFix(f.reason)?.key === key);
     const fix = failure === undefined ? null : routineFailureFix(failure.reason);
     // One run that never started can be a hiccup; repeats point at the routine itself.
-    const neverStarted = key === 'routines' ? facts.recentFailures.filter((f) => /^Routine run never started/.test(f.reason)) : [];
+    const neverStarted =
+      key === 'routines'
+        ? facts.recentFailures.filter((f) => /^Routine run never started/.test(f.reason))
+        : [];
     const unreacted = key === 'claude_app' ? facts.unreactedCheckFailures[0] : undefined;
-    const noWorkflow = facts.claudeWorkflow === false ? ' and the repo has no Claude workflow (see the "Claude workflow" item)' : '';
+    const noWorkflow =
+      facts.claudeWorkflow === false
+        ? ' and the repo has no Claude workflow (see the "Claude workflow" item)'
+        : '';
     items.push(
       failure !== undefined && fix !== null
-        ? item(key, MANUAL[key], 'failing', `${failure.globId} failed: ${failure.reason}. ${fix.fix}`, settings)
+        ? item(
+            key,
+            MANUAL[key],
+            'failing',
+            `${failure.globId} failed: ${failure.reason}. ${fix.fix}`,
+            settings,
+          )
         : neverStarted.length >= 2
-          ? item(key, MANUAL[key], 'failing', `${neverStarted.length} routine runs never started (latest ${neverStarted[0]?.globId ?? ''}): check the routine's fire URL and token, and that its session can reach slop`, settings)
-        : unreacted !== undefined
-          ? item(key, MANUAL[key], 'failing', `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo${noWorkflow}`, settings)
-        : facts.ticks[key] === true
-          ? item(key, MANUAL[key], 'ok', 'Ticked by an admin', null)
-          : item(key, MANUAL[key], 'missing', "slop can't check this: tick it in board settings once it's done", settings),
+          ? item(
+              key,
+              MANUAL[key],
+              'failing',
+              `${neverStarted.length} routine runs never started (latest ${neverStarted[0]?.globId ?? ''}): check the routine's fire URL and token, and that its session can reach slop`,
+              settings,
+            )
+          : unreacted !== undefined
+            ? item(
+                key,
+                MANUAL[key],
+                'failing',
+                `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo${noWorkflow}`,
+                settings,
+              )
+            : facts.ticks[key] === true
+              ? item(key, MANUAL[key], 'ok', 'Ticked by an admin', null)
+              : item(
+                  key,
+                  MANUAL[key],
+                  'missing',
+                  "slop can't check this: tick it in board settings once it's done",
+                  settings,
+                ),
     );
   }
   return items;
@@ -303,7 +490,14 @@ const minutesUnreacted = (glob: Glob, now: string): number | null => {
   if (run === undefined || run.state !== 'watching') return null;
   const head = glob.pr?.headSha ?? null;
   const checks = glob.headChecks;
-  if (head === null || checks === null || checks.sha !== head || checks.state !== 'failed' || checks.at === undefined) return null;
+  if (
+    head === null ||
+    checks === null ||
+    checks.sha !== head ||
+    checks.state !== 'failed' ||
+    checks.at === undefined
+  )
+    return null;
   // Red because the base branch is: nothing for the routine to push.
   if (checks.inheritedFrom !== undefined) return null;
   const since = Math.max(Date.parse(checks.at), Date.parse(run.lastProgressAt ?? checks.at));
@@ -332,7 +526,9 @@ const conflictHint = (glob: Glob, now: string): string | null => {
   const waited =
     conflict.requestedAt !== undefined &&
     (Date.parse(now) - Date.parse(conflict.requestedAt)) / 60_000 >= CONFLICT_FIX_MINUTES;
-  return glob.implementer !== null || waited ? `${hint}. Resolve locally: sstor --glob ${glob.id} --resolve` : hint;
+  return glob.implementer !== null || waited
+    ? `${hint}. Resolve locally: sstor --glob ${glob.id} --take-over`
+    : hint;
 };
 
 /**
@@ -342,10 +538,19 @@ const conflictHint = (glob: Glob, now: string): string | null => {
  */
 export const behindWarning = (glob: Glob): string | null => {
   const behind = glob.behind;
-  if (behind == null || behind.behindBy <= 0 || glob.status !== 'in_progress' || glob.conflict != null) return null;
+  if (
+    behind == null ||
+    behind.behindBy <= 0 ||
+    glob.status !== 'in_progress' ||
+    glob.conflict != null
+  )
+    return null;
   const merges = `${String(behind.behindBy)} merge${behind.behindBy === 1 ? '' : 's'}`;
   const files = behind.files.length;
-  const both = files === 0 ? 'no files changed on both sides' : `${String(files)} file${files === 1 ? '' : 's'} changed on both sides`;
+  const both =
+    files === 0
+      ? 'no files changed on both sides'
+      : `${String(files)} file${files === 1 ? '' : 's'} changed on both sides`;
   return `${behind.base} is ${merges} ahead; ${both}`;
 };
 
@@ -374,9 +579,13 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
   if (minutes < STUCK_MINUTES) return null;
   const head = glob.pr?.headSha ?? null;
   if (head !== null && glob.headChecks?.sha === head && glob.headChecks.state === 'passed') {
-    return 'The sub-gate passed but slop hasn\'t merged it: check the board\'s sub size limit and sensitive paths, or merge it';
+    return "The sub-gate passed but slop hasn't merged it: check the board's sub size limit and sensitive paths, or merge it";
   }
-  if (glob.headChecks === null || glob.headChecks.sha !== head || glob.headChecks.state === 'pending') {
+  if (
+    glob.headChecks === null ||
+    glob.headChecks.sha !== head ||
+    glob.headChecks.state === 'pending'
+  ) {
     return `No sub-gate result after ${String(STUCK_MINUTES)} minutes: is .github/workflows/sub-gate.yml on the base branch?`;
   }
   return null;
@@ -405,7 +614,12 @@ export const checksExplanation = (glob: Glob): ChecksExplanation | null => {
   const inherited = checks.inheritedFrom;
   if (inherited === undefined) return { text: detail, lines, url, inherited: false };
   const since = inherited.since === null ? '' : ` (since ${inherited.since})`;
-  return { text: `${inherited.base} is red${since}: not this glob's change. ${detail}`, lines, url, inherited: true };
+  return {
+    text: `${inherited.base} is red${since}: not this glob's change. ${detail}`,
+    lines,
+    url,
+    inherited: true,
+  };
 };
 
 /** After this long queued, the card says how long (the run may have never started). */
@@ -442,26 +656,42 @@ export const readyStatus = (glob: Glob, reviewSha: string | null = null): ReadyS
   // A fix run in progress is the machine's turn: nothing to show the person until it is done.
   if (run?.state === 'active') return null;
   const stale =
-    reviewSha !== null && reviewSha !== head ? `\nLocal review is from ${reviewSha.slice(0, 7)}, before the latest push.` : '';
+    reviewSha !== null && reviewSha !== head
+      ? `\nLocal review is from ${reviewSha.slice(0, 7)}, before the latest push.`
+      : '';
   if (checks !== null && checks.sha === head && checks.state === 'passed') {
     const merge = `Sames and supers are merged by a person: Merge here or sstor -i ${glob.id} --merge.`;
-    const why = glob.escalation == null ? '' : `\nNeeds a person because: ${glob.escalation.reason}`;
-    return { kind: 'ready', text: 'Merge', tip: `Merge: checks passed at ${head.slice(0, 7)}. ${merge}${why}${stale}` };
+    const why =
+      glob.escalation == null ? '' : `\nNeeds a person because: ${glob.escalation.reason}`;
+    return {
+      kind: 'ready',
+      text: 'Merge',
+      tip: `Merge: checks passed at ${head.slice(0, 7)}. ${merge}${why}${stale}`,
+    };
   }
-  return { kind: 'waiting', text: 'Waiting for checks', tip: `Checks are still running on ${head.slice(0, 7)}.${stale}` };
+  return {
+    kind: 'waiting',
+    text: 'Waiting for checks',
+    tip: `Checks are still running on ${head.slice(0, 7)}.${stale}`,
+  };
 };
 
 export const READINESS_SOURCE = 'readiness';
 const FAILING_PREFIX = 'readiness:';
 export const readinessFailingSource = (key: ReadinessKey): string => `${FAILING_PREFIX}${key}`;
-export const isReadinessFailingSource = (source: string): boolean => source.startsWith(FAILING_PREFIX);
+export const isReadinessFailingSource = (source: string): boolean =>
+  source.startsWith(FAILING_PREFIX);
 
 /**
  * Board setup as notifications, loud only as far as its state warrants: a warning for each item that failed after
  * it worked (clears when it passes), and one dismissible-per-person info line for the items never set up. Unknown and
  * ok items raise nothing.
  */
-export const readinessNotifications = (boardId: number, boardName: string, items: readonly ReadinessItem[]): RaisedNotification[] => {
+export const readinessNotifications = (
+  boardId: number,
+  boardName: string,
+  items: readonly ReadinessItem[],
+): RaisedNotification[] => {
   const link = `/boards/${String(boardId)}/settings#readiness`;
   const raised: RaisedNotification[] = items
     .filter((i) => i.state === 'failing')
@@ -472,7 +702,10 @@ export const readinessNotifications = (boardId: number, boardName: string, items
       title: `${boardName}: ${i.title} is failing`,
       detail: i.detail,
       link,
-      action: { label: i.fix?.label ?? 'Readiness checklist', href: i.fix === null ? link : i.fix.kind === 'link' ? i.fix.href : link },
+      action: {
+        label: i.fix?.label ?? 'Readiness checklist',
+        href: i.fix === null ? link : i.fix.kind === 'link' ? i.fix.href : link,
+      },
       clears: { kind: 'condition' },
     }));
   const missing = items.filter((i) => i.state === 'missing');
