@@ -238,6 +238,32 @@ describe('hotspot service', () => {
     expect((await service.hotspots(boardId, '2026-10-25T00:00:00.000Z')).hotspots).toEqual([]);
   });
 
+  it('ignores a conflict that began before the window and cleared inside it', async () => {
+    await seed(
+      ['s1t1', 's1t2', 's1t3'],
+      [
+        {
+          type: 'ConflictFlagged',
+          globId: 's1t1',
+          at: day(1),
+          actor: null,
+          data: { base: 'main', files: ['old.ts'], since: null },
+        },
+        {
+          type: 'ConflictCleared',
+          globId: 's1t1',
+          at: day(11),
+          actor: null,
+          data: { base: 'main', files: ['old.ts'], by: 'run', kind: 'real' },
+        },
+        ...flagged('s1t2', day(11), ['old.ts']),
+        ...flagged('s1t3', day(12), ['old.ts']),
+      ],
+    );
+    const service = new HotspotService({ store, clock: { now: () => NOW } });
+    expect((await service.hotspots(boardId, NOW)).hotspots).toEqual([]);
+  });
+
   it('is for members only', async () => {
     const service = new HotspotService({ store, clock: { now: () => NOW } });
     expect((await service.view('stranger@example.com', boardId)).ok).toBe(false);
