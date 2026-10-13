@@ -43,19 +43,22 @@ import {
 } from '@/lib/status-line';
 import { categoryOptions, saveCategory, typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
-import { ArtifactsSection } from './artifacts';
-import { DecisionAssessment, DecisionSection } from './decision-section';
-import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
 import type { ArtifactRef } from './artifacts';
 import { ActivityLabel, GroupChip } from './glob-card';
 import { LabelChips, LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
-import { PlanEditor } from './plan-editor';
 import { OversizedGlob, isOversized } from './oversized-glob';
 import { SplitGlob, canSplit } from './split-glob';
-import { GlobDecisions } from './glob-decisions';
 import { GlobTitle } from './glob-title';
-import { ReviewFindings } from './review-findings';
+import { ArtifactsPanel } from './glob-view/artifacts';
+import { ChoicesPanel } from './glob-view/choices';
+import type { GlobViewContext } from './glob-view/context';
+import { DecisionAssessmentPanel, DecisionPanel } from './glob-view/decision';
+import { DeploysPanel } from './glob-view/deploys';
+import { EnvironmentsPanel } from './glob-view/environments';
+import { FindingsPanel } from './glob-view/findings';
+import { PlanSection } from './glob-view/plan';
+import { TestsPanel } from './glob-view/tests';
 import { cn } from '@/lib/utils';
 import { Tip } from './ui/tip';
 import { TypePopover } from './type-popover';
@@ -341,6 +344,17 @@ export const GlobDetail = ({
     } finally {
       setBusy(false);
     }
+  };
+  const ctx: GlobViewContext = {
+    board,
+    glob,
+    busy,
+    onAction,
+    onUpdate,
+    onOpenSection: (target) => {
+      const { section: wanted } = target;
+      if (wanted !== undefined) scrollWhenReady(() => findSection(document, wanted));
+    },
   };
 
   const begin = (action: Action) => {
@@ -766,7 +780,12 @@ export const GlobDetail = ({
                 {moreActions.length + disabled.length > 0 && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="outline" size="sm" disabled={busy} data-testid="more-actions">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        data-testid="more-actions"
+                      >
                         {moreRunning === null ? (
                           <>
                             More
@@ -866,7 +885,7 @@ export const GlobDetail = ({
                     }
                   >
                     {oversized ? 'Start as it is' : 'Continue'}
-                   </Button>
+                  </Button>
                 </div>
               )}
               {confirmingRetrigger && (
@@ -891,8 +910,8 @@ export const GlobDetail = ({
                       })
                     }
                   >
-                   Retry anyway
-                   </Button>
+                    Retry anyway
+                  </Button>
                 </div>
               )}
               {readyPending && (
@@ -1024,78 +1043,39 @@ export const GlobDetail = ({
         </div>
 
         <Anchor name="plan">
-          <PlanEditor
-            globId={glob.id}
-            startExpanded={new URLSearchParams(window.location.search).get('section') === 'plan'}
-            onHistory={
-              glob.status === 'signed_off'
-                ? undefined
-                : () => setArtifact({ kind: 'plan', label: '' })
-            }
-          />
+          <PlanSection ctx={ctx} onHistory={() => setArtifact({ kind: 'plan', label: '' })} />
         </Anchor>
 
         <Anchor name="decision">
-          {decision && (
-            <DecisionSection
-              board={board}
-              glob={glob}
-              busy={busy}
-              onDecide={onDecide}
-              onUpdate={onUpdate}
-              applied={applied}
-            />
-          )}
+          <DecisionPanel ctx={ctx} onDecide={onDecide} applied={applied} />
         </Anchor>
 
-        {!decision && (
-          <>
-            <Anchor name="deploys">
-              <DeploysSection board={board} glob={glob} />
-            </Anchor>
+        <Anchor name="deploys">
+          <DeploysPanel ctx={ctx} />
+        </Anchor>
 
-            <Anchor name="environments">
-              <EnvironmentsSection board={board} glob={glob} />
-            </Anchor>
+        <Anchor name="environments">
+          <EnvironmentsPanel ctx={ctx} />
+        </Anchor>
 
-            <Anchor name="tests">
-              <TestsSection glob={glob} />
-            </Anchor>
-          </>
-        )}
+        <Anchor name="tests">
+          <TestsPanel ctx={ctx} />
+        </Anchor>
 
         <Anchor name="artifacts">
-          <ArtifactsSection
-            globId={glob.id}
-            boardId={glob.boardId}
-            artifacts={glob.artifacts ?? []}
-            signedOff={glob.status === 'signed_off'}
-            selected={artifact}
-            onSelect={setArtifact}
-          />
+          <ArtifactsPanel ctx={ctx} selected={artifact} onSelect={setArtifact} />
         </Anchor>
 
         <Anchor name="choices">
-          <GlobDecisions boardId={glob.boardId} globId={glob.id} />
+          <ChoicesPanel ctx={ctx} />
         </Anchor>
 
         <Anchor name="assessment">
-          {decision && decisionOf(glob)?.origin.kind !== 'replacement' && (
-            <DecisionAssessment
-              glob={glob}
-              canSuggest={board.role === 'admin' || board.role === 'po'}
-              onApply={setApplied}
-            />
-          )}
+          <DecisionAssessmentPanel ctx={ctx} onApply={setApplied} />
         </Anchor>
 
         <Anchor name="findings">
-          {!decision && (
-            <ReviewFindings
-              globId={glob.id}
-              startOpen={new URLSearchParams(window.location.search).get('section') === 'findings'}
-            />
-          )}
+          <FindingsPanel ctx={ctx} />
         </Anchor>
 
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
