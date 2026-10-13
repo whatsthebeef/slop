@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { AgentSetCommitService, isAgentSetGlobOpen } from '../src/app/agent-set-commit-service.js';
 import { BoardService } from '../src/app/board-service.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
-import { agentSetManifest, managedRepoFiles, parseAgentSetManifest } from '../src/domain/agent-set.js';
+import { agentSetManifest, agentSetVersionOfTitle, isAgentSetGlob, managedRepoFiles, parseAgentSetManifest } from '../src/domain/agent-set.js';
 import type { Result } from '../src/domain/errors.js';
 import { agentSetCommitEffect } from '../src/domain/events.js';
+import * as machine from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
+import { dev, glob as globFixture } from './fixtures.js';
 import type { Catalog, CatalogAgentSet } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -183,5 +185,34 @@ describe('agent set files for the repo', () => {
     );
     expect(parseAgentSetManifest('nope')).toBeNull();
     expect(parseAgentSetManifest('{"version":"3"}')).toBeNull();
+  });
+});
+
+describe("slop's agent-set glob in the machine", () => {
+  const agentSet = (patch: Partial<Glob> = {}): Glob =>
+    globFixture({ title: 'Agent set v58', category: 'task', type: 'same', status: 'in_progress', implementer: 'slop', runs: [], pr: { number: 3, state: 'draft', headSha: 'a' }, ...patch });
+  const passed = { sha: 'a', state: 'passed' } as const;
+
+  it('is recognised by its title and implementer, not by any other glob', () => {
+    expect(isAgentSetGlob(agentSet())).toBe(true);
+    expect(isAgentSetGlob(agentSet({ implementer: 'dev@example.com' }))).toBe(false);
+    expect(isAgentSetGlob(agentSet({ title: 'Agent set vNext' }))).toBe(false);
+    expect(agentSetVersionOfTitle('Agent set v58')).toBe(58);
+    expect(agentSetVersionOfTitle('Agent set')).toBeNull();
+  });
+
+  it('offers review, mark ready and delete while the PR is a draft: no pick up, hand to routine or start again', () => {
+    expect(machine.allowedActions(agentSet(), dev)).toEqual(['review_now', 'mark_ready', 'delete']);
+  });
+
+  it('offers merge once the checks passed on the ready PR', () => {
+    const ready = agentSet({ status: 'pr_open', pr: { number: 3, state: 'ready', headSha: 'a' } });
+    expect(machine.allowedActions(ready, dev)).toEqual(['review_now', 'delete']);
+    expect(machine.allowedActions({ ...ready, headChecks: passed }, dev)).toEqual(['review_now', 'merge', 'delete']);
+  });
+
+  it('is marked ready from the board without an implementation record', () => {
+    const step = machine.readyRequested(agentSet(), null, { actor: dev, now: NOW, newRunId: () => 'r', routineOwnerFor: () => '' }, { from: 'board', facts: {} });
+    expect(step.ok && step.value.effects.map((e) => e.kind)).toEqual(['mark_pr_ready']);
   });
 });

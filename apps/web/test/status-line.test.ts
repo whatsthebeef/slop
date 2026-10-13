@@ -155,8 +155,17 @@ describe('activity label', () => {
     const later = new Date(Date.parse(NOW) + 30 * 60_000).toISOString();
     const picked = view({ status: 'in_progress', implementer: 'dev@example.com', updatedAt: NOW, currentRun: null });
     expect(activityLabel(picked, NOW)).toBeNull();
-    expect(activityLabel(picked, later)).toMatchObject({ kind: 'picked_up', text: 'Picked up, no session yet' });
+    expect(activityLabel(picked, later)).toMatchObject({ kind: 'picked_up', text: 'Picked up, no routine run' });
     expect(activityLabel({ ...picked, ...live('active') }, later)?.kind).toBe('working');
+  });
+
+  it("labels slop's agent-set glob by what slop did, not as picked up with no session", () => {
+    const later = new Date(Date.parse(NOW) + 30 * 60_000).toISOString();
+    const agentSet = view({ title: 'Agent set v58', category: 'task', type: 'same', status: 'in_progress', implementer: 'slop', updatedAt: NOW, currentRun: null });
+    expect(activityLabel(agentSet, later)).toMatchObject({ kind: 'agent_set', text: "Waiting for slop's commit" });
+    const open = { ...agentSet, status: 'pr_open' as const, pr: { number: 3, state: 'ready' as const, headSha: head }, headChecks: { sha: head, state: 'passed' as const } };
+    expect(activityLabel(open, later)).toMatchObject({ kind: 'agent_set', text: 'Slop committed agent set v58: review and merge' });
+    expect(activityLabel({ ...open, headChecks: { sha: head, state: 'failed' as const } }, later)).toBeNull();
   });
 
   it('puts merging over checks over the run', () => {

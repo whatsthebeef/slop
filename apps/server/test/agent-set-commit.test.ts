@@ -113,6 +113,7 @@ describe('the commit_agent_set executor', () => {
 
   /** A host holding a branch: its manifest is the one committed last (or `previous`). */
   const setup = (prepared: AgentSetPrepared, previous: string | null, current: Glob | null = glob) => {
+    const readied: string[] = [];
     const commits: { branch: string; files: readonly BranchFile[]; deletions: readonly string[]; message: string }[] = [];
     let manifest = previous;
     const host = fakeCodeHost({
@@ -123,9 +124,9 @@ describe('the commit_agent_set executor', () => {
         return Promise.resolve({ sha: 'c1', changed: true });
       },
     });
-    const run = agentSetExecutors({ prepare: () => Promise.resolve(prepared) }, host, () => Promise.resolve(current)).commit_agent_set;
+    const run = agentSetExecutors({ prepare: () => Promise.resolve(prepared) }, host, () => Promise.resolve(current), (id) => Promise.resolve(readied.push(id))).commit_agent_set;
     if (run === undefined) throw new Error('no executor');
-    return { commits, run: () => run(agentSetCommitEffect(15), null, { globs: undefined as never }) };
+    return { commits, readied, run: () => run(agentSetCommitEffect(15), null, { globs: undefined as never }) };
   };
 
   it('commits the files and the manifest to the glob branch, removes what the old manifest listed, and ends with the trailer', async () => {
@@ -145,6 +146,15 @@ describe('the commit_agent_set executor', () => {
     expect(commit?.message).toContain('from v41 to v42');
     expect(commit?.message.trimEnd().split('\n').at(-1)).toBe('Slop-Agent-Set: 42');
     expect(JSON.parse(commit?.files.at(-1)?.content ?? '')).toMatchObject({ board: 15, version: 42 });
+  });
+
+  it('marks the draft PR ready after committing, and not when it is already ready', async () => {
+    const draft = setup(ready(42), null);
+    await draft.run();
+    expect(draft.readied).toEqual(['s15t9']);
+    const open = setup(ready(42), null, { ...glob, pr: { number: 4, state: 'ready', headSha: 'a' } });
+    await open.run();
+    expect(open.readied).toEqual([]);
   });
 
   it('does nothing the second time: the branch manifest already says the version', async () => {

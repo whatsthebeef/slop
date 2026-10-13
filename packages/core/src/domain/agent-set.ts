@@ -1,3 +1,4 @@
+import type { Glob } from './types.js';
 import { agentSetKind } from './knowledge.js';
 import type { KnowledgeKind, KnowledgeLayer } from './knowledge.js';
 
@@ -9,6 +10,24 @@ import type { KnowledgeKind, KnowledgeLayer } from './knowledge.js';
  * A catalog file with no board row is served as the catalog has it, so catalog changes reach
  * every board without anyone merging.
  */
+/** Who implements slop's own agent-set globs: slop itself, never a person or a routine. */
+export const AGENT_SET_IMPLEMENTER = 'slop';
+
+const AGENT_SET_TITLE = /^Agent set v(\d+)$/;
+
+/** The version in an agent-set glob's title (`Agent set vN`); null for any other title. */
+export const agentSetVersionOfTitle = (title: string): number | null => {
+  const match = AGENT_SET_TITLE.exec(title);
+  return match?.[1] === undefined ? null : Number(match[1]);
+};
+
+/**
+ * Whether the glob is slop's own "Agent set vN" glob: slop commits the set to its branch and nobody works on it, so it
+ * has no run or session. Recognised from fields every reader has, with no store lookup.
+ */
+export const isAgentSetGlob = (glob: Pick<Glob, 'title' | 'implementer' | 'category' | 'type'>): boolean =>
+  glob.category === 'task' && glob.type === 'same' && glob.implementer === AGENT_SET_IMPLEMENTER && agentSetVersionOfTitle(glob.title) !== null;
+
 export const BOARD_RULES_HEADING = '## Board rules';
 
 /** Which kinds take an overlay: markdown agent files append one, settings merge one as JSON. */
