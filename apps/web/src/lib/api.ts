@@ -99,6 +99,8 @@ export interface BoardView extends Board {
   readonly role: Role;
   /** Globs on the board waiting on a person (from /api/me only). */
   readonly attention?: number;
+  /** Due human steps on the board that are yours to do (from /api/me only). */
+  readonly yourTurn?: number;
   /** Globs on the board with a routine run in progress (from /api/me only). */
   readonly running?: number;
   /** Your supers in Doing on the board (from /api/me only); a person drives them, so they aren't runs. */

@@ -12,6 +12,7 @@ import {
   Reviews,
   Running,
   Supers,
+  YourTurn,
   useSessionWrite,
 } from '@/components/board-bar';
 import { NewBoardForm } from '@/components/new-board';
@@ -145,6 +146,7 @@ export const BoardsPage = () => {
                     <Running count={b.running ?? 0} />
                     <Supers count={b.supers ?? 0} />
                     <Attention count={b.attention ?? 0} />
+                    <YourTurn count={b.yourTurn ?? 0} />
                     {LABEL_NAMES.map((name) => (
                       <Reviews key={name} name={name} count={b.reviews?.[name] ?? 0} />
                     ))}

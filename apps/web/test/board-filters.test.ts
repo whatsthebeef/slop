@@ -7,6 +7,7 @@ import {
   parseFilters,
   toggleOption,
   writeFilters,
+  yourTurnCount,
   BOARD_FILTERS,
 } from '../src/lib/board-filters';
 import { glob } from '../../../packages/core/test/fixtures';
@@ -116,5 +117,46 @@ describe('board filters', () => {
     expect(toggleOption(category, 'bug', 'feature')).toBe('feature,bug');
     expect(toggleOption(category, 'feature,bug', 'feature')).toBe('bug');
     expect(toggleOption(category, 'bug', 'bug')).toBe('');
+  });
+
+  describe('human step filters', () => {
+    const step = (patch: Record<string, unknown>) => ({ id: 'x', kind: 'merge', title: 'T', state: 'due', who: 'anyone', due: 'now', blocks: [], ...patch });
+    const viewer = { email: 'me@x.com', role: 'admin' as const };
+    const withSteps = (...steps: Record<string, unknown>[]) => view({ humanSteps: steps as never });
+
+    it('Your turn shows only cards with a step due for the viewer', () => {
+      const values = parse('yourTurn=1');
+      expect(matchesFilters(withSteps(step({ who: 'me@x.com' })), values, viewer)).toBe(true);
+      expect(matchesFilters(withSteps(step({ who: 'other@x.com' })), values, viewer)).toBe(false);
+      expect(matchesFilters(withSteps(step({ who: 'me@x.com', state: 'pending' })), values, viewer)).toBe(false);
+      expect(matchesFilters(withSteps(step({ who: 'me@x.com' })), values, undefined)).toBe(false);
+      expect(matchesFilters(view({}), values, viewer)).toBe(false);
+    });
+
+    it('Human steps shows pending and due, with the kind refinement', () => {
+      const pending = withSteps(step({ kind: 'rollout', state: 'pending' }));
+      const done = withSteps(step({ state: 'done' }));
+      expect(matchesFilters(pending, parse('human=all'), viewer)).toBe(true);
+      expect(matchesFilters(done, parse('human=all'), viewer)).toBe(false);
+      expect(matchesFilters(pending, parse('human=rollout'), viewer)).toBe(true);
+      expect(matchesFilters(pending, parse('human=merge'), viewer)).toBe(false);
+      expect(parse('human=bogus')).toEqual(defaultFilters());
+    });
+
+    it('round-trips through the URL and combines with the other filters', () => {
+      const values = parse('yourTurn=1&human=rollout&id=foo');
+      expect(values).toMatchObject({ yourTurn: '1', human: 'rollout', id: 'foo' });
+      expect(parse(writeFilters(new URLSearchParams(), values).toString())).toEqual(values);
+      const g = view({ title: 'foo', humanSteps: [step({ kind: 'rollout', who: 'me@x.com' })] as never });
+      expect(matchesFilters(g, values, viewer)).toBe(true);
+      expect(matchesFilters({ ...g, title: 'bar', id: 'zz' }, values, viewer)).toBe(false);
+      expect(matchesFilters({ ...g, category: 'decision' }, parse('yourTurn=1'), viewer)).toBe(false);
+    });
+
+    it('counts the due steps that are the viewer\'s', () => {
+      const globs = [withSteps(step({ who: 'me@x.com' }), step({ who: 'anyone' })), withSteps(step({ who: 'o@x.com' })), withSteps(step({ who: 'me@x.com', state: 'pending' }))];
+      expect(yourTurnCount(globs, viewer)).toBe(2);
+      expect(yourTurnCount([], viewer)).toBe(0);
+    });
   });
 });
