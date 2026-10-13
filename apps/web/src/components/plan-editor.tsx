@@ -4,11 +4,22 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import { copyOrSelect, planBaseline, planText, planVersionLine } from '@/lib/plan-text';
-import { MarkdownView } from '@/components/markdown-view';
+import { CollapsibleMarkdown } from '@/components/markdown-view';
 import { useToast } from '@/toast';
 
 /** plan.md for a glob: what the implementer works from. Every save is a new version. */
-export const PlanEditor = ({ globId, summary, onHistory }: { globId: string; summary: string; onHistory?: () => void }) => {
+export const PlanEditor = ({
+  globId,
+  summary,
+  onHistory,
+  startExpanded = false,
+}: {
+  globId: string;
+  summary: string;
+  onHistory?: () => void;
+  /** A deep link to the plan section opens the preview expanded. */
+  startExpanded?: boolean;
+}) => {
   const client = useQueryClient();
   const toast = useToast();
   const plan = useQuery({ queryKey: ['plan', globId], queryFn: () => api.plan(globId) });
@@ -43,6 +54,13 @@ export const PlanEditor = ({ globId, summary, onHistory }: { globId: string; sum
 
   const value = planText(draft, saved, summary);
   const area = useRef<HTMLTextAreaElement>(null);
+  // The editor grows with its content instead of scrolling inside itself.
+  useEffect(() => {
+    const el = area.current;
+    if (el === null) return;
+    el.style.height = 'auto';
+    el.style.height = `${String(el.scrollHeight)}px`;
+  }, [value, editing]);
   const copy = async () => {
     const ok = await copyOrSelect(value, navigator.clipboard, () => area.current?.select());
     toast(ok ? 'Copied' : 'Could not copy; the text is selected, press Ctrl+C');
@@ -73,12 +91,12 @@ export const PlanEditor = ({ globId, summary, onHistory }: { globId: string; sum
       </div>
       {!editing ? (
         <div onDoubleClick={() => setEditing(true)}>
-          <MarkdownView content={value} />
+          <CollapsibleMarkdown content={value} startExpanded={startExpanded} />
         </div>
       ) : (
         <Textarea
           ref={area}
-          className='min-h-40 font-mono text-xs'
+          className='min-h-40 resize-none overflow-hidden font-mono text-xs'
           value={value}
           placeholder='What to build, and "Done when:" lines…'
           onChange={(e) => edit(e.target.value)}

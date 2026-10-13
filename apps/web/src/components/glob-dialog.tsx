@@ -709,6 +709,7 @@ export const GlobDetail = ({
           <PlanEditor
             globId={glob.id}
             summary={glob.summary}
+            startExpanded={new URLSearchParams(window.location.search).get('section') === 'plan'}
             onHistory={glob.status === 'signed_off' ? undefined : () => setArtifact({ kind: 'plan', label: '' })}
           />
 
