@@ -289,7 +289,8 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
   const waiting: Waiting[] = [];
   const named = (action: Action): Pick<Waiting, 'action' | 'label' | 'icon'> => {
     const { label, icon } = actionPresentation(action, glob);
-    return { action, label, icon };
+    // Merge can't be pressed here (failed checks, a conflict), so it isn't "Merge when checks pass".
+    return { action, label: action === 'merge' ? 'Merge' : label, icon };
   };
   if (
     glob.status === 'pr_open' &&

@@ -125,7 +125,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       const checks = steps.some((s) => s.kind === 'checks' && isInFlight(s));
       return {
         holder: 'waiting',
-        text: armed && checks ? 'merging when checks pass' : move.reason,
+        text: armed && checks ? `merging when checks pass${glob.pr?.headSha == null ? '' : ` · ${glob.pr.headSha.slice(0, 7)}`}` : move.reason,
         tip: armed && checks
           ? 'Slop merges the PR as soon as the checks on its head pass. If they fail or the PR conflicts, it stops and says why. Cancel merge stops it.'
           : `Waiting: ${move.reason}`,
