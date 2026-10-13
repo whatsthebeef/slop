@@ -22,7 +22,7 @@ import { knowledgePageExecutors } from './knowledge-page-executors.js';
 import { suggestExecutors } from './suggest-executors.js';
 import { agentSetExecutors, readCommittedAgentSetVersion } from './agent-set-executors.js';
 import { mountMcp } from './mcp/server.js';
-import { readyGate } from './ready-gate.js';
+import { mergeGate, readyGate } from './ready-gate.js';
 import { GitHub } from './github/client.js';
 import { AppCredentialsStore, fileSlot } from './github/credentials.js';
 import { githubDeliveryHandler } from './github/events.js';
@@ -443,6 +443,7 @@ const app = createApp({
   auth,
   decisions: decisionGlobs,
   readyGate: readyGate(github, globs, boards),
+  mergeGate: mergeGate(github, globs, boards),
   links,
   boards,
   globs,
@@ -529,6 +530,7 @@ mountMcp(app, {
   auth,
   suggest: suggestService,
   readyGate: readyGate(github, globs, boards),
+  mergeGate: mergeGate(github, globs, boards),
   boards,
   globs,
   deploys,

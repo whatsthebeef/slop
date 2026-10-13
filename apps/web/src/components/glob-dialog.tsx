@@ -73,6 +73,7 @@ const ACTION_TIPS: Partial<Record<Action, string>> = {
     'An independent AI reviewer reads the change as it would land on main and posts its findings on the glob and the PR. It never blocks merging.',
   start_anyway:
     'Starts now, before what it waits for has merged; its branch will lack those changes',
+  cancel_merge: 'Stops waiting: the PR stays open and Merge comes back',
   merge_continue:
     "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
   mark_ready:

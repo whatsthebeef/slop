@@ -205,10 +205,12 @@ describe("slop's agent-set glob in the machine", () => {
     expect(machine.allowedActions(agentSet(), dev)).toEqual(['review_now', 'mark_ready', 'delete']);
   });
 
-  it('offers merge once the checks passed on the ready PR', () => {
+  it('offers merge on the ready PR (it arms while the checks run), and cancel merge once armed', () => {
     const ready = agentSet({ status: 'pr_open', pr: { number: 3, state: 'ready', headSha: 'a' } });
-    expect(machine.allowedActions(ready, dev)).toEqual(['review_now', 'delete']);
+    expect(machine.allowedActions(ready, dev)).toEqual(['review_now', 'merge', 'delete']);
     expect(machine.allowedActions({ ...ready, headChecks: passed }, dev)).toEqual(['review_now', 'merge', 'delete']);
+    expect(machine.allowedActions({ ...ready, mergeMode: 'when_green' }, dev)).toEqual(['review_now', 'cancel_merge', 'delete']);
+    expect(machine.allowedActions({ ...ready, headChecks: { sha: 'a', state: 'failed' } }, dev)).toEqual(['review_now', 'delete']);
   });
 
   it('is marked ready from the board without an implementation record', () => {

@@ -226,7 +226,12 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
   // QA and PO can't take these actions at all, so a reason would mislead them.
   if (role === 'qa' || role === 'po') return [];
   const waiting: Waiting[] = [];
-  if (glob.status === 'pr_open' && glob.type !== 'sub' && !actions.includes('merge')) {
+  if (
+    glob.status === 'pr_open' &&
+    glob.type !== 'sub' &&
+    !actions.includes('merge') &&
+    !machine.isMergeArmed(glob)
+  ) {
     const head = glob.pr?.headSha ?? null;
     const checks = glob.headChecks;
     const wait: Pick<Waiting, 'tip' | 'why' | 'running'> =
@@ -358,6 +363,15 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     head !== null &&
     checks?.sha === head &&
     (checks.state === 'passed' || checks.state === 'failed');
+  // Merge was pressed before the checks passed: the human step is done and slop holds the ball.
+  if (machine.isMergeArmed(glob)) {
+    return {
+      kind: 'merging',
+      text: 'Merging when checks pass',
+      tip: 'Slop merges the PR as soon as the checks on its head pass. If they fail or the PR conflicts, it stops and says why. Cancel merge is in the More menu.',
+      spinning: !checksSettled,
+    };
+  }
   if (
     glob.status === 'pr_open' &&
     glob.pr?.state === 'ready' &&
@@ -390,7 +404,7 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     if (glob.status === 'in_progress' || glob.status === 'implementing') {
       return {
         kind: 'agent_set',
-        text: "Waiting for slop's commit",
+        text: `Committing agent set v${String(version)}`,
         tip: 'Slop commits the agent set to this branch shortly after the board changes it, then marks the PR ready. Nobody works on it.',
         spinning: false,
       };

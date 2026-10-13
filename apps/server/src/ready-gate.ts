@@ -1,5 +1,5 @@
 import type { BoardService, GlobService, Result } from '@slop/core';
-import { err, ok } from '@slop/core';
+import { AGENT_SET_MANIFEST_PATH, agentSetVersionOfTitle, err, isAgentSetGlob, ok, parseAgentSetManifest } from '@slop/core';
 import type { CodeHost } from './codehost.js';
 import { repoOf } from './codehost.js';
 
@@ -23,11 +23,13 @@ export type ReadyGate = (email: string, id: string) => Promise<Result<ReadyCheck
 /**
  * The check before a PR is marked ready: a branch that conflicts with its base is refused (a conflicted PR runs no
  * checks, so nothing would ever tell the run), a branch only behind its base is allowed with a warning, and a host that
- * can't say after a few tries is trusted: the post-ready conflict check catches it.
+ * can't say after a few tries is trusted: the post-ready conflict check catches it. Slop's own "Agent set vN" glob is
+ * ready only once its branch holds the manifest for version N: slop's commit is the whole change, so before it lands
+ * there is nothing to review (the commit job marks it ready itself, after committing).
  */
 export const readyGate =
   (
-    host: Pick<CodeHost, 'configured' | 'conflictState' | 'conflictFiles' | 'behindBase'>,
+    host: Pick<CodeHost, 'configured' | 'conflictState' | 'conflictFiles' | 'behindBase' | 'readFile'>,
     globs: Pick<GlobService, 'peek'>,
     boards: Pick<BoardService, 'get'>,
     wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -42,6 +44,21 @@ export const readyGate =
     const repo = repoOf(member.value.board);
     if (repo === null) return ok({});
     const prNumber = glob.pr.number;
+    if (isAgentSetGlob(glob)) {
+      const version = agentSetVersionOfTitle(glob.title);
+      // Fails closed: a branch that can't be read can't be shown to hold the commit.
+      const committed = await host
+        .readFile(repo, glob.id, AGENT_SET_MANIFEST_PATH)
+        .then((text) => parseAgentSetManifest(text ?? '')?.version ?? null, () => null);
+      if (committed !== version) {
+        return err({
+          code: 'invalid_transition',
+          message: `slop hasn't committed agent set v${String(version)} yet`,
+          status: glob.status,
+          allowedActions: [],
+        });
+      }
+    }
     try {
       let state = await host.conflictState(repo, prNumber);
       for (let attempt = 1; state === 'unknown' && attempt < UNKNOWN_ATTEMPTS; attempt++) {
@@ -70,4 +87,36 @@ export const readyGate =
       // The host being down is not the branch's fault: the post-ready check follows up.
     }
     return ok({});
+  };
+
+export type MergeGate = (email: string, id: string) => Promise<Result<null>>;
+
+/**
+ * The check before a merge is requested: an agent-set PR whose diff is empty (slop's commit never landed) is refused,
+ * since merging it would land nothing. Anything else is left to the machine.
+ */
+export const mergeGate =
+  (
+    host: Pick<CodeHost, 'configured' | 'diffSummary'>,
+    globs: Pick<GlobService, 'peek'>,
+    boards: Pick<BoardService, 'get'>,
+  ): MergeGate =>
+  async (email, id) => {
+    const glob = await globs.peek(id);
+    if (glob?.pr?.headSha == null || !host.configured || !isAgentSetGlob(glob)) return ok(null);
+    const member = await boards.get(email, glob.boardId);
+    if (!member.ok) return member;
+    const repo = repoOf(member.value.board);
+    if (repo === null) return ok(null);
+    const empty = await host.diffSummary(repo, glob.pr.headSha).then(
+      (diff) => diff.files.length === 0,
+      () => false,
+    );
+    if (!empty) return ok(null);
+    return err({
+      code: 'invalid_transition',
+      message: `slop hasn't committed agent set v${String(agentSetVersionOfTitle(glob.title))} yet`,
+      status: glob.status,
+      allowedActions: [],
+    });
   };

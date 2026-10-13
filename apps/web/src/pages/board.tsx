@@ -17,7 +17,7 @@ import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/l
 import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
-import { runCardAction } from '@/lib/card-pending';
+import { mergeOutcomeText, runCardAction } from '@/lib/card-pending';
 import type { CardPending } from '@/lib/card-pending';
 import { activeCount, matchesFilters, parseFilters, writeFilters } from '@/lib/board-filters';
 import { browserStore, clearFilterMemory, hasFilterParams, loadFilterMemory, saveFilterMemory } from '@/lib/board-filter-memory';
@@ -390,7 +390,9 @@ export const BoardPage = () => {
     // Copied before the request: browsers refuse clipboard writes once the click's user gesture has passed.
     const finish = copyCommand(action, glob.id);
     return mutation.mutateAsync(() => api.action(glob.id, path, glob.version)).then(
-      async () => {
+      async (result) => {
+        const said = result === null ? null : mergeOutcomeText(action, result);
+        if (said !== null) toast(said);
         await finish();
         return true;
       },

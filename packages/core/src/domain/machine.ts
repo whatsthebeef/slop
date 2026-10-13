@@ -105,6 +105,8 @@ export type Action =
   | 'make_super'
   /** Supers: squash-merge what's done and keep going on the same glob and branch. */
   | 'merge_continue'
+  /** Disarm "merge when checks pass". */
+  | 'cancel_merge'
   /** Supers, from the board: ask slop to mark the draft PR ready (as the `mark_ready` tool does). */
   | 'mark_ready'
   /** Decision globs: choose an outcome (accept, retarget, needs work, reject). */
@@ -886,10 +888,12 @@ export const conflictFound = (
 ): Result<Transition> => {
   if (!hasOpenPr(glob) || glob.conflict?.base === found.base) return unchanged(glob);
   const conflict: OpenConflict = { ...found, at: ctx.now };
-  return new Builder(glob, ctx)
+  const b = new Builder(glob, ctx)
     .set({ conflict })
-    .event('ConflictFlagged', { base: found.base, files: [...found.files], since: found.since })
-    .done();
+    .event('ConflictFlagged', { base: found.base, files: [...found.files], since: found.since });
+  // A conflicted PR runs no checks: an armed merge would wait for ever.
+  if (isMergeArmed(glob)) b.set({ mergeMode: null }).event('MergeDisarmed', { reason: 'conflict' });
+  return b.done();
 };
 
 /** Whether the glob is in Doing with an open PR: the globs whose distance from the base branch is worth showing. */
@@ -1040,30 +1044,73 @@ export interface MergeOptions {
   readonly facts?: ActionFacts;
 }
 
-/** Rows 14 and 31: the Merge (or Merge and continue) button on a same or super. */
+/** "Merge when checks pass" is armed: the human step is done and slop merges once the head's checks pass. */
+export const isMergeArmed = (glob: Glob): boolean => glob.status === 'pr_open' && glob.mergeMode === 'when_green';
+
+const headChecksPassed = (glob: Glob): boolean =>
+  glob.pr?.headSha != null && glob.headChecks?.sha === glob.pr.headSha && glob.headChecks.state === 'passed';
+
+const headChecksFailed = (glob: Glob): boolean =>
+  glob.pr?.headSha != null && glob.headChecks?.sha === glob.pr.headSha && glob.headChecks.state === 'failed';
+
+/** Why Merge can't be pressed on a ready same or super right now (not armed, no conflict, checks not failed), or null. */
+const mergeBlocker = (glob: Glob): string | null => {
+  if (glob.status !== 'pr_open' || glob.type === 'sub')
+    return 'Only a same or super with a ready PR can be merged';
+  if (glob.mergeMode === 'when_green') return 'Merge is already waiting for the checks to pass';
+  if (glob.conflict != null) return `The PR conflicts with ${glob.conflict.base}`;
+  if (glob.pr?.headSha == null) return 'The PR has no head yet';
+  if (headChecksFailed(glob)) return 'Required checks failed on the current head';
+  return null;
+};
+
+/**
+ * Rows 14 and 31: the Merge (or Merge and continue) button on a same or super. With the head's checks passed it merges
+ * now; with them pending or not reported yet it arms "merge when checks pass" instead (a hand-off to slop), updating a
+ * branch that is behind its base so the checks run on what will merge. Merge and continue waits for passed checks.
+ */
 export const requestMerge = (
   glob: Glob,
   ctx: Context,
   options: MergeOptions = { continue: false },
 ): Result<Transition> => {
   const actor = requireActor(ctx);
-  if (glob.status !== 'pr_open' || glob.type === 'sub') {
-    return invalidTransition(glob, actor, 'Only a same or super with a ready PR can be merged');
-  }
-  const head = glob.pr?.headSha ?? null;
-  if (head === null || glob.headChecks?.sha !== head || glob.headChecks.state !== 'passed') {
-    return invalidTransition(glob, actor, 'Required checks have not passed on the current head');
-  }
+  const blocked = mergeBlocker(glob);
+  if (blocked !== null) return invalidTransition(glob, actor, blocked);
+  const head = glob.pr?.headSha ?? '';
+  const passed = headChecksPassed(glob);
   if (options.continue) {
     if (glob.type !== 'super')
       return invalidTransition(glob, actor, 'Only a super can merge and continue');
+    if (!passed) return invalidTransition(glob, actor, 'Required checks have not passed on the current head');
     if (!recordAtHead(glob, options.facts ?? {}))
       return invalidTransition(glob, actor, RECORD_NOT_AT_HEAD);
+  }
+  if (!passed) {
+    const b = new Builder(glob, ctx)
+      .set({ mergeMode: 'when_green' })
+      .event('MergeArmed', { sha: head });
+    if (glob.behind != null)
+      b.effect({ kind: 'update_branch', globId: glob.id, generation: glob.generation, sha: head });
+    // Nothing reported for this head yet (a lost webhook): read it now, so a settled result isn't waited for in vain.
+    else if (glob.headChecks?.sha !== head)
+      b.effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+    return b.done();
   }
   return new Builder(glob, ctx)
     .set({ mergeMode: options.continue ? 'continue' : null })
     .status('merging', options.continue ? { mode: 'continue' } : {})
     .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
+    .done();
+};
+
+/** Cancel merge: disarms "merge when checks pass". */
+export const cancelMerge = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (!isMergeArmed(glob)) return invalidTransition(glob, actor, 'Merge is not waiting for checks');
+  return new Builder(glob, ctx)
+    .set({ mergeMode: null })
+    .event('MergeDisarmed', { reason: 'cancelled' })
     .done();
 };
 
@@ -1920,6 +1967,20 @@ export const checksCompleted = (
       ...(failure !== undefined && { failure: failureSummary(failure) }),
       ...(inherited !== null && { inheritedFrom: inherited.base }),
     });
+  // Merge is armed: the head's checks decide whether slop merges now or hands the failure back.
+  if (isMergeArmed(glob)) {
+    if (checks.conflict !== undefined || !checks.passed) {
+      return b
+        .set({ mergeMode: null })
+        .event('MergeDisarmed', { reason: checks.conflict !== undefined ? 'conflict' : 'checks failed' })
+        .done();
+    }
+    return b
+      .set({ mergeMode: null })
+      .status('merging')
+      .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: checks.sha })
+      .done();
+  }
   // Slop updated the branch while merging: the checks on the new head decide (rows 12, 14, 16).
   if (glob.status === 'merging') {
     if (checks.conflict !== undefined) {
@@ -2541,15 +2602,11 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (!restricted && !hasLiveRun(glob) && canRetryMerge(glob)) actions.push('retry_merge');
   if (canRequestConflictFix(glob)) actions.push('resolve_conflict');
   if (glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
-  if (
-    glob.status === 'pr_open' &&
-    glob.type !== 'sub' &&
-    glob.pr?.headSha != null &&
-    glob.headChecks?.sha === glob.pr.headSha &&
-    glob.headChecks.state === 'passed'
-  ) {
+  if (isMergeArmed(glob)) {
+    if (!restricted) actions.push('cancel_merge');
+  } else if (mergeBlocker(glob) === null) {
     actions.push('merge');
-    if (recordAtHead(glob, facts)) actions.push('merge_continue');
+    if (headChecksPassed(glob) && recordAtHead(glob, facts)) actions.push('merge_continue');
   }
   if (
     !restricted &&
@@ -2587,12 +2644,9 @@ const agentSetActions = (glob: Glob, actor: Actor): Action[] => {
     glob.pr?.state === 'draft'
   )
     actions.push('mark_ready');
-  if (
-    glob.status === 'pr_open' &&
-    glob.pr?.headSha != null &&
-    glob.headChecks?.sha === glob.pr.headSha &&
-    glob.headChecks.state === 'passed'
-  ) {
+  if (isMergeArmed(glob)) {
+    if (!restricted) actions.push('cancel_merge');
+  } else if (mergeBlocker(glob) === null) {
     actions.push('merge');
   }
   actions.push('delete');

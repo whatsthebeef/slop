@@ -203,7 +203,7 @@ describe('activity label', () => {
     });
     expect(activityLabel(agentSet, later)).toMatchObject({
       kind: 'agent_set',
-      text: "Waiting for slop's commit",
+      text: 'Committing agent set v58',
     });
     const open = {
       ...agentSet,
@@ -224,6 +224,14 @@ describe('activity label', () => {
     const base = prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') });
     expect(activityLabel(base, NOW)?.kind).toBe('checks');
     expect(activityLabel({ ...base, status: 'merging' }, NOW)?.text).toBe('Merging');
+  });
+
+  it('shows an armed merge as a machine step: merging when checks pass, spinning while they run, no wait line', () => {
+    const armed = prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'], ...live('watching') });
+    expect(activityLabel(armed, NOW)).toMatchObject({ kind: 'merging', text: 'Merging when checks pass', spinning: true });
+    expect(waitingFor(armed, armed.allowedActions ?? [], 'dev')).toEqual([]);
+    const settled = { ...armed, headChecks: { sha: head, state: 'passed' as const } };
+    expect(activityLabel(settled, NOW)).toMatchObject({ kind: 'merging', spinning: false });
   });
 
   it('puts checks over the run, and says waiting before the checks have started', () => {
