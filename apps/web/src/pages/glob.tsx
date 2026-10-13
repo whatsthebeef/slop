@@ -9,7 +9,7 @@ import { GlobDetail } from '@/components/glob-dialog';
 import { ACTION_PATHS, api, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView } from '@/lib/api';
 import { withGlob } from '@/lib/glob-list';
-import { parseGlobTarget } from '@/lib/glob-section';
+import { labelToOpen, parseGlobTarget } from '@/lib/glob-section';
 import { globKey, globsKey, useLiveBoard } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
 import { useSstorCopy } from '@/components/sstor-notice';
@@ -85,6 +85,8 @@ export const GlobPage = () => {
       board={board.data}
       glob={open}
       initialArtifact={initialArtifact}
+      section={target.section}
+      openLabel={labelToOpen(target)}
       onClose={toBoard}
       onAction={(action: Action, anyway?: boolean) => {
         const path = ACTION_PATHS[action];

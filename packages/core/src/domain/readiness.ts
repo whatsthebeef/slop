@@ -2,7 +2,7 @@ import { failureSummary } from './checks.js';
 import { missingCoreDocNotice } from './core-docs.js';
 import type { CoreDocArea } from './core-docs.js';
 import type { RaisedNotification } from './notifications.js';
-import type { Board, Glob } from './types.js';
+import type { Board, CheckFailure, Glob } from './types.js';
 
 /**
  * Board readiness: what a board needs before slop can run its globs end to end, checked where slop
@@ -76,7 +76,7 @@ export interface ReadinessFacts {
   /** Recent routine failures on the board's globs, newest first. */
   readonly recentFailures: readonly { readonly globId: string; readonly reason: string }[];
   /** Globs whose watching run hasn't reacted to failed checks (see `unreactedCheckFailures`). */
-  readonly unreactedCheckFailures: readonly string[];
+  readonly unreactedCheckFailures: readonly UnreactedCheckFailure[];
 }
 
 /** The action a workflow must run for `@claude` mentions to get a response. */
@@ -241,21 +241,13 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     facts.claudeWorkflow === null
       ? item('claude_workflow', claudeTitle, 'unknown', "slop can't read the repo yet", null)
       : facts.claudeWorkflow
-        ? facts.slopBot !== null && facts.claudeAllowsSlop === false
-          ? item(
-              'claude_workflow',
-              claudeTitle,
-              'missing',
-              `A workflow runs ${CLAUDE_ACTION}, but it ignores slop's @claude comments (merge-conflict requests) because slop's App is not allowed to trigger it. Add this under \`with:\`: allowed_bots: "${facts.slopBot}"`,
-              null,
-            )
-          : item(
-              'claude_workflow',
-              claudeTitle,
-              'ok',
-              `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so @claude comments get a response (it also needs the Claude GitHub App)`,
-              null,
-            )
+        ? item(
+            'claude_workflow',
+            claudeTitle,
+            'ok',
+            `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so people's @claude mentions get a response (it also needs the Claude GitHub App). Conflict fixes run as routines and don't depend on it`,
+            null,
+          )
         : item('claude_workflow', claudeTitle, 'missing', claudeWorkflowFix(repo), {
             kind: 'link',
             label: 'Add the workflow',
@@ -423,6 +415,10 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
         ? facts.recentFailures.filter((f) => /^Routine run never started/.test(f.reason))
         : [];
     const unreacted = key === 'claude_app' ? facts.unreactedCheckFailures[0] : undefined;
+    const seen =
+      unreacted === undefined
+        ? ''
+        : ` at ${unreacted.sha.slice(0, 7)}${unreacted.url === null ? '' : ` (${unreacted.url})`}`;
     const noWorkflow =
       facts.claudeWorkflow === false
         ? ' and the repo has no Claude workflow (see the "Claude workflow" item)'
@@ -449,7 +445,7 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
                 key,
                 MANUAL[key],
                 'failing',
-                `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo${noWorkflow}`,
+                `${unreacted.id}'s checks failed${seen} and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo${noWorkflow}`,
                 settings,
               )
             : facts.ticks[key] === true
@@ -500,22 +496,41 @@ const minutesUnreacted = (glob: Glob, now: string): number | null => {
     return null;
   // Red because the base branch is: nothing for the routine to push.
   if (checks.inheritedFrom !== undefined) return null;
+  // A conflict isn't a failing check, and a failure with no detail (no lines, no link) isn't a real one.
+  if (glob.conflict != null || !hasFailureDetail(checks.failure)) return null;
   const since = Math.max(Date.parse(checks.at), Date.parse(run.lastProgressAt ?? checks.at));
   return (Date.parse(now) - since) / 60_000;
 };
 
-/** Globs whose checks failed on the head and whose watching run hasn't reacted for a while. */
-export const unreactedCheckFailures = (globs: readonly Glob[], now: string): string[] =>
-  globs.filter((g) => (minutesUnreacted(g, now) ?? 0) >= STUCK_MINUTES).map((g) => g.id);
+/** Whether a recorded failure says what failed: the log's first lines or a link to the run. */
+const hasFailureDetail = (failure: CheckFailure | undefined): boolean =>
+  failure !== undefined && (failure.lines.length > 0 || failure.url !== null);
 
-/** How long after asking the Claude GitHub App to resolve a conflict the card suggests resolving it locally. */
-const CONFLICT_FIX_MINUTES = 15;
+/** A glob whose head checks failed for real and whose watching run hasn't reacted: what was seen, and where. */
+export interface UnreactedCheckFailure {
+  readonly id: string;
+  readonly sha: string;
+  readonly url: string | null;
+}
+
+/** Globs whose checks failed on the head (not a conflict) and whose watching run hasn't reacted for a while. */
+export const unreactedCheckFailures = (
+  globs: readonly Glob[],
+  now: string,
+): UnreactedCheckFailure[] =>
+  globs
+    .filter((g) => (minutesUnreacted(g, now) ?? 0) >= STUCK_MINUTES)
+    .map((g) => ({
+      id: g.id,
+      sha: g.headChecks?.sha ?? '',
+      url: g.headChecks?.failure?.url ?? null,
+    }));
 
 /**
  * A conflict flagged on an open PR. A human implementer resolves it locally from the start; for the rest the card
- * suggests that once the Claude GitHub App was asked and the PR still conflicts after a while.
+ * suggests that once a Resolve conflict run gave up and the PR still conflicts.
  */
-const conflictHint = (glob: Glob, now: string): string | null => {
+const conflictHint = (glob: Glob): string | null => {
   const conflict = glob.conflict;
   if (conflict == null) return null;
   const shown = conflict.files.slice(0, 5).join(', ');
@@ -523,10 +538,10 @@ const conflictHint = (glob: Glob, now: string): string | null => {
   const files = conflict.files.length === 0 ? '' : `: ${shown}${more}`;
   const cause = conflict.since === null ? '' : ` since ${conflict.since} merged`;
   const hint = `Conflicts with ${conflict.base}${cause}${files}`;
-  const waited =
-    conflict.requestedAt !== undefined &&
-    (Date.parse(now) - Date.parse(conflict.requestedAt)) / 60_000 >= CONFLICT_FIX_MINUTES;
-  return glob.implementer !== null || waited
+  const run = glob.runs.at(-1);
+  const gaveUp =
+    run?.purpose === 'resolve_conflict' && run.state === 'ended' && run.outcome === 'failed';
+  return glob.implementer !== null || gaveUp
     ? `${hint}. Resolve locally: sstor --glob ${glob.id} --take-over`
     : hint;
 };
@@ -567,7 +582,7 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
     const fix = routineFailureFix(glob.failure.reason);
     if (fix !== null) return fix.fix;
   }
-  const conflict = conflictHint(glob, now);
+  const conflict = conflictHint(glob);
   if (conflict !== null) return conflict;
   const unreacted = minutesUnreacted(glob, now);
   if (unreacted !== null && unreacted >= STUCK_MINUTES) {
@@ -625,13 +640,13 @@ export const checksExplanation = (glob: Glob): ChecksExplanation | null => {
 /** After this long queued, the card says how long (the run may have never started). */
 const QUEUED_NOTICE_MINUTES = 10;
 
-/** `Routine run queued for 25 min: open the session`, once a run has waited a while without calling slop; else null. */
+/** `Machine run queued for 25 min: open the session`, once a run has waited a while without calling slop; else null. */
 export const queuedRunNotice = (glob: Glob, now: string): string | null => {
   const run = glob.runs[glob.runs.length - 1];
   if (run === undefined || run.state !== 'queued') return null;
   const minutes = Math.floor((Date.parse(now) - Date.parse(run.queuedAt)) / 60_000);
   if (minutes < QUEUED_NOTICE_MINUTES) return null;
-  return `Routine run queued for ${String(minutes)} min: ${run.sessionUrl === null ? 'no session yet' : `open the session ${run.sessionUrl}`}`;
+  return `Machine run queued for ${String(minutes)} min: ${run.sessionUrl === null ? 'no session yet' : `open the session ${run.sessionUrl}`}`;
 };
 
 /** What a card says about a ready same or super PR: merge it, or wait for its checks. */

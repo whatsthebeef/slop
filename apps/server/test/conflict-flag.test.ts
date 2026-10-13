@@ -157,28 +157,13 @@ describe('conflicts flagged after a merge', () => {
     expect(await run(clean, 'check_conflict')).toEqual(['done']);
     expect((await current(clean)).conflict ?? null).toBeNull();
 
-    // Resolve conflict asks once, naming both globs; a repeat adds nothing.
+    // Resolve conflict queues a routine run on the glob's branch; nothing is posted on the PR.
     unwrap(await globs.resolveConflict(DEV, open, flagged.version));
-    expect(await run(open, 'request_conflict_fix')).toEqual(['done']);
-    const [comment] = host.comments;
-    expect(host.comments).toHaveLength(1);
-    expect(comment?.pr).toBe(8);
-    for (const text of ['@claude', open, 'Change invoices', merged, 'Add billing', 'src/invoice.ts', 'git merge origin/main', 'lint']) {
-      expect(comment?.body).toContain(text);
-    }
-    const asked = await current(open);
-    expect(asked.conflict?.requestedAt).toBeDefined();
-    expect(unwrap(await globs.resolveConflict(DEV, open, asked.version)).version).toBe(asked.version);
-    expect(await pending(open, 'request_conflict_fix')).toHaveLength(0);
-
-    // The retried effect after a crash finds its marker and posts nothing more.
-    const rows = await database.db.select().from(schema.outbox).where(eq(schema.outbox.globId, open));
-    const request = rows.find((row) => row.kind === 'request_conflict_fix');
-    if (request === undefined) throw new Error('no request effect');
-    const executor = executors.request_conflict_fix;
-    if (executor === undefined) throw new Error('no executor');
-    await executor(request.effect, asked, { globs });
-    expect(host.comments).toHaveLength(1);
+    const queued = await current(open);
+    expect(queued.runs.at(-1)).toMatchObject({ state: 'queued', purpose: 'resolve_conflict' });
+    expect(await pending(open, 'fire_routine')).toHaveLength(1);
+    expect(host.comments).toHaveLength(0);
+    expect(machine.allowedActions(queued, { email: DEV, role: 'admin' })).not.toContain('resolve_conflict');
 
     // A push that fixes it clears the flag.
     await globs.applyEvent(open, (g, ctx) => machine.commitPushed(g, { sha: 'fedcba9876543210', runId: null }, ctx));

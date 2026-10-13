@@ -1,7 +1,7 @@
 import type { Action } from '@slop/core';
 import { copyOrSelect } from '@/lib/plan-text';
 
-/** The sstor command that starts the person's own session after Pick up or Take over; null for any other action. */
+/** The sstor command that starts the person's own session after Pick up; null for any other action. */
 export const sstorCommand = (action: Action, globId: string): string | null => {
   if (action === 'pick_up') return `sstor --glob ${globId}`;
   if (action === 'take_over') return `sstor --glob ${globId} --take-over`;
@@ -24,8 +24,8 @@ export const copySstorCommand = (
 };
 
 /**
- * The command the conflict box shows: Take over for a viewer who can take the glob over, the plain session command for
- * the implementer (who has no Take over). The by-hand `--resolve` helper is only ever offered under "by hand (advanced)".
+ * The command the conflict box shows: Pick up (take_over) for a viewer who can take the glob over, the plain session command for
+ * the implementer (who has no take_over). The by-hand `--resolve` helper is only ever offered under "by hand (advanced)".
  */
 export const conflictCommand = (globId: string, canTakeOver: boolean): string =>
   sstorCommand(canTakeOver ? 'take_over' : 'pick_up', globId) ?? `sstor --glob ${globId}`;

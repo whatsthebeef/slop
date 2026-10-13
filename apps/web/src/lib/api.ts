@@ -822,27 +822,3 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   reopen: 'reopen',
   delete: null,
 };
-
-export const ACTION_LABELS: Record<Action, string> = {
-  start: 'Start',
-  investigate: 'Investigate',
-  review_now: 'Get AI review',
-  start_anyway: 'Start anyway',
-  pick_up: 'Pick up',
-  take_over: 'Take over',
-  retrigger: 'Re-trigger',
-  retry_autofix: 'Retry auto-fix',
-  resolve_conflict: 'Resolve conflict',
-  start_again: 'Start again',
-  merge: 'Merge',
-  retry_merge: 'Retry merge',
-  cancel_merge: 'Cancel merge',
-  deescalate: 'Make it a sub again',
-  make_super: 'Make it a super',
-  merge_continue: 'Merge and continue',
-  mark_ready: 'Mark done (PR ready)',
-  decide: 'Decide',
-  sign_off: 'Sign off',
-  reopen: 'Reopen',
-  delete: 'Delete',
-};

@@ -94,7 +94,7 @@ export type Action =
   | 'retrigger'
   /** A PR whose auto-fix ended without fixing it: a new routine run on the same branch, keeping the PR. */
   | 'retry_autofix'
-  /** A merge conflict with no human implementer: ask the Claude GitHub App, in a PR comment, to resolve it on the same branch. */
+  /** A merge conflict with no human implementer: a routine run merges the base branch into the glob's branch and pushes. */
   | 'resolve_conflict'
   | 'start_again'
   | 'merge'
@@ -185,6 +185,15 @@ export const hasBusyRun = (glob: Glob): boolean => {
     run.purpose !== 'investigate' &&
     (run.state === 'active' || run.state === 'watching')
   );
+};
+
+/**
+ * A run that is doing work: queued or active. A `watching` run only waits for check events, so it doesn't stand in the way
+ * of actions the Claude GitHub App performs (like Fix conflict).
+ */
+export const hasWorkingRun = (glob: Glob): boolean => {
+  const run = currentRun(glob);
+  return run !== null && (run.state === 'queued' || run.state === 'active');
 };
 
 /** Any run that has not ended, including one still queued. */
@@ -801,7 +810,8 @@ const canRetryAutofix = (glob: Glob): boolean => {
     glob.failure !== null &&
     glob.failure.kind === undefined &&
     run?.state === 'ended' &&
-    run.outcome === 'failed'
+    run.outcome === 'failed' &&
+    run.purpose !== 'resolve_conflict'
   );
 };
 
@@ -850,12 +860,15 @@ const hasOpenPr = (glob: Glob): boolean =>
   (glob.pr.state === 'draft' || glob.pr.state === 'ready') &&
   (glob.status === 'pr_open' || glob.status === 'in_progress');
 
-/** A conflict slop could ask the Claude GitHub App to fix: nobody implements the glob, no routine run is live, and it hasn't asked yet. */
+/**
+ * A conflict a routine run could fix: nobody implements the glob and no run is queued or working on it. A watching run
+ * doesn't count as working: Resolve conflict ends it and starts the fix. Allowed again after a failed attempt.
+ */
 const canRequestConflictFix = (glob: Glob): boolean =>
   glob.type !== 'super' &&
   glob.implementer === null &&
-  !hasLiveRun(glob) &&
-  ((hasOpenPr(glob) && glob.conflict != null && glob.conflict.requestedAt === undefined) ||
+  !hasWorkingRun(glob) &&
+  ((hasOpenPr(glob) && glob.conflict != null) ||
     (glob.status === 'failed' &&
       glob.failure?.conflict !== undefined &&
       glob.pr?.state === 'ready'));
@@ -951,9 +964,10 @@ export const conflictCleared = (glob: Glob, ctx: Context): Result<Transition> =>
 };
 
 /**
- * Resolve conflict (rows 16 and 20a): a conflicting PR nobody is implementing gets one PR comment asking the Claude
- * GitHub App to merge the base branch in and push; no routine run starts. A glob failed by a merge conflict goes back
- * to review with the conflict flagged. A human implementer resolves locally (`sstor --glob <id>`; others `sstor --glob <id> --take-over`).
+ * Resolve conflict (rows 16 and 20a): a conflicting PR nobody is implementing gets a routine run that merges the base
+ * branch in, resolves the conflicts and pushes (the Claude GitHub App's workflow can't run git). A run on standby is
+ * ended and replaced; a failed attempt can be tried again. A glob failed by a merge conflict goes back to review with
+ * the conflict flagged. A human implementer resolves locally (`sstor --glob <id>`; others `sstor --glob <id> --take-over`).
  */
 export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
@@ -964,8 +978,7 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
       'A glob with a human implementer resolves its conflict locally',
     );
   }
-  if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
-  if (glob.conflict?.requestedAt !== undefined) return unchanged(glob);
+  if (hasWorkingRun(glob)) return runActive('A routine run is already queued or working');
   if (!canRequestConflictFix(glob)) {
     return invalidTransition(
       glob,
@@ -973,28 +986,20 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
       'Only a glob whose PR conflicts with the base branch can resolve it',
     );
   }
-  const request = {
-    kind: 'request_conflict_fix',
-    globId: glob.id,
-    generation: glob.generation,
-  } as const;
   const b = new Builder(glob, ctx);
   const failed = glob.status === 'failed' ? glob.failure?.conflict : undefined;
   if (failed !== undefined) {
     // The failed merge left a ready PR: return it to review while the conflict is fixed.
-    b.set({
-      failure: null,
-      headChecks: null,
-      conflict: { ...failed, since: null, at: ctx.now, requestedAt: ctx.now },
-    })
+    b.set({ failure: null, headChecks: null, conflict: { ...failed, since: null, at: ctx.now } })
       .status('pr_open')
       .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
-  } else if (glob.conflict != null) {
-    b.set({ conflict: { ...glob.conflict, requestedAt: ctx.now } });
+  } else {
+    b.set({ failure: null });
   }
   return b
     .event('ConflictFixRequested', { base: (failed ?? glob.conflict)?.base ?? null })
-    .effect(request)
+    .endRun('superseded', null, { cause: 'resolve_conflict' })
+    .queueRun(actor.email, undefined, false, 'resolve_conflict')
     .done();
 };
 
@@ -1058,7 +1063,9 @@ const mergeBlocker = (glob: Glob): string | null => {
   if (glob.status !== 'pr_open' || glob.type === 'sub')
     return 'Only a same or super with a ready PR can be merged';
   if (glob.mergeMode === 'when_green') return 'Merge is already waiting for the checks to pass';
-  if (glob.conflict != null) return `The PR conflicts with ${glob.conflict.base}`;
+  // Passing checks say nothing about mergeability once the base has moved: GitHub would refuse and fail the glob.
+  if (glob.conflict != null)
+    return `Conflicts with the base branch since ${glob.conflict.since ?? 'the last push'}: merge the base into the branch and push before merging`;
   if (glob.pr?.headSha == null) return 'The PR has no head yet';
   if (headChecksFailed(glob)) return 'Required checks failed on the current head';
   return null;
@@ -1785,7 +1792,9 @@ const failureSummaryOf = (glob: Glob): string | null => {
 /** The head's failed checks that are the glob's own to fix (not inherited from the base): what a watching run is asked to respond to. */
 const ownFailedHead = (glob: Glob): HeadChecks | null => {
   const checks = glob.headChecks;
-  return glob.pr?.headSha != null &&
+  // A conflict isn't a failing check: there is nothing for the watching run to react to.
+  return glob.conflict == null &&
+    glob.pr?.headSha != null &&
     checks?.sha === glob.pr.headSha &&
     checks.state === 'failed' &&
     checks.inheritedFrom === undefined
@@ -1834,7 +1843,7 @@ export const runTimeoutReason = (
     return `No progress for ${String(board.runNoProgressHours)} hours`;
   }
   // An investigate-only run never marks a PR ready.
-  if (run.purpose === 'investigate') return null;
+  if (run.purpose !== undefined) return null;
   if (hours(run.startedAt ?? run.queuedAt) >= board.runReadyHours) {
     return `PR not marked ready within ${String(board.runReadyHours)} hours`;
   }
@@ -1927,6 +1936,20 @@ export const checksChanged = (glob: Glob, ctx: Context): Result<Transition> => {
     .done();
 };
 
+/** Flag the open PR's conflict on the builder's glob when it isn't flagged yet (the first conflict found is kept). */
+const withConflict = (b: Builder, conflict: MergeConflict | undefined, ctx: Context): Builder => {
+  const glob = b.current;
+  if (conflict === undefined || !hasOpenPr(glob) || glob.conflict?.base === conflict.base) return b;
+  b.set({ conflict: { ...conflict, since: null, at: ctx.now } }).event('ConflictFlagged', {
+    base: conflict.base,
+    files: [...conflict.files],
+    since: null,
+  });
+  // A conflicted PR runs no checks: an armed merge would wait for ever.
+  if (isMergeArmed(glob)) b.set({ mergeMode: null }).event('MergeDisarmed', { reason: 'conflict' });
+  return b;
+};
+
 /** Required checks finished on a commit; only the PR's current head counts. */
 export const checksCompleted = (
   glob: Glob,
@@ -1939,19 +1962,34 @@ export const checksCompleted = (
     /** The base branch's result when the checks failed: the failure is inherited if the base fails the same way. */
     base?: BaseChecks | null;
     baseBranch?: string;
+    /** With `conflict`: what the head's own check runs say. GitHub usually runs none on a conflicting PR (`pending`). */
+    real?: { state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null };
   },
   ctx: Context,
 ): Result<Transition> => {
   if (glob.pr?.headSha !== checks.sha) return unchanged(glob);
-  const failure = checks.passed ? undefined : (checks.failure ?? undefined);
+  // A conflict on an open PR is not failed checks: it sets `conflict` only, and the head keeps its last real result.
+  const conflictOnly = checks.conflict !== undefined && glob.status !== 'merging';
+  const real = conflictOnly ? checks.real : undefined;
+  if (conflictOnly && (real === undefined || real.state === 'pending')) {
+    const current = glob.headChecks;
+    const stale =
+      current?.sha === checks.sha && current.state === 'failed' && current.failure === undefined;
+    const b = new Builder(glob, ctx);
+    if (stale) b.set({ headChecks: null });
+    return withConflict(b, checks.conflict, ctx).done();
+  }
+  const passed = real === undefined ? checks.passed : real.state === 'passed';
+  const reported = real === undefined ? checks.failure : real.failure;
+  const failure = passed ? undefined : (reported ?? undefined);
   const inherited = inheritedFailure(failure, checks.base, checks.baseBranch ?? 'the base branch');
   const b = new Builder(glob, ctx)
     .set({
       headChecks: {
         sha: checks.sha,
-        state: checks.passed ? 'passed' : 'failed',
+        state: passed ? 'passed' : 'failed',
         // A re-read of the same failure keeps its first time.
-        ...(!checks.passed && {
+        ...(!passed && {
           at:
             glob.headChecks?.sha === checks.sha && glob.headChecks.state === 'failed'
               ? (glob.headChecks.at ?? ctx.now)
@@ -1963,13 +2001,13 @@ export const checksCompleted = (
     })
     .event('BuildCompleted', {
       sha: checks.sha,
-      passed: checks.passed,
+      passed,
       ...(failure !== undefined && { failure: failureSummary(failure) }),
       ...(inherited !== null && { inheritedFrom: inherited.base }),
     });
   // Merge is armed: the head's checks decide whether slop merges now or hands the failure back.
   if (isMergeArmed(glob)) {
-    if (checks.conflict !== undefined || !checks.passed) {
+    if (checks.conflict !== undefined || !passed) {
       return b
         .set({ mergeMode: null })
         .event('MergeDisarmed', { reason: checks.conflict !== undefined ? 'conflict' : 'checks failed' })
@@ -1995,7 +2033,7 @@ export const checksCompleted = (
         .status('failed')
         .done();
     }
-    if (!checks.passed) {
+    if (!passed) {
       const reason = `Checks failed after updating the branch${failure === undefined ? '' : `: ${failureSummary(failure)}`}`;
       return b
         .endWatchingRun(reason)
@@ -2014,7 +2052,7 @@ export const checksCompleted = (
       sha: checks.sha,
     });
   }
-  return b.done();
+  return (conflictOnly ? withConflict(b, checks.conflict, ctx) : b).done();
 };
 
 /** Whether the glob's head failed checks that a base-branch result can explain (or stop explaining). */
@@ -2506,6 +2544,16 @@ export const reportFailure = (
       .endRun('failed', report.reason, { agentSetVersion })
       .set({ failure })
       .status('failed')
+      .done();
+  }
+  if (
+    run.purpose === 'resolve_conflict' &&
+    (glob.status === 'pr_open' || glob.status === 'in_progress')
+  ) {
+    // A conflict-resolving run gave up: the conflict stays flagged and Resolve conflict is offered again, with the reason.
+    return new Builder(glob, ctx)
+      .endRun('failed', report.reason, { agentSetVersion })
+      .set({ failure })
       .done();
   }
   if (glob.status === 'pr_open' && run.state === 'watching') {

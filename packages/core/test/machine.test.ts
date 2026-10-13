@@ -474,6 +474,30 @@ describe('PR and merge events (rows 11–16)', () => {
     });
   });
 
+  it('row 14: Merge is withheld and refused while a conflict with the base is recorded', () => {
+    const conflict = { base: 'main', files: ['a.ts'], since: 's1t2', at: NOW };
+    const passing = {
+      ...glob({ status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } }),
+      headChecks: { sha: 'bbb', state: 'passed' as const },
+    };
+    const conflicted = { ...passing, conflict };
+    expect(m.allowedActions(conflicted, dev)).not.toContain('merge');
+    expect(m.allowedActions(conflicted, dev)).toContain('resolve_conflict');
+    const refused = m.requestMerge(conflicted, ctx());
+    expect(errorCode(refused)).toBe('invalid_transition');
+    expect(conflicted.status).toBe('pr_open');
+    // A push that merges the base clears the conflict; Merge is offered again.
+    const cleared = { ...passing, conflict: null };
+    expect(m.allowedActions(cleared, dev)).toContain('merge');
+    expect(value(m.requestMerge(cleared, ctx())).glob.status).toBe('merging');
+    // Merge and continue (supers) is withheld the same way.
+    const superConflicted = { ...conflicted, type: 'super' as const };
+    expect(m.allowedActions(superConflicted, dev, { recordSha: 'bbb' })).not.toContain('merge_continue');
+    expect(errorCode(m.requestMerge(superConflicted, ctx(), { continue: true, facts: { recordSha: 'bbb' } }))).toBe(
+      'invalid_transition',
+    );
+  });
+
   it('row 15: a merge sets labels Required by type and ends the run', () => {
     const sub = value(m.merged(glob({ type: 'sub', status: 'merging', runs: [run({ state: 'watching' })] }), { sha: 'm' }, ctx(null)));
     expect(sub.glob.status).toBe('reviewing');
@@ -1080,7 +1104,7 @@ describe('checks and merging (slice 2)', () => {
     expect(checks.failure?.conflict).toBeUndefined();
   });
 
-  it('resolve conflict: a failed merge conflict returns to review and asks for one PR comment, with no routine run', () => {
+  it('resolve conflict: a failed merge conflict returns to review and queues a conflict-fixing routine run', () => {
     const conflict = { base: 'main', files: ['a.ts'] };
     const pr = { number: 7, state: 'ready' as const, headSha: 'abc1234' };
     const failed = glob({ type: 'sub', status: 'failed', pr, failure: { reason: 'Merge conflict with main', at: NOW, conflict } });
@@ -1094,31 +1118,53 @@ describe('checks and merging (slice 2)', () => {
     const t = value(m.resolveConflict(failed, ctx()));
     expect(t.glob.status).toBe('pr_open');
     expect(t.glob.failure).toBeNull();
-    expect(t.glob.runs).toEqual([]);
-    expect(t.glob.conflict).toMatchObject({ base: 'main', files: ['a.ts'], since: null, requestedAt: NOW });
-    expect(effectKinds(t)).toEqual(['refresh_checks', 'request_conflict_fix']);
+    expect(t.glob.runs).toHaveLength(1);
+    expect(t.glob.runs[0]).toMatchObject({ state: 'queued', purpose: 'resolve_conflict' });
+    expect(t.glob.conflict).toMatchObject({ base: 'main', files: ['a.ts'], since: null });
+    expect(effectKinds(t)).toEqual(['refresh_checks', 'fire_routine']);
+    expect(t.effects.at(-1)).toMatchObject({ kind: 'fire_routine', purpose: 'resolve_conflict' });
   });
 
-  it('resolve conflict: a flagged conflict is requested once', () => {
+  it('resolve conflict: a flagged conflict queues a run, is refused while it works, and is offered again after it fails', () => {
     const pr = { number: 7, state: 'ready' as const, headSha: 'abc1234' };
     const flagged = glob({ status: 'pr_open', pr, conflict: { base: 'main', files: [], since: 's1t2', at: NOW } });
     expect(m.allowedActions(flagged, dev)).toContain('resolve_conflict');
     const t = value(m.resolveConflict(flagged, ctx()));
     expect(t.glob.status).toBe('pr_open');
-    expect(t.glob.conflict?.requestedAt).toBe(NOW);
-    expect(effectKinds(t)).toEqual(['request_conflict_fix']);
-    // Asked already: no second comment, and the action is gone.
+    expect(effectKinds(t)).toEqual(['fire_routine']);
+    expect(t.glob.runs.at(-1)).toMatchObject({ state: 'queued', purpose: 'resolve_conflict' });
+    // Queued or working: refused, and the action is gone.
     expect(m.allowedActions(t.glob, dev)).not.toContain('resolve_conflict');
-    const again = value(m.resolveConflict(t.glob, ctx()));
-    expect(again.changed).toBe(false);
-    expect(again.effects).toEqual([]);
+    expect(errorCode(m.resolveConflict(t.glob, ctx()))).toBe('run_active');
+    const started = value(m.runProgress(t.glob, t.glob.runs.at(-1)?.id ?? '', ctx()));
+    expect(started.glob.runs.at(-1)?.state).toBe('watching');
+    // A run that gave up leaves the conflict flagged, with its reason, and the action comes back.
+    const runId = started.glob.runs.at(-1)?.id ?? '';
+    const gaveUp = value(m.reportFailure(started.glob, { reason: 'Real conflict in a.ts', runId }, ctx())).glob;
+    expect(gaveUp.runs.at(-1)).toMatchObject({ state: 'ended', outcome: 'failed' });
+    expect(gaveUp.failure?.reason).toBe('Real conflict in a.ts');
+    expect(gaveUp.conflict).not.toBeNull();
+    expect(m.allowedActions(gaveUp, dev)).toContain('resolve_conflict');
+    expect(m.allowedActions(gaveUp, dev)).not.toContain('retry_autofix');
+    const again = value(m.resolveConflict(gaveUp, ctx()));
+    expect(again.glob.failure).toBeNull();
+    expect(again.glob.runs).toHaveLength(2);
   });
 
-  it('resolve conflict: a live routine run or an unflagged glob is refused', () => {
+  it('resolve conflict: a run on standby is ended and replaced; an unflagged or human-implemented glob is refused', () => {
     const pr = { number: 7, state: 'ready' as const, headSha: 'abc1234' };
-    const conflict = { base: 'main', files: [], since: null, at: NOW };
+    const conflict = { base: 'main', files: [], since: 's1t2', at: NOW };
     expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr }), ctx()))).toBe('invalid_transition');
-    expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr, conflict, runs: [run()] }), ctx()))).toBe('run_active');
+    const watching = glob({ status: 'pr_open', pr, conflict, runs: [run({ state: 'watching' })] });
+    expect(m.allowedActions(watching, dev)).toContain('resolve_conflict');
+    const t = value(m.resolveConflict(watching, ctx()));
+    expect(t.glob.runs).toHaveLength(2);
+    expect(t.glob.runs[0]).toMatchObject({ state: 'ended', outcome: 'superseded' });
+    expect(t.glob.runs[1]).toMatchObject({ state: 'queued', purpose: 'resolve_conflict' });
+    expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr, conflict, runs: [run({ state: 'active' })] }), ctx()))).toBe('run_active');
+    expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr, conflict, runs: [run({ state: 'queued' })] }), ctx()))).toBe('run_active');
+    const human = glob({ status: 'pr_open', pr, conflict, implementer: 'a@b.c', runs: [run({ state: 'watching' })] });
+    expect(m.allowedActions(human, dev)).not.toContain('resolve_conflict');
   });
 });
 

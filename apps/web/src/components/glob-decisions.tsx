@@ -1,6 +1,5 @@
 import type { DecisionRelation, DecisionView } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { api, RequestError } from '@/lib/api';
@@ -8,6 +7,7 @@ import { defaultOpen, hintCount, readChoicesOpen, writeChoicesOpen } from '@/lib
 import { globDecisionsKey } from '@/lib/live';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
+import { SectionToggle } from './section-toggle';
 import { Button } from './ui/button';
 import { boardGlobHref } from '@/lib/glob-section';
 
@@ -130,17 +130,14 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
 
   return (
     <section className='grid gap-2' aria-label='Choices' data-testid='glob-decisions'>
-      <h3 className='text-xs font-semibold text-muted-foreground'>
-        <button type='button' className='flex items-center gap-1' aria-expanded={open} onClick={toggle} data-testid='choices-toggle'>
-          {open ? <ChevronDown aria-hidden className='size-3.5' /> : <ChevronRight aria-hidden className='size-3.5' />}
-          Choices ({decisions.length})
-          {!open && toReview > 0 && (
-            <span className='rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground' data-testid='choices-to-review'>
-              {toReview} to review
-            </span>
-          )}
-        </button>
-      </h3>
+      <SectionToggle open={open} onToggle={toggle} testId='choices-toggle'>
+        Choices ({decisions.length})
+        {!open && toReview > 0 && (
+          <span className='rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground' data-testid='choices-to-review'>
+            {toReview} to review
+          </span>
+        )}
+      </SectionToggle>
       {open && <ul className='grid gap-2'>{decisions.map(row)}</ul>}
     </section>
   );

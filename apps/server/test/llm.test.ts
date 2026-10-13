@@ -2,7 +2,7 @@ import { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand } from '@a
 import { LlmBusy, LlmUnavailable } from '@slop/core';
 import type { LlmSpendTag } from '@slop/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BEDROCK_CLIENT_RETRY, BedrockLlm, shownModelId, spendRecorder } from '../src/llm.js';
+import { BEDROCK_CLIENT_RETRY, BedrockLlm, reviewerLlm, shownModelId, spendRecorder } from '../src/llm.js';
 import type { LlmUsage } from '../src/llm.js';
 
 const MODEL = 'global.anthropic.claude-opus-5-5';
@@ -230,5 +230,27 @@ describe('spendRecorder', () => {
     const log = vi.fn();
     await expect(spendRecorder({ record }, log)(USAGE, { boardId: 3, source: 'chat' })).resolves.toBeUndefined();
     expect(log).toHaveBeenCalledWith('Could not record chat spend for board 3: connection refused');
+  });
+});
+
+describe('reviewerLlm', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const sentConfig = async (modelId: string): Promise<unknown> => {
+    const send = respondWith({ output: { message: { role: 'assistant', content: [{ text: 'ok' }] } }, usage: {} });
+    await reviewerLlm(modelId, 'us-east-1').complete({ system: 's', prompt: 'p', maxTokens: 10 });
+    const command = send.mock.calls[0]?.[0];
+    expect(command).toBeInstanceOf(ConverseCommand);
+    return (command as ConverseCommand).input.inferenceConfig;
+  };
+
+  it('sends no temperature to a Claude model, which refuses non-default sampling', async () => {
+    expect(await sentConfig('global.anthropic.claude-sonnet-5-5')).toEqual({ maxTokens: 10 });
+  });
+
+  it('keeps temperature 0 for other models, so a re-review gives the same findings', async () => {
+    expect(await sentConfig('openai.gpt-oss-120b-1:0')).toEqual({ maxTokens: 10, temperature: 0 });
   });
 });

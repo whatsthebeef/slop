@@ -272,7 +272,7 @@ export const SettingsPage = () => {
           Investigate big globs in Planning automatically
         </label>
         <h3 className='text-xs font-semibold text-muted-foreground'>Independent review</h3>
-        <label className='flex items-center gap-2 text-sm' title='Off stops the automatic reviews; Get AI review on a glob still works'>
+        <label className='flex items-center gap-2 text-sm' title='Off stops the automatic reviews; Review code on a glob still works'>
           <input
             type='checkbox'
             disabled={!admin}

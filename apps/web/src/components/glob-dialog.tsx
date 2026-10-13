@@ -1,18 +1,22 @@
 import { decisionOf, isValidCombination, machine } from '@slop/core';
-import type { Action, Category, EditFailure, SuggestionPrefill } from '@slop/core';
+import type { Action, Category, EditFailure, LabelName, SuggestionPrefill } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
-import { ACTION_LABELS } from '@/lib/api';
+import { actionPresentation } from '@/lib/action-presentation';
+import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
+import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
+import type { GlobSection } from '@/lib/glob-section';
 import { workingLabel } from '@/lib/card-pending';
 import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
 import type { PendingAction } from '@/lib/pending-action';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
-import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
+import { startAgainConfirmation } from '@/lib/start-again';
 import { conflictByHand, conflictCommand, copySstorCommand } from '@/lib/sstor-command';
 import {
   blockedLine,
@@ -22,15 +26,8 @@ import {
   viewStatusLine,
   waitingFor,
 } from '@/lib/status-line';
-import {
-  categoryOptions,
-  saveCategory,
-  subConfirmation,
-  typeActionChanges,
-  typeActions,
-  typeChangeBlocker,
-} from '@/lib/type-change';
-import type { TypeAction } from '@/lib/type-change';
+import { categoryOptions, saveCategory, typeOptions } from '@/lib/type-change';
+import type { TypeOption } from '@/lib/type-change';
 import { ArtifactsSection } from './artifacts';
 import { DecisionAssessment, DecisionSection } from './decision-section';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
@@ -46,6 +43,7 @@ import { GlobTitle } from './glob-title';
 import { ReviewFindings } from './review-findings';
 import { cn } from '@/lib/utils';
 import { Tip } from './ui/tip';
+import { TypePopover } from './type-popover';
 
 const STATUS_TEXT: Record<GlobView['status'], string> = {
   planning: 'Planning',
@@ -66,23 +64,12 @@ const DECISION_STATUS_TEXT: Partial<Record<GlobView['status'], string>> = {
 
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
 
-const ACTION_TIPS: Partial<Record<Action, string>> = {
-  investigate:
-    'Starts a routine run that investigates the plan (no branch, no commits) and attaches the result; starting later reuses it when the plan and files are unchanged',
-  review_now:
-    'An independent AI reviewer reads the change as it would land on main and posts its findings on the glob and the PR. It never blocks merging.',
-  start_anyway:
-    'Starts now, before what it waits for has merged; its branch will lack those changes',
-  cancel_merge: 'Stops waiting: the PR stays open and Merge comes back',
-  merge_continue:
-    "Lands what's done on main; the glob stays in Doing and gets a new PR on the next push",
-  mark_ready:
-    'Takes the PR out of draft: the work is done. A sub then merges by itself once its checks pass; a same or super waits for you to merge. Refused while the branch conflicts with main.',
-  retry_autofix:
-    'Starts a new routine run that watches this PR and fixes its failed checks on the same branch',
-  resolve_conflict:
-    'Asks the Claude GitHub App, in a PR comment, to merge the base branch into this branch and resolve the conflicts',
-};
+/** A section's anchor: found by `?section=`, and left below the sticky header (h-10) when scrolled to. Hidden while empty. */
+const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) => (
+  <div id={`section-${name}`} data-section={name} className="scroll-mt-12 empty:hidden">
+    {children}
+  </div>
+);
 
 /** The glob view: a page in the board's main area (never a modal), with a back arrow to the board. */
 /** The conflict box: the command that starts the glob's Claude session on the merge, with the by-hand route collapsed below. */
@@ -108,7 +95,7 @@ const ConflictBox = ({
   return (
     <div className="grid gap-1 rounded border border-edge p-2 text-sm" data-testid="conflict-box">
       <span>
-        {canTakeOver ? 'Take over and let your Claude session' : 'Let your Claude session'} merge{' '}
+        {canTakeOver ? 'Pick up and let your Claude session' : 'Let your Claude session'} merge{' '}
         {base}: it resolves additive conflicts and asks you about the rest.
       </span>
       <span className="flex items-center gap-2">
@@ -142,6 +129,8 @@ export const GlobDetail = ({
   board,
   glob,
   initialArtifact,
+  section = null,
+  openLabel = null,
   onClose,
   onUpdate,
   onReload,
@@ -154,13 +143,17 @@ export const GlobDetail = ({
   glob: GlobView;
   /** The artifact to show first (from a card icon). */
   initialArtifact: ArtifactRef | null;
+  /** The section to scroll to once it has rendered (from `?section=`); unknown or null stays at the top. */
+  section?: GlobSection | null;
+  /** The sign-off label whose review to bring into view (from `?section=labels&label=`). */
+  openLabel?: LabelName | null;
   onClose: () => void;
   /** Saves the edits; resolves null when saved, or why the server refused them. */
   onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
   /** Loads the glob's latest values into the view (after a version conflict). */
   onReload: () => Promise<void>;
   /** Resolves false when the action failed. */
-  /** `anyway` goes ahead of unmerged prerequisites (Retrigger). */
+  /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
   /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
@@ -194,7 +187,6 @@ export const GlobDetail = ({
     setDraft({});
     setFailure(null);
     setConfirmingAgain(false);
-    setConfirmingType(null);
     setTypeFailure(null);
     setCategoryNote(null);
   }, [glob.id]);
@@ -203,12 +195,10 @@ export const GlobDetail = ({
     setDraft((d) => ({ ...d, ...changes }));
     setFailure(null);
   };
-  // Type changes are actions that say what follows; a feature can only be a sub as a task, so that confirms first.
   const [confirmingRetrigger, setConfirmingRetrigger] = useState(false);
-  const [confirmingType, setConfirmingType] = useState<TypeAction | null>(null);
+  // The type chip's popover says what follows before it changes the type.
   const [typeFailure, setTypeFailure] = useState<EditFailure | null>(null);
-  const typeButtons = typeActions(glob, board.role);
-  const typeBlocker = typeChangeBlocker(glob, board.role);
+  const typeChoices = typeOptions(glob, board.role);
   // Category saves when it changes, and says so with an Undo.
   const [categoryNote, setCategoryNote] = useState<{ undo: Category } | null>(null);
   const changeCategory = async (to: Category, from: Category) => {
@@ -221,11 +211,20 @@ export const GlobDetail = ({
       setCategoryNote(null);
     }
   };
-  const changeType = async (action: TypeAction) => {
-    setConfirmingType(null);
-    setTypeFailure(await onUpdate(typeActionChanges(action)));
+  const changeType = async (option: TypeOption) => {
+    setTypeFailure(null);
+    if (option.via === 'update') {
+      setTypeFailure(await onUpdate({ type: option.to }));
+    } else if (option.via !== null && !(await onAction(option.via))) {
+      setTypeFailure({ message: `Could not make it a ${option.to}`, conflict: false });
+    }
   };
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
+  // Once per navigation (glob or section), not on the live refreshes that re-render the page.
+  useEffect(() => {
+    if (section === null) return undefined;
+    return scrollWhenReady(() => findSection(document, section));
+  }, [glob.id, section]);
 
   // The globs it waits for can change until it has a branch.
   const canEditAfter =
@@ -248,17 +247,20 @@ export const GlobDetail = ({
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   useEffect(() => setConfirmingOversized(null), [glob.id]);
   // Decide has its own panel with the five outcomes.
-  const allActions = (glob.allowedActions ?? []).filter((a) => a !== 'delete' && a !== 'decide');
+  // deescalate and make_super are reached through the type popover.
+  const allActions = (glob.allowedActions ?? []).filter(
+    (a) => a !== 'delete' && a !== 'decide' && actionPresentation(a, glob).placement !== 'none',
+  );
   const actions = orderActions(allActions);
   const tiers = actionTiers(allActions);
   const disabled = waitingFor(glob, actions, board.role);
   const status = viewStatusLine(glob, new Date().toISOString(), disabled);
-  // Mark done (PR ready) changes nothing until GitHub confirms, so say it was asked for meanwhile.
+  // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
   const [readyAsked, setReadyAsked] = useState(false);
   const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
   // A super's local review normally comes first (/finalise); the board warns, then allows.
   const [confirmingReady, setConfirmingReady] = useState(false);
-  // Start again throws the PR and branch away, so it says what it will do first.
+  // Discard throws the PR and branch away, so it says what it will do first.
   const [confirmingAgain, setConfirmingAgain] = useState(false);
   // The header's border shows once the page has scrolled under it.
   const topRef = useRef<HTMLDivElement>(null);
@@ -273,7 +275,7 @@ export const GlobDetail = ({
     return () => observer.disconnect();
   }, []);
   // Esc goes back to the board, unless typing, an overlay or an inline confirmation owns it.
-  const confirming = confirmDelete || confirmingAgain || confirmingType !== null || splitting;
+  const confirming = confirmDelete || confirmingAgain || splitting;
   const escapeRef = useRef({ onClose, confirming });
   escapeRef.current = { onClose, confirming };
   useEffect(() => {
@@ -316,6 +318,7 @@ export const GlobDetail = ({
 
   const renderActions = (list: Action[]) =>
     list.map((action) => {
+      const shown = actionPresentation(action, glob);
       const button = (
         <Button
           key={action}
@@ -368,15 +371,15 @@ export const GlobDetail = ({
               {workingLabel(action)}
             </>
           ) : (
-            actionLabel(action, glob.type, ACTION_LABELS, glob.status)
+            <>
+              <ActorIcon actor={shown.icon} decorative />
+              {shown.label}
+            </>
           )}
         </Button>
       );
-      const tip = ACTION_TIPS[action];
-      return tip === undefined ? (
-        button
-      ) : (
-        <Tip key={action} text={tip}>
+      return (
+        <Tip key={action} text={shown.tip}>
           {button}
         </Tip>
       );
@@ -421,11 +424,13 @@ export const GlobDetail = ({
               decision
             </span>
           ) : (
-            <Tip text={typeBlocker ?? `This is a ${glob.type}`}>
-              <span className="rounded border px-2 py-0.5 text-xs" data-testid="glob-type">
-                {glob.type}
-              </span>
-            </Tip>
+            <TypePopover
+              type={glob.type}
+              options={typeChoices}
+              busy={busy}
+              failure={typeFailure}
+              onChange={(option) => run(() => changeType(option))}
+            />
           )}
           <ActivityLabel glob={glob} />
           {glob.group !== null && <GroupChip name={glob.group} />}
@@ -489,321 +494,299 @@ export const GlobDetail = ({
             )}
           </p>
         )}
-        {(glob.failure?.conflict ?? glob.conflict) != null && glob.implementer !== null && (
-          <ConflictBox
-            globId={glob.id}
-            branch={glob.branch}
-            base={(glob.failure?.conflict ?? glob.conflict)?.base ?? ''}
-            canTakeOver={(glob.allowedActions ?? []).includes('take_over')}
-          />
-        )}
+        <Anchor name="conflict">
+          {(glob.failure?.conflict ?? glob.conflict) != null && glob.implementer !== null && (
+            <ConflictBox
+              globId={glob.id}
+              branch={glob.branch}
+              base={(glob.failure?.conflict ?? glob.conflict)?.base ?? ''}
+              canTakeOver={(glob.allowedActions ?? []).includes('take_over')}
+            />
+          )}
+        </Anchor>
 
-        {glob.escalation != null && (
-          <div
-            className="grid gap-1 rounded border border-edge p-2 text-sm"
-            data-testid="escalation-note"
-          >
-            <span>Needs a human: {glob.escalation.reason}</span>
-            {glob.escalation.evidence !== undefined && (
-              <span className="text-xs text-muted-foreground">{glob.escalation.evidence}</span>
-            )}
-            <span className="text-xs text-muted-foreground">Escalated by {glob.escalation.by}</span>
-          </div>
-        )}
-
-        {!decision && <LabelReviews glob={glob} onReview={onReviewLabel} />}
-
-        {!decision && deps !== null && (
-          <div
-            className="grid gap-2 rounded border p-2 text-sm"
-            data-testid="dependencies"
-            data-section="dependencies"
-          >
-            <span className="font-medium">Dependencies</span>
-            {blockedLine(glob) !== null && (
-              <span className="text-xs text-muted-foreground">{blockedLine(glob)}</span>
-            )}
-            {deps.needs.length > 0 && (
-              <div data-testid="waits-for">
-                <span className="font-medium">Waits for</span>
-                <ul className="ml-4 list-disc">
-                  {deps.needs.map((n) => (
-                    <li key={n.id}>
-                      <GlobLink boardId={glob.boardId} id={n.id} />
-                      {n.status !== null && (
-                        <span className="text-muted-foreground"> · {n.status}</span>
-                      )}{' '}
-                      <span className="text-muted-foreground">{n.why}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {deps.alsoAhead.length > 0 && (
-              <div data-testid="also-ahead">
-                <button
-                  type="button"
-                  className="text-xs text-muted-foreground underline"
-                  aria-expanded={showChain}
-                  onClick={() => setShowChain(!showChain)}
+        <Anchor name="escalation">
+          {glob.escalation != null && (
+            <div
+              className="grid gap-1 rounded border border-edge p-2 text-sm"
+              data-testid="escalation-note"
+            >
+              <span>
+                <span className="sr-only">Needs a person: {glob.escalation.reason}</span>
+                <span
+                  aria-hidden
+                  title={`Needs a person: ${glob.escalation.reason}`}
+                  className="inline-flex items-center gap-1"
                 >
-                  {showChain ? '▾' : '▸'} {deps.alsoAhead.length} more ahead
-                </button>
-                {showChain && (
+                  needs a <HumanIcon decorative />: {glob.escalation.reason}
+                </span>
+              </span>
+              {glob.escalation.evidence !== undefined && (
+                <span className="text-xs text-muted-foreground">{glob.escalation.evidence}</span>
+              )}
+              <span className="text-xs text-muted-foreground">
+                Escalated by {glob.escalation.by}
+              </span>
+            </div>
+          )}
+        </Anchor>
+
+        <Anchor name="labels">
+          {!decision && <LabelReviews glob={glob} onReview={onReviewLabel} openLabel={openLabel} />}
+        </Anchor>
+
+        <Anchor name="prerequisites">
+          {!decision && deps !== null && (
+            <div className="grid gap-2 rounded border p-2 text-sm" data-testid="dependencies">
+              <span className="font-medium">Dependencies</span>
+              {blockedLine(glob) !== null && (
+                <span className="text-xs text-muted-foreground">{blockedLine(glob)}</span>
+              )}
+              {deps.needs.length > 0 && (
+                <div data-testid="waits-for">
+                  <span className="font-medium">Waits for</span>
                   <ul className="ml-4 list-disc">
-                    {deps.alsoAhead.map((b) => (
-                      <li key={b.id} style={{ marginLeft: `${String((b.depth - 2) * 12)}px` }}>
-                        <GlobLink boardId={glob.boardId} id={b.id} />{' '}
-                        <span className="text-muted-foreground">· {statusWords(b.status)}</span>
+                    {deps.needs.map((n) => (
+                      <li key={n.id}>
+                        <GlobLink boardId={glob.boardId} id={n.id} />
+                        {n.status !== null && (
+                          <span className="text-muted-foreground"> · {n.status}</span>
+                        )}{' '}
+                        <span className="text-muted-foreground">{n.why}</span>
                       </li>
                     ))}
                   </ul>
-                )}
-              </div>
-            )}
-            {deps.overlaps.length > 0 && (
-              <div data-testid="overlaps">
-                <span className="font-medium">Overlaps</span>{' '}
-                <span className="text-xs text-muted-foreground">
-                  merge order only; never blocks
-                </span>
-                <ul className="ml-4 list-disc">
-                  {deps.overlaps.map((o) => (
-                    <li key={o.id}>
-                      <GlobLink boardId={glob.boardId} id={o.id} />
-                      {o.paths.length > 0 && (
-                        <span className="text-muted-foreground"> · {o.paths.join(', ')}</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {deps.waitedOnBy.length > 0 && (
-              <div data-testid="waited-on-by">
-                <span className="font-medium">Waited on by</span>{' '}
-                {deps.waitedOnBy.map((id, i) => (
-                  <span key={id}>
-                    {i > 0 && ', '}
-                    <GlobLink boardId={glob.boardId} id={id} />
+                </div>
+              )}
+              {deps.alsoAhead.length > 0 && (
+                <div data-testid="also-ahead">
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground underline"
+                    aria-expanded={showChain}
+                    onClick={() => setShowChain(!showChain)}
+                  >
+                    {showChain ? '▾' : '▸'} {deps.alsoAhead.length} more ahead
+                  </button>
+                  {showChain && (
+                    <ul className="ml-4 list-disc">
+                      {deps.alsoAhead.map((b) => (
+                        <li key={b.id} style={{ marginLeft: `${String((b.depth - 2) * 12)}px` }}>
+                          <GlobLink boardId={glob.boardId} id={b.id} />{' '}
+                          <span className="text-muted-foreground">· {statusWords(b.status)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+              {deps.overlaps.length > 0 && (
+                <div data-testid="overlaps">
+                  <span className="font-medium">Overlaps</span>{' '}
+                  <span className="text-xs text-muted-foreground">
+                    merge order only; never blocks
                   </span>
+                  <ul className="ml-4 list-disc">
+                    {deps.overlaps.map((o) => (
+                      <li key={o.id}>
+                        <GlobLink boardId={glob.boardId} id={o.id} />
+                        {o.paths.length > 0 && (
+                          <span className="text-muted-foreground"> · {o.paths.join(', ')}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {deps.waitedOnBy.length > 0 && (
+                <div data-testid="waited-on-by">
+                  <span className="font-medium">Waited on by</span>{' '}
+                  {deps.waitedOnBy.map((id, i) => (
+                    <span key={id}>
+                      {i > 0 && ', '}
+                      <GlobLink boardId={glob.boardId} id={id} />
+                    </span>
+                  ))}
+                </div>
+              )}
+              {canEditAfter && (
+                <Label>
+                  Waits for (glob IDs)
+                  <Input
+                    value={afterText}
+                    placeholder="s15t7, s15b18"
+                    onChange={(e) => {
+                      setAfterText(e.target.value);
+                      edit({ after: e.target.value.split(/[\s,]+/).filter((id) => id !== '') });
+                    }}
+                  />
+                </Label>
+              )}
+              {(glob.blockedBy?.length ?? 0) > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Picking it up goes ahead without them: the branch will lack their changes.
+                </p>
+              )}
+            </div>
+          )}
+        </Anchor>
+
+        <Anchor name="size">
+          {!decision && splittable && !splitting && (
+            <div>
+              <Tip text="Cut this glob into parts: part 1 stays here, the others are created with their share of the plan">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  data-testid="split-glob"
+                  onClick={() => setSplitting(true)}
+                >
+                  Split
+                </Button>
+              </Tip>
+            </div>
+          )}
+          {!decision && oversized && (
+            <OversizedGlob
+              glob={glob}
+              canKeep={board.role !== 'qa' || glob.type === 'sub'}
+              onDone={() => onClose()}
+            />
+          )}
+          {splitting && (
+            <SplitGlob glob={glob} onCancel={() => setSplitting(false)} onDone={() => onClose()} />
+          )}
+        </Anchor>
+
+        <Anchor name="actions">
+          {actions.length + disabled.length > 0 && (
+            <div className="grid gap-1">
+              <div className="flex flex-wrap gap-2">
+                {renderActions(actions.filter((a) => tiers.get(a) !== 'destructive'))}
+                {disabled.map(({ action, label, icon, tip }) => (
+                  <Tip key={action} text={tip}>
+                    <Button variant="outline" size="sm" disabled>
+                      <ActorIcon actor={icon} decorative />
+                      {label}
+                    </Button>
+                  </Tip>
                 ))}
+                {renderActions(actions.filter((a) => tiers.get(a) === 'destructive'))}
               </div>
-            )}
-            {canEditAfter && (
-              <Label>
-                Waits for (glob IDs)
-                <Input
-                  value={afterText}
-                  placeholder="s15t7, s15b18"
-                  onChange={(e) => {
-                    setAfterText(e.target.value);
-                    edit({ after: e.target.value.split(/[\s,]+/).filter((id) => id !== '') });
-                  }}
-                />
-              </Label>
-            )}
-            {(glob.blockedBy?.length ?? 0) > 0 && (
-              <p className="text-xs text-muted-foreground">
-                Picking it up goes ahead without them: the branch will lack their changes.
-              </p>
-            )}
-          </div>
-        )}
-
-        {!decision && splittable && !splitting && (
-          <div>
-            <Tip text="Cut this glob into parts: part 1 stays here, the others are created with their share of the plan">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                data-testid="split-glob"
-                onClick={() => setSplitting(true)}
-              >
-                Split
-              </Button>
-            </Tip>
-          </div>
-        )}
-        {!decision && oversized && (
-          <OversizedGlob
-            glob={glob}
-            canKeep={board.role !== 'qa' || glob.type === 'sub'}
-            onDone={() => onClose()}
-          />
-        )}
-        {splitting && (
-          <SplitGlob glob={glob} onCancel={() => setSplitting(false)} onDone={() => onClose()} />
-        )}
-
-        {actions.length + disabled.length + typeButtons.length > 0 && (
-          <div className="grid gap-1">
-            <div className="flex flex-wrap gap-2">
-              {renderActions(actions.filter((a) => tiers.get(a) !== 'destructive'))}
-              {(decision ? [] : typeButtons).map((action) => (
-                <Tip key={action.to} text={action.tip}>
+              {confirmingReady && (
+                <div
+                  role="alert"
+                  className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
+                >
+                  <span className="flex-1">
+                    No local review is recorded at the PR head: the change_reviewer and /finalise
+                    haven't run for {glob.pr?.headSha?.slice(0, 7) ?? 'the head'}. Mark it done
+                    anyway?
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmingReady(false)}>
+                    Cancel
+                  </Button>
                   <Button
-                    variant="outline"
                     size="sm"
                     disabled={busy}
-                    data-testid={`type-${action.to}`}
-                    onClick={() => {
-                      if (action.to === 'sub') setConfirmingType(action);
-                      else void run(() => changeType(action));
-                    }}
+                    onClick={() => void markReady()}
+                    data-testid="confirm-ready"
                   >
-                    {action.label}
+                    Done
                   </Button>
-                </Tip>
-              ))}
-              {disabled.map(({ action, tip }) => (
-                <Tip key={action} text={tip}>
-                  <Button variant="outline" size="sm" disabled>
-                    {actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
+                </div>
+              )}
+              {confirmingOversized !== null && (
+                <div
+                  role="alert"
+                  className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
+                >
+                  <span className="flex-1" data-testid="oversized-start-says">
+                    This glob is flagged oversized: it is probably more than one PR's worth of work.
+                    Split it, or start it as it is?
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmingOversized(null)}>
+                    Cancel
                   </Button>
-                </Tip>
-              ))}
-              {renderActions(actions.filter((a) => tiers.get(a) === 'destructive'))}
+                  <Button
+                    size="sm"
+                    disabled={busy}
+                    data-testid="confirm-start-oversized"
+                    onClick={() =>
+                      void run(async () => {
+                        const action = confirmingOversized;
+                        setConfirmingOversized(null);
+                        await onAction(action);
+                      })
+                    }
+                  >
+                   Start as it is
+                   </Button>
+                </div>
+              )}
+              {confirmingRetrigger && (
+                <div
+                  role="alert"
+                  className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
+                >
+                  <span className="flex-1" data-testid="retrigger-says">
+                    Blocked by {chainTip(glob)}. A run now works without their changes.
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmingRetrigger(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={busy}
+                    data-testid="confirm-retrigger"
+                    onClick={() =>
+                      void run(async () => {
+                        setConfirmingRetrigger(false);
+                        await onAction('retrigger', true);
+                      })
+                    }
+                  >
+                   Retry anyway
+                   </Button>
+                </div>
+              )}
+              {confirmingAgain && (
+                <div
+                  role="alert"
+                  className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
+                >
+                  <span className="flex-1" data-testid="start-again-says">
+                    {startAgainConfirmation(glob, board.baseBranch)}
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmingAgain(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={busy}
+                    data-testid="confirm-start-again"
+                    onClick={() =>
+                      void run(async () => {
+                        setConfirmingAgain(false);
+                        await onAction('start_again');
+                      })
+                    }
+                  >
+                    {actionPresentation('start_again', glob).label}
+                  </Button>
+                </div>
+              )}
+              {readyPending && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  Asked GitHub to mark PR #{glob.pr.number} ready; the glob moves to PR open when
+                  GitHub confirms.
+                </p>
+              )}
             </div>
-            {confirmingType !== null && (
-              <div
-                role="alert"
-                className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-              >
-                <span className="flex-1" data-testid="type-says">
-                  {subConfirmation(confirmingType)}
-                </span>
-                <Button size="sm" variant="ghost" onClick={() => setConfirmingType(null)}>
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  data-testid="confirm-type"
-                  onClick={() => void run(() => changeType(confirmingType))}
-                >
-                  Make it a sub
-                </Button>
-              </div>
-            )}
-            {typeFailure !== null && (
-              <p role="alert" className="text-xs text-red" data-testid="type-failure">
-                {typeFailure.message}
-              </p>
-            )}
-            {confirmingReady && (
-              <div
-                role="alert"
-                className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-              >
-                <span className="flex-1">
-                  No local review is recorded at the PR head: the change_reviewer and /finalise
-                  haven't run for {glob.pr?.headSha?.slice(0, 7) ?? 'the head'}. Mark it ready
-                  anyway?
-                </span>
-                <Button size="sm" variant="ghost" onClick={() => setConfirmingReady(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void markReady()}
-                  data-testid="confirm-ready"
-                >
-                  Mark done (PR ready)
-                </Button>
-              </div>
-            )}
-            {confirmingOversized !== null && (
-              <div
-                role="alert"
-                className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-              >
-                <span className="flex-1" data-testid="oversized-start-says">
-                  This glob is flagged oversized: it is probably more than one PR's worth of work.
-                  Split it, or start it as it is?
-                </span>
-                <Button size="sm" variant="ghost" onClick={() => setConfirmingOversized(null)}>
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  data-testid="confirm-start-oversized"
-                  onClick={() =>
-                    void run(async () => {
-                      const action = confirmingOversized;
-                      setConfirmingOversized(null);
-                      await onAction(action);
-                    })
-                  }
-                >
-                  Start anyway
-                </Button>
-              </div>
-            )}
-            {confirmingRetrigger && (
-              <div
-                role="alert"
-                className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-              >
-                <span className="flex-1" data-testid="retrigger-says">
-                  Blocked by {chainTip(glob)}. A run now works without their changes.
-                </span>
-                <Button size="sm" variant="ghost" onClick={() => setConfirmingRetrigger(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  data-testid="confirm-retrigger"
-                  onClick={() =>
-                    void run(async () => {
-                      setConfirmingRetrigger(false);
-                      await onAction('retrigger', true);
-                    })
-                  }
-                >
-                  Retrigger anyway
-                </Button>
-              </div>
-            )}
-            {confirmingAgain && (
-              <div
-                role="alert"
-                className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-              >
-                <span className="flex-1" data-testid="start-again-says">
-                  {startAgainConfirmation(glob, board.baseBranch)}
-                </span>
-                <Button size="sm" variant="ghost" onClick={() => setConfirmingAgain(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  disabled={busy}
-                  data-testid="confirm-start-again"
-                  onClick={() =>
-                    void run(async () => {
-                      setConfirmingAgain(false);
-                      await onAction('start_again');
-                    })
-                  }
-                >
-                  {actionLabel('start_again', glob.type, ACTION_LABELS, glob.status)}
-                </Button>
-              </div>
-            )}
-            {readyPending && (
-              <p role="status" className="text-xs text-muted-foreground">
-                Asked GitHub to mark PR #{glob.pr.number} ready; the glob moves to PR open when
-                GitHub confirms.
-              </p>
-            )}
-          </div>
-        )}
+          )}
+        </Anchor>
 
         <div className="grid gap-3">
           <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-3">
@@ -923,59 +906,80 @@ export const GlobDetail = ({
           )}
         </div>
 
-        <PlanEditor
-          globId={glob.id}
-          startExpanded={new URLSearchParams(window.location.search).get('section') === 'plan'}
-          onHistory={
-            glob.status === 'signed_off'
-              ? undefined
-              : () => setArtifact({ kind: 'plan', label: '' })
-          }
-        />
-
-        {decision && (
-          <DecisionSection
-            board={board}
-            glob={glob}
-            busy={busy}
-            onDecide={onDecide}
-            onUpdate={onUpdate}
-            applied={applied}
+        <Anchor name="plan">
+          <PlanEditor
+            globId={glob.id}
+            startExpanded={new URLSearchParams(window.location.search).get('section') === 'plan'}
+            onHistory={
+              glob.status === 'signed_off'
+                ? undefined
+                : () => setArtifact({ kind: 'plan', label: '' })
+            }
           />
-        )}
+        </Anchor>
+
+        <Anchor name="decision">
+          {decision && (
+            <DecisionSection
+              board={board}
+              glob={glob}
+              busy={busy}
+              onDecide={onDecide}
+              onUpdate={onUpdate}
+              applied={applied}
+            />
+          )}
+        </Anchor>
 
         {!decision && (
           <>
-            <DeploysSection board={board} glob={glob} />
+            <Anchor name="deploys">
+              <DeploysSection board={board} glob={glob} />
+            </Anchor>
 
-            <EnvironmentsSection board={board} glob={glob} />
+            <Anchor name="environments">
+              <EnvironmentsSection board={board} glob={glob} />
+            </Anchor>
 
-            <TestsSection glob={glob} />
+            <Anchor name="tests">
+              <TestsSection glob={glob} />
+            </Anchor>
           </>
         )}
 
-        <ArtifactsSection
-          globId={glob.id}
-          boardId={glob.boardId}
-          artifacts={glob.artifacts ?? []}
-          signedOff={glob.status === 'signed_off'}
-          selected={artifact}
-          onSelect={setArtifact}
-        />
+        <Anchor name="artifacts">
+          <ArtifactsSection
+            globId={glob.id}
+            boardId={glob.boardId}
+            artifacts={glob.artifacts ?? []}
+            signedOff={glob.status === 'signed_off'}
+            selected={artifact}
+            onSelect={setArtifact}
+          />
+        </Anchor>
 
-        <GlobDecisions boardId={glob.boardId} globId={glob.id} />
+        <Anchor name="choices">
+          <GlobDecisions boardId={glob.boardId} globId={glob.id} />
+        </Anchor>
 
-        {decision ? (
-          decisionOf(glob)?.origin.kind !== 'replacement' && (
+        <Anchor name="assessment">
+          {decision && decisionOf(glob)?.origin.kind !== 'replacement' && (
             <DecisionAssessment
               glob={glob}
               canSuggest={board.role === 'admin' || board.role === 'po'}
               onApply={setApplied}
             />
-          )
-        ) : (
-          <ReviewFindings globId={glob.id} />
-        )}
+          )}
+        </Anchor>
+
+        <Anchor name="findings">
+          {!decision && (
+            <ReviewFindings
+              globId={glob.id}
+              startOpen={new URLSearchParams(window.location.search).get('section') === 'findings'}
+            />
+          )}
+        </Anchor>
 
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <dt>Planner</dt>
@@ -1041,7 +1045,7 @@ export const GlobDetail = ({
 
         {glob.runs.length > 0 && (
           <div className="grid gap-1">
-            <h3 className="text-xs font-semibold text-muted-foreground">Routine runs</h3>
+            <h3 className="text-xs font-semibold text-muted-foreground">Machine runs</h3>
             {[...glob.runs].reverse().map((run) => (
               <div
                 key={run.id}
@@ -1049,6 +1053,7 @@ export const GlobDetail = ({
               >
                 <span>
                   {run.purpose === 'investigate' && 'Investigation · '}
+                  {run.purpose === 'resolve_conflict' && 'Conflict fix · '}
                   {run.state === 'ended' ? (run.outcome ?? 'ended') : run.state} · owner{' '}
                   {run.routineOwner}
                   {run.sessionUrl !== null && (

@@ -3,21 +3,23 @@ import type { Action } from '@slop/core';
 /** How long a card shows its move as working before it gives up and says so. */
 export const CARD_PENDING_MS = 20_000;
 
-/** What a card says while its move is in flight. */
+/** What a card says while its move is in flight: each action's name from actionPresentation, as it happens. */
 const WORKING: Partial<Record<Action, string>> = {
   start: 'Starting…',
   start_anyway: 'Starting…',
   investigate: 'Investigating…',
+  review_now: 'Reviewing…',
   pick_up: 'Picking up…',
-  take_over: 'Taking over…',
-  retrigger: 'Re-triggering…',
-  retry_autofix: 'Retrying…',
-  resolve_conflict: 'Resolving…',
-  start_again: 'Starting again…',
+  take_over: 'Picking up…',
+  retrigger: 'Retrying…',
+  retry_autofix: 'Fixing checks…',
+  resolve_conflict: 'Fixing conflict…',
+  start_again: 'Discarding…',
   merge: 'Merging…',
+  merge_continue: 'Merging…',
   retry_merge: 'Merging…',
   cancel_merge: 'Cancelling…',
-  mark_ready: 'Marking ready…',
+  mark_ready: 'Marking done…',
 };
 
 /** The present participle shown on a card whose action is in flight. */

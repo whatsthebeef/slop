@@ -18,6 +18,16 @@ describe('card pending', () => {
     expect(workingLabel('delete')).toBe('Working…');
   });
 
+  it('names in-flight actions after their current labels', () => {
+    expect(workingLabel('take_over')).toBe('Picking up…');
+    expect(workingLabel('retrigger')).toBe('Retrying…');
+    expect(workingLabel('retry_autofix')).toBe('Fixing checks…');
+    expect(workingLabel('resolve_conflict')).toBe('Fixing conflict…');
+    expect(workingLabel('start_again')).toBe('Discarding…');
+    expect(workingLabel('mark_ready')).toBe('Marking done…');
+    expect(workingLabel('review_now')).toBe('Reviewing…');
+  });
+
   it('shows pending before the request answers and clears it on success', async () => {
     const set = vi.fn();
     const request = defer();

@@ -102,8 +102,11 @@ export type Effect =
       readonly generation: number;
       readonly runId: string;
       readonly routineOwner: string;
-      /** `investigate`: the run only investigates a glob in Planning (no branch yet, nothing is committed). */
-      readonly purpose?: 'investigate';
+      /**
+       * `investigate`: the run only investigates a glob in Planning (no branch yet, nothing is committed).
+       * `resolve_conflict`: the run merges the base branch into the glob's open PR and pushes.
+       */
+      readonly purpose?: 'investigate' | 'resolve_conflict';
       /** An automatic retry of a watcher that gave up: the failed check it is asked to fix (name and first lines). */
       readonly failureSummary?: string;
       /** Set for Start and Retrigger: the executor refuses to fire while prerequisites are unmerged (Start now doesn't set it). */
@@ -145,8 +148,6 @@ export type Effect =
   | { readonly kind: 'check_conflict'; readonly globId: string; readonly generation: number; readonly since: string | null }
   /** Read how far the glob's branch is behind the base branch (its branch or the base received a push). */
   | { readonly kind: 'check_behind'; readonly globId: string; readonly generation: number }
-  /** Ask the Claude GitHub App, in a PR comment, to merge the base branch in and resolve the conflict. */
-  | { readonly kind: 'request_conflict_fix'; readonly globId: string; readonly generation: number }
   /**
    * Read the base branch head's check result (a check ran on the base branch) and record it on the board. Board-wide,
    * so `globId` is `board-<id>` and it isn't generation-checked; re-reading is idempotent.
