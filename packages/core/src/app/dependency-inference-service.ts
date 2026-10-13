@@ -87,6 +87,12 @@ const readInvestigation = (content: string | undefined): { files: string[]; find
   return { files: parsed.investigation.files.map((f) => f.path), findings: parsed.investigation.dependencies };
 };
 
+/** The investigator's findings when there is no usable model answer; null (leave the edges as they were) unless one names a candidate. */
+const alone = (findings: readonly InvestigationDependency[] | undefined, candidates: ReadonlySet<string>): InferredEdge[] | null => {
+  const edges = refineEdges([], findings, candidates);
+  return edges.length === 0 ? null : edges;
+};
+
 const filesOfInvestigation = (content: string | undefined): string[] => readInvestigation(content).files;
 
 /**
@@ -171,7 +177,7 @@ export class DependencyInferenceService {
     const ids = new Set(candidates.map((c) => c.glob.id));
     // No model (or none that answers) leaves the investigator's own findings to stand.
     // Without a model, only listed findings can be applied; an empty list alone must not clear what is already recorded.
-    if (this.deps.llm === undefined) return findings === undefined || findings.length === 0 ? null : refineEdges([], findings, ids);
+    if (this.deps.llm === undefined) return alone(findings, ids);
     const others = candidates
       .map((c) => `- ${c.glob.id} [${c.glob.status}] ${c.glob.title}\n  Files: ${c.files.join(', ') || '(not known yet)'}\n  Plan: ${c.plan.replace(/\s+/g, ' ').slice(0, CANDIDATE_PLAN_CHARS)}`)
       .join('\n');
@@ -187,7 +193,7 @@ export class DependencyInferenceService {
       this.deps.llmTimeoutMs ?? INFERENCE_LLM_TIMEOUT_MS,
     );
     const edges = parseEdges(answer, ids);
-    return edges === null ? (findings === undefined ? null : refineEdges([], findings, ids)) : refineEdges(edges, findings, ids);
+    return edges === null ? alone(findings, ids) : refineEdges(edges, findings, ids);
   }
 
   /**

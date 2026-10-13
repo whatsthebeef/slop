@@ -200,9 +200,17 @@ describe('dependency inference', () => {
     await push(investigation([{ id: a.id, kind: 'overlaps', reason: 'edits the same function' }]));
     await lone.refresh(made.id);
     expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
-    // Looked and found none, with no model: the recorded edges are left alone.
+    // Looked and found none, or named only a glob that is not a candidate, with no model: the recorded edges are left alone.
     await push(investigation([]));
     await lone.refresh(made.id);
+    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
+    await push(investigation([{ id: 's99t9', kind: 'needs', reason: 'made up' }]));
+    await lone.refresh(made.id);
+    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
+    // The same when the model's answer is garbled.
+    answer = () => 'not json';
+    await push(investigation([]));
+    await inference.refresh(made.id);
     expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
   });
 
