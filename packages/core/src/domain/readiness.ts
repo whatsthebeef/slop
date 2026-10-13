@@ -481,7 +481,7 @@ export const recentRoutineFailures = (
     .map((g) => ({ globId: g.id, reason: g.failure?.reason ?? '' }));
 
 /** How long a sub's PR may sit ready before the card says its gate looks stuck. */
-const STUCK_MINUTES = 15;
+export const STUCK_MINUTES = 15;
 
 /**
  * Minutes since the head's checks failed with a watching run that hasn't pushed or called slop
@@ -541,7 +541,7 @@ const CONFLICT_FIX_MINUTES = 15;
  * A conflict flagged on an open PR. A human implementer resolves it locally from the start; for the rest the card
  * suggests that once the Claude GitHub App was asked and the PR still conflicts after a while.
  */
-const conflictHint = (glob: Glob, now: string): string | null => {
+export const conflictHint = (glob: Glob, now: string): string | null => {
   const conflict = glob.conflict;
   if (conflict == null) return null;
   const shown = conflict.files.slice(0, 5).join(', ');
@@ -649,7 +649,7 @@ export const checksExplanation = (glob: Glob): ChecksExplanation | null => {
 };
 
 /** After this long queued, the card says how long (the run may have never started). */
-const QUEUED_NOTICE_MINUTES = 10;
+export const QUEUED_NOTICE_MINUTES = 10;
 
 /** `Machine run queued for 25 min: open the session`, once a run has waited a while without calling slop; else null. */
 export const queuedRunNotice = (glob: Glob, now: string): string | null => {

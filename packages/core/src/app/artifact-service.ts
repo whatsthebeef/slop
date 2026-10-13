@@ -14,6 +14,8 @@ import { payloadOf } from '../domain/payload.js';
 import type { Payload } from '../domain/payload.js';
 import type { GlobAttributes } from '../domain/attributes.js';
 import { recheckOverlapsEffect } from '../domain/events.js';
+import { handoverBrief, openFindings, resumePhase } from '../domain/handover.js';
+import type { Handover } from '../domain/handover.js';
 import { currentRun } from '../domain/machine.js';
 import type { SearchHit } from '../domain/search.js';
 import type { Glob } from '../domain/types.js';
@@ -23,6 +25,13 @@ import type { InvestigationReactor } from './investigation-service.js';
 import type { SizeAssessor } from './size-check-service.js';
 import type { SizeCheck } from '../domain/size-check.js';
 import type { SizeForecast } from '../domain/size-forecast.js';
+
+/** The hand-over brief of a glob as it stands, from its newest local review and uploaded artifacts. */
+export const handoverOf = async (tx: Tx, clock: Clock, glob: Glob): Promise<Handover | null> => {
+  const findings = openFindings(await tx.listFindings(glob.id), await tx.listReviewSources(glob.id));
+  const artifacts = await tx.listArtifactSummaries(glob.boardId, [glob.id]);
+  return handoverBrief(glob, { now: clock.now(), findings, resumePhase: resumePhase(artifacts, glob.pr?.headSha ?? null) });
+};
 
 /** The accepted decisions that govern a work glob, each with its one-line statement read from its plan.md. */
 export const governingDecisions = async (tx: Tx, glob: Glob): Promise<ScopedDecision[]> => {
@@ -88,6 +97,8 @@ export interface GlobContext {
    * `get_artifact(id, 'investigation')`.
    */
   readonly investigation?: InvestigationSummary;
+  /** Why a person is needed on this glob and what to do first (a hand-over brief); null when nothing is wrong. */
+  readonly handover: Handover | null;
   /** Which source wins when sources disagree (the spec's order of authority). */
   readonly authority: string;
   /** Present when intake judged the glob: the oversized flag, its reasons and the proposed split (apply it with split_glob). */
@@ -549,6 +560,7 @@ export class ArtifactService {
         ...(investigation === null ? {} : { investigation: investigationSummary(investigation) }),
         decisions,
         inbox,
+        handover: await handoverOf(tx, this.deps.clock, glob),
         authority: AUTHORITY_STATEMENT,
         ...(sizeCheck === null ? {} : { size: sizeContext(sizeCheck) }),
         fetch:

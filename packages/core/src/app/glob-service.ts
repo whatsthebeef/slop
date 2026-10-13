@@ -8,6 +8,8 @@ import { listOf } from '../domain/matrix.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
+import { HANDOVER_LABEL, handoverMarkdown } from '../domain/handover.js';
+import type { Handover } from '../domain/handover.js';
 import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect } from '../domain/events.js';
@@ -18,7 +20,7 @@ import type { InboxItem } from '../domain/inbox.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { DECISIONS_LABEL, decisionsAttachment } from '../domain/decision-glob.js';
-import { addArtifact, governingDecisions } from './artifact-service.js';
+import { addArtifact, governingDecisions, handoverOf } from './artifact-service.js';
 import { fileKeysOf } from './attachment-service.js';
 import { DECISION_SYSTEM_ACTOR } from './decision-glob.js';
 import { AttachConflict, linkInboxItem } from './inbox-service.js';
@@ -188,6 +190,8 @@ export interface GlobView {
   readonly chain: BlockingChain;
   /** The size check (flag, estimate, proposed split); null when none was made. */
   readonly sizeCheck: SizeCheck | null;
+  /** Why a person is needed on the glob and what to do first; null when nothing is wrong. */
+  readonly handover: Handover | null;
 }
 
 /** Artifacts in a stable order: by kind (plan first), then label. */
@@ -209,6 +213,8 @@ interface CommandOptions {
   readonly triggeredByCreator?: boolean;
   /** Which globs the step applies to: work globs (the default), decision globs only, or either (pick-up, field edits). */
   readonly applies?: 'work' | 'decision' | 'any';
+  /** Runs in the transaction after the glob was updated, only when the step changed it: `before` is the glob as it was. */
+  readonly record?: (tx: Tx, before: Glob, next: Glob, actor: Actor | null) => Promise<void>;
 }
 
 /** How many globs a cycle check reads at most. */
@@ -247,8 +253,38 @@ export class GlobService {
         waitedOnBy: waiting.filter((g) => waitsFor(g, glob.id)).map((g) => g.id),
         chain: await this.chainOf(tx, glob),
         sizeCheck,
+        handover: await handoverOf(tx, this.deps.clock, glob),
       });
     });
+  }
+
+  /**
+   * Records the brief for the glob as it was before a hand-over (a pick-up may clear the very failure it explains) as a
+   * "Handover" attachment; nothing when there is none. Sets `wrote` so the caller can publish `glob.artifacts`.
+   */
+  private handoverRecorder(wrote: { value: boolean }): NonNullable<CommandOptions['record']> {
+    return async (tx, before, _next, actor) => {
+      // A retried attempt starts over.
+      wrote.value = false;
+      if (actor === null) return;
+      const brief = await handoverOf(tx, this.deps.clock, before);
+      if (brief === null) return;
+      await addArtifact(tx, this.deps.clock, before, actor.email, {
+        kind: 'attachment',
+        label: HANDOVER_LABEL,
+        content: handoverMarkdown(brief),
+        link: null,
+        commitSha: before.pr?.headSha ?? null,
+        runId: null,
+        agentSetVersion: null,
+        reviewStats: null,
+      });
+      wrote.value = true;
+    };
+  }
+
+  private publishHandover(wrote: { value: boolean }, glob: Glob): void {
+    if (wrote.value) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: glob.boardId, globId: glob.id });
   }
 
   /** The splits on a board, by glob ID, for the card's "part 2 of 3" links (a glob split again shows its latest). */
@@ -760,10 +796,14 @@ export class GlobService {
   }
 
   /** Start a glob that waits for others to merge, before they have. */
-  startAnyway(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.startAnyway(glob, ctx, facts.dependencies), {
+  async startAnyway(email: string, id: string, version: number) {
+    const wrote = { value: false };
+    const result = await this.command(email, id, version, (glob, ctx, _board, facts) => machine.startAnyway(glob, ctx, facts.dependencies), {
       dependencies: true,
+      record: this.handoverRecorder(wrote),
     });
+    if (result.ok) this.publishHandover(wrote, result.value);
+    return result;
   }
 
   /** `environment` (optional) is chosen at pick-up; leaving it out keeps the glob's environment. */
@@ -780,6 +820,7 @@ export class GlobService {
     environment?: string | null,
   ): Promise<Result<{ glob: Glob; warning: string | null }>> {
     let warning: string | null = null;
+    const wrote = { value: false };
     const result = await this.command(
       email,
       id,
@@ -789,8 +830,9 @@ export class GlobService {
         warning = glob.status === 'planning' && dependencies !== undefined ? pickUpWarning(waitingFor(glob, dependencies)) : null;
         return machine.pickUp(glob, ctx, board, { takeOver, ...(environment === undefined ? {} : { environment }), ...(dependencies === undefined ? {} : { dependencies }) });
       },
-      { dependencies: true, applies: 'any' },
+      { dependencies: true, applies: 'any', record: this.handoverRecorder(wrote) },
     );
+    if (result.ok) this.publishHandover(wrote, result.value);
     return result.ok ? ok({ glob: result.value, warning }) : result;
   }
 
@@ -1215,6 +1257,7 @@ export class GlobService {
         }
         await tx.appendEvents(events);
         await tx.enqueueEffects(effects);
+        if (options.record !== undefined) await options.record(tx, glob, next, actor);
         return ok(next);
       });
       if (result === 'retry') {
