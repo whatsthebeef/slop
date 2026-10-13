@@ -11,6 +11,7 @@ import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
 import { actionTiers } from '@/lib/action-style';
+import { splitChip } from '@/lib/split-chip';
 import { Tip } from './ui/tip';
 import { LabelPopover } from './labels';
 import type { ReviewLabel } from './labels';
@@ -379,28 +380,22 @@ export const OversizedChip = ({ glob }: { glob: GlobView }) =>
     </Tip>
   ) : null;
 
-/** "part 2 of 3" with links to the other parts when the glob came from a split. */
+/** "split from <source>" on a part after the first, with the part number and the other parts in the tooltip. */
 export const SplitChip = ({ glob }: { glob: GlobView }) => {
-  const split = glob.split;
-  if (split === undefined) return null;
-  const others = split.parts.filter((id) => id !== glob.id);
+  const chip = splitChip(glob);
+  if (chip === null) return null;
   return (
-    <Tip text={`Split from ${split.source}; the other parts: ${others.join(', ')}`}>
+    <Tip text={chip.tip}>
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='split-chip'>
-        part {split.part + 1} of {split.parts.length}
-        {split.part > 0 && (
-          <>
-            {', split from '}
-            <Link
-              to={`/boards/${glob.boardId}?glob=${encodeURIComponent(split.source)}`}
-              className='underline-offset-2 hover:underline'
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => e.stopPropagation()}
-            >
-              {split.source}
-            </Link>
-          </>
-        )}
+        {'split from '}
+        <Link
+          to={`/boards/${glob.boardId}?glob=${encodeURIComponent(chip.source)}`}
+          className='underline-offset-2 hover:underline'
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {chip.source}
+        </Link>
       </span>
     </Tip>
   );
