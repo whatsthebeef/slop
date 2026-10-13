@@ -742,6 +742,8 @@ export const GlobCard = ({
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
   const status = statusLine(glob, new Date().toISOString(), viewer);
+  // A stalled conflict is already said, briefly, by the position chip: say it once on the card.
+  const conflictSaid = status?.conflict === true && positionOf(glob, new Date().toISOString(), viewer)?.holder === 'stalled';
   const preview = moves.find((m) => m.action === previewing);
   // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status.
   const decision = decisionOf(glob) !== null;
@@ -818,7 +820,7 @@ export const GlobCard = ({
         {status !== null && !decision && status.kind === 'ready' && (
           <YourTurnChip glob={glob} status={status} pending={pending} onAct={(action) => onAct?.(action)} onOpenSection={onOpenSection} />
         )}
-        {status !== null && !decision && status.kind !== 'ready' && (
+        {status !== null && !decision && status.kind !== 'ready' && !conflictSaid && (
           <Tip text={`${status.tip}\n${clickTip(statusClick(status))}`}>
             <ChipButton
               onOpen={() => runChip(statusClick(status), () => undefined, onOpenSection)}

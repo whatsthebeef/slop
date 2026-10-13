@@ -42,6 +42,8 @@ export interface StatusLine {
   readonly turn?: HumanStepKind;
   /** For `ready`: the due step is a stored work step (a rollout), done in the Human steps section. */
   readonly work?: true;
+  /** The problem is a merge conflict: the card says it in a few words and the glob view lists the files. */
+  readonly conflict?: true;
 }
 
 /** True for an investigate-only run: it never started the glob (`purpose` is absent on implementing runs). */
@@ -147,7 +149,17 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
   }
   if (failed && !provisioningFailed) {
     const tip = `${reason}${/^(Routine run never started|The run's session never reached slop)/.test(glob.failure?.reason ?? '') && session !== null ? `\nSession: ${session}` : ''}`;
-    candidates.push(make({ kind: 'failure', full: reason, tone: 'text-red', tip }));
+    candidates.push(
+      make({
+        kind: 'failure',
+        full: reason,
+        tone: 'text-red',
+        tip,
+        ...(failure?.conflict === undefined
+          ? {}
+          : { text: 'Stalled: merge conflict', conflict: true as const }),
+      }),
+    );
   }
   // An investigation is an artifact, not the glob's work: its failure is a note, never the red failure of an implementation.
   if (investigationFailed) {
@@ -162,10 +174,20 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
       }),
     );
   }
-  if (hint !== null)
+  if (hint !== null) {
+    const flagged = failure === null ? glob.conflict : null;
     candidates.push(
-      make({ kind: 'stuck', full: hintSentence(hint), tone: 'text-required', tip: hint }),
+      make({
+        kind: 'stuck',
+        full: hintSentence(hint),
+        tone: 'text-required',
+        tip: hint,
+        ...(flagged == null
+          ? {}
+          : { text: `Merge conflict with ${flagged.base}`, conflict: true as const }),
+      }),
     );
+  }
   const behind = behindWarning(glob);
   if (behind !== null) {
     candidates.push(
