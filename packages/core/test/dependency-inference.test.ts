@@ -163,6 +163,45 @@ describe('dependency inference', () => {
     expect((await current(made.id)).version).toBe(version);
   });
 
+  it('the investigation refines the edges with the code it read: confirms, adds, and drops a need it found unused', async () => {
+    const a = await create({ type: 'same' });
+    const b = await create({ type: 'same' });
+    const c = await create({ type: 'same' });
+    answer = edges({ id: a.id, kind: 'needs', reason: 'guessed from the plan' }, { id: b.id, kind: 'overlaps', reason: 'both edit one file' });
+    const made = await create({ type: 'same' });
+    expect(made.impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'needs'], [b.id, 'overlaps']]);
+    const investigation = (dependencies: unknown) =>
+      `# Investigation\n\n\`\`\`investigation\n${JSON.stringify({
+        files: [{ path: 'x.ts', change: 'modify' }],
+        modules: ['core'],
+        expectedLines: { min: 1, max: 5 },
+        parts: [],
+        riskTier: 'low',
+        riskAreas: [],
+        needsHuman: { needed: false, reason: null },
+        confidence: 'high',
+        dependencies,
+        planHash: 'p',
+        baseCommit: 'c',
+      })}\n\`\`\``;
+    const push = (content: string) =>
+      store.transaction((tx) =>
+        tx.insertArtifact({ globId: made.id, kind: 'investigation', label: '', content, link: null, commitSha: null, provenance: { by: 'human', actor: DEV, runId: null, agentSetVersion: null }, createdAt: '2026-10-05T12:02:00.000Z' }),
+      );
+    // The model still says a needs; the investigator read the code, uses c instead, and found nothing used from a.
+    answer = edges({ id: a.id, kind: 'needs', reason: 'guessed again' }, { id: b.id, kind: 'overlaps', reason: 'both edit one file' });
+    await push(investigation([{ id: c.id, kind: 'needs', reason: 'calls parseEdges() in dependency-inference-service.ts', files: ['dependency-inference-service.ts'] }, { id: 's99t9', kind: 'needs', reason: 'not on the board' }]));
+    await inference.refresh(made.id);
+    const refined = (await current(made.id)).impliedAfter ?? [];
+    expect(refined.map((e) => [e.id, e.kind])).toEqual([[c.id, 'needs'], [b.id, 'overlaps']]);
+    expect(refined[0]).toMatchObject({ source: 'inferred', evidence: 'calls parseEdges() in dependency-inference-service.ts', paths: ['dependency-inference-service.ts'] });
+    // With no model answer the investigator's findings stand on their own.
+    const lone = new DependencyInferenceService({ store, apply: (id, found, planHash) => globs.applyInferred(id, found, planHash) });
+    await push(investigation([{ id: a.id, kind: 'overlaps', reason: 'edits the same function' }]));
+    await lone.refresh(made.id);
+    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
+  });
+
   it('a dismissed edge is not inferred again until the plan changes', async () => {
     const provider = await create({ type: 'same' });
     answer = edges({ id: provider.id, kind: 'needs' });
