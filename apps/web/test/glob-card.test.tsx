@@ -208,6 +208,44 @@ describe('card rows', () => {
   });
 });
 
+describe('independent review icon', () => {
+  const reviewed = (findings: number, headSha: string | null = head) =>
+    view({
+      pr: { state: 'draft', number: 1, headSha: head },
+      artifacts: [
+        {
+          kind: 'independent_review',
+          label: '',
+          version: 1,
+          versions: 1,
+          commitSha: headSha,
+          createdAt: NOW,
+          by: 'reviewer',
+          actor: 'slop',
+          review: { stage: 'pre_merge', headSha, findings, high: 0, medium: 0, low: 0 },
+        },
+      ],
+    } as Partial<GlobView>);
+
+  it('shows no icon or text for a review with zero findings', () => {
+    const root = dom(markup(reviewed(0)));
+    expect(root.querySelector('[data-testid="artifact-icon-independent_review"]')).toBeNull();
+    expect(root.querySelector('[data-testid="review-status"]')).toBeNull();
+    expect(root.innerHTML).not.toContain('No findings');
+  });
+
+  it('shows the icon with the count when there are findings', () => {
+    const root = dom(markup(reviewed(2)));
+    expect(root.querySelector('[data-testid="artifact-icon-independent_review"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="review-status"]')?.textContent).toBe('2 findings');
+  });
+
+  it('says outdated when a later push left the review behind', () => {
+    const root = dom(markup(reviewed(1, 'old0000')));
+    expect(root.querySelector('[data-testid="review-status"]')?.textContent).toContain('(outdated)');
+  });
+});
+
 describe('card actions', () => {
   it('shows Start and Pick up for an unblocked same in Planning', () => {
     const g = view({ type: 'same', status: 'planning' });

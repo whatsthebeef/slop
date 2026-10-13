@@ -258,7 +258,8 @@ export const ChipButton = ({
 const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (target: GlobTarget) => void }) => {
   const present = CARD_ARTIFACT_KINDS.flatMap((kind) => {
     const artifact = glob.artifacts?.find((a) => a.kind === kind);
-    return artifact === undefined ? [] : [artifact];
+    // An independent review with no findings has nothing to show on the card; the glob view still lists it.
+    return artifact === undefined || artifact.review?.findings === 0 ? [] : [artifact];
   });
   if (present.length === 0) return null;
   return (
