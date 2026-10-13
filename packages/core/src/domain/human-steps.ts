@@ -18,6 +18,7 @@ export const HUMAN_STEP_KINDS = [
   'pair',
   'rollout',
   'review_label',
+  'unstick',
 ] as const;
 export type HumanStepKind = (typeof HUMAN_STEP_KINDS)[number];
 

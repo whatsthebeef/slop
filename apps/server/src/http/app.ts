@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, IntakeService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
-import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, humanSteps, latestSignedOff, listOf, machine, needsHuman, stepsForViewer } from '@slop/core';
+import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -320,6 +320,13 @@ export const createApp = (deps: AppDeps) => {
         const everyone = await globs.listWithArtifacts(email, m.board.id, { status: open, include: 'all' });
         const stored = await globs.humanStepsOf(m.board.id);
         const viewer = { email, role: m.role };
+        // Stalled: nobody is moving the glob (a failed step, a quiet run, nobody on it). Derived from the glob alone here;
+        // the board's list adds effects, deploys and uploads for the full picture.
+        const now = new Date().toISOString();
+        const thresholds = stallThresholds(m.board);
+        const stalled = list.filter(
+          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), new Map(), now, { viewer, thresholds }).holder === 'stalled',
+        ).length;
         const yourTurn = (everyone.ok ? everyone.value : []).reduce(
           (n, { glob, artifacts }) =>
             n +
@@ -339,6 +346,7 @@ export const createApp = (deps: AppDeps) => {
           lastViewedAt: m.lastViewedAt,
           attention: list.filter(needsHuman).length,
           running: list.filter(machine.hasLiveRun).length,
+          stalled,
           supers: list.filter((g) => g.type === 'super' && listOf(g.status) === 'doing').length,
           reviews,
         };
@@ -448,12 +456,27 @@ export const createApp = (deps: AppDeps) => {
     const splits = await globs.splitsOf(boardId);
     const oversized = await globs.oversizedOf(boardId);
     const steps = await globs.humanStepsOf(boardId);
+    const now = new Date().toISOString();
+    const viewer = { email, role: membership.value.role };
+    const thresholds = stallThresholds(membership.value.board);
     return send(c, result, (list) =>
-      list.map(({ glob, artifacts, dependencies, chain }) => ({
-        ...globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain, glob.waiting != null && oversized.has(glob.id), steps.get(glob.id)),
-        ...splitField(splits.get(glob.id)),
-        ...(oversized.has(glob.id) ? { oversized: true } : {}),
-      })),
+      list.map(({ glob, artifacts, dependencies, chain }) => {
+        const view = globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain, glob.waiting != null && oversized.has(glob.id), steps.get(glob.id));
+        // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
+        // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
+        const machine = machineSteps(glob);
+        const human = humanSteps(glob, {}, steps.get(glob.id) ?? []);
+        const move = whoseMove(glob, human, machine, dependencies, now, { viewer, thresholds });
+        return {
+          ...view,
+          // A stalled glob also hands a step to its implementer (or planner).
+          humanSteps: withUnstick(human, move).map(compactStep),
+          move,
+          machineSteps: machine,
+          ...splitField(splits.get(glob.id)),
+          ...(oversized.has(glob.id) ? { oversized: true } : {}),
+        };
+      }),
     );
   });
 
