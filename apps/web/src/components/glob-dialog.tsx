@@ -694,7 +694,7 @@ export const GlobDetail = ({
             </>
           )}
 
-          <ArtifactsSection globId={glob.id} artifacts={glob.artifacts ?? []} selected={artifact} onSelect={setArtifact} />
+          <ArtifactsSection globId={glob.id} boardId={glob.boardId} artifacts={glob.artifacts ?? []} selected={artifact} onSelect={setArtifact} />
 
           <GlobDecisions boardId={glob.boardId} globId={glob.id} />
 

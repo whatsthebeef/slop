@@ -73,6 +73,15 @@ const parse = async <S extends z.ZodType>(c: Context<Env>, schema: S): Promise<z
 };
 
 /** REST for the board's knowledge base and glob artifacts. */
+/** The same cap as KB uploads: an attachment's text is stored in Postgres. */
+export const ATTACHMENT_TEXT_MAX = 500_000;
+
+export const attachmentBody = z.object({
+  label: z.string().min(1).max(200),
+  text: z.string().max(ATTACHMENT_TEXT_MAX).nullable().default(null),
+  link: z.url({ protocol: /^https?$/ }).nullable().default(null),
+});
+
 export const mountKnowledge = (
   app: Hono<Env>,
   deps: {
@@ -430,10 +439,7 @@ export const mountKnowledge = (
   app.get('/api/globs/:id/findings', async (c) => send(c, await deps.findings.forGlob(c.get('email'), c.req.param('id'))));
 
   app.post('/api/globs/:id/attachments', async (c) => {
-    const body = await parse(
-      c,
-      z.object({ label: z.string().min(1), text: z.string().nullable().default(null), link: z.url({ protocol: /^https?$/ }).nullable().default(null) }),
-    );
+    const body = await parse(c, attachmentBody);
     if (body instanceof Response) return body;
     return send(c, await artifacts.attach(c.get('email'), c.req.param('id'), body));
   });
