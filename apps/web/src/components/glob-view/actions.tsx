@@ -1,5 +1,5 @@
 import { decisionOf, machine } from '@slop/core';
-import type { Action, EditFailure } from '@slop/core';
+import type { Action, EditFailure, Handover } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -32,6 +32,7 @@ import type { TypeOption } from '@/lib/type-change';
 import { isOversized } from '../oversized-glob';
 import { Tip } from '../ui/tip';
 import { TypePopover } from '../type-popover';
+import type { GlobView } from '@/lib/api';
 import type { GlobViewContext } from './context';
 
 /**
@@ -268,13 +269,20 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
   />
 );
 
-/** Why the viewer is needed: the full box until acknowledged, then one line. */
-const HandoverBox = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) => {
-  const { brief, briefRead, briefOpen } = state;
-  if (brief === null) return null;
+/** Why the viewer is needed, inside the Now panel's details: the full brief until acknowledged, then one line. */
+export const HandoverBrief = ({
+  glob,
+  state,
+  brief,
+}: {
+  glob: GlobView;
+  state: GlobActionsState;
+  brief: Handover;
+}) => {
+  const { briefRead, briefOpen } = state;
   return (
     <div
-      className="mb-2 grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-sm"
+      className="grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-sm"
       data-testid="handover-box"
     >
       {briefRead && !briefOpen ? (
@@ -315,7 +323,7 @@ const HandoverBox = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsS
               variant="ghost"
               data-testid="handover-acknowledge"
               onClick={() => {
-                writeHandoverAcknowledged(ctx.glob.id, brief);
+                writeHandoverAcknowledged(glob.id, brief);
                 state.setBriefRead(true);
                 state.setBriefOpen(false);
               }}
@@ -351,7 +359,6 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
   const { confirmingOversized } = state;
   return (
     <>
-      <HandoverBox ctx={ctx} state={state} />
       {(main !== null || actions.length + disabled.length > 0 || stepTurn !== null) && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">

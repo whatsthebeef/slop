@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GLOB_VIEW_SECTIONS } from '../src/components/glob-view/sections';
+import { GLOB_VIEW_SECTIONS, HEADER_SECTIONS } from '../src/components/glob-view/sections';
 import { GLOB_SECTIONS } from '../src/lib/glob-section';
 
 describe('glob view section registry', () => {
@@ -8,6 +8,6 @@ describe('glob view section registry', () => {
   });
 
   it('lists every section a deep link can open', () => {
-    expect([...GLOB_VIEW_SECTIONS].sort()).toEqual([...GLOB_SECTIONS].sort());
+    expect([...GLOB_VIEW_SECTIONS, ...HEADER_SECTIONS].sort()).toEqual([...GLOB_SECTIONS].sort());
   });
 });

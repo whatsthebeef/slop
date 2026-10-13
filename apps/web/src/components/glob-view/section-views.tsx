@@ -2,6 +2,7 @@ import type { LabelName, SuggestionPrefill } from '@slop/core';
 import type { ReactNode } from 'react';
 import type { DecideInput } from '@/lib/api';
 import type { GlobSection } from '@/lib/glob-section';
+import type { BodySection } from './sections';
 import type { ArtifactRef } from '../artifacts';
 import { HumanSteps } from '../human-steps';
 import { LabelReviews } from '../labels';
@@ -18,7 +19,6 @@ import { DeploysPanel } from './deploys';
 import { EditFieldsSection } from './edit-fields';
 import type { GlobEdits } from './edit-fields';
 import { EnvironmentsPanel } from './environments';
-import { EscalationSection } from './escalation';
 import { FindingsPanel } from './findings';
 import { PlanSection } from './plan';
 import { SizeSection } from './size';
@@ -57,9 +57,8 @@ export interface SectionProps {
 type SectionView = (props: SectionProps) => ReactNode;
 
 /** How each section renders, keyed by its `data-section` id. The order lives in `sections.ts`. */
-export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
+export const SECTION_VIEWS: Record<BodySection, SectionView> = {
   conflict: ({ ctx }) => <ConflictSection ctx={ctx} />,
-  escalation: ({ ctx }) => <EscalationSection ctx={ctx} />,
   labels: ({ ctx, actions, onReviewLabel, openLabel }) =>
     !actions.decision && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />
@@ -108,7 +107,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
 };
 
 /** Sections that render after another one's anchor without an anchor of their own (the edit fields, under the actions). */
-export const AFTER_SECTION: Partial<Record<GlobSection, SectionView>> = {
+export const AFTER_SECTION: Partial<Record<BodySection, SectionView>> = {
   actions: ({ ctx, actions, edits, onReload }) => (
     <EditFieldsSection
       ctx={ctx}
