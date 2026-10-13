@@ -44,6 +44,13 @@ export type BoardFilter = ChipsFilter | TextFilter | StepsFilter;
 /** Splits a comma or space separated list, dropping empties. */
 const tokens = (raw: string): string[] => raw.split(/[\s,]+/).filter((t) => t !== '');
 
+/** The holders the board can filter on: the machine at work, a glob waiting on something automated, a glob nobody is moving. */
+const MOVES = [
+  ['machine', 'Machine working'],
+  ['waiting', 'Waiting'],
+  ['stalled', 'Stalled'],
+] as const;
+
 const CATEGORIES: Category[] = ['feature', 'task', 'bug', 'decision'];
 
 /** The board's filters. Adding one is one entry here: the pane renders this list and the board applies it. */
@@ -69,6 +76,16 @@ export const BOARD_FILTERS: BoardFilter[] = [
     // Without a viewer (not loaded yet) nothing is known to be theirs, so nothing passes.
     matches: (glob, _value, viewer) =>
       viewer !== undefined && yourTurn(glob.humanSteps ?? [], glob, viewer) !== null,
+  },
+  {
+    key: 'move',
+    label: 'Whose move',
+    hideLabel: true,
+    control: 'chips',
+    options: MOVES.map(([value, label]) => ({ value, label })),
+    normalize: (raw) => MOVES.map(([m]) => m).filter((m) => tokens(raw.toLowerCase()).includes(m)).join(','),
+    // Any of the chosen holders; a list that predates the move (an older API) matches nothing.
+    matches: (glob, value) => glob.move !== undefined && tokens(value).includes(glob.move.holder),
   },
   {
     key: 'human',
@@ -163,3 +180,6 @@ export const yourTurnCount = (globs: readonly GlobView[], viewer: HumanStepViewe
   );
 
 export const selectedOptions = (raw: string): string[] => tokens(raw);
+
+/** The globs nobody is moving: the tab bar's ⚠ count. */
+export const stalledCount = (globs: readonly GlobView[]): number => globs.filter((g) => g.move?.holder === 'stalled').length;
