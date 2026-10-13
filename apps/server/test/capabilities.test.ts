@@ -26,7 +26,7 @@ describe('CapabilityReader', () => {
     let calls = 0;
     let answer = true;
     let clock = 0;
-    const reader = new CapabilityReader(switches({ bucket: { reachable: () => Promise.resolve(++calls > 0 && answer) } }), () => clock);
+    const reader = new CapabilityReader(switches({ bucket: { unreachableReason: () => Promise.resolve(++calls > 0 && answer ? null : 'bucket denied: AccessDenied') } }), () => clock);
     expect((await reader.read()).fileAttachments).toBe(true);
     answer = false;
     clock = 30_000;
@@ -38,8 +38,19 @@ describe('CapabilityReader', () => {
   });
 
   it('counts a probe that throws as off', async () => {
-    const reader = new CapabilityReader(switches({ bucket: { reachable: () => Promise.reject(new Error('timeout')) } }));
+    const reader = new CapabilityReader(switches({ bucket: { unreachableReason: () => Promise.reject(new Error('boom')) } }));
     expect((await reader.read()).fileAttachments).toBe(false);
+    expect(await reader.reasons()).toEqual({ fileAttachments: 'timeout' });
+  });
+});
+
+describe('CapabilityReader.reasons', () => {
+  it('says why file attachments are off, and nothing when they are on', async () => {
+    expect(await new CapabilityReader(switches()).reasons()).toEqual({ fileAttachments: 'bucket not configured' });
+    const denied = new CapabilityReader(switches({ bucket: { unreachableReason: () => Promise.resolve('bucket denied: AccessDenied') } }));
+    expect(await denied.reasons()).toEqual({ fileAttachments: 'bucket denied: AccessDenied' });
+    const on = new CapabilityReader(switches({ bucket: { unreachableReason: () => Promise.resolve(null) } }));
+    expect(await on.reasons()).toEqual({});
   });
 });
 
