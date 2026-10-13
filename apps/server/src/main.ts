@@ -35,6 +35,8 @@ import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { environmentExecutors } from './environment-executors.js';
 import { exclusivePathExecutors } from './exclusive-path-executors.js';
+import { rolloutExecutors } from './rollout-executors.js';
+import { CapabilityReader, CapabilityWatch } from './capabilities.js';
 import { reviewExecutors } from './review-executors.js';
 import { makeRunReview } from './review-runner.js';
 import { mountArtifactUploads } from './http/artifact-upload.js';
@@ -158,6 +160,7 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
     ...exclusivePathExecutors(store, branchFiles, boardOf),
+    ...rolloutExecutors(new CodeHostChanges(github, logError), boardOf, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).rolloutPaths, logError),
     // The independent reviewer: `artifacts`, `trackLlm` and the config exist by the time the first job runs.
     ...reviewExecutors(github, boardOf, (glob, resolved) =>
       makeRunReview({
@@ -361,7 +364,7 @@ const chat = new ChatService({
 });
 // An arriving investigation escalates a sub that needs a human and raises the oversize flag with a fan-out proposal.
 const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input), predictRollout: (id) => globs.predictRollout(id) });
-const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, investigation });
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, investigation, rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
 const attachments =
   attachmentObjects === null
     ? null
@@ -492,7 +495,15 @@ awsSignInEnabled = awsSignIn !== null;
 // The registry starts empty: drop notifications a previous run left, so a problem fixed while the server was down doesn't linger.
 for (const id of Object.keys(INTEGRATION_NAMES) as IntegrationId[]) await notifications.clear(null, integrationSource(id));
 await notifications.clear(null, 'integration:local'); // the retired fake integration of local follow
-mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn });
+// What slop can verify about itself: /api/health reports it and human steps with a `check` tick against it.
+const capabilities = new CapabilityReader({
+  bucket: attachmentObjects,
+  attachmentQueueConfigured: config.ATTACHMENTS_QUEUE_URL !== undefined,
+  slackConfigured: config.SLACK_SIGNING_SECRET !== undefined && config.SLACK_BOT_TOKEN !== undefined,
+  codeIndexRuns: config.SLOP_JOBS.has('code'),
+  deployResultsConfigured: config.AWS_WEBHOOK_KEY.length > 0,
+});
+mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn, capabilities });
 mountSearch(app, { search });
 mountCode(app, { code });
 mountChat(app, { chat });
@@ -653,6 +664,8 @@ const attachmentEvents =
         logError,
       );
 if (runs('attachments')) attachmentEvents?.start();
+const capabilityWatch = new CapabilityWatch(async () => (await store.transaction((tx) => tx.listAllBoards())).map((b) => b.id), globs, capabilities, logError);
+if (runs('capabilities')) capabilityWatch.start();
 const readinessWatch = new ReadinessWatch(store, { globs, store, host: github, log: logError }, notifications, logError);
 if (runs('readiness')) readinessWatch.start();
 const reconcileWatch = new ReconcileWatch(store, globs, logError);
@@ -682,6 +695,7 @@ const shutdown = () => {
   followWatch?.stop();
   readinessWatch.stop();
   attachmentEvents?.stop();
+  capabilityWatch.stop();
   server.close();
   void database.close();
 };
