@@ -228,7 +228,7 @@ describe('runs that never start', () => {
 
   it('says how long a run has been queued once it passes 10 minutes, with the session', () => {
     expect(queuedRunNotice(g(), at(9))).toBeNull();
-    expect(queuedRunNotice(g(), at(25))).toBe('Routine run queued for 25 min: open the session https://claude.ai/code/s1');
+    expect(queuedRunNotice(g(), at(25))).toBe('Machine run queued for 25 min: open the session https://claude.ai/code/s1');
     expect(queuedRunNotice(g({ runs: [run({ state: 'active' })] }), at(25))).toBeNull();
   });
 
