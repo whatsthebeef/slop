@@ -130,6 +130,17 @@ describe('shared status line', () => {
     expect(top(g)?.full).toBe('Merge waits: main is red since s15t11');
   });
 
+  it('says a conflict with the base is why a same with passing checks cannot merge', () => {
+    const g = prOpen({
+      headChecks: { sha: head, state: 'passed' },
+      conflict: { base: 'main', files: [], since: 's1t2', at: NOW },
+      allowedActions: [],
+    });
+    expect(waitingFor(g, [], 'dev')).toMatchObject([
+      { action: 'merge', why: ': conflicts with main' },
+    ]);
+  });
+
   it('says a super waits for the implementation record', () => {
     const g = view({
       type: 'super',

@@ -1059,6 +1059,14 @@ export const requestMerge = (
   if (head === null || glob.headChecks?.sha !== head || glob.headChecks.state !== 'passed') {
     return invalidTransition(glob, actor, 'Required checks have not passed on the current head');
   }
+  // Passing checks say nothing about mergeability once the base has moved: GitHub would refuse and fail the glob.
+  if (glob.conflict != null) {
+    return invalidTransition(
+      glob,
+      actor,
+      `Conflicts with the base branch since ${glob.conflict.since ?? 'the last push'}: merge the base into the branch and push before merging`,
+    );
+  }
   if (options.continue) {
     if (glob.type !== 'super')
       return invalidTransition(glob, actor, 'Only a super can merge and continue');
@@ -2585,6 +2593,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (
     glob.status === 'pr_open' &&
     glob.type !== 'sub' &&
+    glob.conflict == null &&
     glob.pr?.headSha != null &&
     glob.headChecks?.sha === glob.pr.headSha &&
     glob.headChecks.state === 'passed'
@@ -2630,6 +2639,7 @@ const agentSetActions = (glob: Glob, actor: Actor): Action[] => {
     actions.push('mark_ready');
   if (
     glob.status === 'pr_open' &&
+    glob.conflict == null &&
     glob.pr?.headSha != null &&
     glob.headChecks?.sha === glob.pr.headSha &&
     glob.headChecks.state === 'passed'
