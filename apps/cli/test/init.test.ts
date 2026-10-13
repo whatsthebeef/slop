@@ -401,6 +401,51 @@ describe('slop init', () => {
     expect(await exists(MANIFEST_PATH)).toBe(false);
   });
 
+  describe('--committed', () => {
+    const withSpec = (version: number) => ({ ...bundle({}, version), localRun: { launch: 'scripts/session.sh' } });
+    const committedDeps = (run: Harness, tracked: boolean): InitDeps => ({
+      ...run.deps,
+      committed: true,
+      isTracked: () => Promise.resolve(tracked),
+    });
+
+    it('leaves a tracked agent set and CLAUDE.md byte-identical, still writes local-run.json, and names both versions', async () => {
+      await runInit(harness({ body: bundle({}, 3) }).deps);
+      const before = {
+        manifest: await read(MANIFEST_PATH),
+        settings: await read('.claude/settings.json'),
+        claudeMd: await read('CLAUDE.md'),
+        agent: await read('.claude/agents/tester.md'),
+      };
+      await rm(join(root, LOCAL_RUN_PATH), { force: true });
+      const run = harness({ body: withSpec(5) });
+      await runInit(committedDeps(run, true));
+      expect(await read(MANIFEST_PATH)).toBe(before.manifest);
+      expect(await read('.claude/settings.json')).toBe(before.settings);
+      expect(await read('CLAUDE.md')).toBe(before.claudeMd);
+      expect(await read('.claude/agents/tester.md')).toBe(before.agent);
+      expect(await read(LOCAL_RUN_PATH)).toBe('{\n  "launch": "scripts/session.sh"\n}\n');
+      expect(run.out).toEqual([
+        'slop init: agent set v3 is committed in this checkout (board has v5; it arrives through the agent-set glob), local-run spec (.sstor/local-run.json)\n',
+      ]);
+    });
+
+    it('says the committed set is current when the versions match', async () => {
+      await runInit(harness({ body: bundle({}, 3) }).deps);
+      const run = harness({ body: bundle({}, 3) });
+      await runInit(committedDeps(run, true));
+      expect(run.out[0]).toContain('agent set v3 is committed in this checkout (it is current)');
+    });
+
+    it('installs as plain init does when the manifest is not tracked', async () => {
+      const run = harness();
+      await runInit(committedDeps(run, false));
+      expect(await read('.claude/agents/tester.md')).toBe('# Tester\n');
+      expect(((await readJson(MANIFEST_PATH)) as { version: number }).version).toBe(3);
+      expect(run.out[0]).toContain('slop init: board 7 agent set v3: 4 files');
+    });
+  });
+
   describe('local-run spec', () => {
     const withSpec = (localRun: unknown, extra: Record<string, unknown> = {}) => ({ ...bundle(), localRun, ...extra });
 

@@ -22,7 +22,7 @@ import {
 import { IMPORT_USAGE, importCommand } from './import.js';
 import { PUT_ARTIFACT_USAGE, putArtifactCommand } from './put-artifact.js';
 import { REPORT_USAGE, reportCommand } from './report.js';
-import { resolveBoard, resolveMcpServer, runInit } from './init.js';
+import { isGitTracked, resolveBoard, resolveMcpServer, runInit } from './init.js';
 import { describeError, parseJsonOrUndefined } from './util.js';
 
 /** Everything a command needs from the outside world; bin.ts wires the real ones. */
@@ -88,7 +88,7 @@ function expectArgs(args: readonly string[], min: number, max: number, usage: st
 const CALL_USAGE = "call <tool> ['<json arguments>']";
 const API_USAGE = "api <GET|POST|PUT|PATCH|DELETE> </api/...> ['<json body>']";
 const API_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
-const INIT_USAGE = 'init [board]';
+const INIT_USAGE = 'init [board] [--committed]';
 
 const whoamiResultSchema = z.object({ email: z.string() });
 
@@ -159,10 +159,12 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   },
   init: {
     usage: INIT_USAGE,
-    summary: "Install the board's agent set into this git checkout",
+    summary: "Install the board's agent set into this git checkout (--committed: leave a committed set alone)",
     run: async (args, context) => {
-      expectArgs(args, 0, 1, INIT_USAGE);
-      const board = resolveBoard(args[0], context.settings);
+      const committed = args.includes('--committed');
+      const positional = args.filter((arg) => arg !== '--committed');
+      expectArgs(positional, 0, 1, INIT_USAGE);
+      const board = resolveBoard(positional[0], context.settings);
       const root = context.gitRoot();
       if (root === undefined) throw new SlopError('init: run this inside a git checkout');
       await runInit({
@@ -175,6 +177,8 @@ const COMMANDS: Readonly<Record<string, Command>> = {
         }),
         fetch: context.fetch,
         isMcpServerConfigured: context.isMcpServerConfigured,
+        committed,
+        isTracked: isGitTracked,
         now: context.now,
         log: context.log,
         stdout: context.stdout,

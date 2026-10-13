@@ -41,6 +41,8 @@ The tmux and worktree machinery is preserved as-is; only naming, the agent setup
 
 `sstor init <board>` keeps today's `merge_claude_config` logic but changes its source: instead of copying `$SSTOR_DIR/.claude/`, it fetches the board's agent set from slop with `get_agent_set`, using sstor's own sign-in (see sstor's slop sign-in). On a first install it also writes the slop server entry into `.mcp.json` from sstor's own configuration (slop's URL and the Claude Code client ID), so Claude Code can authenticate. The board ID comes from an argument, an environment variable, or `.sstor/sstor.conf` (`SLOP_BOARD`, replacing `JIRA_CLOUD_ID` and `JIRA_PROJECT_KEY`).
 
+With `--committed` (`slop init --committed`, which sstor passes when it launches a glob) a checkout whose `.claude/slop-agent-set.json` is tracked by git keeps its committed agent set: no managed file, settings, CLAUDE.md section or manifest is written, only `.sstor/local-run.json`, and one line names the committed and the board's version. Without a tracked manifest it installs as plain `init` does.
+
 | Step today | With slop |
 | --- | --- |
 | rsync agents, commands and memory from the sessionator repo | Write the board's agents, commands and hooks into `.claude/` |
