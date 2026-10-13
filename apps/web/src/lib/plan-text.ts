@@ -39,3 +39,7 @@ export const planVersionLine = (saved: PlanSaved | null, editing = false): strin
   const line = `version ${saved.version} · saved by ${who} · ${when}`;
   return editing ? `${line} · Save makes version ${saved.version + 1}` : line;
 };
+
+/** Until a glob is signed off the plan field already shows plan.md, so the Artifacts list leaves it out. */
+export const listedArtifacts = <T extends { readonly kind: string }>(artifacts: readonly T[], signedOff: boolean): readonly T[] =>
+  signedOff ? artifacts : artifacts.filter((a) => a.kind !== 'plan');

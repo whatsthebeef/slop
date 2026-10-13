@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { copyOrSelect, planBaseline, planText, planVersionLine } from '@/lib/plan-text';
+import { copyOrSelect, listedArtifacts, planBaseline, planText, planVersionLine } from '@/lib/plan-text';
 
 describe('plan text', () => {
   it('starts from the summary when no version is saved, so it is selectable text', () => {
@@ -55,5 +55,13 @@ describe('plan version line', () => {
     expect(planVersionLine(saved, true)).toMatch(/Save makes version 4$/);
     expect(planVersionLine(null)).toBe('not written yet');
     expect(planVersionLine(null, true)).toBe('not written yet · Save makes version 1');
+  });
+});
+
+describe('listedArtifacts', () => {
+  const all = [{ kind: 'plan' }, { kind: 'implementation_plan' }];
+  it('leaves plan.md out until the glob is signed off', () => {
+    expect(listedArtifacts(all, false)).toEqual([{ kind: 'implementation_plan' }]);
+    expect(listedArtifacts(all, true)).toEqual(all);
   });
 });
