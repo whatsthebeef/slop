@@ -3,6 +3,7 @@ import type { Decision, DecisionSource } from '../domain/decisions.js';
 import type { InboxItem, InboxLink } from '../domain/inbox.js';
 import type { IntegrationToken } from '../domain/integration-tokens.js';
 import type { Deploy } from '../domain/deploys.js';
+import type { StoredHumanStep } from '../domain/human-steps.js';
 import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
 import type { DomainEvent, Effect, OutboxJob } from '../domain/events.js';
 import { sameCommit } from '../domain/signals.js';
@@ -68,6 +69,7 @@ interface State {
   knowledgeHistory: KnowledgeDoc[];
   artifacts: Artifact[];
   deploys: Map<string, Deploy>;
+  humanSteps: Map<string, StoredHumanStep>;
   reviewSources: ReviewSource[];
   findings: ReviewFinding[];
   kbSignals: Map<string, KbSignalState>;
@@ -165,6 +167,7 @@ const clone = (state: State): State => ({
   knowledgeHistory: [...state.knowledgeHistory],
   artifacts: [...state.artifacts],
   deploys: new Map(state.deploys),
+  humanSteps: new Map(state.humanSteps),
   reviewSources: [...state.reviewSources],
   findings: [...state.findings],
   kbSignals: new Map(state.kbSignals),
@@ -218,6 +221,8 @@ const latestAttachments = (all: readonly Artifact[]): Artifact[] => {
   return [...latest.values()].sort((a, b) => a.id - b.id);
 };
 
+const byCreated = (a: StoredHumanStep, b: StoredHumanStep): number => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+
 export class MemoryStore implements Store {
   state: State = {
     globs: new Map(),
@@ -234,6 +239,7 @@ export class MemoryStore implements Store {
     knowledgeHistory: [],
     artifacts: [],
     deploys: new Map(),
+    humanSteps: new Map(),
     reviewSources: [],
     findings: [],
     kbSignals: new Map(),
@@ -316,6 +322,7 @@ export class MemoryStore implements Store {
         s.artifacts = s.artifacts.filter((a) => a.globId !== id);
         s.findings = s.findings.filter((f) => f.globId !== id);
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
+        for (const [key, step] of s.humanSteps) if (step.globId === id) s.humanSteps.delete(key);
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
         s.testRuns = s.testRuns.filter((r) => r.globId !== id);
         // A glob's own items go with it; a learning or document it fed only loses the link.
@@ -659,6 +666,14 @@ export class MemoryStore implements Store {
           });
         }
         return Promise.resolve([...summaries.entries()].filter(([key]) => !cleared.has(key)).map(([, v]) => v));
+      },
+      listHumanSteps: (boardId, globIds) =>
+        Promise.resolve([...s.humanSteps.values()].filter((h) => h.boardId === boardId && globIds.includes(h.globId)).sort(byCreated)),
+      listOpenHumanSteps: (boardId) =>
+        Promise.resolve([...s.humanSteps.values()].filter((h) => h.boardId === boardId && h.state === 'open').sort(byCreated)),
+      saveHumanSteps: (steps) => {
+        for (const h of steps) s.humanSteps.set(h.id, h);
+        return Promise.resolve();
       },
       getDeploy: (id) => Promise.resolve(s.deploys.get(id) ?? null),
       saveDeploys: (deploys) => {

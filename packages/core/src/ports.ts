@@ -1,5 +1,6 @@
 import type { BoardSession } from './domain/board-sessions.js';
 import type { Deploy, DeployState } from './domain/deploys.js';
+import type { StoredHumanStep } from './domain/human-steps.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
 import type { DecisionOrigin } from './domain/attributes.js';
 import type { DomainEvent, DomainEventType, Effect, EffectKind, OutboxJob } from './domain/events.js';
@@ -247,6 +248,13 @@ export interface Tx {
   saveKnowledgePageFeedback(feedback: KnowledgePageFeedback): Promise<void>;
   /** Undoes a verdict. */
   deleteKnowledgePageFeedback(boardId: number, globId: string): Promise<void>;
+
+  /** The work steps of these globs on a board (any state), oldest first; none for an empty list. */
+  listHumanSteps(boardId: number, globIds: readonly string[]): Promise<StoredHumanStep[]>;
+  /** A board's open work steps, for the board list. */
+  listOpenHumanSteps(boardId: number): Promise<StoredHumanStep[]>;
+  /** Writes work steps (insert or replace by ID). */
+  saveHumanSteps(steps: readonly StoredHumanStep[]): Promise<void>;
 
   getDeploy(id: string): Promise<Deploy | null>;
   /** Writes deploys (insert or replace by ID). */

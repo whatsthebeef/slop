@@ -1,4 +1,5 @@
 import { failureSummary } from './checks.js';
+import { derivedSteps } from './human-steps.js';
 import { missingCoreDocNotice } from './core-docs.js';
 import type { CoreDocArea } from './core-docs.js';
 import type { RaisedNotification } from './notifications.js';
@@ -674,14 +675,15 @@ export const readyStatus = (glob: Glob, reviewSha: string | null = null): ReadyS
     reviewSha !== null && reviewSha !== head
       ? `\nLocal review is from ${reviewSha.slice(0, 7)}, before the latest push.`
       : '';
-  if (checks !== null && checks.sha === head && checks.state === 'passed') {
-    const merge = `Sames and supers are merged by a person: Merge here or sstor -i ${glob.id} --merge.`;
+  // Your turn is the glob's due Merge step: the same one the glob view lists.
+  const merge = derivedSteps(glob).find((s) => s.kind === 'merge');
+  if (merge !== undefined) {
     const why =
       glob.escalation == null ? '' : `\nNeeds a person because: ${glob.escalation.reason}`;
     return {
       kind: 'ready',
-      text: 'Merge',
-      tip: `Merge: checks passed at ${head.slice(0, 7)}. ${merge}${why}${stale}`,
+      text: merge.title,
+      tip: `${merge.title}: checks passed at ${head.slice(0, 7)}. ${merge.detail ?? ''}${why}${stale}`,
     };
   }
   return {

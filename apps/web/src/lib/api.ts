@@ -58,6 +58,7 @@ import type {
   TypeLearningView,
   SubLimitChange,
   SubLimitView,
+  CompactHumanStep,
   DependencyRulesView,
   Edge,
   TargetChange,
@@ -88,6 +89,8 @@ export interface GlobView extends Glob {
   readonly sizeCheck?: SizeCheck;
   /** Why a person is needed and what to do first; null when nothing is wrong, absent on an older API (single-glob reads only). */
   readonly handover?: Handover | null;
+  /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
+  readonly humanSteps?: readonly CompactHumanStep[];
 }
 
 export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;

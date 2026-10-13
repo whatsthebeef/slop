@@ -1,5 +1,5 @@
-import type { ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { AGENT_SET_COMMIT_DELAY_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
+import type { ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { AGENT_SET_COMMIT_DELAY_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -248,6 +248,38 @@ const deployRow = (d: Deploy): typeof schema.deploys.$inferInsert => ({
   runningSince: d.runningSince === null ? null : new Date(d.runningSince),
   startedAt: d.startedAt === null ? null : new Date(d.startedAt),
   finishedAt: d.finishedAt === null ? null : new Date(d.finishedAt),
+});
+
+const humanStepDue = (value: string): HumanStepDue => {
+  if (!isHumanStepDue(value)) throw new Error(`Unknown human step due ${value}`);
+  return value;
+};
+
+const toHumanStep = (row: typeof schema.humanSteps.$inferSelect): StoredHumanStep => ({
+  id: row.id,
+  boardId: row.boardId,
+  globId: row.globId,
+  kind: row.kind,
+  title: row.title,
+  detail: row.detail,
+  who: row.who,
+  due: humanStepDue(row.due),
+  state: row.state,
+  blocks: row.blocks,
+  check: row.check,
+  script: row.script,
+  origin: row.origin,
+  createdBy: row.createdBy,
+  createdAt: row.createdAt.toISOString(),
+  doneBy: row.doneBy,
+  doneAt: row.doneAt?.toISOString() ?? null,
+  dismissedReason: row.dismissedReason,
+});
+
+const humanStepRow = (h: StoredHumanStep): typeof schema.humanSteps.$inferInsert => ({
+  ...h,
+  createdAt: new Date(h.createdAt),
+  doneAt: h.doneAt === null ? null : new Date(h.doneAt),
 });
 
 const toEnvironmentDeploy = (row: typeof schema.environmentDeploys.$inferSelect): EnvironmentDeploy => ({
@@ -584,6 +616,7 @@ export class PgStore implements Store {
         await t.delete(schema.testRuns).where(eq(schema.testRuns.globId, id));
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
+        await t.delete(schema.humanSteps).where(eq(schema.humanSteps.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
         // Older decisions that this glob's decisions replaced stand again; its own rows go with their items below.
         const d = schema.decisions;
@@ -1284,6 +1317,27 @@ export class PgStore implements Store {
         );
       },
 
+      listHumanSteps: async (boardId, globIds) => {
+        if (globIds.length === 0) return [];
+        const h = schema.humanSteps;
+        const rows = await t
+          .select()
+          .from(h)
+          .where(and(eq(h.boardId, boardId), inArray(h.globId, [...globIds])))
+          .orderBy(h.createdAt, h.id);
+        return rows.map(toHumanStep);
+      },
+      listOpenHumanSteps: async (boardId) => {
+        const h = schema.humanSteps;
+        const rows = await t.select().from(h).where(and(eq(h.boardId, boardId), eq(h.state, 'open'))).orderBy(h.createdAt, h.id);
+        return rows.map(toHumanStep);
+      },
+      saveHumanSteps: async (steps) => {
+        for (const step of steps) {
+          const row = humanStepRow(step);
+          await t.insert(schema.humanSteps).values(row).onConflictDoUpdate({ target: schema.humanSteps.id, set: row });
+        }
+      },
       getDeploy: async (id) => {
         const [row] = await t.select().from(schema.deploys).where(eq(schema.deploys.id, id));
         return row === undefined ? null : toDeploy(row);
