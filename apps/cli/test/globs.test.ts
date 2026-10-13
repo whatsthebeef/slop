@@ -3,6 +3,7 @@ import { SlopError, UsageError } from '../src/errors.js';
 import {
   PROVISION_TIMEOUT_MS,
   globCommand,
+  handoverCommand,
   mergeCommand,
   newCommand,
   pickUpCommand,
@@ -570,5 +571,44 @@ describe('slop merge', () => {
       },
     });
     await expect(mergeCommand(['s1t4'], run.deps)).rejects.toThrow(/checks have not passed/);
+  });
+});
+
+describe('slop handover', () => {
+  const brief = {
+    why: ['Conflicts with main since s15b65 merged: glob-dialog.tsx.'],
+    next: 'Merge origin/main, resolve, run the checks, push.',
+    detail: ['Files: glob-dialog.tsx'],
+  };
+
+  it('prints why the person is needed, what to do first and the detail', async () => {
+    const { deps, out, slop } = setup({ get_glob: () => ({ ...glob(), handover: brief }) });
+    await handoverCommand(['s1t4'], deps);
+    expect(out.join('')).toBe(
+      'Why you are needed:\n- Conflicts with main since s15b65 merged: glob-dialog.tsx.\n\n' +
+        'Do first:\nMerge origin/main, resolve, run the checks, push.\n\nDetail:\n- Files: glob-dialog.tsx\n',
+    );
+    expect(slop.calls).toEqual([{ tool: 'get_glob', args: { id: 's1t4' } }]);
+  });
+
+  it('prints the brief as JSON', async () => {
+    const { deps, out } = setup({ get_glob: () => ({ ...glob(), handover: brief }) });
+    await handoverCommand(['s1t4', '--json'], deps);
+    expect(JSON.parse(out.join(''))).toEqual(brief);
+  });
+
+  it('says nothing is wrong when there is no brief', async () => {
+    const human = setup({ get_glob: () => ({ ...glob(), handover: null }) });
+    await handoverCommand(['s1t4'], human.deps);
+    expect(human.out.join('')).toBe('s1t4: nothing is wrong; continue the plan\n');
+    const json = setup({ get_glob: () => glob() });
+    await handoverCommand(['s1t4', '--json'], json.deps);
+    expect(json.out.join('')).toBe('null\n');
+  });
+
+  it('refuses a missing or malformed ID', async () => {
+    const { deps } = setup({});
+    await expect(handoverCommand([], deps)).rejects.toBeInstanceOf(UsageError);
+    await expect(handoverCommand(['main'], deps)).rejects.toBeInstanceOf(UsageError);
   });
 });

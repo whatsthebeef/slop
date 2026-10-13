@@ -21,6 +21,7 @@ export interface GlobDeps {
 }
 
 export const GLOB_USAGE = 'glob <id> [--json]';
+export const HANDOVER_USAGE = 'handover <id> [--json]';
 export const PICK_UP_USAGE = 'pick-up <id> [--take-over] [--env <name>] [--json]';
 export const NEW_USAGE =
   'new [--same|--sub|--super] [--feature|--task|--bug] [--routine] [--env <name>] [--after <id>[,<id>...]] [--json] <prompt...>';
@@ -76,6 +77,15 @@ const createdSchema = z.object({
   after: z.array(z.string()).optional(),
   waiting: z.boolean().optional(),
 });
+
+/** The hand-over brief get_glob returns (see Handover in packages/core/src/domain/handover.ts); null when nothing is wrong. */
+const handoverSchema = z
+  .object({
+    why: z.array(z.string()),
+    next: z.string(),
+    detail: z.array(z.string()).default([]),
+  })
+  .nullable();
 
 const markedReadySchema = z.object({ id: z.string(), status: z.string(), pr: prSchema.nullable() });
 
@@ -215,6 +225,36 @@ export async function globCommand(args: readonly string[], deps: GlobDeps): Prom
   const glob = await getGlob(deps, requireGlobId(id, GLOB_USAGE));
   if (flags.has('--json')) printJson(deps, globJson(glob));
   else deps.stdout(`${describeGlob(glob)}\n`);
+}
+
+/** `slop handover <id>`: print why a person is needed on a glob and what to do first. */
+export async function handoverCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
+  const { flags, positionals } = parseArgs(args, ['--json'], HANDOVER_USAGE);
+  const [id] = positionals;
+  if (id === undefined || positionals.length !== 1)
+    throw new UsageError(`usage: slop ${HANDOVER_USAGE}`);
+  const glob = await deps.client.call('get_glob', { id: requireGlobId(id, HANDOVER_USAGE) });
+  parseGlob(glob, 'get_glob');
+  const brief = handoverSchema.safeParse((glob as { handover?: unknown }).handover ?? null);
+  if (!brief.success) throw new SlopError('get_glob: unexpected handover from slop');
+  if (flags.has('--json')) {
+    printJson(deps, brief.data);
+    return;
+  }
+  const value = brief.data;
+  if (value === null) {
+    deps.stdout(`${id}: nothing is wrong; continue the plan\n`);
+    return;
+  }
+  const lines = [
+    'Why you are needed:',
+    ...value.why.map((w) => `- ${w}`),
+    '',
+    'Do first:',
+    value.next,
+    ...(value.detail.length === 0 ? [] : ['', 'Detail:', ...value.detail.map((d) => `- ${d}`)]),
+  ];
+  deps.stdout(`${lines.join('\n')}\n`);
 }
 
 /**
