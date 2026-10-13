@@ -1,6 +1,6 @@
 import { decisionOf, dueText, findingsLabel, reviewOutdated, scopeLabel, upcomingSteps } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
-import { AlertTriangle, Bug, GitBranch, Hourglass, ListChecks, Loader2, Pencil, Scale, Sparkles } from 'lucide-react';
+import { AlertTriangle, Bug, GitBranch, Hourglass, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
@@ -12,9 +12,6 @@ import type { Position } from '@/lib/position';
 import { positionOf } from '@/lib/position';
 import { cardStatus, cornerMarker, hasBlocker, turnButton } from '@/lib/card-rows';
 import type { CornerMarker } from '@/lib/card-rows';
-import { useTitleEdit } from '@/lib/title-edit';
-import type { EditFailure } from '@slop/core';
-import type { GlobChanges } from '@/lib/api';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
@@ -634,99 +631,6 @@ const TurnButton = ({
   );
 };
 
-/**
- * The card's title: it wraps over as many lines as it needs (the only text on the card that does) and edits in place, with the
- * glob view's edit logic. Clicks and keys inside it never reach the card, which would open the glob.
- */
-const CardTitle = ({
-  glob,
-  editable,
-  onUpdate,
-  onReload,
-}: {
-  glob: GlobView;
-  editable: boolean;
-  onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
-  onReload: () => Promise<void>;
-}) => {
-  const edit = useTitleEdit({ title: glob.title, resetKey: glob.id, onUpdate, onReload });
-  const { field, text } = edit;
-  // Grow with the text, so the whole title shows while it is typed.
-  useEffect(() => {
-    const el = field.current;
-    if (el === null) return;
-    el.style.height = 'auto';
-    el.style.height = `${String(el.scrollHeight)}px`;
-  }, [field, text, edit.editing]);
-
-  if (!edit.editing) {
-    return editable ? (
-      <button
-        type='button'
-        className='group flex w-full min-w-0 cursor-text items-start gap-1 rounded-sm text-left leading-snug font-medium break-words hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring'
-        aria-label={`Edit title: ${glob.title}`}
-        data-testid='card-title-edit'
-        onClick={(e) => {
-          e.stopPropagation();
-          edit.begin();
-        }}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        <span className='min-w-0 flex-1 break-words'>{glob.title}</span>
-        <Pencil aria-hidden className='mt-0.5 size-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100' />
-      </button>
-    ) : (
-      <div className='leading-snug font-medium break-words' data-testid='card-title'>
-        {glob.title}
-      </div>
-    );
-  }
-  return (
-    <div className='min-w-0' onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-      <textarea
-        ref={field}
-        rows={1}
-        autoFocus
-        value={text}
-        disabled={edit.saving}
-        aria-label='Title'
-        aria-invalid={edit.emptyRefused || edit.error !== null}
-        data-testid='card-title-input'
-        className='block w-full resize-none overflow-hidden rounded border bg-card px-1 text-sm leading-snug font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring'
-        onChange={(e) => edit.change(e.target.value)}
-        onBlur={edit.commit}
-        onKeyDown={edit.onKeyDown}
-      />
-      {edit.saving && (
-        <p role='status' className='text-xs font-normal text-muted-foreground'>
-          Saving…
-        </p>
-      )}
-      {edit.emptyRefused && (
-        <p role='alert' className='text-xs text-red'>
-          The title can't be empty.
-        </p>
-      )}
-      {edit.error !== null && (
-        <div role='alert' className='flex flex-wrap items-center gap-2 text-xs text-red'>
-          <span>{edit.error.message}</span>
-          {edit.error.conflict && (
-            <button
-              type='button'
-              className='rounded-sm border px-1.5 py-0.5 text-foreground hover:bg-muted'
-              disabled={edit.saving}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => void edit.reload()}
-            >
-              Reload latest
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
-
 export const GlobCard = ({
   glob,
   onOpen,
@@ -747,8 +651,6 @@ export const GlobCard = ({
   environments,
   atf,
   viewer,
-  onUpdateTitle,
-  onReload,
 }: {
   glob: GlobView;
   onOpen: () => void;
@@ -782,10 +684,6 @@ export const GlobCard = ({
   atf?: readonly AtfRun[];
   /** Who is looking: Your turn shows the steps that are theirs. */
   viewer?: HumanStepViewer;
-  /** Saves a new title (the glob view's update call); without it the title is plain text. */
-  onUpdateTitle?: (changes: GlobChanges) => Promise<EditFailure | null>;
-  /** Loads the glob's latest values after a title save met a newer version. */
-  onReload?: () => Promise<void>;
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
@@ -801,7 +699,6 @@ export const GlobCard = ({
   const turn = turnButton(glob, now, viewer, blocked);
   // The board hands over the glob's card moves (the one common action); a blocker hides them all.
   const shown = blocked ? [] : moves;
-  const editable = onUpdateTitle !== undefined && glob.status !== 'signed_off';
 
   return (
     <div
@@ -849,7 +746,9 @@ export const GlobCard = ({
         </span>
         {marker !== null && <CornerMarkerView marker={marker} position={position} onAct={onAct} onOpenSection={onOpenSection} />}
       </div>
-      <CardTitle glob={glob} editable={editable} onUpdate={onUpdateTitle ?? (() => Promise.resolve(null))} onReload={onReload ?? (() => Promise.resolve())} />
+      <div className='leading-snug font-medium break-words' data-testid='card-title'>
+        {glob.title}
+      </div>
       {line !== null && (
         <Tip text={line.tip} className='w-full'>
           <div
