@@ -185,6 +185,15 @@ export const hasBusyRun = (glob: Glob): boolean => {
   );
 };
 
+/**
+ * A run that is doing work: queued or active. A `watching` run only waits for check events, so it doesn't stand in the way
+ * of actions the Claude GitHub App performs (like Fix conflict).
+ */
+export const hasWorkingRun = (glob: Glob): boolean => {
+  const run = currentRun(glob);
+  return run !== null && (run.state === 'queued' || run.state === 'active');
+};
+
 /** Any run that has not ended, including one still queued. */
 export const hasLiveRun = (glob: Glob): boolean => {
   const run = currentRun(glob);
@@ -848,11 +857,15 @@ const hasOpenPr = (glob: Glob): boolean =>
   (glob.pr.state === 'draft' || glob.pr.state === 'ready') &&
   (glob.status === 'pr_open' || glob.status === 'in_progress');
 
-/** A conflict slop could ask the Claude GitHub App to fix: nobody implements the glob, no routine run is live, and it hasn't asked yet. */
+/**
+ * A conflict slop could ask the Claude GitHub App to fix: nobody implements the glob, no routine run is working on it
+ * and it hasn't asked yet. A watching run doesn't count as working: it never merges the base branch, and the @claude
+ * comment runs in the GitHub App, not in the routine (so a conflict on a watched PR isn't a dead end).
+ */
 const canRequestConflictFix = (glob: Glob): boolean =>
   glob.type !== 'super' &&
   glob.implementer === null &&
-  !hasLiveRun(glob) &&
+  !hasWorkingRun(glob) &&
   ((hasOpenPr(glob) && glob.conflict != null && glob.conflict.requestedAt === undefined) ||
     (glob.status === 'failed' &&
       glob.failure?.conflict !== undefined &&
@@ -960,7 +973,7 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
       'A glob with a human implementer resolves its conflict locally',
     );
   }
-  if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+  if (hasWorkingRun(glob)) return runActive('A routine run is already queued or active');
   if (glob.conflict?.requestedAt !== undefined) return unchanged(glob);
   if (!canRequestConflictFix(glob)) {
     return invalidTransition(
@@ -1738,7 +1751,9 @@ const failureSummaryOf = (glob: Glob): string | null => {
 /** The head's failed checks that are the glob's own to fix (not inherited from the base): what a watching run is asked to respond to. */
 const ownFailedHead = (glob: Glob): HeadChecks | null => {
   const checks = glob.headChecks;
-  return glob.pr?.headSha != null &&
+  // A conflict isn't a failing check: there is nothing for the watching run to react to.
+  return glob.conflict == null &&
+    glob.pr?.headSha != null &&
     checks?.sha === glob.pr.headSha &&
     checks.state === 'failed' &&
     checks.inheritedFrom === undefined
@@ -1880,6 +1895,15 @@ export const checksChanged = (glob: Glob, ctx: Context): Result<Transition> => {
     .done();
 };
 
+/** Flag the open PR's conflict on the builder's glob when it isn't flagged yet (the first conflict found is kept). */
+const withConflict = (b: Builder, conflict: MergeConflict | undefined, ctx: Context): Builder => {
+  const glob = b.current;
+  if (conflict === undefined || !hasOpenPr(glob) || glob.conflict?.base === conflict.base) return b;
+  return b
+    .set({ conflict: { ...conflict, since: null, at: ctx.now } })
+    .event('ConflictFlagged', { base: conflict.base, files: [...conflict.files], since: null });
+};
+
 /** Required checks finished on a commit; only the PR's current head counts. */
 export const checksCompleted = (
   glob: Glob,
@@ -1892,19 +1916,34 @@ export const checksCompleted = (
     /** The base branch's result when the checks failed: the failure is inherited if the base fails the same way. */
     base?: BaseChecks | null;
     baseBranch?: string;
+    /** With `conflict`: what the head's own check runs say. GitHub usually runs none on a conflicting PR (`pending`). */
+    real?: { state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null };
   },
   ctx: Context,
 ): Result<Transition> => {
   if (glob.pr?.headSha !== checks.sha) return unchanged(glob);
-  const failure = checks.passed ? undefined : (checks.failure ?? undefined);
+  // A conflict on an open PR is not failed checks: it sets `conflict` only, and the head keeps its last real result.
+  const conflictOnly = checks.conflict !== undefined && glob.status !== 'merging';
+  const real = conflictOnly ? checks.real : undefined;
+  if (conflictOnly && (real === undefined || real.state === 'pending')) {
+    const current = glob.headChecks;
+    const stale =
+      current?.sha === checks.sha && current.state === 'failed' && current.failure === undefined;
+    const b = new Builder(glob, ctx);
+    if (stale) b.set({ headChecks: null });
+    return withConflict(b, checks.conflict, ctx).done();
+  }
+  const passed = real === undefined ? checks.passed : real.state === 'passed';
+  const reported = real === undefined ? checks.failure : real.failure;
+  const failure = passed ? undefined : (reported ?? undefined);
   const inherited = inheritedFailure(failure, checks.base, checks.baseBranch ?? 'the base branch');
   const b = new Builder(glob, ctx)
     .set({
       headChecks: {
         sha: checks.sha,
-        state: checks.passed ? 'passed' : 'failed',
+        state: passed ? 'passed' : 'failed',
         // A re-read of the same failure keeps its first time.
-        ...(!checks.passed && {
+        ...(!passed && {
           at:
             glob.headChecks?.sha === checks.sha && glob.headChecks.state === 'failed'
               ? (glob.headChecks.at ?? ctx.now)
@@ -1916,7 +1955,7 @@ export const checksCompleted = (
     })
     .event('BuildCompleted', {
       sha: checks.sha,
-      passed: checks.passed,
+      passed,
       ...(failure !== undefined && { failure: failureSummary(failure) }),
       ...(inherited !== null && { inheritedFrom: inherited.base }),
     });
@@ -1934,7 +1973,7 @@ export const checksCompleted = (
         .status('failed')
         .done();
     }
-    if (!checks.passed) {
+    if (!passed) {
       const reason = `Checks failed after updating the branch${failure === undefined ? '' : `: ${failureSummary(failure)}`}`;
       return b
         .endWatchingRun(reason)
@@ -1953,7 +1992,7 @@ export const checksCompleted = (
       sha: checks.sha,
     });
   }
-  return b.done();
+  return (conflictOnly ? withConflict(b, checks.conflict, ctx) : b).done();
 };
 
 /** Whether the glob's head failed checks that a base-branch result can explain (or stop explaining). */

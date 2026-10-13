@@ -1064,6 +1064,19 @@ describe('checks and merging (slice 2)', () => {
     const conflict = { base: 'main', files: [], since: null, at: NOW };
     expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr }), ctx()))).toBe('invalid_transition');
     expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr, conflict, runs: [run()] }), ctx()))).toBe('run_active');
+    expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr, conflict, runs: [run({ state: 'queued' })] }), ctx()))).toBe('run_active');
+  });
+
+  it('resolve conflict: a watching run does not stand in the way, and keeps watching', () => {
+    const pr = { number: 7, state: 'ready' as const, headSha: 'abc1234' };
+    const conflict = { base: 'main', files: [], since: 's1t2', at: NOW };
+    const watched = glob({ status: 'pr_open', pr, conflict, runs: [run({ state: 'watching' })] });
+    expect(m.allowedActions(watched, dev)).toContain('resolve_conflict');
+    const t = value(m.resolveConflict(watched, ctx()));
+    expect(effectKinds(t)).toEqual(['request_conflict_fix']);
+    expect(t.glob.runs[0]?.state).toBe('watching');
+    const human = glob({ status: 'pr_open', pr, conflict, implementer: 'a@b.c', runs: [run({ state: 'watching' })] });
+    expect(m.allowedActions(human, dev)).not.toContain('resolve_conflict');
   });
 });
 
