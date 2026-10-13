@@ -19,6 +19,7 @@ import type { Handover } from '../domain/handover.js';
 import { humanSteps } from '../domain/human-steps.js';
 import type { HumanStep } from '../domain/human-steps.js';
 import { currentRun } from '../domain/machine.js';
+import type { Hotspot } from '../domain/hotspots.js';
 import type { SearchHit } from '../domain/search.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
@@ -45,6 +46,30 @@ export const governingDecisions = async (tx: Tx, glob: Glob): Promise<ScopedDeci
   }
   return scoped;
 };
+
+/** A hotspot as `get_context` shows it: the path with its counts inside the window. */
+export type GlobHotspot = Pick<Hotspot, 'path' | 'conflicts' | 'real' | 'lastConflictAt'> & {
+  readonly globs: number;
+  readonly windowDays: number;
+};
+
+/** The board's hotspots that are among the files a glob plans to change, or that it conflicted on itself. */
+const hotspotsOfGlob = (
+  view: { readonly windowDays: number; readonly hotspots: readonly Hotspot[] },
+  globId: string,
+  planned: readonly string[],
+  plan: string,
+): GlobHotspot[] =>
+  view.hotspots
+    .filter((h) => planned.includes(h.path) || plan.includes(h.path) || h.globs.includes(globId))
+    .map((h) => ({
+      path: h.path,
+      conflicts: h.conflicts,
+      globs: h.globs.length,
+      real: h.real,
+      lastConflictAt: h.lastConflictAt,
+      windowDays: view.windowDays,
+    }));
 
 export interface GlobContext {
   readonly glob: Pick<Glob, 'id' | 'title' | 'type' | 'category' | 'group' | 'environment' | 'status'>;
@@ -105,6 +130,11 @@ export interface GlobContext {
   readonly authority: string;
   /** Everything only a person can do on the glob (the machine's steps and stored work steps), most pressing first. */
   readonly humanSteps: readonly HumanStep[];
+  /**
+   * The board's conflict hotspots among the glob's files (the paths its investigation or plan.md names, and files it conflicted on),
+   * hottest first, with their counts. Empty when none; absent when hotspots are not configured.
+   */
+  readonly hotspots?: readonly GlobHotspot[];
   /** Present when intake judged the glob: the oversized flag, its reasons and the proposed split (apply it with split_glob). */
   readonly size?: SizeContext;
   readonly fetch: string;
@@ -357,6 +387,8 @@ export class ArtifactService {
       notifier: Notifier;
       /** Ranked material related to a glob, for `get_context`; runs in the context transaction. */
       related?: (tx: Tx, glob: Glob) => Promise<readonly SearchHit[]>;
+      /** The board's conflict hotspots at `now` (`HotspotService.hotspots`), for `get_context`. */
+      hotspots?: (boardId: number, now: string) => Promise<{ readonly windowDays: number; readonly hotspots: readonly Hotspot[] }>;
       /** Re-judges a glob's size when its plan.md is saved in Planning. */
       sizeCheck?: SizeAssessor;
       /** Acts on a stored investigation (escalate, oversize flag) before the save returns. */
@@ -523,6 +555,7 @@ export class ArtifactService {
         text: i.text.slice(0, INBOX_CONTEXT_CHARS),
         truncated: i.text.length > INBOX_CONTEXT_CHARS,
       }));
+      const hotspotView = this.deps.hotspots === undefined ? null : await this.deps.hotspots(glob.boardId, this.deps.clock.now());
       return ok({
         glob: {
           id: glob.id,
@@ -574,6 +607,16 @@ export class ArtifactService {
         handover: await handoverOf(tx, this.deps.clock, glob),
         authority: AUTHORITY_STATEMENT,
         humanSteps: humanSteps(glob, {}, await tx.listHumanSteps(glob.boardId, [globId])),
+        ...(hotspotView === null
+          ? {}
+          : {
+              hotspots: hotspotsOfGlob(
+                hotspotView,
+                globId,
+                investigation === null ? [] : investigationSummary(investigation).files,
+                plan?.content ?? '',
+              ),
+            }),
         ...(sizeCheck === null ? {} : { size: sizeContext(sizeCheck) }),
         fetch:
           "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'all']). Inbox items are attached notes: their text is cut at 12000 characters (truncated: true); search_text finds the rest.",
