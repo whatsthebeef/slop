@@ -22,6 +22,7 @@ interface Body {
   attachments: { label: string }[];
   available: { kind: string }[];
   content: string;
+  handover?: { why: string[]; next: string; detail: string[] } | null;
   related?: { citation: { title: string; link: string | null; globId: string | null } }[];
 }
 
@@ -128,7 +129,7 @@ describe('MCP get_context include and get_artifact', () => {
     objects = new FakeObjectStore();
     let ids = 0;
     const attachments = new AttachmentService({ ...deps, objects, newId: () => `id-${String(++ids)}` });
-    const server = buildServer({ artifacts, globs, intake, outbox, inbox, attachments } as unknown as McpDeps, DEV, 'http://localhost');
+    const server = buildServer({ artifacts, globs, intake, outbox, inbox, attachments, deploys: { history: () => Promise.resolve({ ok: true, value: [] }) } } as unknown as McpDeps, DEV, 'http://localhost');
     const [a, b] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test', version: '0' });
     await Promise.all([server.connect(a), client.connect(b)]);
@@ -160,6 +161,26 @@ describe('MCP get_context include and get_artifact', () => {
       ]),
     );
     expect(body.available).toHaveLength(2);
+  });
+
+  it('get_glob and get_context return the hand-over brief, null when nothing is wrong', async () => {
+    expect((await call('get_context', { id: globId })).body.handover).toBeNull();
+    expect((await call('get_glob', { id: globId })).body.handover).toBeNull();
+    await store.transaction(async (tx) => {
+      const glob = await tx.getGlob(globId);
+      if (glob === null) throw new Error('no glob');
+      await tx.updateGlob({ ...glob, failure: { reason: 'Needs a call', at: new Date().toISOString() }, version: glob.version + 1 }, glob.version);
+    });
+    for (const tool of ['get_glob', 'get_context']) {
+      const { body } = await call(tool, { id: globId });
+      expect(body.handover?.why).toEqual(['Failed: Needs a call']);
+      expect(body.handover?.next).toMatch(/^Fix the cause, then continue from phase \d\./);
+    }
+    await store.transaction(async (tx) => {
+      const glob = await tx.getGlob(globId);
+      if (glob === null) throw new Error('no glob');
+      await tx.updateGlob({ ...glob, failure: null, version: glob.version + 1 }, glob.version);
+    });
   });
 
   it('get_context adds cited related material for the glob and not its own items', async () => {
