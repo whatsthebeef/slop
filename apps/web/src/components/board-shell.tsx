@@ -1,4 +1,4 @@
-import { MessageCircle } from 'lucide-react';
+import { AlertTriangle, MessageCircle } from 'lucide-react';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useLocation, useNavigate, useParams } from 'react-router';
@@ -13,7 +13,7 @@ import { newCount } from '@/lib/inbox';
 import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
 import type { PageContext } from '@/lib/page-context';
 import { globsKey, inboxKey } from '@/lib/live';
-import { yourTurnCount } from '@/lib/board-filters';
+import { stalledCount, yourTurnCount } from '@/lib/board-filters';
 import { activeTab, BOARD_TABS, pollInterval } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
 
@@ -46,6 +46,7 @@ const BoardTabs = ({
     globs.data === undefined || board.data === undefined || me.data === undefined
       ? 0
       : yourTurnCount(globs.data, { email: me.data.email, role: board.data.role });
+  const stalled = globs.data === undefined ? 0 : stalledCount(globs.data);
   // A slow poll: every board model call adds to the figure, but a few minutes' lag is fine for a monthly total.
   const spend = useQuery({ queryKey: ['spend', boardId], queryFn: () => api.spend(boardId), refetchInterval: 5 * 60_000 });
   return (
@@ -72,6 +73,18 @@ const BoardTabs = ({
           >
             <span aria-hidden>🧠</span>
             {turn}
+          </Link>
+        )}
+        {stalled > 0 && (
+          <Link
+            to={`/boards/${String(boardId)}?move=stalled`}
+            className='-mb-px inline-flex items-center gap-1 border-b-2 border-transparent pb-1.5 text-amber hover:text-foreground'
+            title={`${String(stalled)} ${stalled === 1 ? 'glob is' : 'globs are'} stalled: show them on the board`}
+            aria-label={`Stalled: ${String(stalled)}`}
+            data-testid='stalled-count'
+          >
+            <AlertTriangle className='h-3.5 w-3.5' aria-hidden />
+            {stalled}
           </Link>
         )}
       </nav>

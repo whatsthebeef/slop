@@ -2,7 +2,8 @@ import type { Action } from '@slop/core';
 import type { GlobView } from './api';
 import { cardTargets } from './card-targets';
 import type { GlobTarget } from './glob-section';
-import type { Activity, StatusLine } from './status-line';
+import type { Position } from './position';
+import type { StatusLine } from './status-line';
 
 /** How long a Merge chip stays on "Confirm merge" before it reverts. */
 export const CONFIRM_MS = 4000;
@@ -49,14 +50,13 @@ export const yourTurnClick = (status: StatusLine, glob: Pick<GlobView, 'allowedA
   }
 };
 
-/** What clicking the activity label does: the run's session in a new tab, the PR's checks, or the actions section. */
-export const activityClick = (activity: Activity, glob: GlobView, repo: string | undefined): ChipClick => {
-  if (activity.kind === 'checks') {
+/** What clicking the position indicator does: the PR's checks, the run's session in a new tab, or the actions section. */
+export const positionClick = (position: Position, glob: GlobView, repo: string | undefined): ChipClick => {
+  if (position.onChecks) {
     const url = checksUrl(repo, glob);
     if (url !== null) return { kind: 'link', url };
   }
-  const session = glob.currentRun?.state === 'ended' ? null : (glob.currentRun?.sessionUrl ?? null);
-  if (session !== null && activity.kind !== 'checks' && activity.kind !== 'merging') return { kind: 'link', url: session };
+  if (position.sessionUrl !== null) return { kind: 'link', url: position.sessionUrl };
   return { kind: 'section', target: cardTargets.actions() };
 };
 

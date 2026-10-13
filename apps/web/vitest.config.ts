@@ -5,5 +5,6 @@ export default defineConfig({
     conditions: ['development'],
     alias: { '@': new URL('./src', import.meta.url).pathname },
   },
-  test: { include: ['test/**/*.test.ts'] },
+  // DOM tests are `test/**/*.test.tsx` and opt in to jsdom with a `// @vitest-environment jsdom` docblock; `.test.ts` stays on node.
+  test: { include: ['test/**/*.test.{ts,tsx}'] },
 });
