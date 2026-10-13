@@ -10,13 +10,33 @@ import type { ArtifactSummary } from './knowledge.js';
 import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
-import { isDecisionAttributes, sameScope, validateAttributes, validateScopeEdit } from './attributes.js';
-import type { DecisionAttributes, DecisionClosedAs, DecisionOutcome, DecisionOutcomeKind, DecisionScope, GlobAttributes } from './attributes.js';
+import {
+  isDecisionAttributes,
+  sameScope,
+  validateAttributes,
+  validateScopeEdit,
+} from './attributes.js';
+import type {
+  DecisionAttributes,
+  DecisionClosedAs,
+  DecisionOutcome,
+  DecisionOutcomeKind,
+  DecisionScope,
+  GlobAttributes,
+} from './attributes.js';
 import { isAgentSetGlob } from './agent-set.js';
 import { CLOSING_EDGE_KINDS, SLOP_TYPES } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { mergeImplied } from './exclusive-paths.js';
-import { chainRefusal, dependencyIds, explicitOverlaps, NO_CHAIN, refusalText, waitingFor, waitSummary } from './waiting.js';
+import {
+  chainRefusal,
+  dependencyIds,
+  explicitOverlaps,
+  NO_CHAIN,
+  refusalText,
+  waitingFor,
+  waitSummary,
+} from './waiting.js';
 import type { BlockingChain } from './waiting.js';
 import type { DependencyState } from './waiting.js';
 import type {
@@ -113,9 +133,13 @@ export interface ActionFacts {
 const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
 
 /** The latest implementation record's commit SHA among a glob's artifact summaries (a legacy postplan counts until migrated). */
-export const recordShaOf = (artifacts: readonly Pick<ArtifactSummary, 'kind' | 'label' | 'commitSha'>[]): string | null =>
-  (artifacts.find((a) => a.kind === 'implementation_plan' && a.label === '') ??
-    artifacts.find((a) => a.kind === 'postplan' && a.label === ''))?.commitSha ?? null;
+export const recordShaOf = (
+  artifacts: readonly Pick<ArtifactSummary, 'kind' | 'label' | 'commitSha'>[],
+): string | null =>
+  (
+    artifacts.find((a) => a.kind === 'implementation_plan' && a.label === '') ??
+    artifacts.find((a) => a.kind === 'postplan' && a.label === '')
+  )?.commitSha ?? null;
 
 /** Short SHAs are at least this long (git's default abbreviation). */
 const MIN_SHA_LENGTH = 7;
@@ -154,7 +178,11 @@ export const currentRun = (glob: Glob): Run | null => glob.runs.at(-1) ?? null;
  */
 export const hasBusyRun = (glob: Glob): boolean => {
   const run = currentRun(glob);
-  return run !== null && run.purpose !== 'investigate' && (run.state === 'active' || run.state === 'watching');
+  return (
+    run !== null &&
+    run.purpose !== 'investigate' &&
+    (run.state === 'active' || run.state === 'watching')
+  );
 };
 
 /** Any run that has not ended, including one still queued. */
@@ -208,7 +236,11 @@ class Builder {
     // A decision never gets a branch or a PR.
     if (this.glob.category === 'decision' || this.glob.provisioning !== 'none') return this;
     this.set({ provisioning: 'pending' });
-    return this.effect({ kind: 'provision', globId: this.glob.id, generation: this.glob.generation });
+    return this.effect({
+      kind: 'provision',
+      globId: this.glob.id,
+      generation: this.glob.generation,
+    });
   }
 
   event(type: DomainEventType, data: { readonly [key: string]: JsonValue } = {}): this {
@@ -231,12 +263,17 @@ class Builder {
    * Ends the current run if it has not ended. `detail` adds to its RunFailed event (e.g. the agent-set version) or
    * RunEnded event (a superseded run's `cause`, which mined signals count).
    */
-  endRun(outcome: RunOutcome, failureReason: string | null = null, detail: { readonly [key: string]: JsonValue } = {}): this {
+  endRun(
+    outcome: RunOutcome,
+    failureReason: string | null = null,
+    detail: { readonly [key: string]: JsonValue } = {},
+  ): this {
     const run = currentRun(this.glob);
     if (run === null || run.state === 'ended') return this;
     const ended: Run = { ...run, state: 'ended', outcome, endedAt: this.ctx.now, failureReason };
     this.set({ runs: [...this.glob.runs.slice(0, -1), ended] });
-    const purpose: { readonly [key: string]: JsonValue } = run.purpose === undefined ? {} : { purpose: run.purpose };
+    const purpose: { readonly [key: string]: JsonValue } =
+      run.purpose === undefined ? {} : { purpose: run.purpose };
     return outcome === 'failed'
       ? this.event('RunFailed', { ...detail, ...purpose, runId: run.id, reason: failureReason })
       : this.event('RunEnded', { ...detail, ...purpose, runId: run.id, outcome });
@@ -248,7 +285,9 @@ class Builder {
    * `get_glob` check stops it.
    */
   endWatchingRun(failureReason: string): this {
-    return currentRun(this.glob)?.state === 'watching' ? this.endRun('failed', failureReason) : this;
+    return currentRun(this.glob)?.state === 'watching'
+      ? this.endRun('failed', failureReason)
+      : this;
   }
 
   updateRun(patch: Partial<Run>): this {
@@ -266,7 +305,8 @@ class Builder {
   ): this {
     // Starting the glob supersedes an investigation still in flight: its result would only duplicate Phase 2.
     const live = currentRun(this.glob);
-    if (purpose === undefined && live?.purpose === 'investigate') this.endRun('superseded', null, { cause: 'started' });
+    if (purpose === undefined && live?.purpose === 'investigate')
+      this.endRun('superseded', null, { cause: 'started' });
     const run: Run = {
       id: this.ctx.newRunId(),
       state: 'queued',
@@ -374,7 +414,10 @@ export const create = (
   if (input.category === 'decision') return createDecision(input, ctx, actor);
   // A sub created without an environment gets the board's default for subs, if it has one.
   const environment =
-    input.environment ?? (input.type === 'sub' ? (board.environments.find((e) => e.subDefault === true)?.name ?? null) : null);
+    input.environment ??
+    (input.type === 'sub'
+      ? (board.environments.find((e) => e.subDefault === true)?.name ?? null)
+      : null);
   const envCheck = checkEnvironment(board, environment);
   if (!envCheck.ok) return envCheck;
 
@@ -382,14 +425,16 @@ export const create = (
   const impliedAfter = input.impliedAfter ?? [];
   const awaited = waitingFor({ after, impliedAfter }, dependencies);
   const startsBySelf = input.type === 'same' && input.autoStart === true && awaited.length > 0;
-  const wantsStart = input.type === 'sub' || (input.type === 'same' && input.autoTrigger) || startsBySelf;
+  const wantsStart =
+    input.type === 'sub' || (input.type === 'same' && input.autoTrigger) || startsBySelf;
   // A sub (or auto-started same) with something unmerged to wait for sits in Planning, with no branch, until released.
   const sizeHeld = wantsStart && input.sizeHold !== undefined;
   const held = wantsStart && (awaited.length > 0 || sizeHeld);
   const autoStart = input.type === 'same' && input.autoTrigger && !held;
   // A parked super waits in Planning for a person to pick it up; nobody's active glob until then.
   const parked = input.type === 'super' && input.start === false;
-  const status: Status = held || parked ? 'planning' : autoStart ? 'implementing' : initialStatus(input.type);
+  const status: Status =
+    held || parked ? 'planning' : autoStart ? 'implementing' : initialStatus(input.type);
   const glob: Glob = {
     id: input.id,
     boardId: input.boardId,
@@ -431,7 +476,11 @@ export const create = (
   });
   // Subs, supers and auto-started sames start in Doing, so they provision now.
   if (listOf(status) === 'doing') b.ensureProvisioned();
-  if (held) b.event('Waiting', { for: awaited.map((a) => a.id), note: awaited.length > 0 ? waitSummary(awaited) : (input.sizeHold ?? '') });
+  if (held)
+    b.event('Waiting', {
+      for: awaited.map((a) => a.id),
+      note: awaited.length > 0 ? waitSummary(awaited) : (input.sizeHold ?? ''),
+    });
   else if (input.type === 'sub' || autoStart) b.queueRun(actor.email);
   return b.done();
 };
@@ -477,12 +526,18 @@ export const start = (
       .done();
   }
   // Overlaps the policy predicted never hold the start; they stay on the glob as a note and order the merges.
-  const overlaps = newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) };
-  return new Builder(glob, ctx).set({ waiting: null, ...overlaps }).status('implementing').queueRun(actor.email, undefined, true).done();
+  const overlaps =
+    newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) };
+  return new Builder(glob, ctx)
+    .set({ waiting: null, ...overlaps })
+    .status('implementing')
+    .queueRun(actor.email, undefined, true)
+    .done();
 };
 
 /** Whether an investigate-only run can be started on the glob now: in Planning, not a super, nothing live. */
-export const canInvestigate = (glob: Glob): boolean => glob.status === 'planning' && glob.type !== 'super' && !hasLiveRun(glob);
+export const canInvestigate = (glob: Glob): boolean =>
+  glob.status === 'planning' && glob.type !== 'super' && !hasLiveRun(glob);
 
 /**
  * Row 5a: Investigate. A glob in Planning gets a routine run that does the orchestrator's Phases 1–2 only and pushes the
@@ -496,14 +551,17 @@ export const investigate = (glob: Glob, ctx: Context, automatic = false): Result
     return invalidTransition(glob, actor, 'Only a sub or same in planning can be investigated');
   }
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
-  if (actor !== null && restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot investigate ${glob.type}s`);
+  if (actor !== null && restrictedFrom(actor, glob))
+    return forbidden(`QA and PO members cannot investigate ${glob.type}s`);
   const triggeredBy = actor?.email ?? glob.creator;
   return new Builder(glob, ctx).queueRun(triggeredBy, undefined, false, 'investigate').done();
 };
 
 /** Whether a glob can be independently reviewed on demand: it has a PR (open or merged) and is in Doing or Reviewing. */
 export const canReviewNow = (glob: Glob): boolean =>
-  glob.pr !== null && glob.pr.state !== 'closed' && (listOf(glob.status) === 'doing' || glob.status === 'reviewing');
+  glob.pr !== null &&
+  glob.pr.state !== 'closed' &&
+  (listOf(glob.status) === 'doing' || glob.status === 'reviewing');
 
 /**
  * Review now: queues a fresh independent review (never deduplicated against earlier ones) of the change as it is: an open
@@ -512,11 +570,23 @@ export const canReviewNow = (glob: Glob): boolean =>
 export const reviewNow = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
   const pr = glob.pr;
-  if (pr === null || !canReviewNow(glob)) return invalidTransition(glob, actor, 'Only a glob with a pull request in Doing or Reviewing can be reviewed now');
+  if (pr === null || !canReviewNow(glob))
+    return invalidTransition(
+      glob,
+      actor,
+      'Only a glob with a pull request in Doing or Reviewing can be reviewed now',
+    );
   const stage = pr.state === 'merged' ? 'post_merge' : 'pre_merge';
   return new Builder(glob, ctx)
     .event('ReviewRequested', { stage })
-    .effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage, sha: pr.headSha ?? '', requestId: ctx.newRunId() })
+    .effect({
+      kind: 'review_change',
+      globId: glob.id,
+      generation: glob.generation,
+      stage,
+      sha: pr.headSha ?? '',
+      requestId: ctx.newRunId(),
+    })
     .done();
 };
 
@@ -524,9 +594,14 @@ export const reviewNow = (glob: Glob, ctx: Context): Result<Transition> => {
  * A routine's investigation was stored (and its block validated): ends an investigate-only run. A run that implements the
  * glob keeps going; so does a superseded one, which `runId` no longer matches.
  */
-export const investigationPushed = (glob: Glob, runId: string, ctx: Context): Result<Transition> => {
+export const investigationPushed = (
+  glob: Glob,
+  runId: string,
+  ctx: Context,
+): Result<Transition> => {
   const run = currentRun(glob);
-  if (run === null || run.id !== runId || run.state === 'ended' || run.purpose !== 'investigate') return unchanged(glob);
+  if (run === null || run.id !== runId || run.state === 'ended' || run.purpose !== 'investigate')
+    return unchanged(glob);
   return new Builder(glob, ctx).endRun('completed').done();
 };
 
@@ -551,7 +626,11 @@ export const startAnyway = (
       .done();
   }
   if (glob.status !== 'planning' || glob.type === 'super') {
-    return invalidTransition(glob, actor, 'Only a sub or same in planning, or one picked up with no routine run, can be started anyway');
+    return invalidTransition(
+      glob,
+      actor,
+      'Only a sub or same in planning, or one picked up with no routine run, can be started anyway',
+    );
   }
   const awaited = waitingFor(glob, dependencies);
   if (awaited.length === 0 && glob.waiting == null) {
@@ -560,7 +639,9 @@ export const startAnyway = (
   return new Builder(glob, ctx)
     .set({
       waiting: null,
-      ...(glob.impliedAfter === undefined ? {} : { impliedAfter: glob.impliedAfter.map((i) => ({ ...i, overridden: true as const })) }),
+      ...(glob.impliedAfter === undefined
+        ? {}
+        : { impliedAfter: glob.impliedAfter.map((i) => ({ ...i, overridden: true as const })) }),
     })
     .event('HoldOverridden', { for: awaited.map((a) => a.id) })
     .status('implementing')
@@ -580,7 +661,8 @@ export const released = (
   /** Holds found when checking again just before starting: another glob may have taken the exclusive paths meanwhile. */
   newHolds: readonly ImpliedAfter[] = [],
 ): Result<Transition> => {
-  if (glob.waiting == null || glob.status !== 'planning' || glob.type === 'super') return unchanged(glob);
+  if (glob.waiting == null || glob.status !== 'planning' || glob.type === 'super')
+    return unchanged(glob);
   if (waitingFor(glob, dependencies).length > 0) return unchanged(glob);
   const holding = waitingFor({ impliedAfter: newHolds }, dependencies);
   if (holding.length > 0) {
@@ -590,7 +672,10 @@ export const released = (
       .done();
   }
   return new Builder(glob, ctx)
-    .set({ waiting: null, ...(newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) }) })
+    .set({
+      waiting: null,
+      ...(newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) }),
+    })
     .event('Released', { after: dependencyIds(glob) })
     .status('implementing')
     .queueRun(glob.creator)
@@ -610,7 +695,12 @@ export interface PickUpOptions {
 }
 
 /** Rows 6–10: pick up, optionally taking over a routine run, optionally choosing the environment. */
-export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOptions): Result<Transition> => {
+export const pickUp = (
+  glob: Glob,
+  ctx: Context,
+  board: Board,
+  options: PickUpOptions,
+): Result<Transition> => {
   if (glob.category === 'decision') return pickUpDecision(glob, ctx);
   const actor = requireActor(ctx);
   if (restrictedFrom(actor, glob)) {
@@ -661,7 +751,11 @@ export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOp
     case 'failed':
       // Row 6.
       b.endRun('superseded', null, { cause: 'pick_up' })
-        .set({ implementer: actor.email, failure: null, ...(glob.waiting == null ? {} : { waiting: null }) })
+        .set({
+          implementer: actor.email,
+          failure: null,
+          ...(glob.waiting == null ? {} : { waiting: null }),
+        })
         .status('in_progress');
       break;
     case 'pr_open':
@@ -673,8 +767,12 @@ export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOp
       return invalidTransition(glob, actor, `A glob in ${glob.status} cannot be picked up`);
   }
   // A person may go ahead on a glob that still waits; the event records what hadn't merged.
-  const unmerged = glob.status === 'planning' ? waitingFor(glob, options.dependencies ?? NO_DEPENDENCIES) : [];
-  b.event('PickedUp', { takeOver: false, ...(unmerged.length > 0 && { waitingFor: unmerged.map((a) => a.id) }) });
+  const unmerged =
+    glob.status === 'planning' ? waitingFor(glob, options.dependencies ?? NO_DEPENDENCIES) : [];
+  b.event('PickedUp', {
+    takeOver: false,
+    ...(unmerged.length > 0 && { waitingFor: unmerged.map((a) => a.id) }),
+  });
   if (environmentChanged) setEnvironment(b, environment);
   return b.done();
 };
@@ -682,8 +780,11 @@ export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOp
 /** Records an environment chosen at pick-up as a field change, and relabels the PR (`env:<name>`). */
 const setEnvironment = (b: Builder, environment: string | null): Builder => {
   const glob = b.current;
-  b.set({ environment }).event('FieldsChanged', { environment: { from: glob.environment, to: environment } });
-  if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  b.set({ environment }).event('FieldsChanged', {
+    environment: { from: glob.environment, to: environment },
+  });
+  if (glob.pr !== null)
+    b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   return b;
 };
 
@@ -706,18 +807,25 @@ const canRetryAutofix = (glob: Glob): boolean => {
 export const retryAutofix = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
-  if (!canRetryAutofix(glob)) return invalidTransition(glob, actor, 'Only a ready PR whose auto-fix ended can retry it');
+  if (!canRetryAutofix(glob))
+    return invalidTransition(glob, actor, 'Only a ready PR whose auto-fix ended can retry it');
   return new Builder(glob, ctx).set({ failure: null }).queueRun(actor.email).done();
 };
 
 /** Row 20: retry a failed sub or same on its existing branch. */
-export const retrigger = (glob: Glob, ctx: Context, chain: BlockingChain = NO_CHAIN, anyway = false): Result<Transition> => {
+export const retrigger = (
+  glob: Glob,
+  ctx: Context,
+  chain: BlockingChain = NO_CHAIN,
+  anyway = false,
+): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status !== 'failed' || glob.type === 'super') {
     return invalidTransition(glob, actor, 'Only a failed sub or same can be retried');
   }
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
-  if (chain.blockedBy.length > 0 && !anyway) return invalidTransition(glob, actor, chainRefusal(chain));
+  if (chain.blockedBy.length > 0 && !anyway)
+    return invalidTransition(glob, actor, chainRefusal(chain));
   return new Builder(glob, ctx)
     .bumpGeneration()
     .set({ implementer: null, failure: null })
@@ -746,16 +854,27 @@ const canRequestConflictFix = (glob: Glob): boolean =>
   glob.implementer === null &&
   !hasLiveRun(glob) &&
   ((hasOpenPr(glob) && glob.conflict != null && glob.conflict.requestedAt === undefined) ||
-    (glob.status === 'failed' && glob.failure?.conflict !== undefined && glob.pr?.state === 'ready'));
+    (glob.status === 'failed' &&
+      glob.failure?.conflict !== undefined &&
+      glob.pr?.state === 'ready'));
 
 /**
  * A base-branch merge happened: recheck this glob's open PR for a conflict with it. The recheck runs through the
  * outbox because GitHub computes mergeability in the background.
  */
-export const baseMerged = (glob: Glob, merge: { since: string }, ctx: Context): Result<Transition> => {
+export const baseMerged = (
+  glob: Glob,
+  merge: { since: string },
+  ctx: Context,
+): Result<Transition> => {
   if (glob.id === merge.since || !hasOpenPr(glob)) return unchanged(glob);
   return new Builder(glob, ctx)
-    .effect({ kind: 'check_conflict', globId: glob.id, generation: glob.generation, since: merge.since })
+    .effect({
+      kind: 'check_conflict',
+      globId: glob.id,
+      generation: glob.generation,
+      since: merge.since,
+    })
     .done();
 };
 
@@ -779,7 +898,9 @@ const isDoingWithPr = (glob: Glob): boolean => glob.status === 'in_progress' && 
 /** The base branch or the glob's branch received a push: read again how far the branch is behind the base. */
 export const behindCheckRequested = (glob: Glob, ctx: Context): Result<Transition> => {
   if (!isDoingWithPr(glob)) return unchanged(glob);
-  return new Builder(glob, ctx).effect({ kind: 'check_behind', globId: glob.id, generation: glob.generation }).done();
+  return new Builder(glob, ctx)
+    .effect({ kind: 'check_behind', globId: glob.id, generation: glob.generation })
+    .done();
 };
 
 /** What the code host says about how far the branch is behind the base: recorded when it changed, cleared when up to date. */
@@ -792,12 +913,24 @@ export const behindChecked = (
   const before = glob.behind ?? null;
   if (found.behindBy <= 0) {
     if (before === null) return unchanged(glob);
-    return new Builder(glob, ctx).set({ behind: null }).event('BehindChanged', { base: found.base, behindBy: 0 }).done();
+    return new Builder(glob, ctx)
+      .set({ behind: null })
+      .event('BehindChanged', { base: found.base, behindBy: 0 })
+      .done();
   }
-  if (before?.base === found.base && before.behindBy === found.behindBy && before.files.join('\n') === found.files.join('\n')) {
+  if (
+    before?.base === found.base &&
+    before.behindBy === found.behindBy &&
+    before.files.join('\n') === found.files.join('\n')
+  ) {
     return unchanged(glob);
   }
-  const behind: BehindBase = { base: found.base, behindBy: found.behindBy, files: [...found.files], at: ctx.now };
+  const behind: BehindBase = {
+    base: found.base,
+    behindBy: found.behindBy,
+    files: [...found.files],
+    at: ctx.now,
+  };
   return new Builder(glob, ctx)
     .set({ behind })
     .event('BehindChanged', { base: found.base, behindBy: found.behindBy, files: [...found.files] })
@@ -807,36 +940,58 @@ export const behindChecked = (
 /** The open PR no longer conflicts with the base branch. */
 export const conflictCleared = (glob: Glob, ctx: Context): Result<Transition> => {
   if (glob.conflict == null) return unchanged(glob);
-  return new Builder(glob, ctx).set({ conflict: null }).event('ConflictCleared', { base: glob.conflict.base }).done();
+  return new Builder(glob, ctx)
+    .set({ conflict: null })
+    .event('ConflictCleared', { base: glob.conflict.base })
+    .done();
 };
 
 /**
  * Resolve conflict (rows 16 and 20a): a conflicting PR nobody is implementing gets one PR comment asking the Claude
  * GitHub App to merge the base branch in and push; no routine run starts. A glob failed by a merge conflict goes back
- * to review with the conflict flagged. A human implementer resolves locally (`sstor --glob <id> --resolve`).
+ * to review with the conflict flagged. A human implementer resolves locally (`sstor --glob <id>`; others `sstor --glob <id> --take-over`).
  */
 export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.implementer !== null) {
-    return invalidTransition(glob, actor, 'A glob with a human implementer resolves its conflict locally');
+    return invalidTransition(
+      glob,
+      actor,
+      'A glob with a human implementer resolves its conflict locally',
+    );
   }
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
   if (glob.conflict?.requestedAt !== undefined) return unchanged(glob);
   if (!canRequestConflictFix(glob)) {
-    return invalidTransition(glob, actor, 'Only a glob whose PR conflicts with the base branch can resolve it');
+    return invalidTransition(
+      glob,
+      actor,
+      'Only a glob whose PR conflicts with the base branch can resolve it',
+    );
   }
-  const request = { kind: 'request_conflict_fix', globId: glob.id, generation: glob.generation } as const;
+  const request = {
+    kind: 'request_conflict_fix',
+    globId: glob.id,
+    generation: glob.generation,
+  } as const;
   const b = new Builder(glob, ctx);
   const failed = glob.status === 'failed' ? glob.failure?.conflict : undefined;
   if (failed !== undefined) {
     // The failed merge left a ready PR: return it to review while the conflict is fixed.
-    b.set({ failure: null, headChecks: null, conflict: { ...failed, since: null, at: ctx.now, requestedAt: ctx.now } })
+    b.set({
+      failure: null,
+      headChecks: null,
+      conflict: { ...failed, since: null, at: ctx.now, requestedAt: ctx.now },
+    })
       .status('pr_open')
       .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
   } else if (glob.conflict != null) {
     b.set({ conflict: { ...glob.conflict, requestedAt: ctx.now } });
   }
-  return b.event('ConflictFixRequested', { base: (failed ?? glob.conflict)?.base ?? null }).effect(request).done();
+  return b
+    .event('ConflictFixRequested', { base: (failed ?? glob.conflict)?.base ?? null })
+    .effect(request)
+    .done();
 };
 
 /** Row 23: return the glob to its starting status with a fresh branch and PR. */
@@ -849,7 +1004,9 @@ export const startAgain = (
   if (glob.status === 'reviewing' || glob.status === 'signed_off') {
     return invalidTransition(glob, actor, 'A merged glob cannot be started again');
   }
-  const b = new Builder(glob, ctx).endRun('superseded', null, { cause: 'start_again' }).bumpGeneration();
+  const b = new Builder(glob, ctx)
+    .endRun('superseded', null, { cause: 'start_again' })
+    .bumpGeneration();
   const generation = b.current.generation;
   b.set({
     implementer: glob.type === 'super' ? glob.creator : null,
@@ -865,7 +1022,9 @@ export const startAgain = (
   // A sub that waits for an unmerged glob goes back to Planning, held, instead of starting again.
   const awaited = glob.type === 'sub' ? waitingFor(glob, dependencies) : [];
   if (awaited.length > 0) {
-    b.set({ waiting: { since: ctx.now } }).status('planning').event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
+    b.set({ waiting: { since: ctx.now } })
+      .status('planning')
+      .event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
     return b.done();
   }
   b.status(initialStatus(glob.type));
@@ -896,8 +1055,10 @@ export const requestMerge = (
     return invalidTransition(glob, actor, 'Required checks have not passed on the current head');
   }
   if (options.continue) {
-    if (glob.type !== 'super') return invalidTransition(glob, actor, 'Only a super can merge and continue');
-    if (!recordAtHead(glob, options.facts ?? {})) return invalidTransition(glob, actor, RECORD_NOT_AT_HEAD);
+    if (glob.type !== 'super')
+      return invalidTransition(glob, actor, 'Only a super can merge and continue');
+    if (!recordAtHead(glob, options.facts ?? {}))
+      return invalidTransition(glob, actor, RECORD_NOT_AT_HEAD);
   }
   return new Builder(glob, ctx)
     .set({ mergeMode: options.continue ? 'continue' : null })
@@ -919,11 +1080,21 @@ const canRetryMerge = (glob: Glob): boolean =>
 /** Retry merge: a glob whose merge failed (e.g. GitHub hadn't decided mergeability) goes back to merging. */
 export const retryMerge = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
-  if (!canRetryMerge(glob)) return invalidTransition(glob, actor, 'Only a failed merge on a ready PR with passing checks can be retried');
+  if (!canRetryMerge(glob))
+    return invalidTransition(
+      glob,
+      actor,
+      'Only a failed merge on a ready PR with passing checks can be retried',
+    );
   return new Builder(glob, ctx)
     .set({ failure: null, mergeMode: null })
     .status('merging', { retry: true })
-    .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: glob.pr?.headSha ?? '' })
+    .effect({
+      kind: 'squash_merge',
+      globId: glob.id,
+      generation: glob.generation,
+      sha: glob.pr?.headSha ?? '',
+    })
     .done();
 };
 
@@ -940,7 +1111,12 @@ const removeGlob = (glob: Glob, ctx: Context): Result<Transition> =>
   new Builder(glob, ctx)
     .endRun('superseded', null, { cause: 'deleted' })
     .event('GlobDeleted', { status: glob.status })
-    .effect({ kind: 'delete_glob_data', globId: glob.id, boardId: glob.boardId, prNumber: glob.pr?.number ?? null })
+    .effect({
+      kind: 'delete_glob_data',
+      globId: glob.id,
+      boardId: glob.boardId,
+      prNumber: glob.pr?.number ?? null,
+    })
     .done();
 
 /** What a reviewer or developer does to one sign-off label (rows 21, 22 and 27–30). */
@@ -977,9 +1153,14 @@ export const reviewLabel = (
     return invalidTransition(glob, actor, `${name} is not required on this glob`);
   }
   const items = glob.checklists[name] ?? [];
-  const setState = (to: LabelState, detail: { readonly [key: string]: JsonValue } = {}): Builder => {
+  const setState = (
+    to: LabelState,
+    detail: { readonly [key: string]: JsonValue } = {},
+  ): Builder => {
     const labels: Labels = { ...glob.labels, [name]: to };
-    const b = new Builder(glob, ctx).set({ labels }).event('LabelChanged', { ...detail, label: name, from, to });
+    const b = new Builder(glob, ctx)
+      .set({ labels })
+      .event('LabelChanged', { ...detail, label: name, from, to });
     const allApproved = Object.values(labels).every((s) => s === 'approved');
     if (glob.status === 'reviewing' && allApproved) {
       b.set({ signedOffAt: ctx.now }).status('signed_off');
@@ -993,7 +1174,11 @@ export const reviewLabel = (
     case 'submit_items': {
       // Row 27.
       if (from !== 'required') {
-        return invalidTransition(glob, actor, `Items can only be added while ${name} waits for its reviewer`);
+        return invalidTransition(
+          glob,
+          actor,
+          `Items can only be added while ${name} waits for its reviewer`,
+        );
       }
       const texts = command.items.map((t) => t.trim()).filter((t) => t !== '');
       if (texts.length === 0) return invalidInput('Add at least one item');
@@ -1042,7 +1227,12 @@ export const reviewLabel = (
         doneAt: command.done ? ctx.now : null,
       };
       return new Builder(glob, ctx)
-        .set({ checklists: { ...glob.checklists, [name]: items.map((i) => (i.id === item.id ? ticked : i)) } })
+        .set({
+          checklists: {
+            ...glob.checklists,
+            [name]: items.map((i) => (i.id === item.id ? ticked : i)),
+          },
+        })
         .event('LabelItemTicked', { label: name, item: item.id, done: command.done })
         .done();
     }
@@ -1054,7 +1244,8 @@ export const reviewLabel = (
       return setState('required', { open: openItems(items) }).done();
     case 'reopen':
       // Row 22 when the glob was signed off.
-      if (from !== 'approved') return invalidTransition(glob, actor, 'Only an approved label can be re-opened');
+      if (from !== 'approved')
+        return invalidTransition(glob, actor, 'Only an approved label can be re-opened');
       return setState('required').done();
   }
 };
@@ -1086,7 +1277,11 @@ export const changeFields = (
   dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
-  if ((changes.category !== undefined && changes.category !== glob.category && (changes.category === 'decision' || glob.category === 'decision'))) {
+  if (
+    changes.category !== undefined &&
+    changes.category !== glob.category &&
+    (changes.category === 'decision' || glob.category === 'decision')
+  ) {
     return invalidCombination('A glob cannot become a decision, or stop being one');
   }
   const type = changes.type ?? glob.type;
@@ -1102,12 +1297,18 @@ export const changeFields = (
 
   const typeCheck = checkTypeChange(glob, type, actor);
   if (!typeCheck.ok) return typeCheck;
-  const scope = changes.attributes === undefined ? ok(null) : scopeEdit(glob, changes.attributes, actor);
+  const scope =
+    changes.attributes === undefined ? ok(null) : scopeEdit(glob, changes.attributes, actor);
   if (!scope.ok) return scope;
 
-  const afterChanged = changes.after !== undefined && changes.after.join('\n') !== (glob.after ?? []).join('\n');
+  const afterChanged =
+    changes.after !== undefined && changes.after.join('\n') !== (glob.after ?? []).join('\n');
   if (afterChanged && (glob.status !== 'planning' || glob.provisioning !== 'none')) {
-    return invalidTransition(glob, actor, 'What a glob waits for can only be changed before the glob has started');
+    return invalidTransition(
+      glob,
+      actor,
+      'What a glob waits for can only be changed before the glob has started',
+    );
   }
 
   const patch: { -readonly [K in keyof Omit<FieldChanges, 'attributes'>]: FieldChanges[K] } = {};
@@ -1124,10 +1325,16 @@ export const changeFields = (
     diff['after'] = { from: [...(glob.after ?? [])], to: [...changes.after] };
   }
   if (changes.overlaps !== undefined) {
-    const before = (glob.impliedAfter ?? []).filter((i) => i.source === 'explicit' && i.kind === 'overlaps').map((i) => i.id);
+    const before = (glob.impliedAfter ?? [])
+      .filter((i) => i.source === 'explicit' && i.kind === 'overlaps')
+      .map((i) => i.id);
     if (before.join('\n') !== changes.overlaps.join('\n')) {
-      const kept = (glob.impliedAfter ?? []).filter((i) => !(i.source === 'explicit' && i.kind === 'overlaps'));
-      const added = explicitOverlaps(changes.overlaps).filter((o) => !kept.some((k) => k.id === o.id));
+      const kept = (glob.impliedAfter ?? []).filter(
+        (i) => !(i.source === 'explicit' && i.kind === 'overlaps'),
+      );
+      const added = explicitOverlaps(changes.overlaps).filter(
+        (o) => !kept.some((k) => k.id === o.id),
+      );
       Object.assign(patch, { impliedAfter: [...kept, ...added] });
       diff['overlaps'] = { from: before, to: [...changes.overlaps] };
     }
@@ -1135,7 +1342,9 @@ export const changeFields = (
   let attributes: Partial<Glob> = {};
   if (scope.value !== null) {
     attributes = { attributes: { ...decisionAttributesOf(glob), scope: scope.value } };
-    diff['attributes'] = { scope: { from: scopeJson(decisionAttributesOf(glob).scope), to: scopeJson(scope.value) } };
+    diff['attributes'] = {
+      scope: { from: scopeJson(decisionAttributesOf(glob).scope), to: scopeJson(scope.value) },
+    };
   }
   // Only a same waiting in Planning has a start of its own to switch; the flag changes nothing for any other glob.
   const switchable = glob.type === 'same' && glob.status === 'planning';
@@ -1154,19 +1363,32 @@ export const changeFields = (
   // A same becoming a sub starts, unless something it starts after hasn't merged; a held glob whose waiting list was
   // edited down to nothing starts too. A held sub turned into a same is no longer asked to start by itself.
   const becomesSub = (glob.type === 'same' || glob.type === 'super') && type === 'sub';
-  const wasHeld = glob.waiting != null && glob.status === 'planning' && glob.type !== 'super' && type !== 'super' && !autoStartOff;
+  const wasHeld =
+    glob.waiting != null &&
+    glob.status === 'planning' &&
+    glob.type !== 'super' &&
+    type !== 'super' &&
+    !autoStartOff;
   // A glob parked as a super doesn't wait for anything: a person picks it up.
   if (type === 'super' && glob.waiting != null) b.set({ waiting: null });
   if (wasHeld && glob.type === 'sub' && type === 'same') b.set({ waiting: null });
   else if (becomesSub || wasHeld) {
-    const impliedAfter = becomesSub ? mergeImplied(glob.impliedAfter, changes.impliedAfter ?? []) : glob.impliedAfter;
+    const impliedAfter = becomesSub
+      ? mergeImplied(glob.impliedAfter, changes.impliedAfter ?? [])
+      : glob.impliedAfter;
     const awaited = waitingFor({ after: changes.after ?? glob.after, impliedAfter }, dependencies);
     if (awaited.length > 0) {
       if (!wasHeld) {
-        b.set({ waiting: { since: ctx.now }, ...(impliedAfter === undefined ? {} : { impliedAfter }) }).event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
+        b.set({
+          waiting: { since: ctx.now },
+          ...(impliedAfter === undefined ? {} : { impliedAfter }),
+        }).event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
       }
     } else if (wasHeld) {
-      b.set({ waiting: null }).event('Released', { after: [] }).status('implementing').queueRun(glob.creator);
+      b.set({ waiting: null })
+        .event('Released', { after: [] })
+        .status('implementing')
+        .queueRun(glob.creator);
     } else {
       b.status('implementing').queueRun(actor.email);
     }
@@ -1192,7 +1414,11 @@ const checkTypeChange = (glob: Glob, to: SlopType, actor: Actor): Result<null> =
   // A sub and a super swap only while parked in Planning with no run.
   if ((from === 'sub' && to === 'super') || (from === 'super' && to === 'sub')) {
     if (glob.status !== 'planning' || hasLiveRun(glob) || glob.implementer !== null) {
-      return invalidTransition(glob, actor, 'A sub and a super can only be swapped while in planning with no run and nobody implementing');
+      return invalidTransition(
+        glob,
+        actor,
+        'A sub and a super can only be swapped while in planning with no run and nobody implementing',
+      );
     }
     if (to === 'super' && (actor.role === 'qa' || actor.role === 'po')) {
       return forbidden('QA and PO members cannot create supers');
@@ -1235,7 +1461,11 @@ export const allowedTypeChanges = (glob: Glob, role: Role): TypeChangeOption[] =
  * Draft PRs are recorded without changing status. Recording the glob's current PR again is a no-op
  * (slop's own open response and the `opened` event both report it).
  */
-export const prOpened = (glob: Glob, pr: { number: number; headSha: string | null }, ctx: Context): Result<Transition> => {
+export const prOpened = (
+  glob: Glob,
+  pr: { number: number; headSha: string | null },
+  ctx: Context,
+): Result<Transition> => {
   if (glob.pr?.number === pr.number && glob.provisioning === 'ok') return unchanged(glob);
   return new Builder(glob, ctx)
     .set({ pr: { number: pr.number, state: 'draft', headSha: pr.headSha }, provisioning: 'ok' })
@@ -1250,12 +1480,18 @@ export const provisioned = (
   ctx: Context,
 ): Result<Transition> => {
   const b = new Builder(glob, ctx)
-    .set({ provisioning: 'ok', ...(glob.failure?.kind === 'provisioning' ? { failure: null } : {}) })
+    .set({
+      provisioning: 'ok',
+      ...(glob.failure?.kind === 'provisioning' ? { failure: null } : {}),
+    })
     .event('BranchCreated', { ok: true, branch: result.branch });
   if (result.pr !== null) {
-    b.set({ pr: { number: result.pr.number, state: 'draft', headSha: result.pr.headSha } }).event('PROpened', {
-      number: result.pr.number,
-    });
+    b.set({ pr: { number: result.pr.number, state: 'draft', headSha: result.pr.headSha } }).event(
+      'PROpened',
+      {
+        number: result.pr.number,
+      },
+    );
   }
   return b.done();
 };
@@ -1265,8 +1501,15 @@ export const provisioned = (
  * from the code host, or the last attempt) puts the reason on the glob and ends its queued run with it, so the card
  * and glob view say why and nothing keeps waiting for a branch that will not come.
  */
-export const provisioningFailed = (glob: Glob, reason: string, ctx: Context, final = false): Result<Transition> => {
-  const b = new Builder(glob, ctx).set({ provisioning: 'failed' }).event('BranchCreated', { ok: false, reason });
+export const provisioningFailed = (
+  glob: Glob,
+  reason: string,
+  ctx: Context,
+  final = false,
+): Result<Transition> => {
+  const b = new Builder(glob, ctx)
+    .set({ provisioning: 'failed' })
+    .event('BranchCreated', { ok: false, reason });
   if (!final) return b.done();
   if (currentRun(glob)?.state === 'queued') b.endRun('failed', reason);
   b.set({ failure: { reason, at: ctx.now, kind: 'provisioning' } });
@@ -1274,12 +1517,18 @@ export const provisioningFailed = (glob: Glob, reason: string, ctx: Context, fin
   return b.done();
 };
 
-const isStartPush = (glob: Glob, push: { message?: string | null }): boolean => push.message?.trim() === `${glob.id}: start`;
+const isStartPush = (glob: Glob, push: { message?: string | null }): boolean =>
+  push.message?.trim() === `${glob.id}: start`;
 
 /** A push to the glob branch: records the new head; results for older commits stop counting. */
 export const commitPushed = (
   glob: Glob,
-  push: { sha: string; runId: string | null; message?: string | null; agentSetVersion?: number | null },
+  push: {
+    sha: string;
+    runId: string | null;
+    message?: string | null;
+    agentSetVersion?: number | null;
+  },
   ctx: Context,
 ): Result<Transition> => {
   const b = new Builder(glob, ctx);
@@ -1293,22 +1542,44 @@ export const commitPushed = (
     glob.pr?.state === 'ready' &&
     push.message?.trim() !== `${glob.id}: start`;
   if (recovers) {
-    b.set({ failure: null, headChecks: null, mergeMode: null, ...(glob.conflict == null ? {} : { conflict: null }) })
+    b.set({
+      failure: null,
+      headChecks: null,
+      mergeMode: null,
+      ...(glob.conflict == null ? {} : { conflict: null }),
+    })
       .event('MergeFailureRecovered', { sha: push.sha, reason: glob.failure.reason })
       .status('pr_open')
       .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
   }
   const run = currentRun(glob);
-  const superseded = push.runId !== null && (run === null || run.id !== push.runId || run.state === 'ended');
+  const superseded =
+    push.runId !== null && (run === null || run.id !== push.runId || run.state === 'ended');
   if (!superseded && run !== null && run.state !== 'ended' && push.runId === run.id) {
     b.updateRun({ lastProgressAt: ctx.now, state: run.state === 'queued' ? 'active' : run.state });
   }
   if (!recovers && (glob.status === 'pr_open' || glob.status === 'merging')) {
-    b.set({ headChecks: null }).effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+    b.set({ headChecks: null }).effect({
+      kind: 'refresh_checks',
+      globId: glob.id,
+      generation: glob.generation,
+    });
   }
   // A push while the PR is ready (before the developer merges) is reviewed again; the older commit's review is cancelled.
-  if (glob.type !== 'sub' && glob.pr?.state === 'ready' && (glob.status === 'pr_open' || recovers) && !superseded && !isStartPush(glob, push)) {
-    b.effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage: 'pre_merge', sha: push.sha });
+  if (
+    glob.type !== 'sub' &&
+    glob.pr?.state === 'ready' &&
+    (glob.status === 'pr_open' || recovers) &&
+    !superseded &&
+    !isStartPush(glob, push)
+  ) {
+    b.effect({
+      kind: 'review_change',
+      globId: glob.id,
+      generation: glob.generation,
+      stage: 'pre_merge',
+      sha: push.sha,
+    });
   }
   // A push may have fixed a flagged conflict (or not): look again.
   if (glob.conflict != null && glob.pr !== null) {
@@ -1327,7 +1598,12 @@ export const commitPushed = (
   // nor the empty `<id>: start` commit slop creates the branch with.
   const isStart = isStartPush(glob, push);
   if (glob.environment !== null && !superseded && !isStart && listOf(glob.status) === 'doing') {
-    b.effect({ kind: 'request_deploy', globId: glob.id, generation: glob.generation, sha: push.sha });
+    b.effect({
+      kind: 'request_deploy',
+      globId: glob.id,
+      generation: glob.generation,
+      sha: push.sha,
+    });
   }
   // Doing with a PR: look again at whether the branch changes exclusive paths another open glob changes too (a warning).
   if (glob.status === 'in_progress' && glob.pr !== null && !superseded && !isStart) {
@@ -1358,7 +1634,8 @@ export const clashChanged = (
     if (before === null) return unchanged(glob);
     return new Builder(glob, ctx).set({ clash: null }).event('ClashChanged', { with: null }).done();
   }
-  if (before?.with === clash.with && before.paths.join('\n') === clash.paths.join('\n')) return unchanged(glob);
+  if (before?.with === clash.with && before.paths.join('\n') === clash.paths.join('\n'))
+    return unchanged(glob);
   return new Builder(glob, ctx)
     .set({ clash: { with: clash.with, paths: [...clash.paths] } })
     .event('ClashChanged', { with: clash.with, paths: [...clash.paths] })
@@ -1367,7 +1644,9 @@ export const clashChanged = (
 
 /** Whether an edge is a prediction a recheck may replace: implied, not learned or explicit, not blocking, not overridden. */
 export const isReplaceableOverlap = (edge: ImpliedAfter): boolean =>
-  (edge.source ?? 'implied') === 'implied' && (edge.kind ?? 'overlaps') === 'overlaps' && edge.overridden !== true;
+  (edge.source ?? 'implied') === 'implied' &&
+  (edge.kind ?? 'overlaps') === 'overlaps' &&
+  edge.overridden !== true;
 
 /**
  * A recheck of a glob's predicted overlaps: the replaceable ones become `edges` (the others are kept as they are), with an
@@ -1375,15 +1654,21 @@ export const isReplaceableOverlap = (edge: ImpliedAfter): boolean =>
  */
 export const overlapsRechecked = (
   glob: Glob,
-  result: { readonly edges: readonly ImpliedAfter[]; readonly dropReasons: ReadonlyMap<string, string> },
+  result: {
+    readonly edges: readonly ImpliedAfter[];
+    readonly dropReasons: ReadonlyMap<string, string>;
+  },
   ctx: Context,
 ): Result<Transition> => {
   if (listOf(glob.status) !== 'planning' && listOf(glob.status) !== 'doing') return unchanged(glob);
   const existing = glob.impliedAfter ?? [];
   const before = existing.filter(isReplaceableOverlap);
   const kept = existing.filter((e) => !isReplaceableOverlap(e));
-  const edges = result.edges.filter((e) => !kept.some((k) => k.id === e.id) && !(glob.after ?? []).includes(e.id));
-  const same = (a: ImpliedAfter, b: ImpliedAfter) => a.id === b.id && a.paths.join('\n') === b.paths.join('\n');
+  const edges = result.edges.filter(
+    (e) => !kept.some((k) => k.id === e.id) && !(glob.after ?? []).includes(e.id),
+  );
+  const same = (a: ImpliedAfter, b: ImpliedAfter) =>
+    a.id === b.id && a.paths.join('\n') === b.paths.join('\n');
   const dropped = before.filter((b) => !edges.some((e) => e.id === b.id));
   const added = edges.filter((e) => !before.some((b) => b.id === e.id));
   const moved = edges.filter((e) => before.some((b) => b.id === e.id && !same(b, e)));
@@ -1391,7 +1676,11 @@ export const overlapsRechecked = (
   const b = new Builder(glob, ctx);
   const next = [...kept, ...edges];
   b.set({ impliedAfter: next });
-  for (const edge of dropped) b.event('OverlapDropped', { with: edge.id, reason: result.dropReasons.get(edge.id) ?? 'it no longer changes an exclusive path' });
+  for (const edge of dropped)
+    b.event('OverlapDropped', {
+      with: edge.id,
+      reason: result.dropReasons.get(edge.id) ?? 'it no longer changes an exclusive path',
+    });
   for (const edge of added) b.event('OverlapAdded', { with: edge.id, paths: [...edge.paths] });
   return b.done();
 };
@@ -1405,15 +1694,25 @@ export const runFired = (
   const run = currentRun(glob);
   if (run === null || run.id !== fired.runId || run.state === 'ended') return unchanged(glob);
   return new Builder(glob, ctx)
-    .updateRun({ sessionId: fired.sessionId ?? run.sessionId, sessionUrl: fired.sessionUrl ?? run.sessionUrl })
-    .event('RunTriggered', { runId: run.id, fired: true, sessionUrl: fired.sessionUrl, ...(run.purpose === undefined ? {} : { purpose: run.purpose }) })
+    .updateRun({
+      sessionId: fired.sessionId ?? run.sessionId,
+      sessionUrl: fired.sessionUrl ?? run.sessionUrl,
+    })
+    .event('RunTriggered', {
+      runId: run.id,
+      fired: true,
+      sessionUrl: fired.sessionUrl,
+      ...(run.purpose === undefined ? {} : { purpose: run.purpose }),
+    })
     .done();
 };
 
-const minutesSince = (from: string, now: string): number => (Date.parse(now) - Date.parse(from)) / 60_000;
+const minutesSince = (from: string, now: string): number =>
+  (Date.parse(now) - Date.parse(from)) / 60_000;
 
 /** `2026-10-07 02:01 UTC`: a time in a failure reason. */
-const queuedAtText = (at: string): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+const queuedAtText = (at: string): string =>
+  `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
 /**
  * A queued run whose cloud session exists but hasn't called slop within this many minutes of
@@ -1422,7 +1721,8 @@ const queuedAtText = (at: string): string => `${new Date(at).toISOString().slice
  */
 export const SESSION_NEVER_REACHED_SLOP_MINUTES = 5;
 
-const SESSION_NEVER_REACHED_SLOP = "The run's session never reached slop (the Slop connector may not have attached). Discard & restart.";
+const SESSION_NEVER_REACHED_SLOP =
+  "The run's session never reached slop (the Slop connector may not have attached). Discard & restart.";
 
 /** The reason `runTimeoutReason` gives a watching run that ignored failed checks. */
 const GAVE_UP = /^Auto-fix didn't respond/;
@@ -1438,7 +1738,10 @@ const failureSummaryOf = (glob: Glob): string | null => {
 /** The head's failed checks that are the glob's own to fix (not inherited from the base): what a watching run is asked to respond to. */
 const ownFailedHead = (glob: Glob): HeadChecks | null => {
   const checks = glob.headChecks;
-  return glob.pr?.headSha != null && checks?.sha === glob.pr.headSha && checks.state === 'failed' && checks.inheritedFrom === undefined
+  return glob.pr?.headSha != null &&
+    checks?.sha === glob.pr.headSha &&
+    checks.state === 'failed' &&
+    checks.inheritedFrom === undefined
     ? checks
     : null;
 };
@@ -1451,7 +1754,10 @@ const ownFailedHead = (glob: Glob): HeadChecks | null => {
  */
 export const runTimeoutReason = (
   glob: Glob,
-  board: Pick<Board, 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes'>,
+  board: Pick<
+    Board,
+    'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes'
+  >,
   now: string,
 ): string | null => {
   const run = currentRun(glob);
@@ -1459,12 +1765,14 @@ export const runTimeoutReason = (
   // Queued runs have made no slop call yet: one that never starts (no session, a session that never called slop).
   if (run.state === 'queued') {
     const waited = minutesSince(run.queuedAt, now);
-    if (run.sessionId !== null && waited >= SESSION_NEVER_REACHED_SLOP_MINUTES) return SESSION_NEVER_REACHED_SLOP;
+    if (run.sessionId !== null && waited >= SESSION_NEVER_REACHED_SLOP_MINUTES)
+      return SESSION_NEVER_REACHED_SLOP;
     return waited >= board.runStartMinutes
       ? `Routine run never started (queued at ${queuedAtText(run.queuedAt)})`
       : null;
   }
-  const hours = (from: string | null) => (from === null ? 0 : (Date.parse(now) - Date.parse(from)) / 3_600_000);
+  const hours = (from: string | null) =>
+    from === null ? 0 : (Date.parse(now) - Date.parse(from)) / 3_600_000;
   const lastProgress = run.lastProgressAt ?? run.startedAt ?? run.queuedAt;
   if (run.state === 'watching') {
     const failed = ownFailedHead(glob);
@@ -1493,7 +1801,8 @@ export const runProgress = (glob: Glob, runId: string, ctx: Context): Result<Tra
   return new Builder(glob, ctx)
     .updateRun({
       // A run retried on a ready PR watches it; there is no PR to mark ready.
-      state: run.state === 'queued' ? (glob.status === 'pr_open' ? 'watching' : 'active') : run.state,
+      state:
+        run.state === 'queued' ? (glob.status === 'pr_open' ? 'watching' : 'active') : run.state,
       startedAt: run.startedAt ?? ctx.now,
       lastProgressAt: ctx.now,
     })
@@ -1514,13 +1823,34 @@ export const prReadyForReview = (
     .event('PRReadyForReview', { number: pr.number, sha: pr.headSha });
   const run = currentRun(glob);
   if (run !== null && (run.state === 'active' || run.state === 'queued')) {
-    b.updateRun({ state: 'watching', lastProgressAt: ctx.now, startedAt: run.startedAt ?? ctx.now });
+    b.updateRun({
+      state: 'watching',
+      lastProgressAt: ctx.now,
+      startedAt: run.startedAt ?? ctx.now,
+    });
   }
-  b.status('pr_open').effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+  b.status('pr_open').effect({
+    kind: 'refresh_checks',
+    globId: glob.id,
+    generation: glob.generation,
+  });
   // A sub doesn't wait for the PR's checks: the board's policy decides at once, and the checks run on the base after it merges.
-  if (glob.type === 'sub') b.effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha: pr.headSha });
+  if (glob.type === 'sub')
+    b.effect({
+      kind: 'evaluate_sub_gate',
+      globId: glob.id,
+      generation: glob.generation,
+      sha: pr.headSha,
+    });
   // A same or super is reviewed as it would apply to the latest main; a sub is reviewed after it merges.
-  else b.effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage: 'pre_merge', sha: pr.headSha });
+  else
+    b.effect({
+      kind: 'review_change',
+      globId: glob.id,
+      generation: glob.generation,
+      stage: 'pre_merge',
+      sha: pr.headSha,
+    });
   return b.done();
 };
 
@@ -1528,17 +1858,23 @@ export const prReadyForReview = (
 export const isReconcilable = (glob: Glob): boolean =>
   glob.pr !== null &&
   (glob.pr.state === 'draft' || glob.pr.state === 'ready') &&
-  (glob.status === 'implementing' || glob.status === 'in_progress' || glob.status === 'pr_open' || glob.status === 'merging');
+  (glob.status === 'implementing' ||
+    glob.status === 'in_progress' ||
+    glob.status === 'pr_open' ||
+    glob.status === 'merging');
 
 /** Re-read the PR from the code host (on start, or when a webhook may have been lost) and apply what changed. */
 export const reconcileRequested = (glob: Glob, ctx: Context): Result<Transition> => {
   if (!isReconcilable(glob)) return unchanged(glob);
-  return new Builder(glob, ctx).effect({ kind: 'reconcile_pr', globId: glob.id, generation: glob.generation }).done();
+  return new Builder(glob, ctx)
+    .effect({ kind: 'reconcile_pr', globId: glob.id, generation: glob.generation })
+    .done();
 };
 
 /** A check suite or run changed on the glob's branch: re-read the head's merge state. */
 export const checksChanged = (glob: Glob, ctx: Context): Result<Transition> => {
-  if (glob.pr === null || (glob.status !== 'pr_open' && glob.status !== 'merging')) return unchanged(glob);
+  if (glob.pr === null || (glob.status !== 'pr_open' && glob.status !== 'merging'))
+    return unchanged(glob);
   return new Builder(glob, ctx)
     .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation })
     .done();
@@ -1568,7 +1904,12 @@ export const checksCompleted = (
         sha: checks.sha,
         state: checks.passed ? 'passed' : 'failed',
         // A re-read of the same failure keeps its first time.
-        ...(!checks.passed && { at: glob.headChecks?.sha === checks.sha && glob.headChecks.state === 'failed' ? (glob.headChecks.at ?? ctx.now) : ctx.now }),
+        ...(!checks.passed && {
+          at:
+            glob.headChecks?.sha === checks.sha && glob.headChecks.state === 'failed'
+              ? (glob.headChecks.at ?? ctx.now)
+              : ctx.now,
+        }),
         ...(failure !== undefined && { failure }),
         ...(inherited !== null && { inheritedFrom: inherited }),
       },
@@ -1585,7 +1926,10 @@ export const checksCompleted = (
       const reason = conflictReason(checks.conflict);
       return b
         .endWatchingRun(reason)
-        .set({ failure: { reason, at: ctx.now, kind: 'merge', conflict: checks.conflict }, mergeMode: null })
+        .set({
+          failure: { reason, at: ctx.now, kind: 'merge', conflict: checks.conflict },
+          mergeMode: null,
+        })
         .event('MergeFailed', { reason, conflict: true })
         .status('failed')
         .done();
@@ -1602,7 +1946,12 @@ export const checksCompleted = (
         .status('failed')
         .done();
     }
-    b.effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: checks.sha });
+    b.effect({
+      kind: 'squash_merge',
+      globId: glob.id,
+      generation: glob.generation,
+      sha: checks.sha,
+    });
   }
   return b.done();
 };
@@ -1626,7 +1975,8 @@ export const baseChecksChanged = (
   const checks = glob.headChecks;
   if (!hasFailedHead(glob) || checks === null) return unchanged(glob);
   const inherited = inheritedFailure(checks.failure, base.checks, base.branch);
-  if (JSON.stringify(inherited) === JSON.stringify(checks.inheritedFrom ?? null)) return unchanged(glob);
+  if (JSON.stringify(inherited) === JSON.stringify(checks.inheritedFrom ?? null))
+    return unchanged(glob);
   const kept: HeadChecks = {
     sha: checks.sha,
     state: checks.state,
@@ -1645,14 +1995,25 @@ export const baseChecksChanged = (
  * its checks run again on the fixed base. The update's push resets the head checks (row 21).
  */
 export const baseTurnedGreen = (glob: Glob, ctx: Context): Result<Transition> => {
-  if (!hasFailedHead(glob) || glob.headChecks?.inheritedFrom === undefined || glob.pr?.headSha == null) return unchanged(glob);
+  if (
+    !hasFailedHead(glob) ||
+    glob.headChecks?.inheritedFrom === undefined ||
+    glob.pr?.headSha == null
+  )
+    return unchanged(glob);
   return new Builder(glob, ctx)
-    .effect({ kind: 'update_branch', globId: glob.id, generation: glob.generation, sha: glob.pr.headSha })
+    .effect({
+      kind: 'update_branch',
+      globId: glob.id,
+      generation: glob.generation,
+      sha: glob.pr.headSha,
+    })
     .done();
 };
 
 /** Where `mark_ready` came from: the board offers it to supers only, once the implementation record is at the head. */
-export type ReadySource = { readonly from: 'tool' } | { readonly from: 'board'; readonly facts: ActionFacts };
+export type ReadySource =
+  { readonly from: 'tool' } | { readonly from: 'board'; readonly facts: ActionFacts };
 
 /**
  * `mark_ready`: the implementer is done and asks slop to mark the draft PR ready. The status
@@ -1665,22 +2026,30 @@ export const readyRequested = (
   source: ReadySource = { from: 'tool' },
 ): Result<Transition> => {
   if (glob.status !== 'implementing' && glob.status !== 'in_progress') {
-    return invalidTransition(glob, ctx.actor, `A glob in ${glob.status} has no draft PR to mark ready`);
+    return invalidTransition(
+      glob,
+      ctx.actor,
+      `A glob in ${glob.status} has no draft PR to mark ready`,
+    );
   }
   if (glob.pr === null) return invalidTransition(glob, ctx.actor, 'The glob has no PR yet');
   if (source.from === 'board') {
     const agentSet = isAgentSetGlob(glob);
-    if (glob.type !== 'super' && !agentSet) return invalidTransition(glob, ctx.actor, 'Only a super is marked ready from the board');
-    if (restrictedFrom(requireActor(ctx), glob)) return forbidden('QA and PO members cannot mark a super ready');
+    if (glob.type !== 'super' && !agentSet)
+      return invalidTransition(glob, ctx.actor, 'Only a super is marked ready from the board');
+    if (restrictedFrom(requireActor(ctx), glob))
+      return forbidden('QA and PO members cannot mark a super ready');
     // An agent-set glob has no implementation record: slop's commit is the work.
-    if (!agentSet && !recordAtHead(glob, source.facts)) return invalidTransition(glob, ctx.actor, RECORD_NOT_AT_HEAD);
+    if (!agentSet && !recordAtHead(glob, source.facts))
+      return invalidTransition(glob, ctx.actor, RECORD_NOT_AT_HEAD);
   }
   const run = currentRun(glob);
   if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
     return invalidTransition(glob, ctx.actor, `Run ${runId} is not the glob's current run`);
   }
   // Already ready (a conflict fixed, a second call): GitHub raises no event, so go straight to pr_open.
-  if (glob.pr.state === 'ready') return prReadyForReview(glob, { number: glob.pr.number, headSha: glob.pr.headSha ?? '' }, ctx);
+  if (glob.pr.state === 'ready')
+    return prReadyForReview(glob, { number: glob.pr.number, headSha: glob.pr.headSha ?? '' }, ctx);
   return new Builder(glob, ctx)
     .effect({ kind: 'mark_pr_ready', globId: glob.id, generation: glob.generation })
     .done();
@@ -1692,11 +2061,17 @@ export const subGateCheckCompleted = (
   check: { sha: string; passed: boolean },
   ctx: Context,
 ): Result<Transition> => {
-  if (glob.status !== 'pr_open' || glob.type !== 'sub' || glob.pr?.headSha !== check.sha) return unchanged(glob);
+  if (glob.status !== 'pr_open' || glob.type !== 'sub' || glob.pr?.headSha !== check.sha)
+    return unchanged(glob);
   // Failing checks are left to the routine's auto-fix; only policy flags convert a sub.
   if (!check.passed) return unchanged(glob);
   return new Builder(glob, ctx)
-    .effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha: check.sha })
+    .effect({
+      kind: 'evaluate_sub_gate',
+      globId: glob.id,
+      generation: glob.generation,
+      sha: check.sha,
+    })
     .done();
 };
 
@@ -1707,7 +2082,12 @@ export const subGateCheckCompleted = (
  */
 export const escalateToSame = (
   glob: Glob,
-  input: { reason: string; evidence?: string | null; criterion?: string | null; runId?: string | null },
+  input: {
+    reason: string;
+    evidence?: string | null;
+    criterion?: string | null;
+    runId?: string | null;
+  },
   ctx: Context,
 ): Result<Transition> => {
   const runId = input.runId ?? null;
@@ -1716,7 +2096,12 @@ export const escalateToSame = (
     if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
   }
   if (glob.type !== 'sub') return unchanged(glob);
-  if (glob.status !== 'planning' && glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') {
+  if (
+    glob.status !== 'planning' &&
+    glob.status !== 'implementing' &&
+    glob.status !== 'in_progress' &&
+    glob.status !== 'pr_open'
+  ) {
     return invalidTransition(glob, ctx.actor, 'A sub can only be escalated before it merges');
   }
   const reason = input.reason.trim();
@@ -1734,8 +2119,14 @@ export const escalateToSame = (
   const b = new Builder(glob, ctx)
     .set({ type: 'same', escalation })
     .event('FieldsChanged', { type: { from: 'sub', to: 'same' } })
-    .event('Escalated', { reason, criterion, ...(evidence === '' ? {} : { evidence }), ...(runId === null ? {} : { runId }) });
-  if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+    .event('Escalated', {
+      reason,
+      criterion,
+      ...(evidence === '' ? {} : { evidence }),
+      ...(runId === null ? {} : { runId }),
+    });
+  if (glob.pr !== null)
+    b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   return b.done();
 };
 
@@ -1748,16 +2139,31 @@ export const deescalate = (glob: Glob, ctx: Context): Result<Transition> => {
   if (glob.escalation == null || glob.type !== 'same') {
     return invalidTransition(glob, actor, 'Only an escalated same can be made a sub again');
   }
-  if (glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') {
-    return invalidTransition(glob, actor, 'An escalation can only be undone before the glob merges');
+  if (
+    glob.status !== 'implementing' &&
+    glob.status !== 'in_progress' &&
+    glob.status !== 'pr_open'
+  ) {
+    return invalidTransition(
+      glob,
+      actor,
+      'An escalation can only be undone before the glob merges',
+    );
   }
   const b = new Builder(glob, ctx)
     .set({ type: 'sub', escalation: null })
     .event('FieldsChanged', { type: { from: 'same', to: 'sub' } })
     .event('Deescalated', { reason: glob.escalation.reason });
-  if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  if (glob.pr !== null)
+    b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   const sha = glob.pr?.headSha;
-  if (glob.status === 'pr_open' && glob.pr?.state === 'ready' && sha != null && glob.headChecks?.sha === sha && glob.headChecks.state === 'passed') {
+  if (
+    glob.status === 'pr_open' &&
+    glob.pr?.state === 'ready' &&
+    sha != null &&
+    glob.headChecks?.sha === sha &&
+    glob.headChecks.state === 'passed'
+  ) {
     b.effect({ kind: 'evaluate_sub_gate', globId: glob.id, generation: glob.generation, sha });
   }
   return b.done();
@@ -1765,7 +2171,10 @@ export const deescalate = (glob: Glob, ctx: Context): Result<Transition> => {
 
 /** Whether the routine reported that a person has to decide something (`report_failure` with `kind: 'needs_pairing'`). */
 const needsPairing = (glob: Glob): boolean =>
-  glob.status === 'failed' && glob.failure?.kind === 'needs_pairing' && glob.type !== 'super' && glob.category !== 'bug';
+  glob.status === 'failed' &&
+  glob.failure?.kind === 'needs_pairing' &&
+  glob.type !== 'super' &&
+  glob.category !== 'bug';
 
 /**
  * Make it a super: a person takes over a glob whose routine asked for pairing. The type becomes super with the person
@@ -1773,16 +2182,30 @@ const needsPairing = (glob: Glob): boolean =>
  */
 export const makeSuper = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
-  if (!needsPairing(glob)) return invalidTransition(glob, actor, 'Only a failed sub or same whose routine asked for pairing can be made a super');
-  if (actor.role === 'qa' || actor.role === 'po') return forbidden('QA and PO members cannot create supers');
-  if (hasBusyRun(glob)) return runActive('A routine run is active or watching; pick up to supersede it');
+  if (!needsPairing(glob))
+    return invalidTransition(
+      glob,
+      actor,
+      'Only a failed sub or same whose routine asked for pairing can be made a super',
+    );
+  if (actor.role === 'qa' || actor.role === 'po')
+    return forbidden('QA and PO members cannot create supers');
+  if (hasBusyRun(glob))
+    return runActive('A routine run is active or watching; pick up to supersede it');
   const b = new Builder(glob, ctx)
     .endRun('superseded', null, { cause: 'make_super' })
-    .set({ type: 'super', implementer: actor.email, failure: null, escalation: null, ...(glob.waiting == null ? {} : { waiting: null }) })
+    .set({
+      type: 'super',
+      implementer: actor.email,
+      failure: null,
+      escalation: null,
+      ...(glob.waiting == null ? {} : { waiting: null }),
+    })
     .status('in_progress')
     .event('FieldsChanged', { type: { from: glob.type, to: 'super' } })
     .event('PickedUp', { takeOver: false, madeSuper: true });
-  if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  if (glob.pr !== null)
+    b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   return b.done();
 };
 
@@ -1811,7 +2234,8 @@ export const subGateCompleted = (
     reason: gate.reason,
     ...(gate.cause !== undefined && { cause: gate.cause }),
     ...(gate.changedLines !== undefined && { changedLines: gate.changedLines }),
-    ...(gate.ignoredLines !== undefined && gate.ignoredLines > 0 && { ignoredLines: gate.ignoredLines }),
+    ...(gate.ignoredLines !== undefined &&
+      gate.ignoredLines > 0 && { ignoredLines: gate.ignoredLines }),
     ...(gate.limit !== undefined && { limit: gate.limit }),
   });
   if (gate.passed) {
@@ -1831,18 +2255,37 @@ export const subGateCompleted = (
  * Rows 15 and 31: the merge was observed (slop's own merge response or the merged event, whichever
  * comes first; the second is a no-op). `number` is the merged PR's, when the caller knows it.
  */
-export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx: Context): Result<Transition> => {
+export const merged = (
+  glob: Glob,
+  merge: { sha: string; number?: number },
+  ctx: Context,
+): Result<Transition> => {
   // GitHub is the source of truth for merges, so any status before merging moves to reviewing.
   if (glob.status === 'reviewing' || glob.status === 'signed_off') return unchanged(glob);
   // A PR already landed with Merge and continue: its second observation.
-  if (merge.number !== undefined && glob.prs.some((p) => p.number === merge.number)) return unchanged(glob);
+  if (merge.number !== undefined && glob.prs.some((p) => p.number === merge.number))
+    return unchanged(glob);
   if (glob.type === 'super' && glob.mergeMode === 'continue') {
     // Row 31: the glob keeps going on its branch; the next push opens a fresh draft PR.
     const number = merge.number ?? glob.pr?.number;
-    const prs = number === undefined ? glob.prs : [...glob.prs, { number, mergeSha: merge.sha, mergedAt: ctx.now }];
+    const prs =
+      number === undefined
+        ? glob.prs
+        : [...glob.prs, { number, mergeSha: merge.sha, mergedAt: ctx.now }];
     return new Builder(glob, ctx)
-      .set({ prs, pr: null, headChecks: null, mergeMode: null, failure: null, ...(glob.conflict == null ? {} : { conflict: null }) })
-      .event('Merged', { sha: merge.sha, ...(number === undefined ? {} : { number }), mode: 'continue' })
+      .set({
+        prs,
+        pr: null,
+        headChecks: null,
+        mergeMode: null,
+        failure: null,
+        ...(glob.conflict == null ? {} : { conflict: null }),
+      })
+      .event('Merged', {
+        sha: merge.sha,
+        ...(number === undefined ? {} : { number }),
+        mode: 'continue',
+      })
       .status('in_progress')
       .effect({ kind: 'flag_conflicts', globId: glob.id, generation: glob.generation })
       .done();
@@ -1863,7 +2306,14 @@ export const merged = (glob: Glob, merge: { sha: string; number?: number }, ctx:
     // Only the final merge releases the globs waiting for this one (a Merge and continue leaves it open).
     .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation });
   // A sub merges without human review, so its one review runs after the merge (a same or super was reviewed before it).
-  if (glob.type === 'sub') b.effect({ kind: 'review_change', globId: glob.id, generation: glob.generation, stage: 'post_merge', sha: merge.sha });
+  if (glob.type === 'sub')
+    b.effect({
+      kind: 'review_change',
+      globId: glob.id,
+      generation: glob.generation,
+      stage: 'post_merge',
+      sha: merge.sha,
+    });
   return b.done();
 };
 
@@ -1877,7 +2327,15 @@ export const mergeFailed = (
   if (glob.status !== 'merging') return unchanged(glob);
   return new Builder(glob, ctx)
     .endWatchingRun(reason)
-    .set({ failure: { reason, at: ctx.now, kind: 'merge', ...(conflict === undefined ? {} : { conflict }) }, mergeMode: null })
+    .set({
+      failure: {
+        reason,
+        at: ctx.now,
+        kind: 'merge',
+        ...(conflict === undefined ? {} : { conflict }),
+      },
+      mergeMode: null,
+    })
     .event('MergeFailed', { reason })
     .status('failed')
     .done();
@@ -1892,12 +2350,22 @@ export const mergeTurnedBaseRed = (
   red: { sha: string; failure: CheckFailure | null; base: string },
   ctx: Context,
 ): Result<Transition> => {
-  if (glob.type !== 'sub' || glob.status !== 'reviewing' || glob.pr?.state !== 'merged') return unchanged(glob);
+  if (glob.type !== 'sub' || glob.status !== 'reviewing' || glob.pr?.state !== 'merged')
+    return unchanged(glob);
   const check = red.failure === null ? 'the checks' : red.failure.name;
   const link = red.failure?.url == null ? '' : ` (${red.failure.url})`;
   return new Builder(glob, ctx)
-    .set({ failure: { reason: `Reverted from ${red.base}: ${check} failed on its merge commit${link}`, at: ctx.now, kind: 'reverted' } })
-    .event('MergeReverted', { sha: red.sha, ...(red.failure === null ? {} : { check: red.failure.name }) })
+    .set({
+      failure: {
+        reason: `Reverted from ${red.base}: ${check} failed on its merge commit${link}`,
+        at: ctx.now,
+        kind: 'reverted',
+      },
+    })
+    .event('MergeReverted', {
+      sha: red.sha,
+      ...(red.failure === null ? {} : { check: red.failure.name }),
+    })
     .status('failed')
     .effect({ kind: 'revert_merge', globId: glob.id, generation: glob.generation, sha: red.sha })
     .done();
@@ -1915,7 +2383,13 @@ export const revertFailed = (glob: Glob, reason: string, ctx: Context): Result<T
 /** Rows 17, 18 and 25: `report_failure`, or a run timeout (always with its run ID). */
 export const reportFailure = (
   glob: Glob,
-  report: { reason: string; runId: string | null; agentSetVersion?: number | null; kind?: 'needs_pairing'; decision?: string | null },
+  report: {
+    reason: string;
+    runId: string | null;
+    agentSetVersion?: number | null;
+    kind?: 'needs_pairing';
+    decision?: string | null;
+  },
   ctx: Context,
 ): Result<Transition> => {
   // Every failure report records the agent-set version it ran with (spec: provenance).
@@ -1927,12 +2401,21 @@ export const reportFailure = (
     reason: report.reason,
     at: ctx.now,
     ...(agentSetVersion === null ? {} : { agentSetVersion }),
-    ...(pairing ? { kind: 'needs_pairing' as const, ...(decision === '' ? {} : { decision: decision.slice(0, 1000) }) } : {}),
+    ...(pairing
+      ? {
+          kind: 'needs_pairing' as const,
+          ...(decision === '' ? {} : { decision: decision.slice(0, 1000) }),
+        }
+      : {}),
   };
   if (report.runId === null) {
     // Row 18: an interactive session gave up.
     if (glob.status !== 'in_progress') {
-      return invalidTransition(glob, ctx.actor, 'Only a glob in progress can be failed without a run');
+      return invalidTransition(
+        glob,
+        ctx.actor,
+        'Only a glob in progress can be failed without a run',
+      );
     }
     return new Builder(glob, ctx)
       .set({ failure })
@@ -1944,7 +2427,12 @@ export const reportFailure = (
   if (run === null || run.id !== report.runId || run.state === 'ended') {
     // Results from superseded runs are recorded but ignored.
     return new Builder(glob, ctx)
-      .event('RunFailed', { runId: report.runId, reason: report.reason, ignored: true, agentSetVersion })
+      .event('RunFailed', {
+        runId: report.runId,
+        reason: report.reason,
+        ignored: true,
+        agentSetVersion,
+      })
       .done();
   }
   if (glob.status === 'planning' && run.purpose === 'investigate') {
@@ -1965,7 +2453,14 @@ export const reportFailure = (
     // A watcher that gave up is retried once by slop itself, on the same PR and branch; only if that run also ends
     // without fixing it does the glob show the failure and the Retry auto-fix button.
     const retried = glob.runs.some((r) => r.autoRetry === true);
-    if (!pairing && GAVE_UP.test(report.reason) && !retried && glob.type !== 'super' && glob.implementer === null && glob.pr !== null) {
+    if (
+      !pairing &&
+      GAVE_UP.test(report.reason) &&
+      !retried &&
+      glob.type !== 'super' &&
+      glob.implementer === null &&
+      glob.pr !== null
+    ) {
       return b.queueRun(run.triggeredBy, { failureSummary: failureSummaryOf(glob) }).done();
     }
     return b.set({ failure }).done();
@@ -1999,13 +2494,21 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     glob.status === 'planning' &&
     glob.type !== 'super' &&
     (facts.sizeHeld === true ||
-      (facts.dependencies === undefined ? glob.waiting != null : waitingFor(glob, facts.dependencies).length > 0));
+      (facts.dependencies === undefined
+        ? glob.waiting != null
+        : waitingFor(glob, facts.dependencies).length > 0));
   if (glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
   if (canReviewNow(glob)) actions.push('review_now');
   if (held && !restricted) actions.push('start_anyway');
   // Start (the machine takes over): picked up, but no session has started and no run is live.
-  if (!restricted && glob.status === 'in_progress' && glob.type !== 'super' && glob.implementer !== null && !hasLiveRun(glob)) {
+  if (
+    !restricted &&
+    glob.status === 'in_progress' &&
+    glob.type !== 'super' &&
+    glob.implementer !== null &&
+    !hasLiveRun(glob)
+  ) {
     actions.push('start_anyway');
   }
   const canPickUp =
@@ -2026,7 +2529,12 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   }
   // A merge failure on a glob a person implements is theirs to fix and push: a routine run is the wrong answer.
   const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null;
-  if (glob.status === 'failed' && glob.type !== 'super' && !hasLiveRun(glob) && !personMergeFailure) {
+  if (
+    glob.status === 'failed' &&
+    glob.type !== 'super' &&
+    !hasLiveRun(glob) &&
+    !personMergeFailure
+  ) {
     actions.push('retrigger');
   }
   if (!restricted && !hasLiveRun(glob) && canRetryAutofix(glob)) actions.push('retry_autofix');
@@ -2051,10 +2559,16 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   ) {
     actions.push('mark_ready');
   }
-  if (!restricted && glob.escalation != null && glob.type === 'same' && ['implementing', 'in_progress', 'pr_open'].includes(glob.status)) {
+  if (
+    !restricted &&
+    glob.escalation != null &&
+    glob.type === 'same' &&
+    ['implementing', 'in_progress', 'pr_open'].includes(glob.status)
+  ) {
     actions.push('deescalate');
   }
-  if (actor.role !== 'qa' && actor.role !== 'po' && needsPairing(glob) && !hasBusyRun(glob)) actions.push('make_super');
+  if (actor.role !== 'qa' && actor.role !== 'po' && needsPairing(glob) && !hasBusyRun(glob))
+    actions.push('make_super');
   actions.push('delete');
   return actions;
 };
@@ -2067,8 +2581,18 @@ const agentSetActions = (glob: Glob, actor: Actor): Action[] => {
   const actions: Action[] = [];
   const restricted = restrictedFrom(actor, glob);
   if (canReviewNow(glob)) actions.push('review_now');
-  if (!restricted && (glob.status === 'in_progress' || glob.status === 'implementing') && glob.pr?.state === 'draft') actions.push('mark_ready');
-  if (glob.status === 'pr_open' && glob.pr?.headSha != null && glob.headChecks?.sha === glob.pr.headSha && glob.headChecks.state === 'passed') {
+  if (
+    !restricted &&
+    (glob.status === 'in_progress' || glob.status === 'implementing') &&
+    glob.pr?.state === 'draft'
+  )
+    actions.push('mark_ready');
+  if (
+    glob.status === 'pr_open' &&
+    glob.pr?.headSha != null &&
+    glob.headChecks?.sha === glob.pr.headSha &&
+    glob.headChecks.state === 'passed'
+  ) {
     actions.push('merge');
   }
   actions.push('delete');
@@ -2086,7 +2610,8 @@ const mayDecide = (actor: Actor): boolean => actor.role === 'admin' || actor.rol
 /** The attributes of a decision glob; a decision without them is a broken record, never a state to handle. */
 export const decisionAttributesOf = (glob: Glob): DecisionAttributes => {
   const attributes = glob.attributes;
-  if (glob.category !== 'decision' || !isDecisionAttributes(attributes)) throw new Error(`${glob.id} is not a decision glob`);
+  if (glob.category !== 'decision' || !isDecisionAttributes(attributes))
+    throw new Error(`${glob.id} is not a decision glob`);
   return attributes;
 };
 
@@ -2101,7 +2626,11 @@ const outcomeJson = (outcome: DecisionOutcome): JsonValue => ({
 type MutableAttributes = { -readonly [K in keyof DecisionAttributes]: DecisionAttributes[K] };
 
 /** The attributes with `outcome` set (or cleared) and the archived flag as given; the rest is kept. */
-const withOutcome = (attributes: DecisionAttributes, outcome: DecisionOutcome | null, archived: boolean): DecisionAttributes => {
+const withOutcome = (
+  attributes: DecisionAttributes,
+  outcome: DecisionOutcome | null,
+  archived: boolean,
+): DecisionAttributes => {
   const next: MutableAttributes = { ...attributes, outcome };
   if (archived) next.archived = true;
   else delete next.archived;
@@ -2109,14 +2638,22 @@ const withOutcome = (attributes: DecisionAttributes, outcome: DecisionOutcome | 
 };
 
 /** The attributes with the conflict flags replaced (none when `ids` is empty); the rest is kept. */
-const withConflicts = (attributes: DecisionAttributes, ids: readonly string[]): DecisionAttributes => {
+const withConflicts = (
+  attributes: DecisionAttributes,
+  ids: readonly string[],
+): DecisionAttributes => {
   const next: MutableAttributes = { ...attributes };
   if (ids.length === 0) delete next.conflictsWith;
   else next.conflictsWith = [...ids];
   return next;
 };
 
-const linkJson = (link: GlobLink): JsonValue => ({ id: link.id, kind: link.kind, source: link.source, ...(link.detail === undefined ? {} : { detail: link.detail }) });
+const linkJson = (link: GlobLink): JsonValue => ({
+  id: link.id,
+  kind: link.kind,
+  source: link.source,
+  ...(link.detail === undefined ? {} : { detail: link.detail }),
+});
 
 /** Row D1: a decision enters Planning with no run, no provisioning and no labels. */
 const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<Transition> => {
@@ -2156,7 +2693,13 @@ const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<
     doingSince: null,
   };
   return new Builder(glob, ctx)
-    .event('GlobCreated', { type: glob.type, category: glob.category, group: glob.group, environment: null, status: glob.status })
+    .event('GlobCreated', {
+      type: glob.type,
+      category: glob.category,
+      group: glob.group,
+      environment: null,
+      status: glob.status,
+    })
     .done();
 };
 
@@ -2164,7 +2707,7 @@ const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<
 const scopeEdit = (glob: Glob, value: unknown, actor: Actor): Result<DecisionScope | null> => {
   const scope = validateScopeEdit(glob.category, value);
   if (!scope.ok) return scope;
-  if (!mayDecide(actor)) return forbidden('Only admins and POs can change a decision\'s scope');
+  if (!mayDecide(actor)) return forbidden("Only admins and POs can change a decision's scope");
   return ok(sameScope(decisionAttributesOf(glob).scope, scope.value) ? null : scope.value);
 };
 
@@ -2178,10 +2721,17 @@ export const pickUpDecision = (glob: Glob, ctx: Context): Result<Transition> => 
   if (!mayDecide(actor)) return forbidden('Only admins and POs can pick up a decision');
   if (glob.status === 'in_progress' && glob.implementer === actor.email) return unchanged(glob);
   if (glob.status === 'planning') {
-    return new Builder(glob, ctx).set({ implementer: actor.email }).status('in_progress').event('PickedUp', { takeOver: false }).done();
+    return new Builder(glob, ctx)
+      .set({ implementer: actor.email })
+      .status('in_progress')
+      .event('PickedUp', { takeOver: false })
+      .done();
   }
   if (glob.status === 'in_progress') {
-    return new Builder(glob, ctx).set({ implementer: actor.email }).event('PickedUp', { takeOver: true }).done();
+    return new Builder(glob, ctx)
+      .set({ implementer: actor.email })
+      .event('PickedUp', { takeOver: true })
+      .done();
   }
   return invalidTransition(glob, actor, `A decision in ${glob.status} cannot be picked up`);
 };
@@ -2200,24 +2750,36 @@ export interface DecideInput {
  * Reviewing, reject to Signed off (archived); needs work and retarget stay in Doing (needs work records the linked glob,
  * retarget only an event, since the item is redrafted before it can be accepted).
  */
-export const decideDecision = (glob: Glob, input: DecideInput, ctx: Context): Result<Transition> => {
+export const decideDecision = (
+  glob: Glob,
+  input: DecideInput,
+  ctx: Context,
+): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.category !== 'decision') return notDecision(glob, actor);
   if (!mayDecide(actor)) return forbidden('Only admins and POs can decide a decision');
-  if (glob.status !== 'in_progress') return invalidTransition(glob, actor, 'A decision is decided in Doing: pick it up first');
+  if (glob.status !== 'in_progress')
+    return invalidTransition(glob, actor, 'A decision is decided in Doing: pick it up first');
   const attributes = decisionAttributesOf(glob);
   if (attributes.outcome !== null && attributes.outcome.kind !== 'needs_work') {
-    return invalidTransition(glob, actor, 'This decision already has an outcome: reopen it to choose again');
+    return invalidTransition(
+      glob,
+      actor,
+      'This decision already has an outcome: reopen it to choose again',
+    );
   }
   const reason = input.reason?.trim() ?? '';
   if (input.outcome === 'reject' && reason === '') return invalidInput('Rejecting needs a reason');
-  if (input.outcome === 'needs_work' && (input.linkedGlobId ?? '') === '') return invalidInput('Needs work needs the work glob that will make the change');
+  if (input.outcome === 'needs_work' && (input.linkedGlobId ?? '') === '')
+    return invalidInput('Needs work needs the work glob that will make the change');
   const outcome: DecisionOutcome = {
     kind: input.outcome,
     by: actor.email,
     at: ctx.now,
     ...(reason === '' ? {} : { reason }),
-    ...(input.outcome === 'needs_work' && input.linkedGlobId !== undefined ? { linkedGlobId: input.linkedGlobId } : {}),
+    ...(input.outcome === 'needs_work' && input.linkedGlobId !== undefined
+      ? { linkedGlobId: input.linkedGlobId }
+      : {}),
   };
   const b = new Builder(glob, ctx);
   switch (input.outcome) {
@@ -2229,7 +2791,9 @@ export const decideDecision = (glob: Glob, input: DecideInput, ctx: Context): Re
       b.set({ attributes: withOutcome(attributes, outcome, false) });
       break;
     case 'reject':
-      b.set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now }).status('signed_off');
+      b.set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now }).status(
+        'signed_off',
+      );
       break;
     case 'retarget':
       break;
@@ -2242,13 +2806,19 @@ export const decideDecision = (glob: Glob, input: DecideInput, ctx: Context): Re
  * pick-up is needed, there is nothing to apply but the pair. Confirm records an accepted outcome and Dismiss a rejected
  * one; either way the glob is Signed off and archived. The caller has applied the choice rows in the same transaction.
  */
-export const decideReplacement = (glob: Glob, input: { readonly confirm: boolean; readonly reason?: string }, ctx: Context): Result<Transition> => {
+export const decideReplacement = (
+  glob: Glob,
+  input: { readonly confirm: boolean; readonly reason?: string },
+  ctx: Context,
+): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.category !== 'decision') return notDecision(glob, actor);
   if (!mayDecide(actor)) return forbidden('Only admins and POs can decide a decision');
-  if (glob.status !== 'planning' && glob.status !== 'in_progress') return invalidTransition(glob, actor, 'This replacement has already been decided');
+  if (glob.status !== 'planning' && glob.status !== 'in_progress')
+    return invalidTransition(glob, actor, 'This replacement has already been decided');
   const attributes = decisionAttributesOf(glob);
-  if (attributes.origin.kind !== 'replacement') return invalidTransition(glob, actor, 'Only a replacement is confirmed or dismissed');
+  if (attributes.origin.kind !== 'replacement')
+    return invalidTransition(glob, actor, 'Only a replacement is confirmed or dismissed');
   const reason = input.reason?.trim() ?? '';
   const outcome: DecisionOutcome = {
     kind: input.confirm ? 'accept' : 'reject',
@@ -2264,7 +2834,11 @@ export const decideReplacement = (glob: Glob, input: { readonly confirm: boolean
 };
 
 /** The pair a replacement asks about changed before anyone decided (a choice was replaced or deleted): the card closes itself, archived. */
-export const closeReplacement = (glob: Glob, ctx: Context, reason = 'No longer relevant: one of the choices was replaced or deleted'): Result<Transition> => {
+export const closeReplacement = (
+  glob: Glob,
+  ctx: Context,
+  reason = 'No longer relevant: one of the choices was replaced or deleted',
+): Result<Transition> => {
   if (glob.category !== 'decision' || glob.status === 'signed_off') return unchanged(glob);
   const attributes = decisionAttributesOf(glob);
   if (attributes.origin.kind !== 'replacement') return unchanged(glob);
@@ -2295,7 +2869,8 @@ export const signOffDecision = (glob: Glob, ctx: Context): Result<Transition> =>
   const actor = requireActor(ctx);
   if (glob.category !== 'decision') return notDecision(glob, actor);
   if (!mayDecide(actor)) return forbidden('Only admins and POs can sign off a decision');
-  if (glob.status !== 'reviewing') return invalidTransition(glob, actor, 'Only a decision in Reviewing can be signed off');
+  if (glob.status !== 'reviewing')
+    return invalidTransition(glob, actor, 'Only a decision in Reviewing can be signed off');
   return new Builder(glob, ctx).set({ signedOffAt: ctx.now }).status('signed_off').done();
 };
 
@@ -2304,7 +2879,8 @@ export const reopenDecision = (glob: Glob, ctx: Context): Result<Transition> => 
   const actor = requireActor(ctx);
   if (glob.category !== 'decision') return notDecision(glob, actor);
   if (!mayDecide(actor)) return forbidden('Only admins and POs can reopen a decision');
-  if (glob.status !== 'reviewing') return invalidTransition(glob, actor, 'Only a decision in Reviewing can be reopened');
+  if (glob.status !== 'reviewing')
+    return invalidTransition(glob, actor, 'Only a decision in Reviewing can be reopened');
   return new Builder(glob, ctx)
     .set({ attributes: withOutcome(decisionAttributesOf(glob), null, false) })
     .status('in_progress')
@@ -2316,16 +2892,36 @@ export const reopenDecision = (glob: Glob, ctx: Context): Result<Transition> => 
  * covered by approved knowledge). The decision ends Signed off and archived with a `closed` outcome, `closedAs`, and the
  * link to what closed it (none when a document's text covers it). Nothing to do once it is signed off.
  */
-export const closeDecision = (glob: Glob, closedAs: DecisionClosedAs, link: GlobLink | null, ctx: Context): Result<Transition> => {
+export const closeDecision = (
+  glob: Glob,
+  closedAs: DecisionClosedAs,
+  link: GlobLink | null,
+  ctx: Context,
+): Result<Transition> => {
   if (glob.category !== 'decision' || glob.status === 'signed_off') return unchanged(glob);
-  if (link !== null && !CLOSING_EDGE_KINDS.includes(link.kind)) return invalidInput(`A ${link.kind} link does not close a decision`);
-  const outcome: DecisionOutcome = { kind: 'closed', by: 'slop', at: ctx.now, reason: `The knowledge pipeline closed the item as ${closedAs}` };
-  const attributes: MutableAttributes = { ...withOutcome(decisionAttributesOf(glob), outcome, true), closedAs };
-  const links = (glob.links ?? []).filter((l) => link === null || !(l.id === link.id && l.kind === link.kind));
+  if (link !== null && !CLOSING_EDGE_KINDS.includes(link.kind))
+    return invalidInput(`A ${link.kind} link does not close a decision`);
+  const outcome: DecisionOutcome = {
+    kind: 'closed',
+    by: 'slop',
+    at: ctx.now,
+    reason: `The knowledge pipeline closed the item as ${closedAs}`,
+  };
+  const attributes: MutableAttributes = {
+    ...withOutcome(decisionAttributesOf(glob), outcome, true),
+    closedAs,
+  };
+  const links = (glob.links ?? []).filter(
+    (l) => link === null || !(l.id === link.id && l.kind === link.kind),
+  );
   return new Builder(glob, ctx)
     .set({ attributes, links: link === null ? links : [...links, link], signedOffAt: ctx.now })
     .status('signed_off')
-    .event('DecisionDecided', { outcome: outcomeJson(outcome), closedAs, link: link === null ? null : linkJson(link) })
+    .event('DecisionDecided', {
+      outcome: outcomeJson(outcome),
+      closedAs,
+      link: link === null ? null : linkJson(link),
+    })
     .done();
 };
 
@@ -2337,21 +2933,30 @@ export const closeDecision = (glob: Glob, closedAs: DecisionClosedAs, link: Glob
 export const reopenClosedDecision = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.category !== 'decision') return notDecision(glob, actor);
-  if (actor.role !== 'admin') return forbidden('Only admins can reopen a learning the pipeline closed');
+  if (actor.role !== 'admin')
+    return forbidden('Only admins can reopen a learning the pipeline closed');
   const attributes = decisionAttributesOf(glob);
   const closedAs = attributes.closedAs;
-  if (glob.status !== 'signed_off' || closedAs === undefined) return invalidTransition(glob, actor, 'Only a decision the knowledge pipeline closed can be reopened this way');
+  if (glob.status !== 'signed_off' || closedAs === undefined)
+    return invalidTransition(
+      glob,
+      actor,
+      'Only a decision the knowledge pipeline closed can be reopened this way',
+    );
   const before = glob.links ?? [];
   const former = before.find((l) => l.kind === 'duplicate_of')?.id ?? null;
   const links = before.filter((l) => !CLOSING_EDGE_KINDS.includes(l.kind));
-  const keepApart = former !== null && !links.some((l) => l.kind === 'kept_apart_from' && l.id === former);
+  const keepApart =
+    former !== null && !links.some((l) => l.kind === 'kept_apart_from' && l.id === former);
   const next: MutableAttributes = { ...withOutcome(attributes, null, false) };
   delete next.closedAs;
   delete next.coveredByText;
   return new Builder(glob, ctx)
     .set({
       attributes: next,
-      links: keepApart ? [...links, { id: former, kind: 'kept_apart_from', source: 'explicit' }] : links,
+      links: keepApart
+        ? [...links, { id: former, kind: 'kept_apart_from', source: 'explicit' }]
+        : links,
       implementer: null,
       signedOffAt: null,
     })
@@ -2366,7 +2971,11 @@ export const reopenClosedDecision = (glob: Glob, ctx: Context): Result<Transitio
  */
 export const decisionApproved = (
   glob: Glob,
-  approval: { readonly by: string; readonly kind?: 'accept' | 'accept_with_edits'; readonly reason?: string | null },
+  approval: {
+    readonly by: string;
+    readonly kind?: 'accept' | 'accept_with_edits';
+    readonly reason?: string | null;
+  },
   ctx: Context,
 ): Result<Transition> => {
   if (glob.category !== 'decision') return unchanged(glob);
@@ -2374,7 +2983,12 @@ export const decisionApproved = (
   const current = attributes.outcome?.kind;
   if (current === 'accept' || current === 'accept_with_edits') return unchanged(glob);
   const reason = approval.reason ?? null;
-  const outcome: DecisionOutcome = { kind: approval.kind ?? 'accept', by: approval.by, at: ctx.now, ...(reason === null ? {} : { reason }) };
+  const outcome: DecisionOutcome = {
+    kind: approval.kind ?? 'accept',
+    by: approval.by,
+    at: ctx.now,
+    ...(reason === null ? {} : { reason }),
+  };
   return new Builder(glob, ctx)
     .set({ attributes: withOutcome(attributes, outcome, false) })
     .status('reviewing')
@@ -2383,11 +2997,20 @@ export const decisionApproved = (
 };
 
 /** The item behind a decision was rejected on the Knowledge page (or by an agent): the decision ends Signed off, archived. */
-export const decisionRejected = (glob: Glob, rejection: { readonly by: string; readonly reason: string }, ctx: Context): Result<Transition> => {
+export const decisionRejected = (
+  glob: Glob,
+  rejection: { readonly by: string; readonly reason: string },
+  ctx: Context,
+): Result<Transition> => {
   if (glob.category !== 'decision') return unchanged(glob);
   const attributes = decisionAttributesOf(glob);
   if (attributes.outcome?.kind === 'reject' && attributes.archived === true) return unchanged(glob);
-  const outcome: DecisionOutcome = { kind: 'reject', by: rejection.by, at: ctx.now, reason: rejection.reason };
+  const outcome: DecisionOutcome = {
+    kind: 'reject',
+    by: rejection.by,
+    at: ctx.now,
+    reason: rejection.reason,
+  };
   return new Builder(glob, ctx)
     .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
     .status('signed_off')
@@ -2405,7 +3028,8 @@ export const decisionReopened = (glob: Glob, ctx: Context): Result<Transition> =
   const kind = attributes.outcome?.kind;
   // An item that stays open beside a needs-work decision is the expected state (the work lands first).
   if (kind === 'needs_work') return unchanged(glob);
-  if (kind === undefined && attributes.archived !== true && glob.status !== 'signed_off') return unchanged(glob);
+  if (kind === undefined && attributes.archived !== true && glob.status !== 'signed_off')
+    return unchanged(glob);
   return new Builder(glob, ctx)
     .set({ attributes: withOutcome(attributes, null, false), implementer: null, signedOffAt: null })
     .status('planning')
@@ -2414,27 +3038,49 @@ export const decisionReopened = (glob: Glob, ctx: Context): Result<Transition> =
 };
 
 /** The broader decisions this one contradicts changed (`conflictsWith`); a repeat changes nothing. */
-export const decisionConflicts = (glob: Glob, ids: readonly string[], ctx: Context): Result<Transition> => {
+export const decisionConflicts = (
+  glob: Glob,
+  ids: readonly string[],
+  ctx: Context,
+): Result<Transition> => {
   if (glob.category !== 'decision') return unchanged(glob);
   const attributes = decisionAttributesOf(glob);
   const before = attributes.conflictsWith ?? [];
   if (before.join('\n') === ids.join('\n')) return unchanged(glob);
-  return new Builder(glob, ctx).set({ attributes: withConflicts(attributes, ids) }).event('AttributesChanged', { conflictsWith: [...ids] }).done();
+  return new Builder(glob, ctx)
+    .set({ attributes: withConflicts(attributes, ids) })
+    .event('AttributesChanged', { conflictsWith: [...ids] })
+    .done();
 };
 
 /** What a person can do with a decision (drives the glob view's buttons): there is no start, merge, retrigger or labels. */
 const decisionActions = (glob: Glob, actor: Actor): Action[] => {
   const actions: Action[] = [];
   if (mayDecide(actor)) {
-    if (glob.status === 'planning' || (glob.status === 'in_progress' && glob.implementer !== actor.email)) actions.push('pick_up');
+    if (
+      glob.status === 'planning' ||
+      (glob.status === 'in_progress' && glob.implementer !== actor.email)
+    )
+      actions.push('pick_up');
     if (glob.status === 'in_progress') {
-      const outcome = glob.attributes !== undefined && isDecisionAttributes(glob.attributes) ? glob.attributes.outcome : null;
+      const outcome =
+        glob.attributes !== undefined && isDecisionAttributes(glob.attributes)
+          ? glob.attributes.outcome
+          : null;
       if (outcome === null || outcome.kind === 'needs_work') actions.push('decide');
     }
     if (glob.status === 'reviewing') actions.push('sign_off', 'reopen');
-    const attributes = glob.attributes !== undefined && isDecisionAttributes(glob.attributes) ? glob.attributes : null;
+    const attributes =
+      glob.attributes !== undefined && isDecisionAttributes(glob.attributes)
+        ? glob.attributes
+        : null;
     // A learning the KB pipeline closed: admins reopen it (row D12).
-    if (glob.status === 'signed_off' && attributes?.closedAs !== undefined && actor.role === 'admin') actions.push('reopen');
+    if (
+      glob.status === 'signed_off' &&
+      attributes?.closedAs !== undefined &&
+      actor.role === 'admin'
+    )
+      actions.push('reopen');
     // A learning an agent submitted or slop mined is never deleted: it is rejected instead.
     const learning = attributes?.origin.kind === 'submitted' || attributes?.origin.kind === 'mined';
     if (!learning) actions.push('delete');
