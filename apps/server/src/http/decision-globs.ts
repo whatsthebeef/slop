@@ -1,5 +1,5 @@
 import { KNOWLEDGE_KINDS } from '@slop/core';
-import type { DecisionGlobService, GlobService } from '@slop/core';
+import type { DecisionGlobService, GlobService, SuggestService } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { Env } from './app.js';
@@ -7,6 +7,7 @@ import { errorBody, globViewOf, statusOf } from './views.js';
 
 export interface DecisionGlobRoutesDeps {
   readonly decisions: Pick<DecisionGlobService, 'decide' | 'assess' | 'diff'>;
+  readonly suggest: Pick<SuggestService, 'request' | 'view'>;
   readonly globs: Pick<GlobService, 'get'>;
 }
 
@@ -36,7 +37,7 @@ const decideSchema = z.object({
   watchSignal: z.string().min(1).max(200).optional(),
 });
 
-/** The routes of decision globs beyond the shared glob routes: the outcome, the diff and the assessment. */
+/** The routes of decision globs beyond the shared glob routes: the outcome, the diff, the assessment and Suggest. */
 export const mountDecisionGlobs = (app: Hono<Env>, deps: DecisionGlobRoutesDeps): void => {
   const fail = (c: Context<Env>, error: Parameters<typeof statusOf>[0]) => c.json(errorBody(error), statusOf(error));
 
@@ -61,5 +62,16 @@ export const mountDecisionGlobs = (app: Hono<Env>, deps: DecisionGlobRoutesDeps)
   app.post('/api/globs/:id/assessment', async (c) => {
     const result = await deps.decisions.assess(c.get('email'), c.req.param('id'));
     return result.ok ? c.json({ kind: result.value.kind, version: result.value.version, content: result.value.content }) : fail(c, result.error);
+  });
+
+  // Suggest: queues one on-demand model recommendation (admins and POs); the result arrives as an `assessment` artifact
+  // labelled `suggestion` and a live hint. GET reads the latest, whether the draft or target moved since, and whether one waits.
+  app.post('/api/globs/:id/suggest', async (c) => {
+    const result = await deps.suggest.request(c.get('email'), c.req.param('id'));
+    return result.ok ? c.json(result.value, 202) : fail(c, result.error);
+  });
+  app.get('/api/globs/:id/suggestion', async (c) => {
+    const result = await deps.suggest.view(c.get('email'), c.req.param('id'));
+    return result.ok ? c.json(result.value) : fail(c, result.error);
   });
 };

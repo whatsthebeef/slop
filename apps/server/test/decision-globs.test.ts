@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { BoardService, DecisionGlobService, GlobService, InboxService, KnowledgeService, learningSeed } from '@slop/core';
-import type { Catalog, Effect, Glob, Result } from '@slop/core';
+import { BoardService, DecisionGlobService, GlobService, InboxService, KnowledgeService, learningSeed, SuggestService } from '@slop/core';
+import type { Catalog, Effect, Glob, Llm, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { sql } from 'drizzle-orm';
@@ -21,6 +21,7 @@ import type { McpDeps } from '../src/mcp/server.js';
 import { HintHub } from '../src/notifier.js';
 import { FileRoutines } from '../src/routines.js';
 import { SignedLinks } from '../src/signed-links.js';
+import { suggestExecutors } from '../src/suggest-executors.js';
 import { createTestDatabase } from './support/database.js';
 import { FakeCodeHost } from './support/fake-codehost.js';
 
@@ -55,6 +56,8 @@ describe('decision globs', () => {
   let app: Hono<Env>;
   let knowledge: KnowledgeService;
   let decisionGlobs: DecisionGlobService;
+  let suggest: SuggestService;
+  let suggestAnswer = '';
   let globs: GlobService;
   let boardId = 0;
   let sourceGlobId = '';
@@ -76,6 +79,8 @@ describe('decision globs', () => {
     knowledge = new KnowledgeService({ store, clock, catalog, notifier: hub });
     decisionGlobs = new DecisionGlobService({ store, clock, notifier: hub, knowledge, globs });
     const inbox = new InboxService({ store, clock, notifier: hub });
+    const fakeLlm: Llm = { complete: () => Promise.resolve(suggestAnswer) };
+    suggest = new SuggestService({ store, clock, notifier: hub, knowledge, llm: fakeLlm, model: 'test-model' });
     app = createApp({
       auth: new Auth(database.db, loadConfig({})),
       links: new SignedLinks('test'),
@@ -86,7 +91,7 @@ describe('decision globs', () => {
       onBoardCreated: () => Promise.resolve(),
       decisions: decisionGlobs,
     });
-    mountDecisionGlobs(app, { decisions: decisionGlobs, globs });
+    mountDecisionGlobs(app, { decisions: decisionGlobs, suggest, globs });
     mountInbox(app, { inbox, decisionGlobs });
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, PO, DEV]) await tx.upsertUser({ email, name: email, active: true });
@@ -321,6 +326,35 @@ describe('decision globs', () => {
       expect(response.status).toBe(200);
       expect(await json<{ kind: string; content: string }>(response)).toMatchObject({ kind: 'assessment' });
       expect((await view(globId)).id).toBe(globId);
+    });
+  });
+
+  describe('suggest', () => {
+    it('queues one llm-lane job for admins and POs, runs it with a fake model, and serves the labelled assessment version', async () => {
+      const { globId } = await submit('Suggest on me');
+      // Members who don't decide are refused, and nothing is queued.
+      expect((await call(DEV, 'POST', `/api/globs/${globId}/suggest`)).status).toBe(403);
+      expect((await call(ADMIN, 'POST', `/api/globs/${globId}/suggest`)).status).toBe(202);
+      expect((await call(PO, 'POST', `/api/globs/${globId}/suggest`)).status).toBe(202);
+      const queued = await database.db.execute(sql`select lane, state from outbox where kind = 'suggest_decision' and glob_id = ${globId}`);
+      expect(queued).toEqual([{ lane: 'llm', state: 'pending' }]);
+      expect(await json<{ pending: boolean; suggestion: unknown }>(await call(ADMIN, 'GET', `/api/globs/${globId}/suggestion`))).toMatchObject({ pending: true, suggestion: null });
+
+      // The job as the outbox runs it: one model call, then the answer is stored as assessment/suggestion.
+      suggestAnswer = JSON.stringify({ action: 'reject', reason: 'A later change made it moot.' });
+      const run = suggestExecutors(suggest).suggest_decision;
+      if (run === undefined) throw new Error('no executor');
+      expect(await run({ kind: 'suggest_decision', globId }, null, { globs }, undefined)).toBe('done');
+      const versions = await store.transaction((tx) => tx.artifactVersions(globId, 'assessment', 'suggestion'));
+      expect(versions).toHaveLength(1);
+      const read = await json<{ stale: boolean; suggestion: { model: string; suggestion: { action: string; reason: string } } }>(await call(PO, 'GET', `/api/globs/${globId}/suggestion`));
+      expect(read).toMatchObject({ stale: false, suggestion: { model: 'test-model', suggestion: { action: 'reject', reason: 'A later change made it moot.' } } });
+      // The deterministic assessment keeps its own history.
+      expect((await store.transaction((tx) => tx.artifactVersions(globId, 'assessment', ''))).every((a) => !a.content.includes('## Suggestion'))).toBe(true);
+    });
+
+    it('refuses a glob that is not a decision', async () => {
+      expect((await call(ADMIN, 'POST', `/api/globs/${sourceGlobId}/suggest`)).status).toBe(422);
     });
   });
 });

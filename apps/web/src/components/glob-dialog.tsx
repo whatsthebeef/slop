@@ -1,5 +1,5 @@
 import { decisionOf, isValidCombination, machine } from '@slop/core';
-import type { Action, Category, EditFailure } from '@slop/core';
+import type { Action, Category, EditFailure, SuggestionPrefill } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
@@ -111,6 +111,9 @@ export const GlobDetail = ({
   const pendingNow = isPending(pending, glob, Math.max(now, pending?.at ?? 0));
   const busy = running || pendingNow;
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
+  // Suggest's Apply: the decision form opens pre-filled; reset when another glob opens.
+  const [applied, setApplied] = useState<SuggestionPrefill | null>(null);
+  useEffect(() => setApplied(null), [glob.id]);
   const [failure, setFailure] = useState<EditFailure | null>(null);
   useEffect(() => {
     setDraft({});
@@ -679,7 +682,7 @@ export const GlobDetail = ({
 
           <PlanEditor globId={glob.id} summary={glob.summary} />
 
-          {decision && <DecisionSection board={board} glob={glob} busy={busy} onDecide={onDecide} onUpdate={onUpdate} />}
+          {decision && <DecisionSection board={board} glob={glob} busy={busy} onDecide={onDecide} onUpdate={onUpdate} applied={applied} />}
 
           {!decision && (
             <>
@@ -695,7 +698,7 @@ export const GlobDetail = ({
 
           <GlobDecisions boardId={glob.boardId} globId={glob.id} />
 
-          {decision ? decisionOf(glob)?.origin.kind !== 'replacement' && <DecisionAssessment glob={glob} /> : <ReviewFindings globId={glob.id} />}
+          {decision ? decisionOf(glob)?.origin.kind !== 'replacement' && <DecisionAssessment glob={glob} canSuggest={board.role === 'admin' || board.role === 'po'} onApply={setApplied} /> : <ReviewFindings globId={glob.id} />}
 
           <dl className='grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground'>
             <dt>Planner</dt>

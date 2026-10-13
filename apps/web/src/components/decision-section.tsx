@@ -1,5 +1,5 @@
 import { decisionOf, isAgentSetKind, KNOWLEDGE_KINDS, SCOPE_KINDS, scopeLabel } from '@slop/core';
-import type { DecisionAttributes, DecisionLearning, DecisionOutcomeKind, DecisionScope, EditFailure, KbTarget, KnowledgeKind, ScopeKind } from '@slop/core';
+import type { DecisionAttributes, DecisionLearning, DecisionOutcomeKind, DecisionScope, EditFailure, KbTarget, KnowledgeKind, ScopeKind, SuggestionPrefill } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
@@ -23,6 +23,7 @@ import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
+import { applyPrefill, SUGGEST_POLL_MS, SUGGESTION_ACTION_TEXT, suggestionState } from '@/lib/suggestion';
 import { artifactKey, globDecisionsKey, globDiffKey } from '@/lib/live';
 import { useToast } from '@/toast';
 import { Tip } from './ui/tip';
@@ -169,6 +170,7 @@ const OutcomeForm = ({
   draftText,
   target,
   watchable,
+  prefill,
   onCancel,
   onDecide,
 }: {
@@ -181,18 +183,20 @@ const OutcomeForm = ({
   target: KbTarget | null;
   /** The learning can be given a signal to watch on approval. */
   watchable: boolean;
+  /** Suggest's Apply: the form opens with these filled in; nothing is decided until the person confirms. */
+  prefill?: SuggestionPrefill | undefined;
   onCancel: () => void;
   onDecide: (input: DecideInput) => Promise<boolean>;
 }) => {
-  const [reason, setReason] = useState('');
-  const [edited, setEdited] = useState(draftText);
+  const [reason, setReason] = useState(prefill?.reason ?? '');
+  const [edited, setEdited] = useState(prefill?.editedDraft ?? draftText);
   const [linked, setLinked] = useState('');
   const [kind, setKind] = useState<KnowledgeKind>('doc');
   const [name, setName] = useState('');
   const [section, setSection] = useState('');
   const [watch, setWatch] = useState('');
   // The draft arrives after the form opens when the pipeline is still working; fill it in until the person types.
-  const [touched, setTouched] = useState(false);
+  const [touched, setTouched] = useState(prefill?.editedDraft !== undefined);
   useEffect(() => {
     if (!touched) setEdited(draftText);
   }, [draftText, touched]);
@@ -331,10 +335,23 @@ const ProposedChange = ({ globId }: { globId: string }) => {
   );
 };
 
-/** The assessment slop wrote about the proposal (what it changes, flags, a suggested outcome), beside the review section. */
-export const DecisionAssessment = ({ glob }: { glob: GlobView }) => {
+/**
+ * The assessment slop wrote about the proposal (what it changes, flags, the rule-based outcome), beside the review
+ * section, and Suggest: an on-demand model recommendation. Apply opens the decide form pre-filled (`onApply`); nothing is
+ * decided without the person's confirmation there.
+ */
+export const DecisionAssessment = ({
+  glob,
+  canSuggest,
+  onApply,
+}: {
+  glob: GlobView;
+  /** Admins and POs ask for suggestions. */
+  canSuggest: boolean;
+  onApply: (prefill: SuggestionPrefill) => void;
+}) => {
   const client = useQueryClient();
-  const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment');
+  const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === '');
   const versions = useQuery({
     queryKey: artifactKey(glob.id, 'assessment', ''),
     queryFn: () => api.artifactVersions(glob.id, 'assessment', ''),
@@ -343,35 +360,89 @@ export const DecisionAssessment = ({ glob }: { glob: GlobView }) => {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const latest = versions.data?.at(-1);
+  // Under the `artifact` key, so the live `glob.artifacts` hint that announces the stored suggestion refetches it.
+  const suggestion = useQuery({
+    queryKey: ['artifact', glob.id, 'suggestion-view'],
+    queryFn: () => api.suggestion(glob.id),
+    enabled: canSuggest,
+    refetchInterval: (query) => (query.state.data?.pending === true ? SUGGEST_POLL_MS : false),
+  });
+  const state = suggestionState(suggestion.data);
+  const stored = suggestion.data?.suggestion?.suggestion;
+  const prefill = applyPrefill(suggestion.data);
+  const text = stored?.editedDraft ?? stored?.mergedText ?? null;
   return (
     <div className='grid gap-2' data-testid='assessment'>
       <div className='flex items-center gap-2'>
         <h3 className='text-xs font-semibold text-muted-foreground'>Assessment</h3>
-        <Button
-          size='sm'
-          variant='outline'
-          disabled={busy}
-          data-testid='assess'
-          onClick={() => {
-            setBusy(true);
-            setFailed(false);
-            api
-              .assess(glob.id)
-              .then(() => client.invalidateQueries({ queryKey: artifactKey(glob.id, 'assessment', '') }))
-              .then(() => client.invalidateQueries({ queryKey: ['globs', glob.boardId] }))
-              .catch(() => setFailed(true))
-              .finally(() => setBusy(false));
-          }}
-        >
-          {has ? 'Reassess' : 'Assess'}
-        </Button>
-        {failed && <span className='text-xs text-red'>Could not assess it.</span>}
+        {canSuggest && (
+          <Tip text='Ask the model what to do with this: approve, approve with an edit, merge into another learning, or reject. It reads the draft, the target section, the sibling learnings and the changes merged since'>
+            <Button
+              size='sm'
+              variant='outline'
+              disabled={busy || state === 'working'}
+              data-testid='suggest'
+              onClick={() => {
+                setBusy(true);
+                setFailed(false);
+                // The rule-based assessment is free: refresh it first, so the card and the suggestion read the same flags.
+                api
+                  .assess(glob.id)
+                  .then(() => api.suggest(glob.id))
+                  .then(() => client.invalidateQueries({ queryKey: ['artifact', glob.id] }))
+                  .then(() => client.invalidateQueries({ queryKey: ['globs', glob.boardId] }))
+                  .catch(() => setFailed(true))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              {state === 'working' ? 'Suggesting…' : state === 'none' ? 'Suggest' : 'Suggest again'}
+            </Button>
+          </Tip>
+        )}
+        {failed && <span className='text-xs text-red'>Could not ask for a suggestion.</span>}
       </div>
       {latest === undefined ? (
         <p className='text-sm text-muted-foreground'>{has ? 'Loading…' : 'Not assessed yet.'}</p>
       ) : (
         <div className='rounded border p-3'>
           <MarkdownView content={latest.content} />
+        </div>
+      )}
+      {canSuggest && state === 'working' && (
+        <p className='text-xs text-muted-foreground' data-testid='suggest-working'>
+          {suggestion.data?.error == null ? 'Asking the model…' : suggestion.data.error}
+        </p>
+      )}
+      {canSuggest && stored !== undefined && (
+        <div className='grid gap-2 rounded border border-edge p-3' data-testid='suggestion'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <span className='rounded bg-muted px-2 py-0.5 text-xs font-medium'>{SUGGESTION_ACTION_TEXT[stored.action]}</span>
+            {state === 'stale' && (
+              <span className='rounded bg-amber-500/15 px-1.5 text-xs text-amber-800 dark:text-amber-200' data-testid='suggestion-stale'>
+                Stale: the draft or its target changed since; suggest again
+              </span>
+            )}
+            {stored.mergeInto !== null && (
+              <Link className='font-mono text-xs underline' to={`/boards/${String(glob.boardId)}?glob=${encodeURIComponent(stored.mergeInto)}`}>
+                {stored.mergeInto}
+              </Link>
+            )}
+          </div>
+          <p className='whitespace-pre-wrap break-words text-sm'>{stored.reason}</p>
+          {text !== null && (
+            <details className='text-xs'>
+              <summary className='cursor-pointer text-muted-foreground'>{stored.action === 'merge_into' ? 'Combined text for the other learning' : 'Edited text'}</summary>
+              <pre className='mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 font-mono'>{text}</pre>
+            </details>
+          )}
+          {prefill !== null && (
+            <div className='flex items-center gap-2'>
+              <Button size='sm' data-testid='apply-suggestion' onClick={() => onApply(prefill)}>
+                {stored.action === 'merge_into' ? `Apply: reject, merged into ${stored.mergeInto ?? 'another learning'}` : 'Apply'}
+              </Button>
+              <span className='text-xs text-muted-foreground'>Opens the decision below, filled in. You confirm it.</span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -537,16 +608,22 @@ export const DecisionSection = ({
   busy,
   onDecide,
   onUpdate,
+  applied,
 }: {
   board: BoardView;
   glob: GlobView;
   busy: boolean;
   onDecide: (input: DecideInput) => Promise<boolean>;
   onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
+  /** Suggest's Apply: opens the form for its outcome, pre-filled. */
+  applied?: SuggestionPrefill | null;
 }) => {
   const attributes = decisionOf(glob);
   const [choice, setChoice] = useState<Choice | null>(null);
   useEffect(() => setChoice(null), [glob.id, glob.version]);
+  useEffect(() => {
+    if (applied != null) setChoice(applied.outcome);
+  }, [applied]);
   const diff = useQuery({
     queryKey: globDiffKey(glob.id),
     queryFn: () => api.globDiff(glob.id),
@@ -655,8 +732,9 @@ export const DecisionSection = ({
           )}
           {choice !== null && (
             <OutcomeForm
-              key={choice}
+              key={`${choice}-${applied?.outcome === choice ? 'applied' : 'plain'}`}
               choice={choice}
+              prefill={applied?.outcome === choice ? applied : undefined}
               attributes={attributes}
               boardId={glob.boardId}
               busy={busy}
