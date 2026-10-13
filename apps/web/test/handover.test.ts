@@ -1,12 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Handover } from '@slop/core';
 import {
   handoverConfirmation,
   handoverOneLine,
   handoverSignature,
   handoverToShow,
-  readHandoverAcknowledged,
-  writeHandoverAcknowledged,
 } from '../src/lib/handover';
 
 const brief: Handover = {
@@ -14,8 +12,6 @@ const brief: Handover = {
   next: 'Merge origin/main, resolve, run the checks, push.',
   detail: ['CI: https://example.test/run/1'],
 };
-
-afterEach(() => vi.unstubAllGlobals());
 
 describe('handoverToShow', () => {
   it('shows to the implementer', () => {
@@ -49,32 +45,10 @@ describe('brief text', () => {
   });
 });
 
-describe('acknowledgement', () => {
-  const stub = () => {
-    const data = new Map<string, string>();
-    vi.stubGlobal('window', {
-      localStorage: { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => void data.set(k, v) },
-    });
-  };
-
-  it('is remembered per glob, and forgotten when the situation changes', () => {
-    stub();
-    expect(readHandoverAcknowledged('s1t1', brief)).toBe(false);
-    writeHandoverAcknowledged('s1t1', brief);
-    expect(readHandoverAcknowledged('s1t1', brief)).toBe(true);
-    expect(readHandoverAcknowledged('s1t2', brief)).toBe(false);
-    expect(readHandoverAcknowledged('s1t1', { ...brief, next: 'Something else.' })).toBe(false);
+describe('signature', () => {
+  it('changes when the causes or the first step do', () => {
+    expect(handoverSignature(brief)).toBe(handoverSignature({ ...brief, detail: [] }));
+    expect(handoverSignature(brief)).not.toBe(handoverSignature({ ...brief, next: 'Something else.' }));
     expect(handoverSignature(brief)).not.toBe(handoverSignature({ ...brief, why: [] }));
-    writeHandoverAcknowledged('s1t1', null);
-    expect(readHandoverAcknowledged('s1t1', brief)).toBe(false);
-  });
-
-  it('survives storage that throws', () => {
-    const boom = () => {
-      throw new Error('blocked');
-    };
-    vi.stubGlobal('window', { localStorage: { getItem: boom, setItem: boom } });
-    expect(readHandoverAcknowledged('s1t1', brief)).toBe(false);
-    expect(() => writeHandoverAcknowledged('s1t1', brief)).not.toThrow();
   });
 });

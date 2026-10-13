@@ -19,20 +19,14 @@ import { workingLabel } from '@/lib/card-pending';
 import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
 import type { PendingAction } from '@/lib/pending-action';
 import { startAgainConfirmation } from '@/lib/start-again';
-import {
-  handoverConfirmation,
-  handoverOneLine,
-  handoverToShow,
-  readHandoverAcknowledged,
-  writeHandoverAcknowledged,
-} from '@/lib/handover';
+import { handoverConfirmation, handoverOneLine, handoverToShow } from '@/lib/handover';
+import { handoverKey, isDismissed } from '@/lib/dismissals';
 import { chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { isOversized } from '../oversized-glob';
 import { Tip } from '../ui/tip';
 import { TypePopover } from '../type-popover';
-import type { GlobView } from '@/lib/api';
 import type { GlobViewContext } from './context';
 
 /**
@@ -45,8 +39,11 @@ export const useGlobActions = ({
   glob,
   onAction,
   onUpdate,
+  onDismiss,
   email,
 }: Pick<GlobViewContext, 'board' | 'glob' | 'onAction' | 'onUpdate'> & {
+  /** "Got it" / ×, and "Show again": stores the viewer's dismissal of a status message; resolves false when it failed. */
+  onDismiss: (key: string, dismiss: boolean) => Promise<boolean>;
   /** Who is looking, for the steps that are theirs (unknown until /api/me has answered). */
   email?: string;
 }) => {
@@ -100,7 +97,7 @@ export const useGlobActions = ({
   const [readyAsked, setReadyAsked] = useState(false);
   // "Why you're needed": the full box until the viewer acknowledges it, then one line.
   const brief = handoverToShow(glob);
-  const [briefRead, setBriefRead] = useState(false);
+  const briefRead = brief !== null && isDismissed(glob, handoverKey(brief));
   const [briefOpen, setBriefOpen] = useState(false);
   useEffect(() => {
     setConfirmingAgain(false);
@@ -108,10 +105,10 @@ export const useGlobActions = ({
     setConfirmingOversized(null);
     setBriefOpen(false);
   }, [glob.id]);
-  useEffect(
-    () => setBriefRead(brief !== null && readHandoverAcknowledged(glob.id, brief)),
-    [glob.id, brief === null ? '' : JSON.stringify(brief)],
-  );
+  // Dismissing a message is stored per person on the server; the page reloads the glob afterwards.
+  const dismiss = (key: string, on: boolean) => run(async () => {
+      await onDismiss(key, on);
+    });
 
   // deescalate and make_super are reached through the type popover.
   const shownActions = presentedActions(glob.allowedActions ?? []).filter(
@@ -211,7 +208,7 @@ export const useGlobActions = ({
     oversized,
     brief,
     briefRead,
-    setBriefRead,
+    dismiss,
     briefOpen,
     setBriefOpen,
     confirmDelete,
@@ -274,11 +271,9 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
 
 /** Why the viewer is needed, inside the Now panel's details: the full brief until acknowledged, then one line. */
 export const HandoverBrief = ({
-  glob,
   state,
   brief,
 }: {
-  glob: GlobView;
   state: GlobActionsState;
   brief: Handover;
 }) => {
@@ -326,8 +321,7 @@ export const HandoverBrief = ({
               variant="ghost"
               data-testid="handover-acknowledge"
               onClick={() => {
-                writeHandoverAcknowledged(glob.id, brief);
-                state.setBriefRead(true);
+                void state.dismiss(handoverKey(brief), true);
                 state.setBriefOpen(false);
               }}
             >

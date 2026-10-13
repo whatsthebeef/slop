@@ -256,6 +256,13 @@ export interface Tx {
   /** Writes work steps (insert or replace by ID). */
   saveHumanSteps(steps: readonly StoredHumanStep[]): Promise<void>;
 
+  /** The status messages this person dismissed on the board's globs: the glob and the message key. */
+  listStatusDismissals(email: string, boardId: number): Promise<{ globId: string; key: string }[]>;
+  /** Records a dismissal (a second one for the same message changes nothing). */
+  addStatusDismissal(email: string, globId: string, key: string, at: string): Promise<void>;
+  /** Undoes a dismissal. */
+  removeStatusDismissal(email: string, globId: string, key: string): Promise<void>;
+
   getDeploy(id: string): Promise<Deploy | null>;
   /** Writes deploys (insert or replace by ID). */
   saveDeploys(deploys: readonly Deploy[]): Promise<void>;
