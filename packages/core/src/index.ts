@@ -34,6 +34,7 @@ export * from './domain/context-tuning.js';
 export * from './domain/context-report.js';
 export * from './domain/risk-area.js';
 export * from './domain/escalation-learning.js';
+export * from './domain/group.js';
 export * from './domain/intake-learning.js';
 export * from './domain/type-learning.js';
 export * from './domain/size-check.js';

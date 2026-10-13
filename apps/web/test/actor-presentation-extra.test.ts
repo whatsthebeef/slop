@@ -170,6 +170,18 @@ describe('escalation chip (s15f88)', () => {
     );
   });
 
+  it('sits in the right-aligned group, after the status chips', () => {
+    const html = card(
+      view({
+        status: 'planning',
+        escalation: { reason: 'touches billing', at: NOW } as GlobView['escalation'],
+      }),
+    );
+    const group = html.indexOf('class="ml-auto inline-flex items-center gap-1"');
+    expect(group).toBeGreaterThan(-1);
+    expect(html.indexOf('data-testid="escalation-chip"')).toBeGreaterThan(group);
+  });
+
   it('shows no escalation chip outside Planning', () => {
     const html = card(
       view({

@@ -124,7 +124,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .describe('The full spec, stored verbatim as plan.md v1; without it plan.md v1 is the write-up intake makes of the input, else the title'),
         type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing)'),
         category: z.enum(WORK_CATEGORIES).optional(),
-        group: z.string().optional(),
+        group: z.string().nullable().optional().describe('The glob\'s group; omit it to let slop choose one from the title and plan, pass null or an empty string for none'),
         environment: z
           .string()
           .min(1)
@@ -190,7 +190,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         title: input.title ?? '',
         type: input.type ?? ('sub' as const),
         category: input.category ?? ('task' as const),
-        group: input.group ?? null,
+        group: input.group === undefined || input.group === null || input.group.trim() === '' ? null : input.group.trim(),
         autoTrigger: input.autoTrigger ?? false,
       };
       // Intake suggests an environment the request names; an explicit one wins.
@@ -211,7 +211,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           explicit: {
             ...(input.type === undefined ? {} : { type: input.type }),
             ...(input.category === undefined ? {} : { category: input.category }),
-            ...(input.group === undefined ? {} : { group: input.group }),
+            ...(input.group === undefined ? {} : { group: input.group ?? '' }),
             ...(input.environment === undefined ? {} : { environment: input.environment }),
           },
         });
@@ -231,6 +231,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         };
         files = proposal.value.files;
         suggestedAfter = proposal.value.suggestedAfter;
+      }
+      // A titled create skips intake, so choose the group alone; a model that is down leaves it empty.
+      if (input.title !== undefined && input.group === undefined) {
+        const suggested = await deps.intake.suggestGroup(email, input.board, { title: input.title, plan: input.plan ?? input.input ?? '' });
+        if (suggested.ok) fields = { ...fields, group: suggested.value };
       }
       // A super intake chose waits in Planning for a person; one asked for by type starts in Doing as before.
       const start = input.start ?? (intakeRecord !== null && input.type === undefined && fields.type === 'super' ? false : undefined);

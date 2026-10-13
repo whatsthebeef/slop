@@ -690,6 +690,27 @@ describe('decision globs', () => {
       expect(context.authority).toMatch(/scopedDecisions/);
     });
 
+    it('applies an area_group decision to the parts of a split of a group-less glob', async () => {
+      const big = await newWork({ title: 'Billing overhaul: everything' });
+      const made = await submit({ statement: 'Billing rule', type: 'pattern' });
+      await setScope(made.globId, { kind: 'area_group', ref: 'billing-overhaul' });
+      await approveOnPage(made.id);
+      const parts = unwrap(
+        await globs.split(DEV, big.id, big.version, {
+          idempotencyKey: null,
+          parts: [
+            { title: 'Billing overhaul 1/2: model', plan: 'Model' },
+            { title: 'Billing overhaul 2/2: ui', plan: 'UI', after: [0] },
+          ],
+        }),
+      );
+      for (const part of parts) {
+        expect(part.group).toBe('billing-overhaul');
+        const scoped = unwrap(await artifacts.context(DEV, part.id)).scopedDecisions.map((d) => d.id);
+        expect(scoped).toContain(made.globId);
+      }
+    });
+
     it('attaches the decisions that govern a new glob, and nothing when none do', async () => {
       const before = await newWork({ title: 'Before any decision' });
       expect(await artifactsOf(before.id, 'attachment')).toEqual([]);
