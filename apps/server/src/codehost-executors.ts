@@ -1,4 +1,4 @@
-import type { Board, BoardService, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
+import type { Board, BoardService, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { fireRoutine, investigateInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
 import { isRepoAccessFailure, isSetupFailure, chainRefusal, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
@@ -30,6 +30,8 @@ export const codeHostExecutors = (
   /** The board's merge policy's `sizeIgnoredPaths` (undefined: none set, so the defaults apply). */
   sizeIgnoredPaths: (boardId: number) => Promise<readonly string[] | undefined> = () => Promise.resolve(undefined),
   log: (task: string, message: string) => void = () => undefined,
+  /** File attachments' storage; without it (no bucket configured) no `delete_object` effect is ever queued. */
+  objects: Pick<ObjectStore, 'delete'> | null = null,
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -489,7 +491,12 @@ export const codeHostExecutors = (
         if (effect.prNumber !== null) await host.closePr(repo, effect.prNumber);
         await host.deleteBranch(repo, effect.globId);
       }
-      // S3 artifacts join this clean-up when artifacts arrive.
+      // The glob's file objects have their own `delete_object` effects, queued by the delete.
+      return 'done';
+    },
+    delete_object: async (effect) => {
+      if (effect.kind !== 'delete_object' || objects === null) return 'dropped';
+      await objects.delete(effect.key);
       return 'done';
     },
   };

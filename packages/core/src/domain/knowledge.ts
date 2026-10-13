@@ -1,3 +1,4 @@
+import type { AttachmentFile } from './attachment-file.js';
 import type { ReviewStage } from './events.js';
 import type { EffectCheck } from './effect-check.js';
 import type { KbMergeNote, KbOutcome, KbTarget } from './kb.js';
@@ -294,11 +295,17 @@ export interface Artifact {
   readonly commitSha: string | null;
   readonly provenance: Provenance;
   readonly createdAt: string;
+  /** File attachments only: the stored file's facts; each state change is a new version. Absent on text and link attachments. */
+  readonly file?: AttachmentFile | null;
 }
 
-/** An attachment whose latest version has no text and no link: it was removed (an inbox detach), its older versions stay as history. */
-export const isClearedAttachment = (a: { readonly kind: string; readonly content: string; readonly link: string | null }): boolean =>
-  a.kind === 'attachment' && a.content === '' && a.link === null;
+/** An attachment whose latest version has no text, no link and no file: it was removed (an inbox or file detach), its older versions stay as history. */
+export const isClearedAttachment = (a: {
+  readonly kind: string;
+  readonly content: string;
+  readonly link: string | null;
+  readonly file?: AttachmentFile | null;
+}): boolean => a.kind === 'attachment' && a.content === '' && a.link === null && (a.file ?? null) === null;
 
 /** An artifact's latest version without its content: what cards and `get_glob` show. */
 export interface ArtifactSummary {

@@ -10,7 +10,7 @@ import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import type { Actor, Board, Category, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
-import { knowledgePageEffect, recheckOverlapsEffect } from '../domain/events.js';
+import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect } from '../domain/events.js';
 import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
 import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
 import type { InboxItem } from '../domain/inbox.js';
@@ -19,6 +19,7 @@ import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notif
 import { applicableDecisions, DECISIONS_LABEL, decisionsAttachment, scopedDecision } from '../domain/decision-glob.js';
 import type { ScopedDecision } from '../domain/decision-glob.js';
 import { addArtifact } from './artifact-service.js';
+import { fileKeysOf } from './attachment-service.js';
 import { DECISION_SYSTEM_ACTOR } from './decision-glob.js';
 import { AttachConflict, linkInboxItem } from './inbox-service.js';
 import { findHolds } from './hold-service.js';
@@ -904,10 +905,12 @@ export class GlobService {
       // A learning an agent submitted or slop mined is a KB item: deleting it would lose the learning (and a rejected one
       // suppresses repeats), so it is rejected instead. Decisions people made (inbox, extracted, manual) can go.
       if (isLearning(glob)) return invalidInput('This decision is a knowledge item an agent submitted or slop mined; reject it instead of deleting it');
+      const fileKeys = await fileKeysOf(tx, glob.id);
       await tx.deleteEvents(glob.id);
       await tx.deleteGlob(glob.id);
       // The deletion itself is logged without a glob, so reports lose the glob's time.
-      await tx.enqueueEffects([...transition.value.effects, recheckOverlapsEffect(glob.boardId)]);
+      // The files' objects go through the outbox, written with the delete, so a crash or a storage error can't leave them behind.
+      await tx.enqueueEffects([...transition.value.effects, recheckOverlapsEffect(glob.boardId), ...fileKeys.map((key) => deleteObjectEffect(glob.id, key))]);
       return ok(glob);
     });
     if (!result.ok) return result;
