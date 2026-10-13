@@ -1281,6 +1281,35 @@ describe('conflicts flagged after a merge', () => {
   });
 });
 
+describe('a ready PR picked up into Doing returns to review', () => {
+  const ready = { number: 7, state: 'ready' as const, headSha: 'def5678' };
+  const found = { base: 'main', files: ['a.ts'], since: null };
+
+  it('goes back to pr_open when the conflict clears', () => {
+    const g = glob({ status: 'in_progress', type: 'same', pr: ready, conflict: { ...found, at: NOW } });
+    const t = value(m.conflictCleared(g, ctx(null)));
+    expect(t.glob.status).toBe('pr_open');
+    expect(t.glob.conflict).toBeNull();
+    expect(effectKinds(t)).toEqual(['refresh_checks', 'review_change']);
+  });
+
+  it('goes back to pr_open on a push with no conflict flagged, but a sub is not reviewed', () => {
+    const same = value(m.commitPushed(glob({ status: 'in_progress', type: 'same', pr: ready }), { sha: 'aaa1111', runId: null }, ctx(null)));
+    expect(same.glob.status).toBe('pr_open');
+    const sub = value(m.commitPushed(glob({ status: 'in_progress', type: 'sub', pr: ready }), { sha: 'aaa1111', runId: null }, ctx(null)));
+    expect(sub.glob.status).toBe('pr_open');
+    expect(effectKinds(sub)).not.toContain('review_change');
+  });
+
+  it('stays in Doing for a super, a draft PR, or a flagged conflict', () => {
+    const push = { sha: 'aaa1111', runId: null };
+    expect(value(m.commitPushed(glob({ status: 'in_progress', type: 'super', pr: ready }), push, ctx(null))).glob.status).toBe('in_progress');
+    expect(value(m.commitPushed(glob({ status: 'in_progress', type: 'same', pr: { ...ready, state: 'draft' } }), push, ctx(null))).glob.status).toBe('in_progress');
+    const flagged = glob({ status: 'in_progress', type: 'same', pr: ready, conflict: { ...found, at: NOW } });
+    expect(value(m.commitPushed(flagged, push, ctx(null))).glob.status).toBe('in_progress');
+  });
+});
+
 describe('fields and labels', () => {
   it('type and environment changes sync the PR labels', () => {
     const t = value(m.changeFields(glob({ status: 'in_progress' }), { environment: 'dev' }, board, ctx()));
