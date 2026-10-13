@@ -1,6 +1,6 @@
 import { decisionOf, findingsLabel, reviewOutdated, scopeLabel } from '@slop/core';
 import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
-import { Bot, Brain, Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
+import { Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
@@ -8,6 +8,7 @@ import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { activityLabel, blockedParts, chainTip, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
+import { HumanIcon, MachineIcon } from './actor-icons';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
 import { actionTiers } from '@/lib/action-style';
@@ -100,7 +101,7 @@ export const ActivityLabel = ({ glob }: { glob: GlobView }) => {
         data-testid='activity-label'
         data-kind={activity.kind}
       >
-        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <Bot className='h-3 w-3' />}
+        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <MachineIcon className='h-3 w-3' decorative />}
         {activity.text}
       </span>
     </Tip>
@@ -554,7 +555,7 @@ export const GlobCard = ({
         {glob.escalation != null && glob.status === 'planning' && (
           <Tip text={`Needs a person: ${glob.escalation.reason}`}>
             <span className='font-mono text-[11px] text-required' data-testid='escalation-chip'>
-              needs a <Brain className='inline h-3 w-3' />
+              needs a <HumanIcon className='inline h-3 w-3' />
             </span>
           </Tip>
         )}
@@ -578,7 +579,7 @@ export const GlobCard = ({
               data-testid={status.kind === 'ready' ? 'your-turn-chip' : 'status-line'}
               data-kind={status.kind}
             >
-              {status.kind === 'ready' && <Brain className='h-3 w-3' />}
+              {status.kind === 'ready' && <HumanIcon className='h-3 w-3' decorative />}
               {status.kind === 'ready' ? (
                 <>
                   Your turn <span className='font-normal opacity-70'>· {status.text}</span>
