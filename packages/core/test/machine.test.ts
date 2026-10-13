@@ -409,14 +409,86 @@ describe('PR and merge events (rows 11–16)', () => {
     expect(errorCode(m.retryMerge(conflicted, ctx()))).toBe('invalid_transition');
   });
 
-  it('row 14: Merge needs passing checks on the current head', () => {
+  it('row 14: Merge with passing checks on the current head merges now', () => {
     const g = glob({ status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } });
-    expect(errorCode(m.requestMerge(g, ctx()))).toBe('invalid_transition');
-    const stale = { ...g, headChecks: { sha: 'aaa', state: 'passed' as const } };
-    expect(errorCode(m.requestMerge(stale, ctx()))).toBe('invalid_transition');
     const passing = { ...g, headChecks: { sha: 'bbb', state: 'passed' as const } };
-    expect(value(m.requestMerge(passing, ctx())).glob.status).toBe('merging');
+    const t = value(m.requestMerge(passing, ctx()));
+    expect(t.glob.status).toBe('merging');
+    expect(t.effects.map((e) => e.kind)).toEqual(['squash_merge']);
     expect(m.allowedActions(passing, dev)).toContain('merge');
+    const failed = { ...g, headChecks: { sha: 'bbb', state: 'failed' as const } };
+    expect(errorCode(m.requestMerge(failed, ctx()))).toBe('invalid_transition');
+    expect(m.allowedActions(failed, dev)).not.toContain('merge');
+    const conflicted = { ...passing, conflict: { base: 'main', files: ['a'], since: null, at: 'x' } };
+    expect(errorCode(m.requestMerge(conflicted, ctx()))).toBe('invalid_transition');
+  });
+
+  describe('row 14b: Merge with checks pending arms "merge when checks pass"', () => {
+    const open = glob({ status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } });
+    const pending = { ...open, headChecks: { sha: 'bbb', state: 'pending' as const } };
+
+    it('arms instead of merging, with no merge call, and hides Merge until cancelled', () => {
+      for (const g of [open, pending, { ...open, headChecks: { sha: 'aaa', state: 'passed' as const } }]) {
+        expect(m.allowedActions(g, dev)).toContain('merge');
+        const t = value(m.requestMerge(g, ctx()));
+        expect(t.glob).toMatchObject({ status: 'pr_open', mergeMode: 'when_green' });
+        expect(t.effects.map((e) => e.kind)).not.toContain('squash_merge');
+        expect(m.allowedActions(t.glob, dev)).toContain('cancel_merge');
+        expect(m.allowedActions(t.glob, dev)).not.toContain('merge');
+        expect(errorCode(m.requestMerge(t.glob, ctx()))).toBe('invalid_transition');
+      }
+    });
+
+    it('reads the checks when none are reported for the head, and leaves a behind branch to the merge', () => {
+      expect(value(m.requestMerge(open, ctx())).effects).toEqual([{ kind: 'refresh_checks', globId: 's1t1', generation: 1 }]);
+      const behind = { ...pending, behind: { base: 'main', behindBy: 1, files: [], at: 'x' } };
+      expect(value(m.requestMerge(behind, ctx())).effects).toEqual([]);
+    });
+
+    it('is disarmed by a new push, a closed PR, and never carried into a re-readied PR', () => {
+      const armed = value(m.requestMerge(pending, ctx())).glob;
+      const pushed = value(m.commitPushed(armed, { sha: 'ccc', runId: null }, ctx()));
+      expect(pushed.glob).toMatchObject({ mergeMode: null, status: 'pr_open' });
+      expect(value(m.prClosed(armed, ctx())).glob).toMatchObject({ mergeMode: null, status: 'failed' });
+      const stale = { ...armed, status: 'in_progress' as const };
+      expect(value(m.prReadyForReview(stale, { number: 7, headSha: 'bbb' }, ctx())).glob.mergeMode).toBeNull();
+    });
+
+    it('records the conflict when it disarms, even if the head own checks passed', () => {
+      const armed = value(m.requestMerge(pending, ctx())).glob;
+      const conflict = { base: 'main', files: ['a'] };
+      const t = value(m.checksCompleted(armed, { sha: 'bbb', passed: true, conflict }, ctx()));
+      expect(t.glob.mergeMode).toBeNull();
+    });
+
+    it('merges when the head checks pass', () => {
+      const armed = value(m.requestMerge(pending, ctx())).glob;
+      const t = value(m.checksCompleted(armed, { sha: 'bbb', passed: true }, ctx()));
+      expect(t.glob).toMatchObject({ status: 'merging', mergeMode: null });
+      expect(t.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: 'bbb' }]);
+    });
+
+    it('disarms when the checks fail or the PR conflicts, leaving the failure to show', () => {
+      const armed = value(m.requestMerge(pending, ctx())).glob;
+      const failed = value(m.checksCompleted(armed, { sha: 'bbb', passed: false }, ctx()));
+      expect(failed.glob).toMatchObject({ status: 'pr_open', mergeMode: null, headChecks: { state: 'failed' } });
+      expect(failed.effects).toEqual([]);
+      const conflict = { base: 'main', files: ['a'] };
+      expect(value(m.checksCompleted(armed, { sha: 'bbb', passed: false, conflict }, ctx())).glob.mergeMode).toBeNull();
+      expect(value(m.conflictFound(armed, { ...conflict, since: null }, ctx())).glob.mergeMode).toBeNull();
+    });
+
+    it('is cancelled by Cancel merge, which only works while armed', () => {
+      const armed = value(m.requestMerge(pending, ctx())).glob;
+      expect(value(m.cancelMerge(armed, ctx())).glob.mergeMode).toBeNull();
+      expect(errorCode(m.cancelMerge(pending, ctx()))).toBe('invalid_transition');
+    });
+
+    it('is not offered to a sub, and Merge and continue still waits for passed checks', () => {
+      expect(m.allowedActions({ ...pending, type: 'sub' }, dev)).not.toContain('merge');
+      const sup = { ...pending, type: 'super' as const };
+      expect(errorCode(m.requestMerge(sup, ctx(), { continue: true, facts: { recordSha: 'bbb' } }))).toBe('invalid_transition');
+    });
   });
 
   it('row 14: Merge is withheld and refused while a conflict with the base is recorded', () => {
@@ -1035,16 +1107,20 @@ describe('checks and merging (slice 2)', () => {
     expect(fail.glob.status).toBe('failed');
   });
 
-  it('a conflict after updating the branch fails the glob as a merge conflict, not failing checks', () => {
+  it('a conflict after updating the branch returns the glob to pr_open with the conflict recorded, no failure', () => {
     const merging = { ...ready, status: 'merging' as const };
     const conflict = { base: 'main', files: ['a.ts', 'b.ts'] };
-    const failed = value(m.checksCompleted(merging, { sha: 'bbb', passed: false, conflict }, ctx(null))).glob;
-    expect(failed.status).toBe('failed');
-    expect(failed.failure?.reason).toBe('Merge conflict with main in a.ts, b.ts');
-    expect(failed.failure?.conflict).toEqual(conflict);
+    const t = value(m.checksCompleted(merging, { sha: 'bbb', passed: false, conflict }, ctx(null)));
+    expect(t.glob.status).toBe('pr_open');
+    expect(t.glob.failure).toBeNull();
+    expect(t.glob.mergeMode).toBeNull();
+    expect(t.glob.conflict).toMatchObject(conflict);
+    expect(t.events.map((e) => e.type)).toContain('MergeFailed');
     const noFiles = value(m.checksCompleted(merging, { sha: 'bbb', passed: false, conflict: { base: 'main', files: [] } }, ctx(null)));
-    expect(noFiles.glob.failure?.reason).toBe('Merge conflict with main');
+    expect(noFiles.glob.status).toBe('pr_open');
+    expect(noFiles.glob.conflict?.files).toEqual([]);
     const checks = value(m.checksCompleted(merging, { sha: 'bbb', passed: false }, ctx(null))).glob;
+    expect(checks.status).toBe('failed');
     expect(checks.failure?.reason).toBe('Checks failed after updating the branch');
     expect(checks.failure?.conflict).toBeUndefined();
   });

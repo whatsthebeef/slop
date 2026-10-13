@@ -2,6 +2,7 @@ import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js'
 import type { Result } from '../domain/errors.js';
 import { isLearning } from '../domain/learning.js';
 import { validateScopeEdit } from '../domain/attributes.js';
+import { groupFromTitle } from '../domain/group.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
@@ -576,8 +577,16 @@ export class GlobService {
       if (first === undefined) return invalidInput('A split needs at least 2 parts');
       const firstEscalation = escalations[0];
       const firstType = firstEscalation?.type ?? first.type;
+      // Every part shares one group: the original's, else one named from its title (an existing group of that name is reused).
+      const group =
+        original.group ??
+        groupFromTitle(
+          original.title,
+          [...new Set((await tx.listGlobs(board.id, {})).flatMap((g) => (g.group === null ? [] : [g.group])))],
+        );
       const changes: FieldChanges = {
         title: first.title,
+        ...(group === original.group ? {} : { group }),
         ...(first.category === undefined ? {} : { category: first.category }),
         ...(firstType === undefined || (first.type === undefined && firstType === original.type) ? {} : { type: firstType }),
       };
@@ -619,7 +628,7 @@ export class GlobService {
             title: part.title,
             type: escalations[index]?.type ?? part.type ?? original.type,
             category: part.category ?? original.category,
-            group: original.group,
+            group,
             environment: original.environment,
             autoTrigger: false,
             after: checked.value,
@@ -844,6 +853,11 @@ export class GlobService {
       (glob, ctx, _board, facts) => machine.requestMerge(glob, ctx, { continue: continueAfter, facts }),
       { facts: continueAfter },
     );
+  }
+
+  /** Cancel merge: disarms "merge when checks pass". */
+  cancelMerge(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.cancelMerge(glob, ctx));
   }
 
   /** Retry merge: a failed merge (not a conflict) goes back to merging at the head, which already passed. */

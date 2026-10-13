@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CARD_PENDING_MS, runCardAction, workingLabel } from '../src/lib/card-pending';
+import { CARD_PENDING_MS, mergeOutcomeText, runCardAction, workingLabel } from '../src/lib/card-pending';
 
 afterEach(() => vi.useRealTimers());
 
@@ -73,5 +73,16 @@ describe('card pending', () => {
     expect(onSlow).toHaveBeenCalledTimes(1);
     expect(set).toHaveBeenLastCalledWith('a', null);
     expect(inFlight.has('a')).toBe(false);
+  });
+});
+
+describe('mergeOutcomeText', () => {
+  it('says which happened: merged, armed, merging, cancelled or why it failed', () => {
+    expect(mergeOutcomeText('merge', { status: 'reviewing' })).toBe('Merged');
+    expect(mergeOutcomeText('merge', { status: 'pr_open', mergeMode: 'when_green' })).toBe('Will merge when checks pass');
+    expect(mergeOutcomeText('merge', { status: 'merging' })).toBe('Merging…');
+    expect(mergeOutcomeText('merge', { status: 'failed', failure: { reason: 'conflict in a.ts' } })).toBe("Can't merge: conflict in a.ts");
+    expect(mergeOutcomeText('cancel_merge', { status: 'pr_open' })).toBe('Merge cancelled');
+    expect(mergeOutcomeText('start', { status: 'in_progress' })).toBeNull();
   });
 });

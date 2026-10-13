@@ -5,6 +5,7 @@ import {
   blockedLine,
   blockedParts,
   dependencySummary,
+  mergeWarning,
   statusLine,
   viewStatusLine,
   waitingFor,
@@ -216,7 +217,7 @@ describe('activity label', () => {
     });
     expect(activityLabel(agentSet, later)).toMatchObject({
       kind: 'agent_set',
-      text: "Waiting for slop's commit",
+      text: 'Committing agent set v58',
     });
     const open = {
       ...agentSet,
@@ -237,6 +238,14 @@ describe('activity label', () => {
     const base = prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') });
     expect(activityLabel(base, NOW)?.kind).toBe('checks');
     expect(activityLabel({ ...base, status: 'merging' }, NOW)?.text).toBe('Merging');
+  });
+
+  it('shows an armed merge as a machine step: merging when checks pass, spinning while they run, no wait line', () => {
+    const armed = prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'], ...live('watching') });
+    expect(activityLabel(armed, NOW)).toMatchObject({ kind: 'merging', text: 'Merging when checks pass', spinning: true });
+    expect(waitingFor(armed, armed.allowedActions ?? [], 'dev')).toEqual([]);
+    const settled = { ...armed, headChecks: { sha: head, state: 'passed' as const } };
+    expect(activityLabel(settled, NOW)).toMatchObject({ kind: 'merging', spinning: false });
   });
 
   it('puts checks over the run, and says waiting before the checks have started', () => {
@@ -399,5 +408,18 @@ describe('dependency summary', () => {
     );
     expect(summary?.overlaps.map((e) => e.id)).toEqual(['s1t5']);
     expect(summary?.waitedOnBy).toEqual(['s1t9']);
+  });
+});
+
+describe('mergeWarning', () => {
+  const behind = { base: 'main', behindBy: 2, files: ['a.ts'], at: NOW };
+  it('warns on a pr_open glob whose base moved with no conflict recorded', () => {
+    expect(mergeWarning(prOpen({ behind }))).toContain('main has moved since the checks ran');
+  });
+  it('says nothing when the branch is level, a conflict is recorded, or the glob is not in review', () => {
+    expect(mergeWarning(prOpen({ behind: { ...behind, behindBy: 0 } }))).toBeNull();
+    expect(mergeWarning(prOpen())).toBeNull();
+    expect(mergeWarning(prOpen({ behind, conflict: { base: 'main', files: [], since: null, at: NOW } }))).toBeNull();
+    expect(mergeWarning(view({ status: 'in_progress', behind }))).toBeNull();
   });
 });

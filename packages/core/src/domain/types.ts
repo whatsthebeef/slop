@@ -106,8 +106,12 @@ export interface MergedPr {
   readonly mergedAt: string;
 }
 
-/** `continue`: the merge in progress is a super's Merge and continue, so the glob stays in Doing. */
-export type MergeMode = 'continue';
+/**
+ * `continue`: the merge in progress is a super's Merge and continue, so the glob stays in Doing.
+ * `when_green`: Merge was pressed before the head's checks passed: slop merges the moment they do (the glob stays in
+ * pr_open meanwhile), and disarms if they fail, the PR conflicts or a person cancels.
+ */
+export type MergeMode = 'continue' | 'when_green';
 
 /** Result of the required checks on the PR's current head commit. */
 export interface HeadChecks {

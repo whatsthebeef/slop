@@ -228,7 +228,12 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
     const { label, icon } = actionPresentation(action, glob);
     return { action, label, icon };
   };
-  if (glob.status === 'pr_open' && glob.type !== 'sub' && !actions.includes('merge')) {
+  if (
+    glob.status === 'pr_open' &&
+    glob.type !== 'sub' &&
+    !actions.includes('merge') &&
+    !machine.isMergeArmed(glob)
+  ) {
     const head = glob.pr?.headSha ?? null;
     const checks = glob.headChecks;
     const wait: Pick<Waiting, 'tip' | 'why' | 'running'> =
@@ -365,6 +370,16 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     head !== null &&
     checks?.sha === head &&
     (checks.state === 'passed' || checks.state === 'failed');
+  // Merge was pressed before the checks passed: the human step is done and slop holds the ball.
+  if (machine.isMergeArmed(glob)) {
+    return {
+      kind: 'merging',
+      text: 'Merging when checks pass',
+      icon: 'machine',
+      tip: 'Slop merges the PR as soon as the checks on its head pass. If they fail or the PR conflicts, it stops and says why. Cancel merge stops it.',
+      spinning: !checksSettled,
+    };
+  }
   if (
     glob.status === 'pr_open' &&
     glob.pr?.state === 'ready' &&
@@ -397,7 +412,7 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     if (glob.status === 'in_progress' || glob.status === 'implementing') {
       return {
         kind: 'agent_set',
-        text: "Waiting for slop's commit",
+        text: `Committing agent set v${String(version)}`,
         tip: 'Slop commits the agent set to this branch shortly after the board changes it, then marks the PR ready. Nobody works on it.',
         spinning: false,
       };
@@ -558,4 +573,17 @@ export const dependencySummary = (glob: GlobView): DependencySummary | null => {
   )
     return null;
   return { needs, alsoAhead, overlaps, waitedOnBy };
+};
+
+/**
+ * The Merge control's warning: the base has moved on since the branch last caught up and no conflict is recorded yet,
+ * so slop will merge it into the branch first and stop if it conflicts. Null when nothing is known to be ahead.
+ */
+export const mergeWarning = (
+  glob: Pick<GlobView, 'status' | 'behind' | 'conflict'>,
+): string | null => {
+  const behind = glob.behind;
+  if (glob.status !== 'pr_open' || glob.conflict != null || behind == null || behind.behindBy <= 0)
+    return null;
+  return `${behind.base} has moved since the checks ran; slop will merge it into the branch first and stop if it conflicts`;
 };

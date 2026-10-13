@@ -1,4 +1,4 @@
-import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
+import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, IntakeService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
 import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -8,7 +8,7 @@ import { z } from 'zod';
 import type { Auth } from '../auth.js';
 import { SESSION_COOKIE, SESSION_DAYS } from '../auth.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
-import type { ReadyGate } from '../ready-gate.js';
+import type { MergeGate, ReadyGate } from '../ready-gate.js';
 import type { HintHub } from '../notifier.js';
 import type { SignedLinks } from '../signed-links.js';
 import { labelCommandSchema } from './labels.js';
@@ -24,12 +24,18 @@ export interface AppDeps {
   readonly outbox: OutboxRunner;
   /** Keep whole on a flagged glob; absent: its route isn't mounted. */
   readonly sizeCheck?: SizeCheckService;
+  /** Chooses the group of a glob created without one; absent: it gets none. */
+  readonly intake?: Pick<IntakeService, 'suggestGroup'>;
+  /** Proposes (and with apply, writes) groups for a board's open globs that have none; absent: its route isn't mounted. */
+  readonly groupBackfill?: Pick<GroupBackfillService, 'run'>;
   /** Looks at a glob's pending files when it is read (the fallback for a lost storage event); absent: file attachments are off. */
   readonly attachments?: Pick<AttachmentService, 'refreshGlob'>;
   /** The board's LLM spend line; absent: its route isn't mounted. */
   readonly spend?: SpendService;
   /** Refuses Ready for review for a branch that conflicts with its base. */
   readonly readyGate?: ReadyGate;
+  /** Refuses Merge on an agent-set PR whose diff is empty. */
+  readonly mergeGate?: MergeGate;
   /** Signs the board sign-in `state`. */
   readonly links: SignedLinks;
   /** Reopens a decision: one the KB pipeline closed through the Knowledge page's reopen; absent: only accepted ones (row D9). */
@@ -120,7 +126,8 @@ export const createGlobSchema = z.object({
   title: z.string().min(1),
   type: z.enum(SLOP_TYPES).default('same'),
   category: z.enum(WORK_CATEGORIES).default('task'),
-  group: z.string().min(1).nullable().default(null),
+  /** Omitted: slop chooses one from the title and plan. Null or empty: none. */
+  group: z.string().nullable().optional(),
   environment: z.string().min(1).nullable().default(null),
   autoTrigger: z.boolean().default(false),
   /** Super only: false parks it in Planning (no branch, run or implementer) until a person picks it up to pair. */
@@ -374,6 +381,15 @@ export const createApp = (deps: AppDeps) => {
     return send(c, await spend.monthToDate(boardId));
   });
 
+  // The group backfill (admins): a dry run unless `apply` is true. `slop group-backfill` calls it.
+  app.post('/api/boards/:b/groups/backfill', async (c) => {
+    const { groupBackfill } = deps;
+    if (groupBackfill === undefined) return c.json({ code: 'not_found', message: 'The group backfill is not available' }, 404);
+    const body = await parse(c, z.object({ apply: z.boolean().default(false) }));
+    if (body instanceof Response) return body;
+    return send(c, await groupBackfill.run(c.get('email'), Number(c.req.param('b')), body.apply));
+  });
+
   app.get('/api/boards/:b/members', async (c) =>
     send(c, await boards.members(c.get('email'), Number(c.req.param('b')))),
   );
@@ -450,13 +466,20 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
-    const { intake, needs, ...fields } = body;
+    const { intake, needs, group, ...fields } = body;
+    const boardId = Number(c.req.param('b'));
+    let chosen: string | null = group?.trim() === '' ? null : (group ?? null);
+    if (group === undefined && deps.intake !== undefined) {
+      const suggested = await deps.intake.suggestGroup(email, boardId, { title: fields.title, plan: fields.plan ?? '' });
+      if (suggested.ok) chosen = suggested.value;
+    }
     const created = await globs.create(email, {
       ...fields,
+      group: chosen,
       ...(needs === undefined && fields.after === undefined ? {} : { after: needs ?? fields.after ?? [] }),
       source: 'web',
       ...(intake === undefined ? {} : { intake: { ...intake, source: 'web' } }),
-      boardId: Number(c.req.param('b')),
+      boardId,
     });
     if (!created.ok) return send(c, created);
     // Return once provisioning has been attempted.
@@ -553,9 +576,13 @@ export const createApp = (deps: AppDeps) => {
     'pick-up': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, false, b.environment),
     'take-over': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, true, b.environment),
     'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),
-    merge: (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version),
+    merge: async (email: string, id: string, b: ActionBody) => {
+      const gate = await deps.mergeGate?.(email, id);
+      return gate !== undefined && !gate.ok ? gate : globs.merge(email, id, b.version);
+    },
     deescalate: (email: string, id: string, b: ActionBody) => globs.deescalate(email, id, b.version),
     'make-super': (email: string, id: string, b: ActionBody) => globs.makeSuper(email, id, b.version),
+    'cancel-merge': (email: string, id: string, b: ActionBody) => globs.cancelMerge(email, id, b.version),
     'retry-merge': (email: string, id: string, b: ActionBody) => globs.retryMerge(email, id, b.version),
     // Supers: row 31, and the board's Ready for review (both need the latest postplan at the head).
     'merge-continue': (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version, true),

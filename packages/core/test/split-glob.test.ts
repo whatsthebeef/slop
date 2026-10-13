@@ -101,6 +101,30 @@ describe('split a glob into parts', () => {
     expect(await store.transaction((tx) => tx.listGlobs(boardId, {}))).toHaveLength(3);
   });
 
+  it('puts every part of a split of a group-less glob in one group named from its title', async () => {
+    const bare = unwrap(
+      await globs.create(DEV, { boardId, title: 'Billing overhaul: all of it', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'All' }),
+    );
+    const parts = unwrap(
+      await globs.split(DEV, bare.id, bare.version, input([part({ title: 'Billing overhaul 1/2: model' }), part({ title: 'Billing overhaul 2/2: ui', after: [0] })])),
+    );
+    expect(parts.map((g) => g.group)).toEqual(['billing-overhaul', 'billing-overhaul']);
+    expect((await current(bare.id)).group).toBe('billing-overhaul');
+  });
+
+  it('reuses an existing group whose name matches, and keeps a grouped original\'s group', async () => {
+    unwrap(
+      await globs.create(DEV, { boardId, title: 'Other', type: 'same', category: 'task', group: 'Billing Overhaul', environment: null, autoTrigger: false, idempotencyKey: null, plan: 'x' }),
+    );
+    const bare = unwrap(
+      await globs.create(DEV, { boardId, title: 'Billing overhaul: all of it', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'All' }),
+    );
+    const parts = unwrap(await globs.split(DEV, bare.id, bare.version, input([part({ title: 'A' }), part({ title: 'B', after: [0] })])));
+    expect(parts.map((g) => g.group)).toEqual(['Billing Overhaul', 'Billing Overhaul']);
+    const grouped = unwrap(await globs.split(DEV, original.id, original.version, input([part({ title: 'A' }), part({ title: 'B', after: [0] })])));
+    expect(grouped.map((g) => g.group)).toEqual(['grp', 'grp']);
+  });
+
   it('records a GlobSplit event on every part', async () => {
     const parts = unwrap(await globs.split(DEV, original.id, original.version, input([part(), part()])));
     const splits = store.state.events.filter((e) => e.type === 'GlobSplit');

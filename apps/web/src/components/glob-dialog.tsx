@@ -32,6 +32,7 @@ import {
   statusWords,
   viewStatusLine,
   waitingFor,
+  mergeWarning,
 } from '@/lib/status-line';
 import { categoryOptions, saveCategory, typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
@@ -257,7 +258,8 @@ export const GlobDetail = ({
   const shownActions = (glob.allowedActions ?? []).filter(
     (a) => a !== 'delete' && actionPresentation(a, glob).placement !== 'none',
   );
-  // Decide has its own panel with the five outcomes: it can be the main button (which goes to the panel), never a More entry.
+  // Decide has its own panel with the five outcomes: it can be the main button (which goes to
+  // the panel), never a More entry.
   const allActions = shownActions.filter((a) => a !== 'decide');
   const main = mainAction(shownActions, glob, decision);
   const actions = orderActions(allActions, main);
@@ -363,6 +365,13 @@ export const GlobDetail = ({
       () => onAction(action),
       setPending,
     );
+  };
+
+  // Merge also warns when the base moved since the checks ran (slop merges it first).
+  const tipOf = (action: Action) => {
+    const tip = actionPresentation(action, glob).tip;
+    const warning = action === 'merge' ? mergeWarning(glob) : null;
+    return warning === null ? tip : `${tip}\n${warning}`;
   };
 
   const actionContent = (action: Action) => {
@@ -662,7 +671,7 @@ export const GlobDetail = ({
             <div className="grid gap-1">
               <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
                 {main !== null && (
-                  <Tip text={actionPresentation(main, glob).tip}>
+                  <Tip text={tipOf(main)}>
                     <Button
                       size="sm"
                       disabled={busy}
@@ -694,7 +703,9 @@ export const GlobDetail = ({
                               <ActorIcon actor={shown.icon} decorative />
                               {shown.label}
                             </span>
-                            <span className="text-xs text-muted-foreground">{shown.tip}</span>
+                            <span className="whitespace-pre-line text-xs text-muted-foreground">
+                              {tipOf(action)}
+                            </span>
                           </DropdownMenuItem>
                         );
                       })}
