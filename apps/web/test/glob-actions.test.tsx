@@ -49,12 +49,29 @@ const renderGlob = (glob: GlobView) => {
 
 const mainButton = () => screen.queryByTestId('main-action');
 
+/** The main button shows the machine icon (lucide Bot) and not the human one. */
+const expectMachineIcon = (button: HTMLElement | null) => {
+  expect(button?.querySelector('svg.lucide-bot')).not.toBeNull();
+  expect(button?.querySelector('svg.lucide-user-round')).toBeNull();
+};
+
+/** Adds an Element method jsdom lacks, leaving any real one in place. */
+const polyfill = (name: string, value: () => unknown) => {
+  if (!(name in Element.prototype)) {
+    Object.defineProperty(Element.prototype, name, { value, configurable: true, writable: true });
+  }
+};
+
 beforeAll(() => {
   // jsdom lacks these; Radix and the glob view call them.
-  const proto = Element.prototype as unknown as Record<string, unknown>;
-  proto.scrollIntoView ??= () => undefined;
-  proto.hasPointerCapture ??= () => false;
-  proto.releasePointerCapture ??= () => undefined;
+  polyfill('scrollIntoView', () => undefined);
+  polyfill('hasPointerCapture', () => false);
+  polyfill('setPointerCapture', () => undefined);
+  polyfill('releasePointerCapture', () => undefined);
+});
+
+beforeEach(() => {
+  // Stubbed per test so `unstubAllGlobals` in afterEach always pairs with them, whatever the order.
   if (!('ResizeObserver' in globalThis)) {
     vi.stubGlobal(
       'ResizeObserver',
@@ -65,9 +82,6 @@ beforeAll(() => {
       },
     );
   }
-});
-
-beforeEach(() => {
   vi.stubGlobal(
     'fetch',
     vi.fn(() => Promise.reject(new Error('no server in component tests'))),
@@ -84,7 +98,7 @@ describe('glob view: main button', () => {
     renderGlob(view({ allowedActions: ['start', 'pick_up', 'delete'] }));
     const main = mainButton();
     expect(main?.textContent).toBe('Start');
-    expect(main?.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expectMachineIcon(main);
   });
 
   it('is Merge for a ready PR whose checks passed', () => {
@@ -93,10 +107,13 @@ describe('glob view: main button', () => {
         status: 'pr_open',
         list: 'reviewing',
         pr: { number: 7, state: 'ready', headSha: 'aaa' },
+        // GlobView has no checks field: the server reflects passed checks by allowing merge.
         allowedActions: ['merge', 'start_again', 'delete'],
       }),
     );
-    expect(mainButton()?.textContent).toBe('Merge');
+    const main = mainButton();
+    expect(main?.textContent).toBe('Merge');
+    expectMachineIcon(main);
   });
 
   it('is Fix checks when the checks failed', () => {
@@ -105,10 +122,13 @@ describe('glob view: main button', () => {
         status: 'pr_open',
         list: 'reviewing',
         pr: { number: 7, state: 'ready', headSha: 'aaa' },
+        // GlobView has no checks field: the server reflects failed checks by allowing retry_autofix.
         allowedActions: ['retry_autofix', 'start_again', 'delete'],
       }),
     );
-    expect(mainButton()?.textContent).toBe('Fix checks');
+    const main = mainButton();
+    expect(main?.textContent).toBe('Fix checks');
+    expectMachineIcon(main);
   });
 
   it('is absent when no allowed action qualifies, leaving More', () => {
@@ -118,8 +138,9 @@ describe('glob view: main button', () => {
   });
 
   it('calls onAction with the action when clicked', async () => {
+    const user = userEvent.setup();
     const cb = renderGlob(view({ allowedActions: ['start', 'delete'] }));
-    await userEvent.click(screen.getByTestId('main-action'));
+    await user.click(screen.getByTestId('main-action'));
     expect(cb.onAction).toHaveBeenCalledWith('start');
   });
 });
@@ -128,8 +149,9 @@ describe('glob view: More ▾', () => {
   const planning = () => view({ allowedActions: ['start', 'investigate', 'pick_up', 'delete'] });
 
   it('lists the other allowed actions with their descriptions, not the main one', async () => {
+    const user = userEvent.setup();
     renderGlob(planning());
-    await userEvent.click(screen.getByTestId('more-actions'));
+    await user.click(screen.getByTestId('more-actions'));
     const menu = await screen.findByTestId('more-menu');
     expect(within(menu).getByTestId('more-investigate').textContent).toContain('Investigate plan');
     expect(within(menu).getByTestId('more-investigate').textContent).toContain(
@@ -142,9 +164,10 @@ describe('glob view: More ▾', () => {
   });
 
   it('runs the chosen action and closes', async () => {
+    const user = userEvent.setup();
     const cb = renderGlob(planning());
-    await userEvent.click(screen.getByTestId('more-actions'));
-    await userEvent.click(await screen.findByTestId('more-investigate'));
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-investigate'));
     expect(cb.onAction).toHaveBeenCalledWith('investigate');
     await waitFor(() => expect(screen.queryByTestId('more-menu')).toBeNull());
   });
@@ -182,35 +205,37 @@ describe('glob view: Reset', () => {
     });
 
   it('asks before Discard and only Confirm calls start_again', async () => {
+    const user = userEvent.setup();
     const glob = discardable();
     const cb = renderGlob(glob);
     const area = screen.getByTestId('reset-area');
-    await userEvent.click(within(area).getByTestId('reset-start_again'));
+    await user.click(within(area).getByTestId('reset-start_again'));
     expect(cb.onAction).not.toHaveBeenCalled();
     expect(screen.getByTestId('start-again-says').textContent).toBe(
       startAgainConfirmation(glob, board.baseBranch),
     );
-    await userEvent.click(within(area).getByRole('button', { name: 'Cancel' }));
+    await user.click(within(area).getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByTestId('start-again-says')).toBeNull();
     expect(cb.onAction).not.toHaveBeenCalled();
 
-    await userEvent.click(within(area).getByTestId('reset-start_again'));
-    await userEvent.click(screen.getByTestId('confirm-start-again'));
+    await user.click(within(area).getByTestId('reset-start_again'));
+    await user.click(screen.getByTestId('confirm-start-again'));
     expect(cb.onAction).toHaveBeenCalledTimes(1);
     expect(cb.onAction).toHaveBeenCalledWith('start_again');
   });
 
   it('asks before Delete and only confirming calls onDelete', async () => {
+    const user = userEvent.setup();
     const cb = renderGlob(discardable());
     const area = screen.getByTestId('reset-area');
-    await userEvent.click(within(area).getByRole('button', { name: /^Delete…/ }));
+    await user.click(within(area).getByRole('button', { name: /^Delete…/ }));
     expect(cb.onDelete).not.toHaveBeenCalled();
     expect(within(area).getByText(/permanently\?/)).toBeTruthy();
-    await userEvent.click(within(area).getByRole('button', { name: 'Keep it' }));
+    await user.click(within(area).getByRole('button', { name: 'Keep it' }));
     expect(cb.onDelete).not.toHaveBeenCalled();
 
-    await userEvent.click(within(area).getByRole('button', { name: /^Delete…/ }));
-    await userEvent.click(within(area).getByRole('button', { name: 'Delete permanently' }));
+    await user.click(within(area).getByRole('button', { name: /^Delete…/ }));
+    await user.click(within(area).getByRole('button', { name: 'Delete permanently' }));
     expect(cb.onDelete).toHaveBeenCalledTimes(1);
   });
 });
@@ -232,11 +257,12 @@ describe('glob view: a decision in Doing', () => {
         outcome: null,
       },
     });
+    const user = userEvent.setup();
     const cb = renderGlob(decision);
     const main = screen.getByTestId('main-action');
     expect(main.textContent).toContain('Decide');
     const outcomes = await screen.findByTestId('outcomes');
-    await userEvent.click(main);
+    await user.click(main);
     const first = within(outcomes)
       .getAllByRole('button')
       .find((b) => !b.hasAttribute('disabled'));
