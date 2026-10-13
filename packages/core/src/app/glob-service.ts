@@ -2,6 +2,7 @@ import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js'
 import type { Result } from '../domain/errors.js';
 import { isLearning } from '../domain/learning.js';
 import { validateScopeEdit } from '../domain/attributes.js';
+import { groupFromTitle } from '../domain/group.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
@@ -590,8 +591,16 @@ export class GlobService {
       if (first === undefined) return invalidInput('A split needs at least 2 parts');
       const firstEscalation = escalations[0];
       const firstType = firstEscalation?.type ?? first.type;
+      // Every part shares one group: the original's, else one named from its title (an existing group of that name is reused).
+      const group =
+        original.group ??
+        groupFromTitle(
+          original.title,
+          [...new Set((await tx.listGlobs(board.id, {})).flatMap((g) => (g.group === null ? [] : [g.group])))],
+        );
       const changes: FieldChanges = {
         title: first.title,
+        ...(group === original.group ? {} : { group }),
         ...(first.category === undefined ? {} : { category: first.category }),
         ...(firstType === undefined || (first.type === undefined && firstType === original.type) ? {} : { type: firstType }),
       };
@@ -633,7 +642,7 @@ export class GlobService {
             title: part.title,
             type: escalations[index]?.type ?? part.type ?? original.type,
             category: part.category ?? original.category,
-            group: original.group,
+            group,
             environment: original.environment,
             autoTrigger: false,
             after: checked.value,

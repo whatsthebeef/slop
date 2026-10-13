@@ -1963,15 +1963,10 @@ export const checksCompleted = (
   // Slop updated the branch while merging: the checks on the new head decide (rows 12, 14, 16).
   if (glob.status === 'merging') {
     if (checks.conflict !== undefined) {
+      // An ordinary "merge the base into the branch" job, not a failure: back to pr_open with the conflict recorded.
       const reason = conflictReason(checks.conflict);
-      return b
-        .endWatchingRun(reason)
-        .set({
-          failure: { reason, at: ctx.now, kind: 'merge', conflict: checks.conflict },
-          mergeMode: null,
-        })
+      return withConflict(b.set({ mergeMode: null }).status('pr_open'), checks.conflict, ctx)
         .event('MergeFailed', { reason, conflict: true })
-        .status('failed')
         .done();
     }
     if (!passed) {

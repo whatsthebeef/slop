@@ -337,7 +337,8 @@ export interface NewGlob {
   plan?: string;
   type: SlopType;
   category: Category;
-  group: string | null;
+  /** Omitted: slop chooses one from the title and plan; null: none. */
+  group?: string | null;
   environment: string | null;
   autoTrigger: boolean;
   /** Super only: false parks it in Planning until a person picks it up to pair. */
@@ -362,7 +363,8 @@ export interface NewGlob {
 }
 
 /** Intake's answer: the form's fields, plus how sure it is and the past globs it was shown. */
-export type IntakeProposalView = NewGlob & {
+export type IntakeProposalView = Omit<NewGlob, 'group'> & {
+  group: string | null;
   plan: string;
   autoTriggerReason: string | null;
   suggestedAfter: string[];

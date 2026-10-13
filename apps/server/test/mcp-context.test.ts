@@ -121,7 +121,7 @@ describe('MCP get_context include and get_artifact', () => {
 
     const intake = new IntakeService({
       store,
-      llm: { complete: () => Promise.resolve(JSON.stringify({ title: 'Design it', summary: 'S', type: 'super', typeReason: 'Open design', category: 'feature' })) },
+      llm: { complete: (req) => Promise.resolve(req.system.includes('choose the group') ? JSON.stringify({ group: 'Exports' }) : JSON.stringify({ title: 'Design it', summary: 'S', type: 'super', typeReason: 'Open design', category: 'feature' })) },
     });
     const inbox = new InboxService(deps);
     const outbox = { drain: () => Promise.resolve() };
@@ -239,6 +239,15 @@ describe('MCP get_context include and get_artifact', () => {
     expect(asked).toMatchObject({ type: 'super', status: 'in_progress' });
     const parked = await created({ title: 'Parked', type: 'super', category: 'feature', start: false, idempotencyKey: 'parked-super' });
     expect(parked).toMatchObject({ status: 'planning' });
+  });
+
+  it('create_glob chooses a group for a titled create, and an explicit group or null wins', async () => {
+    const groupOf = async (args: Record<string, unknown>) =>
+      ((await call('create_glob', { board: boardId, category: 'task', type: 'same', ...args })).body as unknown as { group: string | null }).group;
+    expect(await groupOf({ title: 'Export CSV', idempotencyKey: 'grp-suggested' })).toBe('Exports');
+    expect(await groupOf({ title: 'Export PDF', group: 'Mine', idempotencyKey: 'grp-explicit' })).toBe('Mine');
+    expect(await groupOf({ title: 'Export XML', group: null, idempotencyKey: 'grp-null' })).toBeNull();
+    expect(await groupOf({ title: 'Export TXT', group: '', idempotencyKey: 'grp-empty' })).toBeNull();
   });
 
   it('create_glob attaches an inbox item of the board and refuses another one', async () => {

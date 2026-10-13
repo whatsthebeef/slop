@@ -567,3 +567,16 @@ export const dependencySummary = (glob: GlobView): DependencySummary | null => {
     return null;
   return { needs, alsoAhead, overlaps, waitedOnBy };
 };
+
+/**
+ * The Merge control's warning: the base has moved on since the branch last caught up and no conflict is recorded yet,
+ * so slop will merge it into the branch first and stop if it conflicts. Null when nothing is known to be ahead.
+ */
+export const mergeWarning = (
+  glob: Pick<GlobView, 'status' | 'behind' | 'conflict'>,
+): string | null => {
+  const behind = glob.behind;
+  if (glob.status !== 'pr_open' || glob.conflict != null || behind == null || behind.behindBy <= 0)
+    return null;
+  return `${behind.base} has moved since the checks ran; slop will merge it into the branch first and stop if it conflicts`;
+};
