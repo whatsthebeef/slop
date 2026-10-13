@@ -8,15 +8,18 @@ import type { EdgeKind, EdgeSource, Glob, ImpliedAfter } from './types.js';
 
 /**
  * `merged`: reviewing or signed off (a super that merged and continues is still `open`). `planning`: not started, or sent
- * back to Planning. `missing`: deleted (or never on this board).
+ * back to Planning. `missing`: deleted (or never on this board). `rollout`: merged, but work steps that hold back its
+ * dependants (its rollout) are still open, so what needs it keeps waiting.
  */
-export type DependencyState = 'open' | 'merged' | 'planning' | 'missing';
+export type DependencyState = 'open' | 'merged' | 'planning' | 'missing' | 'rollout';
 
 export const MAX_AFTER = 20;
 
-export const dependencyState = (glob: Glob | null | undefined): DependencyState => {
+const NOT_HELD: ReadonlySet<string> = new Set();
+
+export const dependencyState = (glob: Glob | null | undefined, held: ReadonlySet<string> = NOT_HELD): DependencyState => {
   if (glob === null || glob === undefined) return 'missing';
-  if (glob.status === 'reviewing' || glob.status === 'signed_off') return 'merged';
+  if (glob.status === 'reviewing' || glob.status === 'signed_off') return held.has(glob.id) ? 'rollout' : 'merged';
   return glob.status === 'planning' ? 'planning' : 'open';
 };
 
@@ -95,6 +98,8 @@ export const waitNote = (id: string, state: Exclude<DependencyState, 'merged'>, 
       return `Waits for ${id} to merge (it is in Planning)`;
     case 'open':
       return `Waits for ${id} to merge`;
+    case 'rollout':
+      return `Waits for the rollout of ${id} to be done (it has merged)`;
   }
 };
 
@@ -206,7 +211,12 @@ export const NO_CHAIN: BlockingChain = { blockedBy: [], nextStartable: null };
  * The glob's whole blocking chain: its unmerged prerequisites, what they wait for in turn, and so on. Merged globs are
  * skipped (and not walked past), a cycle is walked once, and `lookup` answers undefined for a deleted glob.
  */
-export const blockingChain = (rootId: string, root: Dependent, lookup: (id: string) => Glob | undefined): BlockingChain => {
+export const blockingChain = (
+  rootId: string,
+  root: Dependent,
+  lookup: (id: string) => Glob | undefined,
+  held: ReadonlySet<string> = NOT_HELD,
+): BlockingChain => {
   const seen = new Set<string>([rootId]);
   const blockedBy: BlockedBy[] = [];
   const hasUnmergedAhead = new Set<string>();
@@ -216,7 +226,7 @@ export const blockingChain = (rootId: string, root: Dependent, lookup: (id: stri
     for (const parent of level) {
       for (const id of dependencyIds(parent.glob).filter((d) => blocksStart(parent.glob, d))) {
         const glob = lookup(id);
-        const state = dependencyState(glob);
+        const state = dependencyState(glob, held);
         if (state === 'merged') continue;
         hasUnmergedAhead.add(parent.id);
         if (seen.has(id)) continue;

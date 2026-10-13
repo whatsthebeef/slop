@@ -1,6 +1,6 @@
-import type { ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService, SuggestService } from '@slop/core';
+import type { ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService, SuggestService, NewHumanStep, StoredHumanStep } from '@slop/core';
 import { cleanFileName, invalidInput, machine, notFound, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
-import { ARTIFACT_KINDS, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
+import { ARTIFACT_KINDS, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -1015,6 +1015,63 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       reply(await artifacts.attach(email, id, { label, text: text ?? null, link: link ?? null }), (a) =>
         'ignored' in a ? a : { id: a.id, label: a.label, version: a.version },
       ),
+  );
+
+  const stepView = (step: StoredHumanStep) => ({
+    id: step.id,
+    kind: step.kind,
+    title: step.title,
+    detail: step.detail,
+    who: step.who,
+    due: step.due,
+    state: step.state,
+    blocks: step.blocks,
+    check: step.check,
+    script: step.script,
+    doneBy: step.doneBy,
+    doneAt: step.doneAt,
+    dismissedReason: step.dismissedReason,
+  });
+
+  server.registerTool(
+    'add_human_step',
+    {
+      description:
+        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge or after_deploy:<env>. `script`: {artifact: label} or {path: repo path}. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
+      inputSchema: {
+        id: z.string(),
+        version: z.number().int().optional(),
+        title: z.string().min(1).describe('Short: the action ("Roll out the host stack")'),
+        kind: z.enum(HUMAN_STEP_KINDS).optional(),
+        detail: z.string().optional().describe('Markdown, when the title is not enough'),
+        who: z.string().optional(),
+        due: z.string().optional(),
+        blocks: z.array(z.enum(HUMAN_STEP_BLOCKS)).optional(),
+        check: z.string().optional().describe('A capability slop can verify'),
+        script: z.union([z.object({ artifact: z.string() }), z.object({ path: z.string() })]).optional(),
+      },
+    },
+    async ({ id, version, ...step }) =>
+      reply(await globs.addHumanStep(email, id, version ?? null, step as NewHumanStep, 'agent'), stepView),
+  );
+
+  server.registerTool(
+    'complete_human_step',
+    {
+      description:
+        "Tick a step on a glob as done (records who and when). When it was the last one holding back sign-off and the glob's labels are approved, the glob moves to Signed off; globs that waited for its rollout are released. Members only.",
+      inputSchema: { id: z.string(), stepId: z.string(), version: z.number().int().optional() },
+    },
+    async ({ id, stepId, version }) => reply(await globs.completeHumanStep(email, id, stepId, version ?? null), stepView),
+  );
+
+  server.registerTool(
+    'dismiss_human_step',
+    {
+      description: 'Dismiss a wrong step on a glob, with the reason. It stops holding anything back. Members only.',
+      inputSchema: { id: z.string(), stepId: z.string(), reason: z.string().min(1), version: z.number().int().optional() },
+    },
+    async ({ id, stepId, reason, version }) => reply(await globs.dismissHumanStep(email, id, stepId, reason, version ?? null), stepView),
   );
 
   server.registerTool(

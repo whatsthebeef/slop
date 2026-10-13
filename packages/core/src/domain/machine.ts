@@ -39,6 +39,8 @@ import {
 } from './waiting.js';
 import type { BlockingChain } from './waiting.js';
 import type { DependencyState } from './waiting.js';
+import { rolloutPending } from './human-steps.js';
+import type { BlockProgress } from './human-steps.js';
 import type {
   Actor,
   Board,
@@ -130,6 +132,8 @@ export interface ActionFacts {
   readonly chain?: BlockingChain;
   /** The size check flagged the glob oversized and nobody has answered: it is held in Planning, though nothing it waits for is unmerged. */
   readonly sizeHeld?: boolean;
+  /** The work steps holding back sign-off, where loaded (sign-off is refused while any is open). */
+  readonly rollout?: BlockProgress;
 }
 
 const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
@@ -1240,6 +1244,8 @@ export const reviewLabel = (
   name: LabelName,
   command: LabelCommand,
   ctx: Context,
+  /** Work steps holding back sign-off: labels still change, but the glob stays in Reviewing until they are done. */
+  rollout: BlockProgress | null = null,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   const from = glob.labels[name];
@@ -1256,7 +1262,7 @@ export const reviewLabel = (
       .set({ labels })
       .event('LabelChanged', { ...detail, label: name, from, to });
     const allApproved = Object.values(labels).every((s) => s === 'approved');
-    if (glob.status === 'reviewing' && allApproved) {
+    if (glob.status === 'reviewing' && allApproved && (rollout === null || rollout.open === 0)) {
       b.set({ signedOffAt: ctx.now }).status('signed_off');
     } else if (glob.status === 'signed_off' && !allApproved) {
       b.set({ signedOffAt: null }).status('reviewing');
@@ -3015,13 +3021,24 @@ export const decisionWorkLanded = (glob: Glob, ctx: Context): Result<Transition>
 };
 
 /** Row D8: sign off an accepted decision. */
-export const signOffDecision = (glob: Glob, ctx: Context): Result<Transition> => {
+export const signOffDecision = (glob: Glob, ctx: Context, rollout: BlockProgress | null = null): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.category !== 'decision') return notDecision(glob, actor);
   if (!mayDecide(actor)) return forbidden('Only admins and POs can sign off a decision');
   if (glob.status !== 'reviewing')
     return invalidTransition(glob, actor, 'Only a decision in Reviewing can be signed off');
+  if (rollout !== null && rollout.open > 0) return invalidTransition(glob, actor, rolloutPending(rollout));
   return new Builder(glob, ctx).set({ signedOffAt: ctx.now }).status('signed_off').done();
+};
+
+/**
+ * The last work step holding back sign-off was done or dismissed: a merged glob whose labels are all approved moves on to
+ * Signed off (one still short of approvals just stays in Reviewing, and now shows there). A no-op while any step is open.
+ */
+export const rolloutSettled = (glob: Glob, rollout: BlockProgress, ctx: Context): Result<Transition> => {
+  if (rollout.open > 0 || glob.category === 'decision' || glob.status !== 'reviewing') return unchanged(glob);
+  if (!Object.values(glob.labels).every((s) => s === 'approved')) return unchanged(glob);
+  return new Builder(glob, ctx).set({ signedOffAt: ctx.now }).event('RolloutDone', {}).status('signed_off').done();
 };
 
 /** Row D9: an accepted decision goes back to Doing, its outcome cleared, to be chosen again. */

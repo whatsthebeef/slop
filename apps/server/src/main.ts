@@ -359,7 +359,7 @@ const chat = new ChatService({
   submitLearning: (email, board, learning) => knowledge.submitLearning(email, board, learning),
 });
 // An arriving investigation escalates a sub that needs a human and raises the oversize flag with a fan-out proposal.
-const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input) });
+const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input), predictRollout: (id) => globs.predictRollout(id) });
 const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, investigation });
 const attachments =
   attachmentObjects === null

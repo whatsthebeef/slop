@@ -1,5 +1,5 @@
 import type { Action, ArtifactSummary, AwaitedDependency, BlockingChain, DependencyState, CompactHumanStep, DomainError, Glob, Handover, HumanStep, Role, SizeCheck, StoredHumanStep } from '@slop/core';
-import { checksExplanation, compactStep, edgesOf, humanSteps, listOf, machine, unresolved } from '@slop/core';
+import { blockProgress, checksExplanation, compactStep, edgesOf, humanSteps, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /**
@@ -20,7 +20,8 @@ export const globView = (
   ...glob,
   // Every dependency edge with its kind (needs block the start, overlaps only order merges), source and evidence.
   ...(edgesOf(glob).length === 0 ? {} : { edges: edgesOf(glob) }),
-  list: listOf(glob.status),
+  // A merged glob whose rollout still holds back its sign-off stays in Doing.
+  list: listWithSteps(glob, steps === null ? null : blockProgress(steps, 'sign_off')),
   branch: glob.id,
   currentRun: machine.currentRun(glob),
   /** Why the head's checks failed, and whether the base branch is red the same way (then it isn't this glob's change). */
