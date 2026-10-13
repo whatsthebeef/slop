@@ -175,7 +175,8 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.queryByText(/Why you're needed/)).toBeNull();
     expect(screen.queryByTestId('handover-box')).toBeNull();
     expect(screen.queryByTestId('machine-steps')).toBeNull();
-    expect(screen.getAllByTestId('escalation-chip')).toHaveLength(1);
+    // The header chip is Planning-only (s15b86); this glob is pr_open, so the reason lives in the disclosure.
+    expect(screen.queryByTestId('escalation-chip')).toBeNull();
     expect(screen.getAllByText(/Error: boom/)).toHaveLength(1);
     expect(screen.getByTestId('now-details').textContent).toContain('Error: boom');
     // Escalation reason appears only behind "Why a person?", never in Now.
