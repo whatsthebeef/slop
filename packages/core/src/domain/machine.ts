@@ -531,8 +531,8 @@ export const investigationPushed = (glob: Glob, runId: string, ctx: Context): Re
 };
 
 /**
- * Row 34: Start anyway. A sub or same in planning that is held (it waits for unmerged globs, or for its oversized flag to be
- * answered) starts now; the hold is recorded as overridden. Also Hand to routine (row 34a): a glob a person picked up that has
+ * Row 34: Start now. A sub or same in planning that is held (it waits for unmerged globs, or for its oversized flag to be
+ * answered) starts now; the hold is recorded as overridden. Also Start (row 34a): a glob a person picked up that has
  * no routine run goes to a routine, the person no longer implementing it.
  */
 export const startAnyway = (
@@ -636,10 +636,10 @@ export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOp
   if (options.takeOver) {
     // Row 10.
     if (!hasLiveRun(glob) || glob.type === 'super') {
-      return invalidTransition(glob, actor, 'There is no routine run to take over');
+      return invalidTransition(glob, actor, 'There is no routine run to pick up from');
     }
     if (glob.status !== 'implementing' && glob.status !== 'pr_open') {
-      return invalidTransition(glob, actor, 'Take over applies to implementing or pr_open globs');
+      return invalidTransition(glob, actor, 'Pick up applies to implementing or pr_open globs');
     }
     const b = new Builder(glob, ctx)
       .endRun('superseded', null, { cause: 'take_over' })
@@ -652,7 +652,7 @@ export const pickUp = (glob: Glob, ctx: Context, board: Board, options: PickUpOp
   }
 
   if (hasBusyRun(glob)) {
-    return runActive('A routine run is active or watching; take over to supersede it');
+    return runActive('A routine run is active or watching; pick up to supersede it');
   }
 
   const b = new Builder(glob, ctx);
@@ -710,11 +710,11 @@ export const retryAutofix = (glob: Glob, ctx: Context): Result<Transition> => {
   return new Builder(glob, ctx).set({ failure: null }).queueRun(actor.email).done();
 };
 
-/** Row 20: re-trigger a failed sub or same on its existing branch. */
+/** Row 20: retry a failed sub or same on its existing branch. */
 export const retrigger = (glob: Glob, ctx: Context, chain: BlockingChain = NO_CHAIN, anyway = false): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status !== 'failed' || glob.type === 'super') {
-    return invalidTransition(glob, actor, 'Only a failed sub or same can be re-triggered');
+    return invalidTransition(glob, actor, 'Only a failed sub or same can be retried');
   }
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
   if (chain.blockedBy.length > 0 && !anyway) return invalidTransition(glob, actor, chainRefusal(chain));
@@ -1422,7 +1422,7 @@ const queuedAtText = (at: string): string => `${new Date(at).toISOString().slice
  */
 export const SESSION_NEVER_REACHED_SLOP_MINUTES = 5;
 
-const SESSION_NEVER_REACHED_SLOP = "The run's session never reached slop (the Slop connector may not have attached). Start again.";
+const SESSION_NEVER_REACHED_SLOP = "The run's session never reached slop (the Slop connector may not have attached). Discard & restart.";
 
 /** The reason `runTimeoutReason` gives a watching run that ignored failed checks. */
 const GAVE_UP = /^Auto-fix didn't respond/;
@@ -1775,7 +1775,7 @@ export const makeSuper = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
   if (!needsPairing(glob)) return invalidTransition(glob, actor, 'Only a failed sub or same whose routine asked for pairing can be made a super');
   if (actor.role === 'qa' || actor.role === 'po') return forbidden('QA and PO members cannot create supers');
-  if (hasBusyRun(glob)) return runActive('A routine run is active or watching; take over to supersede it');
+  if (hasBusyRun(glob)) return runActive('A routine run is active or watching; pick up to supersede it');
   const b = new Builder(glob, ctx)
     .endRun('superseded', null, { cause: 'make_super' })
     .set({ type: 'super', implementer: actor.email, failure: null, escalation: null, ...(glob.waiting == null ? {} : { waiting: null }) })
@@ -2004,7 +2004,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
   if (canReviewNow(glob)) actions.push('review_now');
   if (held && !restricted) actions.push('start_anyway');
-  // Hand to routine: picked up, but no session has started and no run is live.
+  // Start (the machine takes over): picked up, but no session has started and no run is live.
   if (!restricted && glob.status === 'in_progress' && glob.type !== 'super' && glob.implementer !== null && !hasLiveRun(glob)) {
     actions.push('start_anyway');
   }
@@ -2060,7 +2060,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
 };
 
 /**
- * Slop's own "Agent set vN" glob: nobody works on it (slop commits the set), so no pick up, hand to routine or start
+ * Slop's own "Agent set vN" glob: nobody works on it (slop commits the set), so no pick up, start
  * again. A person reviews the diff, marks the PR ready when slop hasn't yet, and merges once the checks pass.
  */
 const agentSetActions = (glob: Glob, actor: Actor): Action[] => {
