@@ -697,6 +697,7 @@ export const api = {
   resetContextSetting: (boardId: number, key: string) =>
     request<ContextSettingsView>('POST', `/api/boards/${boardId}/context-settings/${encodeURIComponent(key)}/reset`, {}),
   /** Keep whole: the glob stays one glob; a glob held for the flag starts. */
+  reproposeSplit: (id: string) => request<{ running: boolean }>('POST', `/api/globs/${id}/actions/repropose-split`, {}),
   keepWhole: (id: string) => request<GlobView>('POST', `/api/globs/${id}/keep-whole`, {}),
   /** Whether the board has an active integration token (members); the secret is never returned here. */
   integrationToken: (boardId: number) =>

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import type { SizeForecast } from '@slop/core';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, RequestError } from '@/lib/api';
 import type { GlobView, SplitPartInput } from '@/lib/api';
@@ -85,6 +85,33 @@ export const OversizedGlob = ({
   const [error, setError] = useState<string | null>(null);
   const [confirmingKeep, setConfirmingKeep] = useState(false);
   const proposal = check?.proposal ?? null;
+  // Proposing runs in the background: the button spins until the stored check's time moves (or a minute passes).
+  const [proposingFrom, setProposingFrom] = useState<string | null>(null);
+  const proposing = proposingFrom !== null && check?.updatedAt === proposingFrom;
+  useEffect(() => {
+    if (proposingFrom === null) return;
+    if (check?.updatedAt !== proposingFrom) {
+      setProposingFrom(null);
+      onDone();
+      return;
+    }
+    const poll = setInterval(() => void full.refetch(), 2000);
+    const stop = setTimeout(() => setProposingFrom(null), 60_000);
+    return () => {
+      clearInterval(poll);
+      clearTimeout(stop);
+    };
+  }, [proposingFrom, check?.updatedAt]);
+  // The web has no plan hash: a plan saved after the check was last made means the proposal may not reflect it.
+  const planSavedAt = (glob.artifacts ?? full.data?.artifacts)?.find((a) => a.kind === 'plan' && a.label === '')?.createdAt;
+  const planChanged = check !== undefined && planSavedAt !== undefined && planSavedAt > check.updatedAt;
+  const proposeAgain = () => {
+    setError(null);
+    api.reproposeSplit(glob.id).then(
+      () => setProposingFrom(check?.updatedAt ?? ''),
+      (e: unknown) => setError(e instanceof RequestError ? e.body.message : 'Could not do that'),
+    );
+  };
   const act = async (work: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
@@ -151,7 +178,9 @@ export const OversizedGlob = ({
       {check === undefined ? (
         <p className='text-muted-foreground'>{full.isError ? 'Could not load the proposed split.' : 'Loading the proposed split…'}</p>
       ) : (
-        proposal === null && <p className='text-muted-foreground'>No split could be proposed; cut it yourself with Edit split.</p>
+        proposal === null && (
+          <p className='text-muted-foreground'>No split was proposed (the model gave none). Propose again, or cut it yourself with Edit split.</p>
+        )
       )}
       <div className='flex flex-wrap items-center gap-2'>
         {proposal !== null && (
@@ -159,6 +188,12 @@ export const OversizedGlob = ({
             Split as proposed
           </Button>
         )}
+        {check !== undefined && (
+          <Button size='sm' variant='outline' disabled={busy || proposing} data-testid='propose-split' onClick={proposeAgain}>
+            {proposing ? 'Proposing…' : proposal === null ? 'Propose split' : 'Propose again'}
+          </Button>
+        )}
+        {planChanged && <span className='text-muted-foreground' data-testid='plan-changed'>The plan changed since this proposal</span>}
         <Button size='sm' variant='outline' disabled={busy} data-testid='edit-split' onClick={() => setEditing(true)}>
           Edit split
         </Button>
