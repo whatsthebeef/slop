@@ -1,4 +1,5 @@
-import { exclusiveFiles, MAX_HOLD_PATHS, namesExclusivePath } from '../domain/exclusive-paths.js';
+import { openRefactors } from '../domain/decision-glob.js';
+import { exclusiveFiles, MAX_HOLD_PATHS, namesExclusivePath, plannedChangesName } from '../domain/exclusive-paths.js';
 import type { Board, Glob, ImpliedAfter } from '../domain/types.js';
 import { reaches } from '../domain/waiting.js';
 import type { BranchFiles, Store } from '../ports.js';
@@ -43,6 +44,39 @@ const hasBranch = (glob: Glob): boolean =>
  * hold. `skip` are globs not to hold for (already waited for, or a hold a person overrode).
  */
 export const findHolds = async (
+  store: Store,
+  branchFiles: BranchFiles,
+  board: Board,
+  candidate: HoldCandidate,
+  skip: ReadonlySet<string>,
+  prediction?: DependencyPrediction,
+): Promise<ImpliedAfter[]> => {
+  const policyHolds = await findPolicyHolds(store, branchFiles, board, candidate, skip, prediction);
+  const refactorHolds = await findRefactorHolds(store, board, candidate, new Set([...skip, ...policyHolds.map((h) => h.id)]));
+  return [...policyHolds, ...refactorHolds];
+};
+
+/**
+ * The open refactor globs of accepted hotspot decisions a glob about to start should wait for: its plan names the hot file
+ * in a Tasks or Files section, or intake's file guess includes it. Only while the refactor is open, so the hold ends when it
+ * merges. A refactor that itself waits for the candidate (it was told to wait for the globs touching the file) is not held
+ * for: that would wait both ways.
+ */
+const findRefactorHolds = async (store: Store, board: Board, candidate: HoldCandidate, skip: ReadonlySet<string>): Promise<ImpliedAfter[]> =>
+  store.transaction(async (tx) => {
+    const decisions = await tx.listGlobs(board.id, { include: 'decisions', origins: ['hotspot'] });
+    if (decisions.length === 0) return [];
+    const works = new Map((await tx.listGlobs(board.id, {})).map((g) => [g.id, g]));
+    const holds: ImpliedAfter[] = [];
+    for (const { path, glob } of openRefactors(decisions, (id) => works.get(id))) {
+      if (glob.id === candidate.id || skip.has(glob.id) || holds.some((h) => h.id === glob.id)) continue;
+      if (candidate.id !== null && reaches(glob.id, candidate.id, (id) => works.get(id))) continue;
+      if ((candidate.files ?? []).includes(path) || plannedChangesName(candidate.plan, path)) holds.push({ id: glob.id, paths: [path] });
+    }
+    return holds;
+  });
+
+const findPolicyHolds = async (
   store: Store,
   branchFiles: BranchFiles,
   board: Board,

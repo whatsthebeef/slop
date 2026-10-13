@@ -63,6 +63,9 @@ export const namesExclusivePath = (policy: MergePolicy, plan: string): boolean =
   });
 };
 
+/** Whether a plan's Tasks or Files sections name the file (a mention in prose elsewhere predicts nothing). */
+export const plannedChangesName = (plan: string, path: string): boolean => changeSections(plan).includes(path);
+
 /** Adds holds to a glob's, one per awaited glob; an existing hold (even an overridden one) is kept as it is. */
 export const mergeImplied = (
   existing: readonly ImpliedAfter[] | undefined,

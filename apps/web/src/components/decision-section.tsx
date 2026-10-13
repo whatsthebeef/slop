@@ -67,7 +67,8 @@ const REF_HINT: Record<ScopeKind, string | null> = {
 };
 
 /** What Accept is called for this proposal, and what it does. */
-const acceptText = (document: boolean, target: KbTarget | null): { label: string; tip: string } => {
+const acceptText = (document: boolean, target: KbTarget | null, hotspot = false): { label: string; tip: string } => {
+  if (hotspot) return { label: 'Create refactor glob', tip: 'Create a glob that refactors this file; it starts once the globs now changing the file have merged' };
   if (document) return { label: 'Approve document', tip: 'Create or update the proposed document (whole documents always need a person)' };
   if (target?.kind === 'merge_policy') return { label: 'Approve merge policy', tip: 'Replace the merge policy with the proposed one' };
   if (target?.kind === 'local_run') return { label: 'Approve local-run spec', tip: 'Replace the local-run spec with the proposed one' };
@@ -658,7 +659,8 @@ export const DecisionSection = ({
   const learning: DecisionLearning | null = diff.data?.learning ?? null;
   const target = diff.data?.target ?? null;
   const isDocument = attributes.document !== undefined;
-  const accept = acceptText(isDocument, target);
+  const hotspotPath = attributes.origin.kind === 'hotspot' ? attributes.origin.path : null;
+  const accept = acceptText(isDocument, target, hotspotPath !== null);
   const adminOnly = board.role === 'po' ? adminOnlyReason(target?.kind) : null;
   const canDecide = (glob.allowedActions ?? []).includes('decide');
   const conflicts = attributes.conflictsWith ?? [];
@@ -668,7 +670,7 @@ export const DecisionSection = ({
     <section className='grid gap-3 rounded border border-edge p-3' data-testid='decision-section'>
       <div className='flex flex-wrap items-center gap-2 text-xs'>
         <span className='rounded bg-muted px-2 py-0.5' data-testid='decision-scope'>
-          Applies to {scopeLabel(attributes.scope)}
+          {hotspotPath === null ? `Applies to ${scopeLabel(attributes.scope)}` : <>Conflict hotspot: <span className='font-mono'>{hotspotPath}</span></>}
         </span>
         <span className='text-muted-foreground'>via {attributes.channel}</span>
         {conflicts.length > 0 && (
@@ -704,7 +706,7 @@ export const DecisionSection = ({
           {outcome.linkedGlobId !== undefined && (
             <>
               {' '}
-              (waiting for{' '}
+              ({attributes.origin.kind === 'hotspot' ? 'refactor glob' : 'waiting for'}{' '}
               <Link className='font-mono underline' to={`/boards/${String(glob.boardId)}?glob=${encodeURIComponent(outcome.linkedGlobId)}`}>
                 {outcome.linkedGlobId}
               </Link>

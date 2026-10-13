@@ -2942,7 +2942,7 @@ export interface DecideInput {
   readonly outcome: Exclude<DecisionOutcomeKind, 'closed'>;
   /** Required for a rejection. */
   readonly reason?: string;
-  /** Required for needs work: the work glob that will make the change. */
+  /** Required for needs work: the work glob that will make the change. Accepting a hotspot records the refactor glob it created. */
   readonly linkedGlobId?: string;
 }
 
@@ -2978,7 +2978,7 @@ export const decideDecision = (
     by: actor.email,
     at: ctx.now,
     ...(reason === '' ? {} : { reason }),
-    ...(input.outcome === 'needs_work' && input.linkedGlobId !== undefined
+    ...((input.outcome === 'needs_work' || input.outcome === 'accept') && input.linkedGlobId !== undefined
       ? { linkedGlobId: input.linkedGlobId }
       : {}),
   };
