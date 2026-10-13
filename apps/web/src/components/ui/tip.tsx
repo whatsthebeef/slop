@@ -11,7 +11,7 @@ const DELAY_MS = 2000;
  * hidden description linked to the child (the button, when the child is one); the visible tooltip
  * is only for sighted users. Escape dismisses it.
  */
-export const Tip = ({ text, children }: { text: string; children: ReactNode }) => {
+export const Tip = ({ text, children, className }: { text: string; children: ReactNode; className?: string }) => {
   const id = useId();
   const anchor = useRef<HTMLSpanElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -51,7 +51,7 @@ export const Tip = ({ text, children }: { text: string; children: ReactNode }) =
   return (
     <span
       ref={anchor}
-      className="inline-flex"
+      className={className === undefined ? 'inline-flex min-w-0 max-w-full' : `inline-flex min-w-0 max-w-full ${className}`}
       onMouseEnter={arm}
       onMouseLeave={cancel}
       onFocus={arm}

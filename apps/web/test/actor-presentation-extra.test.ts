@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { MemoryRouter } from 'react-router';
-import { GlobCard, PositionLabel } from '../src/components/glob-card';
+import { GlobCard } from '../src/components/glob-card';
 import type { CardMove } from '../src/components/glob-card';
 import { HumanIcon, MachineIcon } from '../src/components/actor-icons';
 import { actionPresentation } from '../src/lib/action-presentation';
@@ -139,18 +139,18 @@ describe('status-line activity icons (s15f88)', () => {
   });
 
   it('renders the standby marker with a decorative icon beside the text', () => {
-    const html = renderToStaticMarkup(
-      createElement(PositionLabel, { glob: view({ status: 'pr_open', ...live('watching') }) }),
-    );
-    expect(html).toContain('standby');
+    const html = card(view({ type: 'sub', status: 'pr_open', pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' }, ...live('watching') }));
+    expect(html).toContain('data-kind="standby"');
+    expect(html).toContain('>standby<');
     expect(html).toContain('aria-hidden="true"');
     expect(html).not.toContain('aria-label="machine"');
   });
 
-  it('shows exactly one position indicator on a card, with the standby marker beside it', () => {
+  it('shows exactly one position indicator on a card, and no standby beside it', () => {
     const html = card(view({ status: 'in_progress', ...live('active') }));
     expect(html.split('data-testid="position"')).toHaveLength(2);
-    expect(html).not.toContain('data-testid="standby"');
+    expect(html.split('data-testid="corner-marker"')).toHaveLength(2);
+    expect(html).not.toContain('>standby<');
   });
 });
 
@@ -176,16 +176,16 @@ describe('escalation chip (s15f88)', () => {
     );
   });
 
-  it('sits in the right-aligned group, after the status chips', () => {
+  it('is the one corner marker, in the header and not among the chips', () => {
     const html = card(
       view({
         status: 'planning',
         escalation: { reason: 'touches billing', at: NOW } as GlobView['escalation'],
       }),
     );
-    const group = html.indexOf('class="ml-auto inline-flex items-center gap-1"');
-    expect(group).toBeGreaterThan(-1);
-    expect(html.indexOf('data-testid="escalation-chip"')).toBeGreaterThan(group);
+    expect(html.split('data-testid="corner-marker"')).toHaveLength(2);
+    expect(html).toContain('data-kind="needs-human"');
+    expect(html.indexOf('data-testid="escalation-chip"')).toBeLessThan(html.indexOf('data-testid="card-chips"'));
   });
 
   it('shows no escalation chip outside Planning', () => {
@@ -238,12 +238,22 @@ describe('a conflict-fix run that went to standby (s15b86)', () => {
     const watching = positionOf(fixed('watching'), NOW);
     expect(watching?.text ?? '').not.toMatch(/fixing/);
     expect(watching?.spinning ?? false).toBe(false);
-    expect(card(fixed('watching'))).toContain('data-testid="standby"');
+    // On the card: the corner marker is standby (never fixing), and nothing spins.
+    const standby = card(fixed('watching'));
+    expect(standby).toContain('data-kind="standby"');
+    expect(standby).not.toMatch(/fixing|animate-spin/);
     expect(positionOf(fixed('active'), NOW)).toMatchObject({
       holder: 'machine',
       text: 'fixing the conflict',
       spinning: true,
     });
+    // While the fix runs the status line says so, with a spinner in the corner.
+    // The card reads the clock, so the run must be fresh for it.
+    const justNow = new Date().toISOString();
+    const fresh = view({ ...fixed('active'), runs: [run({ state: 'active', purpose: 'resolve_conflict', startedAt: justNow, lastProgressAt: justNow })] });
+    const fixing = card(fresh);
+    expect(fixing).toMatch(/data-testid="status-line-open"[^>]*>fixing the conflict</);
+    expect(fixing).toContain('animate-spin');
   });
 
   it('checks pending after the fix: "checks running", not fixing', () => {

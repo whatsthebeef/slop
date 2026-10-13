@@ -44,7 +44,7 @@ describe('merge conflict stall', () => {
 
   it('keeps the card to a short line and the glob view to the full reason', () => {
     const line = statusLine(stalled(), NOW);
-    expect(line).toMatchObject({ kind: 'failure', text: 'Stalled: merge conflict', conflict: true });
+    expect(line).toMatchObject({ kind: 'failure', text: 'stalled · merge conflict', conflict: true });
     expect(line?.full).toContain(files[0]);
   });
 
@@ -57,7 +57,7 @@ describe('merge conflict stall', () => {
 
   it('says a flagged conflict in a few words, without the files', () => {
     const line = statusLine(prOpen({ conflict }), NOW);
-    expect(line).toMatchObject({ kind: 'stuck', text: 'Merge conflict with main', conflict: true });
+    expect(line).toMatchObject({ kind: 'stuck', text: 'conflicts with main', conflict: true });
   });
 
   it('leaves other failures as they were', () => {
