@@ -3,7 +3,7 @@ import { useToast } from '@/toast';
 import { copyOrSelect } from '@/lib/plan-text';
 import { copySstorCommand } from '@/lib/sstor-command';
 
-/** The notice after Pick up or Take over: says the command was copied, or shows it to copy by hand when the clipboard refused. */
+/** The notice after Pick up: says the command was copied, or shows it to copy by hand when the clipboard refused. */
 const Notice = ({ globId, command, copied }: { globId: string; command: string; copied: boolean }) =>
   copied ? (
     <span>
@@ -26,7 +26,7 @@ const Notice = ({ globId, command, copied }: { globId: string; command: string; 
   );
 
 /**
- * Copies the sstor command for Pick up and Take over. `begin` runs synchronously in the click handler, before the request;
+ * Copies the sstor command for Pick up. `begin` runs synchronously in the click handler, before the request;
  * the returned `finish` shows the notice once the request succeeded.
  */
 export const useSstorCopy = () => {
