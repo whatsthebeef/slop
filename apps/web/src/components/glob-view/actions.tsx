@@ -473,8 +473,8 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
           )}
           {state.readyPending && (
             <p role="status" className="text-xs text-muted-foreground">
-              Asked GitHub to mark PR #{glob.pr?.number} ready; the glob moves to PR open when GitHub
-              confirms.
+              Asked GitHub to mark PR #{glob.pr?.number} ready; the glob moves to PR open when
+              GitHub confirms.
             </p>
           )}
         </div>

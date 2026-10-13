@@ -85,7 +85,13 @@ export const GlobHeader = ({
 };
 
 /** The chips under the title: status, type, activity, group, labels, branch and version. */
-export const GlobChips = ({ ctx, actions }: { ctx: GlobViewContext; actions: GlobActionsState }) => {
+export const GlobChips = ({
+  ctx,
+  actions,
+}: {
+  ctx: GlobViewContext;
+  actions: GlobActionsState;
+}) => {
   const { board, glob } = ctx;
   const decision = decisionOf(glob) !== null;
   return (
