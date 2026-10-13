@@ -833,7 +833,6 @@ const canRetryAutofix = (glob: Glob): boolean => {
     return false;
   // Failed checks of this glob's own change with nothing watching them: always fixable, whatever ended the earlier run.
   if (
-    glob.failure === null &&
     glob.pr.state === 'ready' &&
     glob.conflict == null &&
     headChecksFailed(glob) &&

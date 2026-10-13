@@ -86,18 +86,24 @@ const fixtures = (): Fixture[] => {
       for (const k of prRuns) {
         for (const conflict of [false, true]) {
           for (const [c, headChecks] of Object.entries(checks)) {
-            add(
-              `${who} pr_open conflict=${String(conflict)} checks=${c}`,
-              {
-                type,
-                status: 'pr_open',
-                implementer,
-                pr: { number: 7, state: 'ready', headSha: 'aaa' },
-                headChecks,
-                conflict: conflict ? { base: 'main', since: NOW, at: NOW, files: [] } : null,
-              },
-              k,
-            );
+            // Only a run that gave up leaves `failure` on the PR.
+            for (const failure of k === 'failed'
+              ? [null, { reason: 'gave up', at: NOW }]
+              : [null]) {
+              add(
+                `${who} pr_open conflict=${String(conflict)} checks=${c} failure=${String(failure !== null)}`,
+                {
+                  type,
+                  status: 'pr_open',
+                  implementer,
+                  pr: { number: 7, state: 'ready', headSha: 'aaa' },
+                  headChecks,
+                  failure,
+                  conflict: conflict ? { base: 'main', since: NOW, at: NOW, files: [] } : null,
+                },
+                k,
+              );
+            }
           }
         }
       }

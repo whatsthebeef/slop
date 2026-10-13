@@ -162,14 +162,17 @@ export const useGlobActions = ({
       setConfirmingRetrigger(true);
       return;
     }
+    // Resume reopens your own session: nothing starts, so there is nothing to confirm.
+    const resuming = action === 'pick_up' && glob.implementer !== null && glob.implementer === email;
     if (
-      (oversized &&
+      !resuming &&
+      ((oversized &&
         (action === 'start' ||
           action === 'start_anyway' ||
           action === 'pick_up' ||
           action === 'take_over')) ||
       (brief !== null &&
-        (action === 'start_anyway' || action === 'pick_up' || action === 'take_over'))
+        (action === 'start_anyway' || action === 'pick_up' || action === 'take_over')))
     ) {
       setConfirmingOversized(action);
       return;

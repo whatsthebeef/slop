@@ -231,10 +231,7 @@ export const actionLabel = (action: Action, glob: Subject): string =>
   actionPresentation(action, glob).label;
 
 /** What an action would stop, so the board can ask first; empty when nothing is halted. */
-export const haltedBy = (
-  glob: Pick<GlobView, 'currentRun' | 'pr' | 'branch' | 'implementer'>,
-  action: Action,
-): string[] => {
+export const haltedBy = (glob: Pick<GlobView, 'currentRun' | 'pr' | 'branch' | 'implementer'>, action: Action): string[] => {
   const runLive = glob.currentRun !== null && glob.currentRun.state !== 'ended';
   // A queued or standby run holds nothing unpushed, so only an active one is worth asking about.
   if (action === 'take_over')
