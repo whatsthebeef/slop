@@ -1,4 +1,4 @@
-import type { AgentSetCommitService, ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, ContextReportService, ContextTuningService, SubLimitService, DependencyLearningService } from '@slop/core';
+import type { AgentSetCommitService, ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, HotspotService, TypeLearningService, SizeCheckService, ContextReportService, ContextTuningService, SubLimitService, DependencyLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { readCommittedAgentSetVersion } from '../agent-set-executors.js';
@@ -99,6 +99,7 @@ export const mountKnowledge = (
     /** The board's risk areas; absent: their routes aren't mounted. */
     riskAreas?: RiskAreaService;
     escalations?: EscalationLearningService;
+    hotspots?: HotspotService;
     /** What intake learned about types from people's retypes; absent: its routes aren't mounted. */
     typeLearning?: TypeLearningService;
     /** The learned size threshold; absent: its route isn't mounted. */
@@ -265,6 +266,9 @@ export const mountKnowledge = (
     app.get('/api/boards/:b/escalations', async (c) => send(c, await escalations.view(c.get('email'), Number(c.req.param('b')))));
     app.post('/api/boards/:b/escalations/reset', async (c) => send(c, await escalations.reset(c.get('email'), Number(c.req.param('b')))));
   }
+  // The files that keep conflicting inside the window, for members.
+  const { hotspots } = deps;
+  if (hotspots !== undefined) app.get('/api/boards/:b/hotspots', async (c) => send(c, await hotspots.view(c.get('email'), Number(c.req.param('b')))));
   // What intake learned about types from people's retypes (learned or the catalog defaults), for members; admins reset it.
   const { typeLearning } = deps;
   if (typeLearning !== undefined) {

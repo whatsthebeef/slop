@@ -126,7 +126,7 @@ describe('Context report in Postgres', () => {
     const report = reportOf(await res.json());
     expect(report.retrievals.total).toBe(6);
     expect(report.retrievals.bySource[0]).toMatchObject({ key: 'decision', count: 5 });
-    expect(report.settings).toHaveLength(13);
+    expect(report.settings).toHaveLength(16);
     expect((await request('GET', `/api/boards/${String(boardId)}/context-report`, 'nobody@example.com')).status).toBeGreaterThanOrEqual(401);
   });
 
