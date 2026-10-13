@@ -14,7 +14,7 @@ import { GlobChips, GlobHeader } from './glob-view/header';
 import { GlobMeta, MachineRuns } from './glob-view/meta';
 import { AFTER_SECTION, SECTION_VIEWS } from './glob-view/section-views';
 import { GLOB_VIEW_SECTIONS } from './glob-view/sections';
-import { NowRow, StatusLine } from './glob-view/status';
+import { NowPanel } from './glob-view/status';
 
 /** A section's anchor: found by `?section=`, and left below the sticky header (h-10) when scrolled to. Hidden while empty. */
 const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) => (
@@ -161,8 +161,7 @@ export const GlobDetail = ({
       <GlobHeader ctx={ctx} onClose={onClose} onReload={onReload} />
       <div className="grid gap-4">
         <GlobChips ctx={ctx} actions={actionState} />
-        {!decision && <NowRow glob={glob} />}
-        <StatusLine glob={glob} disabled={disabled} />
+        <NowPanel glob={glob} decision={decision} disabled={disabled} actions={actionState} />
         {GLOB_VIEW_SECTIONS.map((name) => (
           <Fragment key={name}>
             <Anchor name={name}>{SECTION_VIEWS[name](sectionProps)}</Anchor>

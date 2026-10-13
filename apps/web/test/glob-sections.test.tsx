@@ -119,6 +119,98 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.queryByTestId('escalation-note')).toBeNull();
   });
 
+  const escalation = {
+    at: '2026-10-13T00:00:00Z',
+    by: 'dev@example.com',
+    reason: 'Touches auth',
+    evidence: 'From the split of s1t0: files a.ts',
+    criterion: 'risk_area',
+  } as const;
+
+  const NOW = '2026-10-13T20:00:00Z';
+  const failedChecks = {
+    sha: 'abcdef1234567',
+    state: 'failed',
+    at: NOW,
+    failure: { name: 'apps/server test', step: 'Test', lines: ['Error: boom'], url: 'https://ci/run/1' },
+  } as const;
+  const fixing = view({
+    type: 'same',
+    status: 'pr_open',
+    pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+    escalation,
+    headChecks: failedChecks,
+    currentRun: {
+      id: 'r1',
+      state: 'watching',
+      outcome: null,
+      generation: 1,
+      triggeredBy: 'dev@example.com',
+      routineOwner: 'dev@example.com',
+      queuedAt: NOW,
+      startedAt: NOW,
+      lastProgressAt: NOW,
+      endedAt: null,
+      failureReason: null,
+      sessionId: 's',
+      sessionUrl: 'https://claude.ai/code/s',
+    },
+    machineSteps: [
+      { id: 'm1', kind: 'fix_checks', state: 'running', startedAt: NOW, lastProgressAt: NOW, detail: null, holdsBall: true },
+    ],
+    move: { holder: 'machine', reason: 'fix checks', since: NOW },
+    handover: { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: ['Error: boom'] },
+  });
+
+  it('escalated glob with failed checks and an active fix run: the machine holds the ball, the failure shows once', () => {
+    renderGlob(fixing);
+    expect(screen.getByTestId('now-headline').textContent).toMatch(/fix(ing)? (CI|checks)/i);
+    expect(screen.getByTestId('now-panel').getAttribute('data-holder')).toBe('machine');
+    expect(screen.queryByText(/Why you're needed/)).toBeNull();
+    expect(screen.queryByTestId('handover-box')).toBeNull();
+    expect(screen.queryByTestId('machine-steps')).toBeNull();
+    expect(screen.getAllByTestId('escalation-chip')).toHaveLength(1);
+    expect(screen.getAllByText(/Error: boom/)).toHaveLength(1);
+    expect(screen.getByTestId('now-details').textContent).toContain('Error: boom');
+    // Escalation reason appears only behind "Why a person?", never in Now.
+    expect(screen.getByTestId('now-panel').textContent).not.toContain('Touches auth');
+  });
+
+  it('keeps the details collapsed under one toggle for a machine headline', () => {
+    renderGlob(fixing);
+    const details = screen.getByTestId<HTMLDetailsElement>('now-details');
+    expect(details.open).toBe(false);
+    expect(screen.getByText('Show details')).toBeTruthy();
+  });
+
+  it("the viewer's turn: the headline and the handover brief inside the details", () => {
+    renderGlob(
+      view({
+        status: 'pr_open',
+        pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+        implementer: 'dev@example.com',
+        allowedActions: ['pick_up'],
+        move: { holder: 'you', reason: 'Merge', since: null, who: 'dev@example.com' },
+        handover: { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: [] },
+      }),
+    );
+    expect(screen.getByTestId('now-headline').textContent).toContain('Your turn · Merge');
+    const details = screen.getByTestId('now-details');
+    expect(details.textContent).toContain("Why you're needed");
+    expect(details.textContent).toContain('Reproduce and fix');
+    expect(screen.getAllByText(/Why you're needed/)).toHaveLength(1);
+  });
+
+  it('never repeats the escalation reason in the headline', () => {
+    renderGlob(
+      view({
+        escalation,
+        move: { holder: 'human', reason: 'Needs a human: Touches auth', since: null, who: 'dev@example.com' },
+      }),
+    );
+    expect(screen.getByTestId('now-headline').textContent).not.toContain('Touches auth');
+  });
+
   it('lets a glob in Planning edit what it waits for', async () => {
     renderGlob(view({ status: 'planning', provisioning: 'none' }));
     expect(screen.getByTestId('dependencies')).toBeTruthy();
