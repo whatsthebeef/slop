@@ -325,6 +325,9 @@ const toKnowledge = (row: typeof schema.knowledge.$inferSelect): KnowledgeDoc =>
   updatedAt: row.updatedAt.toISOString(),
 });
 
+type AttachmentFileFacts = NonNullable<typeof schema.artifacts.$inferSelect['file']>;
+const fileFactsOf = ({ fileName, contentType, size, state, reason }: AttachmentFileFacts) => ({ fileName, contentType, size, state, reason });
+
 const toArtifact = ({ file, ...row }: typeof schema.artifacts.$inferSelect): Artifact => ({
   ...row,
   kind: oneOf(ARTIFACT_KINDS, row.kind),
@@ -1265,6 +1268,7 @@ export class PgStore implements Store {
             provenance: a.provenance,
             content: a.content,
             link: a.link,
+            file: a.file,
           })
           .from(a)
           .innerJoin(schema.globs, eq(schema.globs.id, a.globId))
@@ -1282,6 +1286,7 @@ export class PgStore implements Store {
             by: row.provenance.by,
             actor: row.provenance.actor,
             ...(row.provenance.independentReview === undefined ? {} : { review: row.provenance.independentReview }),
+            ...(row.file === null ? {} : { file: fileFactsOf(row.file) }),
           }),
         );
       },
