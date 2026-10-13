@@ -1,12 +1,15 @@
 import { describeEditFailure } from '@slop/core';
 import type { Action, LabelCommand, LabelName } from '@slop/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { ARTIFACT_META } from '@/components/artifacts';
 import type { ArtifactRef } from '@/components/artifacts';
 import { GlobDetail } from '@/components/glob-dialog';
 import { ACTION_PATHS, api, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView } from '@/lib/api';
 import { withGlob } from '@/lib/glob-list';
+import { parseGlobTarget } from '@/lib/glob-section';
 import { globKey, globsKey, useLiveBoard } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
 import { useSstorCopy } from '@/components/sstor-notice';
@@ -31,8 +34,13 @@ export const GlobPage = () => {
   const view = glob.data;
   const state = view === undefined ? undefined : view.status === 'failed' || view.failure !== null ? 'failed' : view.status === 'signed_off' || view.pr?.state === 'merged' ? 'merged' : 'open';
   usePageContext({ type: 'glob', id: globId, ...(state === undefined ? {} : { state }), ...(view === undefined ? {} : { title: view.title }) });
-  const kind = search.get('artifact');
-  const initialArtifact = kind === null ? null : ({ kind, label: '' } as ArtifactRef);
+  const target = parseGlobTarget(search);
+  // Memoised: GlobDetail resets its selected artifact whenever this object changes, and the glob is read again every 10 s.
+  const initialArtifact = useMemo((): ArtifactRef | null => {
+    const kinds = Object.keys(ARTIFACT_META);
+    const kind = kinds.find((k): k is ArtifactRef['kind'] => k === target.artifact);
+    return kind === undefined ? null : { kind, label: target.label ?? '' };
+  }, [target.artifact, target.label]);
   const toBoard = () => void navigate(`/boards/${String(boardId)}`);
 
   if (glob.data === undefined || board.data === undefined) {

@@ -266,7 +266,7 @@ export const escalationCandidates = (facts: EscalationFacts): EscalationCandidat
         b.category === 'bug' &&
         Date.parse(b.createdAt) >= mergedMs &&
         Date.parse(b.createdAt) <= windowEnd &&
-        namesGlob(`${b.title}\n${b.summary}`, glob.id),
+        namesGlob(b.title, glob.id),
     );
     if (bug !== undefined) {
       add({
@@ -289,7 +289,7 @@ export const escalationCandidates = (facts: EscalationFacts): EscalationCandidat
           isSubToSame(e.data.type) &&
           e.at >= merged.at &&
           Date.parse(e.at) <= windowEnd &&
-          namesGlob(`${f.title}\n${f.summary}`, glob.id),
+          namesGlob(f.title, glob.id),
       );
       if (turned !== undefined) {
         add({

@@ -10,12 +10,10 @@ import { useToast } from '@/toast';
 /** plan.md for a glob: what the implementer works from. Every save is a new version. */
 export const PlanEditor = ({
   globId,
-  summary,
   onHistory,
   startExpanded = false,
 }: {
   globId: string;
-  summary: string;
   onHistory?: () => void;
   /** A deep link to the plan section opens the preview expanded. */
   startExpanded?: boolean;
@@ -52,7 +50,7 @@ export const PlanEditor = ({
     onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not save the plan'),
   });
 
-  const value = planText(draft, saved, summary);
+  const value = planText(draft, saved);
   const area = useRef<HTMLTextAreaElement>(null);
   // The editor grows with its content instead of scrolling inside itself.
   useEffect(() => {
@@ -69,7 +67,7 @@ export const PlanEditor = ({
     setDraft(null);
     setEditing(false);
   };
-  const dirty = draft !== null && draft !== planBaseline(saved, summary);
+  const dirty = draft !== null && draft !== planBaseline(saved);
   return (
     <div className='grid gap-2'>
       <div className='flex items-center justify-between text-xs text-muted-foreground'>

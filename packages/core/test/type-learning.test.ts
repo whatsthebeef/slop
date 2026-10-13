@@ -202,7 +202,6 @@ describe('type corrections', () => {
       await globs.create(DEV, {
         boardId,
         title: 'x',
-        summary: '',
         type,
         category,
         group: null,

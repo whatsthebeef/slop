@@ -9,6 +9,7 @@ import { globDecisionsKey } from '@/lib/live';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
 import { Button } from './ui/button';
+import { boardGlobHref } from '@/lib/glob-section';
 
 const day = (iso: string) => iso.slice(0, 10);
 
@@ -95,7 +96,7 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
             {newer.cardGlobId == null ? (
               buttons(d.id, 'hint')
             ) : (
-              <Link className='underline' to={`/boards/${String(boardId)}?glob=${encodeURIComponent(newer.cardGlobId)}`} data-testid='decision-card-link'>
+              <Link className='underline' to={boardGlobHref(boardId, newer.cardGlobId, { section: 'decision' })} data-testid='decision-card-link'>
                 Decide on {newer.cardGlobId}
               </Link>
             )}
@@ -115,7 +116,7 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
                 {r.state === 'hint' ? 'May replace' : 'Replaces'} “{r.statement}” ({day(r.decidedAt)})
               </span>
               {r.state === 'hint' && r.cardGlobId != null ? (
-                <Link className='underline' to={`/boards/${String(boardId)}?glob=${encodeURIComponent(r.cardGlobId)}`}>
+                <Link className='underline' to={boardGlobHref(boardId, r.cardGlobId, { section: 'decision' })}>
                   Decide on {r.cardGlobId}
                 </Link>
               ) : (

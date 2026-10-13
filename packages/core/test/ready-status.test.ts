@@ -12,16 +12,22 @@ const ready = (patch = {}) =>
   });
 
 describe('readyStatus', () => {
-  it('says Ready to merge for a ready same with passed checks', () => {
+  it('says Merge (your turn) for a ready same with passed checks', () => {
     const s = readyStatus(ready());
-    expect(s).toMatchObject({ kind: 'ready', text: 'Ready to merge' });
-    expect(s?.tip).toMatch(/passed at a2a88c8/);
+    expect(s).toMatchObject({ kind: 'ready', text: 'Merge' });
+    expect(s?.tip).toMatch(/^Merge: checks passed at a2a88c8/);
     expect(s?.tip).toMatch(/--merge/);
     expect(s?.tip).not.toMatch(/auto-fix/);
   });
 
-  it('mentions the watching session in the tooltip', () => {
-    expect(readyStatus(ready({ type: 'super', runs: [run({ state: 'watching' })] }))?.tip).toMatch(/auto-fix/);
+  it('adds the escalation reason to the tooltip', () => {
+    const escalation = { reason: 'touches auth', criterion: 'auth_permissions', by: 'agent', at: NOW };
+    expect(readyStatus(ready({ escalation }))?.tip).toMatch(/Needs a person because: touches auth/);
+  });
+
+  it('keeps a watching run out of the tooltip and hides the chip while a fix run is active', () => {
+    expect(readyStatus(ready({ runs: [run({ state: 'watching' })] }))?.tip).not.toMatch(/auto-fix/);
+    expect(readyStatus(ready({ runs: [run({ state: 'active' })] }))).toBeNull();
   });
 
   it('says Waiting for checks while checks are pending or missing', () => {

@@ -28,7 +28,6 @@ describe('start after', () => {
   const input = (patch: Partial<CreateGlobInput> = {}): CreateGlobInput => ({
     boardId,
     title: 'Add a migration',
-    summary: '',
     type: 'same',
     category: 'task',
     group: null,
@@ -77,7 +76,7 @@ describe('start after', () => {
     expect(second.provisioning).toBe('none');
     expect(second.runs).toEqual([]);
     expect(kinds()).toEqual([]);
-    expect(store.state.events.filter((e) => e.globId === second.id).map((e) => e.type)).toEqual(['GlobCreated', 'Waiting']);
+    expect(store.state.events.filter((e) => e.globId === second.id).map((e) => e.type)).toEqual(['GlobCreated', 'Waiting', 'ArtifactAdded']);
     const view = unwrap(await globs.get(DEV, second.id));
     expect(view.waitingFor.map((w) => w.why)).toEqual([`Waits for ${first.id} to merge (it is in Planning)`]);
     expect(view.allowedActions).toContain('start_anyway');
@@ -148,7 +147,7 @@ describe('start after', () => {
     expect(fromList).toEqual(unwrap(await globs.get(DEV, second.id)).allowedActions);
   });
 
-  it('refuses Start on a same while it waits; Start anyway goes ahead', async () => {
+  it('refuses Start on a same while it waits; Start now goes ahead', async () => {
     const first = await create();
     const second = await create({ after: [first.id] });
     const refused = await globs.start(DEV, second.id, second.version);
@@ -399,7 +398,7 @@ describe('waiting transitions', () => {
     expect(go.ok && go.value.effects.map((e) => e.kind)).toEqual(['provision', 'fire_routine']);
   });
 
-  it('allowedActions hides Start and offers Start anyway for a held same', () => {
+  it('allowedActions hides Start and offers Start now for a held same', () => {
     const held = fixture({ type: 'same', status: 'planning', after: ['s1t2'] });
     const open = states([['s1t2', 'open']]);
     const actions = machine.allowedActions(held, dev, { dependencies: open });
@@ -469,7 +468,7 @@ describe('Retrigger and the routine fire with prerequisites unmerged', () => {
     expect(anyway.ok && anyway.value.effects.find((e) => e.kind === 'fire_routine')).not.toHaveProperty('checkPrerequisites');
   });
 
-  it('marks the fire of a plain Retrigger or Start to be checked, and Start anyway not', () => {
+  it('marks the fire of a plain Retrigger or Start to be checked, and Start now not', () => {
     const retriggered = machine.retrigger(fixture({ status: 'failed' }), ctx(dev));
     expect(retriggered.ok && retriggered.value.effects.find((e) => e.kind === 'fire_routine')).toHaveProperty('checkPrerequisites', true);
     const start = machine.start(fixture({ status: 'planning', type: 'same' }), ctx(dev));

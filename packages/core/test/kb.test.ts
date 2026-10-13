@@ -41,7 +41,6 @@ describe('submit_learning', () => {
       await globs.create(ADMIN, {
         boardId: board,
         title: 'Work',
-        summary: '',
         type: 'same',
         category,
         group: null,
@@ -246,7 +245,6 @@ describe('KB review', () => {
       await globs.create(ADMIN, {
         boardId,
         title: 'Work',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,

@@ -41,7 +41,6 @@ const create = (patch: Partial<machine.CreateInput> = {}, actor: Actor = dev) =>
       id: 's1k1',
       boardId: 1,
       title: 'Never edit src/gen/',
-      summary: 'Never edit src/gen/',
       type: 'same',
       category: 'decision',
       attributes: attributes(),

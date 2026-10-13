@@ -186,21 +186,43 @@ describe('SubLimitService', () => {
       createdAt: at(-DAY),
       ...patch,
     });
-  const bug = (id: string, created: string, summary: string, patch: Partial<Glob> = {}): Glob =>
-    glob({
+  const bug = (id: string, created: string, summary: string, patch: Partial<Glob> = {}): Glob => {
+    plans.set(id, summary);
+    return glob({
       id,
       boardId,
       type: 'same',
       category: 'bug',
       status: 'planning',
       title: `Bug ${id}`,
-      summary,
       createdAt: created,
       ...patch,
     });
+  };
 
+  /** A bug's plan.md text as the bug helper was given it; written with the glob. */
+  const plans = new Map<string, string>();
+  const setPlan = (globId: string, content: string) => {
+    const version = store.state.artifacts.filter((a) => a.globId === globId && a.kind === 'plan').length + 1;
+    store.state.artifacts.push({
+      id: store.state.artifacts.length + 1,
+      version,
+      globId,
+      kind: 'plan',
+      label: '',
+      content,
+      link: null,
+      commitSha: null,
+      provenance: { by: 'human', actor: 'dev@example.com', runId: null, agentSetVersion: null },
+      createdAt: at(0),
+    });
+  };
   const addGlobs = (...globs: Glob[]) => {
-    for (const g of globs) store.state.globs.set(g.id, { glob: g, creationKey: null });
+    for (const g of globs) {
+      store.state.globs.set(g.id, { glob: g, creationKey: null });
+      const plan = plans.get(g.id);
+      if (plan !== undefined && !store.state.artifacts.some((a) => a.globId === g.id && a.kind === 'plan')) setPlan(g.id, plan);
+    }
   };
   const addEvents = (...events: DomainEvent[]) => {
     store.state.events.push(...events);
@@ -505,7 +527,7 @@ describe('SubLimitService', () => {
       addGlobs(sub('s1t1'), first);
       addEvents(...passed('s1t1', NEAR));
       await service(llm).learn(boardId, NOW, null);
-      addGlobs({ ...first, summary: 'Related to s1t1. It was introduced by s1t1 after all.' });
+      setPlan(first.id, 'Related to s1t1. It was introduced by s1t1 after all.');
       await service(llm).learn(boardId, at(3 * HOUR), NOW);
       expect(llm.requests).toHaveLength(2);
     });
@@ -535,7 +557,6 @@ describe('SubLimitService', () => {
           boardId,
           category: 'task',
           title: 'Follow up',
-          summary: 'The defect was introduced by s1t1',
           createdAt: at(HOUR),
         }),
         bug('s1b2', at(-HOUR), 'The defect was introduced by s1t1'),
@@ -763,6 +784,7 @@ describe('SubLimitService', () => {
         event('s1t1', 'LabelChanged', at(HOUR), { label: 'QA', from: 'required', to: 'added' }),
       ],
       globs: [],
+      plans: new Map(),
       recorded: new Set(),
       mergedSince: at(-DAY),
       now: NOW,

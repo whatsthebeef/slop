@@ -9,7 +9,6 @@ import { planText } from '@/lib/plan-text';
 
 interface Draft {
   title: string;
-  summary: string;
   plan: string;
   type: GlobView['type'];
   /** Indexes of earlier parts, as chosen in the "waits for" picker; none runs in parallel. */
@@ -37,17 +36,17 @@ export const SplitGlob = ({
   onCancel: () => void;
 }) => {
   const plan = useQuery({ queryKey: ['plan', glob.id], queryFn: () => api.plan(glob.id) });
-  const original = planText(null, plan.data?.current?.content ?? null, glob.summary);
+  const original = planText(null, plan.data?.current?.content ?? null);
   const [parts, setParts] = useState<Draft[] | null>(null);
   const [key] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (plan.isPending) return <p className='text-xs text-muted-foreground'>Loading plan.md…</p>;
   const proposed: Draft[] | null =
-    proposal === undefined ? null : proposal.parts.map((p) => ({ title: p.title, summary: p.summary, plan: p.plan, type: glob.type, after: [...p.after] }));
+    proposal === undefined ? null : proposal.parts.map((p) => ({ title: p.title, plan: p.plan, type: glob.type, after: [...p.after] }));
   const shown: Draft[] = parts ?? proposed ?? [
-    { title: glob.title, summary: glob.summary, plan: original, type: glob.type, after: [] },
-    { title: '', summary: '', plan: '', type: glob.type, after: [0] },
+    { title: glob.title, plan: original, type: glob.type, after: [] },
+    { title: '', plan: '', type: glob.type, after: [0] },
   ];
   const edit = (index: number, changes: Partial<Draft>) => setParts(shown.map((p, i) => (i === index ? { ...p, ...changes } : p)));
   const remove = (index: number) =>
@@ -63,7 +62,6 @@ export const SplitGlob = ({
     try {
       const body: SplitPartInput[] = shown.map((p, index) => ({
         title: p.title,
-        summary: p.summary,
         plan: p.plan,
         ...(index > 0 && p.type !== glob.type ? { type: p.type } : {}),
         ...(index > 0 && p.after.length > 0 ? { after: p.after } : {}),
@@ -94,10 +92,6 @@ export const SplitGlob = ({
           <Label>
             Title
             <Input value={part.title} onChange={(e) => edit(index, { title: e.target.value })} />
-          </Label>
-          <Label>
-            Summary
-            <Input value={part.summary} onChange={(e) => edit(index, { summary: e.target.value })} />
           </Label>
           <Label>
             Plan
@@ -132,7 +126,7 @@ export const SplitGlob = ({
           <Button
             size='sm'
             variant='outline'
-            onClick={() => setParts([...shown, { title: '', summary: '', plan: '', type: glob.type, after: [shown.length - 1] }])}
+            onClick={() => setParts([...shown, { title: '', plan: '', type: glob.type, after: [shown.length - 1] }])}
           >
             Add a part
           </Button>

@@ -97,7 +97,6 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
       await globs.create(DEV, {
         boardId: 1,
         title: 'Super glob',
-        summary: '',
         type: 'super',
         category: 'feature',
         group: null,

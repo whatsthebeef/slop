@@ -141,12 +141,12 @@ export interface CodeHost {
   /** The integration's own settings (its event subscriptions and owner); null when it isn't set up or the host can't say. */
   appSettings(): Promise<AppSettings | null>;
   /** Creates the glob's branch (empty `<id>: start` commit) and draft review with labels. Idempotent. */
-  provision(repo: Repo, glob: Glob): Promise<{ branch: string; pr: { number: number; headSha: string } }>;
+  provision(repo: Repo, glob: Glob, plan: string): Promise<{ branch: string; pr: { number: number; headSha: string } }>;
   /**
    * Opens a draft review with labels for the glob's existing branch, or returns the open one.
    * Null when the host refuses one because the branch has nothing to merge yet.
    */
-  openDraftPr(repo: Repo, glob: Glob): Promise<{ number: number; headSha: string } | null>;
+  openDraftPr(repo: Repo, glob: Glob, plan: string): Promise<{ number: number; headSha: string } | null>;
   syncLabels(repo: Repo, glob: Glob, prNumber: number): Promise<void>;
   closePr(repo: Repo, prNumber: number): Promise<void>;
   deleteBranch(repo: Repo, branch: string): Promise<void>;

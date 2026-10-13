@@ -2,20 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { copyOrSelect, listedArtifacts, planBaseline, planText, planVersionLine } from '@/lib/plan-text';
 
 describe('plan text', () => {
-  it('starts from the summary when no version is saved, so it is selectable text', () => {
-    expect(planText(null, null, 'the summary')).toBe('the summary');
+  it('is empty when no version is saved', () => {
+    expect(planText(null, null)).toBe('');
   });
 
-  it('shows the saved plan, then the draft, in preference to the summary', () => {
-    expect(planText(null, 'saved', 'the summary')).toBe('saved');
-    expect(planText('draft', 'saved', 'the summary')).toBe('draft');
+  it('shows the saved plan, then the draft in preference to it', () => {
+    expect(planText(null, 'saved')).toBe('saved');
+    expect(planText('draft', 'saved')).toBe('draft');
   });
 
   it('offers Save only once the text differs from the baseline', () => {
-    const summary = 'the summary';
-    const differs = (draft: string, saved: string | null) => draft !== planBaseline(saved, summary);
-    expect(differs(summary, null)).toBe(false);
-    expect(differs(`${summary}!`, null)).toBe(true);
+    const differs = (draft: string, saved: string | null) => draft !== planBaseline(saved);
+    expect(differs('', null)).toBe(false);
+    expect(differs('new', null)).toBe(true);
     expect(differs('saved', 'saved')).toBe(false);
   });
 });

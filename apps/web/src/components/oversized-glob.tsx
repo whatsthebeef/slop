@@ -128,7 +128,6 @@ export const OversizedGlob = ({
     act(() => {
       const parts: SplitPartInput[] = (proposal?.parts ?? []).map((p, index) => ({
         title: p.title,
-        summary: p.summary,
         plan: p.plan,
         ...(index > 0 && p.after.length > 0 ? { after: [...p.after] } : {}),
         // Absent in proposals stored before overlaps and low-risk subs existed.
@@ -170,7 +169,6 @@ export const OversizedGlob = ({
               {(p.overlaps?.length ?? 0) > 0 && (
                 <span className='text-muted-foreground'>, may overlap {(p.overlaps ?? []).map((n) => `part ${n + 1}`).join(', ')}</span>
               )}
-              {p.summary !== '' && <span className='block text-muted-foreground'>{p.summary}</span>}
             </li>
           ))}
         </ol>

@@ -66,7 +66,7 @@ describe('knowledge page', () => {
   const jobs = () => store.state.outbox.filter((e) => e.kind === 'regenerate_knowledge_page');
 
   /** An accepted decision glob (in Reviewing), as the decision flow leaves it. */
-  const accepted = async (patch: Partial<Glob> = {}, attributes: Partial<DecisionAttributes> = {}): Promise<Glob> => {
+  const accepted = async (patch: Partial<Glob> = {}, attributes: Partial<DecisionAttributes> = {}, statement?: string): Promise<Glob> => {
     const id = patch.id ?? `s1k${String(nextKb++)}`;
     const g = globFixture({
       id,
@@ -74,7 +74,6 @@ describe('knowledge page', () => {
       category: 'decision',
       status: 'reviewing',
       title: `Decision ${id}`,
-      summary: `Statement of ${id}`,
       pr: null,
       attributes: {
         scope: { kind: 'project', ref: null },
@@ -85,7 +84,20 @@ describe('knowledge page', () => {
       },
       ...patch,
     });
-    await store.transaction((tx) => tx.insertGlob(g, null));
+    await store.transaction(async (tx) => {
+      await tx.insertGlob(g, null);
+      // The statement is the first line of the decision's plan.md.
+      await tx.insertArtifact({
+        globId: id,
+        kind: 'plan',
+        label: '',
+        content: `${statement ?? `Statement of ${id}`}\n\n## Source\n\nA meeting.\n`,
+        link: null,
+        commitSha: null,
+        provenance: { by: 'human', actor: ADMIN, runId: null, agentSetVersion: null },
+        createdAt: now,
+      });
+    });
     return g;
   };
 
@@ -222,15 +234,15 @@ describe('knowledge page', () => {
   });
 
   it('accepting a decision that changes an agent: agents from data, one model call that sees the previous section and the change only', async () => {
-    const a = await accepted({ id: 's1k1', summary: 'Alpha statement' });
-    const b = await accepted({ id: 's1k2', summary: 'Beta statement' });
+    const a = await accepted({ id: 's1k1' }, {}, 'Alpha statement');
+    const b = await accepted({ id: 's1k2' }, {}, 'Beta statement');
     llm.answer(groups({ area: 'Testing', text: 'Written alpha and beta', globIds: [a.id, b.id] }));
     await page.regenerate(boardId, false);
     expect(llm.calls).toHaveLength(1);
 
     advance(61 * MINUTE);
-    const c = await accepted({ id: 's1k3', summary: 'Gamma statement' });
-    await accepted({ id: 's1k4', summary: 'Delta statement' }, { target: { suggested: null, routed: { kind: 'agent', name: 'agents/implementer.md', section: null, newDocument: null } } });
+    const c = await accepted({ id: 's1k3' }, {}, 'Gamma statement');
+    await accepted({ id: 's1k4' }, { target: { suggested: null, routed: { kind: 'agent', name: 'agents/implementer.md', section: null, newDocument: null } } }, 'Delta statement');
     set = { ...set, version: 2, files: [{ path: 'agents/implementer.md', content: `${IMPLEMENTER}\n## Board rules\n\n- Gamma.\n` }, { path: 'agents/tester.md', content: TESTER }] };
     llm.answer(groups({ area: 'Testing', text: 'Written alpha and beta', globIds: [a.id, b.id] }, { area: 'Agents', text: 'Gamma applies', globIds: [c.id] }));
 
@@ -299,8 +311,8 @@ describe('knowledge page', () => {
   });
 
   it('rebuilds every section on an admin\'s rebuild, inside the interval', async () => {
-    const a = await accepted({ id: 's1k1', summary: 'Alpha statement' });
-    const b = await accepted({ id: 's1k2', summary: 'Beta statement' });
+    const a = await accepted({ id: 's1k1' }, {}, 'Alpha statement');
+    const b = await accepted({ id: 's1k2' }, {}, 'Beta statement');
     llm.answer(groups({ area: 'Testing', text: 'Both', globIds: [a.id, b.id] }));
     await page.regenerate(boardId, false);
     advance(MINUTE);
@@ -316,7 +328,7 @@ describe('knowledge page', () => {
   });
 
   it('rebuilds in full when the prompt version changed', async () => {
-    const a = await accepted({ summary: 'Alpha statement' });
+    const a = await accepted({}, {}, 'Alpha statement');
     llm.answer(groups({ area: 'Testing', text: 'One', globIds: [a.id] }));
     await page.regenerate(boardId, false);
     const old = latest();

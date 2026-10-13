@@ -82,11 +82,11 @@ export const PLAN_SUMMARY_LIMIT = 4_000;
 const checkbox = /^\s*(?:[-*]\s*(?:\[[ xX]\]\s*)?)?/;
 
 /**
- * What the change is meant to do: the glob's title and summary, then the plan's "Done when" lines (a line holds its
+ * What the change is meant to do: the glob's title, then the plan's "Done when" lines (a line holds its
  * own, whether a list item or a sentence), without the rest of the plan.
  */
 export const planSummary = (
-  glob: { readonly title: string; readonly summary: string },
+  glob: { readonly title: string },
   plan: string | null,
 ): string => {
   const doneWhen = (plan ?? '')
@@ -95,7 +95,6 @@ export const planSummary = (
     .map((line) => line.replace(checkbox, '').trim());
   const parts = [
     glob.title,
-    glob.summary.trim(),
     doneWhen.length === 0 ? '' : `Done when:\n${doneWhen.map((line) => `- ${line}`).join('\n')}`,
   ];
   return parts

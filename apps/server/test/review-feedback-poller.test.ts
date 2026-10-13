@@ -72,7 +72,6 @@ describe('ReviewFeedbackPoller (s15f43)', () => {
       await globs.create(DEV, {
         boardId: board.id,
         title: 'Work',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,

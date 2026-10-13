@@ -29,17 +29,16 @@ describe('intake', () => {
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: DEV, active: true }));
     boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
     const globs = new GlobService({ store, notifier, clock: { now: () => '2026-10-05T12:00:00.000Z' }, ids: { runId: () => 'r' }, routines: { hasRoutine: () => Promise.resolve(true) } });
-    unwrap(await globs.create(DEV, { boardId, title: 'x', summary: '', type: 'same', category: 'task', group: 'Device Sync', environment: null, autoTrigger: false, idempotencyKey: null }));
+    unwrap(await globs.create(DEV, { boardId, title: 'x', type: 'same', category: 'task', group: 'Device Sync', environment: null, autoTrigger: false, idempotencyKey: null }));
     intake = new IntakeService({ store, llm: { complete: () => Promise.resolve(answer) } });
   });
 
   const propose = (text: string, explicit = {}) => intake.propose(DEV, boardId, { text, explicit }).then(unwrap);
 
   it('uses the model answer, matching an existing group', async () => {
-    answer = '```json\n{"title":"Fix sync retry","summary":"Retries stop.","plan":"Retries stop after a timeout. Done when: they resume.","type":"sub","category":"bug","group":"device-sync","autoTrigger":false,"autoTriggerQuote":null}\n```';
+    answer = '```json\n{"title":"Fix sync retry","plan":"Retries stop after a timeout. Done when: they resume.","type":"sub","category":"bug","group":"device-sync","autoTrigger":false,"autoTriggerQuote":null}\n```';
     expect(await propose('sync retries stop after a timeout')).toEqual({
       title: 'Fix sync retry',
-      summary: 'Retries stop.',
       plan: 'Retries stop after a timeout. Done when: they resume.',
       type: 'sub',
       typeReason: null,
@@ -117,15 +116,12 @@ describe('intake', () => {
     expect((await propose(`Start once ${decision.id} is accepted, and after s${String(boardId)}t1.`)).suggestedAfter).toEqual([`s${String(boardId)}t1`]);
   });
 
-  it('keeps the spec in plan, so the short summary never replaces it', async () => {
-    answer = '{"title":"T","summary":"Short.","plan":"The full spec.\\nDone when: it works.","type":"same","category":"task","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
+  it('keeps the spec in plan', async () => {
+    answer = '{"title":"T","plan":"The full spec.\\nDone when: it works.","type":"same","category":"task","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
     const p = await propose('the whole request');
-    expect([p.summary, p.plan]).toEqual(['Short.', 'The full spec.\nDone when: it works.']);
-    // An explicit summary wins for the card only; plan still comes from the request.
-    const q = await propose('the whole request', { summary: 'Mine.' });
-    expect([q.summary, q.plan]).toEqual(['Mine.', 'The full spec.\nDone when: it works.']);
+    expect(p.plan).toBe('The full spec.\nDone when: it works.');
     // No plan from the model: the request as written.
-    answer = '{"title":"T","summary":"Short."}';
+    answer = '{"title":"T"}';
     expect((await propose('the whole request')).plan).toBe('the whole request');
   });
 

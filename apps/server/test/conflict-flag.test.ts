@@ -90,7 +90,6 @@ describe('conflicts flagged after a merge', () => {
       await globs.create(DEV, {
         boardId: 1,
         title,
-        summary,
         type: 'same',
         category: 'task',
         group: null,
@@ -158,13 +157,13 @@ describe('conflicts flagged after a merge', () => {
     expect(await run(clean, 'check_conflict')).toEqual(['done']);
     expect((await current(clean)).conflict ?? null).toBeNull();
 
-    // Resolve conflict asks once, with both globs' intent; a repeat adds nothing.
+    // Resolve conflict asks once, naming both globs; a repeat adds nothing.
     unwrap(await globs.resolveConflict(DEV, open, flagged.version));
     expect(await run(open, 'request_conflict_fix')).toEqual(['done']);
     const [comment] = host.comments;
     expect(host.comments).toHaveLength(1);
     expect(comment?.pr).toBe(8);
-    for (const text of ['@claude', open, 'Change invoices', 'Reworks the invoice layout', merged, 'Add billing', 'Bills customers monthly', 'src/invoice.ts', 'git merge origin/main', 'lint']) {
+    for (const text of ['@claude', open, 'Change invoices', merged, 'Add billing', 'src/invoice.ts', 'git merge origin/main', 'lint']) {
       expect(comment?.body).toContain(text);
     }
     const asked = await current(open);

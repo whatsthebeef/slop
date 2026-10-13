@@ -26,6 +26,7 @@ import { globsKey, inboxKey, useLiveInbox } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
+import { boardGlobHref } from '@/lib/glob-section';
 
 const message = (error: unknown) =>
   error instanceof RequestError ? error.body.message : 'Something went wrong';
@@ -33,8 +34,7 @@ const day = (iso: string) => iso.slice(0, 10);
 /** Hints are lost in hidden tabs, so an item being summarised is also polled. */
 const POLL_MS = 15_000;
 
-const globLink = (boardId: number, globId: string) =>
-  `/boards/${String(boardId)}?glob=${encodeURIComponent(globId)}`;
+const globLink = boardGlobHref;
 
 /** Attach to the suggested globs (ticked) and any other open glob of the board. */
 const AttachDialog = ({
@@ -249,7 +249,7 @@ const Card = ({
           <span className="text-muted-foreground">On:</span>
           {attached.map((a) => (
             <span key={a.globId} className="inline-flex items-center gap-1 rounded-full border px-2">
-              <Link className="underline" to={globLink(boardId, a.globId)}>
+              <Link className="underline" to={globLink(boardId, a.globId, { section: 'artifacts' })}>
                 {a.globId}
               </Link>
               <button

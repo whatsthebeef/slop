@@ -8,7 +8,7 @@ import {
   readyStatus,
   stuckHint,
 } from '@slop/core';
-import type { Action, Role } from '@slop/core';
+import type { Action, BlockedBy, Edge, Role } from '@slop/core';
 import type { GlobView } from './api';
 
 /** One problem on a glob, in plain words: what the card shows in a line and the glob view shows in full. */
@@ -39,7 +39,8 @@ export interface StatusLine {
 }
 
 /** True for an investigate-only run: it never started the glob (`purpose` is absent on implementing runs). */
-export const isInvestigateRun = (run: { readonly purpose?: string }): boolean => run.purpose === 'investigate';
+export const isInvestigateRun = (run: { readonly purpose?: string }): boolean =>
+  run.purpose === 'investigate';
 
 /** Cut to one line of at most `max` characters. */
 export const oneLine = (text: string, max = 90): string => {
@@ -71,11 +72,16 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
   const failure = glob.failure;
   const decision = failure?.kind === 'needs_pairing' ? failure.decision?.trim() : undefined;
   // The routine stopped for a decision only a person can make: say which, not just that it failed.
-  const reason = failure?.kind === 'needs_pairing' ? `Needs a person: ${decision === undefined || decision === '' ? failure.reason : decision}` : (failure?.reason ?? 'Routine run failed');
+  const reason =
+    failure?.kind === 'needs_pairing'
+      ? `Needs a person: ${decision === undefined || decision === '' ? failure.reason : decision}`
+      : (failure?.reason ?? 'Routine run failed');
   const run = glob.currentRun ?? null;
   const session = run?.sessionUrl ?? null;
-  const investigationFailed = run !== null && isInvestigateRun(run) && run.state === 'ended' && run.outcome === 'failed';
-  const provisioningFailed = glob.provisioning === 'failed' && glob.failure?.kind === 'provisioning';
+  const investigationFailed =
+    run !== null && isInvestigateRun(run) && run.state === 'ended' && run.outcome === 'failed';
+  const provisioningFailed =
+    glob.provisioning === 'failed' && glob.failure?.kind === 'provisioning';
   const candidates: StatusLine[] = [];
   const make = (
     line: Omit<StatusLine, 'text' | 'url' | 'doing' | 'sessionUrl'> &
@@ -243,7 +249,10 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
     if (glob.type === 'super') waiting.push({ action: 'merge_continue', ...wait });
   }
   if (glob.type !== 'super') return waiting;
-  const record = { tip: machine.RECORD_NOT_AT_HEAD, why: 'for the implementation record at the head' };
+  const record = {
+    tip: machine.RECORD_NOT_AT_HEAD,
+    why: 'for the implementation record at the head',
+  };
   if (actions.includes('merge') && !actions.includes('merge_continue'))
     waiting.push({ action: 'merge_continue', ...record });
   if (
@@ -281,10 +290,7 @@ export const viewStatusLine = (
   if (stopped.length === 0) return base;
   const full = waitingSentences(stopped).join('. ');
   const blocking =
-    base === null ||
-    base.kind === 'ready' ||
-    base.kind === 'checks' ||
-    base.kind === 'base-red';
+    base === null || base.kind === 'ready' || base.kind === 'checks' || base.kind === 'base-red';
   // A failure, a stuck hint or a conflict outranks the wait; the buttons still carry their short reason.
   if (!blocking) return base;
   return {
@@ -294,10 +300,7 @@ export const viewStatusLine = (
         : 'merge-waits',
     text: oneLine(full),
     full,
-    tone:
-      base === null || base.kind === 'ready'
-        ? 'text-muted-foreground'
-        : base.tone,
+    tone: base === null || base.kind === 'ready' ? 'text-muted-foreground' : base.tone,
     tip: base?.tip ?? full,
     url: base?.url ?? null,
     doing: base?.kind === 'ready' ? null : (base?.doing ?? null),
@@ -307,7 +310,15 @@ export const viewStatusLine = (
 
 /** What slop or a routine is doing on its own, in one label: the card's chip and the glob view's, from the same function. */
 export interface Activity {
-  readonly kind: 'merging' | 'checks' | 'investigating' | 'working' | 'watching' | 'queued' | 'picked_up' | 'agent_set';
+  readonly kind:
+    | 'merging'
+    | 'checks'
+    | 'investigating'
+    | 'working'
+    | 'watching'
+    | 'queued'
+    | 'picked_up'
+    | 'agent_set';
   readonly text: string;
   /** Who is acting, shown as an icon before the text: the machine (Bot) or a person (Brain). */
   readonly icon?: 'machine' | 'human';
@@ -391,7 +402,12 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
   if (live === null) {
     // Picked up, and nothing has touched the glob since: say so, with the way out.
     const idle = Math.floor((Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000);
-    if (glob.status === 'in_progress' && glob.implementer !== null && glob.type !== 'super' && idle >= PICKED_UP_IDLE_MINUTES) {
+    if (
+      glob.status === 'in_progress' &&
+      glob.implementer !== null &&
+      glob.type !== 'super' &&
+      idle >= PICKED_UP_IDLE_MINUTES
+    ) {
       return {
         kind: 'picked_up',
         text: 'picked up, no run',
@@ -403,17 +419,24 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     return null;
   }
   if (isInvestigateRun(live)) {
-    return { kind: 'investigating', text: 'Investigating', tip: ['Investigating the plan; the glob has not started', ...runDetail].join('\n'), spinning: true };
+    return {
+      kind: 'investigating',
+      text: 'Investigating',
+      tip: ['Investigating the plan; the glob has not started', ...runDetail].join('\n'),
+      spinning: true,
+    };
   }
   if (live.state === 'active') {
-    return { kind: 'working', text: 'working', icon: 'machine', tip: runDetail.join('\n'), spinning: true };
+    // On an open PR the run is a fix run: say what it is fixing.
+    const fixing = glob.status === 'pr_open' ? (checks?.state === 'failed' ? 'fixing CI' : 'answering review') : null;
+    return { kind: 'working', text: fixing ?? 'working', icon: 'machine', tip: runDetail.join('\n'), spinning: true };
   }
   if (live.state === 'watching') {
     return {
       kind: 'watching',
-      text: 'watching PR',
+      text: 'standby',
       icon: 'machine',
-      tip: ['Auto-fixing CI failures and review comments', ...runDetail].join('\n'),
+      tip: ["Machine on standby: fixes new CI failures or review comments until it's merged.", ...runDetail].join('\n'),
       spinning: false,
     };
   }
@@ -453,7 +476,11 @@ export const blockedParts = (glob: GlobView): BlockedParts | null => {
   // Three or more fold to two names and a count, but never fold away the glob to start next.
   const ids = all.length > SHOWN_AHEAD + 1 ? all.slice(0, SHOWN_AHEAD) : all;
   const next = glob.nextStartable ?? null;
-  return { ids, more: all.length - ids.length, next: next === null || ids.includes(next) ? null : next };
+  return {
+    ids,
+    more: all.length - ids.length,
+    next: next === null || ids.includes(next) ? null : next,
+  };
 };
 
 /** "blocked by s15f82, s15f84 +2 · next: s15f38" for a glob with unmerged prerequisites; null when none. */
@@ -467,10 +494,13 @@ export const blockedLine = (glob: GlobView): string | null => {
 /** The chain for a tip, nearest first, each with its state: "s15f41 (Planning), s15f40 (Planning, 2 links away)". */
 export const chainTip = (glob: GlobView): string =>
   (glob.blockedBy ?? [])
-    .map((b) => `${b.id} (${statusWords(b.status)}${b.depth > 1 ? `, ${String(b.depth)} links away` : ''})`)
+    .map(
+      (b) =>
+        `${b.id} (${statusWords(b.status)}${b.depth > 1 ? `, ${String(b.depth)} links away` : ''})`,
+    )
     .join(', ');
 
-const statusWords = (status: GlobView['status'] | null): string => {
+export const statusWords = (status: GlobView['status'] | null): string => {
   switch (status) {
     case null:
       return 'deleted';
@@ -486,4 +516,41 @@ const statusWords = (status: GlobView['status'] | null): string => {
     default:
       return status;
   }
+};
+
+/** One direct need of a glob, with its status and why it waits. */
+export interface NeedRow {
+  readonly id: string;
+  /** The status word ("Doing", "PR open", ...); the board's own words, from the blocking chain. */
+  readonly status: string | null;
+  readonly why: string;
+}
+
+/** What the glob view's Dependencies section shows. */
+export interface DependencySummary {
+  /** Direct needs, each with status and why. */
+  readonly needs: readonly NeedRow[];
+  /** The rest of the chain ahead (depth above 1), nearest first; the data doesn't say which need each hangs off. */
+  readonly alsoAhead: readonly BlockedBy[];
+  /** Globs that may change the same files (merge order only). */
+  readonly overlaps: readonly Edge[];
+  readonly waitedOnBy: readonly string[];
+}
+
+/** The Dependencies section's content, or null when there is nothing to list. */
+export const dependencySummary = (glob: GlobView): DependencySummary | null => {
+  const chain = glob.blockedBy ?? [];
+  const needs = (glob.waitingFor ?? []).map((w) => {
+    const ahead = chain.find((b) => b.id === w.id);
+    return { id: w.id, status: ahead === undefined ? null : statusWords(ahead.status), why: w.why };
+  });
+  const alsoAhead = chain.filter((b) => b.depth > 1).sort((a, b) => a.depth - b.depth);
+  const overlaps = (glob.edges ?? []).filter((e) => e.kind === 'overlaps');
+  const waitedOnBy = glob.waitedOnBy ?? [];
+  if (
+    needs.length + alsoAhead.length + overlaps.length + waitedOnBy.length === 0 &&
+    chain.length === 0
+  )
+    return null;
+  return { needs, alsoAhead, overlaps, waitedOnBy };
 };

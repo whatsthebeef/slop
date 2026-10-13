@@ -93,7 +93,7 @@ export const codeHostExecutors = (
       }
       const name = `${repo.owner}/${repo.name}`;
       try {
-        const result = await host.provision(repo, glob);
+        const result = await host.provision(repo, glob, await globs.peekPlan(glob.id));
         await globs.applyEvent(glob.id, (g, ctx) => machine.provisioned(g, result, ctx));
         await notifications?.clear(glob.boardId, REPO_ACCESS_SOURCE);
         return 'done';
@@ -143,7 +143,7 @@ export const codeHostExecutors = (
       const reopened = glob.pr === null ? 'missing' : await host.reopenPr(repo, glob.pr.number, glob.id);
       if (reopened === 'missing') {
         // The branch was deleted: provision a fresh branch and draft PR.
-        const result = await host.provision(repo, glob);
+        const result = await host.provision(repo, glob, await globs.peekPlan(glob.id));
         await globs.applyEvent(glob.id, (g, ctx) => machine.provisioned(g, result, ctx));
       }
       return 'done';
@@ -154,7 +154,7 @@ export const codeHostExecutors = (
       if (glob === null || glob.pr !== null || glob.status !== 'in_progress') return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null || !host.configured) return 'dropped';
-      const pr = await host.openDraftPr(repo, glob);
+      const pr = await host.openDraftPr(repo, glob, await globs.peekPlan(glob.id));
       // Nothing to merge yet: the next push tries again.
       if (pr === null) return 'done';
       // The `opened` webhook may have recorded it first; recording it again is a no-op.

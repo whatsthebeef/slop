@@ -43,7 +43,7 @@ const DecisionList = ({
               )}
               <span className='flex gap-2'>
                 {decisionLinks(entry).map((l) => (
-                  <Link key={l.id} className={linkClass} to={globHref(boardId, l.id)}>
+                  <Link key={l.id} className={linkClass} to={globHref(boardId, l.id, {section: 'decision'})}>
                     {l.label}
                   </Link>
                 ))}
@@ -237,7 +237,7 @@ export const KnowledgePageView = ({ boardId, admin, canJudge = admin }: { boardI
                     <span className='rounded bg-muted px-1.5 text-xs'>changed in agent set v{a.changedInAgentSet}</span>
                   )}
                   {a.decisionGlobId != null && (
-                    <Link className={linkClass} to={globHref(boardId, a.decisionGlobId)}>
+                    <Link className={linkClass} to={globHref(boardId, a.decisionGlobId, {section: 'decision'})}>
                       decision
                     </Link>
                   )}

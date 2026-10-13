@@ -71,9 +71,11 @@ describe('decisions store', () => {
       ['Sync polling', POLLING],
       ['Sync push', PUSH],
     ] as const) {
-      const created = await globs.create(DEV, { boardId, title, summary: title, type: 'same', category: 'task', group: 'sync', environment: null, autoTrigger: false, idempotencyKey: null });
+      const created = await globs.create(DEV, { boardId, title, type: 'same', category: 'task', group: 'sync', environment: null, autoTrigger: false, idempotencyKey: null });
       if (!created.ok) throw new Error(created.error.message);
       if (llm.older === '') llm.older = created.value.id;
+      // A new glob's plan.md (its title here) is a source too; these tests are about the record's decisions.
+      await database.db.execute(sql`delete from artifacts where glob_id = ${created.value.id} and kind = 'plan'`);
       await store.transaction((tx) =>
         tx.insertArtifact({
           globId: created.value.id,
@@ -156,7 +158,6 @@ describe('decisions store', () => {
         boardId,
         actor: { email: 'slop', role: 'admin' },
         title: 'Did X replace Y?',
-        summary: 'Unverified.',
         payload: 'Unverified.',
         attributes: { scope: { kind: 'glob', ref: governed }, origin: { kind: 'replacement', oldId: only?.id ?? 0, newId: only?.id ?? 0 }, channel: 'mined', outcome: null },
         creationKey: 'replacement:test',

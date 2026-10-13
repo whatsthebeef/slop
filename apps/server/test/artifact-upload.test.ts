@@ -73,7 +73,6 @@ describe('artifact upload URLs', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Sub',
-        summary: 'x',
         type: 'same',
         category: 'task',
         group: null,

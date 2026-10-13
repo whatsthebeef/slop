@@ -367,7 +367,7 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
   const unreacted = minutesUnreacted(glob, now);
   if (unreacted !== null && unreacted >= STUCK_MINUTES) {
     const session = glob.runs[glob.runs.length - 1]?.sessionUrl ?? null;
-    return `Checks failed on the head ${String(Math.floor(unreacted))} minutes ago and the routine hasn't pushed or reported since. Fix: take over (sstor --glob ${glob.id} --take-over)${session === null ? '' : ` or open the run's session: ${session}`}`;
+    return `Checks failed on the head ${String(Math.floor(unreacted))} minutes ago and the routine hasn't pushed or reported since. Fix: pick it up (sstor --glob ${glob.id} --take-over)${session === null ? '' : ` or open the run's session: ${session}`}`;
   }
   if (glob.type !== 'sub' || glob.status !== 'pr_open') return null;
   const minutes = (Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000;
@@ -428,7 +428,7 @@ export interface ReadyStatus {
 }
 
 /**
- * "Ready to merge" for a same or super at pr_open with a ready PR and passed head checks; "Waiting for checks"
+ * Your turn ("Merge") for a same or super at pr_open with a ready PR and passed head checks; "Waiting for checks"
  * while they run. Null otherwise, including subs (the sub gate merges them) and any failure or conflict, which
  * the caller ranks first. `reviewSha` is the commit of the latest local review, when there is one.
  */
@@ -439,13 +439,14 @@ export const readyStatus = (glob: Glob, reviewSha: string | null = null): ReadyS
   const checks = glob.headChecks;
   if (checks?.state === 'failed' && checks.sha === head) return null;
   const run = glob.runs[glob.runs.length - 1];
-  const watching = run !== undefined && run.state !== 'ended';
+  // A fix run in progress is the machine's turn: nothing to show the person until it is done.
+  if (run?.state === 'active') return null;
   const stale =
     reviewSha !== null && reviewSha !== head ? `\nLocal review is from ${reviewSha.slice(0, 7)}, before the latest push.` : '';
   if (checks !== null && checks.sha === head && checks.state === 'passed') {
-    const merge = `The developer merges sames and supers: Merge on the card, or sstor -i ${glob.id} --merge.`;
-    const auto = watching ? "\nThe run's session stays on the PR to auto-fix new CI failures or review comments." : '';
-    return { kind: 'ready', text: 'Ready to merge', tip: `Checks passed at ${head.slice(0, 7)}. ${merge}${auto}${stale}` };
+    const merge = `Sames and supers are merged by a person: Merge here or sstor -i ${glob.id} --merge.`;
+    const why = glob.escalation == null ? '' : `\nNeeds a person because: ${glob.escalation.reason}`;
+    return { kind: 'ready', text: 'Merge', tip: `Merge: checks passed at ${head.slice(0, 7)}. ${merge}${why}${stale}` };
   }
   return { kind: 'waiting', text: 'Waiting for checks', tip: `Checks are still running on ${head.slice(0, 7)}.${stale}` };
 };

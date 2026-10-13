@@ -861,8 +861,8 @@ describe('decisions', () => {
 
     it('puts current decisions first in related, leaves out the glob\'s own, and shows superseded ones labelled', async () => {
       await seedPair();
-      const asker = await addGlob({ id: 's1t9', title: 'sync jobs', summary: 'How sync jobs reach clients.' });
-      await addArtifact(asker.id, 'plan', 'sync jobs plan text mentioning sync jobs many times: sync jobs sync jobs');
+      const asker = await addGlob({ id: 's1t9', title: 'sync jobs' });
+      await addArtifact(asker.id, 'plan', 'How sync jobs reach clients.');
       await new SearchIndexer({ store, clock, embedder, changes: { mergedDiff: () => Promise.resolve(null) }, llm }).syncBoard(boardId);
       const search = new SearchService({ store, clock, embedder });
       const related = await store.transaction((tx) => search.related(tx, asker));
@@ -882,7 +882,7 @@ describe('decisions', () => {
       for (const item of store.state.searchItems.values()) {
         if (item.sourceType === 'decision') store.state.searchItems.set(item.externalRef, { ...item, authority: 'discussion' });
       }
-      const asker = await addGlob({ id: 's1t9', title: 'sync jobs', summary: 'How sync jobs reach clients.' });
+      const asker = await addGlob({ id: 's1t9', title: 'sync jobs' });
       await addArtifact(asker.id, 'plan', 'sync jobs plan text mentioning sync jobs many times: sync jobs sync jobs');
       await new SearchIndexer({ store, clock, embedder, changes: { mergedDiff: () => Promise.resolve(null) }, llm }).syncBoard(boardId);
       const search = new SearchService({ store, clock, embedder });
