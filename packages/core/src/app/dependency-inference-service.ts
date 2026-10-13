@@ -83,7 +83,8 @@ interface Candidate {
 
 const readInvestigation = (content: string | undefined): { files: string[]; findings: readonly InvestigationDependency[] | undefined } => {
   const parsed = content === undefined ? null : parseInvestigation(content);
-  return parsed?.ok === true ? { files: parsed.investigation.files.map((f) => f.path), findings: parsed.investigation.dependencies } : { files: [], findings: undefined };
+  if (parsed?.ok !== true) return { files: [], findings: undefined };
+  return { files: parsed.investigation.files.map((f) => f.path), findings: parsed.investigation.dependencies };
 };
 
 const filesOfInvestigation = (content: string | undefined): string[] => readInvestigation(content).files;
@@ -169,7 +170,8 @@ export class DependencyInferenceService {
     if (candidates.length === 0) return [];
     const ids = new Set(candidates.map((c) => c.glob.id));
     // No model (or none that answers) leaves the investigator's own findings to stand.
-    if (this.deps.llm === undefined) return refineEdges([], findings, ids);
+    // Without a model, only listed findings can be applied; an empty list alone must not clear what is already recorded.
+    if (this.deps.llm === undefined) return findings === undefined || findings.length === 0 ? null : refineEdges([], findings, ids);
     const others = candidates
       .map((c) => `- ${c.glob.id} [${c.glob.status}] ${c.glob.title}\n  Files: ${c.files.join(', ') || '(not known yet)'}\n  Plan: ${c.plan.replace(/\s+/g, ' ').slice(0, CANDIDATE_PLAN_CHARS)}`)
       .join('\n');

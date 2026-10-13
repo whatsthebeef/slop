@@ -200,6 +200,10 @@ describe('dependency inference', () => {
     await push(investigation([{ id: a.id, kind: 'overlaps', reason: 'edits the same function' }]));
     await lone.refresh(made.id);
     expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
+    // Looked and found none, with no model: the recorded edges are left alone.
+    await push(investigation([]));
+    await lone.refresh(made.id);
+    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
   });
 
   it('a dismissed edge is not inferred again until the plan changes', async () => {
