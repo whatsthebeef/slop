@@ -54,16 +54,32 @@ const ConflictBox = ({
   );
 };
 
-/** The conflict section: shown while a glob with an implementer has a merge conflict with its base. */
+/** The conflict section: shown while a glob has a merge conflict with its base: every conflicting file, and for a glob with an implementer the command to resolve it. */
 export const ConflictSection = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {
   const conflict = glob.failure?.conflict ?? glob.conflict;
-  if (conflict == null || glob.implementer === null) return null;
+  if (conflict == null) return null;
+  const files = (
+    <details data-testid="conflict-files" open={conflict.files.length <= 10}>
+      <summary className="cursor-pointer text-xs text-muted-foreground">
+        Files changed on both sides ({conflict.files.length})
+      </summary>
+      <ul className="font-mono text-xs break-all">
+        {conflict.files.map((f) => (
+          <li key={f}>{f}</li>
+        ))}
+      </ul>
+    </details>
+  );
+  if (glob.implementer === null) return conflict.files.length === 0 ? null : files;
   return (
-    <ConflictBox
-      globId={glob.id}
-      branch={glob.branch}
-      base={conflict.base}
-      canTakeOver={(glob.allowedActions ?? []).includes('take_over')}
-    />
+    <>
+      {conflict.files.length > 0 && files}
+      <ConflictBox
+        globId={glob.id}
+        branch={glob.branch}
+        base={conflict.base}
+        canTakeOver={(glob.allowedActions ?? []).includes('take_over')}
+      />
+    </>
   );
 };

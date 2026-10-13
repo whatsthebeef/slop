@@ -158,7 +158,13 @@ export const machineSteps = (glob: Glob, facts: MachineFacts = {}): MachineStep[
   // A failed glob: the step that stopped. A run that gave up also leaves `failure` on the glob, so one source covers both.
   if (glob.failure !== null && glob.status !== 'signed_off') {
     steps.push(
-      step(failedKind(glob), 'failed', { id: 'machine:failed', startedAt: glob.failure.at, detail: glob.failure.reason, holdsBall: false }),
+      step(failedKind(glob), 'failed', {
+        id: 'machine:failed',
+        startedAt: glob.failure.at,
+        // The card shows this line: the conflicting files are in the glob view, not here.
+        detail: glob.failure.conflict === undefined ? glob.failure.reason : 'merge conflict',
+        holdsBall: false,
+      }),
     );
   }
 
