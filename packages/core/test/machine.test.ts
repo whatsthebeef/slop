@@ -1072,9 +1072,9 @@ describe('checks and merging (slice 2)', () => {
     expect(again.glob.runs).toHaveLength(2);
   });
 
-  it('resolve conflict: a run on standby is ended and replaced; an unflagged glob is refused', () => {
+  it('resolve conflict: a run on standby is ended and replaced; an unflagged or human-implemented glob is refused', () => {
     const pr = { number: 7, state: 'ready' as const, headSha: 'abc1234' };
-    const conflict = { base: 'main', files: [], since: null, at: NOW };
+    const conflict = { base: 'main', files: [], since: 's1t2', at: NOW };
     expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr }), ctx()))).toBe('invalid_transition');
     const watching = glob({ status: 'pr_open', pr, conflict, runs: [run({ state: 'watching' })] });
     expect(m.allowedActions(watching, dev)).toContain('resolve_conflict');
@@ -1083,6 +1083,9 @@ describe('checks and merging (slice 2)', () => {
     expect(t.glob.runs[0]).toMatchObject({ state: 'ended', outcome: 'superseded' });
     expect(t.glob.runs[1]).toMatchObject({ state: 'queued', purpose: 'resolve_conflict' });
     expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr, conflict, runs: [run({ state: 'active' })] }), ctx()))).toBe('run_active');
+    expect(errorCode(m.resolveConflict(glob({ status: 'pr_open', pr, conflict, runs: [run({ state: 'queued' })] }), ctx()))).toBe('run_active');
+    const human = glob({ status: 'pr_open', pr, conflict, implementer: 'a@b.c', runs: [run({ state: 'watching' })] });
+    expect(m.allowedActions(human, dev)).not.toContain('resolve_conflict');
   });
 });
 

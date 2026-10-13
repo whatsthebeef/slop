@@ -68,9 +68,9 @@ describe('Claude workflow readiness', () => {
     expect(allowsBot('steps: []', 'slop[bot]')).toBe(false);
   });
 
-  it('does not blame the Claude GitHub App when checks failed and the run has not reacted', () => {
-    const claudeApp = readiness({ ...ready, claudeWorkflow: false, unreactedCheckFailures: ['s1t1'] }).find((i) => i.key === 'claude_app');
-    expect(claudeApp).toMatchObject({ state: 'ok' });
+  it('names the missing workflow when checks failed and the run has not reacted', () => {
+    const claudeApp = readiness({ ...ready, claudeWorkflow: false, unreactedCheckFailures: [{ id: 's1t1', sha: 'abcdef123', url: null }] }).find((i) => i.key === 'claude_app');
+    expect(claudeApp?.detail).toMatch(/no Claude workflow/);
   });
 });
 
@@ -168,9 +168,8 @@ describe('stuck hints on cards', () => {
       queuedAt: NOW, startedAt: NOW, lastProgressAt: NOW, endedAt: NOW, failureReason: 'x', sessionId: null, sessionUrl: null,
       purpose: 'resolve_conflict' as const,
     };
-    const tried = sub({ conflict, runs: [gaveUp] });
-    expect(stuckHint(sub({ conflict, runs: [{ ...gaveUp, state: 'watching', outcome: null }] }), later)).not.toMatch(/take-over/);
-    expect(stuckHint(tried, NOW)).toMatch(/Resolve the conflict: sstor --glob s1t1 --take-over/);
+    expect(stuckHint(sub({ conflict, runs: [{ ...gaveUp, state: 'watching', outcome: null }] }), later)).not.toMatch(/Resolve locally/);
+    expect(stuckHint(sub({ conflict, runs: [gaveUp] }), NOW)).toMatch(/Resolve locally: sstor --glob s1t1 --take-over/);
     // A human implementer resolves locally from the start; a cleared conflict shows nothing.
     expect(stuckHint(sub({ conflict, implementer: 'dev@example.com' }), NOW)).toMatch(/Resolve locally/);
     expect(stuckHint(sub({ conflict: null }), NOW)).toBeNull();
@@ -194,7 +193,7 @@ describe('watching run that ignores failed checks', () => {
   const watched = (patch: Parameters<typeof glob>[0] = {}) =>
     glob({
       id: 's1t1', type: 'sub', status: 'pr_open', pr: { number: 3, state: 'ready', headSha: head },
-      headChecks: { sha: head, state: 'failed', at: failedAt }, runs: [run()], ...patch,
+      headChecks: { sha: head, state: 'failed', at: failedAt, failure: { name: 'checks', step: null, lines: ['error'], url: 'https://ci/run/1' } }, runs: [run()], ...patch,
     });
 
   it('hints with the take-over and session fixes after 15 minutes', () => {
@@ -217,10 +216,20 @@ describe('watching run that ignores failed checks', () => {
     expect(stuckHint(watched({ type: 'same', headChecks: { sha: 'old', state: 'failed', at: failedAt } }), at(20))).toBeNull();
   });
 
-  it('no longer counts toward the Claude GitHub App readiness item', () => {
-    expect(unreactedCheckFailures([watched(), watched({ id: 's1t2', headChecks: null })], at(20))).toEqual(['s1t1']);
-    const items = readiness({ ...ready, unreactedCheckFailures: ['s1t1'] });
-    expect(items.find((i) => i.key === 'claude_app')).toMatchObject({ state: 'ok' });
+  it('counts toward the Claude GitHub App readiness item', () => {
+    expect(unreactedCheckFailures([watched(), watched({ id: 's1t2', headChecks: null })], at(20))).toEqual([{ id: 's1t1', sha: head, url: 'https://ci/run/1' }]);
+    const items = readiness({ ...ready, unreactedCheckFailures: [{ id: 's1t1', sha: head, url: 'https://ci/run/1' }] });
+    expect(items.find((i) => i.key === 'claude_app')).toMatchObject({ state: 'failing', });
+    expect(items.find((i) => i.key === 'claude_app')?.detail).toContain('https://ci/run/1');
+  });
+
+  it('ignores a conflict recorded as empty failed checks, and failures with no detail', () => {
+    const conflict = { base: 'main', files: ['a.ts'], since: null, at: failedAt };
+    const empty = { sha: head, state: 'failed' as const, at: failedAt };
+    expect(unreactedCheckFailures([watched({ conflict, headChecks: empty })], at(20))).toEqual([]);
+    expect(stuckHint(watched({ conflict, headChecks: empty }), at(20))).not.toMatch(/Checks failed/);
+    expect(unreactedCheckFailures([watched({ headChecks: empty })], at(20))).toEqual([]);
+    expect(unreactedCheckFailures([watched()], at(10))).toEqual([]);
   });
 });
 
@@ -230,7 +239,7 @@ describe('runs that never start', () => {
 
   it('says how long a run has been queued once it passes 10 minutes, with the session', () => {
     expect(queuedRunNotice(g(), at(9))).toBeNull();
-    expect(queuedRunNotice(g(), at(25))).toBe('Routine run queued for 25 min: open the session https://claude.ai/code/s1');
+    expect(queuedRunNotice(g(), at(25))).toBe('Machine run queued for 25 min: open the session https://claude.ai/code/s1');
     expect(queuedRunNotice(g({ runs: [run({ state: 'active' })] }), at(25))).toBeNull();
   });
 

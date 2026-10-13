@@ -443,8 +443,8 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     text: long ? `Queued for ${String(minutes)} min` : 'Queued',
     tip: [
       long
-        ? `Routine run queued for ${String(minutes)} min: ${live.sessionUrl === null ? 'no session yet' : 'open the session'}`
-        : 'Routine run queued',
+        ? `Machine run queued for ${String(minutes)} min: ${live.sessionUrl === null ? 'no session yet' : 'open the session'}`
+        : 'Machine run queued',
       ...runDetail,
     ].join('\n'),
     spinning: false,

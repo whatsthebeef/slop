@@ -192,7 +192,11 @@ export const codeHostExecutors = (
       }
       // The head's checks: re-read them when slop has no result for this head (the effect records it like a webhook would).
       const now = await globs.peek(glob.id);
-      if (now?.status === 'pr_open' && (now.headChecks === null || now.headChecks.sha !== pr.headSha || now.headChecks.state === 'pending')) {
+      if (now?.status === 'pr_open' && (now.headChecks === null ||
+          now.headChecks.sha !== pr.headSha ||
+          now.headChecks.state === 'pending' ||
+          // Recorded as failed with no detail while the PR conflicts: that was the conflict, not the checks.
+          (now.conflict != null && now.headChecks.state === 'failed' && now.headChecks.failure === undefined))) {
         log('reconcile', `${glob.id} rereading head checks (no result recorded)`);
         await globs.applyEvent(glob.id, (g, ctx) => machine.checksChanged(g, ctx));
       }
@@ -219,6 +223,8 @@ export const codeHostExecutors = (
       const conflict = state === 'conflict' ? { base: repo.base, files: await host.conflictFiles(repo, glob.pr.number) } : undefined;
       // Say what failed, and whether the base branch fails the same way (then it isn't this glob's change).
       const failure = state === 'failed' ? await explainFailure(repo, sha) : null;
+      // A conflict says nothing about the head's own checks: read what its check runs report (GitHub usually runs none).
+      const real = state === 'conflict' ? await host.commitChecks(repo, sha) : undefined;
       await globs.applyEvent(glob.id, (g, ctx) =>
         machine.checksCompleted(
           g,
@@ -226,6 +232,7 @@ export const codeHostExecutors = (
             sha,
             passed,
             ...(conflict !== undefined && { conflict }),
+            ...(real !== undefined && { real }),
             ...(failure !== null && { failure, base: board?.baseChecks ?? null, baseBranch: repo.base }),
           },
           ctx,
