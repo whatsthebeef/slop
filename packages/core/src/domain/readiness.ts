@@ -530,7 +530,7 @@ export const unreactedCheckFailures = (
  * A conflict flagged on an open PR. A human implementer resolves it locally from the start; for the rest the card
  * suggests that once a Resolve conflict run gave up and the PR still conflicts.
  */
-export const conflictHint = (glob: Glob): string | null => {
+const conflictHint = (glob: Glob): string | null => {
   const conflict = glob.conflict;
   if (conflict == null) return null;
   const shown = conflict.files.slice(0, 5).join(', ');
