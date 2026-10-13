@@ -191,7 +191,10 @@ describe('card rows', () => {
     expect(chip?.className).toContain('rounded-full');
     expect(chip?.className).toContain('font-sans');
     expect(chip?.querySelector('svg.lucide-git-branch')).not.toBeNull();
-    expect(chip?.textContent).toBe('split from s1t5');
+    expect(chip?.textContent).toBe('s1t5');
+    const link = chip?.querySelector('a');
+    expect(link?.textContent).toBe('s1t5');
+    expect(link?.getAttribute('aria-label')).toBe('Split from s1t5');
     expect(root.querySelector('[data-testid="card-title"]')?.textContent).not.toContain('split');
     expect(root.querySelector('[data-testid="status-line"]')).toBeNull();
   });
