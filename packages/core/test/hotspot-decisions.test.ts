@@ -210,6 +210,27 @@ describe('hotspot decisions', () => {
     expect(prose.impliedAfter ?? []).toEqual([]);
   });
 
+  it('releases the hold once the refactor has merged', async () => {
+    const ids = [(await work()).id, (await work()).id, (await work()).id];
+    await conflicts(ids, day(12));
+    await runJob();
+    const [decision] = await hotDecisions();
+    const accepted = unwrap(await decide(decision?.id ?? '', { outcome: 'accept' }));
+    const refactor = await glob(decisionOf(accepted)?.outcome?.linkedGlobId ?? '');
+    await store.transaction((tx) => tx.updateGlob({ ...refactor, status: 'signed_off' }, refactor.version));
+    const later = await work({ type: 'sub', plan: `## Tasks\n\n- Add a field to ${HOT}\n` });
+    expect(later.impliedAfter ?? []).toEqual([]);
+  });
+
+  it('the refactor waits only for globs with a branch that changes the file, never for Planning ones', async () => {
+    const planning = await work({ title: 'Still planning' });
+    const doing = await work({ title: 'Doing' });
+    unwrap(await globs.pickUp(DEV, doing.id, doing.version, false));
+    branches.files.set(planning.id, [HOT]);
+    branches.files.set(doing.id, [HOT]);
+    expect(await globs.openGlobsTouching(boardId, HOT)).toEqual([doing.id]);
+  });
+
   it('a hotspot decision is not a rule for later work', async () => {
     const ids = [(await work()).id, (await work()).id, (await work()).id];
     await conflicts(ids, day(12));
