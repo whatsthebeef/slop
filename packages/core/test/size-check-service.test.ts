@@ -167,7 +167,7 @@ describe('learned size check', () => {
     expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.decision).toBe('kept_whole');
   });
 
-  it('Start anyway on a flagged sub offers the action and starts it; keeping whole first records the override', async () => {
+  it('Start now on a flagged sub offers the action and starts it; keeping whole first records the override', async () => {
     const sub = await create('sub', BIG);
     const view = unwrap(await globs.get(DEV, sub.id));
     expect(view.allowedActions).toContain('start_anyway');

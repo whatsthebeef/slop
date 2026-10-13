@@ -1,4 +1,5 @@
 import type { KnowledgePageAgentSetVersion, KnowledgePageDecision, KnowledgePageDecisionGroup, KnowledgePageFeedback, KnowledgePageVerdict } from './api';
+import { boardGlobHref } from './glob-section';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -17,7 +18,7 @@ export const relativeTime = (iso: string, now: number): string => {
 };
 
 /** The link target for a glob on its board (the same `?glob=` mechanism the cards use). */
-export const globHref = (boardId: number, globId: string): string => `/boards/${boardId}?glob=${encodeURIComponent(globId)}`;
+export const globHref = boardGlobHref;
 
 /** The board with the Decision category selected (the same `?category=` filter the board's filter bar writes). */
 export const decisionsHref = (boardId: number): string => `/boards/${boardId}?category=decision`;

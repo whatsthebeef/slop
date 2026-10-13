@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RequestError } from '../src/lib/api';
 import type { ChatCitation } from '../src/lib/api';
-import { actionsFor, citedGlobs, globScope, isChatShortcut, isSlashShortcut, MESSAGE_LIST, mentionedGlobs, openGlobOf, saveLabel, scopeLabel, scopeName, scopeOf, showScopeChip, sourceTone, stateLabel, suggestionsFor, unavailableNotice, WRAP_LONG, withCiteLinks } from '../src/lib/chat';
+import { actionsFor, citationHref, citedGlobs, globScope, isChatShortcut, isSlashShortcut, MESSAGE_LIST, mentionedGlobs, openGlobOf, openGlobTarget, saveLabel, scopeLabel, scopeName, scopeOf, showScopeChip, sourceTone, stateLabel, suggestionsFor, unavailableNotice, WRAP_LONG, withCiteLinks } from '../src/lib/chat';
 import { takeSseEvents } from '../src/lib/sse';
 
 const cite = (patch: Partial<ChatCitation>): ChatCitation => ({
@@ -153,5 +153,24 @@ describe('event streams', () => {
       { event: 'done', data: '{}' },
     ]);
     expect(next.rest).toBe('');
+  });
+});
+
+describe('citations that open a glob at a section', () => {
+  const cite = (source: ChatCitation['source'], globId: string | null = 's1t1'): ChatCitation =>
+    ({ n: 1, source, sourceLabel: '', title: '', date: '2026-01-01', link: '/boards/1?glob=s1t1', globId, status: 'active', supersededBy: null });
+  it('opens a plan citation at the plan and a review at its findings', () => {
+    expect(citationHref(cite('glob_plan'))).toBe('/boards/1?glob=s1t1&section=plan');
+    expect(citationHref(cite('independent_review'))).toBe('/boards/1?glob=s1t1&section=findings');
+  });
+  it('leaves other sources and other links at the top', () => {
+    expect(citationHref(cite('decision'))).toBe('/boards/1?glob=s1t1');
+    expect(citationHref({ link: 'https://example.com/x', source: 'glob_plan' })).toBe('https://example.com/x');
+    expect(citationHref({ link: null, source: 'glob_plan' })).toBeNull();
+  });
+  it('sends the open button to the section its citations agree on', () => {
+    expect(openGlobTarget({ citations: [cite('glob_plan'), cite('glob_plan')] }, 's1t1')).toEqual({ section: 'plan' });
+    expect(openGlobTarget({ citations: [cite('glob_plan'), cite('local_review')] }, 's1t1')).toEqual({});
+    expect(openGlobTarget({ citations: [cite('glob_plan', 's1t2')] }, 's1t1')).toEqual({});
   });
 });
