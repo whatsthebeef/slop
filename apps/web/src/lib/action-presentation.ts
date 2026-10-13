@@ -15,7 +15,7 @@ export interface ActionPresentation {
   readonly placement: ActionPlacement;
 }
 
-type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> & Partial<Pick<GlobView, 'headChecks'>>;
+type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'>;
 
 const prRef = (glob: Subject): string => (glob.pr === null ? 'the PR' : `PR #${glob.pr.number}`);
 
@@ -125,24 +125,13 @@ export const actionPresentation = (
         tip: 'Takes the PR out of draft. A sub then merges by itself; a same or super waits for Merge',
         placement: 'main',
       };
-    case 'merge': {
-      // Checks not passed on the head (pending or not reported): Merge arms "merge when checks pass" and lands nothing yet.
-      const head = glob.pr?.headSha ?? null;
-      const passed = head !== null && glob.headChecks?.sha === head && glob.headChecks.state === 'passed';
-      return passed
-        ? {
-            label: 'Merge',
-            icon: 'machine',
-            tip: `Squash-merges ${prRef(glob)}`,
-            placement: 'main',
-          }
-        : {
-            label: 'Merge when checks pass',
-            icon: 'machine',
-            tip: `Slop merges automatically if the checks on ${head === null ? 'the head' : head.slice(0, 7)} go green; it stops and tells you if they fail or the branch conflicts`,
-            placement: 'main',
-          };
-    }
+    case 'merge':
+      return {
+        label: 'Merge',
+        icon: 'machine',
+        tip: `Squash-merges ${prRef(glob)}`,
+        placement: 'main',
+      };
     case 'cancel_merge':
       return {
         label: 'Cancel merge',
