@@ -32,6 +32,7 @@ export const actionPresentation = (
   action: Action,
   glob: Subject,
   decision = false,
+  viewer?: string,
 ): ActionPresentation => {
   switch (action) {
     case 'start':
@@ -68,12 +69,20 @@ export const actionPresentation = (
             // A super is paired on and a decision is decided by a person, so picking it up is the next step.
             placement: glob.type === 'super' || decision ? 'main' : 'more',
           }
-        : {
-            label: 'Pick up',
-            icon: 'human',
-            tip: `You take it over from ${glob.implementer ?? 'the machine'}`,
-            placement: 'more',
-          };
+        : glob.implementer !== null && glob.implementer === viewer
+          ? {
+              // Your own glob: no state change, it reopens your session (the main step while nothing else is moving it).
+              label: 'Resume',
+              icon: 'human',
+              tip: 'Reopens your session on this glob',
+              placement: 'main',
+            }
+          : {
+              label: 'Pick up',
+              icon: 'human',
+              tip: `You take it over from ${glob.implementer ?? 'the machine'}`,
+              placement: 'more',
+            };
     case 'take_over':
       return {
         label: 'Pick up',
@@ -222,14 +231,20 @@ export const actionLabel = (action: Action, glob: Subject): string =>
   actionPresentation(action, glob).label;
 
 /** What an action would stop, so the board can ask first; empty when nothing is halted. */
-export const haltedBy = (glob: Pick<GlobView, 'currentRun' | 'pr' | 'branch' | 'implementer'>, action: Action): string[] => {
+export const haltedBy = (
+  glob: Pick<GlobView, 'currentRun' | 'pr' | 'branch' | 'implementer'>,
+  action: Action,
+): string[] => {
   const runLive = glob.currentRun !== null && glob.currentRun.state !== 'ended';
   // A queued or standby run holds nothing unpushed, so only an active one is worth asking about.
-  if (action === 'take_over') return glob.currentRun?.state === 'active' ? ['the machine run in progress'] : [];
+  if (action === 'take_over')
+    return glob.currentRun?.state === 'active' ? ['the machine run in progress'] : [];
   if (action !== 'start_again') return [];
   return [
     ...(runLive ? ['the machine run in progress'] : []),
-    ...(glob.pr !== null ? [`PR #${glob.pr.number} (closed) and the ${glob.branch} branch (deleted)`] : []),
+    ...(glob.pr !== null
+      ? [`PR #${glob.pr.number} (closed) and the ${glob.branch} branch (deleted)`]
+      : []),
     ...(glob.implementer !== null ? [`${glob.implementer} as implementer`] : []),
   ];
 };

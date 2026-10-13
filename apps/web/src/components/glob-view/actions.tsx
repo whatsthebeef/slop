@@ -114,7 +114,7 @@ export const useGlobActions = ({
 
   // deescalate and make_super are reached through the type popover.
   const shownActions = presentedActions(glob.allowedActions ?? []).filter(
-    (a) => a !== 'delete' && actionPresentation(a, glob).placement !== 'none',
+    (a) => a !== 'delete' && actionPresentation(a, glob, false, email).placement !== 'none',
   );
   // Decide has its own panel with the five outcomes: it can be the main button (which goes to
   // the panel), never a More entry.
@@ -123,7 +123,7 @@ export const useGlobActions = ({
   // A due blocking step for the viewer (a rollout) is the next thing to do, ahead of the state's next step but not a recovery.
   const stepTurn = mainStep(glob, viewer);
   const [stepsSignal, setStepsSignal] = useState(0);
-  const main = mainAction(shownActions, glob, decision, stepTurn !== null);
+  const main = mainAction(shownActions, glob, decision, stepTurn !== null, email);
   const actions = orderActions(allActions, main);
   const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
@@ -225,8 +225,8 @@ export const useGlobActions = ({
 export type GlobActionsState = ReturnType<typeof useGlobActions>;
 
 /** Merge also warns when the base moved since the checks ran (slop merges it first). */
-const tipOf = (action: Action, glob: GlobViewContext['glob']) => {
-  const tip = actionPresentation(action, glob).tip;
+const tipOf = (action: Action, glob: GlobViewContext['glob'], email?: string) => {
+  const tip = actionPresentation(action, glob, false, email).tip;
   const warning = action === 'merge' ? mergeWarning(glob) : null;
   return warning === null ? tip : `${tip}\n${warning}`;
 };
@@ -240,7 +240,7 @@ const ActionContent = ({
   ctx: GlobViewContext;
   state: GlobActionsState;
 }) => {
-  const shown = actionPresentation(action, ctx.glob);
+  const shown = actionPresentation(action, ctx.glob, false, state.viewer?.email);
   return state.busy && state.pending?.action === action ? (
     <>
       <Loader2 className="size-3.5 animate-spin" aria-hidden />
@@ -371,7 +371,7 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
               </Tip>
             )}
             {main !== null && (
-              <Tip text={tipOf(main, glob)}>
+              <Tip text={tipOf(main, glob, state.viewer?.email)}>
                 <Button
                   size="sm"
                   disabled={busy}
@@ -401,7 +401,7 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
                 </DropdownMenuTrigger>
                 <DropdownMenuContent data-testid="more-menu">
                   {moreActions.map((action) => {
-                    const shown = actionPresentation(action, glob);
+                    const shown = actionPresentation(action, glob, false, state.viewer?.email);
                     return (
                       <DropdownMenuItem
                         key={action}
@@ -413,7 +413,7 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
                           {shown.label}
                         </span>
                         <span className="whitespace-pre-line text-xs text-muted-foreground">
-                          {tipOf(action, glob)}
+                          {tipOf(action, glob, state.viewer?.email)}
                         </span>
                       </DropdownMenuItem>
                     );

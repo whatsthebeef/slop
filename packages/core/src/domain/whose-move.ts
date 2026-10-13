@@ -143,6 +143,10 @@ export const whoseMove = (
     const standby = machineSteps.find((s) => s.state === 'standby');
     if (glob.conflict != null) return mover(glob.implementer !== null ? 'Fix conflict: pick up' : 'Fix conflict');
     const checks = glob.headChecks;
+    // A sub with passing checks merges by itself: slop is about to do it.
+    if (glob.type === 'sub' && glob.conflict == null && checks?.state === 'passed' && checks.sha === glob.pr.headSha) {
+      return { holder: 'waiting', reason: 'merges by itself', since: checks.at ?? null, waitingOn: ['merge'] };
+    }
     if (checks?.state === 'failed' && checks.inheritedFrom === undefined) {
       // A watching run is about to answer failed checks; otherwise it is a person's.
       if (standby !== undefined) return { holder: 'machine', reason: 'fix checks', since: checks.at ?? null };
