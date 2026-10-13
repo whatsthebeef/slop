@@ -74,7 +74,7 @@ describe('The learned size check in Postgres', () => {
     },
   };
   const create = async (type: 'sub' | 'same', plan: string) =>
-    unwrap(await globs.create(DEV, { boardId, title: 'T', summary: 's', plan, type, category: type === 'sub' ? 'task' : 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+    unwrap(await globs.create(DEV, { boardId, title: 'T', plan, type, category: type === 'sub' ? 'task' : 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
   const outcome = (globId: string): GlobOutcome => ({
     globId,
     snapshotVersion: 1,

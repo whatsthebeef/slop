@@ -1,4 +1,5 @@
 import type { DecisionView } from '@slop/core';
+import { readSectionOpen, writeSectionOpen } from './section-open';
 
 /** One key for every glob: the viewer's last toggle of the Choices section. */
 const STORAGE_KEY = 'slop.choices-open';
@@ -13,19 +14,6 @@ export const hintCount = (decisions: DecisionView[]): number =>
 export const defaultOpen = (decisions: DecisionView[]): boolean => decisions.length <= MAX_OPEN_CHOICES && hintCount(decisions) === 0;
 
 /** The viewer's remembered choice, or null when nothing usable is stored (or storage is unavailable). */
-export const readChoicesOpen = (): boolean | null => {
-  try {
-    const v = window.localStorage.getItem(STORAGE_KEY);
-    return v === 'open' ? true : v === 'closed' ? false : null;
-  } catch {
-    return null;
-  }
-};
+export const readChoicesOpen = (): boolean | null => readSectionOpen(STORAGE_KEY);
 
-export const writeChoicesOpen = (open: boolean): void => {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, open ? 'open' : 'closed');
-  } catch {
-    // Private mode or blocked storage: the choice just isn't remembered.
-  }
-};
+export const writeChoicesOpen = (open: boolean): void => writeSectionOpen(STORAGE_KEY, open);

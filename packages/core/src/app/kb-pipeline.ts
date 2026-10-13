@@ -22,6 +22,7 @@ import {
   learningFacts,
   learningLinks,
   learningOutcome,
+  learningStatement,
   learningStatus,
   learningStep,
   learningTarget,
@@ -173,7 +174,7 @@ interface Peer {
 const peerOf = ({ glob, artifacts }: LearningRead): Peer => ({
   id: glob.id,
   type: learningFacts(glob).kind,
-  statement: glob.summary,
+  statement: learningStatement(glob, artifacts),
   reason: learningDecision(glob, artifacts).reason,
   outcome: learningOutcome(artifacts),
   target: learningTarget(glob).routed,
@@ -428,7 +429,7 @@ export class KbPipeline {
           maxTokens: 1_000,
           spend,
         }),
-        learning.glob.summary,
+        learningStatement(learning.glob, learning.artifacts),
         snapshot,
         routing.target,
         targetText,
@@ -612,7 +613,7 @@ const headingsLine = (headings: readonly string[]) => (headings.length === 0 ? '
 
 const routePrompt = ({ glob, artifacts }: LearningRead, snapshot: Snapshot): string =>
   [
-    `Learning (${learningFacts(glob).kind}): ${glob.summary}`,
+    `Learning (${learningFacts(glob).kind}): ${learningStatement(glob, artifacts)}`,
     `Evidence: ${learningEvidence(glob, artifacts)}`,
     `Suggested target: ${learningTarget(glob).suggested ?? '(none)'}`,
     '',
@@ -664,7 +665,7 @@ const currentText = (target: KbTarget, snapshot: Snapshot): string | null => {
 
 const dedupePrompt = ({ glob, artifacts }: LearningRead, snapshot: Snapshot, target: KbTarget, targetText: string | null): string =>
   [
-    `New learning (${learningFacts(glob).kind}): ${glob.summary}`,
+    `New learning (${learningFacts(glob).kind}): ${learningStatement(glob, artifacts)}`,
     `Evidence: ${learningEvidence(glob, artifacts)}`,
     '',
     'Open items:',
@@ -899,7 +900,7 @@ const draftPrompt = ({ glob, artifacts }: LearningRead, target: KbTarget, state:
     ];
   }
   return [
-    `Learning (${learningFacts(glob).kind}): ${glob.summary}`,
+    `Learning (${learningFacts(glob).kind}): ${learningStatement(glob, artifacts)}`,
     `Evidence: ${learningEvidence(glob, artifacts)}`,
     ...(extraEvidence.length === 0
       ? []

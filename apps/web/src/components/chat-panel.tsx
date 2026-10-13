@@ -7,8 +7,9 @@ import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link, useNavigate } from 'react-router';
 import { api, RequestError } from '@/lib/api';
+import { globPath } from '@/lib/glob-section';
 import type { ChatCitation, ChatMessage, ChatQuestion, GlobView } from '@/lib/api';
-import { actionsFor, globScope, MESSAGE_LIST, mentionedGlobs, openGlobOf, saveLabel, scopeLabel, scopeName, scopeOf, showScopeChip, sourceTone, stateLabel, suggestionsFor, unavailableNotice, WRAP_LONG, withCiteLinks } from '@/lib/chat';
+import { actionsFor, citationHref, globScope, MESSAGE_LIST, mentionedGlobs, openGlobOf, openGlobTarget, saveLabel, scopeLabel, scopeName, scopeOf, showScopeChip, sourceTone, stateLabel, suggestionsFor, unavailableNotice, WRAP_LONG, withCiteLinks } from '@/lib/chat';
 import { globsKey } from '@/lib/live';
 import { useCurrentPage } from '@/lib/page-context';
 import type { PageContext } from '@/lib/page-context';
@@ -31,16 +32,17 @@ const Chip = ({ citation, onNavigate }: { citation: ChatCitation; onNavigate: ()
     sourceTone(citation.source),
     (citation.status === 'superseded' || citation.status === 'legacy') && 'line-through opacity-70',
   );
-  if (inAppLink(citation.link)) {
+  const href = citationHref(citation);
+  if (inAppLink(href)) {
     return (
-      <Link className={className} to={citation.link} title={label} aria-label={label} data-testid='chat-chip' onClick={onNavigate}>
+      <Link className={className} to={href} title={label} aria-label={label} data-testid='chat-chip' onClick={onNavigate}>
         {citation.n}
       </Link>
     );
   }
-  if (hostLink(citation.link)) {
+  if (hostLink(href)) {
     return (
-      <a className={className} href={citation.link} target='_blank' rel='noreferrer' title={label} aria-label={label} data-testid='chat-chip'>
+      <a className={className} href={href} target='_blank' rel='noreferrer' title={label} aria-label={label} data-testid='chat-chip'>
         {citation.n}
       </a>
     );
@@ -189,7 +191,7 @@ const Actions = ({
           </span>
         ))}
       {actions.includes('open_glob') && openGlob !== undefined && (
-        <Button size='sm' variant='outline' onClick={() => { onNavigate(); void navigate(`/boards/${String(boardId)}/globs/${openGlob}`); }}>
+        <Button size='sm' variant='outline' onClick={() => { onNavigate(); void navigate(globPath(boardId, openGlob, openGlobTarget(message, openGlob))); }}>
           Open in glob view
         </Button>
       )}

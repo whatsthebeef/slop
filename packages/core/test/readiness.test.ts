@@ -168,7 +168,7 @@ describe('stuck hints on cards', () => {
     // Asked the Claude GitHub App, and the PR still conflicts later.
     const asked = sub({ conflict: { ...conflict, requestedAt: NOW } });
     expect(stuckHint(asked, NOW)).not.toMatch(/Resolve locally/);
-    expect(stuckHint(asked, later)).toMatch(/Resolve locally: sstor --glob s1t1 --resolve/);
+    expect(stuckHint(asked, later)).toMatch(/Resolve locally: sstor --glob s1t1 --take-over/);
     // A human implementer resolves locally from the start; a cleared conflict shows nothing.
     expect(stuckHint(sub({ conflict, implementer: 'dev@example.com' }), NOW)).toMatch(/Resolve locally/);
     expect(stuckHint(sub({ conflict: null }), NOW)).toBeNull();
@@ -228,7 +228,7 @@ describe('runs that never start', () => {
 
   it('says how long a run has been queued once it passes 10 minutes, with the session', () => {
     expect(queuedRunNotice(g(), at(9))).toBeNull();
-    expect(queuedRunNotice(g(), at(25))).toBe('Routine run queued for 25 min: open the session https://claude.ai/code/s1');
+    expect(queuedRunNotice(g(), at(25))).toBe('Machine run queued for 25 min: open the session https://claude.ai/code/s1');
     expect(queuedRunNotice(g({ runs: [run({ state: 'active' })] }), at(25))).toBeNull();
   });
 

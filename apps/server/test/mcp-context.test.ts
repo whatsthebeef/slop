@@ -67,7 +67,7 @@ describe('MCP get_context include and get_artifact', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Super',
-        summary: 'Idea',
+        plan: 'Idea',
         type: 'super',
         category: 'feature',
         group: null,
@@ -207,14 +207,15 @@ describe('MCP get_context include and get_artifact', () => {
   it('save_plan saves plan.md conditional on the version read (s15f16)', async () => {
     const save = (version: number, content: string) =>
       client.callTool({ name: 'save_plan', arguments: { id: globId, version, content } });
-    expect((await save(0, '# Plan v1')).isError).not.toBe(true);
+    expect((await save(0, '# Stale')).isError).toBe(true);
     expect((await save(1, '# Plan v2')).isError).not.toBe(true);
-    const stale = await save(1, '# Stale');
+    expect((await save(2, '# Plan v3')).isError).not.toBe(true);
+    const stale = await save(2, '# Stale');
     expect(stale.isError).toBe(true);
     expect(JSON.stringify(stale.content)).toContain('version_conflict');
     const plans = await store.transaction((tx) => tx.artifactVersions(globId, 'plan', ''));
-    expect(plans.map((p) => [p.version, p.content])).toEqual([[1, '# Plan v1'], [2, '# Plan v2']]);
-    expect((await client.callTool({ name: 'save_plan', arguments: { id: globId, version: 2, content: '' } })).isError).toBe(true);
+    expect(plans.map((p) => [p.version, p.content])).toEqual([[1, 'Idea'], [2, '# Plan v2'], [3, '# Plan v3']]);
+    expect((await client.callTool({ name: 'save_plan', arguments: { id: globId, version: 3, content: '' } })).isError).toBe(true);
   });
 
   it('get_artifact returns one artifact in full, or an error when there is none', async () => {

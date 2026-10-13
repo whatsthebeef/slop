@@ -17,9 +17,6 @@ export const agentSetKeyPrefix = (boardId: number): string => `agent-set:${Strin
 /** The title of the glob that brings the repo to agent-set version `version`. */
 export const agentSetGlobTitle = (version: number): string => `Agent set v${String(version)}`;
 
-const summaryOf = (version: number): string =>
-  `Slop commits the board's agent set v${String(version)} to this branch. Merging it brings the repo, and so routines and checkouts, to that version.`;
-
 const PLAN = `# Agent set
 
 Slop opened this glob because the board's agent set changed (an approved learning, or a new catalog version) and the repo's \`.claude/\` is behind.
@@ -113,7 +110,7 @@ export class AgentSetCommitService {
     }
     if (open.title === agentSetGlobTitle(version)) return open;
     // The title follows the board's version; the plan says nothing version-specific, so it stays.
-    const step = machine.changeFields(open, { title: agentSetGlobTitle(version), summary: summaryOf(version) }, board, this.context());
+    const step = machine.changeFields(open, { title: agentSetGlobTitle(version) }, board, this.context());
     if (!step.ok) throw new Error(step.error.message);
     const next = await this.write(tx, open, step.value);
     hints.push({ kind: 'glob.changed', boardId: board.id, globId: next.id, version: next.version }, { kind: 'board.kb', boardId: board.id });
@@ -133,7 +130,6 @@ export class AgentSetCommitService {
         id,
         boardId: board.id,
         title: agentSetGlobTitle(version),
-        summary: summaryOf(version),
         type: 'same',
         category: 'task',
         group: null,

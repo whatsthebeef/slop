@@ -222,7 +222,7 @@ export interface ImpliedAfter {
   readonly source?: EdgeSource;
   /** The run or event that set it, for learned edges. */
   readonly evidence?: string;
-  /** Set when a person chose Start anyway: kept for display, no longer holds. */
+  /** Set when a person chose Start now: kept for display, no longer holds. */
   readonly overridden?: true;
 }
 
@@ -257,7 +257,6 @@ export interface Glob {
   readonly id: string;
   readonly boardId: number;
   readonly title: string;
-  readonly summary: string;
   readonly type: SlopType;
   readonly category: Category;
   /** Per-category fields (a decision's scope and outcome); absent on legacy globs. */

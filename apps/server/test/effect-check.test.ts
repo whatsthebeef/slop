@@ -162,7 +162,6 @@ describe('Effect checks in Postgres', () => {
       await globs.create(DEV, {
         boardId,
         title: `Glob ${String(++n)}`,
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,

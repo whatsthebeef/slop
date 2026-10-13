@@ -150,7 +150,6 @@ export const learningSeed = (tx: Tx, context?: KbWriteContext): LearningSeed => 
         ...moved,
         // A person may have retitled the decision: only a new statement gives it a new title.
         title: before !== null && before.statement === after.statement ? moved.title : decisionGlobTitle(after.statement),
-        summary: after.statement,
         attributes,
         links: kbLinksOf(after),
         version: after.version,
@@ -177,7 +176,6 @@ export const learningSeed = (tx: Tx, context?: KbWriteContext): LearningSeed => 
           id: item.id,
           boardId: item.boardId,
           title: decisionGlobTitle(item.statement),
-          summary: item.statement,
           type: 'same',
           category: 'decision',
           attributes: { scope: defaultScope(), origin: { kind: item.source }, channel: channelOf(item), outcome: null, ...kbAttributesOf(open) },

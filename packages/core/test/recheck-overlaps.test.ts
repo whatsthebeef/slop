@@ -40,7 +40,6 @@ describe('recheck overlaps', () => {
   const input = (patch: Partial<CreateGlobInput> = {}): CreateGlobInput => ({
     boardId,
     title: 'Work',
-    summary: '',
     type: 'sub',
     category: 'task',
     group: null,

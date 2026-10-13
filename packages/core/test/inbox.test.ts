@@ -79,9 +79,22 @@ describe('inbox', () => {
   };
   const searchItem = (id: number) =>
     store.state.searchItems.get(`${String(boardId)}:${inboxRef(id)}`);
-  const addGlob = async (patch: Partial<Glob> = {}) => {
+  const addGlob = async (patch: Partial<Glob> = {}, plan?: string) => {
     const g = makeGlob({ boardId, ...patch });
-    await store.transaction((tx) => tx.insertGlob(g, null));
+    await store.transaction(async (tx) => {
+      await tx.insertGlob(g, null);
+      if (plan !== undefined)
+        await tx.insertArtifact({
+          globId: g.id,
+          kind: 'plan',
+          label: '',
+          content: plan,
+          link: null,
+          commitSha: null,
+          provenance: { by: 'human', actor: DEV, runId: null, agentSetVersion: null },
+          createdAt: START,
+        });
+    });
     return g;
   };
   const paste = async (
@@ -201,17 +214,21 @@ describe('inbox', () => {
 
   describe('processing', () => {
     it('writes the summary and suggestions from candidate globs only, at most three', async () => {
-      const wanted = await addGlob({
-        id: 's1t1',
-        title: 'Push sync jobs over a websocket',
-        summary: 'Replace polling with a websocket',
-      });
+      const wanted = await addGlob(
+        {
+          id: 's1t1',
+          title: 'Push sync jobs over a websocket',
+        },
+        'Replace polling with a websocket',
+      );
       for (const n of [2, 3, 4])
-        await addGlob({
-          id: `s1t${String(n)}`,
-          title: `Sync jobs websocket part ${String(n)}`,
-          summary: 'sync jobs websocket',
-        });
+        await addGlob(
+          {
+            id: `s1t${String(n)}`,
+            title: `Sync jobs websocket part ${String(n)}`,
+          },
+          'sync jobs websocket',
+        );
       await new SearchIndexer({
         store,
         clock,
@@ -255,12 +272,13 @@ describe('inbox', () => {
     });
 
     it('uses the semantic arm when the title is blank, and still summarises with no candidates', async () => {
-      await addGlob({
-        id: 's1t1',
-        title: 'Websocket push',
-        summary:
-          'standup sync jobs pushed over a websocket connection instead of polling the server',
-      });
+      await addGlob(
+        {
+          id: 's1t1',
+          title: 'Websocket push',
+        },
+        'standup sync jobs pushed over a websocket connection instead of polling the server',
+      );
       const indexer = new SearchIndexer({
         store,
         clock,
@@ -405,7 +423,6 @@ describe('inbox', () => {
       globs.create(DEV, {
         boardId,
         title: 'From notes',
-        summary: 'Do it',
         type: 'same',
         category: 'task',
         group: null,
@@ -993,7 +1010,7 @@ describe('inbox', () => {
 
   describe('search index', () => {
     it('leaves pasted items alone when the index sweeps, whatever their type', async () => {
-      await addGlob({ id: 's1t1', summary: 'Something' });
+      await addGlob({ id: 's1t1' }, 'Something');
       const ids = [
         await paste(),
         await paste('A thread', { title: 'Thread' }),

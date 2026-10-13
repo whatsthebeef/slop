@@ -60,7 +60,6 @@ describe('PgStore', () => {
     globs.create('dev@example.com', {
       boardId: 1,
       title: 'Concurrent',
-      summary: '',
       type: 'same',
       category: 'task',
       group: null,
@@ -110,9 +109,9 @@ describe('PgStore', () => {
     await Promise.all([put('plan', '', 'v1'), put('plan', '', 'v2')]);
     await put('attachment', 'Notes', 'n1');
     const latest = await store.transaction((tx) => tx.listArtifacts(glob.id));
-    expect(latest.map((a) => `${a.kind}:${a.version}`).sort()).toEqual(['attachment:1', 'plan:2']);
+    expect(latest.map((a) => `${a.kind}:${a.version}`).sort()).toEqual(['attachment:1', 'plan:3']);
     const versions = await store.transaction((tx) => tx.artifactVersions(glob.id, 'plan', ''));
-    expect(versions.map((v) => v.version)).toEqual([1, 2]);
+    expect(versions.map((v) => v.version)).toEqual([1, 2, 3]);
   });
 
   it('backfills plan.md v1 from the summary only where a glob has none, and again changes nothing', async () => {
@@ -138,8 +137,21 @@ describe('PgStore', () => {
     expect(v1).toMatchObject({ version: 1, content: 'Old summary', provenance: { by: 'backfill' } });
     expect((await plans(planned.id)).map((a) => [a.version, a.content])).toEqual([[1, 'Real plan']]);
     expect(await plans(blank.id)).toEqual([]);
-    const summary = await store.transaction((tx) => tx.getGlob(bare.id));
-    expect(summary?.summary).toBe('Old summary');
+  });
+
+  it('drops the glob summary from stored globs and intake snapshots, and again changes nothing', async () => {
+    const drop = readFileSync(new URL('../drizzle/0062_remove_glob_summary.sql', import.meta.url), 'utf8');
+    const glob = unwrap(await create());
+    await database.db.execute(sql`update globs set data = jsonb_set(data, '{summary}', to_jsonb('Old summary'::text)) where id = ${glob.id}`);
+    const stored = () => database.db.execute(sql`select data ? 'summary' as has, data->>'title' as title from globs where id = ${glob.id}`);
+    expect((await stored())[0]).toMatchObject({ has: true });
+    // The snapshot column is gone already (this test database ran every migration): the statement tolerates that.
+    for (let run = 0; run < 2; run++) {
+      for (const statement of drop.split('--> statement-breakpoint')) await database.db.execute(sql.raw(statement));
+    }
+    expect((await stored())[0]).toMatchObject({ has: false, title: glob.title });
+    const columns = await database.db.execute(sql`select column_name from information_schema.columns where table_name = 'intake_snapshots'`);
+    expect(columns.map((r) => r.column_name)).not.toContain('summary');
   });
 
   it('summarises artifacts per glob on a board: latest version per kind, version count, no content', async () => {
@@ -185,21 +197,23 @@ describe('PgStore', () => {
     expect(rows).toEqual(
       [
         `${first.id}:local_review:v2/2:bbb:sessionator`,
+        `${first.id}:plan:v1/1:-:human`,
         `${first.id}:postplan:v1/1:bbb:sessionator`,
         `${second.id}:local_review:v1/1:-:routine`,
+        `${second.id}:plan:v1/1:-:human`,
       ].sort(),
     );
     expect(summaries[0]).not.toHaveProperty('content');
     expect(summaries.every((a) => typeof a.createdAt === 'string' && a.actor === 'dev@example.com')).toBe(true);
 
     const one = await store.transaction((tx) => tx.listArtifactSummaries(1, [second.id]));
-    expect(one.map((a) => a.globId)).toEqual([second.id]);
+    expect(new Set(one.map((a) => a.globId))).toEqual(new Set([second.id]));
     expect(await store.transaction((tx) => tx.listArtifactSummaries(1, []))).toEqual([]);
 
     const view = unwrap(await globs.get('dev@example.com', first.id));
-    expect(view.artifacts.map((a) => a.kind)).toEqual(['postplan', 'local_review']);
+    expect(view.artifacts.map((a) => a.kind).sort()).toEqual(['local_review', 'plan', 'postplan']);
     const board = unwrap(await globs.listWithArtifacts('dev@example.com', 1, {}));
-    expect(board.find((g) => g.glob.id === second.id)?.artifacts.map((a) => a.kind)).toEqual(['local_review']);
+    expect(board.find((g) => g.glob.id === second.id)?.artifacts.map((a) => a.kind).sort()).toEqual(['local_review', 'plan']);
   });
 
   it('keeps earlier knowledge versions as history', async () => {

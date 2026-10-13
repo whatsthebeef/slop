@@ -118,7 +118,7 @@ export class DecisionGlobService {
         const check = machine.decideDecision(glob, { outcome: 'needs_work', ...(input.reason === undefined ? {} : { reason: input.reason }), linkedGlobId: glob.id }, this.context(actor.value));
         if (!check.ok) return check;
       }
-      const plan = (await tx.listArtifacts(id, 'plan'))[0]?.content ?? glob.summary;
+      const plan = (await tx.listArtifacts(id, 'plan'))[0]?.content ?? '';
       return ok({ glob, plan });
     });
     if (!read.ok) return read;
@@ -130,7 +130,6 @@ export class DecisionGlobService {
       const created = await this.deps.globs.create(email, {
         boardId: seen.boardId,
         title: `${seen.id}: ${seen.title}`.slice(0, 200),
-        summary: seen.summary,
         type: 'same',
         category: 'task',
         group: seen.group,

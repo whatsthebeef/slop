@@ -72,7 +72,7 @@ describe('the behind-main warning', () => {
     executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), new BoardService({ store, notifier: { publish: () => undefined } }));
     // A same starts in planning; this one is in Doing with its draft PR.
     const created = unwrap(
-      await globs.create(DEV, { boardId: 1, title: 'Work', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+      await globs.create(DEV, { boardId: 1, title: 'Work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
     );
     globId = created.id;
     await globs.applyEvent(created.id, (g, ctx) => machine.provisioned(g, { branch: g.id, pr: { number: 7, headSha: HEAD } }, ctx));

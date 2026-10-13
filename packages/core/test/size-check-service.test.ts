@@ -72,7 +72,6 @@ describe('learned size check', () => {
       await globs.create(DEV, {
         boardId,
         title: 'T',
-        summary: 's',
         type,
         category: type === 'sub' ? 'task' : 'feature',
         group: null,
@@ -168,7 +167,7 @@ describe('learned size check', () => {
     expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.decision).toBe('kept_whole');
   });
 
-  it('Start anyway on a flagged sub offers the action and starts it; keeping whole first records the override', async () => {
+  it('Start now on a flagged sub offers the action and starts it; keeping whole first records the override', async () => {
     const sub = await create('sub', BIG);
     const view = unwrap(await globs.get(DEV, sub.id));
     expect(view.allowedActions).toContain('start_anyway');
@@ -269,7 +268,7 @@ describe('learned size check', () => {
   it('splitting a flagged glob records the decision', async () => {
     const glob = await create('same', BIG);
     const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-    const parts = (check?.proposal?.parts ?? []).map((p) => ({ title: p.title, summary: p.summary, plan: p.plan, after: p.after }));
+    const parts = (check?.proposal?.parts ?? []).map((p) => ({ title: p.title, plan: p.plan, after: p.after }));
     unwrap(await globs.split(DEV, glob.id, glob.version, { parts, idempotencyKey: null }));
     expect((await store.transaction((tx) => tx.getSizeCheck(glob.id)))?.decision).toBe('split');
     const view = unwrap(await globs.get(DEV, glob.id));
@@ -290,7 +289,7 @@ describe('learned size check', () => {
 
   it('a summary-only sub is not held by the model\'s parts estimate', async () => {
     const sub = unwrap(
-      await globs.create(DEV, { boardId, title: 'T', summary: 'x'.repeat(300), type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+      await globs.create(DEV, { boardId, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
     );
     expect(calls).toEqual([]);
     expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.flagged).toBe(false);
@@ -333,7 +332,6 @@ describe('learned size check', () => {
       const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
       const parts = (check?.proposal?.parts ?? []).map((p, index) => ({
         title: p.title,
-        summary: p.summary,
         plan: p.plan,
         ...(index > 0 && p.after.length > 0 ? { after: [...p.after] } : {}),
         ...(index > 0 && (p.overlaps ?? []).length > 0 ? { overlaps: [...(p.overlaps ?? [])] } : {}),

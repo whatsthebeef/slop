@@ -66,8 +66,7 @@ export type SizeAssessment = Pick<SizeCheck, 'planHash' | 'estimate' | 'evidence
 
 /** What `GlobService` and `ArtifactService` need: assess a plan before creating a glob, and refresh a glob's check after a plan save. */
 export interface SizeAssessor {
-  /** `summaryOnly`: no plan was written, `plan` is the glob's summary; the model's parts estimate is not used for it. */
-  assess(boardId: number, plan: string, options?: { summaryOnly?: boolean }): Promise<SizeAssessment>;
+  assess(boardId: number, plan: string): Promise<SizeAssessment>;
   /** Re-assesses a glob in Planning after its plan.md changed. Never throws. */
   refresh(globId: string): Promise<void>;
 }
@@ -90,7 +89,7 @@ Also say how many parts could be built at the same time once any shared contract
 Answer with JSON only: {"independentParts": a whole number, at least 1, "parallelParts": a whole number, at least 1, "reason": "one short sentence"}.`;
 
 const PROPOSE_SYSTEM = `You split a plan that is too big for one pull request into parts that can each be built and merged on their own.
-Answer with JSON only: {"parts": [{"title": "...", "summary": "one or two sentences", "plan": "...", "after": [0]}]}.
+Answer with JSON only: {"parts": [{"title": "...", "plan": "...", "after": [0]}]}.
 - 2 to 6 parts, in the order they should be built. Part 0 stays the original task. When the parts share something (a schema, an interface, a type), make part 0 that shared contract alone and let each other part need only part 0, so they can be built at the same time.
 - "plan" is the part's share of the original plan, copied verbatim (keep the goal and any context it needs): every task goes to exactly one part. A section with no task (Evidence, Why, Background, Notes, an investigation list) is context: never make it a part, leave it with the parts that use it.
 - "after" lists the earlier parts (their index) whose code this one needs on main before it can start: direct prerequisites only. Touching the same files is not a need (leave it out); otherwise leave it empty so parts run in parallel.`;
@@ -123,7 +122,6 @@ export const parseParts = (answer: string): ModelPart[] =>
     return [
       {
         title,
-        summary: text(field(p, 'summary')) ?? '',
         plan,
         after: list(field(p, 'after')).flatMap((n) => {
           const found = intOf(n);
@@ -160,11 +158,10 @@ export class SizeCheckService implements SizeAssessor {
   private readonly forecasting = new Set<string>();
   private readonly forecastAgain = new Set<string>();
 
-  async assess(boardId: number, plan: string, options: { summaryOnly?: boolean } = {}): Promise<SizeAssessment> {
+  async assess(boardId: number, plan: string): Promise<SizeAssessment> {
     const threshold = await this.deps.store.transaction((tx) => tx.getSizeThreshold(boardId));
     let estimate = estimateFromText(plan);
-    // A sentence of summary says nothing about how many parts the work has: only the text estimate, which cannot hold a glob.
-    if (this.deps.llm !== undefined && options.summaryOnly !== true && plan.trim().length >= MIN_JUDGED_CHARS) {
+    if (this.deps.llm !== undefined && plan.trim().length >= MIN_JUDGED_CHARS) {
       try {
         const answer = await completeWithDeadline(
           this.deps.llm,
@@ -254,7 +251,7 @@ export class SizeCheckService implements SizeAssessor {
       const read = await this.deps.store.transaction(async (tx) => {
         const glob = await tx.getGlob(globId);
         if (glob === null || glob.status !== 'planning') return null;
-        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? glob.summary;
+        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
         return { boardId: glob.boardId, plan };
       });
       if (read === null) return;
@@ -284,7 +281,7 @@ export class SizeCheckService implements SizeAssessor {
       const read = await this.deps.store.transaction(async (tx) => {
         const glob = await tx.getGlob(globId);
         if (glob === null || glob.status !== 'planning') return null;
-        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? glob.summary;
+        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
         return { boardId: glob.boardId, plan, previous: await tx.getSizeCheck(globId) };
       });
       if (read === null) return;
@@ -297,7 +294,7 @@ export class SizeCheckService implements SizeAssessor {
       const written = await this.deps.store.transaction(async (tx) => {
         const glob = await tx.getGlob(globId);
         if (glob === null || glob.status !== 'planning') return false;
-        const latest = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? glob.summary;
+        const latest = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
         // The plan was saved again meanwhile: that save's own refresh writes.
         if (hash(latest) !== assessment.planHash) return false;
         await tx.updateSizeAssessment(checkFrom(globId, read.boardId, assessment, await tx.getSizeCheck(globId), this.deps.clock.now()));
@@ -340,7 +337,7 @@ export class SizeCheckService implements SizeAssessor {
       const read = await this.deps.store.transaction(async (tx) => {
         const glob = await tx.getGlob(globId);
         if (glob === null || glob.status !== 'planning') return null;
-        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? glob.summary;
+        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
         const check = await tx.getSizeCheck(globId);
         return check === null ? null : { boardId: glob.boardId, plan, check };
       });
@@ -351,7 +348,7 @@ export class SizeCheckService implements SizeAssessor {
       const written = await this.deps.store.transaction(async (tx) => {
         const glob = await tx.getGlob(globId);
         if (glob === null || glob.status !== 'planning') return false;
-        const latest = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? glob.summary;
+        const latest = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
         const current = await tx.getSizeCheck(globId);
         if (current === null || hash(latest) !== current.planHash || current.planHash !== read.check.planHash) return false;
         const [calibration, threshold] = [await tx.getSizeCalibration(read.boardId), await tx.getSizeThreshold(read.boardId)];

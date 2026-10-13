@@ -190,7 +190,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   },
   glob: {
     usage: GLOB_USAGE,
-    summary: "Print a glob's summary (status, branch, implementer, run, PR)",
+    summary: "Print a glob's status (status, branch, implementer, run, PR)",
     run: (args, context) => globCommand(args, globDeps(context)),
   },
   'pick-up': {

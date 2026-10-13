@@ -122,7 +122,6 @@ describe('Type corrections in Postgres', () => {
       await globs.create(DEV, {
         boardId,
         title: 'x',
-        summary: '',
         type,
         category: 'feature',
         group: null,

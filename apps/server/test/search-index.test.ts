@@ -59,7 +59,6 @@ describe('search index backfill', () => {
     const created = await globs.create(DEV, {
       boardId,
       title: 'Sync retries',
-      summary: 'Retry failed syncs with backoff.',
       type: 'same',
       category: 'task',
       group: 'sync',
@@ -124,10 +123,10 @@ describe('search index backfill', () => {
 
   it('writes the same rows when run again', async () => {
     const first = await indexer.syncBoard(boardId);
-    // Summary, plan, postplan, attachment, document, learning, and the queued change.
-    expect(first).toEqual({ written: 6, removed: 0, queued: 1 });
+    // Plan, postplan, attachment, document, learning, and the queued change.
+    expect(first).toEqual({ written: 5, removed: 0, queued: 1 });
     const before = await counts();
-    expect(before.items).toBe(7);
+    expect(before.items).toBe(6);
     expect(before.embedded).toBe(0);
 
     expect(await indexer.syncBoard(boardId)).toEqual({ written: 0, removed: 0, queued: 0 });

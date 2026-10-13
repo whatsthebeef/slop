@@ -22,7 +22,6 @@ const createInput = (patch: Partial<m.CreateInput> = {}): m.CreateInput => ({
   id: 's1t1',
   boardId: 1,
   title: 'Fix login timeout',
-  summary: '',
   type: 'same',
   category: 'task',
   group: null,
@@ -800,7 +799,7 @@ describe('field changes and type changes (row 26)', () => {
       }
     });
 
-    it('a same held only by `after` offers Start anyway, not Start, with the dependencies loaded (the list path)', () => {
+    it('a same held only by `after` offers Start now, not Start, with the dependencies loaded (the list path)', () => {
       const held = glob({ type: 'same', status: 'planning', after: ['s1t9'], waiting: null });
       const actions = m.allowedActions(held, dev, { dependencies: new Map([['s1t9', 'open' as const]]) });
       expect(actions).toContain('start_anyway');
@@ -808,7 +807,7 @@ describe('field changes and type changes (row 26)', () => {
       expect(m.allowedActions(held, dev, { dependencies: new Map([['s1t9', 'merged' as const]]) })).toContain('start');
     });
 
-    it('a glob held only for its oversized flag offers Start anyway with the dependencies loaded', () => {
+    it('a glob held only for its oversized flag offers Start now with the dependencies loaded', () => {
       const held = glob({ type: 'sub', status: 'planning', waiting: { since: NOW } });
       expect(m.allowedActions(held, dev, { dependencies: new Map() })).not.toContain('start_anyway');
       expect(m.allowedActions(held, dev, { dependencies: new Map(), sizeHeld: true })).toContain('start_anyway');
@@ -1552,7 +1551,7 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
 
 describe('provisioning failure', () => {
   const queued = () => glob({ status: 'implementing', provisioning: 'pending', pr: null, runs: [run({ state: 'queued' })] });
-  const reason = "Couldn't create branch s1t1 on acme/app: the slop GitHub App can't see that repo. Install it on the repo, or add the repo to its access, then Start over.";
+  const reason = "Couldn't create branch s1t1 on acme/app: the slop GitHub App can't see that repo. Install it on the repo, or add the repo to its access, then Discard & restart.";
 
   it('a retryable failure only records the attempt', () => {
     const t = value(m.provisioningFailed(queued(), 'boom', ctx()));

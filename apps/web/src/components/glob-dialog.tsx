@@ -2,19 +2,21 @@ import { decisionOf, isValidCombination, machine } from '@slop/core';
 import type { Action, Category, EditFailure, SuggestionPrefill } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
-import { Input, Label, Select, Textarea } from '@/components/ui/input';
+import { Input, Label, Select } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
 import type { GlobSection } from '@/lib/glob-section';
+import { workingLabel } from '@/lib/card-pending';
 import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
 import type { PendingAction } from '@/lib/pending-action';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
+import { conflictByHand, conflictCommand, copySstorCommand } from '@/lib/sstor-command';
 import {
   blockedLine,
   chainTip,
@@ -92,6 +94,59 @@ const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) 
 );
 
 /** The glob view: a page in the board's main area (never a modal), with a back arrow to the board. */
+/** The conflict box: the command that starts the glob's Claude session on the merge, with the by-hand route collapsed below. */
+const ConflictBox = ({
+  globId,
+  branch,
+  base,
+  canTakeOver,
+}: {
+  globId: string;
+  branch: string;
+  base: string;
+  canTakeOver: boolean;
+}) => {
+  const command = conflictCommand(globId, canTakeOver);
+  const copy = () => {
+    const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+    void (
+      copySstorCommand(canTakeOver ? 'take_over' : 'pick_up', globId, clipboard) ??
+      Promise.resolve(null)
+    );
+  };
+  return (
+    <div className="grid gap-1 rounded border border-edge p-2 text-sm" data-testid="conflict-box">
+      <span>
+        {canTakeOver ? 'Take over and let your Claude session' : 'Let your Claude session'} merge{' '}
+        {base}: it resolves additive conflicts and asks you about the rest.
+      </span>
+      <span className="flex items-center gap-2">
+        <code
+          className="block select-all whitespace-pre-wrap font-mono text-xs"
+          data-testid="conflict-command"
+        >
+          {command}
+        </code>
+        <button
+          type="button"
+          className="rounded border px-1.5 py-0.5 text-xs hover:bg-muted"
+          onClick={copy}
+        >
+          Copy
+        </button>
+      </span>
+      <details data-testid="conflict-by-hand">
+        <summary className="cursor-pointer text-xs text-muted-foreground">
+          Resolve by hand instead (advanced)
+        </summary>
+        <code className="block whitespace-pre-wrap font-mono text-xs">
+          {conflictByHand(globId, branch, base)}
+        </code>
+      </details>
+    </div>
+  );
+};
+
 export const GlobDetail = ({
   board,
   glob,
@@ -324,9 +379,14 @@ export const GlobDetail = ({
             );
           }}
         >
-          {busy && pending?.action === action
-            ? 'Working…'
-            : actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
+          {busy && pending?.action === action ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              {workingLabel(action)}
+            </>
+          ) : (
+            actionLabel(action, glob.type, ACTION_LABELS, glob.status)
+          )}
         </Button>
       );
       const tip = ACTION_TIPS[action];
@@ -448,12 +508,12 @@ export const GlobDetail = ({
         )}
         <Anchor name="conflict">
           {(glob.failure?.conflict ?? glob.conflict) != null && glob.implementer !== null && (
-            <div className="grid gap-1 rounded border border-edge p-2 text-sm">
-              <span>Resolve it locally, then push (Start again stays available):</span>
-              <code className="block whitespace-pre-wrap font-mono text-xs">
-                {`sstor --glob ${glob.id} --resolve\n# or by hand:\ngit fetch origin ${(glob.failure?.conflict ?? glob.conflict)?.base ?? ''} && git checkout ${glob.branch} && git merge origin/${(glob.failure?.conflict ?? glob.conflict)?.base ?? ''}\n# resolve the conflicts, commit\ngit push origin ${glob.branch}`}
-              </code>
-            </div>
+            <ConflictBox
+              globId={glob.id}
+              branch={glob.branch}
+              base={(glob.failure?.conflict ?? glob.conflict)?.base ?? ''}
+              canTakeOver={(glob.allowedActions ?? []).includes('take_over')}
+            />
           )}
         </Anchor>
 
@@ -773,10 +833,6 @@ export const GlobDetail = ({
         </Anchor>
 
         <div className="grid gap-3">
-          <Label>
-            Summary
-            <Textarea value={merged.summary} onChange={(e) => edit({ summary: e.target.value })} />
-          </Label>
           <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-3">
             {!decision && (
               <Label>
@@ -897,7 +953,6 @@ export const GlobDetail = ({
         <Anchor name="plan">
           <PlanEditor
             globId={glob.id}
-            summary={glob.summary}
             startExpanded={new URLSearchParams(window.location.search).get('section') === 'plan'}
             onHistory={
               glob.status === 'signed_off'
@@ -961,7 +1016,14 @@ export const GlobDetail = ({
           )}
         </Anchor>
 
-        <Anchor name="findings">{!decision && <ReviewFindings globId={glob.id} />}</Anchor>
+        <Anchor name="findings">
+          {!decision && (
+            <ReviewFindings
+              globId={glob.id}
+              startOpen={new URLSearchParams(window.location.search).get('section') === 'findings'}
+            />
+          )}
+        </Anchor>
 
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <dt>Planner</dt>

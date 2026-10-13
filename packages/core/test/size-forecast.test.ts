@@ -106,7 +106,6 @@ describe('size forecast', () => {
       await globs.create(DEV, {
         boardId,
         title: 'T',
-        summary: 's',
         type: 'same',
         category: 'feature',
         group: null,
@@ -427,7 +426,7 @@ describe('size forecast', () => {
   describe('the background forecast of a created glob and the hold', () => {
     const createSub = async (plan: string): Promise<Glob> =>
       unwrap(
-        await globs.create(DEV, { boardId, title: 'T', summary: 's', type: 'sub', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan }),
+        await globs.create(DEV, { boardId, title: 'T', type: 'sub', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan }),
       );
     const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -437,7 +436,7 @@ describe('size forecast', () => {
       const sizeCheck = { assess: base.assess.bind(base), refresh: () => (++refreshes, new Promise<void>(() => undefined)) };
       const slow = new GlobService({ store, notifier: new RecordingNotifier(), clock: { now: () => NOW }, ids: { runId: () => 'run-x' }, routines: { hasRoutine: () => Promise.resolve(true) }, sizeCheck, log: (_t, m) => void logged.push(m) });
       const created = unwrap(
-        await slow.create(DEV, { boardId, title: 'T', summary: 's', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: checklist(2) }),
+        await slow.create(DEV, { boardId, title: 'T', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: checklist(2) }),
       );
       expect(created.status).toBe('planning');
       expect(refreshes).toBe(1);
@@ -452,7 +451,7 @@ describe('size forecast', () => {
         log: (_t, m) => void logged.push(m),
       });
       const again = unwrap(
-        await failing.create(DEV, { boardId, title: 'T2', summary: 's', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: checklist(2) }),
+        await failing.create(DEV, { boardId, title: 'T2', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: checklist(2) }),
       );
       expect(again.status).toBe('planning');
       await settle();
@@ -472,7 +471,7 @@ describe('size forecast', () => {
         },
         log: (_t, m) => void logged.push(m),
       });
-      unwrap(await throwing.create(DEV, { boardId, title: 'T3', summary: 's', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: checklist(2) }));
+      unwrap(await throwing.create(DEV, { boardId, title: 'T3', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: checklist(2) }));
       await settle();
       expect(logged).toEqual(['model exploded', 'sync boom']);
     });

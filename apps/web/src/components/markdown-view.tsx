@@ -2,8 +2,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Button } from '@/components/ui/button';
-import { COLLAPSED_REM, needsCollapse } from '@/lib/collapsible';
+import { BAR_CLASS, barLabel, boxClass, COLLAPSED_REM, needsCollapse } from '@/lib/collapsible';
 
 /**
  * Renders an artifact's markdown. GitHub-flavoured, because local reviews and plans lean on
@@ -19,8 +18,9 @@ export const MarkdownView = ({ content }: { content: string }) => (
 );
 
 /**
- * MarkdownView for long documents: clipped to about 24rem with a fade and "More ▾", and "Show less ▴" once expanded.
- * Short documents show no button. `startExpanded` opens it expanded (a deep link); the state is per view.
+ * MarkdownView for long documents: clipped to about 24rem with no fade, and a full-width "Show more ▾" bar joined to the
+ * bottom of the box ("Show less ▴" once expanded). Short documents show no bar. `startExpanded` opens it expanded
+ * (a deep link); the state is per view.
  */
 export const CollapsibleMarkdown = ({ content, startExpanded = false }: { content: string; startExpanded?: boolean }) => {
   const [expanded, setExpanded] = useState(startExpanded);
@@ -43,34 +43,25 @@ export const CollapsibleMarkdown = ({ content, startExpanded = false }: { conten
   const clipped = long && !expanded;
   return (
     <div ref={box} data-testid="collapsible-markdown">
-      <div className="relative" style={clipped ? { maxHeight: `${String(COLLAPSED_REM)}rem`, overflow: 'hidden' } : undefined}>
+      <div className={boxClass(long)} style={clipped ? { maxHeight: `${String(COLLAPSED_REM)}rem` } : undefined}>
         <div ref={natural}>
           <MarkdownView content={content} />
         </div>
-        {clipped && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent" />}
       </div>
       {long && (
-        <div className="mt-1 flex justify-center">
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid={expanded ? 'show-less' : 'show-more'}
-            onClick={() => {
-              if (expanded) box.current?.scrollIntoView({ block: 'nearest' });
-              setExpanded(!expanded);
-            }}
-          >
-            {expanded ? (
-              <>
-                Show less <ChevronUp className="h-4 w-4" />
-              </>
-            ) : (
-              <>
-                More <ChevronDown className="h-4 w-4" />
-              </>
-            )}
-          </Button>
-        </div>
+        <button
+          type="button"
+          className={BAR_CLASS}
+          aria-expanded={expanded}
+          data-testid={expanded ? 'show-less' : 'show-more'}
+          onClick={() => {
+            if (expanded) box.current?.scrollIntoView({ block: 'nearest' });
+            setExpanded(!expanded);
+          }}
+        >
+          {barLabel(expanded)}
+          {expanded ? <ChevronUp aria-hidden className="h-4 w-4" /> : <ChevronDown aria-hidden className="h-4 w-4" />}
+        </button>
       )}
     </div>
   );

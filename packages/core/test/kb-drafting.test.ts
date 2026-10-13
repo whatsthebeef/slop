@@ -166,7 +166,6 @@ describe('KB pipeline: drafting and approving drafts', () => {
       await globs.create(ADMIN, {
         boardId,
         title: 'Work',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,

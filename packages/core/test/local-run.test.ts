@@ -155,7 +155,6 @@ describe('the local-run spec through the KB', () => {
       await globs.create(ADMIN, {
         boardId,
         title: 'Work',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,

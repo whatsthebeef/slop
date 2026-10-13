@@ -70,3 +70,9 @@ export const globTargetOf = (search: URLSearchParams): GlobTarget => {
     ...(label === null ? {} : { label }),
   };
 };
+
+/** A link through the board's `?glob=<id>` redirect, which carries the target on to the glob's page. */
+export const boardGlobHref = (boardId: number, globId: string, target: GlobTarget = {}): string => {
+  const query = globQuery(target);
+  return `/boards/${String(boardId)}?glob=${encodeURIComponent(globId)}${query === '' ? '' : `&${query.slice(1)}`}`;
+};

@@ -28,7 +28,6 @@ describe('services', () => {
   const input = (patch: Partial<CreateGlobInput> = {}): CreateGlobInput => ({
     boardId,
     title: 'Fix login timeout',
-    summary: '',
     type: 'same',
     category: 'task',
     group: null,
@@ -76,7 +75,7 @@ describe('services', () => {
 
   it('writes events and effects with the state change and publishes a hint', async () => {
     const glob = unwrap(await globs.create(DEV, input()));
-    expect(store.state.events.map((e) => e.type)).toEqual(['GlobCreated']);
+    expect(store.state.events.map((e) => e.type)).toEqual(['GlobCreated', 'ArtifactAdded']);
     // A same in Planning has no branch yet; it provisions when work starts.
     expect(store.state.outbox.map((e) => e.kind)).toEqual([]);
     expect(notifier.hints).toContainEqual({ kind: 'glob.changed', boardId, globId: glob.id, version: 1 });
@@ -171,7 +170,8 @@ describe('services', () => {
     const second = unwrap(await artifacts.addIndependentReview(glob.id, { content: '# again', commitSha: 'm2', meta: { ...meta, findings: 0, high: 0, medium: 0, low: 0 }, model: 'gpt-oss' }));
     expect([first.version, second.version]).toEqual([1, 2]);
     expect(second).toMatchObject({ kind: 'independent_review', commitSha: 'm2', provenance: { by: 'reviewer', actor: 'gpt-oss' } });
-    const [summary] = await store.transaction((tx) => tx.listArtifactSummaries(boardId, [glob.id]));
+    const summaries = await store.transaction((tx) => tx.listArtifactSummaries(boardId, [glob.id]));
+    const summary = summaries.find((a) => a.kind === 'independent_review');
     expect(summary).toMatchObject({ kind: 'independent_review', version: 2, versions: 2, commitSha: 'm2', review: { findings: 0, stage: 'pre_merge' } });
     expect(notifier.hints.some((h) => h.kind === 'glob.artifacts' && h.globId === glob.id)).toBe(true);
     const missing = await artifacts.addIndependentReview('nope', { content: 'x', commitSha: 'm', meta, model: 'm' });
