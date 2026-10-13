@@ -1,6 +1,8 @@
 import { globIdInText } from '@slop/core';
 import { RequestError } from '@/lib/api';
 import type { ChatCitation, ChatMessage } from '@/lib/api';
+import type { GlobSection, GlobTarget } from '@/lib/glob-section';
+import { globQuery } from '@/lib/glob-section';
 import type { PageContext } from '@/lib/page-context';
 
 /** What the panel says when the chat model can't answer; null for any other failure (shown as its own message). */
@@ -178,3 +180,31 @@ export const withCiteLinks = (text: string, citations: readonly Pick<ChatCitatio
 
 /** The glob IDs an answer mentions, in order and without repeats. */
 export const mentionedGlobs = (text: string): string[] => [...new Set(text.match(globIdInText()) ?? [])];
+
+/** The part of a glob's page a cited source lives in: a plan opens at the plan, a review at its findings; other sources at the top. */
+export const citationSection = (source: ChatCitation['source']): GlobSection | undefined => {
+  switch (source) {
+    case 'glob_plan':
+      return 'plan';
+    case 'independent_review':
+    case 'local_review':
+      return 'findings';
+    default:
+      return undefined;
+  }
+};
+
+/** A citation's link with its section added, when it is the board's `?glob=<id>` link; any other link is returned as it is. */
+export const citationHref = (citation: Pick<ChatCitation, 'link' | 'source'>): string | null => {
+  const { link } = citation;
+  const section = citationSection(citation.source);
+  if (link === null || section === undefined || !/^\/boards\/\d+\?glob=[^&#]+$/.test(link)) return link;
+  return `${link}&${globQuery({ section }).slice(1)}`;
+};
+
+/** Where the answer's open button goes: the section every citation of that glob agrees on, else the top. */
+export const openGlobTarget = (message: Pick<ChatMessage, 'citations'>, globId: string): GlobTarget => {
+  const sections = new Set((message.citations ?? []).filter((c) => c.globId === globId).map((c) => citationSection(c.source)));
+  const [only] = sections.size === 1 ? sections : [];
+  return only === undefined ? {} : { section: only };
+};

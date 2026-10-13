@@ -27,6 +27,7 @@ import { APPLY_HINT_TEXT, applyPrefill, SUGGEST_POLL_MS, SUGGESTION_ACTION_TEXT,
 import { artifactKey, globDecisionsKey, globDiffKey } from '@/lib/live';
 import { useToast } from '@/toast';
 import { Tip } from './ui/tip';
+import { boardGlobHref } from '@/lib/glob-section';
 
 /** A learning an agent submitted or slop mined: the decision is a KB item (same ID), with a knowledge change to apply. */
 const isLearning = (attributes: DecisionAttributes): boolean => attributes.origin.kind === 'submitted' || attributes.origin.kind === 'mined';
@@ -429,7 +430,7 @@ export const DecisionAssessment = ({
               </span>
             )}
             {stored.mergeInto !== null && (
-              <Link className='font-mono text-xs underline' to={`/boards/${String(glob.boardId)}?glob=${encodeURIComponent(stored.mergeInto)}`}>
+              <Link className='font-mono text-xs underline' to={boardGlobHref(glob.boardId, stored.mergeInto, { section: 'decision' })}>
                 {stored.mergeInto}
               </Link>
             )}
@@ -576,7 +577,7 @@ const LearningFacts = ({ glob, attributes, deciders }: { glob: GlobView; attribu
   const target = targetText(attributes);
   const closed = closedText(attributes);
   const groups = linksByKind(glob.links);
-  const open = (id: string) => `/boards/${String(glob.boardId)}?glob=${encodeURIComponent(id)}`;
+  const open = (id: string) => boardGlobHref(glob.boardId, id, { section: 'decision' });
   return (
     <div className='grid gap-1 text-xs' data-testid='learning-facts'>
       <p className='text-muted-foreground'>
@@ -677,7 +678,7 @@ export const DecisionSection = ({
               {conflicts.map((id, i) => (
                 <span key={id}>
                   {i > 0 && ', '}
-                  <Link className='font-mono underline' to={`/boards/${String(glob.boardId)}?glob=${encodeURIComponent(id)}`}>
+                  <Link className='font-mono underline' to={boardGlobHref(glob.boardId, id, { section: 'decision' })}>
                     {id}
                   </Link>
                 </span>

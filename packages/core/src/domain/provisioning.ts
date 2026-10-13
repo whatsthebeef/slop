@@ -18,10 +18,10 @@ export const provisioningFailureReason = (
 ): string => {
   const where = repo === null ? '' : ` on ${repo}`;
   if (status === 404) {
-    return `Couldn't create branch ${globId}${where}: the slop GitHub App can't see that repo. Install it on the repo, or add the repo to its access, then Start over.`;
+    return `Couldn't create branch ${globId}${where}: the slop GitHub App can't see that repo. Install it on the repo, or add the repo to its access, then Discard & restart.`;
   }
   if (status === 403 && !RATE_LIMITED.test(message)) {
-    return `Couldn't create branch ${globId}${where}: the slop GitHub App lacks permission (contents: write). Accept its updated permissions on the installation, then Start over.`;
+    return `Couldn't create branch ${globId}${where}: the slop GitHub App lacks permission (contents: write). Accept its updated permissions on the installation, then Discard & restart.`;
   }
   return `Couldn't create branch ${globId}${where}: ${message}`;
 };

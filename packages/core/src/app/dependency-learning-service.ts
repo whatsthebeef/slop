@@ -51,7 +51,7 @@ const merged = (glob: Glob): boolean => glob.status === 'reviewing' || glob.stat
  * - one that conflicted or needed a rebase strengthens them;
  * - a run that failed for unmerged prerequisites makes them a learned `needs` of the glob (an overlap on the same
  *   glob is upgraded) and strengthens the patterns of the edge;
- * - a `needs` that a person overrode with Start anyway, whose glob then merged without failing for it, drops to an
+ * - a `needs` that a person overrode with Start now, whose glob then merged without failing for it, drops to an
  *   overlap and weakens its patterns.
  * Cross-board promotion stays a human step (`submit_learning`); nothing here leaves the board.
  */
@@ -129,7 +129,7 @@ export class DependencyLearningService {
           if (await this.move(tx, glob.boardId, defaults, pattern, cause, glob.id, evidence)) touched = true;
         }
       }
-      // Start anyway on a need, then a merge that never failed for it: the need was an overlap.
+      // Start now on a need, then a merge that never failed for it: the need was an overlap.
       const overridden = events.filter((e) => e.type === 'HoldOverridden').flatMap((e) => stringsOf(e.data['for']));
       const history = await tx.listDependencyRuleChanges(glob.boardId);
       const failedFor = new Set(history.filter((c) => c.globId === glob.id && c.cause === 'unmerged_prerequisite').map((c) => c.evidence));
@@ -182,7 +182,7 @@ export class DependencyLearningService {
         const evidence = `${glob.id} failed: ${reason.slice(0, 160)}`;
         const existing = edgesOf(next).find((e) => e.id === id);
         if (existing?.kind === 'needs') {
-          // Already a need: the failure confirms it (and keeps a later start anyway from downgrading it).
+          // Already a need: the failure confirms it (and keeps a later start now from downgrading it).
           await tx.insertDependencyRuleChange({ boardId: glob.boardId, at: this.deps.clock.now(), pattern: `edge ${glob.id} -> ${id}`, from: 1, to: 1, cause: 'unmerged_prerequisite', globId: glob.id, evidence });
           continue;
         }
