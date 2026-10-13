@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
 import { GroupChip } from '../glob-card';
 import { GlobTitle } from '../glob-title';
+import { rolloutLine } from '@/lib/human-steps';
 import { LabelChips } from '../labels';
 import { Tip } from '../ui/tip';
 import type { GlobView } from '@/lib/api';
@@ -95,10 +96,12 @@ export const GlobChips = ({
 }) => {
   const { board, glob } = ctx;
   const decision = decisionOf(glob) !== null;
+  // A merged glob whose rollout holds back its sign-off says so, as its card does, instead of "awaiting sign-off".
+  const rollout = decision ? null : rolloutLine(glob, glob.humanSteps ?? [], undefined);
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="rounded bg-muted px-2 py-0.5">
-        {(decision ? DECISION_STATUS_TEXT[glob.status] : undefined) ?? STATUS_TEXT[glob.status]}
+      <span className="rounded bg-muted px-2 py-0.5" title={rollout?.tip}>
+        {rollout?.text ?? (decision ? DECISION_STATUS_TEXT[glob.status] : undefined) ?? STATUS_TEXT[glob.status]}
       </span>
       {decision ? (
         <span className="rounded border px-2 py-0.5 text-xs" data-testid="glob-type">

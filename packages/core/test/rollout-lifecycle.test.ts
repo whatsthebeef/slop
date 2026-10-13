@@ -29,9 +29,16 @@ describe('lifecycle with open blocking steps (pure)', () => {
   it('approving the last label signs off, unless work steps still hold sign-off back', () => {
     expect(approve(reviewing(), null).glob.status).toBe('signed_off');
     expect(approve(reviewing(), { open: 0, total: 2 }).glob.status).toBe('signed_off');
-    const held = approve(reviewing(), { open: 1, total: 2 });
-    expect(held.glob.status).toBe('reviewing');
-    expect(held.glob.labels.CR).toBe('approved');
+  });
+
+  it('refuses to approve a merged glob\'s label while a step holds sign-off back, and still takes other changes', () => {
+    const refused = machine.reviewLabel(reviewing(), 'CR', { kind: 'approve' }, ctx(po), { open: 1, total: 2 });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error.message).toContain('Rollout pending (1 of 2)');
+    const asked = unwrap(machine.reviewLabel(reviewing(), 'CR', { kind: 'submit_items', items: ['Check it'] }, ctx(po), { open: 1, total: 2 }));
+    expect(asked.glob.labels.CR).toBe('added');
+    const approved = reviewing({ labels: { CR: 'approved' } });
+    expect(unwrap(machine.reviewLabel(approved, 'CR', { kind: 'approve' }, ctx(po), { open: 1, total: 2 })).changed).toBe(false);
   });
 
   it('refuses to sign off a decision while steps are open, saying how many', () => {
@@ -156,11 +163,21 @@ describe('work steps through the service', () => {
     expect(after.signedOffAt).not.toBeNull();
   });
 
-  it('labels approved while steps are open stay in Reviewing, then sign off when the step is ticked', async () => {
+  it('a label can only be approved once the steps are done or dismissed', async () => {
     const g = await merged({ CR: 'required' });
     const step = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Roll out' }));
-    const approved = unwrap(await globs.reviewLabel(PO, g.id, g.version, 'CR', { kind: 'approve' }));
-    expect(approved.status).toBe('reviewing');
+    const refused = await globs.reviewLabel(PO, g.id, (await peek(g.id)).version, 'CR', { kind: 'approve' });
+    expect(!refused.ok && refused.error.message).toContain('Rollout pending (1 of 1)');
+    unwrap(await globs.completeHumanStep(DEV, g.id, step.id, null));
+    expect((await peek(g.id)).status).toBe('reviewing');
+    const approved = unwrap(await globs.reviewLabel(PO, g.id, (await peek(g.id)).version, 'CR', { kind: 'approve' }));
+    expect(approved.status).toBe('signed_off');
+  });
+
+  it('a label approved before a step appeared stays approved and signs off when the step is ticked', async () => {
+    const g = await merged({ CR: 'approved' });
+    const step = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Roll out' }));
+    expect((await peek(g.id)).labels.CR).toBe('approved');
     unwrap(await globs.completeHumanStep(DEV, g.id, step.id, null));
     expect((await peek(g.id)).status).toBe('signed_off');
   });

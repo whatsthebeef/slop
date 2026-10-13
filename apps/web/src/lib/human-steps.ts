@@ -1,4 +1,4 @@
-import { blockProgress, dueText, isMerged, rolloutPending, yourTurn } from '@slop/core';
+import { blockProgress, dueText, isMerged, isOpenStep, rolloutPending, yourTurn } from '@slop/core';
 import type { Glob, HumanStepBlock, HumanStepScript, HumanStepViewer } from '@slop/core';
 import type { ListedHumanStep } from './api';
 import { globPath } from './glob-section';
@@ -45,6 +45,15 @@ export const rolloutLine = (
     tip: rolloutPending(progress),
     turn,
   };
+};
+
+/** Why a merged glob's labels can't be approved yet: the first sign-off-blocking step still open, or null when nothing holds them. */
+export const approveHold = (glob: Glob & { readonly humanSteps?: readonly ListedHumanStep[] }): string | null => {
+  if (glob.status !== 'reviewing') return null;
+  const steps = glob.humanSteps ?? [];
+  if (blockProgress(steps, 'sign_off').open === 0) return null;
+  const first = steps.find((s) => s.source !== 'machine' && s.blocks.includes('sign_off') && isOpenStep(s));
+  return `Waits for the rollout${first === undefined ? '' : `: ${first.title}`}`;
 };
 
 /** One key for every glob: the viewer's last toggle of the Human steps section. */
