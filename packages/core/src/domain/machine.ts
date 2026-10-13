@@ -678,6 +678,26 @@ export const startAnyway = (
 };
 
 /**
+ * A person says a recorded edge (implied, learned or inferred) is not a dependency: it stops holding and `planHash` is
+ * kept so a changed plan may infer it again. Explicit edges (`after`, explicit overlaps) are never dismissed. A repeat
+ * on an edge already dismissed is a no-op.
+ */
+export const dismissEdge = (glob: Glob, edgeId: string, planHash: string, ctx: Context): Result<Transition> => {
+  requireActor(ctx);
+  if ((glob.after ?? []).includes(edgeId)) return invalidInput(`${edgeId} was set as a dependency by a person; change it in Waits for`);
+  const edge = (glob.impliedAfter ?? []).find((i) => i.id === edgeId);
+  if (edge === undefined) return invalidInput(`${glob.id} has no recorded edge to ${edgeId}`);
+  if (edge.source === 'explicit') return invalidInput(`The edge to ${edgeId} was set by a person and cannot be dismissed`);
+  if (edge.overridden === true && edge.dismissedPlanHash !== undefined) return unchanged(glob);
+  return new Builder(glob, ctx)
+    .set({
+      impliedAfter: (glob.impliedAfter ?? []).map((i) => (i.id === edgeId ? { ...i, overridden: true as const, dismissedPlanHash: planHash } : i)),
+    })
+    .event('EdgeDismissed', { edgeId, kind: edge.kind ?? 'overlaps', source: edge.source ?? 'implied', planHash })
+    .done();
+};
+
+/**
  * Row 33: a glob this one waited for merged. When everything it waits for has merged, it starts as a fresh sub (or
  * auto-started same) would: branch cut from the current base, run queued for whoever created it. Anything else, or a
  * second call, changes nothing, so the outbox can deliver it any number of times.

@@ -115,7 +115,7 @@ export class DependencyLearningService {
       if (glob === null || !merged(glob)) return null;
       const policy = await readMergePolicy(tx, glob.boardId);
       const patterns = candidatePatterns(policy.exclusivePaths, defaults);
-      const events = (await tx.listBoardEvents(glob.boardId, glob.createdAt, ['ConflictFlagged', 'BehindChanged', 'HoldOverridden'])).filter(
+      const events = (await tx.listBoardEvents(glob.boardId, glob.createdAt, ['ConflictFlagged', 'BehindChanged', 'HoldOverridden', 'EdgeDismissed'])).filter(
         (e) => e.globId === glob.id,
       );
       const conflicted = events.some((e) => e.type === 'ConflictFlagged');
@@ -128,6 +128,19 @@ export class DependencyLearningService {
         for (const pattern of patternsCovering(edge.paths, patterns)) {
           if (await this.move(tx, glob.boardId, defaults, pattern, cause, glob.id, evidence)) touched = true;
         }
+      }
+      // A person dismissed an inferred edge: the inference was wrong, so weaken the patterns it came from. Start now
+      // (overridden without a dismissal) is not a signal here.
+      for (const e of events.filter((ev) => ev.type === 'EdgeDismissed' && ev.data['source'] === 'inferred')) {
+        const id = typeof e.data['edgeId'] === 'string' ? e.data['edgeId'] : null;
+        if (id === null) continue;
+        const paths = edgesOf(glob).find((edge) => edge.id === id)?.paths ?? [];
+        const evidence = `${glob.id} dismissed the inferred edge to ${id} as not a dependency`;
+        const covering = patternsCovering(paths, patterns);
+        if (covering.length === 0) {
+          if (await tx.insertDependencyRuleChange({ boardId: glob.boardId, at: this.deps.clock.now(), pattern: `edge ${glob.id} -> ${id}`, from: 1, to: 1, cause: 'edge_dismissed', globId: glob.id, evidence })) touched = true;
+        }
+        for (const pattern of covering) if (await this.move(tx, glob.boardId, defaults, pattern, 'edge_dismissed', glob.id, evidence)) touched = true;
       }
       // Start now on a need, then a merge that never failed for it: the need was an overlap.
       const overridden = events.filter((e) => e.type === 'HoldOverridden').flatMap((e) => stringsOf(e.data['for']));
