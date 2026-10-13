@@ -49,6 +49,7 @@ import type {
   Run,
   SearchHit,
   SizeCheck,
+  Handover,
   SizeThresholdView,
   SizeCalibrationView,
   SlopType,
@@ -86,6 +87,8 @@ export interface GlobView extends Glob {
   readonly oversized?: boolean;
   /** The size check: why it was flagged, its evidence and the proposed split (single-glob reads only). */
   readonly sizeCheck?: SizeCheck;
+  /** Why a person is needed and what to do first; null when nothing is wrong, absent on an older API (single-glob reads only). */
+  readonly handover?: Handover | null;
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
   readonly humanSteps?: readonly CompactHumanStep[];
 }

@@ -9,7 +9,7 @@ import {
   stuckHint,
   yourTurn,
 } from '@slop/core';
-import type { Action, BlockedBy, Edge, HumanStepViewer, Role } from '@slop/core';
+import type { Action, BlockedBy, Edge, HumanStepKind, HumanStepViewer, Role } from '@slop/core';
 import type { GlobView } from './api';
 import { actionPresentation, type ActionIcon } from './action-presentation';
 
@@ -38,6 +38,8 @@ export interface StatusLine {
   readonly doing: string | null;
   /** The routine session doing it. */
   readonly sessionUrl: string | null;
+  /** For `ready` (Your turn): the kind of step it is, so the card can run it or open where it is done. */
+  readonly turn?: HumanStepKind;
 }
 
 /** True for an investigate-only run: it never started the glob (`purpose` is absent on implementing runs). */
@@ -181,13 +183,14 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
       glob.humanSteps !== undefined && viewer !== undefined
         ? yourTurn(glob.humanSteps, glob, viewer)
         : ready?.kind === 'ready'
-          ? { kind: 'merge', title: ready.text }
+          ? { kind: 'merge' as const, title: ready.text }
           : null;
     // Waiting for checks is activity, not a problem or a next step: the activity label carries it.
     if (turn !== null)
       return make({
         kind: 'ready',
         full: turn.title,
+        turn: turn.kind,
         tone: 'text-signal-strong',
         tip: turn.kind === 'merge' && ready?.kind === 'ready' ? ready.tip : turn.title,
       });
