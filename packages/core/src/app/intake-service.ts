@@ -13,6 +13,7 @@ import type { SizeThreshold } from '../domain/size-check.js';
 import type { Embedder } from '../ports.js';
 import { defaultAreas, riskAreaLine } from '../domain/risk-area.js';
 import type { RiskArea } from '../domain/risk-area.js';
+import { normaliseGroup } from '../domain/group.js';
 import { typeLearningBlock } from '../domain/type-learning.js';
 import { memberOf } from './access.js';
 import { recentTypeCorrections } from './type-learning-service.js';
@@ -148,7 +149,13 @@ Respond with one JSON object and nothing else:
 - files: repo paths the work most likely changes, only ones the request names or clearly implies (a migration directory for a schema change, a named file); an empty list when unknown. Never invent paths. List every one you expect: the board's risk-area path patterns are matched against them.
 - autoTrigger: true only if the request explicitly says to start the work immediately or to let an agent implement it now. Then autoTriggerQuote is the exact words from the request that say so; otherwise null.`;
 
-const normalise = (s: string) => s.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+const normalise = normaliseGroup;
+
+const GROUP_SYSTEM = `You choose the group of a unit of work on a planning board.
+
+Respond with one JSON object and nothing else: {"group": string | null}
+
+- group: reuse an existing group (its exact name) only when the work clearly belongs to that same area; otherwise a new short group name (at most 4 words) if the work names an area of work, otherwise null. Never pick an existing group just because it is the only one.`;
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -267,6 +274,42 @@ export class IntakeService {
       throw error;
     }
     return ok(this.validate(parseJson(completion), input, groups, environments, open, examples, threshold));
+  }
+
+  /**
+   * A group for a glob that has a title and plan but no group: intake's group rule alone, on the intake model, with the board's
+   * existing groups. Null when there is no clear area; a model that is down gives null too, so creating never fails for it.
+   */
+  async suggestGroup(email: string, boardId: number, input: {readonly title: string; readonly plan: string}): Promise<Result<string | null>> {
+    const groups = await this.deps.store.transaction(async (tx) => {
+      const actor = await memberOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      const globs = await tx.listGlobs(boardId, {});
+      return ok([...new Set(globs.flatMap((g) => (g.group === null ? [] : [g.group])))]);
+    });
+    if (!groups.ok) return groups;
+    let completion: string;
+    try {
+      completion = await this.deps.llm.complete({
+        system: GROUP_SYSTEM,
+        prompt: [
+          `Existing groups: ${groups.value.length === 0 ? '(none)' : groups.value.join(', ')}`,
+          '',
+          `Title: ${input.title.trim()}`,
+          '',
+          'Plan:',
+          input.plan.trim().slice(0, 4000),
+        ].join('\n'),
+        maxTokens: 100,
+        spend: { boardId, source: 'intake' },
+      });
+    } catch (error) {
+      if (error instanceof LlmUnavailable) return ok(null);
+      throw error;
+    }
+    const proposed = text(field(parseJson(completion), 'group'));
+    if (proposed === null || proposed.trim() === '') return ok(null);
+    return ok(groups.value.find((g) => normalise(g) === normalise(proposed)) ?? proposed.trim().slice(0, 60));
   }
 
   /** The nearest past snapshots; none when there is no embedder, it fails, or the board has none. Never fails intake. */
