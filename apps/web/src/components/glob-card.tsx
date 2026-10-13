@@ -16,6 +16,7 @@ import { splitChip } from '@/lib/split-chip';
 import { Tip } from './ui/tip';
 import { LabelPopover } from './labels';
 import type { ReviewLabel } from './labels';
+import { boardGlobHref } from '@/lib/glob-section';
 
 /** The glob's category as a small icon in the card's corner. */
 export const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> = {
@@ -394,7 +395,7 @@ export const SplitChip = ({ glob }: { glob: GlobView }) => {
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='split-chip'>
         {'split from '}
         <Link
-          to={`/boards/${glob.boardId}?glob=${encodeURIComponent(chip.source)}`}
+          to={boardGlobHref(glob.boardId, chip.source, { section: 'size' })}
           className='underline-offset-2 hover:underline'
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
