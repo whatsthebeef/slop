@@ -29,10 +29,17 @@ export const checksUrl = (repo: string | undefined, glob: Pick<GlobView, 'pr'>):
  * allowed actions include it, which is the same list the glob view's main button reads; every other step needs input,
  * so the click opens the glob view where it is done.
  */
-export const yourTurnClick = (status: StatusLine, glob: Pick<GlobView, 'allowedActions'>): ChipClick => {
+export const yourTurnClick = (status: StatusLine, glob: Pick<GlobView, 'allowedActions'> & Partial<Pick<GlobView, 'currentRun'>>): ChipClick => {
   const allowed = glob.allowedActions ?? [];
   // A stored work step (a rollout) is ticked in the Human steps section, whatever its kind.
   if (status.work === true) return { kind: 'section', target: cardTargets.humanSteps() };
+  // A step that names its action runs it (or opens the run's session); the action is only used while the glob view still offers it.
+  if (status.action === 'open_session') {
+    const session = glob.currentRun?.state === 'ended' ? null : (glob.currentRun?.sessionUrl ?? null);
+    return session === null ? { kind: 'section', target: cardTargets.actions() } : { kind: 'link', url: session };
+  }
+  if (status.turn === 'unstick' && status.action !== undefined)
+    return allowed.includes(status.action) ? { kind: 'act', action: status.action, confirm: false } : { kind: 'section', target: cardTargets.actions() };
   switch (status.turn) {
     case 'merge':
       return allowed.includes('merge') ? { kind: 'act', action: 'merge', confirm: true } : { kind: 'section', target: cardTargets.actions() };

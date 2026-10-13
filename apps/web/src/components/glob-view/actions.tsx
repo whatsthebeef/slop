@@ -123,8 +123,11 @@ export const useGlobActions = ({
   // A due blocking step for the viewer (a rollout) is the next thing to do, ahead of the state's next step but not a recovery.
   const stepTurn = mainStep(glob, viewer);
   const [stepsSignal, setStepsSignal] = useState(0);
-  const main = mainAction(shownActions, glob, decision, stepTurn !== null, email);
-  const actions = orderActions(allActions, main);
+  // A stalled glob's step names the one action to lead with and one alternative to follow it.
+  const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
+  const leading = stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
+  const main = mainAction(shownActions, glob, decision, stepTurn !== null, email, leading);
+  const actions = orderActions(allActions, main, stall?.alternative);
   const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
   const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';

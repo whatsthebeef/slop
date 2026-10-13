@@ -1,4 +1,5 @@
 import { isDecisionAttributes } from './attributes.js';
+import type { Action } from './machine.js';
 import { listOf } from './matrix.js';
 import type { Glob, List, Role } from './types.js';
 
@@ -43,6 +44,9 @@ export type HumanStepBlock = (typeof HUMAN_STEP_BLOCKS)[number];
 /** A script a step points at: an artifact of the glob (by label) or a path in the repo. */
 export type HumanStepScript = { readonly artifact: string } | { readonly path: string };
 
+/** What a step's chip runs: a state-machine action, or opening the run's session (a link, not a state change). */
+export type StepAction = Action | 'open_session';
+
 export interface HumanStep {
   readonly id: string;
   readonly kind: HumanStepKind;
@@ -61,6 +65,10 @@ export interface HumanStep {
   readonly source: 'machine' | 'work';
   readonly doneBy: string | null;
   readonly doneAt: string | null;
+  /** The one action the step's chip runs; its label is the title. Absent when the step needs input in the glob view. */
+  readonly action?: StepAction;
+  /** The one other action the glob view offers beside `action`; never shown on the card. */
+  readonly alternative?: Action;
 }
 
 /** What a stored work step is in the database: open until it is ticked or dismissed; due-ness is worked out on read. */
@@ -159,7 +167,7 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
   // A person who implements the glob fixes its conflict or failed merge themselves: no routine run will.
   const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null;
   if (glob.implementer !== null && ((hasOpenPr && glob.conflict != null) || personMergeFailure))
-    steps.push(derived('resolve_conflict', 'Resolve the conflict', 'implementer'));
+    steps.push(derived('resolve_conflict', 'Resolve conflict', 'implementer'));
   const run = glob.runs[glob.runs.length - 1];
   // Merge as the card says it: the button's conditions, and nothing failed or being fixed by a run.
   if (canMerge(glob) && glob.failure === null && run?.state !== 'active') {
@@ -174,7 +182,7 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
     steps.push(derived('done', 'Mark ready', 'implementer'));
   for (const file of facts.missingUploads ?? [])
     steps.push(derived('upload_file', `Upload ${file.fileName}`, 'anyone', { id: `machine:upload_file:${file.key}` }));
-  if (glob.type === 'super' && glob.status === 'planning') steps.push(derived('pair', 'Pair on this super', 'anyone'));
+  if (glob.type === 'super' && glob.status === 'planning') steps.push(derived('pair', 'Pair', 'anyone'));
   return steps;
 };
 
@@ -277,9 +285,9 @@ export const upcomingSteps = (steps: readonly Pick<HumanStep, 'kind' | 'state'>[
 };
 
 /** The compact form on board and glob views: enough for the card, the filters and the status line, without detail text. */
-export type CompactHumanStep = Pick<HumanStep, 'id' | 'kind' | 'title' | 'state' | 'who' | 'due' | 'blocks'>;
+export type CompactHumanStep = Pick<HumanStep, 'id' | 'kind' | 'title' | 'state' | 'who' | 'due' | 'blocks' | 'action' | 'alternative'>;
 
-export const compactStep = ({ id, kind, title, state, who, due, blocks }: HumanStep): CompactHumanStep => ({
+export const compactStep = ({ id, kind, title, state, who, due, blocks, action, alternative }: HumanStep): CompactHumanStep => ({
   id,
   kind,
   title,
@@ -287,6 +295,8 @@ export const compactStep = ({ id, kind, title, state, who, due, blocks }: HumanS
   who,
   due,
   blocks,
+  ...(action === undefined ? {} : { action }),
+  ...(alternative === undefined ? {} : { alternative }),
 });
 
 /** When a pending step falls due, in words (for tooltips). */

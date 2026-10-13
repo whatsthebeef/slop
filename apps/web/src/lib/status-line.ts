@@ -7,8 +7,8 @@ import {
   stuckHint,
   yourTurn,
 } from '@slop/core';
+import type { Action, BlockedBy, Edge, HumanStepKind, HumanStepViewer, Role, StepAction } from '@slop/core';
 import { rolloutLine } from './human-steps';
-import type { Action, BlockedBy, Edge, HumanStepKind, HumanStepViewer, Role } from '@slop/core';
 import type { GlobView } from './api';
 import { actionPresentation, type ActionIcon } from './action-presentation';
 
@@ -40,11 +40,16 @@ export interface StatusLine {
   readonly sessionUrl: string | null;
   /** For `ready` (Your turn): the kind of step it is, so the card can run it or open where it is done. */
   readonly turn?: HumanStepKind;
+  /** For `ready` (Your turn): the one action the step's chip runs; absent when the step needs input in the glob view. */
+  readonly action?: StepAction;
   /** For `ready`: the due step is a stored work step (a rollout), done in the Human steps section. */
   readonly work?: true;
   /** The problem is a merge conflict: the card says it in a few words and the glob view lists the files. */
   readonly conflict?: true;
 }
+
+/** The longest label a Your turn chip shows: one or two words; the step's full title goes in the tooltip. */
+const TURN_LABEL_MAX = 24;
 
 /** True for an investigate-only run: it never started the glob (`purpose` is absent on implementing runs). */
 export const isInvestigateRun = (run: { readonly purpose?: string }): boolean =>
@@ -221,14 +226,26 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
           ? { kind: 'merge' as const, title: ready.text }
           : null;
     // Waiting for checks is activity, not a problem or a next step: the activity label carries it.
-    if (turn !== null)
+    if (turn !== null) {
+      const stalled = turn.kind === 'unstick' && glob.move?.holder === 'stalled' ? glob.move : null;
+      const cause = stalled === null ? null : `${stalled.reason.charAt(0).toUpperCase()}${stalled.reason.slice(1)}${stalled.since === null ? '' : ` since ${new Date(stalled.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}`;
+      const turnAction = 'action' in turn ? turn.action : undefined;
+      // The chip names one action; the cause (and that other options are in the glob view) is the tooltip's.
+      const tip =
+        turn.kind === 'merge' && ready?.kind === 'ready'
+          ? ready.tip
+          : cause !== null
+            ? `${cause}\nOther options are in the glob view`
+            : turn.title;
       return make({
         kind: 'ready',
-        full: turn.title,
+        full: oneLine(turn.title, TURN_LABEL_MAX),
         turn: turn.kind,
+        ...(turnAction === undefined ? {} : { action: turnAction }),
         tone: 'text-signal-strong',
-        tip: turn.kind === 'merge' && ready?.kind === 'ready' ? ready.tip : turn.title,
+        tip,
       });
+    }
   }
   const [top, ...rest] = candidates;
   if (top === undefined) return null;

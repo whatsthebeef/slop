@@ -1,5 +1,6 @@
 import { isForViewer } from './human-steps.js';
-import type { HumanStep, HumanStepViewer } from './human-steps.js';
+import type { HumanStep, HumanStepViewer, StepAction } from './human-steps.js';
+import type { Action } from './machine.js';
 import { DEFAULT_STALL_MINUTES, isInFlight, isStale, isWaitingStep, quietMinutes } from './machine-steps.js';
 import type { MachineStep, StallThresholds } from './machine-steps.js';
 import type { Glob } from './types.js';
@@ -195,23 +196,64 @@ export const whoseMove = (
   return stalled('nobody', 'nobody is on this', glob.updatedAt);
 };
 
-const UNSTICK_TITLES: Readonly<Record<StallCause, (m: Move) => string>> = {
-  failed: () => 'Machine stopped: retry or pick up',
-  queued: (m) => `Queued for ${String(m.minutes ?? 0)} min: open the session`,
-  quiet: (m) => `No progress for ${String(m.minutes ?? 0)} min: open the session`,
-  nobody: () => 'Nobody is on this: start, hand to machine or pick up',
+/** The short label a stall step's action carries as its title: one or two words, the cause goes in `detail`. */
+const ACTION_TITLES: Readonly<Partial<Record<StepAction, string>>> = {
+  retrigger: 'Retry',
+  pick_up: 'Pick up',
+  start: 'Start',
+  start_anyway: 'Start',
+  open_session: 'Open session',
+};
+
+/** What the unstick step needs beyond the move: the actions the viewer may take, and whether a run's session can be opened. */
+export interface UnstickOptions {
+  /** The glob's `allowedActions`; without it every action counts as allowed. */
+  readonly allowed?: readonly Action[];
+  /** Whether the run has a session to open (default true). */
+  readonly session?: boolean;
+}
+
+/**
+ * The one action a stalled glob's step names, and the one alternative the glob view offers, by cause and state. Only
+ * allowed actions are used: if the choice isn't allowed the alternative takes its place, and with neither there is no step.
+ */
+export const unstickAction = (
+  move: Move,
+  glob: Pick<Glob, 'implementer'>,
+  options: UnstickOptions = {},
+): { readonly action: StepAction; readonly alternative?: Action } | null => {
+  if (move.cause === undefined) return null;
+  const allowed = options.allowed;
+  const ok = (a: StepAction): boolean => (a === 'open_session' ? options.session !== false : allowed === undefined || allowed.includes(a));
+  const pair = ((): [StepAction, Action | undefined] => {
+    switch (move.cause) {
+      case 'failed':
+        return glob.implementer === null ? ['retrigger', 'pick_up'] : ['pick_up', undefined];
+      case 'queued':
+      case 'quiet':
+        return ['open_session', 'pick_up'];
+      case 'nobody':
+        return glob.implementer === null ? ['start', 'pick_up'] : ['pick_up', 'start_anyway'];
+    }
+  })();
+  const [first, second] = pair;
+  const alternative = second !== undefined && ok(second) ? second : undefined;
+  if (ok(first)) return { action: first, ...(alternative === undefined ? {} : { alternative }) };
+  return alternative === undefined ? null : { action: alternative };
 };
 
 /**
- * The human step a stalled glob adds: for the implementer, or the planner while nobody implements. Derived from the move, so
- * it is gone the moment the cause is.
+ * The human step a stalled glob adds: for the implementer, or the planner while nobody implements. Its title is its
+ * action's label and the cause is its detail. Derived from the move, so it is gone the moment the cause is.
  */
-export const unstickStep = (move: Move): HumanStep | null => {
+export const unstickStep = (move: Move, glob: Pick<Glob, 'implementer'> = { implementer: null }, options: UnstickOptions = {}): HumanStep | null => {
   if (move.holder !== 'stalled' || move.cause === undefined) return null;
+  const chosen = unstickAction(move, glob, options);
+  if (chosen === null) return null;
   return {
     id: 'machine:unstick',
     kind: 'unstick',
-    title: UNSTICK_TITLES[move.cause](move),
+    title: ACTION_TITLES[chosen.action] ?? 'Open',
     detail: move.reason,
     who: 'implementer',
     due: 'now',
@@ -222,13 +264,20 @@ export const unstickStep = (move: Move): HumanStep | null => {
     source: 'machine',
     doneBy: null,
     doneAt: null,
+    action: chosen.action,
+    ...(chosen.alternative === undefined ? {} : { alternative: chosen.alternative }),
   };
 };
 
 /** The glob's human steps with the stall hand-off added when it is stalled (any earlier `unstick` step is replaced). */
-export const withUnstick = (steps: readonly HumanStep[], move: Move): HumanStep[] => {
+export const withUnstick = (
+  steps: readonly HumanStep[],
+  move: Move,
+  glob: Pick<Glob, 'implementer'> = { implementer: null },
+  options: UnstickOptions = {},
+): HumanStep[] => {
   const rest = steps.filter((s) => s.kind !== 'unstick');
-  const unstick = unstickStep(move);
+  const unstick = unstickStep(move, glob, options);
   return unstick === null ? rest : [unstick, ...rest];
 };
 
