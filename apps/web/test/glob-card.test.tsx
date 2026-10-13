@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
@@ -206,65 +206,26 @@ describe('card actions', () => {
 describe('card interaction', () => {
   const renderCard = (g: GlobView, extra: Partial<Parameters<typeof GlobCard>[0]> = {}) => {
     const props = base();
-    const onUpdateTitle = vi.fn(() => Promise.resolve(null));
     const onAct = vi.fn();
     render(
       <MemoryRouter>
-        <GlobCard {...props} glob={g} onUpdateTitle={onUpdateTitle} onReload={() => Promise.resolve()} onAct={onAct} repo='a/b' {...extra} />
+        <GlobCard {...props} glob={g} onAct={onAct} repo='a/b' {...extra} />
       </MemoryRouter>,
     );
-    return { ...props, onUpdateTitle, onAct };
+    return { ...props, onAct };
   };
 
-  it('edits the title in place: Enter saves through the update call and the card does not open', async () => {
+  it('has no title edit affordance: the title is plain wrapping text and clicking it opens the glob', async () => {
     const user = userEvent.setup();
-    const { onOpen, onUpdateTitle } = renderCard(view());
-    await user.click(screen.getByTestId('card-title-edit'));
-    const input = screen.getByTestId('card-title-input');
-    expect(input.tagName).toBe('TEXTAREA');
-    await user.clear(input);
-    await user.type(input, 'A new title{Enter}');
-    expect(onUpdateTitle).toHaveBeenCalledTimes(1);
-    expect(onUpdateTitle).toHaveBeenCalledWith({ title: 'A new title' });
-    await waitFor(() => expect(screen.queryByTestId('card-title-input')).toBeNull());
-    expect(onOpen).not.toHaveBeenCalled();
-  });
-
-  it('cancels with Esc: nothing is saved, the textarea goes and the card does not open', async () => {
-    const user = userEvent.setup();
-    const { onOpen, onUpdateTitle } = renderCard(view());
-    await user.click(screen.getByTestId('card-title-edit'));
-    await user.type(screen.getByTestId('card-title-input'), ' more{Escape}');
-    expect(screen.queryByTestId('card-title-input')).toBeNull();
-    expect(onUpdateTitle).not.toHaveBeenCalled();
-    expect(onOpen).not.toHaveBeenCalled();
-  });
-
-  it('refuses an empty title', async () => {
-    const user = userEvent.setup();
-    const { onUpdateTitle } = renderCard(view());
-    await user.click(screen.getByTestId('card-title-edit'));
-    await user.clear(screen.getByTestId('card-title-input'));
-    await user.keyboard('{Enter}');
-    expect(screen.getByRole('alert').textContent).toContain("can't be empty");
-    expect(onUpdateTitle).not.toHaveBeenCalled();
-  });
-
-  it('shows a refused save under the title, with the draft kept', async () => {
-    const user = userEvent.setup();
-    const refused = vi.fn(() => Promise.resolve({ message: 'Changed meanwhile', conflict: true }));
-    renderCard(view(), { onUpdateTitle: refused });
-    await user.click(screen.getByTestId('card-title-edit'));
-    await user.type(screen.getByTestId('card-title-input'), '!{Enter}');
-    expect((await screen.findByRole('alert')).textContent).toContain('Changed meanwhile');
-    expect(screen.getByRole('button', { name: 'Reload latest' })).toBeTruthy();
-    expect(screen.getByTestId<HTMLTextAreaElement>('card-title-input').value).toContain('!');
-  });
-
-  it('has plain text for a title that cannot be edited (a signed-off glob, or no update call)', () => {
-    renderCard(view({ status: 'signed_off' }));
+    const { onOpen } = renderCard(view());
     expect(screen.queryByTestId('card-title-edit')).toBeNull();
-    expect(screen.getByTestId('card-title').textContent).toBe('Fix login timeout');
+    expect(screen.queryByTestId('card-title-input')).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    const title = screen.getByTestId('card-title');
+    expect(title.textContent).toBe('Fix login timeout');
+    expect(title.className).toContain('break-words');
+    await user.click(title);
+    expect(onOpen).toHaveBeenCalled();
   });
 
   it('keeps Merge a two-step confirm from the actions row', async () => {
