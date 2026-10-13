@@ -12,7 +12,8 @@ import {
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { actionPresentation, presentedActions } from '@/lib/action-presentation';
 import { mainAction } from '@/lib/main-action';
-import { ActorIcon } from '@/components/actor-icons';
+import { mainStep } from '@/lib/human-steps';
+import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import { findSection } from '@/lib/glob-scroll';
 import { workingLabel } from '@/lib/card-pending';
 import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
@@ -43,7 +44,11 @@ export const useGlobActions = ({
   glob,
   onAction,
   onUpdate,
-}: Pick<GlobViewContext, 'board' | 'glob' | 'onAction' | 'onUpdate'>) => {
+  email,
+}: Pick<GlobViewContext, 'board' | 'glob' | 'onAction' | 'onUpdate'> & {
+  /** Who is looking, for the steps that are theirs (unknown until /api/me has answered). */
+  email?: string;
+}) => {
   // A decision glob has no branch, PR, runs, deploys or labels: those parts of the view are left out.
   const decision = decisionOf(glob) !== null;
   const [running, setBusy] = useState(false);
@@ -114,7 +119,11 @@ export const useGlobActions = ({
   // Decide has its own panel with the five outcomes: it can be the main button (which goes to
   // the panel), never a More entry.
   const allActions = shownActions.filter((a) => a !== 'decide');
-  const main = mainAction(shownActions, glob, decision);
+  const viewer = email === undefined ? undefined : { email, role: board.role };
+  // A due blocking step for the viewer (a rollout) is the next thing to do, ahead of the state's next step but not a recovery.
+  const stepTurn = mainStep(glob, viewer);
+  const [stepsSignal, setStepsSignal] = useState(0);
+  const main = mainAction(shownActions, glob, decision, stepTurn !== null);
   const actions = orderActions(allActions, main);
   const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
@@ -182,6 +191,10 @@ export const useGlobActions = ({
     pending,
     begin,
     main,
+    viewer,
+    stepTurn,
+    stepsSignal,
+    setStepsSignal,
     actions,
     tiers,
     disabled,
@@ -316,7 +329,18 @@ const HandoverBox = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsS
 /** The `actions` section's content: the handover box, the main button, More ▾ and the confirmations. */
 export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) => {
   const { glob } = ctx;
-  const { busy, pending, main, actions, tiers, disabled, brief, oversized } = state;
+  const {
+    busy,
+    pending,
+    main,
+    stepTurn,
+    setStepsSignal,
+    actions,
+    tiers,
+    disabled,
+    brief,
+    oversized,
+  } = state;
   const moreActions = actions.filter((a) => a !== main && tiers.get(a) !== 'destructive');
   // The menu closes on select, so the More button shows the action it started while it runs.
   const moreRunning =
@@ -325,9 +349,27 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
   return (
     <>
       <HandoverBox ctx={ctx} state={state} />
-      {(main !== null || actions.length + disabled.length > 0) && (
+      {(main !== null || actions.length + disabled.length > 0 || stepTurn !== null) && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
+            {main === null && stepTurn !== null && (
+              <Tip
+                text={`${stepTurn.step.title}: a person does this, then ticks it in Human steps`}
+              >
+                <Button
+                  size="sm"
+                  data-testid="main-action"
+                  data-step={stepTurn.step.id}
+                  onClick={() => {
+                    setStepsSignal((n) => n + 1);
+                    findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' });
+                  }}
+                >
+                  <HumanIcon decorative />
+                  {stepTurn.label}
+                </Button>
+              </Tip>
+            )}
             {main !== null && (
               <Tip text={tipOf(main, glob)}>
                 <Button

@@ -21,6 +21,8 @@ export const cardTargets = {
   decision: (): GlobTarget => ({ section: 'decision' }),
   /** The status chips and Your turn steps that need input: the glob view's actions. */
   actions: (): GlobTarget => ({ section: 'actions' }),
+  /** The upcoming-steps marker and Your turn for a work step (a rollout): the Human steps section. */
+  humanSteps: (): GlobTarget => ({ section: 'human-steps' }),
   /** The deploy indicator. */
   deploys: (): GlobTarget => ({ section: 'deploys' }),
 } as const;

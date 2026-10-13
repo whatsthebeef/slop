@@ -18,6 +18,7 @@ export const GLOB_SECTIONS = [
   'decision',
   'assessment',
   'actions',
+  'human-steps',
 ] as const;
 
 export type GlobSection = (typeof GLOB_SECTIONS)[number];
@@ -38,13 +39,18 @@ export interface ParsedGlobTarget {
 
 const isSection = (name: string): name is GlobSection => GLOB_SECTIONS.some((s) => s === name);
 
+/** Other names a link may use for a section: `rollout` is what people call the Human steps section. */
+const SECTION_ALIASES: Readonly<Record<string, GlobSection>> = { rollout: 'human-steps' };
+
+const sectionOf = (name: string): GlobSection | null => (isSection(name) ? name : (SECTION_ALIASES[name] ?? null));
+
 const nonEmpty = (value: string | null): string | null => (value === null || value === '' ? null : value);
 
-/** Reads `section`, `artifact` and `label` from a URL's search params. Unknown sections are ignored. */
+/** Reads `section`, `artifact` and `label` from a URL's search params. Unknown sections are ignored; aliases (`rollout`) read as their section. */
 export const parseGlobTarget = (search: URLSearchParams): ParsedGlobTarget => {
   const section = nonEmpty(search.get('section'));
   return {
-    section: section !== null && isSection(section) ? section : null,
+    section: section === null ? null : sectionOf(section),
     artifact: nonEmpty(search.get('artifact')),
     label: nonEmpty(search.get('label')),
   };
