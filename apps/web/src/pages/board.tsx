@@ -518,6 +518,8 @@ export const BoardPage = () => {
                         const target = moves.find((m) => m.move.action === move.action)?.target;
                         if (target !== undefined) runMove(glob, move, target);
                       }}
+                      onAct={(action) => void commit(glob, action)}
+                      repo={board.data.repo ?? undefined}
                       onArrow={(direction) => arrow(glob, direction)}
                       lock={motion.locks[glob.id]}
                       bump={bumps[glob.id]}

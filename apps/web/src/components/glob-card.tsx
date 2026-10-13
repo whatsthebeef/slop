@@ -3,18 +3,22 @@ import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStep
 import { Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
+import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { ActionIcon } from '@/lib/action-presentation';
 import type { MoveTag } from '@/lib/board-motion';
 import { activityLabel, blockedParts, chainTip, statusLine } from '@/lib/status-line';
+import type { StatusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
 import { actionTiers } from '@/lib/action-style';
 import { workingLabel } from '@/lib/card-pending';
 import { splitChip } from '@/lib/split-chip';
+import { activityClick, CONFIRM_MS, clickTip, prUrl, statusClick, turnStep, yourTurnClick } from '@/lib/chip-actions';
+import type { ChipClick } from '@/lib/chip-actions';
 import { cardTargets } from '@/lib/card-targets';
 import type { GlobTarget } from '@/lib/glob-section';
 import { Tip } from './ui/tip';
@@ -94,19 +98,27 @@ export const GroupChip = ({ name }: { name: string }) => {
 };
 
 /** The one label for what runs on its own (merging, checks, the routine): shared with the glob view. */
-export const ActivityLabel = ({ glob }: { glob: GlobView }) => {
+export const ActivityLabel = ({
+  glob,
+  repo,
+  onAct,
+  onOpenSection,
+}: {
+  glob: GlobView;
+  repo?: string;
+  onAct?: (action: Action) => void;
+  onOpenSection?: (target: GlobTarget) => void;
+}) => {
   const activity = activityLabel(glob, new Date().toISOString());
   if (activity === null) return null;
+  const click = activityClick(activity, glob, repo);
+  const open = onOpenSection === undefined ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
   return (
-    <Tip text={activity.tip}>
-      <span
-        className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground'
-        data-testid='activity-label'
-        data-kind={activity.kind}
-      >
+    <Tip text={open === undefined ? activity.tip : `${activity.tip}\n${clickTip(click)}`}>
+      <ChipButton onOpen={open} className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' testId='activity-label' dataKind={activity.kind}>
         {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <ActorIcon actor={activity.icon ?? 'machine'} className='h-3 w-3' decorative />}
         {activity.text}
-      </span>
+      </ChipButton>
     </Tip>
   );
 };
@@ -116,6 +128,7 @@ const CardButton = ({
   onOpen,
   className,
   testId,
+  dataKind,
   ariaLabel,
   'aria-describedby': describedBy,
   children,
@@ -123,6 +136,7 @@ const CardButton = ({
   onOpen: () => void;
   className: string;
   testId: string;
+  dataKind?: string;
   ariaLabel?: string;
   /** Set by a wrapping `Tip`, which clones its child to link the tooltip text as the button's description. */
   'aria-describedby'?: string;
@@ -134,6 +148,7 @@ const CardButton = ({
     aria-label={ariaLabel}
     aria-describedby={describedBy}
     data-testid={testId}
+    data-kind={dataKind}
     onClick={(e) => {
       e.stopPropagation();
       onOpen();
@@ -149,6 +164,7 @@ export const ChipButton = ({
   onOpen,
   className,
   testId,
+  dataKind,
   ariaLabel,
   'aria-describedby': describedBy,
   children,
@@ -156,13 +172,14 @@ export const ChipButton = ({
   onOpen?: () => void;
   className: string;
   testId: string;
+  dataKind?: string;
   /** The button's name, for chips whose visible words are hidden from screen readers. */
   ariaLabel?: string;
   'aria-describedby'?: string;
   children: ReactNode;
 }) =>
   onOpen === undefined ? (
-    <span className={className} data-testid={testId} aria-describedby={describedBy}>
+    <span className={className} data-testid={testId} data-kind={dataKind} aria-describedby={describedBy}>
       {children}
     </span>
   ) : (
@@ -170,6 +187,7 @@ export const ChipButton = ({
       onOpen={onOpen}
       className={cn(className, 'cursor-pointer rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring')}
       testId={testId}
+      dataKind={dataKind}
       ariaLabel={ariaLabel}
       aria-describedby={describedBy}
     >
@@ -560,6 +578,84 @@ const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', str
   '--bump': side === 'left' ? '-3px' : '3px',
 });
 
+/** Runs a chip's click: an action, the glob view at a section, or a page in a new tab. */
+const runChip = (click: ChipClick, onAct: (action: Action) => void, onOpenSection: (target: GlobTarget) => void) => {
+  if (click.kind === 'act') onAct(click.action);
+  else if (click.kind === 'section') onOpenSection(click.target);
+  else window.open(click.url, '_blank', 'noopener,noreferrer');
+};
+
+/**
+ * Your turn: a button that runs its step. Merge asks for a second click (Confirm merge, for a few seconds; Esc or the
+ * timeout reverts it); steps that need input open the glob view where they are done. The click never reaches the card.
+ */
+const YourTurnChip = ({
+  glob,
+  status,
+  pending,
+  onAct,
+  onOpenSection,
+}: {
+  glob: GlobView;
+  status: StatusLine;
+  pending?: Action;
+  onAct: (action: Action) => void;
+  onOpenSection: (target: GlobTarget) => void;
+}) => {
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (!confirming) return;
+    const timer = setTimeout(() => setConfirming(false), CONFIRM_MS);
+    return () => clearTimeout(timer);
+  }, [confirming]);
+  const click = yourTurnClick(status, glob);
+  const busy = pending !== undefined && click.kind === 'act';
+  const pr = glob.pr === null ? '' : ` #${String(glob.pr.number)}`;
+  const verb = click.kind === 'act' && click.action === 'merge' ? 'Merge' : status.text;
+  return (
+    <Tip text={`${status.tip}\n${clickTip(click, confirming)}`}>
+      <button
+        type='button'
+        className={cn(
+          'inline-flex cursor-pointer items-center gap-1 rounded-sm bg-foreground px-1.5 py-0.5 font-mono text-[11px] font-medium text-background hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60',
+          confirming && 'bg-required',
+        )}
+        disabled={busy}
+        aria-label={click.kind === 'act' ? `Your turn: ${verb} PR${pr}` : `Your turn: ${status.text}`}
+        data-testid='your-turn-chip'
+        data-kind={status.kind}
+        data-confirming={confirming ? 'true' : undefined}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (busy) return;
+          if (turnStep(click, confirming) === 'confirm') {
+            setConfirming(true);
+            return;
+          }
+          setConfirming(false);
+          runChip(click, onAct, onOpenSection);
+        }}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Escape') setConfirming(false);
+        }}
+        onBlur={() => setConfirming(false)}
+      >
+        {busy ? <Loader2 className='h-3 w-3 animate-spin' aria-hidden /> : <HumanIcon className='h-3 w-3' decorative />}
+        {busy ? (
+          workingLabel(pending)
+        ) : confirming ? (
+          `Confirm merge${pr}`
+        ) : (
+          <>
+            Your turn <span className='font-normal opacity-70'>· {status.text}</span>
+          </>
+        )}
+      </button>
+    </Tip>
+  );
+};
+
 export const GlobCard = ({
   glob,
   onOpen,
@@ -570,6 +666,8 @@ export const GlobCard = ({
   previewing,
   onPreview,
   onMove,
+  onAct,
+  repo,
   onArrow,
   lock,
   bump,
@@ -592,6 +690,10 @@ export const GlobCard = ({
   previewing: Action | null;
   onPreview: (move: CardMove | null) => void;
   onMove: (move: CardMove) => void;
+  /** Runs an action from a chip (Your turn: Merge, Done); the board's own action path, with its pending state. */
+  onAct?: (action: Action) => void;
+  /** The board's GitHub repo, for chips that open the PR's checks. */
+  repo?: string;
   /** ← / → on the focused card: cycle its moves that way (or bump the wall). */
   onArrow: (direction: 'left' | 'right') => void;
   /** The flash as the card locks into its new list: yours, or a move made elsewhere. */
@@ -657,7 +759,7 @@ export const GlobCard = ({
           {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
         </span>
         <span className='inline-flex items-center gap-1.5'>
-          <ActivityLabel glob={glob} />
+          <ActivityLabel glob={glob} repo={repo} onAct={onAct} onOpenSection={onOpenSection} />
           <CategoryIcon category={glob.category} />
         </span>
       </div>
@@ -685,35 +787,37 @@ export const GlobCard = ({
         {deploy !== undefined && <DeployChip deploy={deploy} onOpen={() => onOpenSection(cardTargets.deploys())} />}
         {environments !== undefined && <EnvironmentChips environments={environments} />}
         {atf !== undefined && <AtfChip runs={atf} />}
-        {status !== null && !decision && (
-          <Tip text={status.tip}>
-            <span
-              className={cn(
-                'font-mono text-[11px]',
-                status.kind === 'ready' ? 'inline-flex items-center gap-1 rounded-sm bg-foreground px-1.5 py-0.5 font-medium text-background' : status.tone,
-              )}
-              data-testid={status.kind === 'ready' ? 'your-turn-chip' : 'status-line'}
-              data-kind={status.kind}
+        {status !== null && !decision && status.kind === 'ready' && (
+          <YourTurnChip glob={glob} status={status} pending={pending} onAct={(action) => onAct?.(action)} onOpenSection={onOpenSection} />
+        )}
+        {status !== null && !decision && status.kind !== 'ready' && (
+          <Tip text={`${status.tip}\n${clickTip(statusClick(status))}`}>
+            <ChipButton
+              onOpen={() => runChip(statusClick(status), () => undefined, onOpenSection)}
+              className={cn('font-mono text-[11px]', status.tone)}
+              testId='status-line'
+              dataKind={status.kind}
             >
-              {status.kind === 'ready' && <HumanIcon className='h-3 w-3' decorative />}
-              {status.kind === 'ready' ? (
-                <>
-                  Your turn <span className='font-normal opacity-70'>· {status.text}</span>
-                </>
-              ) : (
-                status.text
-              )}
-            </span>
+              {status.text}
+            </ChipButton>
           </Tip>
         )}
         {age !== 'neutral' && glob.pr?.state === 'draft' && (
           <Tip text='Two or more days in Doing and the PR is still a draft'>
-            <span className='font-mono text-[11px] text-muted-foreground'>PR still draft</span>
+            <ChipButton
+              onOpen={prUrl(repo, glob) === null ? undefined : () => window.open(prUrl(repo, glob) ?? '', '_blank', 'noopener,noreferrer')}
+              className='font-mono text-[11px] text-muted-foreground'
+              testId='draft-chip'
+            >
+              PR still draft
+            </ChipButton>
           </Tip>
         )}
         {glob.provisioning === 'failed' && (
           <Tip text='slop could not create the branch and draft PR; it retries in the background'>
-            <span className='font-mono text-[11px] text-red'>provisioning failed</span>
+            <ChipButton onOpen={() => onOpenSection(cardTargets.actions())} className='font-mono text-[11px] text-red' testId='provisioning-chip'>
+              provisioning failed
+            </ChipButton>
           </Tip>
         )}
         <span className='ml-auto inline-flex items-center gap-1'>
