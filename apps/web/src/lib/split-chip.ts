@@ -1,6 +1,6 @@
 import type { GlobView } from './api';
 
-/** What the card's split chip says for a glob cut from another: nothing on the first part, "split from <source>" on the rest. */
+/** What the card's split chip says for a glob cut from another: nothing on the first part, the source glob on the rest. */
 export const splitChip = (
   glob: Pick<GlobView, 'id' | 'split'>,
 ): { source: string; tip: string } | null => {

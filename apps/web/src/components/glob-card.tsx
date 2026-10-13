@@ -473,25 +473,25 @@ export const OversizedChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () =>
   ) : null;
 
 /**
- * "split from <source>" on a part after the first, with the part number and the other parts in the tooltip. A small pill
- * (muted background, sans text, a branch icon) so it is never read as a status.
+ * The branch icon and the source glob's ID on a part after the first; the ID links to the source. The tooltip and the link's
+ * accessible name say "Split from <source>", with the part number and the other parts in the tooltip. A small pill (muted
+ * background, sans text) so it is never read as a status.
  */
-export const SplitChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) => {
+export const SplitChip = ({ glob }: { glob: GlobView }) => {
   const chip = splitChip(glob);
   if (chip === null) return null;
   return (
-    <Tip text={onOpen === undefined ? chip.tip : `${chip.tip}. "split from" opens this glob's split; ${chip.source} opens that glob`}>
+    <Tip text={`${chip.tip}. ${chip.source} opens that glob`}>
       <span
         className='inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full border bg-muted px-1.5 py-0.5 font-sans text-[11px] text-muted-foreground'
         data-testid='split-chip'
       >
         <GitBranch className='h-3 w-3 shrink-0' aria-hidden />
-        <ChipButton onOpen={onOpen} className='font-sans' testId='split-chip-open'>
-          split from
-        </ChipButton>{' '}
         <Link
           to={boardGlobHref(glob.boardId, chip.source, { section: 'size' })}
           className='truncate underline-offset-2 hover:underline'
+          aria-label={`Split from ${chip.source}`}
+          data-testid='split-chip-open'
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -798,7 +798,7 @@ export const GlobCard = ({
             )}
             <ArtifactIcons glob={glob} onOpen={onOpenSection} />
             <OverlapChip glob={glob} />
-            <SplitChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
+            <SplitChip glob={glob} />
             <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
             <UpcomingStepsChip glob={glob} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
             {glob.clash != null && (
