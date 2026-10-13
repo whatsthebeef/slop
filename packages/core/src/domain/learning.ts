@@ -28,7 +28,7 @@ import type { Glob, GlobLink } from './types.js';
 /**
  * A learning is a decision glob an agent submitted or slop mined (`s<board>k<n>`). These pure helpers read one value of a
  * learning each, from the glob and its artifacts (and, for its pipeline state, its outbox jobs), so every derived value
- * is worked out in exactly one place. The glob holds the statement (`summary`), the learning's fields (attributes), how it
+ * is worked out in exactly one place. The glob holds the statement (its plan.md), the learning's fields (attributes), how it
  * relates to other learnings (`links`), its outcome and status (the decision rows); its artifacts hold the payload
  * (statement and evidence, or a proposed document), the draft, the approval's outcome, the effect check, and attachments
  * for evidence merged in from near-duplicates and the merge note.

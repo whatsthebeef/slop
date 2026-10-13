@@ -532,7 +532,7 @@ interface LearningEdit {
   /** The attributes after the edit; the row's own keys and `conflictsWith` are worked out around it. */
   readonly attributes?: (attributes: DecisionAttributes) => DecisionAttributes;
   readonly links?: (links: readonly GlobLink[]) => GlobLink[];
-  /** A new statement: the glob's summary, title and payload follow it. */
+  /** A new statement: the glob's title and payload follow it. */
   readonly statement?: string;
   /** New evidence text for a statement: the payload follows it. */
   readonly evidence?: string;
