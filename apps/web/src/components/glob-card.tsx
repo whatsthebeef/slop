@@ -707,7 +707,6 @@ export const GlobCard = ({
               </ChipButton>
             </Tip>
           )}
-          )}
           {pending !== undefined && (
             <span className='inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
               <Loader2 className='size-3 animate-spin' aria-hidden />
