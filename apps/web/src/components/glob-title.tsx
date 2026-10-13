@@ -75,7 +75,7 @@ export const GlobTitle = ({
 
   if (!editing) {
     return (
-      <h1 className='group flex min-w-0 items-baseline gap-1.5 text-base font-semibold' data-testid='glob-title'>
+      <h1 className='group flex min-w-0 flex-1 items-baseline gap-1.5 text-base font-semibold' data-testid='glob-title'>
         <span className='shrink-0 font-mono text-muted-foreground'>{id}</span>
         {editable ? (
           <button
@@ -85,7 +85,7 @@ export const GlobTitle = ({
             aria-label={`Edit title: ${title}`}
             data-testid='glob-title-edit'
           >
-            <span className='truncate'>{title}</span>
+            <span className='truncate' title={title}>{title}</span>
             <Pencil aria-hidden className='size-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' />
           </button>
         ) : (
@@ -95,7 +95,7 @@ export const GlobTitle = ({
     );
   }
   return (
-    <div className='min-w-0 flex-1'>
+    <div className='relative min-w-0 flex-1'>
       <h1 className='flex items-baseline gap-1.5 text-base font-semibold'>
         <span className='shrink-0 font-mono text-muted-foreground'>{id}</span>
         <input
@@ -133,12 +133,12 @@ export const GlobTitle = ({
         )}
       </h1>
       {emptyRefused && (
-        <p role='alert' className='text-xs text-red'>
+        <p role='alert' className='absolute left-0 top-full z-20 rounded bg-background px-1 text-xs text-red'>
           The title can't be empty.
         </p>
       )}
       {error !== null && (
-        <div role='alert' className='flex flex-wrap items-center gap-2 text-xs text-red'>
+        <div role='alert' className='absolute left-0 top-full z-20 flex flex-wrap items-center gap-2 rounded bg-background px-1 text-xs text-red'>
           <span>{error.message}</span>
           {error.conflict && (
             <Button
