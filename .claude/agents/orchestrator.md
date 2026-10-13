@@ -52,13 +52,21 @@ When a run ID is given:
 - **A red base branch is not yours to fix.** When the PR's checks fail (auto-fix), call `get_glob` first. If `headChecks.inheritedFrom` is set (or `failedChecks.inherited` is true), the base branch fails the same way: do not patch its error in this branch (a second fix collides with the one the base's owner pushes). Do not push. Record it in the run's notes (an `Assumptions` attachment): the failing check and first error, and that it is inherited from the base since the glob named in `inheritedFrom.since`. Slop brings the branch up to date and re-runs the checks when the base goes green. If the checks still fail afterwards with `inheritedFrom` unset, the failure is this glob's: fix it.
 - Pick the investigator's recommended proposal.
 
+## Human steps
+
+Anything a person must do (a rollout, a setting, an install, a decision) is recorded as a human step, never as a note in prose.
+
+- Take the investigator's `## Human steps` and `needsRollout` into the plan file. Take the implementer's `## Rollout` into the implementation record as `## Rollout`, after `## Open items`, and push the record. Slop turns that section into rollout steps once rollout detection is live; until then it is the record a person reads.
+- **Agents never run steps that change paid infrastructure or IAM**: no stack deploys, role or policy edits or billable resources, in any mode, unattended or interactive. Write the step for a person, and don't work around a refusal.
+- Your final report lists the human steps: each one's text, who and when (before or after the merge), and whether it blocks the sign-off.
+
 ## Handover
 
 `get_glob` and `get_context` return `handover`: why a person is needed on this glob (`why`, one sentence per cause, most actionable first), what to do first (`next`) and the extra lines (`detail`); it is null when nothing is wrong. When it is present, act on `next` before resuming the plan (a conflict with `<base>` is merged and resolved, failed checks reproduced and fixed, a failure's decision answered, a stalled run resumed with `--from`), and tell the developer the `why` in your first message. Slop also records it as the glob's `Handover` attachment when someone picks up or takes over. `slop handover <id>` prints it.
 
 ## Interactive start
 
-In an interactive session, call `pick_up(id, version)` before Phase 1. If you are already the implementer this is a no-op. If it returns `run_active`, stop and tell the developer a routine run is in progress; they can supersede it with `sstor --glob <id> --take-over`. Do not pass `takeOver` yourself unless the developer explicitly asks.
+In an interactive session, call `pick_up(id, version)` before Phase 1. If you are already the implementer this is a no-op. If it returns `run_active`, stop and tell the developer a routine run is in progress; they can run `sstor --glob <id>`, which asks before stopping an active run. Do not pass `takeOver` yourself unless the developer explicitly asks.
 
 ## Board knowledge
 
@@ -135,6 +143,7 @@ Keep it in `.reviews/<id>-record.md` and use this format:
 ## What was built   by area, with commits
 ## Traps            what went wrong or would surprise the next person, and how it was handled
 ## Open items       anything left for later or for another glob
+## Rollout          (only when a person must do something after the merge) the implementer's concrete steps, one per line
 ```
 
 Keep it concise: no file lists, test counts or narration, since git, the local review and the code hold those. Only what they don't already say. About 3–15 KB depending on the size of the glob. Rewrite sections rather than appending to them. `.reviews/<id>-implementation.md` stays local raw notes from the sub-agents, which you condense into the record. Push the record with the HEAD commit's SHA (`commitSha`) whenever it changes meaningfully and at the end.
@@ -353,7 +362,7 @@ If a phase fails: log the details, call `report_failure(id, reason)` (with the r
 ## Communication style
 
 - Report brief progress at each phase transition (e.g. "Phase 2 complete. Proceeding to implementation.").
-- At the end, summarise what was done across all phases.
+- At the end, summarise what was done across all phases, and list the human steps (see Human steps).
 - When restarting from a phase, say which output files were read and whether any had been edited.
 
 ## Board rules
@@ -376,6 +385,13 @@ In every mode, not only in supers, check for overlap before creating side globs 
 - Don't convert a waiting glob to a sub with `update_glob` while the glob it waits for is still open. Slop starts a routine run on the new sub straight away and ignores any "start only after X merges" in its summary. Keep it a same until that glob has merged, then convert it.
 
 In s15f11, s15f14 was in planning with "Start only after s15t18 has merged" in its summary. It was converted to a sub on 2026-10-08 at 15:55. Slop queued routine run d124783b immediately, while s15t18 was still open with failing checks.
+
+**Merge hotspot: `apps/web/src/components/glob-dialog.tsx`.** Most glob-view features and fixes edit this file, and several are often in flight at once.
+
+- A glob that changes it records `overlaps` with every other open glob that changes it, so their merges are ordered. Find them from the open globs' branches (`git diff --name-only origin/<base>...origin/<id>`), not from guesses about related work.
+- A long-lived same that edits it merges `<base>` and pushes again right before a person presses Merge, not only when it was last confirmed clean.
+
+In s15f88 (PR #289) on 2026-10-13, the branch conflicted with main in `glob-dialog.tsx` four times: after s15f99 (15:53), s15t102 (16:26), s15t104 (16:32) and s15f96 (17:13). Its overlaps named s15b58, s15b60 and s15b61, but none of the globs that actually conflicted. The last conflict landed six minutes after the branch was confirmed clean, and the Merge press failed (s15b70).
 
 ### Routine runs
 
@@ -428,11 +444,13 @@ Purely additive conflicts are yours to resolve, even in an interactive session. 
 - methods, including methods on test fakes such as a fake `CodeHost`;
 - settings or defaults entries;
 - list entries;
+- separate pieces of code that both sides added to the same function or route block;
 - Drizzle migrations that `<base>` has overtaken (see **Migrations** below).
 
 To resolve them:
 
 - Keep both sides.
+- When both sides added code to the same block, reuse the variables the other side already declares, such as a loaded record or the viewer. Don't declare them a second time.
 - Run the type check and the tests on the merged result. They must pass before you commit the merge.
 - For migrations, check that there is no drizzle drift.
 - List what you resolved in the merge commit message.
@@ -446,6 +464,17 @@ In s15f8, two merges of main conflicted only in additive ways. Keeping both side
 - `board-service.ts` settings and `memory-store.ts` defaults;
 - the fake `CodeHost`s in the server tests;
 - the drizzle journal and snapshots.
+
+Main can move again between the pre-push merge and `mark_ready`. In s15f102, the first `mark_ready` was refused (`invalid_transition`) for a conflict in `apps/server/src/http/app.ts`, in the imports and the `/api/me` block, where both sides had added code. Merging again and keeping both sides resolved it: the import lists were combined, and the branch's stalled count sat beside main's `yourTurn` and reused main's `stored` and `viewer`.
+
+**When `<base>` reformatted or restructured a file you also edit** (re-indentation, sections wrapped in new components, Prettier rewrites). This is not a clash of logic, but don't resolve it hunk by hunk:
+
+1. Take `<base>`'s version: `git checkout --theirs <file>`.
+2. Re-apply your branch's own change, read from `git diff $(git merge-base HEAD origin/<base>) HEAD -- <file>`, using whitespace-tolerant replacements.
+3. Check that every identifier your change removed (old imports, tables) is gone from the file.
+4. Run the type check and the tests before committing the merge.
+
+In s15f88, main reformatted or restructured `apps/web/src/components/glob-dialog.tsx` in three merges (cc0a3e3, c461c49, 45d347b). The hunk-by-hunk zdiff3 output for the first was over 30 KB of conflict text. Each time, taking main's file and re-applying the branch's ~35-line diff by script was clean on the first try (web vitest 282, 304 and 319 passing).
 
 **Migrations.** When `<base>` and your branch both added a migration with the same number, the drizzle journal and snapshot conflict (the snapshot as add/add). Don't merge those files by hand, and don't rename by hand:
 
@@ -584,3 +613,55 @@ Globs created together that each extend the same table run in parallel: sharing 
 - Parts that build on the same new table or column need `after` (needs) on the glob that creates it, so they share one design. Globs that merely add unrelated migrations don't: they're overlaps, and the one merged second renumbers its migration (see Merge conflicts).
 
 On 2026-10-09, s15f22, s15f23 and s15f24 ran at once after s15f21. Each added its own 0031 migration for the same inbox source idea: `source_ref` with integration tokens (f22), `source_ref` (f23) and a nullable `source_key` (f24). f23 and f24 then conflicted with main in 10 and 9 files and had to be moved onto f22's column by hand.
+
+### Human steps
+
+Anything a person must do (a rollout, a setting, an install or a decision) is a human step. Record it as one: under a `## Rollout` section in the implementation record, or as a stored step. Never leave it only as prose in a summary, or only in an attachment. This includes the data updates left to a person under Routine runs.
+
+- For each step, give what to do, who does it, when (before merge, after deploy, …) and whether it blocks the sign-off.
+- Your final report has a **Human steps** section listing every step with who, when and whether it blocks the sign-off. Write "None" when there are no steps.
+
+In s15f78, the rollout was described only in a "Rollout script" attachment. Nobody saw it until after sign-off (s15f113).
+
+### Reading a stalled reason
+
+The catalog's "Keep progress moving" sets the stall thresholds and the progress calls. When `get_glob`, a handover or the board says a glob is stalled, the kind of stall says what is wrong and what to do:
+
+- **implementing:** the run is alive but silent. Its agent is stuck or its session died. Check the session, then resume with `--from` or restart the run.
+- **queued:** no session picked the run up. Open the session or restart the run.
+- **provisioning:** the branch or PR setup never finished. Restart the run.
+- **no step and no one on it:** nobody is moving the glob. Start it, hand it to the machine, or pick it up.
+
+Don't read a stall as a failure of the code. It only says that no run with that ID has called slop since its last progress (s15f108).
+
+### Pushing to a glob whose PR is already ready
+
+When a glob was picked up again with its PR already ready (for example for a conflict, which moves it from `pr_open` to `in_progress`), any push leaves it in `in_progress` until you call `mark_ready`:
+
+- After pushing the fix, call `mark_ready` with the glob ID (and your run ID if unattended), even though the PR is not a draft. Its "already ready" branch is what moves the glob back to `pr_open`. The board can't do this for a sub or same.
+- Then call `get_glob` and check that the status is `pr_open`, not `in_progress`. Until it is, the card shows no Merge and nothing happening.
+
+In s15f92 on 2026-10-13, the glob was picked up at 18:51 for a conflict. The fix was pushed (a9a5a40, 4d85729), but the session skipped `mark_ready` because PR #323 was already ready. The glob sat in Doing with no Merge until `mark_ready` was called at about 19:07. The developer asked: "Still not seeing the option to merge or any indication of anything happening on the card. Is this a bug?"
+
+### Diagnosing production incidents
+
+When a developer reports a production failure (a 5xx, an outage, missing data), don't present the first known pattern that fits as the cause. That includes the deploy restarts after a burst of merges under Routine runs.
+
+- List the explanations that fit. Before naming one, check the evidence that tells them apart:
+  - the instance's launch time and uptime, which show whether the instance was replaced or only its process restarted;
+  - stack (CDK) deploys as well as app deploys;
+  - whether the data is still there, for example whether `whoami` still returns the boards.
+- Say what you checked and how confident you are. If the other explanations aren't ruled out yet, say so.
+- Don't propose a fix, or answer "how do we prevent this", until the cause is confirmed.
+
+In s15f88 on 2026-10-13, slopmux returned 504 at 16:41 UTC. The orchestrator blamed stacked deploy restarts from merges at 16:32–16:36 and proposed a deploy debounce. The real cause was a CDK deploy that replaced the instance at 16:36:53 with an empty data disk. It surfaced only when `whoami` returned no boards, after the developer had already asked how to prevent "this sort of crash" based on the wrong explanation.
+
+### Reading glob attachments
+
+`get_context` lists a glob's file attachments under `files`, each with its state. A missing file has a `note`. A stored file has a fresh `downloadUrl` (`get_artifact` adds one too).
+
+- To see an image or other stored file, download it and then Read it: `mkdir -p .reviews/<id>-attachments && curl -sfo .reviews/<id>-attachments/<name> '<downloadUrl>'`. The link is fresh when returned, so if it has expired, call `get_context` or `get_artifact` again for a new one. `.reviews/` is never committed.
+- Pass the downloaded paths to sub-agents that need them.
+- Don't block on a missing file. Record the gap (the file's name and its `note`) in the context file, and in a routine also in the `Assumptions` attachment. Then carry on with what the plan and the other sources say.
+
+In s15f84, `get_context` began returning `files`, and `get_artifact` began adding `downloadUrl` for a stored file.
