@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tip';
 import type { GlobView } from '@/lib/api';
+import { approveHold } from '@/lib/human-steps';
 import { cn } from '@/lib/utils';
 
 const LABEL_TITLES: Record<LabelName, string> = {
@@ -83,6 +84,7 @@ export const LabelPopover = ({
   onOpenReview: (label?: LabelName) => void;
 }) => {
   const present = presentLabels(glob);
+  const hold = approveHold(glob);
   if (present.length === 0) return null;
   return (
     <Popover>
@@ -124,7 +126,12 @@ export const LabelPopover = ({
                       Re-open
                     </Button>
                   ) : (
-                    <Button size="sm" onClick={() => void onReview(name, { kind: 'approve' })}>
+                    <Button
+                      size="sm"
+                      disabled={hold !== null}
+                      title={hold ?? undefined}
+                      onClick={() => void onReview(name, { kind: 'approve' })}
+                    >
                       Approve
                     </Button>
                   )}
@@ -198,6 +205,7 @@ const LabelReview = ({
   const [drafts, setDrafts] = useState<string[]>(['']);
   const [busy, setBusy] = useState(false);
   const signedOff = glob.status === 'signed_off';
+  const hold = approveHold(glob);
 
   const act = async (command: LabelCommand): Promise<boolean> => {
     setBusy(true);
@@ -267,6 +275,11 @@ const LabelReview = ({
         </div>
       )}
 
+      {hold !== null && state !== 'approved' && (
+        <p className="text-xs text-muted-foreground" data-testid={`approve-hold-${name}`}>
+          {hold}
+        </p>
+      )}
       <div className="flex flex-wrap justify-end gap-2">
         {state === 'required' && (
           <Button
@@ -302,7 +315,7 @@ const LabelReview = ({
             Re-open review
           </Button>
         ) : (
-          <Button size="sm" disabled={busy} onClick={() => void act({ kind: 'approve' })}>
+          <Button size="sm" disabled={busy || hold !== null} title={hold ?? undefined} onClick={() => void act({ kind: 'approve' })}>
             Approve
           </Button>
         )}

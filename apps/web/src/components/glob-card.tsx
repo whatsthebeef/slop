@@ -685,7 +685,9 @@ export const GlobCard = ({
   /** Who is looking: Your turn shows the steps that are theirs. */
   viewer?: HumanStepViewer;
 }) => {
-  const person = glob.implementer ?? glob.planner;
+  // Nothing for the machine: the corner marker already says it is working.
+  const machineRun = glob.runs.some((r) => r.generation === glob.generation && r.purpose !== 'investigate');
+  const person = glob.implementer ?? (machineRun ? null : glob.planner);
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
   const now = new Date().toISOString();
@@ -736,15 +738,15 @@ export const GlobCard = ({
       data-testid={`card-${glob.id}`}
     >
       <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground' data-testid='card-header'>
-        <span className='inline-flex min-w-0 items-center gap-1.5'>
-          <span className='whitespace-nowrap'>
-            {glob.id} · {decision ? 'decision' : glob.type}
-            {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
-          </span>
-          <CategoryIcon category={glob.category} />
-          <Avatar email={person} planner={glob.implementer === null} />
+        {/* The ID gives way last: the marker's text truncates first (it shrinks faster), the category icon never moves. */}
+        <span className='min-w-0 shrink-[0.2] truncate whitespace-nowrap' data-testid='card-id'>
+          {glob.id} · {decision ? 'decision' : glob.type}
+          {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
         </span>
-        {marker !== null && <CornerMarkerView marker={marker} position={position} onAct={onAct} onOpenSection={onOpenSection} />}
+        <span className='inline-flex min-w-0 items-center justify-end gap-1.5' data-testid='card-corner'>
+          {marker !== null && <CornerMarkerView marker={marker} position={position} onAct={onAct} onOpenSection={onOpenSection} />}
+          <CategoryIcon category={glob.category} />
+        </span>
       </div>
       <div className='leading-snug font-medium break-words' data-testid='card-title'>
         {glob.title}
@@ -785,69 +787,74 @@ export const GlobCard = ({
           </div>
         </Tip>
       )}
-      <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
-        {glob.group !== null && <GroupChip name={glob.group} />}
-        {decision ? (
-          <DecisionChips glob={glob} onOpen={() => onOpenSection(cardTargets.decision())} />
-        ) : (
-          <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
-        )}
-        <ArtifactIcons glob={glob} onOpen={onOpenSection} />
-        <OverlapChip glob={glob} />
-        <SplitChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
-        <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
-        <UpcomingStepsChip glob={glob} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
-        {glob.clash != null && (
-          <Tip text={`${glob.clash.with} also changes some of the same files; whichever merges second will conflict. Opens the conflict`}>
-            <ChipButton onOpen={() => onOpenSection(cardTargets.conflict())} className='font-mono text-[11px] text-required' testId='clash-chip'>
-              clashes with {glob.clash.with}
-            </ChipButton>
-          </Tip>
-        )}
-        {deploy !== undefined && <DeployChip deploy={deploy} onOpen={() => onOpenSection(cardTargets.deploys())} />}
-        {environments !== undefined && <EnvironmentChips environments={environments} />}
-        {atf !== undefined && <AtfChip runs={atf} />}
-        {age !== 'neutral' && glob.pr?.state === 'draft' && (
-          <Tip text='Two or more days in Doing and the PR is still a draft'>
-            <ChipButton
-              onOpen={prUrl(repo, glob) === null ? undefined : () => window.open(prUrl(repo, glob) ?? '', '_blank', 'noopener,noreferrer')}
-              className='font-mono text-[11px] text-muted-foreground'
-              testId='draft-chip'
-            >
-              PR still draft
-            </ChipButton>
-          </Tip>
-        )}
-        {glob.provisioning === 'failed' && (
-          <Tip text='slop could not create the branch and draft PR; it retries in the background'>
-            <ChipButton onOpen={() => onOpenSection(cardTargets.actions())} className='font-mono text-[11px] text-red' testId='provisioning-chip'>
-              provisioning failed
-            </ChipButton>
-          </Tip>
-        )}
-      </div>
-      {(pending !== undefined || turn !== null || shown.length > 0) && (
-        <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-testid='card-actions'>
-          {pending !== undefined && (
-            <span className='inline-flex items-center gap-1 whitespace-nowrap font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
-              <Loader2 className='size-3 animate-spin' aria-hidden />
-              {workingLabel(pending)}
-            </span>
+      <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
+        <div className='flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden'>
+          <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
+            {glob.group !== null && <GroupChip name={glob.group} />}
+            {decision ? (
+              <DecisionChips glob={glob} onOpen={() => onOpenSection(cardTargets.decision())} />
+            ) : (
+              <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
+            )}
+            <ArtifactIcons glob={glob} onOpen={onOpenSection} />
+            <OverlapChip glob={glob} />
+            <SplitChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
+            <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
+            <UpcomingStepsChip glob={glob} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
+            {glob.clash != null && (
+              <Tip text={`${glob.clash.with} also changes some of the same files; whichever merges second will conflict. Opens the conflict`}>
+                <ChipButton onOpen={() => onOpenSection(cardTargets.conflict())} className='font-mono text-[11px] text-required' testId='clash-chip'>
+                  clashes with {glob.clash.with}
+                </ChipButton>
+              </Tip>
+            )}
+            {deploy !== undefined && <DeployChip deploy={deploy} onOpen={() => onOpenSection(cardTargets.deploys())} />}
+            {environments !== undefined && <EnvironmentChips environments={environments} />}
+            {atf !== undefined && <AtfChip runs={atf} />}
+            {age !== 'neutral' && glob.pr?.state === 'draft' && (
+              <Tip text='Two or more days in Doing and the PR is still a draft'>
+                <ChipButton
+                  onOpen={prUrl(repo, glob) === null ? undefined : () => window.open(prUrl(repo, glob) ?? '', '_blank', 'noopener,noreferrer')}
+                  className='font-mono text-[11px] text-muted-foreground'
+                  testId='draft-chip'
+                >
+                  PR still draft
+                </ChipButton>
+              </Tip>
+            )}
+            {glob.provisioning === 'failed' && (
+              <Tip text='slop could not create the branch and draft PR; it retries in the background'>
+                <ChipButton onOpen={() => onOpenSection(cardTargets.actions())} className='font-mono text-[11px] text-red' testId='provisioning-chip'>
+                  provisioning failed
+                </ChipButton>
+              </Tip>
+            )}
+          </div>
+          {(pending !== undefined || turn !== null || shown.length > 0) && (
+            <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-testid='card-actions'>
+              {pending !== undefined && (
+                <span className='inline-flex items-center gap-1 whitespace-nowrap font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
+                  <Loader2 className='size-3 animate-spin' aria-hidden />
+                  {workingLabel(pending)}
+                </span>
+              )}
+              {turn !== null && <TurnButton glob={glob} turn={turn} pending={pending} onAct={(action) => onAct?.(action)} />}
+              {shown.map((move, _i, all) => (
+                <MoveButton
+                  key={move.action}
+                  move={move}
+                  hot={move.action === previewing}
+                  disabled={pending !== undefined}
+                  primary={mainAction(all.map((m) => m.action), glob, decision) === move.action}
+                  onPreview={onPreview}
+                  onMove={onMove}
+                />
+              ))}
+            </div>
           )}
-          {turn !== null && <TurnButton glob={glob} turn={turn} pending={pending} onAct={(action) => onAct?.(action)} />}
-          {shown.map((move, _i, all) => (
-            <MoveButton
-              key={move.action}
-              move={move}
-              hot={move.action === previewing}
-              disabled={pending !== undefined}
-              primary={mainAction(all.map((m) => m.action), glob, decision) === move.action}
-              onPreview={onPreview}
-              onMove={onMove}
-            />
-          ))}
         </div>
-      )}
+        {person !== null && <Avatar email={person} planner={glob.implementer === null} />}
+      </div>
       {tag !== undefined && (
         // Keyed by the move, so a second move's tag restarts its fade.
         <div key={tag.n} className='move-tag font-mono text-[10px] text-muted-foreground' role='status'>

@@ -1,4 +1,4 @@
-import { blockProgress, dueText, isMerged, rolloutPending, yourTurn } from '@slop/core';
+import { blockProgress, dueText, isMerged, isOpenStep, rolloutPending, yourTurn } from '@slop/core';
 import type { Glob, HumanStepBlock, HumanStepScript, HumanStepViewer } from '@slop/core';
 import type { ListedHumanStep } from './api';
 import { globPath } from './glob-section';
@@ -27,6 +27,26 @@ export const mainStep = (
   return step === null ? null : { step, label: step.kind === 'rollout' ? 'Rollout' : step.title };
 };
 
+/** What a due step's main button does: copy its command, tick it, or wait (disabled, with why). Never just scroll to the section. */
+export type StepMain =
+  | { readonly kind: 'copy'; readonly label: string; readonly then: string }
+  | { readonly kind: 'done'; readonly label: string; readonly text: string | null }
+  | { readonly kind: 'wait'; readonly label: string; readonly reason: string };
+
+/**
+ * The main action for a due blocking step, by its kind. A step with a capability check is slop's to tick, so the button
+ * is disabled with the reason; a script step copies its command (and offers Mark done after); any other step is
+ * ticked with Mark done, with its text shown beside it.
+ */
+export const stepMain = (step: Pick<ListedHumanStep, 'title' | 'detail' | 'script' | 'check'>): StepMain => {
+  if (step.check != null && step.check !== '') {
+    return { kind: 'wait', label: 'Mark done', reason: `waits for ${step.check} to turn on; slop ticks this itself` };
+  }
+  if (step.script != null) return { kind: 'copy', label: 'Copy rollout command', then: 'Mark done' };
+  const detail = step.detail?.trim();
+  return { kind: 'done', label: 'Mark done', text: detail === undefined || detail === '' ? null : detail };
+};
+
 /**
  * The status line for a merged glob whose rollout still holds back its sign-off: "Merged; rollout 1/3 (Your turn)",
  * counting done against all steps that aren't dismissed. Null when nothing is open or the change isn't merged yet.
@@ -45,6 +65,15 @@ export const rolloutLine = (
     tip: rolloutPending(progress),
     turn,
   };
+};
+
+/** Why a merged glob's labels can't be approved yet: the first sign-off-blocking step still open, or null when nothing holds them. */
+export const approveHold = (glob: Glob & { readonly humanSteps?: readonly ListedHumanStep[] }): string | null => {
+  if (glob.status !== 'reviewing') return null;
+  const steps = glob.humanSteps ?? [];
+  if (blockProgress(steps, 'sign_off').open === 0) return null;
+  const first = steps.find((s) => s.source !== 'machine' && s.blocks.includes('sign_off') && isOpenStep(s));
+  return `Waits for the rollout${first === undefined ? '' : `: ${first.title}`}`;
 };
 
 /** One key for every glob: the viewer's last toggle of the Human steps section. */
