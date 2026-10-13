@@ -617,6 +617,7 @@ export class PgStore implements Store {
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.humanSteps).where(eq(schema.humanSteps.globId, id));
+        await t.delete(schema.statusDismissals).where(eq(schema.statusDismissals.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
         // Older decisions that this glob's decisions replaced stand again; its own rows go with their items below.
         const d = schema.decisions;
@@ -1337,6 +1338,22 @@ export class PgStore implements Store {
           const row = humanStepRow(step);
           await t.insert(schema.humanSteps).values(row).onConflictDoUpdate({ target: schema.humanSteps.id, set: row });
         }
+      },
+      listStatusDismissals: async (email, boardId) => {
+        const d = schema.statusDismissals;
+        return t
+          .select({ globId: d.globId, key: d.key })
+          .from(d)
+          .innerJoin(schema.globs, eq(schema.globs.id, d.globId))
+          .where(and(eq(d.userEmail, email), eq(schema.globs.boardId, boardId)))
+          .orderBy(d.at, d.key);
+      },
+      addStatusDismissal: async (email, globId, key, at) => {
+        await t.insert(schema.statusDismissals).values({ userEmail: email, globId, key, at: new Date(at) }).onConflictDoNothing();
+      },
+      removeStatusDismissal: async (email, globId, key) => {
+        const d = schema.statusDismissals;
+        await t.delete(d).where(and(eq(d.userEmail, email), eq(d.globId, globId), eq(d.key, key)));
       },
       getDeploy: async (id) => {
         const [row] = await t.select().from(schema.deploys).where(eq(schema.deploys.id, id));

@@ -338,6 +338,18 @@ export const BoardPage = () => {
     onError: fail,
   });
 
+  // The card's ×: store the viewer's dismissal, then show the keys the server answers with (the rest of the card is kept).
+  const dismissMessage = async (glob: GlobView, key: string, dismiss: boolean) => {
+    try {
+      const { dismissedKeys } = await api.setDismissed(glob.id, key, dismiss);
+      client.setQueryData<GlobView[]>(globsKey(glob.boardId), (list) =>
+        list?.map((g) => (g.id === glob.id ? { ...g, ...(dismissedKeys === undefined ? {} : { dismissedKeys }) } : g)),
+      );
+    } catch {
+      toast("Couldn't save that; try again");
+    }
+  };
+
   /** Runs an action; false when it failed (the failure is already shown). */
   const act = async (glob: GlobView, action: Action): Promise<boolean> => {
     const path = ACTION_PATHS[action];
@@ -489,6 +501,7 @@ export const BoardPage = () => {
                       environments={deployState.data?.environments?.[glob.id]}
                       atf={deployState.data?.atf?.[glob.id]}
                       viewer={viewer}
+                      onDismiss={(key, dismiss) => void dismissMessage(glob, key, dismiss)}
                     />
                   );
                 })}

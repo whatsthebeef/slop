@@ -10,6 +10,7 @@ import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { onStandby, positionOf } from '@/lib/position';
 import type { Position } from '@/lib/position';
+import { collapsed } from '@/lib/dismissals';
 import { blockedParts, chainTip, statusLine } from '@/lib/status-line';
 import type { StatusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
@@ -694,6 +695,7 @@ export const GlobCard = ({
   environments,
   atf,
   viewer,
+  onDismiss,
 }: {
   glob: GlobView;
   onOpen: () => void;
@@ -727,6 +729,8 @@ export const GlobCard = ({
   atf?: readonly AtfRun[];
   /** Who is looking: Your turn shows the steps that are theirs. */
   viewer?: HumanStepViewer;
+  /** The × on the status line: the viewer has read it, so it keeps its short label, muted (`dismiss` false is Show again). */
+  onDismiss?: (key: string, dismiss: boolean) => void;
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
@@ -734,6 +738,7 @@ export const GlobCard = ({
   const status = statusLine(glob, new Date().toISOString(), viewer);
   // A stalled conflict is already said, briefly, by the position chip: say it once on the card.
   const conflictSaid = status?.conflict === true && positionOf(glob, new Date().toISOString(), viewer)?.holder === 'stalled';
+  const seen = status === null ? null : collapsed(glob, status);
   const preview = moves.find((m) => m.action === previewing);
   // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status.
   const decision = decisionOf(glob) !== null;
@@ -810,17 +815,31 @@ export const GlobCard = ({
         {status !== null && !decision && status.kind === 'ready' && (
           <YourTurnChip glob={glob} status={status} pending={pending} onAct={(action) => onAct?.(action)} onOpenSection={onOpenSection} />
         )}
-        {status !== null && !decision && status.kind !== 'ready' && !conflictSaid && (
-          <Tip text={`${status.tip}\n${clickTip(statusClick(status))}`}>
-            <ChipButton
-              onOpen={() => runChip(statusClick(status), () => undefined, onOpenSection)}
-              className={cn('font-mono text-[11px]', status.tone)}
-              testId='status-line'
-              dataKind={status.kind}
-            >
-              {status.text}
-            </ChipButton>
-          </Tip>
+        {status !== null && seen !== null && !decision && status.kind !== 'ready' && !conflictSaid && (
+          <>
+            <Tip text={`${seen.dismissed ? status.text : status.tip}\n${clickTip(statusClick(status))}`}>
+              <ChipButton
+                onOpen={() => runChip(statusClick(status), () => undefined, onOpenSection)}
+                className={cn('font-mono text-[11px]', seen.dismissed ? 'text-muted-foreground' : status.tone)}
+                testId='status-line'
+                dataKind={status.kind}
+              >
+                {seen.label}
+              </ChipButton>
+            </Tip>
+            {onDismiss !== undefined && !seen.dismissed && status.kind !== 'rollout' && (
+              <Tip text='Got it: collapse this message to its short label (only for you)'>
+                <CardButton
+                  onOpen={() => onDismiss(seen.key, true)}
+                  className='cursor-pointer rounded-sm font-mono text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring'
+                  testId='status-dismiss'
+                  ariaLabel='Got it: collapse this message'
+                >
+                  ×
+                </CardButton>
+              </Tip>
+            )}
+          </>
         )}
         {age !== 'neutral' && glob.pr?.state === 'draft' && (
           <Tip text='Two or more days in Doing and the PR is still a draft'>

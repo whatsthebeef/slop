@@ -97,6 +97,8 @@ export interface GlobView extends Glob {
   readonly sizeCheck?: SizeCheck;
   /** Why a person is needed and what to do first; null when nothing is wrong, absent on an older API (single-glob reads only). */
   readonly handover?: Handover | null;
+  /** The status messages the viewer dismissed on this glob (see `lib/dismissals.ts`); absent on an older API. */
+  readonly dismissedKeys?: readonly string[];
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
   readonly humanSteps?: readonly ListedHumanStep[];
   /** Whose move it is, derived on every read (board list only; absent on an older API). */
@@ -833,6 +835,9 @@ export const api = {
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel: (id: string, label: LabelName, command: LabelCommand, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/labels/${label}`, { command, version }),
+  /** "Got it" / ×: the viewer has read the status message `key` (dismiss) or wants it back (Show again). Answers the glob. */
+  setDismissed: (id: string, key: string, dismiss: boolean) =>
+    request<GlobView>(dismiss ? 'POST' : 'DELETE', `/api/globs/${id}/dismiss`, { key }),
   /** The ✕ on a Dependencies row: the edge to `edgeId` is not a dependency. */
   dismissEdge: (id: string, edgeId: string, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/edges/${edgeId}/dismiss`, { version }),

@@ -70,6 +70,8 @@ interface State {
   artifacts: Artifact[];
   deploys: Map<string, Deploy>;
   humanSteps: Map<string, StoredHumanStep>;
+  /** Status dismissals by user, glob and message key. */
+  statusDismissals: Map<string, { email: string; globId: string; key: string; at: string }>;
   reviewSources: ReviewSource[];
   findings: ReviewFinding[];
   kbSignals: Map<string, KbSignalState>;
@@ -168,6 +170,7 @@ const clone = (state: State): State => ({
   artifacts: [...state.artifacts],
   deploys: new Map(state.deploys),
   humanSteps: new Map(state.humanSteps),
+  statusDismissals: new Map(state.statusDismissals),
   reviewSources: [...state.reviewSources],
   findings: [...state.findings],
   kbSignals: new Map(state.kbSignals),
@@ -240,6 +243,7 @@ export class MemoryStore implements Store {
     artifacts: [],
     deploys: new Map(),
     humanSteps: new Map(),
+    statusDismissals: new Map(),
     reviewSources: [],
     findings: [],
     kbSignals: new Map(),
@@ -323,6 +327,7 @@ export class MemoryStore implements Store {
         s.findings = s.findings.filter((f) => f.globId !== id);
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
         for (const [key, step] of s.humanSteps) if (step.globId === id) s.humanSteps.delete(key);
+        for (const [key, d] of s.statusDismissals) if (d.globId === id) s.statusDismissals.delete(key);
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
         s.testRuns = s.testRuns.filter((r) => r.globId !== id);
         // A glob's own items go with it; a learning or document it fed only loses the link.
@@ -673,6 +678,22 @@ export class MemoryStore implements Store {
         Promise.resolve([...s.humanSteps.values()].filter((h) => h.boardId === boardId && h.state === 'open').sort(byCreated)),
       saveHumanSteps: (steps) => {
         for (const h of steps) s.humanSteps.set(h.id, h);
+        return Promise.resolve();
+      },
+      listStatusDismissals: (email, boardId) =>
+        Promise.resolve(
+          [...s.statusDismissals.values()]
+            .filter((d) => d.email === email && s.globs.get(d.globId)?.glob.boardId === boardId)
+            .sort((x, y) => x.at.localeCompare(y.at) || x.key.localeCompare(y.key))
+            .map(({ globId, key }) => ({ globId, key })),
+        ),
+      addStatusDismissal: (email, globId, key, at) => {
+        const id = JSON.stringify([email, globId, key]);
+        if (!s.statusDismissals.has(id)) s.statusDismissals.set(id, { email, globId, key, at });
+        return Promise.resolve();
+      },
+      removeStatusDismissal: (email, globId, key) => {
+        s.statusDismissals.delete(JSON.stringify([email, globId, key]));
         return Promise.resolve();
       },
       getDeploy: (id) => Promise.resolve(s.deploys.get(id) ?? null),

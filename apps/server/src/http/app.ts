@@ -456,6 +456,7 @@ export const createApp = (deps: AppDeps) => {
     const splits = await globs.splitsOf(boardId);
     const oversized = await globs.oversizedOf(boardId);
     const steps = await globs.humanStepsOf(boardId);
+    const dismissed = await globs.dismissedKeysOf(email, boardId);
     const now = new Date().toISOString();
     const viewer = { email, role: membership.value.role };
     const thresholds = stallThresholds(membership.value.board);
@@ -472,6 +473,7 @@ export const createApp = (deps: AppDeps) => {
           // A stalled glob also hands a step to its implementer (or planner).
           humanSteps: withUnstick(human, move, glob, { allowed: view.allowedActions ?? [], session: glob.runs.some((r) => r.state !== 'ended' && r.sessionUrl != null) }).map(compactStep),
           move,
+          dismissedKeys: dismissed.get(glob.id) ?? [],
           machineSteps: facts,
           ...splitField(splits.get(glob.id)),
           ...(oversized.has(glob.id) ? { oversized: true } : {}),
@@ -681,6 +683,17 @@ export const createApp = (deps: AppDeps) => {
     if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
     return withView(c, result);
   });
+
+  // "Got it" / ×: the viewer has read a status message (the key names the situation, so a new one shows again); DELETE is Show again.
+  const dismissalBody = z.object({ key: z.string() });
+  for (const [method, dismiss] of [['post', true], ['delete', false]] as const) {
+    app[method]('/api/globs/:id/dismiss', async (c) => {
+      const body = await parse(c, dismissalBody);
+      if (body instanceof Response) return body;
+      const result = await globs.setStatusDismissed(c.get('email'), c.req.param('id'), body.key, dismiss);
+      return result.ok ? send(c, await globs.get(c.get('email'), result.value.globId), globViewOf) : send(c, result);
+    });
+  }
 
   // Human steps (the glob view's Human steps section; MCP's add/complete/dismiss_human_step). Each answers with the glob's
   // view, steps included, so the page replaces its state. A step change leaves the glob's version alone, so it is optional.
