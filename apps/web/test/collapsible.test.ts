@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BAR_CLASS, barLabel, boxClass, COLLAPSED_REM, needsCollapse } from '../src/lib/collapsible';
+import { barClass, barLabel, boxClass, COLLAPSED_REM, FADE_STYLE, needsCollapse } from '../src/lib/collapsible';
 
 describe('collapsible markdown', () => {
   it('collapses only documents taller than the collapsed height', () => {
@@ -10,12 +10,15 @@ describe('collapsible markdown', () => {
 });
 
 describe('clamped box', () => {
-  it('has a Show more bar joined to a bordered box, with no fade', () => {
+  it('has a Show more bar joined to a bordered box, with a faint separator and a mask fade only while clipped', () => {
     expect(barLabel(false)).toBe('Show more');
     expect(barLabel(true)).toBe('Show less');
-    expect(BAR_CLASS).toContain('w-full');
+    expect(barClass(true)).toContain('w-full');
     expect(boxClass(true)).toContain('border-b-0');
-    for (const c of [BAR_CLASS, boxClass(true), boxClass(false)]) expect(c).not.toMatch(/gradient|fade/);
+    expect(barClass(true)).toContain('border-t-border/40');
+    expect(barClass(false)).not.toContain('border-t-border/40');
+    expect(FADE_STYLE.maskImage).toContain('linear-gradient');
+    for (const c of [barClass(true), boxClass(true), boxClass(false)]) expect(c).not.toMatch(/gradient|fade/);
   });
 
   it('adds no border for short content', () => {

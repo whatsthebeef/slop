@@ -2,7 +2,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { BAR_CLASS, barLabel, boxClass, COLLAPSED_REM, needsCollapse } from '@/lib/collapsible';
+import { barClass, barLabel, boxClass, COLLAPSED_REM, FADE_STYLE, needsCollapse } from '@/lib/collapsible';
 
 /**
  * Renders an artifact's markdown. GitHub-flavoured, because local reviews and plans lean on
@@ -18,7 +18,7 @@ export const MarkdownView = ({ content }: { content: string }) => (
 );
 
 /**
- * MarkdownView for long documents: clipped to about 24rem with no fade, and a full-width "Show more ▾" bar joined to the
+ * MarkdownView for long documents: clipped to about 24rem with a light fade on the last line, and a full-width "Show more ▾" bar joined to the
  * bottom of the box ("Show less ▴" once expanded). Short documents show no bar. `startExpanded` opens it expanded
  * (a deep link); the state is per view.
  */
@@ -43,7 +43,7 @@ export const CollapsibleMarkdown = ({ content, startExpanded = false }: { conten
   const clipped = long && !expanded;
   return (
     <div ref={box} data-testid="collapsible-markdown">
-      <div className={boxClass(long)} style={clipped ? { maxHeight: `${String(COLLAPSED_REM)}rem` } : undefined}>
+      <div className={boxClass(long)} style={clipped ? { maxHeight: `${String(COLLAPSED_REM)}rem`, ...FADE_STYLE } : undefined}>
         <div ref={natural}>
           <MarkdownView content={content} />
         </div>
@@ -51,7 +51,7 @@ export const CollapsibleMarkdown = ({ content, startExpanded = false }: { conten
       {long && (
         <button
           type="button"
-          className={BAR_CLASS}
+          className={barClass(clipped)}
           aria-expanded={expanded}
           data-testid={expanded ? 'show-less' : 'show-more'}
           onClick={() => {
