@@ -1,6 +1,6 @@
 import { decisionOf, findingsLabel, reviewOutdated, scopeLabel } from '@slop/core';
 import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
-import { Bot, Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
+import { Bot, Brain, Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
@@ -541,10 +541,10 @@ export const GlobCard = ({
         <OverlapChip glob={glob} />
         <SplitChip glob={glob} />
         <OversizedChip glob={glob} />
-        {glob.escalation != null && (
-          <Tip text={`Needs a human: ${glob.escalation.reason}`}>
+        {glob.escalation != null && glob.status === 'planning' && (
+          <Tip text={`Needs a person: ${glob.escalation.reason}`}>
             <span className='font-mono text-[11px] text-required' data-testid='escalation-chip'>
-              needs a human
+              needs a <Brain className='inline h-3 w-3' />
             </span>
           </Tip>
         )}
@@ -560,7 +560,15 @@ export const GlobCard = ({
         {atf !== undefined && <AtfChip runs={atf} />}
         {status !== null && !decision && (
           <Tip text={status.tip}>
-            <span className={cn('font-mono text-[11px]', status.tone)} data-testid='status-line' data-kind={status.kind}>
+            <span
+              className={cn(
+                'font-mono text-[11px]',
+                status.kind === 'ready' ? 'inline-flex items-center gap-1 rounded-sm bg-foreground px-1.5 py-0.5 font-medium text-background' : status.tone,
+              )}
+              data-testid={status.kind === 'ready' ? 'your-turn-chip' : 'status-line'}
+              data-kind={status.kind}
+            >
+              {status.kind === 'ready' && <Brain className='h-3 w-3' />}
               {status.text}
             </span>
           </Tip>
