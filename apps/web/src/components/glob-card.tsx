@@ -1,6 +1,6 @@
 import { decisionOf, dueText, findingsLabel, reviewOutdated, scopeLabel, upcomingSteps } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
-import { Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
+import { AlertTriangle, Bug, Hourglass, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
@@ -9,7 +9,9 @@ import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { ActionIcon } from '@/lib/action-presentation';
 import type { MoveTag } from '@/lib/board-motion';
-import { activityLabel, blockedParts, chainTip, statusLine } from '@/lib/status-line';
+import { onStandby, positionOf } from '@/lib/position';
+import type { Position } from '@/lib/position';
+import { blockedParts, chainTip, statusLine } from '@/lib/status-line';
 import type { StatusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
@@ -17,7 +19,7 @@ import { OUTCOME_TEXT } from './decision-section';
 import { actionTiers } from '@/lib/action-style';
 import { workingLabel } from '@/lib/card-pending';
 import { splitChip } from '@/lib/split-chip';
-import { activityClick, CONFIRM_MS, clickTip, prUrl, statusClick, turnStep, yourTurnClick } from '@/lib/chip-actions';
+import { positionClick, CONFIRM_MS, clickTip, prUrl, statusClick, turnStep, yourTurnClick } from '@/lib/chip-actions';
 import type { ChipClick } from '@/lib/chip-actions';
 import { cardTargets } from '@/lib/card-targets';
 import type { GlobTarget } from '@/lib/glob-section';
@@ -97,30 +99,56 @@ export const GroupChip = ({ name }: { name: string }) => {
   );
 };
 
-/** The one label for what runs on its own (merging, checks, the routine): shared with the glob view. */
-export const ActivityLabel = ({
+/**
+ * The one position indicator, shared with the glob view: who has the ball and what they are doing. The viewer's own turn is
+ * the Your turn chip, so this shows nothing for it. Standby stays a small muted marker beside whatever holds the ball.
+ */
+export const PositionLabel = ({
   glob,
   repo,
+  viewer,
   onAct,
   onOpenSection,
 }: {
   glob: GlobView;
   repo?: string;
+  viewer?: HumanStepViewer;
   onAct?: (action: Action) => void;
   onOpenSection?: (target: GlobTarget) => void;
 }) => {
-  const activity = activityLabel(glob, new Date().toISOString());
-  if (activity === null) return null;
-  const click = activityClick(activity, glob, repo);
-  const open = onOpenSection === undefined ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
+  const now = new Date().toISOString();
+  const position = positionOf(glob, now, viewer);
+  const standby = onStandby(glob);
+  if (position === null && standby === null) return null;
+  const click = position === null ? null : positionClick(position, glob, repo);
+  const open = click === null || onOpenSection === undefined ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
   return (
-    <Tip text={open === undefined ? activity.tip : `${activity.tip}\n${clickTip(click)}`}>
-      <ChipButton onOpen={open} className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' testId='activity-label' dataKind={activity.kind}>
-        {activity.spinning ? <Loader2 className='h-3 w-3 animate-spin' /> : <ActorIcon actor={activity.icon ?? 'machine'} className='h-3 w-3' decorative />}
-        {activity.text}
-      </ChipButton>
-    </Tip>
+    <>
+      {position !== null && click !== null && (
+        <Tip text={open === undefined ? position.tip : `${position.tip}\n${clickTip(click)}`}>
+          <ChipButton onOpen={open} className={cn('inline-flex items-center gap-1 font-mono text-[11px]', position.tone)} testId='position' dataKind={position.holder}>
+            <PositionIcon position={position} />
+            {position.text}
+          </ChipButton>
+        </Tip>
+      )}
+      {standby !== null && position?.holder !== 'machine' && (
+        <Tip text="Machine on standby: fixes new CI failures or review comments until it's merged.">
+          <span className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' data-testid='standby'>
+            <ActorIcon actor='machine' className='h-3 w-3' decorative />
+            standby
+          </span>
+        </Tip>
+      )}
+    </>
   );
+};
+
+const PositionIcon = ({ position }: { position: Position }) => {
+  if (position.spinning) return <Loader2 className='h-3 w-3 animate-spin' aria-hidden />;
+  if (position.holder === 'waiting') return <Hourglass className='h-3 w-3' aria-hidden />;
+  if (position.holder === 'stalled') return <AlertTriangle className='h-3 w-3' aria-hidden />;
+  return <ActorIcon actor={position.holder === 'human' ? 'human' : 'machine'} className='h-3 w-3' decorative />;
 };
 
 /** A button on the card that stops its click and key from reaching the card, which opens the glob at the top. */
@@ -759,7 +787,7 @@ export const GlobCard = ({
           {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
         </span>
         <span className='inline-flex items-center gap-1.5'>
-          <ActivityLabel glob={glob} repo={repo} onAct={onAct} onOpenSection={onOpenSection} />
+          <PositionLabel glob={glob} repo={repo} viewer={viewer} onAct={onAct} onOpenSection={onOpenSection} />
           <CategoryIcon category={glob.category} />
         </span>
       </div>

@@ -56,6 +56,13 @@ describe('machineSteps: other sources', () => {
     expect(kinds(glob({ status: 'pr_open', headChecks: { sha: 'abc', state: 'passed' } }))).toEqual([]);
   });
 
+  it('a ready PR with no check reported on its head yet: a queued checks step', () => {
+    const ready = glob({ status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'abc1234def' }, headChecks: null });
+    expect(machineSteps(ready)[0]).toMatchObject({ kind: 'checks', state: 'queued', holdsBall: false, detail: 'abc1234' });
+    expect(machineSteps({ ...ready, headChecks: { sha: 'abc1234def', state: 'passed' } })).toEqual([]);
+    expect(machineSteps({ ...ready, pr: { number: 7, state: 'draft', headSha: 'abc1234def' } })).toEqual([]);
+  });
+
   it('merge when green: the checks hold the ball until they pass, then slop does', () => {
     const armed = (state: 'pending' | 'passed') => glob({ status: 'pr_open', mergeMode: 'when_green', headChecks: { sha: 'abc', state } });
     expect(machineSteps(armed('pending')).find((s) => s.kind === 'merge')?.holdsBall).toBe(false);

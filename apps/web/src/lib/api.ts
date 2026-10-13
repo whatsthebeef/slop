@@ -28,6 +28,8 @@ import type {
   DecisionScope,
   DecisionView,
   Deploy,
+  MachineStep,
+  Move,
   DeployIndicator,
   AtfIndicator,
   EnvironmentIndicator,
@@ -91,6 +93,9 @@ export interface GlobView extends Glob {
   readonly handover?: Handover | null;
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
   readonly humanSteps?: readonly CompactHumanStep[];
+  /** Whose move it is (You / Machine / Waiting / Stalled) and the machine steps behind it; derived on every read, absent on an older API. */
+  readonly move?: Move;
+  readonly machineSteps?: readonly MachineStep[];
 }
 
 export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;
