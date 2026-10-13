@@ -53,7 +53,7 @@ export const NowPanel = ({
   const problem = status !== null && status.kind !== 'ready' ? status : null;
   const session = position?.sessionUrl ?? problem?.sessionUrl ?? null;
   const listed = steps.length > 1;
-  const hasDetails = problem !== null || listed || brief !== null || session !== null;
+  const hasDetails = problem !== null || listed || brief !== null;
   if (position === null && !yours && problem === null && steps.length === 0) return null;
 
   const minutes = position?.minutes ?? null;
@@ -110,7 +110,16 @@ export const NowPanel = ({
             {problem !== null && (
               <p className={cn('text-sm', problem.tone)} data-testid="status-line" data-kind={problem.kind}>
                 {problem.full}
-                {problem.doing !== null && <span className="font-normal">{` — ${problem.doing}`}</span>}
+                {problem.doing !== null && (
+                  <span className="font-normal">
+                    {' — '}
+                    {problem.sessionUrl === null ? (
+                      problem.doing
+                    ) : (
+                      <Link href={problem.sessionUrl}>{problem.doing}</Link>
+                    )}
+                  </span>
+                )}
                 {problem.url !== null && (
                   <>
                     {' ('}
