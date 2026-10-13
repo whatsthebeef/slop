@@ -38,6 +38,8 @@ export interface InferenceInput {
   readonly title?: string;
   /** What the investigator found in the code (see `Investigation.dependencies`); absent when it said nothing. */
   readonly findings?: readonly InvestigationDependency[];
+  /** The inferred edges already recorded for the glob: what the findings refine when no model answers. */
+  readonly recorded?: readonly ImpliedAfter[];
 }
 
 /** An inferred edge as the model gave it, checked against the candidates. */
@@ -88,9 +90,16 @@ const readInvestigation = (content: string | undefined): { files: string[]; find
 };
 
 /** The investigator's findings when there is no usable model answer; null (leave the edges as they were) unless one names a candidate. */
-const alone = (findings: readonly InvestigationDependency[] | undefined, candidates: ReadonlySet<string>): InferredEdge[] | null => {
-  const edges = refineEdges([], findings, candidates);
-  return edges.length === 0 ? null : edges;
+const alone = (
+  findings: readonly InvestigationDependency[] | undefined,
+  candidates: ReadonlySet<string>,
+  recorded: readonly ImpliedAfter[] = [],
+): InferredEdge[] | null => {
+  if (!(findings ?? []).some((f) => candidates.has(f.id))) return null;
+  const earlier: InferredEdge[] = recorded.flatMap((e) =>
+    e.source === 'inferred' && e.overridden !== true && candidates.has(e.id) ? [{ id: e.id, kind: e.kind ?? 'overlaps', reason: e.evidence ?? '', files: e.paths }] : [],
+  );
+  return refineEdges(earlier, findings, candidates);
 };
 
 const filesOfInvestigation = (content: string | undefined): string[] => readInvestigation(content).files;
@@ -177,7 +186,7 @@ export class DependencyInferenceService {
     const ids = new Set(candidates.map((c) => c.glob.id));
     // No model (or none that answers) leaves the investigator's own findings to stand.
     // Without a model, only listed findings can be applied; an empty list alone must not clear what is already recorded.
-    if (this.deps.llm === undefined) return alone(findings, ids);
+    if (this.deps.llm === undefined) return alone(findings, ids, input.recorded);
     const others = candidates
       .map((c) => `- ${c.glob.id} [${c.glob.status}] ${c.glob.title}\n  Files: ${c.files.join(', ') || '(not known yet)'}\n  Plan: ${c.plan.replace(/\s+/g, ' ').slice(0, CANDIDATE_PLAN_CHARS)}`)
       .join('\n');
@@ -193,7 +202,7 @@ export class DependencyInferenceService {
       this.deps.llmTimeoutMs ?? INFERENCE_LLM_TIMEOUT_MS,
     );
     const edges = parseEdges(answer, ids);
-    return edges === null ? alone(findings, ids) : refineEdges(edges, findings, ids);
+    return edges === null ? alone(findings, ids, input.recorded) : refineEdges(edges, findings, ids);
   }
 
   /**
@@ -229,7 +238,7 @@ export class DependencyInferenceService {
       return { glob, plan, files, findings };
     });
     if (read === null) return;
-    const edges = await this.ask({ boardId: read.glob.boardId, plan: read.plan, selfId: globId, files: read.files, title: read.glob.title, ...(read.findings === undefined ? {} : { findings: read.findings }) });
+    const edges = await this.ask({ boardId: read.glob.boardId, plan: read.plan, selfId: globId, files: read.files, title: read.glob.title, recorded: read.glob.impliedAfter ?? [], ...(read.findings === undefined ? {} : { findings: read.findings }) });
     // No usable answer leaves the edges as they were; only a well-formed (even empty) list replaces them.
     if (edges === null) return;
     await this.deps.apply(globId, edges, hash(read.plan));

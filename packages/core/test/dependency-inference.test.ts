@@ -199,19 +199,20 @@ describe('dependency inference', () => {
     const lone = new DependencyInferenceService({ store, apply: (id, found, planHash) => globs.applyInferred(id, found, planHash) });
     await push(investigation([{ id: a.id, kind: 'overlaps', reason: 'edits the same function' }]));
     await lone.refresh(made.id);
-    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
+    // The recorded overlap on b is not the investigator's to drop: it is kept beside the new finding.
+    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps'], [b.id, 'overlaps']]);
     // Looked and found none, or named only a glob that is not a candidate, with no model: the recorded edges are left alone.
     await push(investigation([]));
     await lone.refresh(made.id);
-    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
+    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps'], [b.id, 'overlaps']]);
     await push(investigation([{ id: 's99t9', kind: 'needs', reason: 'made up' }]));
     await lone.refresh(made.id);
-    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
+    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps'], [b.id, 'overlaps']]);
     // The same when the model's answer is garbled.
     answer = () => 'not json';
     await push(investigation([]));
     await inference.refresh(made.id);
-    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps']]);
+    expect((await current(made.id)).impliedAfter?.map((e) => [e.id, e.kind])).toEqual([[a.id, 'overlaps'], [b.id, 'overlaps']]);
   });
 
   it('a dismissed edge is not inferred again until the plan changes', async () => {
