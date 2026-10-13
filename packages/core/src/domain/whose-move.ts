@@ -45,12 +45,13 @@ export interface MoveOptions {
   readonly complete?: boolean;
 }
 
-/** Two states a person is the one to move in, whatever steps say: sign-off labels asked for, an escalation. */
-const personReason = (glob: Glob): string | null => {
-  if (glob.status === 'reviewing' && Object.values(glob.labels).some((l) => l === 'required' || l === 'added')) return 'Review needed';
-  if (glob.escalation != null && glob.status !== 'signed_off' && glob.status !== 'failed') return `Needs a human: ${glob.escalation.reason}`;
-  return null;
-};
+/** A state a person is the one to move in, whatever steps say: sign-off labels asked for. */
+const personReason = (glob: Glob): string | null =>
+  glob.status === 'reviewing' && Object.values(glob.labels).some((l) => l === 'required' || l === 'added') ? 'Review needed' : null;
+
+/** An escalation is a person's turn only when nothing else holds the ball: it never outranks a machine step (see `whoseMove`). */
+const escalationReason = (glob: Glob): string | null =>
+  glob.escalation != null && glob.status !== 'signed_off' && glob.status !== 'failed' ? `Needs a human: ${glob.escalation.reason}` : null;
 
 const holderOf = (who: string, glob: Pick<Glob, 'implementer' | 'planner'>): string =>
   who === 'implementer' ? (glob.implementer ?? glob.planner) : who;
@@ -125,7 +126,7 @@ export const whoseMove = (
     return { holder: 'waiting', reason: `waiting for ${first?.title ?? 'a step'}`, since: null, waitingOn: rollouts.map((s) => s.id) };
   }
 
-  // 4. A person's turn by state: sign-off asked for, an escalation. Nothing failed.
+  // 4. A person's turn by state: sign-off asked for. Nothing failed.
   const person = personReason(glob);
   const failed = machineSteps.filter((s) => s.state === 'failed');
   if (person !== null && failed.length === 0 && quiet.length === 0) {
@@ -152,6 +153,17 @@ export const whoseMove = (
       if (standby !== undefined) return { holder: 'machine', reason: 'fix checks', since: checks.at ?? null };
       return mover('Fix checks');
     }
+  }
+
+  // 4c. A person's turn by escalation: only after the machine had its say above (a run working, a watcher answering failed checks).
+  const escalation = escalationReason(glob);
+  if (escalation !== null && failed.length === 0 && quiet.length === 0) {
+    return {
+      holder: options.viewer !== undefined && (glob.implementer ?? glob.planner) === options.viewer.email ? 'you' : 'human',
+      reason: escalation,
+      since: null,
+      who: glob.implementer ?? glob.planner,
+    };
   }
 
   // 5. Idle: a Planning glob nobody started.
