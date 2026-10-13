@@ -300,7 +300,7 @@ describe('rolloutPaths', () => {
     expect(rolloutPathsOf({})).toBe(DEFAULT_ROLLOUT_PATHS);
     expect(rolloutPathsOf({ rolloutPaths: [] })).toBe(DEFAULT_ROLLOUT_PATHS);
     expect(rolloutPathsOf({ rolloutPaths: ['ops/**'] })).toEqual(['ops/**']);
-    expect(DEFAULT_ROLLOUT_PATHS).toEqual(['infra/**', 'apps/server/src/config.ts']);
+    expect(DEFAULT_ROLLOUT_PATHS).toEqual(['infra/**', 'apps/server/src/config.ts', '.github/workflows/**', '**/drizzle/**']);
   });
 
   it.each([

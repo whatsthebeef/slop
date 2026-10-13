@@ -14,7 +14,7 @@ type Octokit = Awaited<ReturnType<App['getInstallationOctokit']>>;
 /** The parts of `GET /repos/{owner}/{repo}/commits/{ref}` a merged sub's size is read from. */
 const commitStats = z.object({
   stats: z.object({ additions: z.number().int().nonnegative(), deletions: z.number().int().nonnegative() }),
-  files: z.array(z.object({ filename: z.string(), additions: z.number().int().nonnegative().optional(), deletions: z.number().int().nonnegative().optional(), patch: z.string().optional() })).optional(),
+  files: z.array(z.object({ filename: z.string(), additions: z.number().int().nonnegative().optional(), deletions: z.number().int().nonnegative().optional() })).optional(),
 });
 
 /** How long the App's own settings are reused: readiness is read on every settings view. */
@@ -732,7 +732,6 @@ export class GitHub implements CodeHost, CommitGraph {
       changedLines: commit.stats.additions + commit.stats.deletions,
       files: (commit.files ?? []).map((f) => f.filename),
       fileLines: Object.fromEntries((commit.files ?? []).map((f) => [f.filename, (f.additions ?? 0) + (f.deletions ?? 0)])),
-      patches: Object.fromEntries((commit.files ?? []).flatMap((f) => (f.patch === undefined ? [] : [[f.filename, f.patch] as const]))),
     };
   }
 
