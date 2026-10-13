@@ -105,41 +105,6 @@ const Control = ({
       </span>
     );
   }
-  if (filter.control === 'steps') {
-    const on = value !== '';
-    return (
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          aria-pressed={on}
-          className={cn(
-            'inline-flex h-7 items-center rounded-full border px-2.5 text-xs',
-            on ? 'border-foreground bg-muted font-medium' : 'border-edge text-muted-foreground hover:text-foreground',
-          )}
-          data-testid={`filter-${filter.key}`}
-          onClick={() => onChange(on ? '' : 'all')}
-        >
-          {filter.label}
-        </button>
-        {on && (
-          <select
-            aria-label="Kind of human step"
-            className="h-7 rounded border border-edge bg-card px-1.5 text-xs"
-            value={value}
-            data-testid={`filter-${filter.key}-kind`}
-            onChange={(e) => onChange(e.target.value)}
-          >
-            <option value="all">any kind</option>
-            {filter.kinds.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind.replace(/_/g, ' ')}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-    );
-  }
   const on = selectedOptions(value);
   return (
     <div className="flex gap-1" role="group" aria-label={filter.label}>

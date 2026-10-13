@@ -59,7 +59,9 @@ type SectionView = (props: SectionProps) => ReactNode;
 /** How each section renders, keyed by its `data-section` id. The order lives in `sections.ts`. */
 export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   conflict: ({ ctx }) => <ConflictSection ctx={ctx} />,
-  escalation: ({ ctx }) => <EscalationSection ctx={ctx} />,
+  escalation: ({ ctx, section }) => (
+    <EscalationSection ctx={ctx} startOpen={section === 'escalation'} />
+  ),
   labels: ({ ctx, actions, onReviewLabel, openLabel }) =>
     !actions.decision && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />

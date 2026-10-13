@@ -364,7 +364,7 @@ const chat = new ChatService({
 });
 // An arriving investigation escalates a sub that needs a human and raises the oversize flag with a fan-out proposal.
 const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input), predictRollout: (id) => globs.predictRollout(id) });
-const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, investigation, rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, investigation, hotspots: (board, now) => hotspots.hotspots(board, now, false), rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
 const attachments =
   attachmentObjects === null
     ? null

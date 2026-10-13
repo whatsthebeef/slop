@@ -436,7 +436,7 @@ export const BoardPage = () => {
   }
 
   // A rejected or closed decision (archived) never shows.
-  const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters, viewer));
+  const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters));
   const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
   const haltLabel = haltConfirm === null ? '' : actionLabel(haltConfirm.action, haltConfirm.glob);
 
