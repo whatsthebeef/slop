@@ -116,7 +116,8 @@ describe('shared status line', () => {
       kind: 'base-red',
       doing: 'this branch is updated when the base is fixed',
     });
-    expect(line?.full).toMatch(/not this glob's change/);
+    expect(line?.full).toBe('⏳ waiting · main is red');
+    expect(line?.full).not.toMatch(/not this glob's change/);
     expect(line).toEqual(statusLine(g, NOW));
   });
 

@@ -67,7 +67,7 @@ const shortProblem = (status: StatusLine, glob: GlobView): string => {
     case 'provisioning':
       return 'branch not created';
     case 'base-red':
-      return 'base branch is red';
+      return status.text;
     case 'checks':
       return 'checks failed';
     case 'failure':

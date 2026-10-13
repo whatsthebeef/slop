@@ -723,7 +723,7 @@ export const readinessNotifications = (
         label: i.fix?.label ?? 'Readiness checklist',
         href: i.fix === null ? link : i.fix.kind === 'link' ? i.fix.href : link,
       },
-      clears: { kind: 'condition' },
+      clears: { kind: 'condition', key: `${i.key}:${i.state}` },
     }));
   const missing = items.filter((i) => i.state === 'missing');
   if (missing.length > 0) {

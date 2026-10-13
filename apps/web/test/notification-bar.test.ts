@@ -23,8 +23,8 @@ describe('the notification bar', () => {
     expect(barView([n('b', 'warning', '2026-10-05T12:00:00Z'), n('a', 'warning', '2026-10-05T11:00:00Z')])?.lead.id).toBe('a');
   });
 
-  it('offers dismiss only for dismissible ones', () => {
-    expect(canDismiss(n('x', 'critical', 't'))).toBe(false);
+  it('offers dismiss for every notification, critical and condition-held included', () => {
+    expect(canDismiss(n('x', 'critical', 't'))).toBe(true);
     expect(canDismiss(n('x', 'info', 't', { kind: 'dismissible' }))).toBe(true);
   });
 

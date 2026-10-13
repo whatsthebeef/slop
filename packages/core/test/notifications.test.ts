@@ -8,6 +8,7 @@ import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { NOW, board } from './fixtures.js';
 
 const MEMBER = 'dev@example.com';
+const OTHER = 'other@example.com';
 const LATER = '2026-10-05T13:00:00.000Z';
 
 const raised = (patch: Partial<RaisedNotification> = {}): RaisedNotification => ({
@@ -39,6 +40,8 @@ describe('board notifications', () => {
     await store.transaction(async (tx) => {
       await tx.upsertUser({ email: MEMBER, name: 'Dev', active: true });
       await tx.upsertMember({ boardId: board.id, email: MEMBER, role: 'dev' });
+      await tx.upsertUser({ email: OTHER, name: 'Other', active: true });
+      await tx.upsertMember({ boardId: board.id, email: OTHER, role: 'dev' });
     });
   });
 
@@ -109,16 +112,33 @@ describe('board notifications', () => {
     expect(await list()).toMatchObject([{ id: 'all/integration:github', boardId: null }]);
   });
 
-  it('dismisses only dismissible ones', async () => {
+  it('dismisses a dismissible one for everyone, and a condition-held one for that person only', async () => {
     await service.raise(raised());
     await service.raise(raised({ source: 'tip', severity: 'info', clears: { kind: 'dismissible' } }));
-    const refused = await service.dismiss(MEMBER, board.id, '1/main-red');
-    expect(refused.ok).toBe(false);
-    expect((await list()).map((n) => n.source)).toEqual(['main-red', 'tip']);
+    expect((await service.dismiss(MEMBER, board.id, '1/main-red')).ok).toBe(true);
+    expect((await list()).map((n) => n.source)).toEqual(['tip']);
+    // Still there for someone else.
+    const other = await service.list(OTHER, board.id);
+    expect(other.ok && other.value.map((n) => n.source)).toEqual(['main-red', 'tip']);
     expect((await service.dismiss(MEMBER, board.id, '1/tip')).ok).toBe(true);
-    expect((await list()).map((n) => n.source)).toEqual(['main-red']);
+    expect(await list()).toEqual([]);
     const missing = await service.dismiss(MEMBER, board.id, '1/tip');
     expect(!missing.ok && missing.error.code).toBe('not_found');
+  });
+
+  it('shows a snoozed condition again on a new condition key, and restores a dismissal', async () => {
+    await service.raise(raised({ clears: { kind: 'condition', key: 'm1:a' } }));
+    await service.dismiss(MEMBER, board.id, '1/main-red');
+    await service.raise(raised({ title: 'again', clears: { kind: 'condition', key: 'm1:a' } }));
+    expect(await list()).toEqual([]);
+    const hidden = await service.listDismissed(MEMBER, board.id);
+    expect(hidden.ok && hidden.value).toHaveLength(1);
+    await service.raise(raised({ clears: { kind: 'condition', key: 'm2:a' } }));
+    expect(await list()).toHaveLength(1);
+    await service.dismiss(MEMBER, board.id, '1/main-red');
+    expect(await list()).toEqual([]);
+    expect((await service.restore(MEMBER, board.id, '1/main-red')).ok).toBe(true);
+    expect(await list()).toHaveLength(1);
   });
 
   it('is for members only', async () => {
@@ -139,7 +159,14 @@ describe('board notifications', () => {
 
     it('says what failed, who caused it, and that globs are waiting', () => {
       const n = mainRedNotification(1, 'main', failed);
-      expect(n).toMatchObject({ severity: 'critical', title: 'main is red since s1f5 merged', link: 'https://x/run/1', clears: { kind: 'condition' } });
+      expect(n).toMatchObject({
+        severity: 'critical',
+        title: '⚠ main is red since m1 (s1f5) · src/a.ts(1,1): error TS1: broken · fixing: nobody yet',
+        link: 'https://x/run/1',
+        action: { label: 'Create fix glob' },
+        clears: { kind: 'condition', key: 'm1:src/a.ts(1,1): error TS1: broken' },
+      });
+      expect(mainRedNotification(1, 'main', failed, { glob: 's1t9' })?.title).toContain('fixing: s1t9');
       expect(n?.detail).toContain('Check (Type check): src/a.ts(1,1): error TS1: broken');
       expect(n?.detail).toContain('Globs failing the same way are waiting');
     });

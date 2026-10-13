@@ -43,7 +43,7 @@ export const activeTab = (pathname: string, boardId: number): BoardTab => {
 /** The ＋ New glob icon is in the tab row on the board view only. */
 export const showBoardTools = (tab: BoardTab): boolean => tab === 'board';
 
-/** Dismissible notifications offer a dismiss button; one whose condition holds never does. */
+/** Every notification offers a dismiss button; one whose condition holds snoozes for that person until the condition changes. */
 export const canDismiss = (n: BoardNotification): boolean => isDismissible(n);
 
 /** An action's link: a page of this app opens in place, anything else in a new tab. */
@@ -51,3 +51,6 @@ export const linkTarget = (href: string): { readonly target?: '_blank' } => (hre
 
 /** Poll slowly while one is showing (hints can be lost while the tab is hidden), more slowly still otherwise. */
 export const pollInterval = (active: boolean): number => (active ? 15_000 : 60_000);
+
+/** The control that brings dismissed notifications back: "dismissed (2)". */
+export const dismissedLabel = (count: number): string => `dismissed (${String(count)})`;
