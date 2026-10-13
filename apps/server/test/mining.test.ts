@@ -147,6 +147,7 @@ describe('Mining reads and board jobs in Postgres', () => {
   it("windows a board's findings by when their review was written, not when it was split (s15f8)", async () => {
     const globId = await newGlob(boardId);
     const finding = (sourceId: number, text: string): NewFinding => ({
+      resolved: false,
       boardId,
       globId,
       sourceId,

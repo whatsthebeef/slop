@@ -211,6 +211,7 @@ describe('hand-over brief in the services', () => {
             path: 'a.ts',
             line: null,
             text: 'Fix a',
+            resolved: false,
             fingerprint: 'fa',
           },
         ],

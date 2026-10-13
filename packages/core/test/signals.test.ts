@@ -63,6 +63,7 @@ const finding = (
   round: null,
   path: null,
   line: null,
+  resolved: false,
   text: patch.text ?? `A ${cls ?? 'pending'} finding on ${globId}`,
   fingerprint: `f${String(findingId)}`,
   class: cls,
