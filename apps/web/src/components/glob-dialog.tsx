@@ -1,13 +1,14 @@
 import { decisionOf, isValidCombination, machine } from '@slop/core';
 import type { Action, Category, EditFailure, SuggestionPrefill } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
+import { workingLabel } from '@/lib/card-pending';
 import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
 import type { PendingAction } from '@/lib/pending-action';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
@@ -306,9 +307,14 @@ export const GlobDetail = ({
             );
           }}
         >
-          {busy && pending?.action === action
-            ? 'Working…'
-            : actionLabel(action, glob.type, ACTION_LABELS, glob.status)}
+          {busy && pending?.action === action ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              {workingLabel(action)}
+            </>
+          ) : (
+            actionLabel(action, glob.type, ACTION_LABELS, glob.status)
+          )}
         </Button>
       );
       const tip = ACTION_TIPS[action];
