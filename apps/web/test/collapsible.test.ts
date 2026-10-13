@@ -23,6 +23,11 @@ describe('clamped box', () => {
 
   it('adds no border for short content, and the box always carries the solid background', () => {
     expect(boxClass(false)).not.toContain('border');
+    expect(boxClass(true, true)).toContain('pb-0');
+    expect(boxClass(true, true)).not.toMatch(/(^| )p-3/);
+    expect(boxClass(true, false)).toContain('p-3');
+    expect(boxClass(true, false)).not.toContain('pb-0');
+    expect(boxClass(false)).toContain('p-3');
     expect(boxClass(true)).toContain('bg-muted');
     expect(boxClass(false)).toContain('bg-muted');
   });
