@@ -503,7 +503,7 @@ export const BoardPage = () => {
                       key={glob.id}
                       glob={glob}
                       onOpen={() => openGlob(glob.id)}
-                      onOpenArtifact={(kind) => openGlob(glob.id, { artifact: kind })}
+                      onOpenSection={(target) => openGlob(glob.id, target)}
                       onReviewLabel={reviewLabel(glob)}
                       moves={moves.map((m) => m.move)}
                       pending={pending[glob.id]}

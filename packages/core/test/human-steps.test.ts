@@ -14,7 +14,7 @@ const ready = (patch = {}) =>
   });
 const attributes = (outcome: DecisionAttributes['outcome']): DecisionAttributes => ({
   scope: { kind: 'project', ref: null },
-  origin: { kind: 'submitted', globId: 's1t1' },
+  origin: { kind: 'submitted' },
   channel: 'agent',
   outcome,
 });
@@ -78,8 +78,8 @@ describe('derived steps', () => {
 
   it('decide and sign off: decision globs only', () => {
     expect(kinds(decision({ status: 'in_progress' }))).toEqual(['decide']);
-    expect(kinds(decision({ status: 'in_progress', attributes: attributes({ kind: 'needs_work', reason: 'x' }) }))).toEqual(['decide']);
-    expect(kinds(decision({ status: 'in_progress', attributes: attributes({ kind: 'accepted' }) }))).toEqual([]);
+    expect(kinds(decision({ status: 'in_progress', attributes: attributes({ kind: 'needs_work', reason: 'x', by: 'po@example.com', at: NOW }) }))).toEqual(['decide']);
+    expect(kinds(decision({ status: 'in_progress', attributes: attributes({ kind: 'accept', by: 'po@example.com', at: NOW }) }))).toEqual([]);
     expect(kinds(decision({ status: 'reviewing' }))).toEqual(['sign_off']);
     expect(kinds(decision({ status: 'planning' }))).toEqual([]);
   });
