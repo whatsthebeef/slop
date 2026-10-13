@@ -556,16 +556,6 @@ export const GlobCard = ({
         <OverlapChip glob={glob} />
         <SplitChip glob={glob} />
         <OversizedChip glob={glob} />
-        {glob.escalation != null && glob.status === 'planning' && (
-          // The Tip's hidden description reads "Needs a person: <reason>" once; the visible words are hidden.
-          <Tip text={`Needs a person: ${glob.escalation.reason}`}>
-            <span className='inline-flex items-center gap-1 font-mono text-[11px] text-required' data-testid='escalation-chip'>
-              <span aria-hidden className='inline-flex items-center gap-1'>
-                needs a <HumanIcon className='h-3 w-3' decorative />
-              </span>
-            </span>
-          </Tip>
-        )}
         {glob.clash != null && (
           <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict`}>
             <span className='font-mono text-[11px] text-required' data-testid='clash-chip'>
@@ -608,6 +598,16 @@ export const GlobCard = ({
           </Tip>
         )}
         <span className='ml-auto inline-flex items-center gap-1'>
+          {glob.escalation != null && glob.status === 'planning' && (
+            // The Tip's hidden description reads "Needs a person: <reason>" once; the visible words are hidden.
+            <Tip text={`Needs a person: ${glob.escalation.reason}`}>
+              <span className='inline-flex items-center gap-1 font-mono text-[11px] text-required' data-testid='escalation-chip'>
+                <span aria-hidden className='inline-flex items-center gap-1'>
+                  needs a <HumanIcon className='h-3 w-3' decorative />
+                </span>
+              </span>
+            </Tip>
+          )}
           {pending !== undefined && (
             <span className='inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
               <Loader2 className='size-3 animate-spin' aria-hidden />
