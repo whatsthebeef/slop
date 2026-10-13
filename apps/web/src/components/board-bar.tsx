@@ -66,6 +66,11 @@ export const Supers = ({ count }: { count: number }) => (
   />
 );
 
+/** How many globs on the board nobody is moving. */
+export const Stalled = ({ count }: { count: number }) => (
+  <Count count={count} word="STALLED" tip={`${count} ${count === 1 ? 'glob is' : 'globs are'} stalled: nobody is moving ${count === 1 ? 'it' : 'them'}`} on="bg-amber" />
+);
+
 /** How many globs on the board wait on a person. */
 export const Attention = ({ count }: { count: number }) => (
   <Count count={count} word="WAITING" tip={needs(count)} on="bg-red-soft" />
@@ -100,7 +105,7 @@ export const Reviews = ({ name, count }: { name: LabelName; count: number }) => 
 
 /** Board rows' columns: number, name with its ID and last-viewed label, running, supers, waiting, your turn, reviews. */
 const ROW =
-  'grid grid-cols-[2rem_minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)_7rem_7rem_7rem_8rem_3.5rem_3.5rem_3.5rem]';
+  'grid grid-cols-[2rem_minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 px-2 py-1 no-underline sm:grid-cols-[2.5rem_minmax(0,1fr)_7rem_7rem_7rem_8rem_7rem_3.5rem_3.5rem_3.5rem]';
 
 const MENU_ITEM =
   'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted';
@@ -332,6 +337,7 @@ export const BoardBar = ({ current }: { current?: number }) => {
           <Supers count={board.supers ?? 0} />
           <Attention count={board.attention ?? 0} />
           <YourTurn count={board.yourTurn ?? 0} />
+          <Stalled count={board.stalled ?? 0} />
           {LABEL_NAMES.map((name) => (
             <Reviews key={name} name={name} count={board.reviews?.[name] ?? 0} />
           ))}
