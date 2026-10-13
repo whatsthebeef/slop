@@ -326,4 +326,6 @@ export interface ArtifactSummary {
   readonly actor: string;
   /** Independent reviews only. */
   readonly review?: IndependentReviewMeta;
+  /** File attachments only: the latest version's file facts (state, name, type, size). */
+  readonly file?: Pick<AttachmentFile, 'fileName' | 'contentType' | 'size' | 'state' | 'reason'>;
 }
