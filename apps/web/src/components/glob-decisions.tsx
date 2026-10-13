@@ -1,7 +1,10 @@
 import type { DecisionRelation, DecisionView } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useState } from 'react';
 import { Link } from 'react-router';
 import { api, RequestError } from '@/lib/api';
+import { defaultOpen, hintCount, readChoicesOpen, writeChoicesOpen } from '@/lib/choices-collapse';
 import { globDecisionsKey } from '@/lib/live';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
@@ -18,11 +21,13 @@ const Source = ({ label, url }: { label: string; url: string | null }) =>
  * and approved learnings), each with who decided, when and a link to its source. A choice a newer one replaced is
  * struck through and says by what and when; a replacement the model proposed but could not verify is shown as
  * proposed, with a link to the decision glob where an admin or PO confirms or dismisses it. Choice text comes from documents and models, so it is plain text.
- * `glob.decisions` hints and reconnects refresh it.
+ * `glob.decisions` hints and reconnects refresh it. The section collapses to its heading and count; the viewer's toggle
+ * is remembered, and until they make one it starts collapsed for many choices or any pending replacement.
  */
 export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: string }) => {
   const client = useQueryClient();
   const toast = useToast();
+  const [toggled, setToggled] = useState<boolean | null>(readChoicesOpen);
   const query = useQuery({ queryKey: globDecisionsKey(globId), queryFn: () => api.decisions(boardId, globId) });
   const change = useMutation({
     mutationFn: ({ id, action }: { id: number; action: 'confirm' | 'undo' }) =>
@@ -41,6 +46,12 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
   });
   const decisions = query.data?.decisions ?? [];
   if (decisions.length === 0) return null;
+  const open = toggled ?? defaultOpen(decisions);
+  const toReview = hintCount(decisions);
+  const toggle = () => {
+    setToggled(!open);
+    writeChoicesOpen(!open);
+  };
 
   const buttons = (id: number, state: DecisionRelation['state']) => (
     <span className='inline-flex gap-1'>
@@ -118,8 +129,18 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
 
   return (
     <section className='grid gap-2' aria-label='Choices' data-testid='glob-decisions'>
-      <h3 className='text-xs font-semibold text-muted-foreground'>Choices</h3>
-      <ul className='grid gap-2'>{decisions.map(row)}</ul>
+      <h3 className='text-xs font-semibold text-muted-foreground'>
+        <button type='button' className='flex items-center gap-1' aria-expanded={open} onClick={toggle} data-testid='choices-toggle'>
+          {open ? <ChevronDown aria-hidden className='size-3.5' /> : <ChevronRight aria-hidden className='size-3.5' />}
+          Choices ({decisions.length})
+          {!open && toReview > 0 && (
+            <span className='rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground' data-testid='choices-to-review'>
+              {toReview} to review
+            </span>
+          )}
+        </button>
+      </h3>
+      {open && <ul className='grid gap-2'>{decisions.map(row)}</ul>}
     </section>
   );
 };
