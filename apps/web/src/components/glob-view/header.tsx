@@ -2,7 +2,7 @@ import { decisionOf } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
-import { ActivityLabel, GroupChip } from '../glob-card';
+import { GroupChip } from '../glob-card';
 import { GlobTitle } from '../glob-title';
 import { LabelChips } from '../labels';
 import { Tip } from '../ui/tip';
@@ -100,7 +100,6 @@ export const GlobChips = ({ ctx, actions }: { ctx: GlobViewContext; actions: Glo
       ) : (
         <TypeChip ctx={ctx} state={actions} />
       )}
-      <ActivityLabel glob={glob} />
       {glob.group !== null && <GroupChip name={glob.group} />}
       {!decision && <LabelChips glob={glob} />}
       <span className="ml-auto text-xs text-muted-foreground">
