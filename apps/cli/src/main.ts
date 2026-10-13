@@ -20,6 +20,7 @@ import {
   readyCommand,
   type GlobDeps,
 } from './globs.js';
+import { GROUP_BACKFILL_USAGE, groupBackfillCommand } from './group-backfill.js';
 import { IMPORT_USAGE, importCommand } from './import.js';
 import { PUT_ARTIFACT_USAGE, putArtifactCommand } from './put-artifact.js';
 import { REPORT_USAGE, reportCommand } from './report.js';
@@ -255,6 +256,12 @@ const COMMANDS: Readonly<Record<string, Command>> = {
         log: context.log,
         defaultBoard: context.settings.SLOP_BOARD,
       }),
+  },
+  'group-backfill': {
+    usage: GROUP_BACKFILL_USAGE,
+    summary: "List the groups proposed for a board's open globs that have none; --apply writes them (the board's admins)",
+    run: (args, context) =>
+      groupBackfillCommand(args, { client: clientFor(context), stdout: context.stdout, defaultBoard: context.settings.SLOP_BOARD }),
   },
   merge: {
     usage: MERGE_USAGE,

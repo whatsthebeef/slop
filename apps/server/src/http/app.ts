@@ -1,4 +1,4 @@
-import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, IntakeService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
+import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, IntakeService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
 import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -26,6 +26,8 @@ export interface AppDeps {
   readonly sizeCheck?: SizeCheckService;
   /** Chooses the group of a glob created without one; absent: it gets none. */
   readonly intake?: Pick<IntakeService, 'suggestGroup'>;
+  /** Proposes (and with apply, writes) groups for a board's open globs that have none; absent: its route isn't mounted. */
+  readonly groupBackfill?: Pick<GroupBackfillService, 'run'>;
   /** Looks at a glob's pending files when it is read (the fallback for a lost storage event); absent: file attachments are off. */
   readonly attachments?: Pick<AttachmentService, 'refreshGlob'>;
   /** The board's LLM spend line; absent: its route isn't mounted. */
@@ -375,6 +377,15 @@ export const createApp = (deps: AppDeps) => {
     const member = await boards.get(c.get('email'), boardId);
     if (!member.ok) return send(c, member);
     return send(c, await spend.monthToDate(boardId));
+  });
+
+  // The group backfill (admins): a dry run unless `apply` is true. `slop group-backfill` calls it.
+  app.post('/api/boards/:b/groups/backfill', async (c) => {
+    const { groupBackfill } = deps;
+    if (groupBackfill === undefined) return c.json({ code: 'not_found', message: 'The group backfill is not available' }, 404);
+    const body = await parse(c, z.object({ apply: z.boolean().default(false) }));
+    if (body instanceof Response) return body;
+    return send(c, await groupBackfill.run(c.get('email'), Number(c.req.param('b')), body.apply));
   });
 
   app.get('/api/boards/:b/members', async (c) =>
