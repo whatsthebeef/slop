@@ -59,6 +59,7 @@ import type {
   SubLimitChange,
   SubLimitView,
   CompactHumanStep,
+  Move,
   DependencyRulesView,
   Edge,
   TargetChange,
@@ -91,6 +92,8 @@ export interface GlobView extends Glob {
   readonly handover?: Handover | null;
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
   readonly humanSteps?: readonly CompactHumanStep[];
+  /** Whose move it is (board list only): for a stalled glob, its reason is the cause the Your turn tooltip gives. */
+  readonly move?: Move;
 }
 
 export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;

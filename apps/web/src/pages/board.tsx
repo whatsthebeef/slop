@@ -15,7 +15,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobView, NewGlob } from '@/lib/api';
-import { actionLabel, actionPresentation, presentedActions } from '@/lib/action-presentation';
+import { actionLabel } from '@/lib/action-presentation';
+import { cardMoves } from '@/lib/card-moves';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { mergeOutcomeText, runCardAction } from '@/lib/card-pending';
@@ -42,35 +43,7 @@ const LIST_TITLES: Record<List, string> = {
 
 type Direction = 'left' | 'right';
 
-/**
- * The moves a glob can make, each a state-machine action it allows: right takes a glob from
- * Planning into Doing. Discard isn't a card move (it is in the glob view). Leaving Doing happens through the merge and signing off
- * through labels, so those lists have no moves.
- */
-const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
-  // No moves while slop is still creating the glob's branch and PR: a second action then would race the setup.
-  if (glob.provisioning === 'pending') return [];
-  const allowed = presentedActions(glob.allowedActions ?? []);
-  const make = (action: Action, direction: Direction, target: List) => {
-    const { label: name, tip, icon } = actionPresentation(action, glob);
-    return {
-      target,
-      move: {
-        action,
-        direction,
-        label: direction === 'right' ? `${name} ▸` : `◂ ${name}`,
-        description: `${name} ${glob.id}: ${tip}`,
-        icon,
-      },
-    };
-  };
-  if (glob.list === 'planning') {
-    return (['start', 'start_anyway', 'pick_up', 'take_over', 'retrigger'] as const)
-      .filter((a) => allowed.includes(a))
-      .map((a) => make(a, 'right', 'doing'));
-  }
-  return [];
-};
+const movesFor = cardMoves;
 
 /** What an action would stop, so the board can ask first; empty when nothing is halted. */
 const haltedBy = (glob: GlobView, action: Action): string[] => {

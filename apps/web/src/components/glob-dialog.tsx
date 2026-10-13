@@ -259,8 +259,11 @@ export const GlobDetail = ({
   const allActions = presentedActions(glob.allowedActions ?? []).filter(
     (a) => a !== 'delete' && a !== 'decide' && actionPresentation(a, glob).placement !== 'none',
   );
-  const actions = orderActions(allActions);
-  const tiers = actionTiers(allActions);
+  // A stalled glob's step names the one action to lead with and one alternative to follow it.
+  const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
+  const leading = stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
+  const actions = orderActions(allActions, leading, stall?.alternative);
+  const tiers = actionTiers(allActions, leading);
   const disabled = waitingFor(glob, actions, board.role);
   const status = viewStatusLine(glob, new Date().toISOString(), disabled);
   // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.

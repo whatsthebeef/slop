@@ -35,6 +35,15 @@ describe('Your turn click', () => {
     expect(yourTurnClick(turn('sign_off'), {})).toEqual({ kind: 'section', target: { section: 'labels' } });
   });
 
+  it('runs the action a stall step names, opens the session for Open session, and falls back to the glob view', () => {
+    const unstick = (action: StatusLine['action']): StatusLine => ({ ...turn('unstick'), action });
+    expect(yourTurnClick(unstick('retrigger'), { allowedActions: ['retrigger', 'pick_up'] })).toEqual({ kind: 'act', action: 'retrigger', confirm: false });
+    expect(yourTurnClick(unstick('retrigger'), { allowedActions: ['pick_up'] }).kind).toBe('section');
+    const running = { currentRun: { state: 'active', sessionUrl: 'https://claude.ai/code/x' } } as Pick<GlobView, 'currentRun'>;
+    expect(yourTurnClick(unstick('open_session'), { allowedActions: [], ...running })).toEqual({ kind: 'link', url: 'https://claude.ai/code/x' });
+    expect(yourTurnClick(unstick('open_session'), { allowedActions: [] }).kind).toBe('section');
+  });
+
   it('does not run Merge when the glob view would not offer it', () => {
     expect(yourTurnClick(turn('merge'), { allowedActions: [] }).kind).toBe('section');
   });

@@ -7,7 +7,6 @@ import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
-import type { ActionIcon } from '@/lib/action-presentation';
 import type { MoveTag } from '@/lib/board-motion';
 import { activityLabel, blockedParts, chainTip, statusLine } from '@/lib/status-line';
 import type { StatusLine } from '@/lib/status-line';
@@ -241,17 +240,8 @@ const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (target: Glob
   );
 };
 
-/** One move the glob can make: a state-machine action into a neighbouring list. */
-export interface CardMove {
-  readonly action: Action;
-  readonly direction: 'left' | 'right';
-  /** The verb on the button, e.g. "Pick up ▸". */
-  readonly label: string;
-  /** What it does, for screen readers and the tooltip. */
-  readonly description: string;
-  /** Who does the work, from actionPresentation; decorative, since the description says it in words. */
-  readonly icon: ActionIcon | null;
-}
+import type { CardMove } from '@/lib/card-moves';
+export type { CardMove };
 
 const MoveButton = ({
   move,
