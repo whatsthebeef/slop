@@ -7,6 +7,7 @@ import {
   parseFilters,
   toggleOption,
   writeFilters,
+  stalledCount,
   yourTurnCount,
   BOARD_FILTERS,
 } from '../src/lib/board-filters';
@@ -158,5 +159,27 @@ describe('board filters', () => {
       expect(yourTurnCount(globs, viewer)).toBe(2);
       expect(yourTurnCount([], viewer)).toBe(0);
     });
+  });
+});
+
+describe('whose-move filter and stalled count', () => {
+  const moved = (holder: 'machine' | 'waiting' | 'stalled' | 'you') =>
+    view({ move: { holder, reason: '', since: null } });
+
+  it('matches the chosen holders', () => {
+    const values = parse('category=all&move=machine,stalled');
+    expect(values.move).toBe('machine,stalled');
+    expect(matchesFilters(moved('machine'), values)).toBe(true);
+    expect(matchesFilters(moved('stalled'), values)).toBe(true);
+    expect(matchesFilters(moved('waiting'), values)).toBe(false);
+    expect(matchesFilters(view({}), values)).toBe(false);
+  });
+
+  it('keeps a stable order and drops unknown holders', () => {
+    expect(parse('category=all&move=stalled,nope,Machine').move).toBe('machine,stalled');
+  });
+
+  it('counts the stalled globs', () => {
+    expect(stalledCount([moved('stalled'), moved('machine'), moved('stalled'), view({})])).toBe(2);
   });
 });

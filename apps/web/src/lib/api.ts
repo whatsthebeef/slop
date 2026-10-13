@@ -1,5 +1,7 @@
 import type {
   Action,
+  MachineStep,
+  Move,
   AttachmentFile,
   AwaitedDependency,
   BlockedBy,
@@ -92,6 +94,10 @@ export interface GlobView extends Glob {
   readonly handover?: Handover | null;
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
   readonly humanSteps?: readonly CompactHumanStep[];
+  /** Whose move it is, derived on every read (board list only; absent on an older API). */
+  readonly move?: Move;
+  /** What slop is doing for the glob (board list only). */
+  readonly machineSteps?: readonly MachineStep[];
 }
 
 export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;
@@ -104,6 +110,8 @@ export interface BoardView extends Board {
   readonly yourTurn?: number;
   /** Globs on the board with a routine run in progress (from /api/me only). */
   readonly running?: number;
+  /** Globs on the board nobody is moving (from /api/me only). */
+  readonly stalled?: number;
   /** Your supers in Doing on the board (from /api/me only); a person drives them, so they aren't runs. */
   readonly supers?: number;
   /** Per sign-off label, globs waiting on that review (from /api/me only). */

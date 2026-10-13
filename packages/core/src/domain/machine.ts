@@ -6,6 +6,7 @@
 import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from './errors.js';
 import type { Result } from './errors.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
+import type { ConflictKind, ConflictResolvedBy } from './conflict-record.js';
 import type { ArtifactSummary } from './knowledge.js';
 import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
@@ -968,13 +969,57 @@ export const behindChecked = (
     .done();
 };
 
-/** The open PR no longer conflicts with the base branch. */
-export const conflictCleared = (glob: Glob, ctx: Context): Result<Transition> => {
+/**
+ * A same or sub in Doing whose PR is already ready for review (picked up to fix a conflict or failed checks): once its
+ * pushed head has no conflict, nothing else brings it back to pr_open, so the machine does.
+ */
+const backToReview = (glob: Glob): boolean =>
+  glob.status === 'in_progress' &&
+  glob.type !== 'super' &&
+  glob.pr?.state === 'ready' &&
+  !hasLiveRun(glob);
+
+/** Returns a Doing glob with a ready PR to pr_open: its head's checks are read and a same is reviewed again. */
+const returnToReview = (b: Builder, sha: string): Builder => {
+  const glob = b.current;
+  b.set({ headChecks: null })
+    .event('ReturnedToReview', { sha })
+    .status('pr_open')
+    .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+  if (glob.type !== 'sub')
+    b.effect({
+      kind: 'review_change',
+      globId: glob.id,
+      generation: glob.generation,
+      stage: 'pre_merge',
+      sha,
+    });
+  return b;
+};
+
+/**
+ * The open PR no longer conflicts with the base branch. The event records what was resolved (files, the causing glob)
+ * and how: `by` is the conflict-fix run when the glob's latest run is a resolve_conflict run that is still live or
+ * completed, else a person; `kind` is what the code host could tell about the resolution (`unknown` when it could not).
+ */
+export const conflictCleared = (
+  glob: Glob,
+  ctx: Context,
+  kind: ConflictKind = 'unknown',
+): Result<Transition> => {
   if (glob.conflict == null) return unchanged(glob);
-  return new Builder(glob, ctx)
-    .set({ conflict: null })
-    .event('ConflictCleared', { base: glob.conflict.base })
-    .done();
+  const run = currentRun(glob);
+  const by: ConflictResolvedBy =
+    run?.purpose === 'resolve_conflict' && (run.state !== 'ended' || run.outcome === 'completed') ? 'run' : 'human';
+  const b = new Builder(glob, ctx).set({ conflict: null }).event('ConflictCleared', {
+    base: glob.conflict.base,
+    files: [...glob.conflict.files],
+    since: glob.conflict.since,
+    by,
+    kind,
+  });
+  if (backToReview(glob) && glob.pr?.headSha != null) returnToReview(b, glob.pr.headSha);
+  return b.done();
 };
 
 /**
@@ -1661,6 +1706,10 @@ export const commitPushed = (
   // Doing: look again at how far the branch is behind the base (the card warns before a conflict exists).
   if (glob.status === 'in_progress' && glob.pr !== null) {
     b.effect({ kind: 'check_behind', globId: glob.id, generation: glob.generation });
+  }
+  // A ready PR picked up into Doing and pushed with no conflict flagged goes back to review; a flagged one waits for the recheck.
+  if (backToReview(glob) && glob.conflict == null && !superseded && !isStartPush(glob, push)) {
+    returnToReview(b, push.sha);
   }
   // After Merge and continue the glob has no PR until the next push opens one, once there's new
   // work on the branch (main is merged back into it first, so the PR shows only the new work).

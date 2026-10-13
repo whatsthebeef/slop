@@ -75,6 +75,7 @@ import { AwsSecretStore, secretNames, storeSlot, withSecrets } from './secrets.j
 import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { SignedLinks } from './signed-links.js';
 import { RunWatch } from './jobs/run-watch.js';
+import { StallWatch } from './jobs/stall-watch.js';
 import { ReconcileWatch } from './jobs/reconcile.js';
 import { DeployWatch } from './jobs/deploy-watch.js';
 import { KbPipelineJob } from './jobs/kb-pipeline.js';
@@ -619,6 +620,8 @@ if (runs('llm') || runs('kb')) {
 }
 const runWatch = new RunWatch(store, globs, logError);
 if (runs('runs')) runWatch.start();
+const stallWatch = new StallWatch(store, globs, notifications, logError);
+if (runs('runs')) stallWatch.start();
 const deployWatch = new DeployWatch(deploys, logError);
 if (runs('deploys')) deployWatch.start();
 // Findings pause on the findings model only, like the KB pipeline on its own.
@@ -675,6 +678,7 @@ const shutdown = () => {
   outbox.stop();
   llmOutbox.stop();
   runWatch.stop();
+  stallWatch.stop();
   reconcileWatch.stop();
   deployWatch.stop();
   findingsJob.stop();

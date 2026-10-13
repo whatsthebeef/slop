@@ -1269,7 +1269,24 @@ describe('conflicts flagged after a merge', () => {
 
     const cleared = value(m.conflictCleared(flagged.glob, ctx(null)));
     expect(cleared.glob.conflict).toBeNull();
+    expect(cleared.events[0]?.data).toEqual({
+      base: found.base,
+      files: [...found.files],
+      since: found.since,
+      by: 'human',
+      kind: 'unknown',
+    });
     expect(value(m.conflictCleared(cleared.glob, ctx(null))).changed).toBe(false);
+  });
+
+  it('attributes a cleared conflict to the run only while its conflict-fix run is live or completed', () => {
+    const by = (r: Partial<Parameters<typeof run>[0]>) => {
+      const g = glob({ status: 'in_progress', pr, conflict: { ...found, at: NOW }, runs: [run({ purpose: 'resolve_conflict', ...r })] });
+      return value(m.conflictCleared(g, ctx(null))).events[0]?.data;
+    };
+    expect(by({ state: 'watching' })).toMatchObject({ by: 'run' });
+    expect(by({ state: 'ended', outcome: 'completed' })).toMatchObject({ by: 'run' });
+    expect(by({ state: 'ended', outcome: 'superseded' })).toMatchObject({ by: 'human' });
   });
 
   it('a push rechecks a flagged conflict; merging clears it', () => {
@@ -1278,6 +1295,35 @@ describe('conflicts flagged after a merge', () => {
     expect(pushed.effects).toContainEqual({ kind: 'check_conflict', globId: 's1t1', generation: 1, since: null });
     const merged = value(m.merged({ ...flagged, status: 'pr_open' }, { sha: 'm1' }, ctx(null)));
     expect(merged.glob.conflict).toBeNull();
+  });
+});
+
+describe('a ready PR picked up into Doing returns to review', () => {
+  const ready = { number: 7, state: 'ready' as const, headSha: 'def5678' };
+  const found = { base: 'main', files: ['a.ts'], since: null };
+
+  it('goes back to pr_open when the conflict clears', () => {
+    const g = glob({ status: 'in_progress', type: 'same', pr: ready, conflict: { ...found, at: NOW } });
+    const t = value(m.conflictCleared(g, ctx(null)));
+    expect(t.glob.status).toBe('pr_open');
+    expect(t.glob.conflict).toBeNull();
+    expect(effectKinds(t)).toEqual(['refresh_checks', 'review_change']);
+  });
+
+  it('goes back to pr_open on a push with no conflict flagged, but a sub is not reviewed', () => {
+    const same = value(m.commitPushed(glob({ status: 'in_progress', type: 'same', pr: ready }), { sha: 'aaa1111', runId: null }, ctx(null)));
+    expect(same.glob.status).toBe('pr_open');
+    const sub = value(m.commitPushed(glob({ status: 'in_progress', type: 'sub', pr: ready }), { sha: 'aaa1111', runId: null }, ctx(null)));
+    expect(sub.glob.status).toBe('pr_open');
+    expect(effectKinds(sub)).not.toContain('review_change');
+  });
+
+  it('stays in Doing for a super, a draft PR, or a flagged conflict', () => {
+    const push = { sha: 'aaa1111', runId: null };
+    expect(value(m.commitPushed(glob({ status: 'in_progress', type: 'super', pr: ready }), push, ctx(null))).glob.status).toBe('in_progress');
+    expect(value(m.commitPushed(glob({ status: 'in_progress', type: 'same', pr: { ...ready, state: 'draft' } }), push, ctx(null))).glob.status).toBe('in_progress');
+    const flagged = glob({ status: 'in_progress', type: 'same', pr: ready, conflict: { ...found, at: NOW } });
+    expect(value(m.commitPushed(flagged, push, ctx(null))).glob.status).toBe('in_progress');
   });
 });
 
