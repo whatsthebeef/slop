@@ -169,6 +169,28 @@ describe('failed checks on a glob', () => {
     expect(green.headChecks?.inheritedFrom).toBeUndefined();
   });
 
+  it('a conflict after passed checks flags the conflict and leaves the head checks passed', () => {
+    const passed = value(m.checksCompleted(open(), { sha: HEAD, passed: true }, ctx(null))).glob;
+    const conflict = { base: 'main', files: ['a.ts'] };
+    const t = value(m.checksCompleted(passed, { sha: HEAD, passed: false, conflict, real: { state: 'pending', failure: null } }, ctx(null)));
+    expect(t.glob.headChecks).toMatchObject({ sha: HEAD, state: 'passed' });
+    expect(t.glob.conflict).toMatchObject({ base: 'main', files: ['a.ts'] });
+    const noRead = value(m.checksCompleted(passed, { sha: HEAD, passed: false, conflict }, ctx(null))).glob;
+    expect(noRead.headChecks).toMatchObject({ state: 'passed' });
+  });
+
+  it('a conflict drops a stale empty failed entry, and records a real result when GitHub has one', () => {
+    const stale = { ...open(), headChecks: { sha: HEAD, state: 'failed' as const, at: NOW } };
+    const conflict = { base: 'main', files: ['a.ts'] };
+    const cleared = value(m.checksCompleted(stale, { sha: HEAD, passed: false, conflict, real: { state: 'pending', failure: null } }, ctx(null))).glob;
+    expect(cleared.headChecks).toBeNull();
+    const real = value(m.checksCompleted(stale, { sha: HEAD, passed: false, conflict, real: { state: 'failed', failure: typecheck } }, ctx(null))).glob;
+    expect(real.headChecks).toMatchObject({ state: 'failed', failure: typecheck });
+    expect(real.conflict).toMatchObject({ base: 'main' });
+    const ok = value(m.checksCompleted(stale, { sha: HEAD, passed: false, conflict, real: { state: 'passed', failure: null } }, ctx(null))).glob;
+    expect(ok.headChecks).toMatchObject({ state: 'passed' });
+  });
+
   it('says only that checks failed when the log could not be read, and nothing for passing checks', () => {
     const failed = value(m.checksCompleted(open(), { sha: HEAD, passed: false }, ctx(null))).glob;
     expect(checksExplanation(failed)).toMatchObject({ text: 'Checks failed', lines: [], inherited: false });

@@ -2,7 +2,7 @@ import { failureSummary } from './checks.js';
 import { missingCoreDocNotice } from './core-docs.js';
 import type { CoreDocArea } from './core-docs.js';
 import type { RaisedNotification } from './notifications.js';
-import type { Board, Glob } from './types.js';
+import type { Board, CheckFailure, Glob } from './types.js';
 
 /**
  * Board readiness: what a board needs before slop can run its globs end to end, checked where slop
@@ -76,7 +76,7 @@ export interface ReadinessFacts {
   /** Recent routine failures on the board's globs, newest first. */
   readonly recentFailures: readonly { readonly globId: string; readonly reason: string }[];
   /** Globs whose watching run hasn't reacted to failed checks (see `unreactedCheckFailures`). */
-  readonly unreactedCheckFailures: readonly string[];
+  readonly unreactedCheckFailures: readonly UnreactedCheckFailure[];
 }
 
 /** The action a workflow must run for `@claude` mentions to get a response. */
@@ -423,6 +423,10 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
         ? facts.recentFailures.filter((f) => /^Routine run never started/.test(f.reason))
         : [];
     const unreacted = key === 'claude_app' ? facts.unreactedCheckFailures[0] : undefined;
+    const seen =
+      unreacted === undefined
+        ? ''
+        : ` at ${unreacted.sha.slice(0, 7)}${unreacted.url === null ? '' : ` (${unreacted.url})`}`;
     const noWorkflow =
       facts.claudeWorkflow === false
         ? ' and the repo has no Claude workflow (see the "Claude workflow" item)'
@@ -449,7 +453,7 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
                 key,
                 MANUAL[key],
                 'failing',
-                `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo${noWorkflow}`,
+                `${unreacted.id}'s checks failed${seen} and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo${noWorkflow}`,
                 settings,
               )
             : facts.ticks[key] === true
@@ -500,13 +504,35 @@ const minutesUnreacted = (glob: Glob, now: string): number | null => {
     return null;
   // Red because the base branch is: nothing for the routine to push.
   if (checks.inheritedFrom !== undefined) return null;
+  // A conflict isn't a failing check, and a failure with no detail (no lines, no link) isn't a real one.
+  if (glob.conflict != null || !hasFailureDetail(checks.failure)) return null;
   const since = Math.max(Date.parse(checks.at), Date.parse(run.lastProgressAt ?? checks.at));
   return (Date.parse(now) - since) / 60_000;
 };
 
-/** Globs whose checks failed on the head and whose watching run hasn't reacted for a while. */
-export const unreactedCheckFailures = (globs: readonly Glob[], now: string): string[] =>
-  globs.filter((g) => (minutesUnreacted(g, now) ?? 0) >= STUCK_MINUTES).map((g) => g.id);
+/** Whether a recorded failure says what failed: the log's first lines or a link to the run. */
+const hasFailureDetail = (failure: CheckFailure | undefined): boolean =>
+  failure !== undefined && (failure.lines.length > 0 || failure.url !== null);
+
+/** A glob whose head checks failed for real and whose watching run hasn't reacted: what was seen, and where. */
+export interface UnreactedCheckFailure {
+  readonly id: string;
+  readonly sha: string;
+  readonly url: string | null;
+}
+
+/** Globs whose checks failed on the head (not a conflict) and whose watching run hasn't reacted for a while. */
+export const unreactedCheckFailures = (
+  globs: readonly Glob[],
+  now: string,
+): UnreactedCheckFailure[] =>
+  globs
+    .filter((g) => (minutesUnreacted(g, now) ?? 0) >= STUCK_MINUTES)
+    .map((g) => ({
+      id: g.id,
+      sha: g.headChecks?.sha ?? '',
+      url: g.headChecks?.failure?.url ?? null,
+    }));
 
 /** How long after asking the Claude GitHub App to resolve a conflict the card suggests resolving it locally. */
 const CONFLICT_FIX_MINUTES = 15;

@@ -72,7 +72,7 @@ describe('Claude workflow readiness', () => {
   });
 
   it('names the missing workflow when checks failed and the run has not reacted', () => {
-    const claudeApp = readiness({ ...ready, claudeWorkflow: false, unreactedCheckFailures: ['s1t1'] }).find((i) => i.key === 'claude_app');
+    const claudeApp = readiness({ ...ready, claudeWorkflow: false, unreactedCheckFailures: [{ id: 's1t1', sha: 'abcdef123', url: null }] }).find((i) => i.key === 'claude_app');
     expect(claudeApp?.detail).toMatch(/no Claude workflow/);
   });
 });
@@ -192,7 +192,7 @@ describe('watching run that ignores failed checks', () => {
   const watched = (patch: Parameters<typeof glob>[0] = {}) =>
     glob({
       id: 's1t1', type: 'sub', status: 'pr_open', pr: { number: 3, state: 'ready', headSha: head },
-      headChecks: { sha: head, state: 'failed', at: failedAt }, runs: [run()], ...patch,
+      headChecks: { sha: head, state: 'failed', at: failedAt, failure: { name: 'checks', step: null, lines: ['error'], url: 'https://ci/run/1' } }, runs: [run()], ...patch,
     });
 
   it('hints with the take-over and session fixes after 15 minutes', () => {
@@ -216,9 +216,19 @@ describe('watching run that ignores failed checks', () => {
   });
 
   it('counts toward the Claude GitHub App readiness item', () => {
-    expect(unreactedCheckFailures([watched(), watched({ id: 's1t2', headChecks: null })], at(20))).toEqual(['s1t1']);
-    const items = readiness({ ...ready, unreactedCheckFailures: ['s1t1'] });
-    expect(items.find((i) => i.key === 'claude_app')).toMatchObject({ state: 'failing' });
+    expect(unreactedCheckFailures([watched(), watched({ id: 's1t2', headChecks: null })], at(20))).toEqual([{ id: 's1t1', sha: head, url: 'https://ci/run/1' }]);
+    const items = readiness({ ...ready, unreactedCheckFailures: [{ id: 's1t1', sha: head, url: 'https://ci/run/1' }] });
+    expect(items.find((i) => i.key === 'claude_app')).toMatchObject({ state: 'failing', });
+    expect(items.find((i) => i.key === 'claude_app')?.detail).toContain('https://ci/run/1');
+  });
+
+  it('ignores a conflict recorded as empty failed checks, and failures with no detail', () => {
+    const conflict = { base: 'main', files: ['a.ts'], since: null, at: failedAt };
+    const empty = { sha: head, state: 'failed' as const, at: failedAt };
+    expect(unreactedCheckFailures([watched({ conflict, headChecks: empty })], at(20))).toEqual([]);
+    expect(stuckHint(watched({ conflict, headChecks: empty }), at(20))).not.toMatch(/Checks failed/);
+    expect(unreactedCheckFailures([watched({ headChecks: empty })], at(20))).toEqual([]);
+    expect(unreactedCheckFailures([watched()], at(10))).toEqual([]);
   });
 });
 
