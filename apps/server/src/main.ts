@@ -441,6 +441,7 @@ if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
 
 const app = createApp({
   auth,
+  intake,
   decisions: decisionGlobs,
   readyGate: readyGate(github, globs, boards),
   links,

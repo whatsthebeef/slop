@@ -1,4 +1,4 @@
-import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
+import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, IntakeService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
 import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -24,6 +24,8 @@ export interface AppDeps {
   readonly outbox: OutboxRunner;
   /** Keep whole on a flagged glob; absent: its route isn't mounted. */
   readonly sizeCheck?: SizeCheckService;
+  /** Chooses the group of a glob created without one; absent: it gets none. */
+  readonly intake?: Pick<IntakeService, 'suggestGroup'>;
   /** Looks at a glob's pending files when it is read (the fallback for a lost storage event); absent: file attachments are off. */
   readonly attachments?: Pick<AttachmentService, 'refreshGlob'>;
   /** The board's LLM spend line; absent: its route isn't mounted. */
@@ -120,7 +122,8 @@ export const createGlobSchema = z.object({
   title: z.string().min(1),
   type: z.enum(SLOP_TYPES).default('same'),
   category: z.enum(WORK_CATEGORIES).default('task'),
-  group: z.string().min(1).nullable().default(null),
+  /** Omitted: slop chooses one from the title and plan. Null or empty: none. */
+  group: z.string().nullable().optional(),
   environment: z.string().min(1).nullable().default(null),
   autoTrigger: z.boolean().default(false),
   /** Super only: false parks it in Planning (no branch, run or implementer) until a person picks it up to pair. */
@@ -450,13 +453,20 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
-    const { intake, needs, ...fields } = body;
+    const { intake, needs, group, ...fields } = body;
+    const boardId = Number(c.req.param('b'));
+    let chosen: string | null = group?.trim() === '' ? null : (group ?? null);
+    if (group === undefined && deps.intake !== undefined) {
+      const suggested = await deps.intake.suggestGroup(email, boardId, { title: fields.title, plan: fields.plan ?? '' });
+      if (suggested.ok) chosen = suggested.value;
+    }
     const created = await globs.create(email, {
       ...fields,
+      group: chosen,
       ...(needs === undefined && fields.after === undefined ? {} : { after: needs ?? fields.after ?? [] }),
       source: 'web',
       ...(intake === undefined ? {} : { intake: { ...intake, source: 'web' } }),
-      boardId: Number(c.req.param('b')),
+      boardId,
     });
     if (!created.ok) return send(c, created);
     // Return once provisioning has been attempted.
