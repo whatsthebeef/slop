@@ -74,6 +74,24 @@ describe('board filters', () => {
     expect(matchesFilters(view({ id: 's1b1' }), values)).toBe(false);
   });
 
+  it('matches titles by case-insensitive substring', () => {
+    const v = view({ id: 's1t1', title: 'File attachments on globs' });
+    expect(matchesFilters(v, parse('id=ATTACH'))).toBe(true);
+    expect(matchesFilters(v, parse('id=nothing'))).toBe(false);
+    expect(matchesFilters(v, parse('id=f4, attach'))).toBe(true);
+  });
+
+  it('matches a multi-word phrase against a title', () => {
+    const v = view({ id: 's1t1', title: 'File attachments on globs' });
+    expect(matchesFilters(v, parse('id=file attach'))).toBe(true);
+    expect(matchesFilters(v, parse('id=attach file'))).toBe(true);
+    expect(matchesFilters(v, parse('id=zzz qqq'))).toBe(false);
+  });
+
+  it('treats a blank value as off', () => {
+    expect(parse('id=%20')).toEqual(defaultFilters());
+  });
+
   it('requires every active filter', () => {
     const values = parse('category=bug&id=b1');
     expect(matchesFilters(view({ id: 's1b1', category: 'bug' }), values)).toBe(true);

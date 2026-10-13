@@ -54,14 +54,20 @@ export const BOARD_FILTERS: BoardFilter[] = [
   },
   {
     key: 'id',
-    label: 'Glob ID',
+    label: 'ID or name',
     control: 'text',
-    placeholder: 'e.g. f4, s15t2',
+    placeholder: 'e.g. f4, s15t2, attachments',
     // Kept as typed (a trailing space is the next ID being started), and off when blank.
     normalize: (raw) => (tokens(raw).length === 0 ? '' : raw),
-    // Case-insensitive substring of the ID; several IDs match any of them.
-    matches: (glob, value) =>
-      tokens(value.toLowerCase()).some((t) => glob.id.toLowerCase().includes(t)),
+    // Case-insensitive substring of the ID or title; several tokens match any of them, and the whole value matches a title as a phrase.
+    matches: (glob, value) => {
+      const id = glob.id.toLowerCase();
+      const title = glob.title.toLowerCase();
+      const phrase = value.trim().toLowerCase();
+      return (
+        tokens(phrase).some((t) => id.includes(t) || title.includes(t)) || title.includes(phrase)
+      );
+    },
   },
 ];
 
