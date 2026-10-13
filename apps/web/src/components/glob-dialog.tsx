@@ -329,9 +329,14 @@ export const GlobDetail = ({
 
   const begin = (action: Action) => {
     if (action === 'decide') {
+      // The outcome buttons, not the first button in the section (a retry, an expand toggle).
       const panel = findSection(document, 'decision');
-      panel?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-      panel?.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+      const target =
+        panel?.querySelector<HTMLElement>(
+          '[data-testid="outcomes"], [data-testid="replacement-outcomes"]',
+        ) ?? panel;
+      target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      target?.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true });
       return;
     }
     if (action === 'mark_ready') {
@@ -391,6 +396,9 @@ export const GlobDetail = ({
 
   const moreActions = actions.filter((a) => a !== main && tiers.get(a) !== 'destructive');
   const resetActions = actions.filter((a) => tiers.get(a) === 'destructive' && a !== 'delete');
+  // The menu closes on select, so the More button shows the action it started while it runs.
+  const moreRunning =
+    busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
 
   return (
     <article className="mx-auto w-full max-w-[63rem] p-5" data-testid="glob-page">
@@ -686,8 +694,17 @@ export const GlobDetail = ({
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="outline" size="sm" disabled={busy} data-testid="more-actions">
-                        More
-                        <ChevronDown className="size-3.5" aria-hidden />
+                        {moreRunning === null ? (
+                          <>
+                            More
+                            <ChevronDown className="size-3.5" aria-hidden />
+                          </>
+                        ) : (
+                          <>
+                            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                            {workingLabel(moreRunning)}
+                          </>
+                        )}
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent data-testid="more-menu">
@@ -1110,7 +1127,7 @@ export const GlobDetail = ({
           <div className="text-xs font-medium text-destructive">Reset</div>
           <div className="flex flex-wrap gap-2">
             {resetActions.map((action) => (
-              <Tip key={action} text={actionPresentation(action, glob).tip}>
+              <Tip key={action} text={tipOf(action)}>
                 <Button
                   variant="danger"
                   size="sm"
@@ -1128,33 +1145,33 @@ export const GlobDetail = ({
               </Button>
             )}
           </div>
-              {confirmingAgain && (
-                <div
-                  role="alert"
-                  className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-                >
-                  <span className="flex-1" data-testid="start-again-says">
-                    {startAgainConfirmation(glob, board.baseBranch)}
-                  </span>
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmingAgain(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    disabled={busy}
-                    data-testid="confirm-start-again"
-                    onClick={() =>
-                      void run(async () => {
-                        setConfirmingAgain(false);
-                        await onAction('start_again');
-                      })
-                    }
-                  >
-                    {actionPresentation('start_again', glob).label}
-                  </Button>
-                </div>
-              )}
+          {confirmingAgain && (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
+            >
+              <span className="flex-1" data-testid="start-again-says">
+                {startAgainConfirmation(glob, board.baseBranch)}
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmingAgain(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={busy}
+                data-testid="confirm-start-again"
+                onClick={() =>
+                  void run(async () => {
+                    setConfirmingAgain(false);
+                    await onAction('start_again');
+                  })
+                }
+              >
+                {actionPresentation('start_again', glob).label}
+              </Button>
+            </div>
+          )}
           {confirmDelete && (
             <div className="grid gap-2 rounded border border-destructive/50 p-3 text-sm">
               <p>

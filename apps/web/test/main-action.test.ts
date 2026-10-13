@@ -1,4 +1,4 @@
-import type { Action } from '@slop/core';
+import type { Action, PullRequest } from '@slop/core';
 import { describe, expect, it } from 'vitest';
 import { mainAction } from '../src/lib/main-action';
 
@@ -9,13 +9,23 @@ const glob = (over: Partial<Parameters<typeof mainAction>[1]> = {}) => ({
   pr: null,
   ...over,
 });
-const pr = (state: 'draft' | 'ready' = 'draft') => ({ number: 7, state, headSha: 'abc' }) as never;
+const pr = (state: PullRequest['state'] = 'draft'): PullRequest => ({
+  number: 7,
+  state,
+  headSha: 'abc',
+});
 
 const pick = (actions: Action[], g = glob(), decision = false) => mainAction(actions, g, decision);
 
 describe('mainAction', () => {
   it('prefers fixes, most specific first', () => {
-    const all: Action[] = ['retrigger', 'retry_merge', 'retry_autofix', 'resolve_conflict', 'merge'];
+    const all: Action[] = [
+      'retrigger',
+      'retry_merge',
+      'retry_autofix',
+      'resolve_conflict',
+      'merge',
+    ];
     expect(pick(all)).toBe('resolve_conflict');
     expect(pick(all.filter((a) => a !== 'resolve_conflict'))).toBe('retry_autofix');
     expect(pick(['retrigger', 'retry_merge'])).toBe('retry_merge');
@@ -34,7 +44,9 @@ describe('mainAction', () => {
   it('is Done for a human draft PR and Merge for a ready one', () => {
     const g = glob({ status: 'in_progress', implementer: 'a@b.c', pr: pr() });
     expect(pick(['mark_ready', 'review_now', 'start_anyway'], g)).toBe('mark_ready');
-    expect(pick(['merge', 'review_now'], glob({ status: 'pr_open', pr: pr('ready') }))).toBe('merge');
+    expect(pick(['merge', 'review_now'], glob({ status: 'pr_open', pr: pr('ready') }))).toBe(
+      'merge',
+    );
   });
 
   it('walks a decision glob: Pick up, then Decide, then Sign off', () => {

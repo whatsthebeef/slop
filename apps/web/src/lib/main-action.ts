@@ -8,7 +8,14 @@ type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'>;
 const FIXES: readonly Action[] = ['resolve_conflict', 'retry_autofix', 'retry_merge', 'retrigger'];
 
 /** Otherwise the state's next step: land it, hand it in, start it, or work through a decision. */
-const NEXT_STEPS: readonly Action[] = ['merge', 'mark_ready', 'start', 'pick_up', 'decide', 'sign_off'];
+const NEXT_STEPS: readonly Action[] = [
+  'merge',
+  'mark_ready',
+  'start',
+  'pick_up',
+  'decide',
+  'sign_off',
+];
 
 /** Never the main button: they jump ahead, throw work away or remove the glob. */
 const NEVER_MAIN: readonly Action[] = ['start_anyway', 'start_again', 'delete'];
@@ -24,8 +31,7 @@ export const mainAction = (
 ): Action | null => {
   const candidate = (action: Action): boolean => {
     if (!available.includes(action) || NEVER_MAIN.includes(action)) return false;
-    if (action === 'pick_up') return decision ? glob.status === 'planning' : actionPresentation(action, glob).placement === 'main';
-    return actionPresentation(action, glob).placement === 'main';
+    return actionPresentation(action, glob, decision).placement === 'main';
   };
   return [...FIXES, ...NEXT_STEPS].find(candidate) ?? null;
 };
