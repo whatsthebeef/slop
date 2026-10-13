@@ -32,6 +32,15 @@ export interface InvestigationPart {
   readonly needs: readonly string[];
 }
 
+/** A dependency on another open glob that the investigator found in the code, with the evidence it read. */
+export interface InvestigationDependency {
+  readonly id: string;
+  readonly kind: 'needs' | 'overlaps';
+  /** One line naming the file or symbol that shows it, e.g. "uses humanSteps() from s15f100". */
+  readonly reason: string;
+  readonly files: readonly string[];
+}
+
 export interface Investigation {
   readonly files: readonly InvestigationFile[];
   readonly modules: readonly string[];
@@ -43,6 +52,11 @@ export interface Investigation {
   readonly riskAreas: readonly string[];
   readonly needsHuman: { readonly needed: boolean; readonly reason: string | null };
   readonly confidence: InvestigationConfidence;
+  /**
+   * The other open globs this one needs or overlaps, from the code the investigator read. Absent when it did not say;
+   * an empty list says it looked and found none, which drops the needs slop had guessed from the plan.
+   */
+  readonly dependencies?: readonly InvestigationDependency[];
   /** The investigator predicts the change needs a rollout (a person's steps after the merge); absent when not said. */
   readonly needsRollout?: boolean;
   /** sha256 (hex) of plan.md as it was when the investigation was made. */
@@ -166,6 +180,24 @@ export const parseInvestigation = (content: string): InvestigationParse => {
 
   if (!INVESTIGATION_CONFIDENCES.includes(raw.confidence as InvestigationConfidence))
     errors.push(`confidence must be one of ${INVESTIGATION_CONFIDENCES.join(', ')}`);
+  const dependencies: InvestigationDependency[] = [];
+  if (raw.dependencies !== undefined) {
+    if (!Array.isArray(raw.dependencies)) errors.push('dependencies must be a list of {id, kind, reason, files} when given');
+    else
+      raw.dependencies.forEach((d: unknown, i) => {
+        if (
+          !isRecord(d) ||
+          typeof d.id !== 'string' ||
+          d.id.trim() === '' ||
+          (d.kind !== 'needs' && d.kind !== 'overlaps') ||
+          typeof d.reason !== 'string' ||
+          d.reason.trim() === '' ||
+          (d.files !== undefined && !isStringList(d.files))
+        ) {
+          errors.push(`dependencies[${String(i)}] needs an id, a kind of needs or overlaps, a reason and files (a list of paths)`);
+        } else dependencies.push({ id: d.id.trim(), kind: d.kind, reason: d.reason.trim(), files: d.files ?? [] });
+      });
+  }
   if (raw.needsRollout !== undefined && typeof raw.needsRollout !== 'boolean') errors.push('needsRollout must be a boolean when given');
   if (typeof raw.planHash !== 'string' || raw.planHash.trim() === '')
     errors.push('planHash is required');
@@ -187,6 +219,7 @@ export const parseInvestigation = (content: string): InvestigationParse => {
         reason: (human as { reason: string | null }).reason,
       },
       confidence: raw.confidence as InvestigationConfidence,
+      ...(raw.dependencies !== undefined ? { dependencies } : {}),
       ...(raw.needsRollout === true ? { needsRollout: true } : {}),
       planHash: raw.planHash as string,
       baseCommit: raw.baseCommit as string,
