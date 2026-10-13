@@ -1,6 +1,6 @@
 import { decisionOf, isValidCombination, machine } from '@slop/core';
 import type { Action, Category, EditFailure, SuggestionPrefill } from '@slop/core';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
 import type { PendingAction } from '@/lib/pending-action';
+import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { blockedLine, chainTip, viewStatusLine, waitingFor } from '@/lib/status-line';
 import {
@@ -178,6 +179,30 @@ export const GlobDetail = ({
   const [confirmingReady, setConfirmingReady] = useState(false);
   // Start again throws the PR and branch away, so it says what it will do first.
   const [confirmingAgain, setConfirmingAgain] = useState(false);
+  // The header's border shows once the page has scrolled under it.
+  const topRef = useRef<HTMLDivElement>(null);
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const el = topRef.current;
+    if (el === null || typeof IntersectionObserver === 'undefined') return undefined;
+    const observer = new IntersectionObserver(([entry]) => setScrolled(entry !== undefined && !entry.isIntersecting));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  // Esc goes back to the board, unless typing, an overlay or an inline confirmation owns it.
+  const confirming = confirmDelete || confirmingAgain || confirmingType !== null || splitting;
+  const escapeRef = useRef({onClose, confirming});
+  escapeRef.current = {onClose, confirming};
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target instanceof HTMLElement ? e.target : null;
+      const target = {tag: t?.tagName ?? 'BODY', editable: t?.isContentEditable ?? false};
+      if (!escapeGoesBack(e.key, e.defaultPrevented, target, document.querySelector(OPEN_OVERLAY) !== null, escapeRef.current.confirming)) return;
+      escapeRef.current.onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
   const reviewedAtHead = (glob.artifacts ?? []).some(
     (a) => a.kind === 'local_review' && machine.sameCommit(a.commitSha, glob.pr?.headSha),
   );
@@ -248,20 +273,26 @@ export const GlobDetail = ({
 
   return (
     <article className='mx-auto w-full max-w-[63rem] p-5' data-testid='glob-page'>
-      <div className='mb-4 flex items-start gap-3'>
-        <Link
-          to={`/boards/${String(glob.boardId)}`}
-          className='mt-0.5 rounded p-1 hover:bg-muted'
-          aria-label='Back to the board'
-          data-testid='glob-back'
-          onClick={(e) => {
-            e.preventDefault();
-            onClose();
-          }}
-        >
-          <ArrowLeft className='h-4 w-4' />
-        </Link>
-        <h1 className='text-base font-semibold'>
+      <div ref={topRef} aria-hidden className='h-0' />
+      <div
+        className={`sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex h-10 items-center gap-3 border-b bg-background px-5 ${scrolled ? 'border-border' : 'border-transparent'}`}
+        data-testid='glob-header'
+      >
+        <Tip text='Back to the board (Esc)'>
+          <Link
+            to={`/boards/${String(glob.boardId)}`}
+            className='rounded p-1 hover:bg-muted'
+            aria-label='Back to the board'
+            data-testid='glob-back'
+            onClick={(e) => {
+              e.preventDefault();
+              onClose();
+            }}
+          >
+            <ArrowLeft className='h-4 w-4' />
+          </Link>
+        </Tip>
+        <h1 className='min-w-0 truncate text-base font-semibold' title={glob.title} data-testid='glob-heading'>
           <span className='font-mono text-muted-foreground'>{glob.id}</span> {glob.title}
         </h1>
       </div>
