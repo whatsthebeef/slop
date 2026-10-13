@@ -52,6 +52,8 @@ You review code changes to make sure they meet the glob's requirements, follow t
 - **Consistency** with the surrounding codebase: naming, patterns, architecture.
 - **Error handling**: appropriate at system boundaries, not excessive internally.
 
+- **Hotspots**: if a changed file is listed in `hotspots` (from `get_context`, or named in the investigation) and the diff grows it substantially, raise a `SUGGESTION` (e.g. "hotspot glob-dialog.tsx grew by 120 lines; could this live in its own component?"). It is never in-scope on size alone.
+
 ### 4. Dependency checks
 
 When the branch changes dependency manifests or lockfiles, run every dependency check the board's build doc defines (for example a vulnerability audit, or a check that the lockfile matches the dependency manifests); otherwise record them as N/A. Also check whether the branch changes dependency manifests or lockfiles, and flag unexpected changes as `IN-SCOPE`, noting what changed.
