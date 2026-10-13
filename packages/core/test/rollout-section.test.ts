@@ -6,7 +6,7 @@ import type { CreateGlobInput } from '../src/app/glob-service.js';
 import { InvestigationService } from '../src/app/investigation-service.js';
 import { CAPABILITY_NAMES } from '../src/domain/capabilities.js';
 import type { Result } from '../src/domain/errors.js';
-import { ROLLOUT_NOT_WRITTEN_TITLE, parseRollout, rolloutScriptLabel, touchesRolloutPaths } from '../src/domain/rollout.js';
+import { ROLLOUT_NONE_LABEL, ROLLOUT_NOT_WRITTEN_TITLE, checkRolloutAnswer, parseRollout, rolloutScriptLabel, touchesRolloutPaths } from '../src/domain/rollout.js';
 import { DEFAULT_ROLLOUT_PATHS } from '../src/domain/merge-policy.js';
 import type { Glob } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -19,6 +19,34 @@ const unwrap = <T>(result: Result<T>): T => {
 const record = (rollout: string): string => `# Implementation\n\nDid things.\n\n${rollout}\n\n## Checks\n\n- vitest passed\n`;
 
 const FENCE = '```';
+
+/** The placeholder step the old path flag wrote ("Rollout steps not written"), seeded straight into the store. */
+const legacyFlag = async (store: MemoryStore, glob: Glob): Promise<void> => {
+  await store.transaction((tx) =>
+    tx.saveHumanSteps([
+      {
+        id: `hs_legacy_${glob.id}`,
+        boardId: glob.boardId,
+        globId: glob.id,
+        kind: 'rollout',
+        title: ROLLOUT_NOT_WRITTEN_TITLE,
+        detail: null,
+        who: 'anyone',
+        due: 'after_merge',
+        state: 'open',
+        blocks: ['sign_off', 'dependants'],
+        check: null,
+        script: null,
+        origin: 'rollout-paths',
+        createdBy: 'slop',
+        createdAt: '2026-10-13T12:00:00.000Z',
+        doneBy: null,
+        doneAt: null,
+        dismissedReason: null,
+      },
+    ]),
+  );
+};
 
 describe('parseRollout', () => {
   it('reads script, setting and manual steps with their detail, checks and the script body', () => {
@@ -125,8 +153,9 @@ describe('touchesRolloutPaths', () => {
   it('matches the default paths and nothing else', () => {
     expect(touchesRolloutPaths(['infra/stacks/host.ts'], DEFAULT_ROLLOUT_PATHS)).toBe(true);
     expect(touchesRolloutPaths(['apps/server/src/config.ts'], DEFAULT_ROLLOUT_PATHS)).toBe(true);
-    expect(touchesRolloutPaths(['.github/workflows/checks.yml'], DEFAULT_ROLLOUT_PATHS)).toBe(true);
-    expect(touchesRolloutPaths(['apps/server/drizzle/0060_x.sql'], DEFAULT_ROLLOUT_PATHS)).toBe(true);
+    // Workflows deploy with the merge and migrations run on start, so neither is a default path.
+    expect(touchesRolloutPaths(['.github/workflows/checks.yml'], DEFAULT_ROLLOUT_PATHS)).toBe(false);
+    expect(touchesRolloutPaths(['apps/server/drizzle/0060_x.sql'], DEFAULT_ROLLOUT_PATHS)).toBe(false);
     expect(touchesRolloutPaths(['apps/server/src/main.ts', 'README.md'], DEFAULT_ROLLOUT_PATHS)).toBe(false);
     expect(touchesRolloutPaths([], DEFAULT_ROLLOUT_PATHS)).toBe(false);
     expect(touchesRolloutPaths(['a.ts'], [' '])).toBe(false);
@@ -257,7 +286,7 @@ describe('the implementation record becomes rollout steps', () => {
   it('dismisses an open "not written" step when a record with real steps arrives', async () => {
     const g = await newGlob();
     await merge(g.id);
-    expect(await globs.flagUnwrittenRollout(g.id)).toBe(true);
+    await legacyFlag(store, g);
     await put(g.id, record(ROLLOUT));
     expect(stepsOf(g.id).find((s) => s.origin === 'rollout-paths')).toMatchObject({ state: 'dismissed', dismissedReason: 'Replaced by the steps in the implementation record' });
     expect(stepsOf(g.id).filter((s) => s.state === 'open')).toHaveLength(2);
@@ -290,7 +319,7 @@ describe('the implementation record becomes rollout steps', () => {
   });
 });
 
-describe('the path-only flag', () => {
+describe('the rollout job answer', () => {
   let store: MemoryStore;
   let globs: GlobService;
   let artifacts: ArtifactService;
@@ -307,7 +336,8 @@ describe('the path-only flag', () => {
       return next;
     });
   };
-  const flagged = (id: string) => [...store.state.humanSteps.values()].filter((s) => s.globId === id && s.origin === 'rollout-paths');
+  const stepsOf = (id: string) => [...store.state.humanSteps.values()].filter((s) => s.globId === id);
+  const notes = (id: string) => store.transaction((tx) => tx.artifactVersions(id, 'attachment', ROLLOUT_NONE_LABEL));
 
   beforeEach(async () => {
     store = new MemoryStore();
@@ -324,33 +354,80 @@ describe('the path-only flag', () => {
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
-  it('adds the step once, due after the merge, blocking sign-off and dependants', async () => {
+  it('is unwritten for a merged glob with no steps, record section or note', async () => {
     const g = await create();
-    expect(await globs.flagUnwrittenRollout(g.id)).toBe(true);
-    expect(await globs.flagUnwrittenRollout(g.id)).toBe(false);
-    expect(flagged(g.id)).toHaveLength(1);
-    expect(flagged(g.id)[0]).toMatchObject({ kind: 'rollout', title: ROLLOUT_NOT_WRITTEN_TITLE, due: 'after_merge', blocks: ['sign_off', 'dependants'], who: 'anyone', state: 'open' });
-    expect(unwrap(await globs.get(DEV, g.id)).humanSteps.map((s) => [s.title, s.state])).toEqual([[ROLLOUT_NOT_WRITTEN_TITLE, 'due']]);
+    expect(await globs.rolloutUnwritten(g.id)).toBe(true);
+    expect(await globs.rolloutUnwritten('s9t9')).toBe(false);
   });
 
-  it('adds nothing when the record has a Rollout section, even one whose steps were dismissed', async () => {
+  it('is not unwritten when the record has a Rollout section, even one whose steps were dismissed', async () => {
     const g = await create();
     unwrap(await artifacts.putArtifact(DEV, g.id, 'implementation_plan', record('## Rollout\n- manual: Do it\n'), { commitSha: null, runId: null, agentSetVersion: null }));
-    expect(await globs.flagUnwrittenRollout(g.id)).toBe(false);
-    const step = [...store.state.humanSteps.values()][0];
-    unwrap(await globs.dismissHumanStep(DEV, g.id, step?.id ?? '', 'Not needed', null));
-    expect(await globs.flagUnwrittenRollout(g.id)).toBe(false);
-    expect(flagged(g.id)).toHaveLength(0);
+    expect(await globs.rolloutUnwritten(g.id)).toBe(false);
+    unwrap(await globs.dismissHumanStep(DEV, g.id, stepsOf(g.id)[0]?.id ?? '', 'Not needed', null));
+    expect(await globs.rolloutUnwritten(g.id)).toBe(false);
   });
 
-  it('flags a record whose Rollout section says None', async () => {
+  it('"none" records the reason on the glob and adds no step for a person', async () => {
     const g = await create();
-    unwrap(await artifacts.putArtifact(DEV, g.id, 'implementation_plan', record('## Rollout\n\nNone\n'), { commitSha: null, runId: null, agentSetVersion: null }));
-    expect(await globs.flagUnwrittenRollout(g.id)).toBe(true);
+    expect(await globs.applyRolloutAnswer(g.id, { decision: 'none', reason: 'migration 0071 runs on start; no new settings' }, 'm')).toBe(true);
+    expect(stepsOf(g.id)).toEqual([]);
+    expect((await notes(g.id)).at(-1)?.content).toContain('No rollout needed: migration 0071 runs on start; no new settings');
+    expect(await globs.rolloutUnwritten(g.id)).toBe(false);
+    expect(await globs.applyRolloutAnswer(g.id, { decision: 'none', reason: 'again' }, 'm')).toBe(false);
+    expect(await notes(g.id)).toHaveLength(1);
   });
 
-  it('does nothing for a glob that is gone', async () => {
-    expect(await globs.flagUnwrittenRollout('s9t9')).toBe(false);
+  it('"steps" stores the steps after the merge, blocking sign-off, with the script as an artifact; once only', async () => {
+    const g = await create();
+    const steps = parseRollout('## Rollout\n- script: Deploy the host stack\n```sh\ninfra/deploy/host-deploy.sh\n```\n- setting: Add SLOP_X to the server env\n');
+    expect(await globs.applyRolloutAnswer(g.id, { decision: 'steps', steps }, 'm')).toBe(true);
+    expect(stepsOf(g.id).map((s) => [s.title, s.kind, s.origin, s.due, s.blocks, s.script])).toEqual([
+      ['Deploy the host stack', 'rollout', 'rollout-paths', 'after_merge', ['sign_off', 'dependants'], { artifact: 'rollout: deploy-the-host-stack' }],
+      ['Add SLOP_X to the server env', 'rollout', 'rollout-paths', 'after_merge', ['sign_off', 'dependants'], null],
+    ]);
+    expect(unwrap(await artifacts.artifact(DEV, g.id, 'rollout_script', 'rollout: deploy-the-host-stack')).content).toBe('infra/deploy/host-deploy.sh');
+    expect(await globs.applyRolloutAnswer(g.id, { decision: 'steps', steps }, 'm')).toBe(false);
+    expect(stepsOf(g.id)).toHaveLength(2);
+  });
+
+  it('"ask" adds one step whose title is the specific question', async () => {
+    const g = await create();
+    await globs.applyRolloutAnswer(g.id, { decision: 'ask', question: 'Does SLOP_X need setting in prod? It has no default' }, 'm');
+    expect(stepsOf(g.id)).toHaveLength(1);
+    expect(stepsOf(g.id)[0]).toMatchObject({ kind: 'rollout', title: 'Does SLOP_X need setting in prod? It has no default', state: 'open', who: 'anyone' });
+  });
+
+  it('replaces the old "not written" step, and lists such globs with their merge commit for the backfill', async () => {
+    const g = await create();
+    await store.transaction((tx) => tx.appendEvents([{ type: 'Merged', globId: g.id, actor: null, at: '2026-10-13T11:00:00.000Z', data: { sha: 'm1' } }]));
+    await legacyFlag(store, g);
+    expect(await globs.rolloutUnwritten(g.id)).toBe(true);
+    expect(await globs.unwrittenRolloutSteps(boardId)).toEqual([{ globId: g.id, sha: 'm1' }]);
+    await globs.applyRolloutAnswer(g.id, { decision: 'none', reason: 'only a comment changed' }, 'm');
+    expect(stepsOf(g.id).map((s) => [s.title, s.state])).toEqual([[ROLLOUT_NOT_WRITTEN_TITLE, 'dismissed']]);
+    expect(await globs.unwrittenRolloutSteps(boardId)).toEqual([]);
+  });
+
+  it('queues the job once for a merge, and not when the rollout is written', async () => {
+    const g = await create();
+    expect(await globs.queueRolloutWrite(g.id, 'm1')).toBe(true);
+    expect(store.state.outboxJobs.filter((j) => j.kind === 'write_rollout_steps' && j.globId === g.id)).toHaveLength(1);
+    await globs.applyRolloutAnswer(g.id, { decision: 'none', reason: 'nothing' }, 'm');
+    expect(await globs.queueRolloutWrite(g.id, 'm1')).toBe(false);
+  });
+});
+
+describe('checkRolloutAnswer', () => {
+  it('accepts the three decisions', () => {
+    expect(checkRolloutAnswer({ decision: 'none', reason: 'No rollout needed: it deploys with the image' })).toEqual({ ok: true, value: { decision: 'none', reason: 'it deploys with the image' } });
+    expect(checkRolloutAnswer({ decision: 'ask', question: 'Does X need setting?' })).toEqual({ ok: true, value: { decision: 'ask', question: 'Does X need setting?' } });
+    const steps = checkRolloutAnswer({ decision: 'steps', rollout: '- setting: Add X to the env' });
+    expect(steps.ok && steps.value.decision === 'steps' && steps.value.steps.map((s) => [s.kind, s.title])).toEqual([['setting', 'Add X to the env']]);
+  });
+
+  it.each([null, 'text', [], { decision: 'maybe' }, { decision: 'none' }, { decision: 'ask', question: '  ' }, { decision: 'steps', rollout: 'nothing to do' }])('refuses %j', (answer) => {
+    expect(checkRolloutAnswer(answer).ok).toBe(false);
   });
 });
 
