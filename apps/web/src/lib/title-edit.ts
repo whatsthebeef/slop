@@ -14,7 +14,7 @@ export const decideTitle = (current: string, typed: string): TitleDecision => {
 };
 
 /**
- * The title's edit state, shared by the glob view's heading (an input) and the board card (a textarea): begin and cancel,
+ * The title's edit state, used by the glob view's sticky header (a wrapping textarea): begin and cancel,
  * Enter or blur saves, Esc cancels, an empty title is refused, and a refused save keeps the draft and says why.
  * `resetKey` (the glob's ID) ends an edit when the view moves to another glob.
  */
@@ -83,7 +83,8 @@ export const useTitleEdit = ({
     }
   };
   const change = (value: string) => {
-    setText(value);
+    // Titles are one line: a pasted line break becomes a space.
+    setText(value.replace(/\s*\n\s*/g, ' '));
     setEmptyRefused(false);
     setError(null);
   };

@@ -16,9 +16,9 @@ import { AFTER_SECTION, SECTION_VIEWS } from './glob-view/section-views';
 import { GLOB_VIEW_SECTIONS } from './glob-view/sections';
 import { NowPanel } from './glob-view/status';
 
-/** A section's anchor: found by `?section=`, and left below the sticky header (h-10) when scrolled to. Hidden while empty. */
+/** A section's anchor: found by `?section=`, and left below the sticky header (its measured height) when scrolled to. Hidden while empty. */
 const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) => (
-  <div id={`section-${name}`} data-section={name} className="scroll-mt-12 empty:hidden">
+  <div id={`section-${name}`} data-section={name} className="scroll-mt-[calc(var(--glob-header-height,2.5rem)+0.5rem)] empty:hidden">
     {children}
   </div>
 );
