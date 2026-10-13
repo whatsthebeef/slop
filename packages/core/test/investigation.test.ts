@@ -29,6 +29,17 @@ describe('parseInvestigation', () => {
     }
   });
 
+  it('reads the dependencies the investigator found, and keeps an empty list apart from none', () => {
+    const none = parseInvestigation(wrap(BLOCK));
+    expect(none.ok && none.investigation.dependencies).toBeUndefined();
+    const empty = parseInvestigation(wrap({ ...BLOCK, dependencies: [] }));
+    expect(empty.ok && empty.investigation.dependencies).toEqual([]);
+    const found = parseInvestigation(wrap({ ...BLOCK, dependencies: [{ id: 's1t2', kind: 'needs', reason: 'uses humanSteps()', files: ['a.ts'] }] }));
+    expect(found.ok && found.investigation.dependencies).toEqual([{ id: 's1t2', kind: 'needs', reason: 'uses humanSteps()', files: ['a.ts'] }]);
+    const bad = parseInvestigation(wrap({ ...BLOCK, dependencies: [{ id: 's1t2', kind: 'blocks', reason: '' }] }));
+    expect(!bad.ok && bad.errors[0]).toContain('dependencies[0]');
+  });
+
   it('uses the last block when the text shows an example earlier', () => {
     const text = `${wrap({ ...BLOCK, riskTier: 'high' })}\nLater:\n${wrap(BLOCK)}`;
     const parsed = parseInvestigation(text);
