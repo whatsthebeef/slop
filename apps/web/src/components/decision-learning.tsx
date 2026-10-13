@@ -5,7 +5,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
-import { MarkdownView } from '@/components/markdown-view';
+import { CollapsibleMarkdown } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
 import { Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
@@ -392,7 +392,7 @@ export const DocumentProposal = ({ boardId, document, content }: { boardId: numb
       </button>
       {shown &&
         (existing === null ? (
-          <MarkdownView content={content} />
+          <CollapsibleMarkdown content={content} />
         ) : (
           <div className='grid gap-3 md:grid-cols-2'>
             <Side
@@ -402,7 +402,7 @@ export const DocumentProposal = ({ boardId, document, content }: { boardId: numb
               description={existing.description}
               changed={{ area: existing.area !== document.area, description: existing.description !== document.description }}
             >
-              <MarkdownView content={currentContent ?? 'Loading…'} />
+              <CollapsibleMarkdown content={currentContent ?? 'Loading…'} />
             </Side>
             <Side
               title='Proposed'
@@ -411,7 +411,7 @@ export const DocumentProposal = ({ boardId, document, content }: { boardId: numb
               description={document.description}
               changed={{ area: existing.area !== document.area, description: existing.description !== document.description }}
             >
-              <MarkdownView content={content} />
+              <CollapsibleMarkdown content={content} />
             </Side>
           </div>
         ))}
