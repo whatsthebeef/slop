@@ -79,7 +79,8 @@ export const LabelPopover = ({
 }: {
   glob: GlobView;
   onReview: ReviewLabel;
-  onOpenReview: () => void;
+  /** Opens the sign-off section in the glob view, at one label's checklist when given. */
+  onOpenReview: (label?: LabelName) => void;
 }) => {
   const present = presentLabels(glob);
   if (present.length === 0) return null;
@@ -95,7 +96,7 @@ export const LabelPopover = ({
           <Chip key={name} name={name} state={glob.labels[name] ?? 'required'} />
         ))}
       </PopoverTrigger>
-      <PopoverContent className="w-72" onClick={(e) => e.stopPropagation()}>
+      <PopoverContent className="w-80" onClick={(e) => e.stopPropagation()}>
         <div className="grid gap-2">
           {present.map((name) => {
             const state = glob.labels[name] ?? 'required';
@@ -110,23 +111,28 @@ export const LabelPopover = ({
                     {stateText(state, itemsOf(glob, name))}
                   </span>
                 </span>
-                {state === 'approved' ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void onReview(name, { kind: 'reopen' })}
-                  >
-                    Re-open
+                <span className="flex items-center gap-1">
+                  <Button size="sm" variant="ghost" onClick={() => onOpenReview(name)}>
+                    Open review
                   </Button>
-                ) : (
-                  <Button size="sm" onClick={() => void onReview(name, { kind: 'approve' })}>
-                    Approve
-                  </Button>
-                )}
+                  {state === 'approved' ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void onReview(name, { kind: 'reopen' })}
+                    >
+                      Re-open
+                    </Button>
+                  ) : (
+                    <Button size="sm" onClick={() => void onReview(name, { kind: 'approve' })}>
+                      Approve
+                    </Button>
+                  )}
+                </span>
               </div>
             );
           })}
-          <Button size="sm" variant="ghost" className="justify-self-start" onClick={onOpenReview}>
+          <Button size="sm" variant="ghost" className="justify-self-start" onClick={() => onOpenReview()}>
             Open review checklists…
           </Button>
         </div>
