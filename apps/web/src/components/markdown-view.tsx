@@ -43,7 +43,7 @@ export const CollapsibleMarkdown = ({ content, startExpanded = false }: { conten
   const clipped = long && !expanded;
   return (
     <div ref={box} data-testid="collapsible-markdown">
-      <div className={boxClass(long)}>
+      <div className={boxClass(long, clipped)}>
         <div style={clipped ? { maxHeight: `${String(COLLAPSED_REM)}rem`, overflow: 'hidden', ...FADE_STYLE } : undefined} data-testid="markdown-fade">
           <div ref={natural}>
             <MarkdownView content={content} bare />
