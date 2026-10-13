@@ -1170,7 +1170,7 @@ describe('checks and merging (slice 2)', () => {
     expect(m.allowedActions(t.glob, dev)).not.toContain('resolve_conflict');
     expect(errorCode(m.resolveConflict(t.glob, ctx()))).toBe('run_active');
     const started = value(m.runProgress(t.glob, t.glob.runs.at(-1)?.id ?? '', ctx()));
-    expect(started.glob.runs.at(-1)?.state).toBe('watching');
+    expect(started.glob.runs.at(-1)?.state).toBe('active');
     // A run that gave up leaves the conflict flagged, with its reason, and the action comes back.
     const runId = started.glob.runs.at(-1)?.id ?? '';
     const gaveUp = value(m.reportFailure(started.glob, { reason: 'Real conflict in a.ts', runId }, ctx())).glob;
@@ -1529,6 +1529,28 @@ describe('Retry auto-fix', () => {
   it('starts the retried run watching, since there is no PR to mark ready', () => {
     const queued = value(m.retryAutofix(stuck(), ctx(dev))).glob;
     expect(m.currentRun(value(m.runProgress(queued, m.currentRun(queued)?.id ?? '', ctx(null))).glob)?.state).toBe('watching');
+  });
+
+  it('starts a conflict-fix run active on a ready PR, and moves it to watching once the conflict clears', () => {
+    const conflict = { base: 'main', files: ['a.ts'], since: null, at: NOW };
+    const g = glob({
+      status: 'pr_open',
+      pr: { number: 7, state: 'ready', headSha: 'a2a88c8aaaa' },
+      conflict,
+      runs: [run({ id: 'run-0', state: 'queued', purpose: 'resolve_conflict' })],
+    });
+    const active = value(m.runProgress(g, 'run-0', ctx(null))).glob;
+    expect(m.currentRun(active)?.state).toBe('active');
+    expect(m.currentRun(value(m.conflictCleared(active, ctx(null))).glob)?.state).toBe('watching');
+  });
+
+  it('starts a conflict-fix run watching when the conflict cleared before its first call', () => {
+    const g = glob({
+      status: 'pr_open',
+      pr: { number: 7, state: 'ready', headSha: 'a2a88c8aaaa' },
+      runs: [run({ id: 'run-0', state: 'queued', purpose: 'resolve_conflict' })],
+    });
+    expect(m.currentRun(value(m.runProgress(g, 'run-0', ctx(null))).glob)?.state).toBe('watching');
   });
 
   it('is refused while a run is live, for merge failures and without an ended failed run', () => {

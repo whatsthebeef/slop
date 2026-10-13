@@ -192,3 +192,36 @@ describe('stall notification', () => {
     expect(stalledNotification(g, { holder: 'machine', reason: 'implement', since: null })).toBeNull();
   });
 });
+
+describe('whoseMove: a conflict or failed checks on an open PR is never "nobody"', () => {
+  const conflict = { base: 'main', files: ['a.ts'], since: null, at: NOW };
+
+  it('an active conflict-fix run is the machine\'s', () => {
+    const g = ready({ implementer: null, conflict, runs: [run({ state: 'active', purpose: 'resolve_conflict', lastProgressAt: minutesAgo(1) })] });
+    expect(move(g)).toMatchObject({ holder: 'machine', reason: 'resolve conflict' });
+  });
+
+  it('a conflict with only a standby run names the action', () => {
+    const g = ready({ implementer: null, conflict, runs: [run({ state: 'watching' })] });
+    expect(move(g)).toMatchObject({ holder: 'you', reason: 'Fix conflict' });
+    expect(move(g, {}, { viewer: undefined })).toMatchObject({ holder: 'human', reason: 'Fix conflict' });
+    expect(move(ready({ implementer: null, conflict }))).toMatchObject({ reason: 'Fix conflict' });
+  });
+
+  it('an in_progress glob with a human implementer keeps its pick-up / stall handling', () => {
+    const g = glob({ status: 'in_progress', implementer: dev.email, pr: { number: 49, state: 'draft', headSha: head }, conflict });
+    expect(move(g).reason).not.toBe('Fix conflict: pick up');
+  });
+
+  it('failed checks with no run are a person\'s; with a watching run they are the watcher\'s', () => {
+    const failedChecks = { sha: head, state: 'failed' as const, at: NOW };
+    expect(move(ready({ implementer: null, headChecks: failedChecks }))).toMatchObject({ holder: 'you', reason: 'Fix checks' });
+    expect(move(ready({ implementer: null, headChecks: failedChecks, runs: [run({ state: 'watching' })] }))).toMatchObject({ holder: 'machine', reason: 'fix checks' });
+  });
+
+  it('a standby run with a draft PR whose record is at the head is Done', () => {
+    const g = glob({ status: 'in_progress', implementer: null, pr: { number: 49, state: 'draft', headSha: head }, runs: [run({ state: 'watching' })] });
+    const steps = humanSteps(g, { recordAtHead: true }, []);
+    expect(whoseMove(g, steps, machineSteps(g, {}), new Map(), NOW, { viewer })).toMatchObject({ reason: 'Mark ready' });
+  });
+});

@@ -132,6 +132,24 @@ export const whoseMove = (
     return { holder: options.viewer !== undefined && (glob.implementer ?? glob.planner) === options.viewer.email ? 'you' : 'human', reason: person, since: null, who: glob.implementer ?? glob.planner };
   }
 
+  // 4b. An open PR with a conflict or failing checks and nothing working on it has a next step: never "nobody".
+  if (failed.length === 0 && quiet.length === 0 && glob.pr !== null && glob.status === 'pr_open') {
+    const mover = (reason: string): Move => ({
+      holder: options.viewer !== undefined && (glob.implementer ?? glob.planner) === options.viewer.email ? 'you' : 'human',
+      reason,
+      since: null,
+      who: glob.implementer ?? glob.planner,
+    });
+    const standby = machineSteps.find((s) => s.state === 'standby');
+    if (glob.conflict != null) return mover(glob.implementer !== null ? 'Fix conflict: pick up' : 'Fix conflict');
+    const checks = glob.headChecks;
+    if (checks?.state === 'failed' && checks.inheritedFrom === undefined) {
+      // A watching run is about to answer failed checks; otherwise it is a person's.
+      if (standby !== undefined) return { holder: 'machine', reason: 'fix checks', since: checks.at ?? null };
+      return mover('Fix checks');
+    }
+  }
+
   // 5. Idle: a Planning glob nobody started.
   const live = machineSteps.some((s) => s.state !== 'done' && s.state !== 'standby');
   if (glob.status === 'planning' && glob.failure === null && !live) return { holder: 'idle', reason: 'Not started', since: null };
