@@ -38,6 +38,7 @@ export const LLM_SPEND_SOURCES = [
   'decisions',
   'inbox',
   'sub_limit',
+  'rollout',
   'chat',
   'knowledge_page',
 ] as const;

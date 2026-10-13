@@ -1,4 +1,4 @@
-import { BoardService, GlobService, ROLLOUT_NOT_WRITTEN_TITLE } from '@slop/core';
+import { BoardService, GlobService } from '@slop/core';
 import type { Board, ChangeSource, Effect, Glob, Result } from '@slop/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -15,7 +15,7 @@ const unwrap = <T>(result: Result<T>): T => {
   return result.value;
 };
 
-describe('check_rollout_paths: a merge touching rollout paths without a Rollout section is flagged', () => {
+describe('check_rollout_paths: a merge touching rollout paths without a Rollout section queues the rollout job', () => {
   let database: Database;
   let drop: () => Promise<void>;
   let store: PgStore;
@@ -29,7 +29,7 @@ describe('check_rollout_paths: a merge touching rollout paths without a Rollout 
     mergedDiff: () => (files instanceof Error ? Promise.reject(files) : Promise.resolve(files === null ? null : { changedLines: 10, files })),
   };
   const boardOf = (id: number): Promise<Board | null> => store.transaction((tx) => tx.getBoard(id));
-  const executors = () => rolloutExecutors(changes, boardOf, () => Promise.resolve(customPaths), (task, message) => logged.push(`${task}: ${message}`));
+  const executors = () => rolloutExecutors(changes, boardOf, () => Promise.resolve(customPaths), (task, message) => logged.push(`${task}: ${message}`), { run: () => Promise.resolve('done') });
 
   beforeAll(async () => {
     ({ database, drop } = await createTestDatabase('rollout_paths'));
@@ -62,17 +62,27 @@ describe('check_rollout_paths: a merge touching rollout paths without a Rollout 
     if (executor === undefined) throw new Error('No executor');
     return executor(effect, glob, { globs });
   };
-  const flagged = async (id: string) =>
-    (await store.transaction((tx) => tx.listHumanSteps(boardId, [id]))).filter((s) => s.origin === 'rollout-paths');
+  /** The rollout jobs queued for a glob; the check no longer adds a step itself. */
+  const flagged = async (id: string) => (await database.db.select().from(schema.outbox).where(eq(schema.outbox.globId, id))).filter((j) => j.kind === 'write_rollout_steps');
 
-  it('adds the step once when a default rollout path changed', async () => {
+  it('queues the rollout job once when a default rollout path changed', async () => {
     files = ['apps/web/src/a.ts', 'infra/lib/host-stack.ts'];
     const glob = await mergedGlob();
     expect(await run(glob, effectOf(glob))).toBe('done');
     expect(await run(glob, effectOf(glob))).toBe('done');
     const steps = await flagged(glob.id);
     expect(steps).toHaveLength(1);
-    expect(steps[0]).toMatchObject({ kind: 'rollout', title: ROLLOUT_NOT_WRITTEN_TITLE, due: 'after_merge', blocks: ['sign_off', 'dependants'], who: 'anyone', state: 'open' });
+    expect(steps[0]?.effect).toEqual({ kind: 'write_rollout_steps', globId: glob.id, sha: 'm1' });
+    expect(steps[0]?.lane).toBe('llm');
+    // No human step is added by the check.
+    expect(await store.transaction((tx) => tx.listHumanSteps(boardId, [glob.id]))).toEqual([]);
+  });
+
+  it('queues nothing for a migration or a workflow alone (not default rollout paths)', async () => {
+    files = ['apps/server/drizzle/0071_x.sql', '.github/workflows/checks.yml'];
+    const glob = await mergedGlob();
+    expect(await run(glob, effectOf(glob))).toBe('done');
+    expect(await flagged(glob.id)).toEqual([]);
   });
 
   it('adds nothing when no changed file matches', async () => {
@@ -114,7 +124,7 @@ describe('check_rollout_paths: a merge touching rollout paths without a Rollout 
     }
   });
 
-  it('flags nothing and does not throw when the diff cannot be read', async () => {
+  it('queues nothing and does not throw when the diff cannot be read', async () => {
     const glob = await mergedGlob();
     files = new Error('GitHub is down');
     expect(await run(glob, effectOf(glob))).toBe('done');

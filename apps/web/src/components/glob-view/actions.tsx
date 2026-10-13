@@ -12,7 +12,9 @@ import {
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { actionPresentation, presentedActions } from '@/lib/action-presentation';
 import { mainAction } from '@/lib/main-action';
-import { mainStep } from '@/lib/human-steps';
+import { mainStep, scriptCopyText, stepMain } from '@/lib/human-steps';
+import { api } from '@/lib/api';
+import { copyOrSelect } from '@/lib/plan-text';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import { findSection } from '@/lib/glob-scroll';
 import { workingLabel } from '@/lib/card-pending';
@@ -40,8 +42,11 @@ export const useGlobActions = ({
   onAction,
   onUpdate,
   onDismiss,
+  onCompleteStep,
   email,
 }: Pick<GlobViewContext, 'board' | 'glob' | 'onAction' | 'onUpdate'> & {
+  /** Ticks a work step (the main button of a due rollout step); resolves false when it failed. */
+  onCompleteStep?: (stepId: string) => Promise<boolean>;
   /** "Got it" / ×, and "Show again": stores the viewer's dismissal of a status message; resolves false when it failed. */
   onDismiss: (key: string, dismiss: boolean) => Promise<boolean>;
   /** Who is looking, for the steps that are theirs (unknown until /api/me has answered). */
@@ -223,6 +228,7 @@ export const useGlobActions = ({
     setConfirmingReady,
     readyPending,
     markReady,
+    completeStep: onCompleteStep,
   };
 };
 
@@ -334,6 +340,56 @@ export const HandoverBrief = ({
   );
 };
 
+/**
+ * A due blocking step as the glob's main button: Copy rollout command for a script (then Mark done), Mark done for a
+ * setting or manual step with its text beside it, and disabled with the reason when slop ticks it itself.
+ */
+const StepMainButton = ({
+  step,
+  glob,
+  busy,
+  onComplete,
+}: {
+  step: NonNullable<ReturnType<typeof mainStep>>['step'];
+  glob: GlobViewContext['glob'];
+  busy: boolean;
+  onComplete: ((stepId: string) => Promise<boolean>) | undefined;
+}) => {
+  const main = stepMain(step);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => setCopied(false), [step.id]);
+  const copy = async () => {
+    const text = await scriptCopyText(glob.boardId, glob.id, step.script ?? { path: '' }, api.rolloutScript, window.location.origin);
+    setCopied(await copyOrSelect(text, typeof navigator === 'undefined' ? undefined : navigator.clipboard, () => undefined));
+  };
+  const tick = () => void onComplete?.(step.id);
+  const asCopy = main.kind === 'copy' && !copied;
+  const label = main.kind === 'copy' ? (copied ? main.then : main.label) : main.label;
+  const unavailable = main.kind === 'wait' || (!asCopy && onComplete === undefined);
+  return (
+    <>
+      <Tip text={main.kind === 'wait' ? main.reason : step.title}>
+        <span>
+          <Button
+            size="sm"
+            data-testid="main-action"
+            data-step={step.id}
+            data-step-action={main.kind === 'wait' ? 'wait' : asCopy ? 'copy' : 'done'}
+            disabled={busy || unavailable}
+            onClick={asCopy ? () => void copy() : tick}
+          >
+            <HumanIcon decorative />
+            {label}
+          </Button>
+        </span>
+      </Tip>
+      <span className="text-xs text-muted-foreground" data-testid="main-action-note">
+        {main.kind === 'wait' ? `${step.title}: ${main.reason}` : main.kind === 'done' && main.text !== null ? `${step.title}: ${main.text}` : step.title}
+      </span>
+    </>
+  );
+};
+
 /** The `actions` section's content: the handover box, the main button, More ▾ and the confirmations. */
 export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) => {
   const { glob } = ctx;
@@ -342,7 +398,6 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
     pending,
     main,
     stepTurn,
-    setStepsSignal,
     actions,
     tiers,
     disabled,
@@ -359,24 +414,7 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
       {(main !== null || actions.length + disabled.length > 0 || stepTurn !== null) && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
-            {main === null && stepTurn !== null && (
-              <Tip
-                text={`${stepTurn.step.title}: a person does this, then ticks it in Human steps`}
-              >
-                <Button
-                  size="sm"
-                  data-testid="main-action"
-                  data-step={stepTurn.step.id}
-                  onClick={() => {
-                    setStepsSignal((n) => n + 1);
-                    findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' });
-                  }}
-                >
-                  <HumanIcon decorative />
-                  {stepTurn.label}
-                </Button>
-              </Tip>
-            )}
+            {main === null && stepTurn !== null && <StepMainButton step={stepTurn.step} glob={glob} busy={busy} onComplete={state.completeStep} />}
             {main !== null && (
               <Tip text={tipOf(main, glob, state.viewer?.email)}>
                 <Button

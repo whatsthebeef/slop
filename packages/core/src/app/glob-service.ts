@@ -9,7 +9,8 @@ import { listOf } from '../domain/matrix.js';
 import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, humanSteps, isHumanStepDue, isMerged, storedBlockProgress } from '../domain/human-steps.js';
 import { isCapabilityName } from '../domain/capabilities.js';
 import type { Capabilities } from '../domain/capabilities.js';
-import { ROLLOUT_NOT_WRITTEN_TITLE, ROLLOUT_PATHS_ORIGIN, ROLLOUT_SCRIPT_KIND, ROLLOUT_SECTION_ORIGIN, parseRollout, rolloutScriptLabel } from '../domain/rollout.js';
+import { ROLLOUT_NONE_LABEL, ROLLOUT_NONE_PREFIX, ROLLOUT_NOT_WRITTEN_TITLE, ROLLOUT_PATHS_ORIGIN, ROLLOUT_SCRIPT_KIND, ROLLOUT_SECTION_ORIGIN, parseRollout, rolloutScriptLabel } from '../domain/rollout.js';
+import type { RolloutAnswer } from '../domain/rollout.js';
 import type { HumanStep, HumanStepBlock, HumanStepKind, HumanStepScript, StoredHumanStep } from '../domain/human-steps.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
@@ -20,7 +21,7 @@ import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName,
 import { mergeImplied } from '../domain/exclusive-paths.js';
 import { toImplied } from './dependency-inference-service.js';
 import type { DependencyInferenceService, InferredEdge } from './dependency-inference-service.js';
-import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect } from '../domain/events.js';
+import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect, writeRolloutEffect } from '../domain/events.js';
 import type { DomainEvent } from '../domain/events.js';
 import { defaultAreas, matchRiskAreas, splitEvidence } from '../domain/risk-area.js';
 import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, reaches, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
@@ -601,25 +602,110 @@ export class GlobService {
   }
 
   /**
-   * A glob merged and its diff touched the board's rollout paths: when its record has no rollout steps, adds the step that
-   * asks someone to check what the change needs. Once only, and never when the record has a Rollout section.
+   * Whether a merged glob's rollout still has to be written: no step from the record or the rollout check (except the
+   * old "Rollout steps not written" placeholder, which the check replaces), no `## Rollout` in the record, and no
+   * "No rollout needed" note. The check runs once; a backfill and a repeated job find it done.
    */
-  async flagUnwrittenRollout(id: string): Promise<boolean> {
-    const added = await this.deps.store.transaction(async (tx) => {
+  async rolloutUnwritten(id: string): Promise<boolean> {
+    return this.deps.store.transaction(async (tx) => {
       const glob = await tx.getGlob(id);
-      if (glob === null) return null;
-      const steps = await tx.listHumanSteps(glob.boardId, [id]);
-      if (steps.some((s) => s.origin === ROLLOUT_SECTION_ORIGIN || s.origin === ROLLOUT_PATHS_ORIGIN)) return null;
-      const record = (await tx.listArtifacts(id, 'implementation_plan')).find((a) => a.label === '');
-      if (record !== undefined && parseRollout(record.content).length > 0) return null;
-      const now = this.deps.clock.now();
-      const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: ROLLOUT_NOT_WRITTEN_TITLE, detail: null, check: null, script: null });
-      await tx.saveHumanSteps([step]);
-      await tx.appendEvents([{ type: 'HumanStepChanged', globId: id, actor: null, at: now, data: { step: step.id, kind: step.kind, title: step.title, change: 'added' } }]);
-      return glob;
+      return glob !== null && (await this.rolloutOpen(tx, glob));
     });
-    if (added === null) return false;
-    this.deps.notifier.publish({ kind: 'glob.changed', boardId: added.boardId, globId: id, version: added.version });
+  }
+
+  /** Queues the rollout job for a merge that touched the rollout paths, unless the rollout is already written. */
+  async queueRolloutWrite(id: string, sha: string): Promise<boolean> {
+    return this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      if (glob === null || !(await this.rolloutOpen(tx, glob))) return false;
+      await tx.enqueueEffects([writeRolloutEffect(id, sha)]);
+      return true;
+    });
+  }
+
+  private async rolloutOpen(tx: Tx, glob: Glob): Promise<boolean> {
+    const steps = await tx.listHumanSteps(glob.boardId, [glob.id]);
+    if (steps.some((s) => s.origin === ROLLOUT_SECTION_ORIGIN || (s.origin === ROLLOUT_PATHS_ORIGIN && s.title !== ROLLOUT_NOT_WRITTEN_TITLE))) return false;
+    if ((await tx.artifactVersions(glob.id, 'attachment', ROLLOUT_NONE_LABEL)).length > 0) return false;
+    const record = (await tx.listArtifacts(glob.id, 'implementation_plan')).find((a) => a.label === '');
+    return record === undefined || parseRollout(record.content).length === 0;
+  }
+
+  /** The merged globs on a board that still show the old "Rollout steps not written" step, with their merge commit: the backfill's worklist. */
+  async unwrittenRolloutSteps(boardId: number): Promise<{ readonly globId: string; readonly sha: string }[]> {
+    return this.deps.store.transaction(async (tx) => {
+      const open = (await tx.listOpenHumanSteps(boardId)).filter((s) => s.origin === ROLLOUT_PATHS_ORIGIN && s.title === ROLLOUT_NOT_WRITTEN_TITLE);
+      const globIds = [...new Set(open.map((s) => s.globId))];
+      if (globIds.length === 0) return [];
+      const merges = await tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['Merged'], globIds);
+      const found: { globId: string; sha: string }[] = [];
+      for (const globId of globIds) {
+        const sha = merges.filter((e) => e.globId === globId).sort((a, b) => a.at.localeCompare(b.at)).at(-1)?.data.sha;
+        if (typeof sha === 'string') found.push({ globId, sha });
+      }
+      return found;
+    });
+  }
+
+  /**
+   * The rollout job's answer for a merged glob. Steps are stored as the record's own would be (script bodies as
+   * artifacts); "none" is recorded as a "Rollout check" attachment and adds nothing for a person; a question becomes
+   * the one step. The old "Rollout steps not written" step is dismissed as replaced. Returns false when it was already
+   * written (nothing changes).
+   */
+  async applyRolloutAnswer(id: string, answer: RolloutAnswer, model: string): Promise<boolean> {
+    const changed = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      if (glob === null || !(await this.rolloutOpen(tx, glob))) return null;
+      const now = this.deps.clock.now();
+      const events: DomainEvent[] = [];
+      const save: StoredHumanStep[] = [];
+      const note = (step: StoredHumanStep, change: string) =>
+        events.push({ type: 'HumanStepChanged', globId: id, actor: null, at: now, data: { step: step.id, kind: step.kind, title: step.title, change } });
+      let artifacts = false;
+      if (answer.decision === 'none') {
+        await addArtifact(tx, this.deps.clock, glob, 'slop', {
+          kind: 'attachment',
+          label: ROLLOUT_NONE_LABEL,
+          content: `${ROLLOUT_NONE_PREFIX}${answer.reason}\n\n(Written by slop's rollout check, ${model}.)`,
+          link: null,
+          commitSha: null,
+          runId: null,
+          agentSetVersion: null,
+          reviewStats: null,
+        });
+        artifacts = true;
+      } else if (answer.decision === 'ask') {
+        const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: answer.question, detail: null, check: null, script: null });
+        save.push(step);
+        note(step, 'added');
+      } else {
+        for (const written of answer.steps) {
+          let script: HumanStepScript | null = null;
+          if (written.script !== null && written.script.trim() !== '') {
+            const label = rolloutScriptLabel(written.title);
+            script = { artifact: label };
+            await addArtifact(tx, this.deps.clock, glob, 'slop', { kind: ROLLOUT_SCRIPT_KIND, label, content: written.script, link: null, commitSha: null, runId: null, agentSetVersion: null, reviewStats: null });
+            artifacts = true;
+          }
+          const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: written.title, detail: written.detail, check: written.check, script });
+          save.push(step);
+          note(step, 'added');
+        }
+      }
+      for (const old of await tx.listHumanSteps(glob.boardId, [id])) {
+        if (old.origin !== ROLLOUT_PATHS_ORIGIN || old.title !== ROLLOUT_NOT_WRITTEN_TITLE || old.state !== 'open') continue;
+        save.push({ ...old, state: 'dismissed', dismissedReason: 'Replaced by the rollout check' });
+        note(old, 'dismissed');
+      }
+      if (save.length > 0) await tx.saveHumanSteps(save);
+      if (events.length > 0) await tx.appendEvents(events);
+      return { glob, artifacts, steps: save.length > 0 };
+    });
+    if (changed === null) return false;
+    if (changed.artifacts) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: changed.glob.boardId, globId: id });
+    if (changed.steps) await this.afterStepsChanged(id);
+    this.deps.notifier.publish({ kind: 'glob.changed', boardId: changed.glob.boardId, globId: id, version: changed.glob.version });
     return true;
   }
 
