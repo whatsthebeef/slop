@@ -60,7 +60,7 @@ export const globViewFor = (
   /** The state of the globs this one waits for, so a held glob's actions don't rest on its `waiting` mark. */
   dependencies?: ReadonlyMap<string, DependencyState>,
   chain: BlockingChain | null = null,
-  /** Held in Planning for an unanswered oversized flag: nothing unmerged is awaited, yet Start anyway applies. */
+  /** Held in Planning for an unanswered oversized flag: nothing unmerged is awaited, yet Start now applies. */
   sizeHeld = false,
 ) =>
   globView(

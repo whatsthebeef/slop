@@ -563,7 +563,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'report_failure',
     {
       description:
-        "Report that the glob cannot be finished. Routines pass their run ID; pass the agent-set version from .claude/slop-agent-set.json. Pass kind: 'needs_pairing' (with the decision you would have had to guess) when the work needs a person's decision, not more effort: the card then offers Make it a super and slop does not retry the run.",
+        "Report that the glob cannot be finished. Routines pass their run ID; pass the agent-set version from .claude/slop-agent-set.json. Pass kind: 'needs_pairing' (with the decision you would have had to guess) when the work needs a person's decision, not more effort: the card then offers to pick it up as a super and slop does not retry the run.",
       inputSchema: {
         id: z.string(),
         reason: z.string().min(1),
@@ -584,7 +584,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'escalate_to_same',
     {
       description:
-        "Flag a running sub as needing a human: it becomes a same in place (same branch and PR, no auto-merge) with the reason shown on its card, and the owner is told. Only for a concrete reason: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth/permissions/secrets changes, weakened or deleted tests, changed agent instructions, scope well beyond the plan, or in-scope review findings still open after the allowed rounds. Otherwise let the sub merge. Routines pass their run ID (a superseded run's call is ignored). A person can make it a sub again.",
+        "Flag a running sub as needing a human: it becomes a same in place (same branch and PR, no auto-merge) with the reason shown on its card, and the owner is told. Only for a concrete reason: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth/permissions/secrets changes, weakened or deleted tests, changed agent instructions, scope well beyond the plan, or in-scope review findings still open after the allowed rounds. Otherwise let the sub merge. Routines pass their run ID (a superseded run's call is ignored). A person can set its type back to sub.",
       inputSchema: {
         id: z.string(),
         reason: z.string().min(1).describe('What a human should check, in one or two sentences'),
