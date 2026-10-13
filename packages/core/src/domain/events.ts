@@ -56,6 +56,8 @@ export const DOMAIN_EVENT_TYPES = [
   'HoldOverridden',
   /** A person said a recorded edge is not a dependency (data: the other glob, its kind and source, the plan hash). */
   'EdgeDismissed',
+  /** Slop inferred a glob's needs and overlaps from its plan, the open globs and any investigation (data: added, dropped, notes, the plan hash). */
+  'EdgesInferred',
   /** Another open glob started or stopped changing the same exclusive paths as this one. */
   'ClashChanged',
   /** An overlap edge was predicted for a glob (data: the other glob, its paths and why) by a recheck. */

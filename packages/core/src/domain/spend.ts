@@ -32,6 +32,7 @@ export const LLM_SPEND_SOURCES = [
   'findings',
   'intake',
   'size_check',
+  'dependency_inference',
   'search',
   'search_index',
   'decisions',

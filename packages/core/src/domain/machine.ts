@@ -28,7 +28,7 @@ import type {
 import { isAgentSetGlob } from './agent-set.js';
 import { CLOSING_EDGE_KINDS, SLOP_TYPES } from './types.js';
 import { criterionOf } from './escalation-learning.js';
-import { mergeImplied } from './exclusive-paths.js';
+import { isReplaceableInferred, mergeImplied, mergeInferred } from './exclusive-paths.js';
 import {
   chainRefusal,
   dependencyIds,
@@ -684,7 +684,7 @@ export const startAnyway = (
  */
 export const dismissEdge = (glob: Glob, edgeId: string, planHash: string, ctx: Context): Result<Transition> => {
   requireActor(ctx);
-  if ((glob.after ?? []).includes(edgeId)) return invalidInput(`${edgeId} was set as a dependency by a person; change it in Waits for`);
+  if ((glob.after ?? []).includes(edgeId)) return invalidInput(`${edgeId} was set as a dependency by a person and cannot be dismissed`);
   const edge = (glob.impliedAfter ?? []).find((i) => i.id === edgeId);
   if (edge === undefined) return invalidInput(`${glob.id} has no recorded edge to ${edgeId}`);
   if (edge.source === 'explicit') return invalidInput(`The edge to ${edgeId} was set by a person and cannot be dismissed`);
@@ -1852,6 +1852,41 @@ export const overlapsRechecked = (
     });
   for (const edge of added) b.event('OverlapAdded', { with: edge.id, paths: [...edge.paths] });
   return b.done();
+};
+
+/**
+ * An inference of a glob's edges (plan saved, investigation pushed): the inferred edges become `edges`, the other recorded
+ * ones are kept (see `mergeInferred`). Needs only count while the glob is in Planning; once it has started they are kept
+ * as overlaps would be, so nothing blocks it. An event says what was added, dropped and which candidates were refused
+ * (`notes`). Nothing changes when the lists agree, so a repeat is a no-op.
+ */
+export const edgesInferred = (
+  glob: Glob,
+  result: { readonly edges: readonly ImpliedAfter[]; readonly notes: readonly string[]; readonly planHash: string },
+  ctx: Context,
+): Result<Transition> => {
+  if (listOf(glob.status) !== 'planning' && listOf(glob.status) !== 'doing') return unchanged(glob);
+  if (glob.type === 'super') return unchanged(glob);
+  const existing = glob.impliedAfter ?? [];
+  const started = glob.status !== 'planning';
+  const fresh = result.edges.map((e) => (started && e.kind === 'needs' ? { ...e, kind: 'overlaps' as const } : e));
+  const next = mergeInferred(existing, fresh, glob.after ?? [], result.planHash);
+  const before = existing.filter((e) => isReplaceableInferred(e, result.planHash));
+  const after = next.filter((e) => isReplaceableInferred(e, result.planHash));
+  // The reason is the model's wording and changes between answers: the edge is the same while its glob and kind are.
+  const sig = (e: ImpliedAfter) => `${e.id}|${e.kind ?? 'overlaps'}`;
+  const added = after.filter((e) => !before.some((b) => sig(b) === sig(e)));
+  const dropped = before.filter((b) => !after.some((e) => e.id === b.id));
+  if (added.length === 0 && dropped.length === 0) return unchanged(glob);
+  return new Builder(glob, ctx)
+    .set({ impliedAfter: next })
+    .event('EdgesInferred', {
+      added: added.map((e) => ({ id: e.id, kind: e.kind ?? 'overlaps', reason: e.evidence ?? '' })),
+      dropped: dropped.map((e) => e.id),
+      notes: [...result.notes],
+      planHash: result.planHash,
+    })
+    .done();
 };
 
 /** The routine was fired: records its cloud session (if the fire response returned one). */
