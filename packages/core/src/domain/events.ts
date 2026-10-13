@@ -74,6 +74,10 @@ export const DOMAIN_EVENT_TYPES = [
   'DecisionReopened',
   /** A glob's attributes changed (a decision's scope, or its conflict flags). */
   'AttributesChanged',
+  /** A person or agent added, ticked or dismissed a work step (data: the step and what changed). */
+  'HumanStepChanged',
+  /** The last work step holding back sign-off was done (or dismissed), so the glob moved on. */
+  'RolloutDone',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 

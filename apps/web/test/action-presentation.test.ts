@@ -91,6 +91,9 @@ describe('actionPresentation', () => {
       tip: 'You pair on it with the product owner',
     });
     expect(
+      actionPresentation('pick_up', view({ status: 'planning', type: 'same' }), true).placement,
+    ).toBe('main');
+    expect(
       actionPresentation('pick_up', view({ status: 'failed', implementer: 'bo@x.io' })).tip,
     ).toBe('You take it over from bo@x.io');
     expect(actionPresentation('take_over', view({ status: 'in_progress' }))).toMatchObject({

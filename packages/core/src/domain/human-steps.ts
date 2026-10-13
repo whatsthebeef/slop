@@ -1,5 +1,6 @@
 import { isDecisionAttributes } from './attributes.js';
-import type { Glob, Role } from './types.js';
+import { listOf } from './matrix.js';
+import type { Glob, List, Role } from './types.js';
 
 /**
  * Human steps: everything only a person can do on a glob, as one list. Two sources feed it. Steps the state machine
@@ -294,3 +295,31 @@ export const dueText = (due: HumanStepDue): string => {
   if (due === 'after_merge') return 'after the merge';
   return `after the deploy to ${due.slice('after_deploy:'.length)}`;
 };
+
+/**
+ * How far a block is from clearing: the work steps that hold it back. Only stored (work) steps count; the machine's own
+ * steps (Merge blocks Reviewing until the merge happens) clear themselves with the glob's state.
+ */
+export interface BlockProgress {
+  readonly open: number;
+  /** Open and done steps for the block; dismissed ones were wrong and don't count. */
+  readonly total: number;
+}
+
+export const blockProgress = (steps: readonly (Pick<HumanStep, 'state' | 'blocks'> & Partial<Pick<HumanStep, 'source'>>)[], block: HumanStepBlock): BlockProgress => {
+  const holding = steps.filter((s) => s.source !== 'machine' && s.state !== 'dismissed' && s.blocks.includes(block));
+  return { open: holding.filter(isOpenStep).length, total: holding.length };
+};
+
+/** The refusal and the status text while a glob's rollout holds back its sign-off: "Rollout pending (1 of 3)". */
+export const rolloutPending = (progress: BlockProgress): string => `Rollout pending (${progress.open} of ${progress.total})`;
+
+/** The same, for stored steps (what the machine and the dependants read, with no glob to work due-ness out from). */
+export const storedBlockProgress = (stored: readonly Pick<StoredHumanStep, 'state' | 'blocks'>[], block: HumanStepBlock): BlockProgress => {
+  const holding = stored.filter((s) => s.state !== 'dismissed' && s.blocks.includes(block));
+  return { open: holding.filter((s) => s.state === 'open').length, total: holding.length };
+};
+
+/** The list the glob sits in: a merged glob (in Reviewing) whose sign-off is held by open work steps stays in Doing. */
+export const listWithSteps = (glob: Pick<Glob, 'status'>, progress: BlockProgress | null): List =>
+  glob.status === 'reviewing' && progress !== null && progress.open > 0 ? 'doing' : listOf(glob.status);

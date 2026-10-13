@@ -2,12 +2,19 @@ import { decisionOf, isValidCombination, machine } from '@slop/core';
 import type { Action, Category, EditFailure, LabelName, SuggestionPrefill } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Loader2 } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input, Label, Select } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { actionPresentation, presentedActions } from '@/lib/action-presentation';
+import { mainAction } from '@/lib/main-action';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
@@ -305,13 +312,16 @@ export const GlobDetail = ({
   // Starting a flagged glob asks first: it is likely more than one PR's worth of work.
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   useEffect(() => setConfirmingOversized(null), [glob.id]);
-  // Decide has its own panel with the five outcomes.
   // deescalate and make_super are reached through the type popover.
-  const allActions = presentedActions(glob.allowedActions ?? []).filter(
-    (a) => a !== 'delete' && a !== 'decide' && actionPresentation(a, glob).placement !== 'none',
+  const shownActions = presentedActions(glob.allowedActions ?? []).filter(
+    (a) => a !== 'delete' && actionPresentation(a, glob).placement !== 'none',
   );
-  const actions = orderActions(allActions);
-  const tiers = actionTiers(allActions);
+  // Decide has its own panel with the five outcomes: it can be the main button (which goes to
+  // the panel), never a More entry.
+  const allActions = shownActions.filter((a) => a !== 'decide');
+  const main = mainAction(shownActions, glob, decision);
+  const actions = orderActions(allActions, main);
+  const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
   const status = viewStatusLine(glob, new Date().toISOString(), disabled);
   // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
@@ -384,77 +394,80 @@ export const GlobDetail = ({
     }
   };
 
-  const renderActions = (list: Action[]) =>
-    list.map((action) => {
-      const shown = actionPresentation(action, glob);
-      const warning = action === 'merge' ? mergeWarning(glob) : null;
-      const button = (
-        <Button
-          key={action}
-          variant={
-            tiers.get(action) === 'primary'
-              ? 'default'
-              : tiers.get(action) === 'destructive'
-                ? 'danger'
-                : 'outline'
-          }
-          size="sm"
-          disabled={busy}
-          onClick={() => {
-            if (action === 'mark_ready') {
-              if (reviewedAtHead) void markReady();
-              else setConfirmingReady(true);
-              return;
-            }
-            if (action === 'start_again') {
-              setConfirmingAgain(true);
-              return;
-            }
-            if (action === 'retrigger' && (glob.blockedBy?.length ?? 0) > 0) {
-              setConfirmingRetrigger(true);
-              return;
-            }
-            if (
-              (oversized &&
-                (action === 'start' ||
-                  action === 'start_anyway' ||
-                  action === 'pick_up' ||
-                  action === 'take_over')) ||
-              (brief !== null &&
-                (action === 'start_anyway' || action === 'pick_up' || action === 'take_over'))
-            ) {
-              setConfirmingOversized(action);
-              return;
-            }
-            void startAction(
-              pending,
-              running,
-              { action, version: glob.version, at: Date.now() },
-              glob,
-              () => onAction(action),
-              setPending,
-            );
-          }}
-        >
-          {busy && pending?.action === action ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin" aria-hidden />
-              {workingLabel(action)}
-            </>
-          ) : (
-            <>
-              <ActorIcon actor={shown.icon} decorative />
-              {shown.label}
-            </>
-          )}
-        </Button>
-      );
-      return (
-        <Tip key={action} text={warning === null ? shown.tip : `${shown.tip}\n${warning}`}>
-          {button}
-        </Tip>
-      );
-    });
+  const begin = (action: Action) => {
+    if (action === 'decide') {
+      // The outcome buttons, not the first button in the section (a retry, an expand toggle).
+      const panel = findSection(document, 'decision');
+      const target =
+        panel?.querySelector<HTMLElement>(
+          '[data-testid="outcomes"], [data-testid="replacement-outcomes"]',
+        ) ?? panel;
+      target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      target?.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+      return;
+    }
+    if (action === 'mark_ready') {
+      if (reviewedAtHead) void markReady();
+      else setConfirmingReady(true);
+      return;
+    }
+    if (action === 'start_again') {
+      setConfirmingAgain(true);
+      return;
+    }
+    if (action === 'retrigger' && (glob.blockedBy?.length ?? 0) > 0) {
+      setConfirmingRetrigger(true);
+      return;
+    }
+    if (
+      (oversized &&
+        (action === 'start' ||
+          action === 'start_anyway' ||
+          action === 'pick_up' ||
+          action === 'take_over')) ||
+      (brief !== null &&
+        (action === 'start_anyway' || action === 'pick_up' || action === 'take_over'))
+    ) {
+      setConfirmingOversized(action);
+      return;
+    }
+    void startAction(
+      pending,
+      running,
+      { action, version: glob.version, at: Date.now() },
+      glob,
+      () => onAction(action),
+      setPending,
+    );
+  };
+
+  // Merge also warns when the base moved since the checks ran (slop merges it first).
+  const tipOf = (action: Action) => {
+    const tip = actionPresentation(action, glob).tip;
+    const warning = action === 'merge' ? mergeWarning(glob) : null;
+    return warning === null ? tip : `${tip}\n${warning}`;
+  };
+
+  const actionContent = (action: Action) => {
+    const shown = actionPresentation(action, glob);
+    return busy && pending?.action === action ? (
+      <>
+        <Loader2 className="size-3.5 animate-spin" aria-hidden />
+        {workingLabel(action)}
+      </>
+    ) : (
+      <>
+        <ActorIcon actor={shown.icon} decorative />
+        {shown.label}
+      </>
+    );
+  };
+
+  const moreActions = actions.filter((a) => a !== main && tiers.get(a) !== 'destructive');
+  const resetActions = actions.filter((a) => tiers.get(a) === 'destructive' && a !== 'delete');
+  // The menu closes on select, so the More button shows the action it started while it runs.
+  const moreRunning =
+    busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
 
   return (
     <article className="mx-auto w-full max-w-[63rem] p-5" data-testid="glob-page">
@@ -788,17 +801,67 @@ export const GlobDetail = ({
           )}
           {actions.length + disabled.length > 0 && (
             <div className="grid gap-1">
-              <div className="flex flex-wrap gap-2">
-                {renderActions(actions.filter((a) => tiers.get(a) !== 'destructive'))}
-                {disabled.map(({ action, label, icon, tip }) => (
-                  <Tip key={action} text={tip}>
-                    <Button variant="outline" size="sm" disabled>
-                      <ActorIcon actor={icon} decorative />
-                      {label}
+              <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
+                {main !== null && (
+                  <Tip text={tipOf(main)}>
+                    <Button
+                      size="sm"
+                      disabled={busy}
+                      data-testid="main-action"
+                      onClick={() => begin(main)}
+                    >
+                      {actionContent(main)}
                     </Button>
                   </Tip>
-                ))}
-                {renderActions(actions.filter((a) => tiers.get(a) === 'destructive'))}
+                )}
+                {moreActions.length + disabled.length > 0 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" disabled={busy} data-testid="more-actions">
+                        {moreRunning === null ? (
+                          <>
+                            More
+                            <ChevronDown className="size-3.5" aria-hidden />
+                          </>
+                        ) : (
+                          <>
+                            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                            {workingLabel(moreRunning)}
+                          </>
+                        )}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent data-testid="more-menu">
+                      {moreActions.map((action) => {
+                        const shown = actionPresentation(action, glob);
+                        return (
+                          <DropdownMenuItem
+                            key={action}
+                            data-testid={`more-${action}`}
+                            onSelect={() => begin(action)}
+                          >
+                            <span className="flex items-center gap-1.5 font-medium">
+                              <ActorIcon actor={shown.icon} decorative />
+                              {shown.label}
+                            </span>
+                            <span className="whitespace-pre-line text-xs text-muted-foreground">
+                              {tipOf(action)}
+                            </span>
+                          </DropdownMenuItem>
+                        );
+                      })}
+                      {disabled.map(({ action, label, icon, tip }) => (
+                        <DropdownMenuItem key={action} disabled>
+                          <span className="flex items-center gap-1.5 font-medium">
+                            <ActorIcon actor={icon} decorative />
+                            {label}
+                          </span>
+                          <span className="text-xs text-muted-foreground">{tip}</span>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
               {confirmingReady && (
                 <div
@@ -881,33 +944,6 @@ export const GlobDetail = ({
                   >
                    Retry anyway
                    </Button>
-                </div>
-              )}
-              {confirmingAgain && (
-                <div
-                  role="alert"
-                  className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-                >
-                  <span className="flex-1" data-testid="start-again-says">
-                    {startAgainConfirmation(glob, board.baseBranch)}
-                  </span>
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmingAgain(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    disabled={busy}
-                    data-testid="confirm-start-again"
-                    onClick={() =>
-                      void run(async () => {
-                        setConfirmingAgain(false);
-                        await onAction('start_again');
-                      })
-                    }
-                  >
-                    {actionPresentation('start_again', glob).label}
-                  </Button>
                 </div>
               )}
               {readyPending && (
@@ -1214,8 +1250,59 @@ export const GlobDetail = ({
           </div>
         )}
 
-        <div className="border-t pt-3">
-          {confirmDelete ? (
+        <div
+          className="grid gap-2 rounded border border-destructive/50 p-3"
+          data-testid="reset-area"
+        >
+          <div className="text-xs font-medium text-destructive">Reset</div>
+          <div className="flex flex-wrap gap-2">
+            {resetActions.map((action) => (
+              <Tip key={action} text={tipOf(action)}>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={busy}
+                  data-testid={`reset-${action}`}
+                  onClick={() => begin(action)}
+                >
+                  {actionContent(action)}
+                </Button>
+              </Tip>
+            ))}
+            {!confirmDelete && (
+              <Button variant="danger" size="sm" onClick={() => setConfirmDelete(true)}>
+                Delete…
+              </Button>
+            )}
+          </div>
+          {confirmingAgain && (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
+            >
+              <span className="flex-1" data-testid="start-again-says">
+                {startAgainConfirmation(glob, board.baseBranch)}
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmingAgain(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={busy}
+                data-testid="confirm-start-again"
+                onClick={() =>
+                  void run(async () => {
+                    setConfirmingAgain(false);
+                    await onAction('start_again');
+                  })
+                }
+              >
+                {actionPresentation('start_again', glob).label}
+              </Button>
+            </div>
+          )}
+          {confirmDelete && (
             <div className="grid gap-2 rounded border border-destructive/50 p-3 text-sm">
               <p>
                 <strong>Delete {glob.id} permanently?</strong> This removes the glob, its branch,
@@ -1236,10 +1323,6 @@ export const GlobDetail = ({
                 </Button>
               </div>
             </div>
-          ) : (
-            <Button variant="danger" size="sm" onClick={() => setConfirmDelete(true)}>
-              Delete…
-            </Button>
           )}
         </div>
       </div>
