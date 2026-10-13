@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { contextDiff, lineDiff } from '../src/domain/agent-set.js';
-import { markdownHeadings, sectionText, spliceHeadings, spliceSection, splicePreview, withHeading } from '../src/domain/sections.js';
+import { duplicateHeadings, markdownHeadings, sectionText, spliceProblem, spliceHeadings, spliceSection, splicePreview, withHeading } from '../src/domain/sections.js';
 
 const DOC = '# Title\n\nIntro\n\n## Test\n\nRun vitest.\n\n### Watch\n\nUse --watch.\n\n```sh\n## not a heading\n```\n\n## Lint\n\nRun eslint.\n';
 
@@ -96,5 +96,29 @@ describe('splicing a drafted section', () => {
       { op: 'skipped', count: 7 },
     ]);
     expect(contextDiff(lineDiff('a\n', 'a\n'))).toEqual([]);
+  });
+});
+
+describe('repeated headings', () => {
+  const DUP = '# T\n\n## A\n\none\n\n## B\n\n## a\n\ntwo\n';
+
+  it('lists headings that repeat, ignoring the title and fenced code', () => {
+    expect(duplicateHeadings(DUP)).toEqual(['a']);
+    expect(duplicateHeadings(DOC)).toEqual([]);
+  });
+
+  it('takes the last copy when asked, and splices there', () => {
+    expect(sectionText(DUP, 'A')).toBe('## A\n\none');
+    expect(sectionText(DUP, 'A', true)).toBe('## a\n\ntwo');
+    expect(spliceSection(DUP, 'A', '## A\n\nnew')).toBe('# T\n\n## A\n\none\n\n## B\n\n## A\n\nnew\n');
+  });
+
+  it('refuses a repeated target, a body with another heading of its level, and a repeated new heading', () => {
+    expect(spliceProblem(DUP, 'A', '## A\n\nx')).toContain('"A" appears 2 times');
+    expect(spliceProblem(DUP, 'A', '## A\n\nx', true)).toBeNull();
+    expect(spliceProblem(DOC, 'Test', '## Test\n\nx\n\n## Lint\n\ny')).toContain('"Lint"');
+    expect(spliceProblem(DOC, 'Test', '## Test\n\nx\n\n### Sub\n\ny')).toBeNull();
+    expect(spliceProblem(DOC, null, '## Lint\n\ny')).toContain('"Lint"');
+    expect(spliceProblem(DOC, null, '## New\n\ny')).toBeNull();
   });
 });

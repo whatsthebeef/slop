@@ -311,6 +311,7 @@ describe('the KB wire contract', () => {
   const PREVIEW = {
     version: 1,
     stale: false,
+    duplicateSections: [],
     diff: [
       { op: 'same', text: '## Test' },
       { op: 'same', text: '' },
@@ -578,6 +579,7 @@ describe('the KB wire contract', () => {
           description: 'How to test.',
           version: 1,
           source: 'upload',
+          duplicateSections: [],
         },
       ],
       learnings: [

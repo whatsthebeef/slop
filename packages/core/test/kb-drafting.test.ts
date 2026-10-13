@@ -195,6 +195,45 @@ describe('KB pipeline: drafting and approving drafts', () => {
     expect(await doc('build_test_lint')).toBe('# Build\n\n## Test\n\nRun vitest.\n\n## Lint\n\nRun eslint.\n\n## Reporters\n\nUse dot.\n');
   });
 
+  it('refuses to approve a section body that holds another heading of its level, so no section is duplicated', async () => {
+    const id = await drafted(
+      { kind: 'doc', name: 'build_test_lint', section: 'Test' },
+      draftAnswer('Test', '## Test\n\nRun vitest.'),
+    );
+    const refused = errorOf(await approveDraft(id, { content: '## Test\n\nRun vitest.\n\n## Lint\n\nRun eslint twice.' }));
+    expect(refused).toMatchObject({ code: 'invalid_input' });
+    expect(refused?.message).toContain('"Lint"');
+    expect(await doc('build_test_lint')).toBe(BUILD_DOC.split('---\n')[2]);
+  });
+
+  it('refuses a new section that repeats an existing heading', async () => {
+    const id = await drafted({ kind: 'doc', name: 'build_test_lint', section: null }, draftAnswer(null, '## Reporters\n\nMore.'));
+    const refused = errorOf(await approveDraft(id, { content: '## Lint\n\nMore.' }));
+    expect(refused?.code).toBe('invalid_input');
+    expect(refused?.message).toContain('"Lint"');
+  });
+
+  it('fails (to retry) a draft whose section body holds another heading of its level', async () => {
+    const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: 'Test' });
+    drafter.answer(draftAnswer('Test', '## Test\n\nRun vitest.\n\n## Lint\n\nRun eslint twice.'));
+    expect(await queue.process(id)).toBe(true);
+    expect((await item(id)).processing).not.toBe('drafted');
+  });
+
+  describe('a target document with repeated headings', () => {
+    const DUP = '---\narea: conventions\ndescription: Conventions\n---\n# Conv\n\n## Code\n\nOld.\n\n## Tests\n\nT.\n\n## Code\n\nNew.\n';
+
+    it('drafts the last copy and flags the item, and refuses to approve into it', async () => {
+      unwrap(await knowledge.importDocuments(ADMIN, boardId, [{ fileName: 'conv.md', content: DUP }], 'upload'));
+      const id = await drafted({ kind: 'doc', name: 'conv', section: 'Code' }, draftAnswer('Code', '## Code\n\nNewer.'));
+      expect((await preview(id))?.duplicateSections).toEqual(['Code']);
+      const refused = errorOf(await approveDraft(id));
+      expect(refused?.code).toBe('invalid_input');
+      expect(refused?.message).toContain('"Code"');
+      expect(unwrap(await knowledge.index(DEV, boardId)).find((d) => d.name === 'conv')?.duplicateSections).toEqual(['Code']);
+    });
+  });
+
   it("fails (to retry) a draft that rewrites the whole document under the document's title", async () => {
     const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: null });
     drafter.answer(draftAnswer('Build', '# Build\n\n## Test\n\nRun vitest --reporter=dot.\n\n## Lint\n\nRun eslint.'));
@@ -253,6 +292,7 @@ describe('KB pipeline: drafting and approving drafts', () => {
     expect(await preview(id)).toEqual({
       version: 1,
       stale: false,
+      duplicateSections: [],
       diff: [
         { op: 'same', text: '# Build' },
         { op: 'same', text: '' },

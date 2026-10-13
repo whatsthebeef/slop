@@ -117,6 +117,8 @@ export interface KnowledgeIndex {
     readonly description: string;
     readonly version: number;
     readonly source: string;
+    /** Headings that appear more than once in the document. */
+    readonly duplicateSections?: readonly string[];
   }[];
   readonly agentSet: {
     readonly version: number;

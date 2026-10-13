@@ -31,7 +31,7 @@ import { agentSetKind, docName, hasFrontmatter, isAgentSetKind, parseFrontmatter
 import type { KnowledgeDoc, KnowledgeKind, KnowledgeLayer } from '../domain/knowledge.js';
 import { checkLocalRun, LOCAL_RUN_NAME, parseLocalRun, renderLocalRun } from '../domain/local-run.js';
 import { checkMergePolicy, MERGE_POLICY_NAME, parseMergePolicy, renderMergePolicy } from '../domain/merge-policy.js';
-import { markdownHeadings, sameHeading, sectionText, spliceHeadings, withHeading } from '../domain/sections.js';
+import { markdownHeadings, sameHeading, sectionText, spliceHeadings, spliceProblem, withHeading } from '../domain/sections.js';
 import type { LlmSpendTag } from '../domain/spend.js';
 import type { Catalog, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
@@ -657,7 +657,7 @@ const currentText = (target: KbTarget, snapshot: Snapshot): string | null => {
       ? snapshot.docs.find((d) => d.name === target.name)?.content
       : snapshot.agentFiles.find((f) => f.path === target.name)?.served;
   if (whole === undefined || whole.trim() === '') return null;
-  const section = target.section === null ? null : sectionText(whole, target.section);
+  const section = target.section === null ? null : sectionText(whole, target.section, true);
   if (section !== null) return section;
   return whole.length > TARGET_TEXT_LIMIT ? `${whole.slice(0, TARGET_TEXT_LIMIT)}\n(truncated)` : whole;
 };
@@ -948,6 +948,9 @@ const parseDraft = (answer: string, target: KbTarget, state: TargetState): Draft
   const section = namesTitle ? null : named;
   // Board rules sit under "## Board rules", so a new heading there is one level down.
   const content = section === null ? raw : withHeading(state.text, section, raw, state.catalog === null ? 2 : 3);
+  // A repeated target heading is left to approval (it refuses, and the item is flagged); the draft takes the last copy.
+  const problem = spliceProblem(state.text, section, content, true);
+  if (problem !== null) return `The draft is not one section: ${problem}`;
   return {
     draft: { section, content },
     // The document exists now (another item created it), so the item no longer proposes it.

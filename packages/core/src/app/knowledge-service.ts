@@ -53,7 +53,7 @@ import { isReviewGuide } from '../domain/code-review.js';
 import { effectBasisOf, effectItemOf, isEffectMeasured, startEffectCheck } from '../domain/effect-check.js';
 import type { EffectCheck } from '../domain/effect-check.js';
 import type { KbSignal } from '../domain/signals.js';
-import { splicePreview } from '../domain/sections.js';
+import { duplicateHeadings, splicePreview, spliceProblem } from '../domain/sections.js';
 import type { AgentKbApproval, Board, Role } from '../domain/types.js';
 import type { Catalog, CatalogAgentSet, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf, roleOf } from './access.js';
@@ -84,6 +84,8 @@ export interface IndexEntry {
   readonly description: string;
   readonly version: number;
   readonly source: string;
+  /** Headings that appear more than once in the document: drafts can't be approved into it until it is cleaned up. */
+  readonly duplicateSections: readonly string[];
 }
 
 /**
@@ -361,7 +363,12 @@ export const draftPreview = async (tx: Tx, catalog: CatalogAgentSet, item: Draft
   // The local-run spec is replaced whole (a draft holds its canonical text).
   const whole = state.newDocument || item.target.kind === 'local_run' || item.target.kind === 'merge_policy';
   const { diff } = splicePreview(state.text, item.draft.section, item.draft.content, whole);
-  return { version: state.version, stale: state.version !== item.draftedAgainstVersion, diff: contextDiff(diff) };
+  return {
+    version: state.version,
+    stale: state.version !== item.draftedAgainstVersion,
+    diff: contextDiff(diff),
+    duplicateSections: whole ? [] : duplicateHeadings(state.text),
+  };
 };
 
 export const newLearningId = async (tx: Tx, boardId: number): Promise<string> => formatId(boardId, 'k', await tx.nextNumber(boardId, 'k'));
@@ -530,13 +537,14 @@ export class KnowledgeService {
       if (!actor.ok) return actor;
       const docs = await tx.listKnowledge(boardId, ['doc']);
       return ok(
-        docs.map(({ name, area, audience, description, version, source }) => ({
+        docs.map(({ name, area, audience, description, version, source, content }) => ({
           name,
           area,
           audience,
           description,
           version,
           source,
+          duplicateSections: duplicateHeadings(content),
         })),
       );
     });
@@ -1426,6 +1434,10 @@ export class KnowledgeService {
       const content = checkedMergePolicy(draft.content);
       if (!content.ok) return content;
       return this.apply(tx, email, item, 'merge_policy', MERGE_POLICY_NAME, content.value);
+    }
+    if (!state.newDocument) {
+      const problem = spliceProblem(state.text, draft.section, draft.content);
+      if (problem !== null) return invalidInput(problem);
     }
     const { after } = splicePreview(state.text, draft.section, draft.content, state.newDocument);
     if (target.kind === 'doc') {
