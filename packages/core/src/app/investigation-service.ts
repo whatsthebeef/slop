@@ -25,6 +25,8 @@ export class InvestigationService implements InvestigationReactor {
       notifier: Notifier;
       /** `GlobService.escalateToSame`; the machine ignores a stale run and a same. */
       escalate: (email: string, globId: string, input: { reason: string; evidence: string; runId: string | null }) => Promise<Result<unknown>>;
+      /** `GlobService.predictRollout`: leaves the placeholder step when the investigator predicts a rollout. */
+      predictRollout?: (globId: string) => Promise<void>;
     },
   ) {}
 
@@ -44,6 +46,7 @@ export class InvestigationService implements InvestigationReactor {
 
       const escalation = glob.type === 'sub' ? escalationOf(investigation) : null;
       if (escalation !== null) await this.deps.escalate(email, globId, { ...escalation, runId });
+      if (investigation.needsRollout === true) await this.deps.predictRollout?.(globId);
 
       // A person's answer to the flag stands; a merged or finished glob has nothing left to cut.
       if (read.check?.decision != null || !['planning', 'implementing'].includes(glob.status)) return;
