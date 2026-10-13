@@ -25,7 +25,7 @@ COPY catalog ./catalog
 COPY skills ./skills
 # The files a deploy runs on the host (infra/deploy/deploy.sh extracts them from the pulled image).
 COPY compose.prod.yaml ./deploy/compose.yaml
-COPY infra/deploy/remote-deploy.sh infra/deploy/backup.sh ./deploy/
+COPY infra/deploy/remote-deploy.sh infra/deploy/deploy-guards.sh infra/deploy/backup.sh ./deploy/
 USER node
 EXPOSE 3000
 CMD ["node", "dist/main.js"]
