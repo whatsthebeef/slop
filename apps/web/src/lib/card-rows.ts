@@ -56,6 +56,22 @@ export const cornerMarker = (glob: GlobView, now: string, viewer?: HumanStepView
   return null;
 };
 
+/**
+ * The specifics a position's label adds to the corner marker, without the marker's own word: "stalled · merge conflict"
+ * becomes "merge conflict", and a bare "standby" says what it is listening for.
+ */
+export const specifics = (label: string): string => {
+  const rest = label.replace(/^stalled(\s*[·:]\s*|$)/i, '');
+  return rest.toLowerCase() === 'standby' ? 'listening for CI and reviews' : rest;
+};
+
+/** The glob view's Now headline for a stalled or machine position: the corner marker's word and the line's specifics, joined once. */
+export const nowHeadline = (holder: 'stalled' | 'machine', label: string): string => {
+  const line = specifics(label);
+  const word = holder === 'stalled' ? 'stalled' : label.toLowerCase() === 'standby' ? 'standby' : 'working';
+  return line === '' ? word : `${word} · ${line}`;
+};
+
 /** The merge conflict the glob has, open or recorded on a failed merge. */
 const conflictOf = (glob: GlobView) => glob.conflict ?? glob.failure?.conflict ?? null;
 
@@ -131,7 +147,7 @@ export const cardStatus = (glob: GlobView, now: string, viewer?: HumanStepViewer
 
   if (position?.holder === 'stalled') {
     // One mention: the stall's own short label, with the problem's detail (files included) in the tooltip.
-    head = { kind: 'stalled', text: position.label, tone: position.tone, click: positionClick(position, glob, repo) };
+    head = { kind: 'stalled', text: specifics(position.label), tone: position.tone, click: positionClick(position, glob, repo) };
     tips.push(position.tip, ...(status === null ? [] : [status.tip]));
   } else if (status !== null && status.kind === 'ready') {
     // The status line only ever opens the glob view; Merge and Done are run by the actions row's button.
@@ -141,14 +157,14 @@ export const cardStatus = (glob: GlobView, now: string, viewer?: HumanStepViewer
     tips.push(status.tip);
   } else if (status !== null && position?.holder === 'machine' && (status.conflict === true || status.kind === 'checks' || status.kind === 'stuck')) {
     // Someone is on the problem: say what the machine is doing ("fixing the conflict"), with the problem in the tooltip.
-    head = { kind: 'machine', text: position.label, tone: position.tone, click: positionClick(position, glob, repo) };
+    head = { kind: 'machine', text: specifics(position.label), tone: position.tone, click: positionClick(position, glob, repo) };
     tips.push(position.tip, status.tip);
   } else if (status !== null) {
     const click = statusClick(status);
     head = { kind: status.kind, text: shortProblem(status, glob), tone: status.tone, click };
     tips.push(status.tip);
   } else if (position !== null && !(escalated && position.holder === 'human') && !(blocked !== null && position.holder === 'waiting')) {
-    head = { kind: position.holder, text: position.label, tone: position.tone, click: positionClick(position, glob, repo) };
+    head = { kind: position.holder, text: specifics(position.label), tone: position.tone, click: positionClick(position, glob, repo) };
     tips.push(position.tip);
     if (position.holder === 'waiting') tips.push(...learnedReasons(glob));
   }

@@ -4,6 +4,7 @@ import { MachineIcon } from '@/components/actor-icons';
 import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepLabel, stepsOf, stepWords } from '@/lib/position';
 import { collapsed, isDismissed, turnKey } from '@/lib/dismissals';
+import { nowHeadline } from '@/lib/card-rows';
 import { viewStatusLine } from '@/lib/status-line';
 import type { Waiting } from '@/lib/status-line';
 import { cn } from '@/lib/utils';
@@ -109,7 +110,9 @@ export const NowPanel = ({
         {position.holder === 'human' && 'Their turn · '}
         {position.holder === 'stalled' && seen?.dismissed === true
           ? `Stalled · ${seen.label}`
-          : capitalised(headlineReason(position.text))}
+          : position.holder === 'stalled' || position.holder === 'machine'
+            ? capitalised(nowHeadline(position.holder, position.label))
+            : capitalised(headlineReason(position.text))}
         {minutes !== null && minutes > 0 && (
           <span className="font-normal text-muted-foreground"> · {minutes} min</span>
         )}

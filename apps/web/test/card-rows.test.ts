@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { cardStatus, cornerMarker, hasBlocker, turnButton } from '../src/lib/card-rows';
+import { cardStatus, cornerMarker, hasBlocker, nowHeadline, specifics, turnButton } from '../src/lib/card-rows';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -52,7 +52,7 @@ describe('cornerMarker', () => {
 describe('cardStatus', () => {
   it('says a merge-conflict stall once, short, with the files only in the tooltip', () => {
     const line = cardStatus(mergeConflictStall(), NOW);
-    expect(line?.text).toBe('stalled · merge conflict');
+    expect(line?.text).toBe('merge conflict');
     expect(line?.text.length).toBeLessThanOrEqual(40);
     expect(line?.text).not.toMatch(/\.tsx?|\//);
     expect(line?.tip).toContain(files[0]);
@@ -93,8 +93,24 @@ describe('cardStatus', () => {
     expect(cardStatus(checks, NOW)?.head?.text).toBe('checks failed');
     const failed = view({ status: 'planning', failure: { reason: 'A very long reason that goes on and on about a thing that went wrong', at: NOW } });
     // A failed run is a stall: the card says it once, short, and the long reason stays in the tooltip.
-    expect(cardStatus(failed, NOW)?.head?.text).toBe('stalled · run failed');
+    expect(cardStatus(failed, NOW)?.head?.text).toBe('run failed');
     expect(cardStatus(failed, NOW)?.tip).toContain('A very long reason');
+  });
+});
+
+describe('marker and line never repeat each other', () => {
+  it('keeps the marker words out of the line, and the Now headline is marker · line', () => {
+    const stalled = mergeConflictStall();
+    const marker = cornerMarker(stalled, NOW);
+    const line = cardStatus(stalled, NOW);
+    expect(line?.text).not.toMatch(/stalled/i);
+    expect(nowHeadline('stalled', 'stalled · merge conflict')).toBe(`${marker?.text} · ${line?.text}`);
+    expect(nowHeadline('stalled', 'stalled')).toBe('stalled');
+    expect(nowHeadline('machine', 'implementing')).toBe('working · implementing');
+    expect(nowHeadline('machine', 'standby')).toBe('standby · listening for CI and reviews');
+    const working = cardStatus(view({ status: 'in_progress', ...live('active') }), NOW);
+    expect(working?.text).not.toMatch(/working|standby/i);
+    expect(specifics('standby')).toBe('listening for CI and reviews');
   });
 });
 
