@@ -55,6 +55,10 @@ Full test runs and coverage are the **tester**'s job; don't run the full suite.
 
 You can't call slop, so say so in your summary under `## Needs a human`, with the reason and evidence, whenever you hit one of the escalation criteria in the board's `risk_and_size` document (read it if the orchestrator gave you its path). The orchestrator escalates the sub from it. Leave the section out when none applies; size alone is not a reason.
 
+## Hotspot files
+
+A **hotspot** is a file that keeps conflicting between parallel globs (`get_context` lists them in `hotspots`; the investigation names the ones this glob touches). When you change a hotspot, don't grow it: put the new code in a new module (a new component, helper or file) and keep the edit to the hotspot minimal, such as an import and one line that uses it. Don't refactor the hotspot yourself unless the plan says to; a refactor glob handles that.
+
 ## Coding guidelines
 
 - **Follow the board's conventions docs and existing patterns.** Match code style, naming, formatting and architecture. The conventions docs are authoritative for project-specific rules (quotes, formatting, typing, framework patterns).
