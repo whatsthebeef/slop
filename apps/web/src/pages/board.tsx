@@ -273,7 +273,7 @@ export const BoardPage = () => {
   }, [boardId, query]);
   const [filterOpen, setFilterOpen] = useFilterPaneOpen();
   // `/` opens the filter pane if needed and focuses the text filter, selecting what is in it. Only while this page is
-  // the current one: with a glob open over the board the page context is the glob's and `/` belongs to the chat.
+  // the current one: with a glob open over the board the page context is the glob's and `/` does nothing.
   const currentPage = useCurrentPage();
   const [focusFilter, setFocusFilter] = useState(0);
   useEffect(() => {

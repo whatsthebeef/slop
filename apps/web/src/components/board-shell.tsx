@@ -125,13 +125,13 @@ export const BoardShell = () => {
   useEffect(() => {
     if (!isBoard) return;
     const onKey = (e: KeyboardEvent) => {
-      if (!isChatShortcut(e, page.type)) return;
+      if (!isChatShortcut(e)) return;
       e.preventDefault();
       openChat();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isBoard, page.type]);
+  }, [isBoard]);
   // 1–9 open the board in that place of the bar, as clicking it does (the navigation closes any open glob view).
   const navigate = useNavigate();
   const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });

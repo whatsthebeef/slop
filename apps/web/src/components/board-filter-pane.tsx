@@ -87,9 +87,10 @@ const Control = ({
           data-testid={`filter-${filter.key}`}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
-            // Escape leaves the field first; the pane's own Escape (close) then applies to the rest of the pane.
-            if (e.key !== 'Escape') return;
+            // Escape leaves the field and keeps the text; Enter clears it (the cards all show again) and leaves too.
+            if (e.key !== 'Escape' && e.key !== 'Enter') return;
             e.stopPropagation();
+            if (e.key === 'Enter') onChange('');
             e.currentTarget.blur();
           }}
         />

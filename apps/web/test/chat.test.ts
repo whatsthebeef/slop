@@ -32,22 +32,12 @@ describe('opening the chat', () => {
     key: k, metaKey: false, ctrlKey: false, altKey: false, target: null, ...mods,
   });
 
-  it('opens on ⌘K or Ctrl+K on every page, and on nothing else', () => {
-    for (const page of ['board', 'glob', 'inbox'] as const) {
-      expect(isChatShortcut(key('k', { metaKey: true }), page)).toBe(true);
-      expect(isChatShortcut(key('K', { ctrlKey: true }), page)).toBe(true);
-    }
-    expect(isChatShortcut(key('k'), 'glob')).toBe(false);
-    expect(isChatShortcut(key('a'), 'glob')).toBe(false);
-  });
-
-  it('opens on / everywhere but the board, where / focuses the filter', () => {
-    expect(isChatShortcut(key('/'), 'board')).toBe(false);
+  it('opens on ⌘K or Ctrl+K, and on nothing else (`/` is the board filter\'s)', () => {
+    expect(isChatShortcut(key('k', { metaKey: true }))).toBe(true);
+    expect(isChatShortcut(key('K', { ctrlKey: true }))).toBe(true);
+    expect(isChatShortcut(key('k'))).toBe(false);
     expect(isChatShortcut(key('/'))).toBe(false);
-    for (const page of ['glob', 'knowledge', 'inbox', 'signed_off', 'settings'] as const) {
-      expect(isChatShortcut(key('/'), page)).toBe(true);
-    }
-    expect(isChatShortcut(key('/', { ctrlKey: true }), 'glob')).toBe(false);
+    expect(isChatShortcut(key('a'))).toBe(false);
   });
 
   it('treats a bare / outside typing as the slash shortcut', () => {

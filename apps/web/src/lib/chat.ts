@@ -24,7 +24,7 @@ export const WIDE_QUERY = '(min-width: 1024px)';
 
 type KeyLike = { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; target: unknown };
 
-/** A bare `/` that isn't someone typing: left alone in an input, textarea, select or contenteditable. Shared by the chat and the board filter. */
+/** A bare `/` that isn't someone typing: left alone in an input, textarea, select or contenteditable. */
 export const isSlashShortcut = (e: KeyLike): boolean => {
   if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return false;
   const el = e.target;
@@ -32,11 +32,8 @@ export const isSlashShortcut = (e: KeyLike): boolean => {
   return !(el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 };
 
-/** ⌘K / Ctrl+K opens the chat everywhere; `/` does too, except on the board page where it focuses the filter. */
-export const isChatShortcut = (e: KeyLike, page: PageContext['type'] = 'board'): boolean => {
-  if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey) && !e.altKey) return true;
-  return page !== 'board' && isSlashShortcut(e);
-};
+/** ⌘K / Ctrl+K opens the chat, on every page. `/` belongs to the board's filter. */
+export const isChatShortcut = (e: KeyLike): boolean => e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey) && !e.altKey;
 
 /** The chat's scope: the page it follows, one pinned to stay put, or the whole board. */
 export const scopeOf = (page: PageContext, pinned: PageContext | null, widened: boolean): PageContext => (widened ? { type: 'board' } : (pinned ?? page));
