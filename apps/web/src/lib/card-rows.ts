@@ -50,7 +50,8 @@ export const cornerMarker = (glob: GlobView, now: string, viewer?: HumanStepView
     return { kind: 'needs-human', text: 'needs a human', tip: `Needs a person: ${escalation.reason}. Opens the reason`, tone: 'text-required', click: { kind: 'section', target: cardTargets.escalation() } };
   }
   if (position?.holder === 'machine') {
-    return { kind: 'working', text: 'working', tip: position.tip, tone: 'text-muted-foreground', click: positionClick(position, glob, repo) };
+    // A step still waiting to start is not working: say so, as the card's status line does ("starting" / "queued N min").
+    return { kind: 'working', text: position.queued ? (position.label === 'starting' ? 'starting' : 'queued') : 'working', tip: position.tip, tone: 'text-muted-foreground', click: positionClick(position, glob, repo) };
   }
   if (standby !== null) return { kind: 'standby', text: 'standby', tip: STANDBY_TIP, tone: 'text-muted-foreground', click: null };
   return null;
@@ -66,7 +67,9 @@ export const specifics = (label: string): string => {
 };
 
 /** The glob view's Now headline for a stalled or machine position: the corner marker's word and the line's specifics, joined once. */
-export const nowHeadline = (holder: 'stalled' | 'machine', label: string): string => {
+export const nowHeadline = (holder: 'stalled' | 'machine', label: string, queued = false): string => {
+  // A step waiting to start already says so in its label ("starting", "queued 3 min"): don't prefix it with "working".
+  if (queued) return label;
   const line = specifics(label);
   const word = holder === 'stalled' ? 'stalled' : label.toLowerCase() === 'standby' ? 'standby' : 'working';
   return line === '' ? word : `${word} · ${line}`;
