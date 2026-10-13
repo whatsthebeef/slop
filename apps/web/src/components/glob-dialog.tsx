@@ -39,6 +39,7 @@ export const GlobDetail = ({
   onDismissStep,
   onAction,
   onReviewLabel,
+  onDismissEdge,
   onDecide,
   onDelete,
 }: {
@@ -70,6 +71,8 @@ export const GlobDetail = ({
   /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
+  /** The ✕ on a needs or overlaps row: the edge to this glob is not a dependency; resolves false when it failed. */
+  onDismissEdge: (edgeId: string) => Promise<boolean>;
   /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
   onDecide: (input: DecideInput) => Promise<boolean>;
   onDelete: () => Promise<void>;
@@ -146,6 +149,7 @@ export const GlobDetail = ({
     onClose,
     onReload,
     onReviewLabel,
+    onDismissEdge,
     onDecide,
     onAddStep,
     onCompleteStep,
