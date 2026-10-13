@@ -3,11 +3,12 @@ import { Tip } from '../ui/tip';
 import type { GlobViewContext } from './context';
 
 /**
- * The "needs a <person>" chip in the glob view header, as on the card. The reason is in its tooltip; the visible words are
+ * The "needs a <person>" chip in the glob view header, as on the card: shown only while the glob is in Planning, the one rule
+ * for both. After that the reason lives in the "Why a person?" disclosure. The reason is in its tooltip; the visible words are
  * hidden from assistive tech because the label names the chip, so the reason is never read out or shown a second time.
  */
 export const EscalationChip = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {
-  if (glob.escalation == null) return null;
+  if (glob.escalation == null || glob.status !== 'planning') return null;
   return (
     <Tip text={`Needs a person: ${glob.escalation.reason}`}>
       <span
