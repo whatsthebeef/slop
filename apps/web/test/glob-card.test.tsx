@@ -89,6 +89,27 @@ describe('card rows', () => {
     expect(root.querySelectorAll('[data-testid="corner-marker"]')).toHaveLength(1);
   });
 
+  describe('dismissing', () => {
+    const states: readonly [string, () => GlobView][] = [
+      ['a failure', () => view({ status: 'failed', failure: { reason: 'Run failed', at: NOW } })],
+      ['a stall', stalledByConflict],
+      ['a conflict', conflicting],
+      ['a handover', () => prOpen({ handover: { why: ['Checks failed'], next: 'Fix them', detail: [] } as unknown as GlobView['handover'] })],
+    ];
+    const keys = [`failure:${NOW}`, `conflict:${NOW}`, 'stall:x', 'handover:x', 'checks:x'];
+
+    it.each(states)('renders no dismiss control on the card for %s', (_name, make) => {
+      const html = markup(make());
+      expect(html).not.toMatch(/dismiss|got it/i);
+      expect(withoutTips(html)).not.toMatch(/[×✕]/);
+    });
+
+    it.each(states)('shows the same short label for %s whether or not it was dismissed in the glob view', (_name, make) => {
+      const g = make();
+      expect(markup({ ...g, dismissedKeys: keys })).toBe(markup(g));
+    });
+  });
+
   it('shows a merge-conflict stall once, short, with no file names; the tooltip has the full reason', () => {
     const html = markup(stalledByConflict());
     const text = withoutTips(html);
