@@ -1,6 +1,6 @@
 import { LABEL_NAMES, machine } from '@slop/core';
 import type { ChecklistItem, LabelCommand, LabelName, LabelState } from '@slop/core';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -181,11 +181,18 @@ const LabelReview = ({
   glob,
   name,
   onReview,
+  open,
 }: {
   glob: GlobView;
   name: LabelName;
   onReview: ReviewLabel;
+  open: boolean;
 }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  // Once per navigation: `open` only changes with the link, not on the live refreshes.
+  useEffect(() => {
+    if (open) ref.current?.scrollIntoView({ block: 'nearest' });
+  }, [open]);
   const state = glob.labels[name] ?? 'required';
   const items = itemsOf(glob, name);
   const [drafts, setDrafts] = useState<string[]>(['']);
@@ -203,7 +210,11 @@ const LabelReview = ({
   const texts = drafts.map((d) => d.trim()).filter((d) => d !== '');
 
   return (
-    <div className="grid gap-2 rounded-md border p-3" data-testid={`review-${name}`}>
+    <div
+      ref={ref}
+      className={cn('grid gap-2 rounded-md border p-3', open && 'border-[var(--signal)]')}
+      data-testid={`review-${name}`}
+    >
       <div className="flex items-center gap-2 text-sm">
         <Chip name={name} state={state} />
         <span className="font-semibold">{LABEL_TITLES[name]}</span>
@@ -304,14 +315,28 @@ const LabelReview = ({
  * The glob view's sign-off section: per label, the reviewer adds items or approves, the developer
  * ticks items and resubmits. Approved labels and signed-off globs show their items read-only.
  */
-export const LabelReviews = ({ glob, onReview }: { glob: GlobView; onReview: ReviewLabel }) => {
+export const LabelReviews = ({
+  glob,
+  onReview,
+  openLabel = null,
+}: {
+  glob: GlobView;
+  onReview: ReviewLabel;
+  openLabel?: LabelName | null;
+}) => {
   const present = presentLabels(glob);
   if (present.length === 0) return null;
   return (
     <section className="grid gap-2" aria-label="Sign-off reviews" id={`reviews-${glob.id}`}>
       <h3 className="text-xs font-semibold text-muted-foreground">Sign-off</h3>
       {present.map((name) => (
-        <LabelReview key={`${glob.id}-${name}`} glob={glob} name={name} onReview={onReview} />
+        <LabelReview
+          key={`${glob.id}-${name}`}
+          glob={glob}
+          name={name}
+          onReview={onReview}
+          open={openLabel === name}
+        />
       ))}
     </section>
   );

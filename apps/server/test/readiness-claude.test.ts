@@ -105,7 +105,7 @@ describe('GET /api/boards/:b/readiness: Claude workflow', () => {
     expect(item).toMatchObject({ state: 'ok' });
   });
 
-  it("warns when the workflow does not allow slop's App, and passes once it does", async () => {
+  it("doesn't ask the workflow to allow slop's App: conflict fixes run as routines", async () => {
     const workflow = (extra: string): string => `steps:\n  - uses: anthropics/claude-code-action@v1\n    with:\n      x: y\n${extra}`;
     const withApp = (files: Record<string, string>): CodeHost => {
       const host = hostWith(files);
@@ -113,8 +113,8 @@ describe('GET /api/boards/:b/readiness: Claude workflow', () => {
       return host;
     };
     const denied = await claudeItem(withApp({ '.github/workflows/claude.yml': workflow('') }));
-    expect(denied).toMatchObject({ state: 'missing' });
-    expect(denied?.detail).toContain('allowed_bots: "slop[bot]"');
+    expect(denied).toMatchObject({ state: 'ok' });
+    expect(denied?.detail).not.toContain('allowed_bots');
     const allowed = await claudeItem(withApp({ '.github/workflows/claude.yml': workflow("      allowed_bots: 'slop[bot]'\n") }));
     expect(allowed).toMatchObject({ state: 'ok' });
   });

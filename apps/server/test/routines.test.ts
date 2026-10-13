@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FileRoutines, investigateInstructions, runInstructions } from '../src/routines.js';
+import { FileRoutines, conflictInstructions, investigateInstructions, runInstructions } from '../src/routines.js';
 
 describe('routine directory', () => {
   let dir = '';
@@ -73,6 +73,18 @@ describe('routine run instructions', () => {
     expect(text).toContain('do not call mark_ready');
     expect(text).not.toContain(`git checkout -B ${glob.id}`);
     expect(investigateInstructions(glob, 'run-3', null, null)).not.toContain('Repository:');
+  });
+
+  it('tell a conflict run to merge the base in, push only the glob branch, and hand real clashes back', () => {
+    const text = conflictInstructions(glob, 'run-4', 'whatsthebeef/slop', 'main', { base: 'main', files: ['a.ts', 'b.ts'] });
+    expect(text).toContain('RESOLVE-CONFLICT');
+    expect(text).toContain(`git fetch origin ${glob.id} && git checkout -B ${glob.id} origin/${glob.id}`);
+    expect(text).toContain('git fetch origin main && git merge origin/main');
+    expect(text).toContain('a.ts, b.ts');
+    expect(text).toContain('never rebase');
+    expect(text).toContain('report_failure');
+    expect(text).toContain('Slop-Run: run-4');
+    expect(conflictInstructions(glob, 'run-4', null, null, null)).not.toContain('Repository:');
   });
 
   it('leave the repository out for a board without one', () => {
