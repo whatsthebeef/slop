@@ -10,6 +10,7 @@ import {
   LearningJobService,
   MAX_PROCESSING_ATTEMPTS,
   MiningService,
+  SuggestService,
 } from '@slop/core';
 import type { Catalog, LearningWire, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -138,6 +139,7 @@ describe('the KB wire contract', () => {
     });
     mountDecisionGlobs(app, {
       decisions: new DecisionGlobService({ ...deps, knowledge, globs }),
+      suggest: new SuggestService({ ...deps, knowledge, llm: { complete: unused }, model: 'test' }),
       globs,
     });
     await store.transaction(async (tx) => {

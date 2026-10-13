@@ -1448,6 +1448,12 @@ export class KnowledgeService {
     return draftPreview(tx, await this.deps.catalog.agentSet(), previewInputOf(learning));
   }
 
+  /** The current state of a learning's routed target (its text and version), for Suggest; null when it has none or it is gone. */
+  async targetStateFor(tx: Tx, learning: LearningRead): Promise<TargetState | null> {
+    const target = learningTarget(learning.glob).routed;
+    return target === null ? null : targetState(tx, await this.deps.catalog.agentSet(), learning.glob.boardId, target);
+  }
+
   /** An admin's target, checked against the board: an existing document, a new one with its metadata, or a prose agent file. */
   private async checkTarget(tx: Tx, catalog: CatalogAgentSet, boardId: number, change: TargetChange): Promise<Result<KbTarget>> {
     const section = cleanHeading(change.section);

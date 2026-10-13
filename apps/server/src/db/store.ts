@@ -2279,7 +2279,7 @@ export class PgStore implements Store {
               continue;
             }
           }
-          if (effect.kind === 'kb_route' || effect.kind === 'kb_draft') {
+          if (effect.kind === 'kb_route' || effect.kind === 'kb_draft' || effect.kind === 'suggest_decision') {
             // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running,
             // or backing off after a failure) gets a sibling: it may have committed its step before this change, and
             // would then finish without it.

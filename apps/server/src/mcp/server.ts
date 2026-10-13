@@ -1,5 +1,5 @@
-import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService } from '@slop/core';
-import { invalidInput, machine } from '@slop/core';
+import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService, SuggestService } from '@slop/core';
+import { invalidInput, machine, notFound } from '@slop/core';
 import { ARTIFACT_KINDS, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -45,6 +45,8 @@ export interface McpDeps {
   readonly links: SignedLinks;
   /** Time reports (`get_report`). */
   readonly reports: Pick<ReportService, 'report'>;
+  /** Suggest on decision globs (`suggest_decision`). */
+  readonly suggest?: Pick<SuggestService, 'request' | 'view'>;
 }
 
 const json = (value: unknown): CallToolResult => ({
@@ -680,6 +682,21 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     },
     async ({ id, version, decision, reason, editedDraft }) =>
       reply(await knowledge.decideByAgent(email, id, version, decision, { reason, editedDraft })),
+  );
+
+  server.registerTool(
+    'suggest_decision',
+    {
+      description:
+        "Admins and POs: ask for Suggest on a decision glob (a KB item or any decision). One on-demand model call reads the learning, its draft, the target section, the other open learnings on the same file, the changes merged since and recent outcomes, and recommends approve, approve_with_edit (with the full edited section), merge_into (another open learning, with the combined section) or reject, with reasons. Returns at once; the result follows in under a minute as the glob's `assessment` artifact labelled `suggestion` (read it with get_artifact kind assessment, label suggestion). The result here is the latest suggestion so far, whether the draft or target moved since it was made (`stale`) and whether a new one is queued. Nothing is decided: apply it with decide_kb_item or the board.",
+      inputSchema: { id: z.string().describe('Decision glob ID, e.g. s1k3') },
+    },
+    async ({ id }) => {
+      if (deps.suggest === undefined) return reply(notFound('Suggest is not available on this server'));
+      const queued = await deps.suggest.request(email, id);
+      if (!queued.ok) return reply(queued);
+      return reply(await deps.suggest.view(email, id), (view) => ({ queued: true, ...view }));
+    },
   );
 
   server.registerTool(

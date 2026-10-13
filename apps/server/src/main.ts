@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, kbJobHint } from '@slop/core';
+import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -12,6 +12,7 @@ import { mountKnowledge } from './http/knowledge.js';
 import { OutboxRunner } from './jobs/outbox.js';
 import { kbExecutors } from './kb-executors.js';
 import { knowledgePageExecutors } from './knowledge-page-executors.js';
+import { suggestExecutors } from './suggest-executors.js';
 import { agentSetExecutors, readCommittedAgentSetVersion } from './agent-set-executors.js';
 import { mountMcp } from './mcp/server.js';
 import { readyGate } from './ready-gate.js';
@@ -179,6 +180,8 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
   ...kbExecutors({ runStep: (itemId, step) => kbPipeline.runStep(itemId, step) }, { isDown: () => llmHealth.isDown(kbModels) }),
   // The knowledge page's regeneration (the `llm` lane); `knowledgePage` is built below and only called once a job runs.
   ...knowledgePageExecutors({ regenerate: (boardId, full) => knowledgePage.regenerate(boardId, full) }),
+  // Suggest on a decision glob (the `llm` lane); `suggestService` is built below and only called once a job runs.
+  ...suggestExecutors({ run: (globId) => suggestService.run(globId) }),
   // The agent set's commit to its glob's branch; `agentSetCommit` is built below and only called once a job runs.
   ...agentSetExecutors({ prepare: (boardId) => agentSetCommit.prepare(boardId) }, github, (id) => store.transaction((tx) => tx.getGlob(id))),
 };
@@ -261,6 +264,13 @@ const knowledgePageLlm = trackLlm(
   config.KNOWLEDGE_PAGE_MODEL,
 );
 const knowledgePage = new KnowledgePageService({ store, clock, notifier: hub, llm: knowledgePageLlm, model: config.KNOWLEDGE_PAGE_MODEL, spend, knowledge });
+
+// Suggest (Sonnet, SUGGEST_MODEL): an admin's on-demand recommendation for a decision glob; the call is tagged for the spend ledger.
+const suggestLlm = trackLlm(
+  new BedrockLlm({ id: config.SUGGEST_MODEL, configKey: 'SUGGEST_MODEL' }, config.BEDROCK_REGION, recordUsage, null),
+  config.SUGGEST_MODEL,
+);
+const suggestService = new SuggestService({ store, clock, notifier: hub, knowledge, llm: suggestLlm, model: config.SUGGEST_MODEL });
 
 // Haiku: splitting and classifying review findings, and checking bug reports for the learned sub limit.
 const findingsLlm = trackLlm(
@@ -459,7 +469,7 @@ mountCode(app, { code });
 mountChat(app, { chat });
 mountDecisions(app, { decisions });
 mountInbox(app, { inbox, decisionGlobs });
-mountDecisionGlobs(app, { decisions: decisionGlobs, globs });
+mountDecisionGlobs(app, { decisions: decisionGlobs, suggest: suggestService, globs });
 if (config.SLACK_SIGNING_SECRET !== undefined && config.SLACK_BOT_TOKEN !== undefined) {
   mountSlack(app, {
     signingSecret: config.SLACK_SIGNING_SECRET,
@@ -495,6 +505,7 @@ app.get('/downloads/agent-set/:board', async (c) => {
 mountArtifactUploads(app, { artifacts, globs, links });
 mountMcp(app, {
   auth,
+  suggest: suggestService,
   readyGate: readyGate(github, globs, boards),
   boards,
   globs,

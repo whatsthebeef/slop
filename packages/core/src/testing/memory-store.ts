@@ -1283,7 +1283,7 @@ export class MemoryStore implements Store {
           if (effect.kind === 'commit_agent_set' && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;
           // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running, or
           // backing off) gets a sibling, so a change it may not have seen still gets its step.
-          if ((effect.kind === 'kb_route' || effect.kind === 'kb_draft') && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;
+          if ((effect.kind === 'kb_route' || effect.kind === 'kb_draft' || effect.kind === 'suggest_decision') && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;
           // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
           if (effect.kind === 'review_change' && effect.requestId === undefined) {
             const same = (e: Effect) => e.kind === 'review_change' && e.requestId === undefined && e.globId === effect.globId && e.stage === effect.stage;

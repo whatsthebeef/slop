@@ -21,6 +21,7 @@ import type {
   IntakeAccuracy,
   IntakeExample,
   DecisionDiff,
+  SuggestionView,
   DecisionLearning,
   DecisionOutcomeKind,
   DecisionScope,
@@ -724,6 +725,10 @@ export const api = {
   decide: (id: string, version: number, input: DecideInput) => request<GlobView>('POST', `/api/globs/${id}/decision`, { ...input, version }),
   /** Decision globs: the proposed change against the target as it is now. */
   globDiff: (id: string) => request<GlobDiff>('GET', `/api/globs/${id}/diff`),
+  /** Decision globs: queues Suggest (admins and POs); the result follows as an `assessment` artifact labelled `suggestion`. */
+  suggest: (id: string) => request<{ queued: true }>('POST', `/api/globs/${id}/suggest`, {}),
+  /** Decision globs: the latest suggestion, whether the draft or target moved since, and whether one is queued. */
+  suggestion: (id: string) => request<SuggestionView>('GET', `/api/globs/${id}/suggestion`),
   /** Decision globs: writes or refreshes the assessment. */
   assess: (id: string) => request<{ kind: ArtifactKind; version: number; content: string }>('POST', `/api/globs/${id}/assessment`, {}),
   /** Inbox: promotes an item to a decision glob in Planning (idempotent). */
