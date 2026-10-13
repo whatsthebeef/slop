@@ -1,58 +1,26 @@
-import { decisionOf, isValidCombination, machine } from '@slop/core';
+import { isValidCombination } from '@slop/core';
 import type { Action, Category, EditFailure, LabelName, SuggestionPrefill } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ArrowLeft, ChevronDown, Loader2 } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { Input, Label, Select } from '@/components/ui/input';
-import { actionTiers, orderActions } from '@/lib/action-style';
-import { actionPresentation, presentedActions } from '@/lib/action-presentation';
-import { mainAction } from '@/lib/main-action';
-import { mainStep } from '@/lib/human-steps';
-import { ActorIcon, HumanIcon } from '@/components/actor-icons';
+import { HumanIcon } from '@/components/actor-icons';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
 import type { GlobSection } from '@/lib/glob-section';
-import { workingLabel } from '@/lib/card-pending';
-import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
-import type { PendingAction } from '@/lib/pending-action';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
-import { startAgainConfirmation } from '@/lib/start-again';
-import {
-  handoverConfirmation,
-  handoverOneLine,
-  handoverToShow,
-  readHandoverAcknowledged,
-  writeHandoverAcknowledged,
-} from '@/lib/handover';
 import { conflictByHand, conflictCommand, copySstorCommand } from '@/lib/sstor-command';
-import {
-  blockedLine,
-  chainTip,
-  dependencySummary,
-  statusWords,
-  viewStatusLine,
-  waitingFor,
-  mergeWarning,
-} from '@/lib/status-line';
-import { categoryOptions, saveCategory, typeOptions } from '@/lib/type-change';
-import type { TypeOption } from '@/lib/type-change';
-import { HumanSteps } from './human-steps';
+import { blockedLine, dependencySummary, statusWords, viewStatusLine } from '@/lib/status-line';
+import { categoryOptions, saveCategory } from '@/lib/type-change';
 import type { ArtifactRef } from './artifacts';
-import { GroupChip } from './glob-card';
 import { moveOf, positionOf, stepLabel, stepsOf, stepWords } from '@/lib/position';
-import { LabelChips, LabelReviews } from './labels';
+import { LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
-import { OversizedGlob, isOversized } from './oversized-glob';
+import { OversizedGlob } from './oversized-glob';
 import { SplitGlob, canSplit } from './split-glob';
-import { GlobTitle } from './glob-title';
+import { HumanSteps } from './human-steps';
+import { GlobActions, GlobReset, useGlobActions } from './glob-view/actions';
 import { ArtifactsPanel } from './glob-view/artifacts';
 import { ChoicesPanel } from './glob-view/choices';
 import type { GlobViewContext } from './glob-view/context';
@@ -60,28 +28,11 @@ import { DecisionAssessmentPanel, DecisionPanel } from './glob-view/decision';
 import { DeploysPanel } from './glob-view/deploys';
 import { EnvironmentsPanel } from './glob-view/environments';
 import { FindingsPanel } from './glob-view/findings';
+import { GlobChips, GlobHeader } from './glob-view/header';
 import { PlanSection } from './glob-view/plan';
 import { TestsPanel } from './glob-view/tests';
 import { cn } from '@/lib/utils';
 import { Tip } from './ui/tip';
-import { TypePopover } from './type-popover';
-
-const STATUS_TEXT: Record<GlobView['status'], string> = {
-  planning: 'Planning',
-  implementing: 'A routine is implementing',
-  in_progress: 'In progress',
-  failed: 'Failed',
-  pr_open: 'PR open for review',
-  merging: 'Merging',
-  reviewing: 'Merged; awaiting sign-off',
-  signed_off: 'Signed off',
-};
-
-/** A decision glob uses the same lists for a different journey: it is decided in Doing and signed off once accepted. */
-const DECISION_STATUS_TEXT: Partial<Record<GlobView['status'], string>> = {
-  in_progress: 'Doing: being decided',
-  reviewing: 'Decided; awaiting sign-off',
-};
 
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
 
@@ -158,7 +109,9 @@ const NowRow = ({ glob }: { glob: GlobView }) => {
       ? 'Your turn'
       : position === null
         ? ''
-        : { human: 'Their turn', machine: 'Machine', waiting: 'Waiting', stalled: 'Stalled' }[position.holder];
+        : { human: 'Their turn', machine: 'Machine', waiting: 'Waiting', stalled: 'Stalled' }[
+            position.holder
+          ];
   const minutes = position?.minutes ?? null;
   return (
     <div className="text-sm" data-testid="now-row" data-holder={move.holder}>
@@ -178,7 +131,8 @@ const NowRow = ({ glob }: { glob: GlobView }) => {
           <ul className="mt-1 space-y-0.5 text-xs">
             {steps.map((step) => (
               <li key={step.id} data-kind={step.kind} data-state={step.state}>
-                {stepLabel(step)} <span className="text-muted-foreground">{stepWords(step, now)}</span>
+                {stepLabel(step)}{' '}
+                <span className="text-muted-foreground">{stepWords(step, now)}</span>
                 {step.detail !== null && /^https?:\/\//.test(step.detail) && (
                   <>
                     {' '}
@@ -230,7 +184,12 @@ export const GlobDetail = ({
   /** Who is looking, for the steps that are theirs (unknown until /api/me has answered). */
   email?: string;
   /** Human steps: each resolves false when it failed (the page shows why); the glob is replaced afterwards. */
-  onAddStep: (step: { title: string; detail?: string; who?: string; due?: string }) => Promise<boolean>;
+  onAddStep: (step: {
+    title: string;
+    detail?: string;
+    who?: string;
+    due?: string;
+  }) => Promise<boolean>;
   onCompleteStep: (stepId: string) => Promise<boolean>;
   onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
   /** Resolves false when the action failed. */
@@ -241,24 +200,15 @@ export const GlobDetail = ({
   onDecide: (input: DecideInput) => Promise<boolean>;
   onDelete: () => Promise<void>;
 }) => {
-  // A decision glob has no branch, PR, runs, deploys or labels: those parts of the view are left out.
-  const decision = decisionOf(glob) !== null;
+  const actionState = useGlobActions({
+    board,
+    glob,
+    onAction,
+    onUpdate,
+    ...(email === undefined ? {} : { email }),
+  });
+  const { decision, busy, run, oversized, disabled, viewer, stepsSignal } = actionState;
   const [draft, setDraft] = useState<GlobChanges>({});
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [running, setBusy] = useState(false);
-  // An action stays pending until the glob has moved (its version changes), not just until the request returns.
-  const [pending, setPending] = useState<PendingAction | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (pending === null) return undefined;
-    const timer = setTimeout(
-      () => setNow(Date.now()),
-      PENDING_TIMEOUT_MS - (Date.now() - pending.at) + 50,
-    );
-    return () => clearTimeout(timer);
-  }, [pending]);
-  const pendingNow = isPending(pending, glob, Math.max(now, pending?.at ?? 0));
-  const busy = running || pendingNow;
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
   // Suggest's Apply: the decision form opens pre-filled; reset when another glob opens.
   const [applied, setApplied] = useState<SuggestionPrefill | null>(null);
@@ -267,8 +217,6 @@ export const GlobDetail = ({
   useEffect(() => {
     setDraft({});
     setFailure(null);
-    setConfirmingAgain(false);
-    setTypeFailure(null);
     setCategoryNote(null);
   }, [glob.id]);
   /** Edits the draft; a refusal shown earlier no longer applies to what the person is typing. */
@@ -276,10 +224,6 @@ export const GlobDetail = ({
     setDraft((d) => ({ ...d, ...changes }));
     setFailure(null);
   };
-  const [confirmingRetrigger, setConfirmingRetrigger] = useState(false);
-  // The type chip's popover says what follows before it changes the type.
-  const [typeFailure, setTypeFailure] = useState<EditFailure | null>(null);
-  const typeChoices = typeOptions(glob, board.role);
   // Category saves when it changes, and says so with an Undo.
   const [categoryNote, setCategoryNote] = useState<{ undo: Category } | null>(null);
   const changeCategory = async (to: Category, from: Category) => {
@@ -292,20 +236,23 @@ export const GlobDetail = ({
       setCategoryNote(null);
     }
   };
-  const changeType = async (option: TypeOption) => {
-    setTypeFailure(null);
-    if (option.via === 'update') {
-      setTypeFailure(await onUpdate({ type: option.to }));
-    } else if (option.via !== null && !(await onAction(option.via))) {
-      setTypeFailure({ message: `Could not make it a ${option.to}`, conflict: false });
-    }
-  };
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
   // Once per navigation (glob or section), not on the live refreshes that re-render the page.
   useEffect(() => {
     if (section === null) return undefined;
     return scrollWhenReady(() => findSection(document, section));
   }, [glob.id, section]);
+  const ctx: GlobViewContext = {
+    board,
+    glob,
+    busy,
+    onAction,
+    onUpdate,
+    onOpenSection: (target) => {
+      const { section: to } = target;
+      if (to !== undefined) scrollWhenReady(() => findSection(document, to));
+    },
+  };
 
   // The globs it waits for can change until it has a branch.
   const canEditAfter =
@@ -322,57 +269,10 @@ export const GlobDetail = ({
   const dirty = Object.keys(draft).length > 0;
   const [splitting, setSplitting] = useState(false);
   useEffect(() => setSplitting(false), [glob.id]);
-  const oversized = isOversized(glob);
   const splittable = canSplit(glob) && (glob.allowedActions ?? []).includes('delete') && !oversized;
-  // Starting a flagged glob asks first: it is likely more than one PR's worth of work.
-  const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
-  useEffect(() => setConfirmingOversized(null), [glob.id]);
-  // deescalate and make_super are reached through the type popover.
-  const shownActions = presentedActions(glob.allowedActions ?? []).filter(
-    (a) => a !== 'delete' && actionPresentation(a, glob).placement !== 'none',
-  );
-  // Decide has its own panel with the five outcomes: it can be the main button (which goes to
-  // the panel), never a More entry.
-  const allActions = shownActions.filter((a) => a !== 'decide');
-  const viewer = email === undefined ? undefined : { email, role: board.role };
-  // A due blocking step for the viewer (a rollout) is the next thing to do, ahead of the state's next step but not a recovery.
-  const stepTurn = mainStep(glob, viewer);
-  const [stepsSignal, setStepsSignal] = useState(0);
-  const main = mainAction(shownActions, glob, decision, stepTurn !== null);
-  const actions = orderActions(allActions, main);
-  const tiers = actionTiers(allActions, main);
-  const disabled = waitingFor(glob, actions, board.role);
   const status = viewStatusLine(glob, new Date().toISOString(), disabled);
-  // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
-  const [readyAsked, setReadyAsked] = useState(false);
-  const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
-  // A super's local review normally comes first (/finalise); the board warns, then allows.
-  const [confirmingReady, setConfirmingReady] = useState(false);
-  // "Why you're needed": the full box until the viewer acknowledges it, then one line.
-  const brief = handoverToShow(glob);
-  const [briefRead, setBriefRead] = useState(false);
-  useEffect(
-    () => setBriefRead(brief !== null && readHandoverAcknowledged(glob.id, brief)),
-    [glob.id, brief === null ? '' : JSON.stringify(brief)],
-  );
-  const [briefOpen, setBriefOpen] = useState(false);
-  useEffect(() => setBriefOpen(false), [glob.id]);
-  // Discard throws the PR and branch away, so it says what it will do first.
-  const [confirmingAgain, setConfirmingAgain] = useState(false);
-  // The header's border shows once the page has scrolled under it.
-  const topRef = useRef<HTMLDivElement>(null);
-  const [scrolled, setScrolled] = useState(false);
-  useEffect(() => {
-    const el = topRef.current;
-    if (el === null || typeof IntersectionObserver === 'undefined') return undefined;
-    const observer = new IntersectionObserver(([entry]) =>
-      setScrolled(entry !== undefined && !entry.isIntersecting),
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
   // Esc goes back to the board, unless typing, an overlay or an inline confirmation owns it.
-  const confirming = confirmDelete || confirmingAgain || splitting;
+  const confirming = actionState.confirmDelete || actionState.confirmingAgain || splitting;
   const escapeRef = useRef({ onClose, confirming });
   escapeRef.current = { onClose, confirming };
   useEffect(() => {
@@ -394,183 +294,13 @@ export const GlobDetail = ({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
-  const reviewedAtHead = (glob.artifacts ?? []).some(
-    (a) => a.kind === 'local_review' && machine.sameCommit(a.commitSha, glob.pr?.headSha),
-  );
-  const markReady = () =>
-    run(async () => {
-      setConfirmingReady(false);
-      if (await onAction('mark_ready')) setReadyAsked(true);
-    });
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
-
-  const run = async (work: () => Promise<void>) => {
-    setBusy(true);
-    try {
-      await work();
-    } finally {
-      setBusy(false);
-    }
-  };
-  const ctx: GlobViewContext = {
-    board,
-    glob,
-    busy,
-    onAction,
-    onUpdate,
-    onOpenSection: (target) => {
-      const { section: wanted } = target;
-      if (wanted !== undefined) scrollWhenReady(() => findSection(document, wanted));
-    },
-  };
-
-  const begin = (action: Action) => {
-    if (action === 'decide') {
-      // The outcome buttons, not the first button in the section (a retry, an expand toggle).
-      const panel = findSection(document, 'decision');
-      const target =
-        panel?.querySelector<HTMLElement>(
-          '[data-testid="outcomes"], [data-testid="replacement-outcomes"]',
-        ) ?? panel;
-      target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      target?.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true });
-      return;
-    }
-    if (action === 'mark_ready') {
-      if (reviewedAtHead) void markReady();
-      else setConfirmingReady(true);
-      return;
-    }
-    if (action === 'start_again') {
-      setConfirmingAgain(true);
-      return;
-    }
-    if (action === 'retrigger' && (glob.blockedBy?.length ?? 0) > 0) {
-      setConfirmingRetrigger(true);
-      return;
-    }
-    if (
-      (oversized &&
-        (action === 'start' ||
-          action === 'start_anyway' ||
-          action === 'pick_up' ||
-          action === 'take_over')) ||
-      (brief !== null &&
-        (action === 'start_anyway' || action === 'pick_up' || action === 'take_over'))
-    ) {
-      setConfirmingOversized(action);
-      return;
-    }
-    void startAction(
-      pending,
-      running,
-      { action, version: glob.version, at: Date.now() },
-      glob,
-      () => onAction(action),
-      setPending,
-    );
-  };
-
-  // Merge also warns when the base moved since the checks ran (slop merges it first).
-  const tipOf = (action: Action) => {
-    const tip = actionPresentation(action, glob).tip;
-    const warning = action === 'merge' ? mergeWarning(glob) : null;
-    return warning === null ? tip : `${tip}\n${warning}`;
-  };
-
-  const actionContent = (action: Action) => {
-    const shown = actionPresentation(action, glob);
-    return busy && pending?.action === action ? (
-      <>
-        <Loader2 className="size-3.5 animate-spin" aria-hidden />
-        {workingLabel(action)}
-      </>
-    ) : (
-      <>
-        <ActorIcon actor={shown.icon} decorative />
-        {shown.label}
-      </>
-    );
-  };
-
-  const moreActions = actions.filter((a) => a !== main && tiers.get(a) !== 'destructive');
-  const resetActions = actions.filter((a) => tiers.get(a) === 'destructive' && a !== 'delete');
-  // The menu closes on select, so the More button shows the action it started while it runs.
-  const moreRunning =
-    busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
 
   return (
     <article className="mx-auto w-full max-w-[63rem] p-5" data-testid="glob-page">
-      <div ref={topRef} aria-hidden className="h-0" />
-      <div
-        className={`sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex h-10 items-center gap-3 border-b bg-background px-5 ${scrolled ? 'border-border' : 'border-transparent'}`}
-        data-testid="glob-header"
-      >
-        <Tip text="Back to the board (Esc)">
-          <Link
-            to={`/boards/${String(glob.boardId)}`}
-            className="rounded p-1 hover:bg-muted"
-            aria-label="Back to the board"
-            data-testid="glob-back"
-            onClick={(e) => {
-              e.preventDefault();
-              onClose();
-            }}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Tip>
-        <GlobTitle
-          id={glob.id}
-          title={glob.title}
-          editable={glob.status !== 'signed_off'}
-          onUpdate={onUpdate}
-          onReload={onReload}
-        />
-      </div>
+      <GlobHeader ctx={ctx} onClose={onClose} onReload={onReload} />
       <div className="grid gap-4">
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="rounded bg-muted px-2 py-0.5">
-            {(decision ? DECISION_STATUS_TEXT[glob.status] : undefined) ?? STATUS_TEXT[glob.status]}
-          </span>
-          {decision ? (
-            <span className="rounded border px-2 py-0.5 text-xs" data-testid="glob-type">
-              decision
-            </span>
-          ) : (
-            <TypePopover
-              type={glob.type}
-              options={typeChoices}
-              busy={busy}
-              failure={typeFailure}
-              onChange={(option) => run(() => changeType(option))}
-            />
-          )}
-          {glob.group !== null && <GroupChip name={glob.group} />}
-          {!decision && <LabelChips glob={glob} />}
-          <span className="ml-auto text-xs text-muted-foreground">
-            {!decision && (
-              <>
-                branch{' '}
-                {board.repo === null ? (
-                  <span className="font-mono">{glob.branch}</span>
-                ) : (
-                  <a
-                    className="font-mono underline-offset-2 hover:underline"
-                    href={`https://github.com/${board.repo}/compare/${board.baseBranch}...${glob.branch}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    title={`Compare ${glob.branch} with ${board.baseBranch} on GitHub`}
-                  >
-                    {glob.branch}
-                  </a>
-                )}{' '}
-                ·{' '}
-              </>
-            )}
-            v{glob.version}
-          </span>
-        </div>
+        <GlobChips ctx={ctx} actions={actionState} />
 
         {!decision && <NowRow glob={glob} />}
         {status !== null && (
@@ -774,237 +504,7 @@ export const GlobDetail = ({
         </Anchor>
 
         <Anchor name="actions">
-          {brief !== null && (
-            <div
-              className="mb-2 grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-sm"
-              data-testid="handover-box"
-            >
-              {briefRead && !briefOpen ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="flex-1">
-                    <strong>Why you're needed:</strong> {handoverOneLine(brief)}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    data-testid="handover-expand"
-                    onClick={() => setBriefOpen(true)}
-                  >
-                    Show
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <strong>Why you're needed</strong>
-                  <ul className="list-disc pl-5">
-                    {brief.why.map((cause) => (
-                      <li key={cause}>{cause}</li>
-                    ))}
-                  </ul>
-                  <p>
-                    <strong>First:</strong> {brief.next}
-                  </p>
-                  {brief.detail.length > 0 && (
-                    <ul className="list-disc pl-5 text-xs text-muted-foreground">
-                      {brief.detail.map((line) => (
-                        <li key={line}>{line}</li>
-                      ))}
-                    </ul>
-                  )}
-                  <div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      data-testid="handover-acknowledge"
-                      onClick={() => {
-                        writeHandoverAcknowledged(glob.id, brief);
-                        setBriefRead(true);
-                        setBriefOpen(false);
-                      }}
-                    >
-                      Got it
-                    </Button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-          {(main !== null || actions.length + disabled.length > 0 || stepTurn !== null) && (
-            <div className="grid gap-1">
-              <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
-                {main === null && stepTurn !== null && (
-                  <Tip text={`${stepTurn.step.title}: a person does this, then ticks it in Human steps`}>
-                    <Button
-                      size="sm"
-                      data-testid="main-action"
-                      data-step={stepTurn.step.id}
-                      onClick={() => {
-                        setStepsSignal((n) => n + 1);
-                        findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' });
-                      }}
-                    >
-                      <HumanIcon decorative />
-                      {stepTurn.label}
-                    </Button>
-                  </Tip>
-                )}
-                {main !== null && (
-                  <Tip text={tipOf(main)}>
-                    <Button
-                      size="sm"
-                      disabled={busy}
-                      data-testid="main-action"
-                      onClick={() => begin(main)}
-                    >
-                      {actionContent(main)}
-                    </Button>
-                  </Tip>
-                )}
-                {moreActions.length + disabled.length > 0 && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        data-testid="more-actions"
-                      >
-                        {moreRunning === null ? (
-                          <>
-                            More
-                            <ChevronDown className="size-3.5" aria-hidden />
-                          </>
-                        ) : (
-                          <>
-                            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                            {workingLabel(moreRunning)}
-                          </>
-                        )}
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent data-testid="more-menu">
-                      {moreActions.map((action) => {
-                        const shown = actionPresentation(action, glob);
-                        return (
-                          <DropdownMenuItem
-                            key={action}
-                            data-testid={`more-${action}`}
-                            onSelect={() => begin(action)}
-                          >
-                            <span className="flex items-center gap-1.5 font-medium">
-                              <ActorIcon actor={shown.icon} decorative />
-                              {shown.label}
-                            </span>
-                            <span className="whitespace-pre-line text-xs text-muted-foreground">
-                              {tipOf(action)}
-                            </span>
-                          </DropdownMenuItem>
-                        );
-                      })}
-                      {disabled.map(({ action, label, icon, tip }) => (
-                        <DropdownMenuItem key={action} disabled>
-                          <span className="flex items-center gap-1.5 font-medium">
-                            <ActorIcon actor={icon} decorative />
-                            {label}
-                          </span>
-                          <span className="text-xs text-muted-foreground">{tip}</span>
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </div>
-              {confirmingReady && (
-                <div
-                  role="alert"
-                  className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-                >
-                  <span className="flex-1">
-                    No local review is recorded at the PR head: the change_reviewer and /finalise
-                    haven't run for {glob.pr?.headSha?.slice(0, 7) ?? 'the head'}. Mark it done
-                    anyway?
-                  </span>
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmingReady(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void markReady()}
-                    data-testid="confirm-ready"
-                  >
-                    Done
-                  </Button>
-                </div>
-              )}
-              {confirmingOversized !== null && (
-                <div
-                  role="alert"
-                  className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-                >
-                  <span className="flex-1" data-testid="oversized-start-says">
-                    {oversized &&
-                      "This glob is flagged oversized: it is probably more than one PR's worth of work. Split it, or start it as it is?"}
-                    {brief !== null && (
-                      <span data-testid="handover-confirmation">
-                        {' '}
-                        {handoverConfirmation(confirmingOversized, brief)}
-                      </span>
-                    )}
-                  </span>
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmingOversized(null)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={busy}
-                    data-testid="confirm-start-oversized"
-                    onClick={() =>
-                      void run(async () => {
-                        const action = confirmingOversized;
-                        setConfirmingOversized(null);
-                        await onAction(action);
-                      })
-                    }
-                  >
-                    {oversized ? 'Start as it is' : 'Continue'}
-                  </Button>
-                </div>
-              )}
-              {confirmingRetrigger && (
-                <div
-                  role="alert"
-                  className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-                >
-                  <span className="flex-1" data-testid="retrigger-says">
-                    Blocked by {chainTip(glob)}. A run now works without their changes.
-                  </span>
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmingRetrigger(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={busy}
-                    data-testid="confirm-retrigger"
-                    onClick={() =>
-                      void run(async () => {
-                        setConfirmingRetrigger(false);
-                        await onAction('retrigger', true);
-                      })
-                    }
-                  >
-                    Retry anyway
-                  </Button>
-                </div>
-              )}
-              {readyPending && (
-                <p role="status" className="text-xs text-muted-foreground">
-                  Asked GitHub to mark PR #{glob.pr.number} ready; the glob moves to PR open when
-                  GitHub confirms.
-                </p>
-              )}
-            </div>
-          )}
+          <GlobActions ctx={ctx} state={actionState} />
         </Anchor>
 
         <div className="grid gap-3">
@@ -1275,81 +775,7 @@ export const GlobDetail = ({
           </div>
         )}
 
-        <div
-          className="grid gap-2 rounded border border-destructive/50 p-3"
-          data-testid="reset-area"
-        >
-          <div className="text-xs font-medium text-destructive">Reset</div>
-          <div className="flex flex-wrap gap-2">
-            {resetActions.map((action) => (
-              <Tip key={action} text={tipOf(action)}>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  disabled={busy}
-                  data-testid={`reset-${action}`}
-                  onClick={() => begin(action)}
-                >
-                  {actionContent(action)}
-                </Button>
-              </Tip>
-            ))}
-            {!confirmDelete && (
-              <Button variant="danger" size="sm" onClick={() => setConfirmDelete(true)}>
-                Delete…
-              </Button>
-            )}
-          </div>
-          {confirmingAgain && (
-            <div
-              role="alert"
-              className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-            >
-              <span className="flex-1" data-testid="start-again-says">
-                {startAgainConfirmation(glob, board.baseBranch)}
-              </span>
-              <Button size="sm" variant="ghost" onClick={() => setConfirmingAgain(false)}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={busy}
-                data-testid="confirm-start-again"
-                onClick={() =>
-                  void run(async () => {
-                    setConfirmingAgain(false);
-                    await onAction('start_again');
-                  })
-                }
-              >
-                {actionPresentation('start_again', glob).label}
-              </Button>
-            </div>
-          )}
-          {confirmDelete && (
-            <div className="grid gap-2 rounded border border-destructive/50 p-3 text-sm">
-              <p>
-                <strong>Delete {glob.id} permanently?</strong> This removes the glob, its branch,
-                its PR, its artifacts and its events, so its time leaves the reports. There is no
-                archive.
-              </p>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" size="sm" onClick={() => setConfirmDelete(false)}>
-                  Keep it
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void run(onDelete)}
-                >
-                  Delete permanently
-                </Button>
-              </div>
-            </div>
-          )}
-        </div>
+        <GlobReset ctx={ctx} state={actionState} onDelete={onDelete} />
       </div>
     </article>
   );

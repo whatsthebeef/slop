@@ -1,5 +1,6 @@
 import * as http from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { createInterface } from 'node:readline/promises';
 import { isatty } from 'node:tty';
 import { openInBrowser } from './auth.js';
 import { defaultConfigSources, findGitRoot, loadSettings } from './config.js';
@@ -11,6 +12,16 @@ import { describeError } from './util.js';
 
 function log(message: string): void {
   process.stderr.write(message.endsWith('\n') ? message : `${message}\n`);
+}
+
+async function ask(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    // Ctrl-D closes the interface: answer with nothing, so the caller reports "not taken over".
+    return await Promise.race([rl.question(question), new Promise<string>((resolve) => rl.once('close', () => resolve('')))]);
+  } finally {
+    rl.close();
+  }
 }
 
 // Node's fetch ignores HTTPS_PROXY unless asked (Node 24.5+); sandboxes route through a proxy.
@@ -27,6 +38,7 @@ try {
     now: () => Date.now(),
     // Not process.stdin.isTTY: that is undefined at runtime (despite its type) for a pipe or file.
     canPrompt: isatty(0),
+    ask,
     openBrowser: openInBrowser,
     log,
     stdout: (text) => process.stdout.write(text),

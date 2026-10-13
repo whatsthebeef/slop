@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobView, NewGlob } from '@/lib/api';
-import { actionLabel, actionPresentation, presentedActions } from '@/lib/action-presentation';
+import { actionLabel, actionPresentation, haltedBy, presentedActions } from '@/lib/action-presentation';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { mergeOutcomeText, runCardAction } from '@/lib/card-pending';
@@ -70,18 +70,6 @@ const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
       .map((a) => make(a, 'right', 'doing'));
   }
   return [];
-};
-
-/** What an action would stop, so the board can ask first; empty when nothing is halted. */
-const haltedBy = (glob: GlobView, action: Action): string[] => {
-  const runLive = glob.currentRun !== null && glob.currentRun.state !== 'ended';
-  if (action === 'take_over') return runLive ? ['the machine run in progress'] : [];
-  if (action !== 'start_again') return [];
-  return [
-    ...(runLive ? ['the machine run in progress'] : []),
-    ...(glob.pr !== null ? [`PR #${glob.pr.number} (closed) and the ${glob.branch} branch (deleted)`] : []),
-    ...(glob.implementer !== null ? [`${glob.implementer} as implementer`] : []),
-  ];
 };
 
 /** A previewed move: its ghost piece shows in the target list where the card would land. */

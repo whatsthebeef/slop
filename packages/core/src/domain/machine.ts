@@ -748,7 +748,15 @@ export const pickUp = (
     return setEnvironment(new Builder(glob, ctx), environment).done();
   }
 
-  if (options.takeOver) {
+  // A queued or standby run holds nothing unpushed, so picking up supersedes it without a flag; an active one needs takeOver.
+  const run = currentRun(glob);
+  const idleRun =
+    run !== null &&
+    run.state !== 'active' &&
+    run.state !== 'ended' &&
+    glob.type !== 'super' &&
+    (glob.status === 'implementing' || glob.status === 'pr_open');
+  if (options.takeOver || idleRun) {
     // Row 10.
     if (!hasLiveRun(glob) || glob.type === 'super') {
       return invalidTransition(glob, actor, 'There is no routine run to pick up from');
@@ -767,7 +775,7 @@ export const pickUp = (
   }
 
   if (hasBusyRun(glob)) {
-    return runActive('A routine run is active or watching; pick up to supersede it');
+    return runActive('The machine is mid-run; unpushed work will be lost. Take over to supersede it');
   }
 
   const b = new Builder(glob, ctx);
@@ -1026,7 +1034,7 @@ export const conflictCleared = (
  * Resolve conflict (rows 16 and 20a): a conflicting PR nobody is implementing gets a routine run that merges the base
  * branch in, resolves the conflicts and pushes (the Claude GitHub App's workflow can't run git). A run on standby is
  * ended and replaced; a failed attempt can be tried again. A glob failed by a merge conflict goes back to review with
- * the conflict flagged. A human implementer resolves locally (`sstor --glob <id>`; others `sstor --glob <id> --take-over`).
+ * the conflict flagged. A human implementer resolves locally (`sstor --glob <id>`).
  */
 export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
