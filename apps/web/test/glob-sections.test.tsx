@@ -79,22 +79,42 @@ afterEach(() => {
 });
 
 describe('glob view: escalation, dependencies and edit fields', () => {
-  it('shows why the glob needs a person', () => {
-    renderGlob(
-      view({
-        escalation: {
-          at: '2026-10-13T00:00:00Z',
-          by: 'dev@example.com',
-          reason: 'Touches auth',
-          criterion: 'risk_area',
-        },
-      }),
-    );
+  /** The page's text without the screen-reader-only spans (the tooltip's description is read, never shown). */
+  const visibleText = () => {
+    const copy = document.body.cloneNode(true) as HTMLElement;
+    copy.querySelectorAll('.sr-only').forEach((el) => el.remove());
+    return copy.textContent;
+  };
+
+  const escalated = () =>
+    view({
+      escalation: {
+        at: '2026-10-13T00:00:00Z',
+        by: 'dev@example.com',
+        reason: 'Touches auth',
+        evidence: 'From the split of s1t0: files a.ts',
+        criterion: 'risk_area',
+      },
+    });
+
+  it('shows the escalation once, as a header chip, with the reason in the disclosure only', () => {
+    renderGlob(escalated());
+    expect(screen.getAllByTestId('escalation-chip')).toHaveLength(1);
     expect(screen.getByTestId('escalation-note').textContent).toContain('Touches auth');
+    expect(screen.getByTestId('escalation-note').textContent).toContain('From the split of s1t0');
+    expect(visibleText().split('Touches auth')).toHaveLength(2);
   });
 
-  it('leaves the escalation section empty without an escalation', () => {
+  it('keeps the chip text out of the visible and accessible text but names it for screen readers', () => {
+    renderGlob(escalated());
+    expect(screen.getByRole('img', { name: 'Needs a person' })).toBeTruthy();
+    expect(visibleText()).not.toMatch(/needs a ?:/i);
+    expect(screen.getByTestId('escalation-chip').getAttribute('aria-describedby')).not.toBeNull();
+  });
+
+  it('leaves the chip and the disclosure out without an escalation', () => {
     renderGlob(view());
+    expect(screen.queryByTestId('escalation-chip')).toBeNull();
     expect(screen.queryByTestId('escalation-note')).toBeNull();
   });
 
