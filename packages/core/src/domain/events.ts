@@ -104,7 +104,7 @@ export type Effect =
       readonly purpose?: 'investigate';
       /** An automatic retry of a watcher that gave up: the failed check it is asked to fix (name and first lines). */
       readonly failureSummary?: string;
-      /** Set for Start and Retrigger: the executor refuses to fire while prerequisites are unmerged (Start anyway doesn't set it). */
+      /** Set for Start and Retrigger: the executor refuses to fire while prerequisites are unmerged (Start now doesn't set it). */
       readonly checkPrerequisites?: true;
     }
   | { readonly kind: 'squash_merge'; readonly globId: string; readonly generation: number; readonly sha: string }

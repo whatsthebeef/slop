@@ -38,7 +38,7 @@ export interface Edge {
   readonly source: EdgeSource;
   readonly paths: readonly string[];
   readonly evidence?: string;
-  /** Set when a person chose Start anyway on it. */
+  /** Set when a person chose Start now on it. */
   readonly overridden?: true;
 }
 
@@ -108,7 +108,7 @@ export const pickUpWarning = (awaited: readonly AwaitedDependency[]): string | n
     : `${awaited.map((a) => a.id).join(', ')} hasn't merged yet; this branch lacks ${awaited.length === 1 ? 'its' : 'their'} changes`;
 
 /** What a glob waits for, in a form that reads in a refusal: "s15t7 to merge". */
-export const refusalText = (awaited: readonly AwaitedDependency[]): string => `${waitSummary(awaited)} (use Start anyway)`;
+export const refusalText = (awaited: readonly AwaitedDependency[]): string => `${waitSummary(awaited)} (use Start now)`;
 
 /** Checks the IDs a glob is to overlap: on this board, not itself, without repeats. An overlap needs no cycle check: it never blocks. */
 export const checkOverlaps = (
@@ -238,7 +238,7 @@ export const chainSummary = (chain: BlockingChain): string =>
 
 /** The refusal for starting a glob with a chain ahead of it: the whole chain with each glob's state. */
 export const chainRefusal = (chain: BlockingChain): string =>
-  `${chainSummary(chain)} (${chain.blockedBy.map((b) => `${b.id} ${b.status ?? 'deleted'}`).join(', ')}; use Start anyway)`;
+  `${chainSummary(chain)} (${chain.blockedBy.map((b) => `${b.id} ${b.status ?? 'deleted'}`).join(', ')}; use Start now)`;
 
 /** The note on a glob's card for an overlap: it may change the same files as `id`, so the later merge rebases. */
 export const overlapNote = (edge: Edge): string =>

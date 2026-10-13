@@ -222,7 +222,7 @@ export interface ImpliedAfter {
   readonly source?: EdgeSource;
   /** The run or event that set it, for learned edges. */
   readonly evidence?: string;
-  /** Set when a person chose Start anyway: kept for display, no longer holds. */
+  /** Set when a person chose Start now: kept for display, no longer holds. */
   readonly overridden?: true;
 }
 

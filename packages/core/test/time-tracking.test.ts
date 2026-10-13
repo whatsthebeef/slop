@@ -171,7 +171,7 @@ describe('the active glob', () => {
   it('switches attribution from the planner to the implementer at pick-up', () => {
     const events = [
       created('s1t3', BOB, at(MON, '08:00'), 'sub', 'task', 'planning'),
-      // Start anyway on the held sub, then Ana takes it over from the routine.
+      // Start now on the held sub, then Ana takes it over from the routine.
       moved('s1t3', BOB, at(MON, '10:00'), 'planning', 'implementing'),
       event('PickedUp', 's1t3', ANA, at(MON, '13:00'), { takeOver: true }),
       moved('s1t3', ANA, at(MON, '13:00'), 'implementing', 'in_progress'),
