@@ -410,7 +410,7 @@ export interface SplitPartInput {
   overlaps?: number[];
 }
 
-export type GlobChanges = Partial<Pick<Glob, 'title' | 'type' | 'category' | 'group' | 'environment' | 'after'>> & {
+export type GlobChanges = Partial<Pick<Glob, 'title' | 'type' | 'category' | 'group' | 'environment'>> & {
   /** A decision's scope, the only attribute a person edits. */
   attributes?: { scope: DecisionScope };
 };

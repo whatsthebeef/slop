@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router';
-import { Input, Label } from '@/components/ui/input';
 import { blockedLine, dependencySummary, isDismissible, statusWords } from '@/lib/status-line';
 import type { GlobViewContext } from './context';
 
@@ -27,29 +26,17 @@ const DismissEdge = ({ id, onDismiss }: { id: string; onDismiss: (edgeId: string
   </button>
 );
 
-/** What the glob waits for, overlaps with and is waited on by; the "waits for" list is editable until it has a branch. */
+/** What the glob waits for, overlaps with and is waited on by. Slop infers the edges; a person can only dismiss a wrong one. */
 export const DependenciesSection = ({
   ctx: { glob },
-  onEditAfter,
   onDismissEdge,
 }: {
   ctx: GlobViewContext;
-  /** The edited "waits for" glob IDs (goes into the view's draft). */
-  onEditAfter: (after: string[]) => void;
   /** The ✕ on a needs or overlaps row: the edge to this glob is not a dependency; resolves false when it failed. */
   onDismissEdge: (edgeId: string) => Promise<boolean>;
 }) => {
-  // The globs it waits for can change until it has a branch.
-  const canEditAfter =
-    glob.status === 'planning' && glob.provisioning === 'none' && glob.type !== 'super';
-  const [afterText, setAfterText] = useState((glob.after ?? []).join(', '));
   const [showChain, setShowChain] = useState(false);
-  useEffect(() => setAfterText((glob.after ?? []).join(', ')), [glob.id, glob.after]);
-  const summary = dependencySummary(glob);
-  const deps =
-    summary !== null || canEditAfter
-      ? (summary ?? { needs: [], alsoAhead: [], overlaps: [], waitedOnBy: [] })
-      : null;
+  const deps = dependencySummary(glob);
   if (deps === null) return null;
   return (
     <div className="grid gap-2 rounded border p-2 text-sm" data-testid="dependencies">
@@ -126,19 +113,6 @@ export const DependenciesSection = ({
             </span>
           ))}
         </div>
-      )}
-      {canEditAfter && (
-        <Label>
-          Waits for (glob IDs)
-          <Input
-            value={afterText}
-            placeholder="s15t7, s15b18"
-            onChange={(e) => {
-              setAfterText(e.target.value);
-              onEditAfter(e.target.value.split(/[\s,]+/).filter((id) => id !== ''));
-            }}
-          />
-        </Label>
       )}
       {(glob.blockedBy?.length ?? 0) > 0 && (
         <p className="text-xs text-muted-foreground">

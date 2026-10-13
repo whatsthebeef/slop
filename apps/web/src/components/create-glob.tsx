@@ -66,7 +66,6 @@ export const CreateGlobDialog = ({
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [afterText, setAfterText] = useState('');
   const restricted = board.role === 'qa' || board.role === 'po';
   const types = SLOP_TYPES.filter((t) => !(restricted && t === 'super'));
   const valid = isValidCombination(form.type, form.category) && form.title.trim() !== '';
@@ -91,8 +90,6 @@ export const CreateGlobDialog = ({
         ...(!restricted && proposal.type === 'super' ? { start: false } : {}),
         ...(proposal.files === undefined || proposal.files.length === 0 ? {} : { files: proposal.files }),
       });
-      // Only a suggestion: the person sees it in the field and may clear it.
-      if (proposal.suggestedAfter.length > 0) setAfterText(proposal.suggestedAfter.join(', '));
       setReason(proposal.autoTriggerReason);
       setInsight(proposal);
       setConfirmed(false);
@@ -125,13 +122,11 @@ export const CreateGlobDialog = ({
     setBusy(true);
     setError(null);
     try {
-      const after = afterText.split(/[\s,]+/).filter((id) => id !== '');
       const created = await onCreate({
         ...form,
         ...(fromInbox === undefined ? {} : { inboxItem: fromInbox.id, idempotencyKey: fromInbox.key }),
         // A blank group after intake means none; typed by hand with no request, it is left for slop to choose.
         ...((form.group ?? '').trim() === '' ? (insight === null ? { group: undefined } : { group: null }) : { group: form.group ?? null }),
-        ...(after.length === 0 ? {} : { after }),
         ...(insight === null
           ? {}
           : {
@@ -151,7 +146,6 @@ export const CreateGlobDialog = ({
       setStaged([]);
       setFileError(null);
       setForm(empty());
-      setAfterText('');
       setRequest('');
       setReason(null);
       setInsight(null);
@@ -270,17 +264,6 @@ export const CreateGlobDialog = ({
               {insight.examples
                 .map((e) => `${e.globId} (${e.type} ${e.category}${e.note === null ? '' : `, ${e.note}`})`)
                 .join('; ')}
-            </p>
-          )}
-          <Label>
-            Waits for (glob IDs, optional)
-            <Input value={afterText} onChange={(e) => setAfterText(e.target.value)} placeholder='s15t7, s15b18' />
-          </Label>
-          {afterText.trim() !== '' && (
-            <p className='text-xs text-muted-foreground'>
-              {form.type === 'sub'
-                ? 'The sub waits in Planning until these have merged, then starts on the new main.'
-                : 'Start is refused until these have merged.'}
             </p>
           )}
           {form.type === 'super' && (
