@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { Action } from '@slop/core';
 import { createElement } from 'react';
 import { ActorIcon } from '../src/components/actor-icons';
-import { actionPresentation } from '../src/lib/action-presentation';
+import { actionPresentation, presentedActions } from '../src/lib/action-presentation';
 import type { GlobView } from '../src/lib/api';
 import { glob } from '../../../packages/core/test/fixtures';
 
@@ -98,6 +98,12 @@ describe('actionPresentation', () => {
       icon: 'human',
       placement: 'more',
     });
+  });
+
+  it('offers one Pick up: take_over when both are allowed', () => {
+    expect(presentedActions(['start_again', 'pick_up', 'take_over'] as Action[])).toEqual(['start_again', 'take_over']);
+    expect(presentedActions(['pick_up', 'start'] as Action[])).toEqual(['pick_up', 'start']);
+    expect(presentedActions(['take_over'] as Action[])).toEqual(['take_over']);
   });
 
   it('names Discard by glob type', () => {
