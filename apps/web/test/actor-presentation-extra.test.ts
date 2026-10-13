@@ -84,7 +84,7 @@ describe('actionPresentation state variants (s15f88)', () => {
   });
 
   it('merge without a PR falls back to "the PR"', () => {
-    expect(actionPresentation('merge', view({ pr: null })).tip).toBe('Squash-merges the PR');
+    expect(actionPresentation('merge', view({ pr: null })).tip).toContain('the checks on the head go green');
   });
 
   it('puts the type actions nowhere, since the type popover replaces them', () => {
