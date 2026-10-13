@@ -43,6 +43,7 @@ const NOT_GENERATION_CHECKED: readonly EffectKind[] = [
   // The KB pipeline's jobs name a KB item; the executor re-checks the item itself.
   'kb_route',
   'kb_draft',
+  'suggest_decision',
   // Board-wide like the others above; the executor re-reads the board.
   'regenerate_knowledge_page',
   // Board-wide; the executor re-reads the board and its open agent-set glob.

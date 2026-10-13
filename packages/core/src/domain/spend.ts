@@ -27,6 +27,7 @@ export const LLM_SPEND_SOURCES = [
   'review',
   'kb_route',
   'kb_draft',
+  'suggest',
   'kb_consolidate',
   'findings',
   'intake',

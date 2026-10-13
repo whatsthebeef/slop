@@ -171,6 +171,8 @@ export interface AssessmentInput {
 export interface Assessment {
   readonly markdown: string;
   readonly suggested: SuggestedOutcome | null;
+  /** The flags the markdown lists, one sentence each. */
+  readonly flags: readonly string[];
 }
 
 const targetText = (item: LearningAssessmentFacts): string => {
@@ -239,5 +241,5 @@ export const assessmentOf = (input: AssessmentInput): Assessment => {
           ? 'Needs work: it contradicts existing knowledge or a broader decision.'
           : 'Reject: it appears to be covered already.',
   );
-  return { markdown: `${lines.join('\n')}\n`, suggested };
+  return { markdown: `${lines.join('\n')}\n`, suggested, flags };
 };
