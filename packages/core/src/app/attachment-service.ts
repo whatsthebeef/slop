@@ -198,6 +198,17 @@ export class AttachmentService {
     return 'expired';
   }
 
+  /**
+   * How long, in milliseconds, the glob's pending files can still arrive (until the last open link expires); 0 when none
+   * is waiting. A sub's first run waits this long for its files. Looks in storage first, so an arrived file doesn't hold it.
+   */
+  async pendingFor(globId: string): Promise<number> {
+    await this.refreshGlob(globId);
+    const pending = await this.deps.store.transaction((tx) => tx.listPendingFileArtifacts(globId));
+    const now = Date.parse(this.deps.clock.now());
+    return pending.reduce((wait, a) => Math.max(wait, a.file === undefined || a.file === null ? 0 : Date.parse(a.file.expiresAt) - now), 0);
+  }
+
   /** The fallback on a glob read: looks at the glob's pending files, so a lost storage event only delays detection. */
   async refreshGlob(globId: string): Promise<void> {
     const pending = await this.deps.store.transaction((tx) => tx.listPendingFileArtifacts(globId));

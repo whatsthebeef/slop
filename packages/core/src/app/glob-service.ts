@@ -80,36 +80,7 @@ export interface CreateGlobInput {
   readonly source?: SnapshotSource;
   /** An inbox item of the board to attach to the new glob in the same transaction; refused when it is another board's or discarded. */
   readonly inboxItem?: number;
-  /** Text or link attachments stored with the glob in the same transaction, as `attach` stores them; one bad item refuses the create. */
-  readonly attachments?: readonly NewGlobAttachment[];
 }
-
-/** An attachment sent with a new glob: text, a link or both, under a label. */
-export interface NewGlobAttachment {
-  readonly label: string;
-  readonly text?: string | null;
-  readonly link?: string | null;
-}
-
-export const MAX_CREATE_ATTACHMENTS = 10;
-export const MAX_ATTACHMENT_TEXT = 100_000;
-export const MAX_ATTACHMENTS_TOTAL_TEXT = 400_000;
-
-const validAttachments = (items: readonly NewGlobAttachment[]): Result<null> => {
-  if (items.length > MAX_CREATE_ATTACHMENTS) return invalidInput(`At most ${String(MAX_CREATE_ATTACHMENTS)} attachments`);
-  let total = 0;
-  for (const a of items) {
-    if (a.label.trim() === '') return invalidInput('An attachment needs a label');
-    const text = a.text ?? '';
-    const link = (a.link ?? '').trim();
-    if (text.trim() === '' && link === '') return invalidInput(`Attachment "${a.label}" needs text or a link`);
-    if (text.length > MAX_ATTACHMENT_TEXT) return invalidInput(`Attachment "${a.label}" is longer than ${String(MAX_ATTACHMENT_TEXT)} characters`);
-    if (link !== '' && !/^https?:\/\/\S+$/i.test(link)) return invalidInput(`Attachment "${a.label}" needs an http(s) link`);
-    total += text.length;
-  }
-  if (total > MAX_ATTACHMENTS_TOTAL_TEXT) return invalidInput(`Attachments are longer than ${String(MAX_ATTACHMENTS_TOTAL_TEXT)} characters in total`);
-  return ok(null);
-};
 
 /** One part of a split. Part 0 is the original glob (it keeps its ID); the others become new globs in its group. */
 export interface SplitPart {
@@ -323,8 +294,6 @@ export class GlobService {
   private async createWithItem(email: string, input: CreateGlobInput): Promise<Result<Glob>> {
     // Decisions come from knowledge proposals, the inbox and the backfill: never through the work form.
     if (input.category === 'decision') return invalidInput('A decision glob is created from a knowledge proposal or an inbox item, not directly');
-    const checkedAttachments = validAttachments(input.attachments ?? []);
-    if (!checkedAttachments.ok) return checkedAttachments;
     // A glob about to start waits for open globs that may change the same exclusive paths (read before the transaction:
     // it asks the code host).
     let holds: readonly ImpliedAfter[] = [];
@@ -426,19 +395,6 @@ export class GlobService {
           by: 'sessionator',
         });
       }
-      // Before the run effect is drained, so the first get_context has them.
-      for (const a of input.attachments ?? []) {
-        await addArtifact(tx, this.deps.clock, glob, email, {
-          kind: 'attachment',
-          label: a.label.trim(),
-          content: a.text ?? '',
-          link: (a.link ?? '').trim() === '' ? null : (a.link ?? '').trim(),
-          commitSha: null,
-          runId: null,
-          agentSetVersion: null,
-          reviewStats: null,
-        });
-      }
       // Attached last, so the item is in the glob's context from the start; a racing write throws and rolls the glob back too.
       if (item !== null) await linkInboxItem(tx, this.deps.clock, email, board.id, item, [glob]);
       return ok({ ...transition.value, glob, changed: true });
@@ -446,7 +402,7 @@ export class GlobService {
     if (!result.ok) return result;
     if (result.value.changed) {
       this.publish(result.value.glob);
-      if (input.inboxItem !== undefined || (input.attachments ?? []).length > 0) {
+      if (input.inboxItem !== undefined) {
         this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: input.boardId, globId: result.value.glob.id });
         this.deps.notifier.publish({ kind: 'board.inbox', boardId: input.boardId });
       }

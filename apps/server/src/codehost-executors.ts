@@ -11,6 +11,9 @@ import { conflictCommentBody, conflictCommentMarker } from './conflict-comment.j
 /** How long a cancelled check run may wait for a newer run on the same head before it is re-requested. */
 const CANCELLED_CHECK_WAIT_MS = 5 * 60_000;
 
+/** How often a run held for pending files looks again. */
+const FILES_POLL_MS = 15_000;
+
 /** The HTTP status of a code host error (Octokit's `status`), when it has one. */
 const httpStatus = (error: unknown): number | null =>
   typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number' ? error.status : null;
@@ -32,6 +35,8 @@ export const codeHostExecutors = (
   log: (task: string, message: string) => void = () => undefined,
   /** File attachments' storage; without it (no bucket configured) no `delete_object` effect is ever queued. */
   objects: Pick<ObjectStore, 'delete'> | null = null,
+  /** Milliseconds the glob's pending file uploads can still arrive (0: none); a run waits for them. Absent: file attachments are off. */
+  pendingFiles: ((globId: string) => Promise<number>) | null = null,
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -455,6 +460,9 @@ export const codeHostExecutors = (
           return 'done';
         }
       }
+      // A run waits for the files its glob was created with (until their links expire), so its first context has them.
+      const filesWait = pendingFiles === null ? 0 : await pendingFiles(glob.id);
+      if (filesWait > 0) return { state: 'pending', retryAfterMs: Math.min(filesWait, FILES_POLL_MS), reason: 'Waiting for uploaded files' };
       // A routine works on the glob's branch, so it is only fired once that exists. An investigate-only run works on the
       // base branch of a glob in Planning, which has no branch yet.
       if (effect.purpose !== 'investigate' && glob.provisioning !== 'ok') throw new Error(`${glob.id} is not provisioned yet`);
