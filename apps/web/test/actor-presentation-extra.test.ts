@@ -20,7 +20,7 @@ const card = (g: GlobView, moves: readonly CardMove[] = []) =>
       createElement(GlobCard, {
         glob: g,
         onOpen: noop,
-        onOpenArtifact: noop,
+        onOpenSection: noop,
         onReviewLabel: noop as never,
         moves,
         previewing: null,
@@ -160,8 +160,10 @@ describe('escalation chip (s15f88)', () => {
     );
     expect(html).toContain('data-testid="escalation-chip"');
     expect(html).toMatch(
-      /<span id="[^"]+" class="sr-only">Needs a person: touches billing<\/span>/,
+      /<span id="[^"]+" class="sr-only">Needs a person: touches billing\. Opens the reason<\/span>/,
     );
+    // The chip opens the escalation section (s15f97), so it is a button named by its label.
+    expect(html).toMatch(/<button[^>]*aria-label="Needs a person"[^>]*data-testid="escalation-chip"/);
     expect(html.split('Needs a person: touches billing')).toHaveLength(2);
     expect(html).toMatch(
       /<span aria-hidden="true" class="inline-flex items-center gap-1">needs a <svg[^>]*aria-hidden="true"/,
