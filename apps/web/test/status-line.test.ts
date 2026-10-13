@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { activityLabel, statusLine, viewStatusLine, waitingFor } from '../src/lib/status-line';
+import { activityLabel, blockedLine, blockedParts, statusLine, viewStatusLine, waitingFor } from '../src/lib/status-line';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -230,5 +230,41 @@ describe('investigate runs', () => {
     expect(activityLabel(view({ currentRun: run({ state: 'active' }) }), NOW)?.kind).toBe('working');
     expect(activityLabel(view({ currentRun: run({ state: 'queued' }) }), NOW)?.kind).toBe('queued');
     expect(statusLine(view({ currentRun: run({ state: 'ended', outcome: 'failed', failureReason: 'x' }) }), NOW)?.kind).not.toBe('investigation-failed');
+  });
+});
+
+describe('blocked line', () => {
+  const ahead = (ids: string[], nextStartable: string | null = null) =>
+    view({
+      blockedBy: ids.map((id, i) => ({ id, state: 'open' as const, status: 'implementing' as const, depth: i + 1 })),
+      nextStartable,
+    });
+
+  it('names one or two blockers', () => {
+    expect(blockedLine(ahead(['s1t1']))).toBe('blocked by s1t1');
+    expect(blockedLine(ahead(['s1t1', 's1t2']))).toBe('blocked by s1t1, s1t2');
+  });
+
+  it('folds three or more into two names and a count', () => {
+    expect(blockedLine(ahead(['s1t1', 's1t2', 's1t3', 's1t4']))).toBe('blocked by s1t1, s1t2 +2');
+  });
+
+  it('lists direct prerequisites before transitive ones', () => {
+    const g = view({
+      blockedBy: [
+        { id: 's1t3', state: 'open', status: 'implementing', depth: 2 },
+        { id: 's1t1', state: 'open', status: 'implementing', depth: 1 },
+      ],
+    });
+    expect(blockedParts(g)?.ids).toEqual(['s1t1', 's1t3']);
+  });
+
+  it('appends the glob to start next unless it is already named', () => {
+    expect(blockedLine(ahead(['s1t1', 's1t2', 's1t3'], 's1t3'))).toBe('blocked by s1t1, s1t2, s1t3');
+    expect(blockedLine(ahead(['s1t1', 's1t2', 's1t3', 's1t4'], 's1t4'))).toBe('blocked by s1t1, s1t2 +2 · next: s1t4');
+  });
+
+  it('is null with nothing ahead', () => {
+    expect(blockedLine(view())).toBeNull();
   });
 });
