@@ -517,7 +517,7 @@ export const GlobDetail = ({
               {confirmingRetrigger && (
                 <div role='alert' className='flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs'>
                   <span className='flex-1' data-testid='retrigger-says'>
-                    {blockedLine(glob)}: {chainTip(glob)}. A run now works without their changes.
+                    Blocked by {chainTip(glob)}. A run now works without their changes.
                   </span>
                   <Button size='sm' variant='ghost' onClick={() => setConfirmingRetrigger(false)}>
                     Cancel

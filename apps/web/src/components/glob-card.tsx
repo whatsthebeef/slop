@@ -6,7 +6,7 @@ import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
-import { activityLabel, blockedLine, chainTip, statusLine } from '@/lib/status-line';
+import { activityLabel, blockedParts, chainTip, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
@@ -283,17 +283,43 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
   );
 };
 
+/** Glob IDs as comma-separated links that open that glob on the board without opening the card they sit on. */
+const GlobLinks = ({ boardId, ids }: { boardId: number; ids: readonly string[] }) => (
+  <>
+    {ids.map((id, i) => (
+      <span key={id}>
+        {i > 0 && ', '}
+        <Link
+          to={`/boards/${boardId}?glob=${encodeURIComponent(id)}`}
+          className='underline-offset-2 hover:underline'
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {id}
+        </Link>
+      </span>
+    ))}
+  </>
+);
+
 /**
  * A glob held for others to merge: "waits for s15t7", or the reason when the board's merge policy held it. Each ID opens
  * that glob on the board.
  */
 export const AfterChip = ({ glob }: { glob: GlobView }) => {
-  const blocked = blockedLine(glob);
+  const blocked = blockedParts(glob);
   if (blocked !== null) {
     return (
       <Tip text={`Waits for, in order: ${chainTip(glob)}`}>
         <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
-          {blocked}
+          blocked by <GlobLinks boardId={glob.boardId} ids={blocked.ids} />
+          {blocked.more > 0 && ` +${String(blocked.more)}`}
+          {blocked.next !== null && (
+            <>
+              {' · next: '}
+              <GlobLinks boardId={glob.boardId} ids={[blocked.next]} />
+            </>
+          )}
         </span>
       </Tip>
     );
@@ -307,20 +333,7 @@ export const AfterChip = ({ glob }: { glob: GlobView }) => {
   return (
     <Tip text={reason === '' ? `Waits for ${ids.join(', ')} to merge` : `Waits for ${reason}`}>
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
-        waits for{' '}
-        {ids.map((id, i) => (
-          <span key={id}>
-            {i > 0 && ', '}
-            <Link
-              to={`/boards/${glob.boardId}?glob=${encodeURIComponent(id)}`}
-              className='underline-offset-2 hover:underline'
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => e.stopPropagation()}
-            >
-              {id}
-            </Link>
-          </span>
-        ))}
+        waits for <GlobLinks boardId={glob.boardId} ids={ids} />
       </span>
     </Tip>
   );
