@@ -46,6 +46,8 @@ const NOT_GENERATION_CHECKED: readonly EffectKind[] = [
   'kb_route',
   'kb_draft',
   'suggest_decision',
+  // The rollout job reads the merge it was queued for; a backfill queues it for globs merged long ago.
+  'write_rollout_steps',
   // Board-wide like the others above; the executor re-reads the board.
   'regenerate_knowledge_page',
   // Board-wide; the executor re-reads the board and its open agent-set glob.
