@@ -17,7 +17,7 @@ describe('actionTiers', () => {
     expect(actionTiers(['start_again']).get('start_again')).toBe('destructive');
   });
 
-  it('prefers Merge over Mark done (PR ready)', () => {
+  it('prefers Merge over Done', () => {
     expect(actionTiers(['mark_ready', 'merge']).get('merge')).toBe('primary');
   });
 });

@@ -13,9 +13,10 @@ import type { CardMove } from '@/components/glob-card';
 import type { BoardShellContext } from '@/components/board-shell';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
-import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
+import { ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobView, NewGlob } from '@/lib/api';
-import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
+import { actionLabel, actionPresentation } from '@/lib/action-presentation';
+import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { runCardAction } from '@/lib/card-pending';
 import type { CardPending } from '@/lib/card-pending';
@@ -41,17 +42,9 @@ const LIST_TITLES: Record<List, string> = {
 
 type Direction = 'left' | 'right';
 
-const MOVE_DESCRIPTIONS: Partial<Record<Action, string>> = {
-  start: 'a routine implements it',
-  start_anyway: 'a routine implements it, ahead of what holds it',
-  pick_up: 'you implement it in your own session',
-  take_over: 'you take it over from the routine',
-  retrigger: 'a routine runs it again',
-};
-
 /**
  * The moves a glob can make, each a state-machine action it allows: right takes a glob from
- * Planning into Doing. Start again isn't a card move (it is in the glob view). Leaving Doing happens through the merge and signing off
+ * Planning into Doing. Discard isn't a card move (it is in the glob view). Leaving Doing happens through the merge and signing off
  * through labels, so those lists have no moves.
  */
 const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
@@ -59,16 +52,15 @@ const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
   if (glob.provisioning === 'pending') return [];
   const allowed = glob.allowedActions ?? [];
   const make = (action: Action, direction: Direction, target: List) => {
-    const name = actionLabel(action, glob.type, ACTION_LABELS, glob.status);
+    const { label: name, tip, icon } = actionPresentation(action, glob);
     return {
       target,
       move: {
         action,
         direction,
         label: direction === 'right' ? `${name} ▸` : `◂ ${name}`,
-        description: `${name} ${glob.id}: ${
-          action === 'pick_up' && glob.type === 'super' ? 'you pair on it with the product owner' : (MOVE_DESCRIPTIONS[action] ?? LIST_TITLES[target])
-        }`,
+        description: `${name} ${glob.id}: ${tip}`,
+        icon,
       },
     };
   };
@@ -83,10 +75,10 @@ const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
 /** What an action would stop, so the board can ask first; empty when nothing is halted. */
 const haltedBy = (glob: GlobView, action: Action): string[] => {
   const runLive = glob.currentRun !== null && glob.currentRun.state !== 'ended';
-  if (action === 'take_over') return runLive ? ['the routine run in progress'] : [];
+  if (action === 'take_over') return runLive ? ['the machine run in progress'] : [];
   if (action !== 'start_again') return [];
   return [
-    ...(runLive ? ['the routine run in progress'] : []),
+    ...(runLive ? ['the machine run in progress'] : []),
     ...(glob.pr !== null ? [`PR #${glob.pr.number} (closed) and the ${glob.branch} branch (deleted)`] : []),
     ...(glob.implementer !== null ? [`${glob.implementer} as implementer`] : []),
   ];
@@ -131,7 +123,7 @@ const Column = ({
       // A moved card lands at the top: lists show the most recently changed first.
       <div className='ghost-piece flex flex-col gap-1 px-3 py-2.5' aria-hidden data-testid='ghost-piece'>
         <span className='font-mono text-[10px] font-semibold tracking-wider text-signal-strong uppercase'>
-          Lands here · {actionLabel(ghost.move.action, ghost.glob.type, ACTION_LABELS)}
+          Lands here · {actionLabel(ghost.move.action, ghost.glob)}
         </span>
         <span className='text-sm font-medium opacity-55'>
           <span className='font-mono text-xs'>{ghost.glob.id}</span> · {ghost.glob.title}
@@ -454,6 +446,7 @@ export const BoardPage = () => {
   // A rejected or closed decision (archived) never shows.
   const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters));
   const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
+  const haltLabel = haltConfirm === null ? '' : actionLabel(haltConfirm.action, haltConfirm.glob);
 
   return (
     <div className='flex h-full flex-col' data-testid='board' data-live={live}>
@@ -555,7 +548,7 @@ export const BoardPage = () => {
       {haltConfirm !== null && (
         <Dialog open onOpenChange={(o) => !o && setHaltConfirm(null)}>
           <DialogContent
-            title={`${actionLabel(haltConfirm.action, haltConfirm.glob.type, ACTION_LABELS)}: move ${haltConfirm.glob.id} to ${LIST_TITLES[haltConfirm.target]}?`}
+            title={`${haltLabel}: move ${haltConfirm.glob.id} to ${LIST_TITLES[haltConfirm.target]}?`}
             className='max-w-sm'
           >
             {haltConfirm.action === 'start_again' && (
@@ -581,7 +574,7 @@ export const BoardPage = () => {
                   void commit(haltConfirm.glob, haltConfirm.action);
                 }}
               >
-                {actionLabel(haltConfirm.action, haltConfirm.glob.type, ACTION_LABELS)}
+                {haltLabel}
               </Button>
             </div>
           </DialogContent>

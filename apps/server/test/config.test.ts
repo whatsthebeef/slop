@@ -77,4 +77,9 @@ describe('AUTH_MODE', () => {
     };
     expect(loadConfig(env).AUTH_MODE).toBe('cognito');
   });
+
+  it('defaults the independent reviewer to Sonnet 5.5, which the spend table prices', () => {
+    expect(loadConfig({}).REVIEW_MODEL).toBe('global.anthropic.claude-sonnet-5-5');
+    expect(loadConfig({ REVIEW_MODEL: 'amazon.nova-pro-v1:0' }).REVIEW_MODEL).toBe('amazon.nova-pro-v1:0');
+  });
 });

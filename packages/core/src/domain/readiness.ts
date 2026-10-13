@@ -241,21 +241,13 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     facts.claudeWorkflow === null
       ? item('claude_workflow', claudeTitle, 'unknown', "slop can't read the repo yet", null)
       : facts.claudeWorkflow
-        ? facts.slopBot !== null && facts.claudeAllowsSlop === false
-          ? item(
-              'claude_workflow',
-              claudeTitle,
-              'missing',
-              `A workflow runs ${CLAUDE_ACTION}, but it ignores slop's @claude comments (merge-conflict requests) because slop's App is not allowed to trigger it. Add this under \`with:\`: allowed_bots: "${facts.slopBot}"`,
-              null,
-            )
-          : item(
-              'claude_workflow',
-              claudeTitle,
-              'ok',
-              `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so @claude comments get a response (it also needs the Claude GitHub App)`,
-              null,
-            )
+        ? item(
+            'claude_workflow',
+            claudeTitle,
+            'ok',
+            `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so people's @claude mentions get a response (it also needs the Claude GitHub App). Conflict fixes run as routines and don't depend on it`,
+            null,
+          )
         : item('claude_workflow', claudeTitle, 'missing', claudeWorkflowFix(repo), {
             kind: 'link',
             label: 'Add the workflow',
@@ -534,14 +526,11 @@ export const unreactedCheckFailures = (
       url: g.headChecks?.failure?.url ?? null,
     }));
 
-/** How long after asking the Claude GitHub App to resolve a conflict the card suggests resolving it locally. */
-const CONFLICT_FIX_MINUTES = 15;
-
 /**
  * A conflict flagged on an open PR. A human implementer resolves it locally from the start; for the rest the card
- * suggests that once the Claude GitHub App was asked and the PR still conflicts after a while.
+ * suggests that once a Resolve conflict run gave up and the PR still conflicts.
  */
-export const conflictHint = (glob: Glob, now: string): string | null => {
+export const conflictHint = (glob: Glob): string | null => {
   const conflict = glob.conflict;
   if (conflict == null) return null;
   const shown = conflict.files.slice(0, 5).join(', ');
@@ -549,10 +538,10 @@ export const conflictHint = (glob: Glob, now: string): string | null => {
   const files = conflict.files.length === 0 ? '' : `: ${shown}${more}`;
   const cause = conflict.since === null ? '' : ` since ${conflict.since} merged`;
   const hint = `Conflicts with ${conflict.base}${cause}${files}`;
-  const waited =
-    conflict.requestedAt !== undefined &&
-    (Date.parse(now) - Date.parse(conflict.requestedAt)) / 60_000 >= CONFLICT_FIX_MINUTES;
-  return glob.implementer !== null || waited
+  const run = glob.runs.at(-1);
+  const gaveUp =
+    run?.purpose === 'resolve_conflict' && run.state === 'ended' && run.outcome === 'failed';
+  return glob.implementer !== null || gaveUp
     ? `${hint}. Resolve locally: sstor --glob ${glob.id} --take-over`
     : hint;
 };
@@ -593,7 +582,7 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
     const fix = routineFailureFix(glob.failure.reason);
     if (fix !== null) return fix.fix;
   }
-  const conflict = conflictHint(glob, now);
+  const conflict = conflictHint(glob);
   if (conflict !== null) return conflict;
   const unreacted = minutesUnreacted(glob, now);
   if (unreacted !== null && unreacted >= STUCK_MINUTES) {

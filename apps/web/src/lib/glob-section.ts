@@ -1,3 +1,6 @@
+import { LABEL_NAMES } from '@slop/core';
+import type { LabelName } from '@slop/core';
+
 /** The parts of a glob's page a link can open it at (`?section=<name>`). */
 export const GLOB_SECTIONS = [
   'plan',
@@ -45,6 +48,12 @@ export const parseGlobTarget = (search: URLSearchParams): ParsedGlobTarget => {
     artifact: nonEmpty(search.get('artifact')),
     label: nonEmpty(search.get('label')),
   };
+};
+
+/** The sign-off label a link asks to open: `?section=labels&label=CR` with no artifact; an unknown label is null. */
+export const labelToOpen = (target: ParsedGlobTarget): LabelName | null => {
+  if (target.section !== 'labels' || target.artifact !== null || target.label === null) return null;
+  return LABEL_NAMES.find((name) => name === target.label) ?? null;
 };
 
 /** The query string for a target, with a leading `?`, or '' when it has nothing to say. */
