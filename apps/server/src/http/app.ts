@@ -128,6 +128,11 @@ export const createGlobSchema = z.object({
   plan: z.string().optional(),
   /** An inbox item of the board to attach to the new glob in the same transaction. */
   inboxItem: z.number().int().positive().optional(),
+  /** Text or link attachments stored with the glob in the same transaction. */
+  attachments: z
+    .array(z.object({ label: z.string().min(1), text: z.string().max(100_000).optional(), link: z.url().optional() }))
+    .max(10)
+    .optional(),
   /** IDs of globs on the board this one needs: their code must be on main first, so the glob waits for them to merge. */
   needs: z.array(z.string().min(1)).max(20).optional(),
   /** Alias of `needs`. */
