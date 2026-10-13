@@ -8,7 +8,7 @@ import { MarkdownView } from '@/components/markdown-view';
 import { useToast } from '@/toast';
 
 /** plan.md for a glob: what the implementer works from. Every save is a new version. */
-export const PlanEditor = ({ globId, summary }: { globId: string; summary: string }) => {
+export const PlanEditor = ({ globId, summary, onHistory }: { globId: string; summary: string; onHistory?: () => void }) => {
   const client = useQueryClient();
   const toast = useToast();
   const plan = useQuery({ queryKey: ['plan', globId], queryFn: () => api.plan(globId) });
@@ -18,7 +18,12 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
   // The saved content the draft started from: live updates refetch the plan, and a change
   // underneath a draft is flagged rather than allowed to wipe it.
   const [base, setBase] = useState<string | null>(null);
-  useEffect(() => setDraft(null), [globId]);
+  // Always opens in preview; Edit switches to the editor, Save or Discard returns to preview.
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    setDraft(null);
+    setEditing(false);
+  }, [globId]);
   const changedUnderneath = draft !== null && saved !== base;
 
   const edit = (text: string) => {
@@ -30,6 +35,7 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
     mutationFn: (content: string) => api.savePlan(globId, content),
     onSuccess: () => {
       setDraft(null);
+      setEditing(false);
       void client.invalidateQueries({ queryKey: ['plan', globId] });
     },
     onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not save the plan'),
@@ -41,7 +47,10 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
     const ok = await copyOrSelect(value, navigator.clipboard, () => area.current?.select());
     toast(ok ? 'Copied' : 'Could not copy; the text is selected, press Ctrl+C');
   };
-  const [preview, setPreview] = useState(false);
+  const discard = () => {
+    setDraft(null);
+    setEditing(false);
+  };
   const dirty = draft !== null && draft !== planBaseline(saved, summary);
   return (
     <div className='grid gap-2'>
@@ -49,16 +58,23 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
         <span className='font-semibold'>plan.md</span>
         <span className='flex items-center gap-2'>
           <span data-testid='plan-version'>{planVersionLine(current, dirty)}</span>
-          <Button variant='ghost' size='sm' onClick={() => setPreview(!preview)}>
-            {preview ? 'Edit' : 'Preview'}
+          {onHistory !== undefined && current !== null && (
+            <Button variant='ghost' size='sm' onClick={onHistory} data-testid='plan-history'>
+              v{current.version} · history
+            </Button>
+          )}
+          <Button variant='ghost' size='sm' onClick={() => (editing ? discard() : setEditing(true))}>
+            {editing ? 'Preview' : 'Edit'}
           </Button>
           <Button variant='ghost' size='sm' onClick={() => void copy()}>
             Copy
           </Button>
         </span>
       </div>
-      {preview ? (
-        <MarkdownView content={value} />
+      {!editing ? (
+        <div onDoubleClick={() => setEditing(true)}>
+          <MarkdownView content={value} />
+        </div>
       ) : (
         <Textarea
           ref={area}
@@ -83,7 +99,7 @@ export const PlanEditor = ({ globId, summary }: { globId: string; summary: strin
       )}
       {dirty && (
         <div className='flex justify-end gap-2'>
-          <Button variant='outline' size='sm' onClick={() => setDraft(null)}>
+          <Button variant='outline' size='sm' onClick={discard}>
             Discard
           </Button>
           <Button size='sm' disabled={save.isPending} onClick={() => save.mutate(draft)}>
