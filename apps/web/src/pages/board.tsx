@@ -486,6 +486,10 @@ export const BoardPage = () => {
                       glob={glob}
                       onOpen={() => openGlob(glob.id)}
                       onOpenSection={(target) => openGlob(glob.id, target)}
+                      onFilterGroup={(name) => {
+                        setFilters({ ...filters, group: name });
+                        setFilterOpen(true);
+                      }}
                       onReviewLabel={reviewLabel(glob)}
                       moves={moves.map((m) => m.move)}
                       pending={pending[glob.id]}
