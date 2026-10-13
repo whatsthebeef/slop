@@ -1026,6 +1026,9 @@ export const conflictCleared = (
     by,
     kind,
   });
+  // The fix is pushed and nothing is left for the run: it now watches the PR's checks like any run on a ready PR.
+  if (run?.purpose === 'resolve_conflict' && run.state === 'active' && glob.status === 'pr_open')
+    b.updateRun({ state: 'watching', lastProgressAt: ctx.now });
   if (backToReview(glob) && glob.pr?.headSha != null) returnToReview(b, glob.pr.headSha);
   return b.done();
 };
@@ -1932,9 +1935,13 @@ export const runProgress = (glob: Glob, runId: string, ctx: Context): Result<Tra
   if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
   return new Builder(glob, ctx)
     .updateRun({
-      // A run retried on a ready PR watches it; there is no PR to mark ready.
+      // A run retried on a ready PR watches it; there is no PR to mark ready. A conflict-fix run has work to do first.
       state:
-        run.state === 'queued' ? (glob.status === 'pr_open' ? 'watching' : 'active') : run.state,
+        run.state === 'queued'
+          ? glob.status === 'pr_open' && run.purpose !== 'resolve_conflict'
+            ? 'watching'
+            : 'active'
+          : run.state,
       startedAt: run.startedAt ?? ctx.now,
       lastProgressAt: ctx.now,
     })
