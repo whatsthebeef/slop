@@ -196,6 +196,15 @@ export const hasWorkingRun = (glob: Glob): boolean => {
   return run !== null && (run.state === 'queued' || run.state === 'active');
 };
 
+/**
+ * A conflict-fixing run that has not ended. Its first call to slop on a PR that is ready moves it to `watching`, which
+ * is not "working", so without this check a second Fix conflict supersedes it seconds after it starts.
+ */
+export const hasConflictFixRun = (glob: Glob): boolean => {
+  const run = currentRun(glob);
+  return run !== null && run.purpose === 'resolve_conflict' && run.state !== 'ended';
+};
+
 /** Any run that has not ended, including one still queued. */
 export const hasLiveRun = (glob: Glob): boolean => {
   const run = currentRun(glob);
@@ -868,6 +877,7 @@ const canRequestConflictFix = (glob: Glob): boolean =>
   glob.type !== 'super' &&
   glob.implementer === null &&
   !hasWorkingRun(glob) &&
+  !hasConflictFixRun(glob) &&
   ((hasOpenPr(glob) && glob.conflict != null) ||
     (glob.status === 'failed' &&
       glob.failure?.conflict !== undefined &&
@@ -978,7 +988,9 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
       'A glob with a human implementer resolves its conflict locally',
     );
   }
-  if (hasWorkingRun(glob)) return runActive('A routine run is already queued or working');
+  if (hasWorkingRun(glob) || hasConflictFixRun(glob)) {
+    return runActive('Already fixing the conflict: the run merges the latest base branch');
+  }
   if (!canRequestConflictFix(glob)) {
     return invalidTransition(
       glob,

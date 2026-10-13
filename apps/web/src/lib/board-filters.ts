@@ -1,4 +1,5 @@
-import type { Category } from '@slop/core';
+import { HUMAN_STEP_KINDS, isOpenStep, stepsForViewer, yourTurn } from '@slop/core';
+import type { Category, HumanStepKind, HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 
 /** A filter's value is always its URL text, so reading, writing and matching share one form (chips hold comma-joined options). */
@@ -18,7 +19,7 @@ interface FilterBase {
   /** Cleans a raw value (from the URL or the control); empty means the filter is off. */
   normalize: (raw: string) => string;
   /** True when the glob passes, given a non-empty normalised value. */
-  matches: (glob: GlobView, value: string) => boolean;
+  matches: (glob: GlobView, value: string, viewer?: HumanStepViewer) => boolean;
 }
 
 /** Toggle chips; none selected means all. */
@@ -32,7 +33,13 @@ interface TextFilter extends FilterBase {
   placeholder: string;
 }
 
-export type BoardFilter = ChipsFilter | TextFilter;
+/** One toggle chip, plus a select of kinds while it is on: the value is `all` or a step kind. */
+interface StepsFilter extends FilterBase {
+  control: 'steps';
+  kinds: readonly HumanStepKind[];
+}
+
+export type BoardFilter = ChipsFilter | TextFilter | StepsFilter;
 
 /** Splits a comma or space separated list, dropping empties. */
 const tokens = (raw: string): string[] => raw.split(/[\s,]+/).filter((t) => t !== '');
@@ -51,6 +58,31 @@ export const BOARD_FILTERS: BoardFilter[] = [
     // Kept in the options' order and without repeats, so equal selections give equal URLs.
     normalize: (raw) => CATEGORIES.filter((c) => tokens(raw.toLowerCase()).includes(c)).join(','),
     matches: (glob, value) => tokens(value).includes(glob.category),
+  },
+  {
+    key: 'yourTurn',
+    label: 'Your turn',
+    hideLabel: true,
+    control: 'chips',
+    options: [{ value: '1', label: 'Your turn' }],
+    normalize: (raw) => (tokens(raw).includes('1') ? '1' : ''),
+    // Without a viewer (not loaded yet) nothing is known to be theirs, so nothing passes.
+    matches: (glob, _value, viewer) =>
+      viewer !== undefined && yourTurn(glob.humanSteps ?? [], glob, viewer) !== null,
+  },
+  {
+    key: 'human',
+    label: 'Human steps',
+    hideLabel: true,
+    control: 'steps',
+    kinds: HUMAN_STEP_KINDS,
+    normalize: (raw) => {
+      const v = raw.trim().toLowerCase();
+      return v === 'all' || (HUMAN_STEP_KINDS as readonly string[]).includes(v) ? v : '';
+    },
+    // Any open step (pending or due, for anyone), optionally of one kind.
+    matches: (glob, value) =>
+      (glob.humanSteps ?? []).some((s) => isOpenStep(s) && (value === 'all' || s.kind === value)),
   },
   {
     key: 'id',
@@ -109,10 +141,10 @@ export const activeCount = (values: FilterValues): number =>
   BOARD_FILTERS.filter((f) => f.normalize(values[f.key] ?? '') !== (f.defaultValue ?? '')).length;
 
 /** True when the glob passes every active filter; with none active, every glob does. */
-export const matchesFilters = (glob: GlobView, values: FilterValues): boolean =>
+export const matchesFilters = (glob: GlobView, values: FilterValues, viewer?: HumanStepViewer): boolean =>
   BOARD_FILTERS.every((f) => {
     const value = f.normalize(values[f.key] ?? '');
-    return value === '' || f.matches(glob, value);
+    return value === '' || f.matches(glob, value, viewer);
   });
 
 /** A chips value with the option switched on or off. */
@@ -122,5 +154,12 @@ export const toggleOption = (filter: BoardFilter, raw: string, option: string): 
     (on.includes(option) ? on.filter((o) => o !== option) : [...on, option]).join(','),
   );
 };
+
+/** The due steps on these globs that are the viewer's to do: the tab bar's 🧠 count. */
+export const yourTurnCount = (globs: readonly GlobView[], viewer: HumanStepViewer): number =>
+  globs.reduce(
+    (n, g) => n + stepsForViewer((g.humanSteps ?? []).filter((s) => s.state === 'due'), g, viewer).length,
+    0,
+  );
 
 export const selectedOptions = (raw: string): string[] => tokens(raw);

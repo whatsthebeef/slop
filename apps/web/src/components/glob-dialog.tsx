@@ -24,6 +24,13 @@ import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action
 import type { PendingAction } from '@/lib/pending-action';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
 import { startAgainConfirmation } from '@/lib/start-again';
+import {
+  handoverConfirmation,
+  handoverOneLine,
+  handoverToShow,
+  readHandoverAcknowledged,
+  writeHandoverAcknowledged,
+} from '@/lib/handover';
 import { conflictByHand, conflictCommand, copySstorCommand } from '@/lib/sstor-command';
 import {
   blockedLine,
@@ -271,6 +278,15 @@ export const GlobDetail = ({
   const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
   // A super's local review normally comes first (/finalise); the board warns, then allows.
   const [confirmingReady, setConfirmingReady] = useState(false);
+  // "Why you're needed": the full box until the viewer acknowledges it, then one line.
+  const brief = handoverToShow(glob);
+  const [briefRead, setBriefRead] = useState(false);
+  useEffect(
+    () => setBriefRead(brief !== null && readHandoverAcknowledged(glob.id, brief)),
+    [glob.id, brief === null ? '' : JSON.stringify(brief)],
+  );
+  const [briefOpen, setBriefOpen] = useState(false);
+  useEffect(() => setBriefOpen(false), [glob.id]);
   // Discard throws the PR and branch away, so it says what it will do first.
   const [confirmingAgain, setConfirmingAgain] = useState(false);
   // The header's border shows once the page has scrolled under it.
@@ -353,11 +369,13 @@ export const GlobDetail = ({
       return;
     }
     if (
-      oversized &&
-      (action === 'start' ||
-        action === 'start_anyway' ||
-        action === 'pick_up' ||
-        action === 'take_over')
+      (oversized &&
+        (action === 'start' ||
+          action === 'start_anyway' ||
+          action === 'pick_up' ||
+          action === 'take_over')) ||
+      (brief !== null &&
+        (action === 'start_anyway' || action === 'pick_up' || action === 'take_over'))
     ) {
       setConfirmingOversized(action);
       return;
@@ -675,6 +693,61 @@ export const GlobDetail = ({
         </Anchor>
 
         <Anchor name="actions">
+          {brief !== null && (
+            <div
+              className="mb-2 grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-sm"
+              data-testid="handover-box"
+            >
+              {briefRead && !briefOpen ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="flex-1">
+                    <strong>Why you're needed:</strong> {handoverOneLine(brief)}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    data-testid="handover-expand"
+                    onClick={() => setBriefOpen(true)}
+                  >
+                    Show
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <strong>Why you're needed</strong>
+                  <ul className="list-disc pl-5">
+                    {brief.why.map((cause) => (
+                      <li key={cause}>{cause}</li>
+                    ))}
+                  </ul>
+                  <p>
+                    <strong>First:</strong> {brief.next}
+                  </p>
+                  {brief.detail.length > 0 && (
+                    <ul className="list-disc pl-5 text-xs text-muted-foreground">
+                      {brief.detail.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      data-testid="handover-acknowledge"
+                      onClick={() => {
+                        writeHandoverAcknowledged(glob.id, brief);
+                        setBriefRead(true);
+                        setBriefOpen(false);
+                      }}
+                    >
+                      Got it
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           {actions.length + disabled.length > 0 && (
             <div className="grid gap-1">
               <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
@@ -768,8 +841,14 @@ export const GlobDetail = ({
                   className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
                 >
                   <span className="flex-1" data-testid="oversized-start-says">
-                    This glob is flagged oversized: it is probably more than one PR's worth of work.
-                    Split it, or start it as it is?
+                    {oversized &&
+                      "This glob is flagged oversized: it is probably more than one PR's worth of work. Split it, or start it as it is?"}
+                    {brief !== null && (
+                      <span data-testid="handover-confirmation">
+                        {' '}
+                        {handoverConfirmation(confirmingOversized, brief)}
+                      </span>
+                    )}
                   </span>
                   <Button size="sm" variant="ghost" onClick={() => setConfirmingOversized(null)}>
                     Cancel
@@ -786,7 +865,7 @@ export const GlobDetail = ({
                       })
                     }
                   >
-                   Start as it is
+                    {oversized ? 'Start as it is' : 'Continue'}
                    </Button>
                 </div>
               )}
