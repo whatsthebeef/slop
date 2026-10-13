@@ -680,7 +680,11 @@ export const GlobDetail = ({
             )}
           </div>
 
-          <PlanEditor globId={glob.id} summary={glob.summary} />
+          <PlanEditor
+            globId={glob.id}
+            summary={glob.summary}
+            onHistory={glob.status === 'signed_off' ? undefined : () => setArtifact({ kind: 'plan', label: '' })}
+          />
 
           {decision && <DecisionSection board={board} glob={glob} busy={busy} onDecide={onDecide} onUpdate={onUpdate} applied={applied} />}
 
@@ -694,7 +698,7 @@ export const GlobDetail = ({
             </>
           )}
 
-          <ArtifactsSection globId={glob.id} boardId={glob.boardId} artifacts={glob.artifacts ?? []} selected={artifact} onSelect={setArtifact} />
+          <ArtifactsSection globId={glob.id} boardId={glob.boardId} artifacts={glob.artifacts ?? []} signedOff={glob.status === 'signed_off'} selected={artifact} onSelect={setArtifact} />
 
           <GlobDecisions boardId={glob.boardId} globId={glob.id} />
 
