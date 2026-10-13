@@ -61,12 +61,16 @@ export const cornerMarker = (glob: GlobView, now: string, viewer?: HumanStepView
  * becomes "merge conflict", and a bare "standby" says what it is listening for.
  */
 export const specifics = (label: string): string => {
-  const rest = label.replace(/^stalled\s*[·:]\s*/i, '');
+  const rest = label.replace(/^stalled(\s*[·:]\s*|$)/i, '');
   return rest.toLowerCase() === 'standby' ? 'listening for CI and reviews' : rest;
 };
 
-/** The glob view's Now headline for a stalled glob: the corner marker and the status line's specifics, joined once. */
-export const stalledHeadline = (label: string): string => `stalled · ${specifics(label)}`;
+/** The glob view's Now headline for a stalled or machine position: the corner marker's word and the line's specifics, joined once. */
+export const nowHeadline = (holder: 'stalled' | 'machine', label: string): string => {
+  const line = specifics(label);
+  const word = holder === 'stalled' ? 'stalled' : label.toLowerCase() === 'standby' ? 'standby' : 'working';
+  return line === '' ? word : `${word} · ${line}`;
+};
 
 /** The merge conflict the glob has, open or recorded on a failed merge. */
 const conflictOf = (glob: GlobView) => glob.conflict ?? glob.failure?.conflict ?? null;

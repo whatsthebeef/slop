@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { cardStatus, cornerMarker, hasBlocker, specifics, stalledHeadline, turnButton } from '../src/lib/card-rows';
+import { cardStatus, cornerMarker, hasBlocker, nowHeadline, specifics, turnButton } from '../src/lib/card-rows';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -104,7 +104,10 @@ describe('marker and line never repeat each other', () => {
     const marker = cornerMarker(stalled, NOW);
     const line = cardStatus(stalled, NOW);
     expect(line?.text).not.toMatch(/stalled/i);
-    expect(stalledHeadline('stalled · merge conflict')).toBe(`${marker?.text} · ${line?.text}`);
+    expect(nowHeadline('stalled', 'stalled · merge conflict')).toBe(`${marker?.text} · ${line?.text}`);
+    expect(nowHeadline('stalled', 'stalled')).toBe('stalled');
+    expect(nowHeadline('machine', 'implementing')).toBe('working · implementing');
+    expect(nowHeadline('machine', 'standby')).toBe('standby · listening for CI and reviews');
     const working = cardStatus(view({ status: 'in_progress', ...live('active') }), NOW);
     expect(working?.text).not.toMatch(/working|standby/i);
     expect(specifics('standby')).toBe('listening for CI and reviews');
