@@ -66,6 +66,37 @@ describe('services', () => {
     expect(unwrap(await globs.create(DEV, input({ category: 'bug' }))).id).toBe(`s${boardId}b1`);
   });
 
+  it('lists a glob\'s human steps on a read: a stored rollout step is pending until the PR merges', async () => {
+    const glob = unwrap(await globs.create(DEV, input()));
+    await store.transaction((tx) =>
+      tx.saveHumanSteps([
+        {
+          id: 'hs-1',
+          boardId,
+          globId: glob.id,
+          kind: 'rollout',
+          title: 'Deploy the host stack',
+          detail: null,
+          who: 'admin',
+          due: 'after_merge',
+          state: 'open',
+          blocks: ['sign_off'],
+          check: null,
+          script: null,
+          origin: 'rollout-section',
+          createdBy: DEV,
+          createdAt: '2026-10-05T12:00:00.000Z',
+          doneBy: null,
+          doneAt: null,
+          dismissedReason: null,
+        },
+      ]),
+    );
+    const read = unwrap(await globs.get(DEV, glob.id));
+    expect(read.humanSteps.map((s) => [s.id, s.kind, s.state])).toEqual([['hs-1', 'rollout', 'pending']]);
+    expect([...(await globs.humanStepsOf(boardId)).keys()]).toEqual([glob.id]);
+  });
+
   it('returns the same glob for a repeated idempotency key', async () => {
     const first = unwrap(await globs.create(DEV, input({ idempotencyKey: 'k1' })));
     const again = unwrap(await globs.create(DEV, input({ idempotencyKey: 'k1' })));
