@@ -543,7 +543,7 @@ const conflictHint = (glob: Glob): string | null => {
   const gaveUp =
     run?.purpose === 'resolve_conflict' && run.state === 'ended' && run.outcome === 'failed';
   return glob.implementer !== null || gaveUp
-    ? `${hint}. Resolve locally: sstor --glob ${glob.id} --take-over`
+    ? `${hint}. Resolve locally: sstor --glob ${glob.id}`
     : hint;
 };
 
@@ -588,7 +588,7 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
   const unreacted = minutesUnreacted(glob, now);
   if (unreacted !== null && unreacted >= STUCK_MINUTES) {
     const session = glob.runs[glob.runs.length - 1]?.sessionUrl ?? null;
-    return `Checks failed on the head ${String(Math.floor(unreacted))} minutes ago and the routine hasn't pushed or reported since. Fix: pick it up (sstor --glob ${glob.id} --take-over)${session === null ? '' : ` or open the run's session: ${session}`}`;
+    return `Checks failed on the head ${String(Math.floor(unreacted))} minutes ago and the routine hasn't pushed or reported since. Fix: pick it up (sstor --glob ${glob.id})${session === null ? '' : ` or open the run's session: ${session}`}`;
   }
   if (glob.type !== 'sub' || glob.status !== 'pr_open') return null;
   const minutes = (Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000;

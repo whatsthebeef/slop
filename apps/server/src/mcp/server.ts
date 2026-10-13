@@ -475,7 +475,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'pick_up',
     {
       description:
-        'Become the glob\'s human implementer, optionally choosing its environment (one of the board\'s that allows branch deploys; leave it out to keep the current one). Refused with run_active while a routine run is active or watching, unless takeOver is set. QA and PO members can only pick up subs.',
+        'Become the glob\'s human implementer, optionally choosing its environment (one of the board\'s that allows branch deploys; leave it out to keep the current one). A queued or standby run is superseded without a flag; an active run is refused with run_active unless takeOver is set. QA and PO members can only pick up subs.',
       inputSchema: {
         id: z.string(),
         version: z.number().int(),

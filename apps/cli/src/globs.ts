@@ -18,6 +18,8 @@ export interface GlobDeps {
   readonly now: () => number;
   readonly sleep: (ms: number) => Promise<void>;
   readonly newIdempotencyKey: () => string;
+  /** Asks a question on the terminal and resolves to the answer; undefined when nobody can answer (no TTY). */
+  readonly ask?: (question: string) => Promise<string>;
 }
 
 export const GLOB_USAGE = 'glob <id> [--json]';
@@ -45,6 +47,8 @@ const runSchema = z.object({
   state: z.string(),
   routineOwner: z.string().optional(),
   sessionUrl: z.string().nullable().optional(),
+  purpose: z.string().optional(),
+  lastProgressAt: z.string().nullable().optional(),
 });
 
 const prSchema = z.object({ number: z.number(), state: z.string() });
@@ -258,8 +262,9 @@ export async function handoverCommand(args: readonly string[], deps: GlobDeps): 
 }
 
 /**
- * `slop pick-up <id>`: become the implementer and wait for the branch. A queued, active or
- * watching run is refused without --take-over; pick_up is always called, since slop treats
+ * `slop pick-up <id>`: become the implementer and wait for the branch. A queued or watching run holds nothing
+ * unpushed, so slop supersedes it silently. An active run is mid-work: --take-over stops it without asking,
+ * otherwise a terminal is asked and anything else is refused. pick_up is always called, since slop treats
  * re-picking your own glob as a no-op (and it moves your own failed glob back to in_progress).
  */
 export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
@@ -270,7 +275,7 @@ export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Pr
   if (given === undefined || positionals.length !== 1)
     throw new UsageError(`usage: slop ${PICK_UP_USAGE}`);
   const id = requireGlobId(given, PICK_UP_USAGE);
-  const takeOver = flags.has('--take-over');
+  let takeOver = flags.has('--take-over');
   const environment = values.get('--env');
 
   const glob = await getGlob(deps, id);
@@ -278,11 +283,19 @@ export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Pr
     throw new SlopError(`${id} is already merged (${glob.status})`);
   const run = liveRun(glob);
   if (run !== null && !takeOver) {
-    const owner = run.routineOwner === undefined ? '' : ` (owner ${run.routineOwner})`;
-    const watch = run.sessionUrl ?? 'the glob view';
-    throw new SlopError(
-      `${id} has a routine run ${run.state}${owner}. Use --take-over to supersede it, or watch it: ${watch}`,
-    );
+    if (run.state === 'active') {
+      const progress = run.lastProgressAt == null ? '' : `, last progress ${run.lastProgressAt}`;
+      const message = `${id}'s machine run is working (${run.purpose ?? 'implementing'}${progress}); unpushed work will be lost.`;
+      if (deps.ask === undefined) {
+        const watch = run.sessionUrl ?? 'the glob view';
+        throw new SlopError(`${message} rerun with --take-over to stop it, or watch it: ${watch}`);
+      }
+      const answer = await deps.ask(`${message} Take over? [y/N] `);
+      if (!/^y(es)?$/i.test(answer.trim())) throw new SlopError(`${id}: not taken over`);
+    } else {
+      deps.log(`slop: took over ${id} from its ${run.state} run (nothing unpushed)`);
+    }
+    takeOver = true;
   }
   // slop refuses a take-over when there is no run to take over, so only ask for one when there is.
   const picked = parseGlob(

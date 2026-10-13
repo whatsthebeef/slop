@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { Action } from '@slop/core';
 import { createElement } from 'react';
 import { ActorIcon } from '../src/components/actor-icons';
-import { actionPresentation, presentedActions } from '../src/lib/action-presentation';
+import { actionPresentation, haltedBy, presentedActions } from '../src/lib/action-presentation';
 import type { GlobView } from '../src/lib/api';
 import { glob } from '../../../packages/core/test/fixtures';
 
@@ -151,5 +151,16 @@ describe('actor icons', () => {
       renderToStaticMarkup(createElement(ActorIcon, { actor: 'human', decorative: true })),
     ).toContain('aria-hidden="true"');
     expect(renderToStaticMarkup(createElement(ActorIcon, { actor: null }))).toBe('');
+  });
+});
+
+describe('haltedBy (the confirmation before a take-over)', () => {
+  const withRun = (state: string) => view({ currentRun: { state } as GlobView['currentRun'] });
+
+  it('asks only when the run is active; a queued or standby run holds nothing unpushed', () => {
+    expect(haltedBy(withRun('active'), 'take_over')).toEqual(['the machine run in progress']);
+    expect(haltedBy(withRun('queued'), 'take_over')).toEqual([]);
+    expect(haltedBy(withRun('watching'), 'take_over')).toEqual([]);
+    expect(haltedBy(view({ currentRun: null }), 'take_over')).toEqual([]);
   });
 });
