@@ -376,7 +376,7 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
       kind: 'merging',
       text: 'Merging when checks pass',
       icon: 'machine',
-      tip: 'Slop merges the PR as soon as the checks on its head pass. If they fail or the PR conflicts, it stops and says why. Cancel merge is in the More menu.',
+      tip: 'Slop merges the PR as soon as the checks on its head pass. If they fail or the PR conflicts, it stops and says why. Cancel merge stops it.',
       spinning: !checksSettled,
     };
   }

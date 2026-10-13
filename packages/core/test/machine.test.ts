@@ -439,9 +439,26 @@ describe('PR and merge events (rows 11–16)', () => {
       }
     });
 
-    it('updates a branch that is behind its base', () => {
+    it('reads the checks when none are reported for the head, and leaves a behind branch to the merge', () => {
+      expect(value(m.requestMerge(open, ctx())).effects).toEqual([{ kind: 'refresh_checks', globId: 's1t1', generation: 1 }]);
       const behind = { ...pending, behind: { base: 'main', behindBy: 1, files: [], at: 'x' } };
-      expect(value(m.requestMerge(behind, ctx())).effects).toEqual([{ kind: 'update_branch', globId: 's1t1', generation: 1, sha: 'bbb' }]);
+      expect(value(m.requestMerge(behind, ctx())).effects).toEqual([]);
+    });
+
+    it('is disarmed by a new push, a closed PR, and never carried into a re-readied PR', () => {
+      const armed = value(m.requestMerge(pending, ctx())).glob;
+      const pushed = value(m.commitPushed(armed, { sha: 'ccc', runId: null }, ctx()));
+      expect(pushed.glob).toMatchObject({ mergeMode: null, status: 'pr_open' });
+      expect(value(m.prClosed(armed, ctx())).glob).toMatchObject({ mergeMode: null, status: 'failed' });
+      const stale = { ...armed, status: 'in_progress' as const };
+      expect(value(m.prReadyForReview(stale, { number: 7, headSha: 'bbb' }, ctx())).glob.mergeMode).toBeNull();
+    });
+
+    it('records the conflict when it disarms, even if the head own checks passed', () => {
+      const armed = value(m.requestMerge(pending, ctx())).glob;
+      const conflict = { base: 'main', files: ['a'] };
+      const t = value(m.checksCompleted(armed, { sha: 'bbb', passed: true, conflict }, ctx()));
+      expect(t.glob.mergeMode).toBeNull();
     });
 
     it('merges when the head checks pass', () => {

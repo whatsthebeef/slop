@@ -32,7 +32,7 @@ export const mergeOutcomeText = (
 ): string | null => {
   if (action === 'cancel_merge') return 'Merge cancelled';
   if (action !== 'merge' && action !== 'merge_continue' && action !== 'retry_merge') return null;
-  if (glob.mergeMode === 'when_green') return 'Will merge when checks pass';
+  if (glob.mergeMode === 'when_green' && glob.status === 'pr_open') return 'Will merge when checks pass';
   if (glob.status === 'failed') return `Can't merge: ${glob.failure?.reason ?? 'the merge failed'}`;
   return glob.status === 'reviewing' ? 'Merged' : 'Merging…';
 };

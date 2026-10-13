@@ -1097,10 +1097,9 @@ export const requestMerge = (
     const b = new Builder(glob, ctx)
       .set({ mergeMode: 'when_green' })
       .event('MergeArmed', { sha: head });
-    if (glob.behind != null)
-      b.effect({ kind: 'update_branch', globId: glob.id, generation: glob.generation, sha: head });
+    // A branch behind its base is updated by the merge itself (squash_merge), once the checks pass.
     // Nothing reported for this head yet (a lost webhook): read it now, so a settled result isn't waited for in vain.
-    else if (glob.headChecks?.sha !== head)
+    if (glob.headChecks?.sha !== head)
       b.effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
     return b.done();
   }
@@ -1612,6 +1611,8 @@ export const commitPushed = (
   if (!superseded && run !== null && run.state !== 'ended' && push.runId === run.id) {
     b.updateRun({ lastProgressAt: ctx.now, state: run.state === 'queued' ? 'active' : run.state });
   }
+  // A new head is a different commit from the one the person armed the merge on: they press Merge again.
+  if (isMergeArmed(glob)) b.set({ mergeMode: null }).event('MergeDisarmed', { reason: 'new push' });
   if (!recovers && (glob.status === 'pr_open' || glob.status === 'merging')) {
     b.set({ headChecks: null }).effect({
       kind: 'refresh_checks',
@@ -1875,7 +1876,11 @@ export const prReadyForReview = (
     return invalidTransition(glob, null, `PR ready ignored: glob is ${glob.status}`);
   }
   const b = new Builder(glob, ctx)
-    .set({ pr: { number: pr.number, state: 'ready', headSha: pr.headSha } })
+    .set({
+      pr: { number: pr.number, state: 'ready', headSha: pr.headSha },
+      // An armed merge never outlives the ready PR it was pressed on.
+      ...(glob.mergeMode === 'when_green' && { mergeMode: null }),
+    })
     .event('PRReadyForReview', { number: pr.number, sha: pr.headSha });
   const run = currentRun(glob);
   if (run !== null && (run.state === 'active' || run.state === 'queued')) {
@@ -2008,7 +2013,7 @@ export const checksCompleted = (
   // Merge is armed: the head's checks decide whether slop merges now or hands the failure back.
   if (isMergeArmed(glob)) {
     if (checks.conflict !== undefined || !passed) {
-      return b
+      return withConflict(b, checks.conflict, ctx)
         .set({ mergeMode: null })
         .event('MergeDisarmed', { reason: checks.conflict !== undefined ? 'conflict' : 'checks failed' })
         .done();
@@ -2585,7 +2590,10 @@ export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
   if (glob.status !== 'pr_open') return b.done();
   return b
     .endRun('superseded', null, { cause: 'pr_closed' })
-    .set({ failure: { reason: 'PR closed without merging', at: ctx.now } })
+    .set({
+      failure: { reason: 'PR closed without merging', at: ctx.now },
+      ...(isMergeArmed(glob) && { mergeMode: null }),
+    })
     .status('failed')
     .done();
 };
