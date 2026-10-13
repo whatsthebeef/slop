@@ -1,12 +1,11 @@
 import type { Board, BoardService, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
-import { fireRoutine, investigateInstructions, runInstructions } from './routines.js';
+import { conflictInstructions, fireRoutine, investigateInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
 import { isRepoAccessFailure, isSetupFailure, chainRefusal, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
 import { SUB_GATE_CHECK, repoOf } from './codehost.js';
-import { conflictCommentBody, conflictCommentMarker } from './conflict-comment.js';
 
 /** How long a cancelled check run may wait for a newer run on the same head before it is re-requested. */
 const CANCELLED_CHECK_WAIT_MS = 5 * 60_000;
@@ -361,17 +360,6 @@ export const codeHostExecutors = (
       return 'done';
     },
 
-    request_conflict_fix: async (_effect, glob, { globs }) => {
-      const conflict = glob?.conflict;
-      if (glob?.pr == null || conflict?.requestedAt === undefined) return 'dropped';
-      const repo = await repoFor(glob.boardId);
-      if (repo === null) return 'dropped';
-      const merged = conflict.since === null ? null : await globs.peek(conflict.since);
-      const marker = conflictCommentMarker(glob, conflict.requestedAt);
-      await host.commentOnce(repo, glob.pr.number, marker, conflictCommentBody(glob, merged, conflict, marker));
-      return 'done';
-    },
-
     squash_merge: async (effect, glob, { globs }, attempt) => {
       if (effect.kind !== 'squash_merge' || glob?.pr == null) return 'dropped';
       const repo = await repoFor(glob.boardId);
@@ -486,7 +474,9 @@ export const codeHostExecutors = (
       const text =
         effect.purpose === 'investigate'
           ? investigateInstructions(glob, effect.runId, repoName, board?.baseBranch ?? null)
-          : runInstructions(glob, effect.runId, repoName, glob.status === 'pr_open', effect.failureSummary ?? null);
+          : effect.purpose === 'resolve_conflict'
+            ? conflictInstructions(glob, effect.runId, repoName, board?.baseBranch ?? null, glob.conflict ?? null)
+            : runInstructions(glob, effect.runId, repoName, glob.status === 'pr_open', effect.failureSummary ?? null);
       const result = await fireRoutine(secret, text, health);
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
