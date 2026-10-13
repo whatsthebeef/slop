@@ -1495,24 +1495,38 @@ export class GlobService {
    * edges (see `mergeInferred`). A held glob that waited only for an edge now gone starts. A no-op when nothing changed.
    */
   async applyInferred(id: string, edges: readonly InferredEdge[], planHash: string): Promise<void> {
-    const read = await this.deps.store.transaction(async (tx) => {
-      const glob = await tx.getGlob(id);
-      if (glob === null) return null;
-      return { glob, reach: await this.closure(tx, edges.filter((e) => e.kind === 'needs').map((e) => e.id)) };
-    });
-    if (read === null) return;
-    const notes: string[] = [];
+    const before = await this.peek(id);
+    if (before === null) return;
     const usable: ImpliedAfter[] = [];
-    for (const edge of edges) {
-      if (edge.id === id) continue;
-      if (edge.kind === 'needs' && reaches(edge.id, id, (other) => read.reach.get(other))) {
-        notes.push(`Dropped the need on ${edge.id}: it already waits for ${id}, so that would be a cycle`);
-        continue;
-      }
-      usable.push(toImplied(edge));
-    }
-    const result = await this.command(null, id, null, (g, ctx) => machine.edgesInferred(g, { edges: usable, notes, planHash }, ctx));
-    if (!result.ok || result.value.version === read.glob.version) return;
+    const notes: string[] = [];
+    let stale = false;
+    // Read inside the command's transaction: a plan saved or an edge dismissed while the model answered must not be overwritten,
+    // and two globs inferring needs on each other must see each other's edges.
+    const result = await this.command(
+      null,
+      id,
+      null,
+      (g, ctx) => (stale ? ok({ glob: g, changed: false, events: [], effects: [] }) : machine.edgesInferred(g, { edges: usable, notes, planHash }, ctx)),
+      {
+        prepare: async (tx: Tx, glob: Glob): Promise<Result<readonly string[]>> => {
+          usable.length = 0;
+          notes.length = 0;
+          stale = hash((await tx.artifactVersions(glob.id, 'plan', '')).at(-1)?.content ?? '') !== planHash;
+          if (stale) return ok([]);
+          const reach = await this.closure(tx, edges.filter((e) => e.kind === 'needs').map((e) => e.id));
+          for (const edge of edges) {
+            if (edge.id === id) continue;
+            if (edge.kind === 'needs' && reaches(edge.id, id, (other) => reach.get(other))) {
+              notes.push(`Dropped the need on ${edge.id}: it already waits for ${id}, so that would be a cycle`);
+              continue;
+            }
+            usable.push(toImplied(edge));
+          }
+          return ok([]);
+        },
+      },
+    );
+    if (!result.ok || result.value.version === before.version) return;
     // A needs edge that went away may have been all a held glob waited for.
     if (result.value.status === 'planning' && result.value.waiting != null) await this.release(id);
   }

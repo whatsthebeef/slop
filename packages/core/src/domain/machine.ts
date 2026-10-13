@@ -684,7 +684,7 @@ export const startAnyway = (
  */
 export const dismissEdge = (glob: Glob, edgeId: string, planHash: string, ctx: Context): Result<Transition> => {
   requireActor(ctx);
-  if ((glob.after ?? []).includes(edgeId)) return invalidInput(`${edgeId} was set as a dependency by a person; change it in Waits for`);
+  if ((glob.after ?? []).includes(edgeId)) return invalidInput(`${edgeId} was set as a dependency by a person and cannot be dismissed`);
   const edge = (glob.impliedAfter ?? []).find((i) => i.id === edgeId);
   if (edge === undefined) return invalidInput(`${glob.id} has no recorded edge to ${edgeId}`);
   if (edge.source === 'explicit') return invalidInput(`The edge to ${edgeId} was set by a person and cannot be dismissed`);
@@ -1873,7 +1873,8 @@ export const edgesInferred = (
   const next = mergeInferred(existing, fresh, glob.after ?? [], result.planHash);
   const before = existing.filter((e) => isReplaceableInferred(e, result.planHash));
   const after = next.filter((e) => isReplaceableInferred(e, result.planHash));
-  const sig = (e: ImpliedAfter) => `${e.id}|${e.kind ?? 'overlaps'}|${e.evidence ?? ''}`;
+  // The reason is the model's wording and changes between answers: the edge is the same while its glob and kind are.
+  const sig = (e: ImpliedAfter) => `${e.id}|${e.kind ?? 'overlaps'}`;
   const added = after.filter((e) => !before.some((b) => sig(b) === sig(e)));
   const dropped = before.filter((b) => !after.some((e) => e.id === b.id));
   if (added.length === 0 && dropped.length === 0) return unchanged(glob);

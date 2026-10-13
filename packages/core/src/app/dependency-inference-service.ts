@@ -47,9 +47,12 @@ export interface InferredEdge {
 }
 
 /** The edges from the model's answer: only candidates, only the two kinds, a reason each; a need wins over an overlap to the same glob. */
-export const parseEdges = (answer: string, candidates: ReadonlySet<string>): InferredEdge[] => {
+export const parseEdges = (answer: string, candidates: ReadonlySet<string>): InferredEdge[] | null => {
+  const listed = field(parseJson(answer), 'edges');
+  // Only a well-formed list (even an empty one) is an answer: a refusal or a cut-off reply says nothing about the edges.
+  if (!Array.isArray(listed)) return null;
   const found = new Map<string, InferredEdge>();
-  for (const item of list(field(parseJson(answer), 'edges'))) {
+  for (const item of list(listed)) {
     const id = text(field(item, 'id'))?.trim();
     const kind = text(field(item, 'kind'))?.trim();
     const reason = text(field(item, 'reason'))?.trim().slice(0, MAX_REASON_CHARS);
@@ -124,15 +127,16 @@ export class DependencyInferenceService {
   /** The edges for a plan, as recorded edges; none when the model is unavailable or has nothing to compare with. Never throws. */
   async infer(input: InferenceInput): Promise<ImpliedAfter[]> {
     try {
-      return (await this.ask(input)).map(toImplied);
+      return ((await this.ask(input)) ?? []).map(toImplied);
     } catch (e) {
       this.deps.log?.('dependency inference', e instanceof Error ? e.message : String(e));
       return [];
     }
   }
 
-  private async ask(input: InferenceInput): Promise<InferredEdge[]> {
-    if (this.deps.llm === undefined || input.plan.trim().length < MIN_PLAN_CHARS) return [];
+  /** The model's edges; null when it gave no usable answer (no model, too short a plan, an unparseable reply), so nothing is changed. */
+  private async ask(input: InferenceInput): Promise<InferredEdge[] | null> {
+    if (this.deps.llm === undefined || input.plan.trim().length < MIN_PLAN_CHARS) return null;
     const candidates = await this.candidates(input.boardId, input.selfId);
     if (candidates.length === 0) return [];
     const others = candidates
@@ -186,6 +190,8 @@ export class DependencyInferenceService {
     });
     if (read === null) return;
     const edges = await this.ask({ boardId: read.glob.boardId, plan: read.plan, selfId: globId, files: read.files, title: read.glob.title });
+    // No usable answer leaves the edges as they were; only a well-formed (even empty) list replaces them.
+    if (edges === null) return;
     await this.deps.apply(globId, edges, hash(read.plan));
   }
 }

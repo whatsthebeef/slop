@@ -6,6 +6,7 @@ import type { CreateGlobInput } from '../src/app/glob-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
 import type { Result } from '../src/domain/errors.js';
 import type { Glob } from '../src/domain/types.js';
+import { hash } from '../src/app/text-hash.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
 const unwrap = <T>(result: Result<T>): T => {
@@ -116,7 +117,8 @@ describe('dependency inference', () => {
     const other = await create({ type: 'same' });
     answer = edges({ id: 's99t1', kind: 'needs' }, { id: other.id, kind: 'blocks' }, { id: other.id, kind: 'needs', reason: '' });
     expect((await create()).impliedAfter ?? []).toEqual([]);
-    expect(parseEdges('not json', new Set([other.id]))).toEqual([]);
+    expect(parseEdges('not json', new Set([other.id]))).toBeNull();
+    expect(parseEdges('{"edges": [', new Set([other.id]))).toBeNull();
   });
 
   it('an explicit after wins over an inferred edge to the same glob, and still works without any model answer', async () => {
@@ -204,6 +206,30 @@ describe('dependency inference', () => {
     answer = edges({ id: provider.id, kind: 'needs', reason: 'uses its helper' });
     await inference.refresh(running.id);
     expect((await current(running.id)).impliedAfter?.[0]).toMatchObject({ id: provider.id, kind: 'overlaps', source: 'inferred' });
+  });
+
+  it('an unparseable or cut-off answer leaves the edges as they were; only a well-formed empty list clears them', async () => {
+    const other = await create({ type: 'same' });
+    answer = edges({ id: other.id, kind: 'overlaps' });
+    const made = await create({ type: 'same' });
+    for (const bad of ['I cannot help with that.', '{"edges": [{"id": "', '{"foo": 1}']) {
+      answer = () => bad;
+      await inference.refresh(made.id);
+      expect((await current(made.id)).impliedAfter?.map((e) => e.id)).toEqual([other.id]);
+    }
+    answer = () => '{"edges": []}';
+    await inference.refresh(made.id);
+    expect((await current(made.id)).impliedAfter ?? []).toEqual([]);
+  });
+
+  it('does not write when the plan changed while the model answered, so a dismissal is not lost', async () => {
+    const provider = await create({ type: 'same' });
+    answer = edges({ id: provider.id, kind: 'needs' });
+    const made = await create();
+    const oldHash = hash(PLAN);
+    await savePlan(made.id, `${PLAN} Changed meanwhile.`);
+    await globs.applyInferred(made.id, [{ id: provider.id, kind: 'overlaps', reason: 'x', files: [] }], oldHash);
+    expect((await current(made.id)).impliedAfter?.[0]).toMatchObject({ id: provider.id, kind: 'needs' });
   });
 
   it('a model that fails leaves the edges as they were', async () => {
