@@ -14,7 +14,7 @@ import { GlobChips, GlobHeader } from './glob-view/header';
 import { GlobMeta, MachineRuns } from './glob-view/meta';
 import { AFTER_SECTION, SECTION_VIEWS } from './glob-view/section-views';
 import { GLOB_VIEW_SECTIONS } from './glob-view/sections';
-import { NowRow, StatusLine } from './glob-view/status';
+import { NowPanel } from './glob-view/status';
 
 /** A section's anchor: found by `?section=`, and left below the sticky header (h-10) when scrolled to. Hidden while empty. */
 const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) => (
@@ -40,6 +40,7 @@ export const GlobDetail = ({
   onAction,
   onReviewLabel,
   onDismissEdge,
+  onDismiss,
   onDecide,
   onDelete,
 }: {
@@ -73,6 +74,8 @@ export const GlobDetail = ({
   onReviewLabel: ReviewLabel;
   /** The ✕ on a needs or overlaps row: the edge to this glob is not a dependency; resolves false when it failed. */
   onDismissEdge: (edgeId: string) => Promise<boolean>;
+  /** "Got it" / ×: dismisses a status message for the viewer (`dismiss` false is Show again); resolves false when it failed. */
+  onDismiss: (key: string, dismiss: boolean) => Promise<boolean>;
   /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
   onDecide: (input: DecideInput) => Promise<boolean>;
   onDelete: () => Promise<void>;
@@ -82,6 +85,7 @@ export const GlobDetail = ({
     glob,
     onAction,
     onUpdate,
+    onDismiss,
     ...(email === undefined ? {} : { email }),
   });
   const { decision, busy, disabled } = actionState;
@@ -161,8 +165,7 @@ export const GlobDetail = ({
       <GlobHeader ctx={ctx} onClose={onClose} onReload={onReload} />
       <div className="grid gap-4">
         <GlobChips ctx={ctx} actions={actionState} />
-        {!decision && <NowRow glob={glob} />}
-        <StatusLine glob={glob} disabled={disabled} />
+        <NowPanel glob={glob} decision={decision} disabled={disabled} actions={actionState} />
         {GLOB_VIEW_SECTIONS.map((name) => (
           <Fragment key={name}>
             <Anchor name={name}>{SECTION_VIEWS[name](sectionProps)}</Anchor>

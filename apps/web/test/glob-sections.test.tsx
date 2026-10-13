@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Action } from '@slop/core';
 import { MemoryRouter } from 'react-router';
@@ -8,6 +8,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { GlobDetail } from '../src/components/glob-dialog';
 import type { BoardView, GlobView } from '../src/lib/api';
 import { board as coreBoard, glob as coreGlob } from '../../../packages/core/test/fixtures';
+import { handoverKey } from '../src/lib/dismissals';
 
 const board: BoardView = { ...coreBoard, role: 'dev' };
 
@@ -28,6 +29,7 @@ const callbacks = () => ({
   ),
   onReviewLabel: vi.fn(),
   onDismissEdge: vi.fn(() => Promise.resolve(true)),
+  onDismiss: vi.fn(() => Promise.resolve(true)),
   onAddStep: vi.fn(() => Promise.resolve(true)),
   onCompleteStep: vi.fn(() => Promise.resolve(true)),
   onDismissStep: vi.fn(() => Promise.resolve(true)),
@@ -113,17 +115,129 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.getByTestId('escalation-chip').getAttribute('aria-describedby')).not.toBeNull();
   });
 
+  it('shows the chip only in Planning, as on the card: a pr_open escalated glob keeps the disclosure but no chip', () => {
+    renderGlob({ ...escalated(), status: 'pr_open', list: 'doing' });
+    expect(screen.queryByTestId('escalation-chip')).toBeNull();
+    expect(screen.getByTestId('escalation-note').textContent).toContain('Touches auth');
+  });
+
   it('leaves the chip and the disclosure out without an escalation', () => {
     renderGlob(view());
     expect(screen.queryByTestId('escalation-chip')).toBeNull();
     expect(screen.queryByTestId('escalation-note')).toBeNull();
   });
 
-  it('lets a glob in Planning edit what it waits for', async () => {
+  const escalation = {
+    at: '2026-10-13T00:00:00Z',
+    by: 'dev@example.com',
+    reason: 'Touches auth',
+    evidence: 'From the split of s1t0: files a.ts',
+    criterion: 'risk_area',
+  } as const;
+
+  const NOW = '2026-10-13T20:00:00Z';
+  const failedChecks = {
+    sha: 'abcdef1234567',
+    state: 'failed',
+    at: NOW,
+    failure: { name: 'apps/server test', step: 'Test', lines: ['Error: boom'], url: 'https://ci/run/1' },
+  } as const;
+  const fixing = view({
+    type: 'same',
+    status: 'pr_open',
+    pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+    escalation,
+    headChecks: failedChecks,
+    currentRun: {
+      id: 'r1',
+      state: 'watching',
+      outcome: null,
+      generation: 1,
+      triggeredBy: 'dev@example.com',
+      routineOwner: 'dev@example.com',
+      queuedAt: NOW,
+      startedAt: NOW,
+      lastProgressAt: NOW,
+      endedAt: null,
+      failureReason: null,
+      sessionId: 's',
+      sessionUrl: 'https://claude.ai/code/s',
+    },
+    machineSteps: [
+      { id: 'm1', kind: 'fix_checks', state: 'running', startedAt: NOW, lastProgressAt: NOW, detail: null, holdsBall: true },
+    ],
+    move: { holder: 'machine', reason: 'fix checks', since: NOW },
+    handover: { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: ['Error: boom'] },
+  });
+
+  it('escalated glob with failed checks and an active fix run: the machine holds the ball, the failure shows once', () => {
+    renderGlob(fixing);
+    expect(screen.getByTestId('now-headline').textContent).toMatch(/fix(ing)? (CI|checks)/i);
+    expect(screen.getByTestId('now-panel').getAttribute('data-holder')).toBe('machine');
+    expect(screen.queryByText(/Why you're needed/)).toBeNull();
+    expect(screen.queryByTestId('handover-box')).toBeNull();
+    expect(screen.queryByTestId('machine-steps')).toBeNull();
+    // The header chip is Planning-only (s15b86); this glob is pr_open, so the reason lives in the disclosure.
+    expect(screen.queryByTestId('escalation-chip')).toBeNull();
+    expect(screen.getAllByText(/Error: boom/)).toHaveLength(1);
+    expect(screen.getByTestId('now-details').textContent).toContain('Error: boom');
+    // Escalation reason appears only behind "Why a person?", never in Now.
+    expect(screen.getByTestId('now-panel').textContent).not.toContain('Touches auth');
+  });
+
+  it('keeps the details collapsed under one toggle for a machine headline', () => {
+    renderGlob(fixing);
+    const details = screen.getByTestId<HTMLDetailsElement>('now-details');
+    expect(details.open).toBe(false);
+    expect(screen.getByText('Show details')).toBeTruthy();
+  });
+
+  it("the viewer's turn: the headline and the handover brief inside the details", () => {
+    renderGlob(
+      view({
+        status: 'pr_open',
+        pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+        implementer: 'dev@example.com',
+        allowedActions: ['pick_up'],
+        move: { holder: 'you', reason: 'Merge', since: null, who: 'dev@example.com' },
+        handover: { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: [] },
+      }),
+    );
+    expect(screen.getByTestId('now-headline').textContent).toContain('Your turn · Merge');
+    const details = screen.getByTestId('now-details');
+    expect(details.textContent).toContain("Why you're needed");
+    expect(details.textContent).toContain('Reproduce and fix');
+    expect(screen.getAllByText(/Why you're needed/)).toHaveLength(1);
+  });
+
+  it('never repeats the escalation reason in the headline', () => {
+    renderGlob(
+      view({
+        escalation,
+        move: { holder: 'human', reason: 'Needs a human: Touches auth', since: null, who: 'dev@example.com' },
+      }),
+    );
+    expect(screen.getByTestId('now-headline').textContent).not.toContain('Touches auth');
+  });
+
+  it('has no Waits for input: a glob in Planning shows only the edges slop inferred, with a ✕ to dismiss one', () => {
     renderGlob(view({ status: 'planning', provisioning: 'none' }));
-    expect(screen.getByTestId('dependencies')).toBeTruthy();
-    await userEvent.type(screen.getByPlaceholderText('s15t7, s15b18'), 's1t2');
-    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+    expect(screen.queryByTestId('dependencies')).toBeNull();
+    expect(screen.queryByPlaceholderText('s15t7, s15b18')).toBeNull();
+    expect(screen.queryByText('Waits for (glob IDs)')).toBeNull();
+  });
+
+  it('lists an inferred edge with its reason and a ✕, and never an input', () => {
+    renderGlob(
+      view({
+        status: 'planning',
+        provisioning: 'none',
+        edges: [{ id: 's1t2', kind: 'overlaps', source: 'inferred', paths: [], evidence: 'both edit glob-dialog.tsx' }],
+      }),
+    );
+    expect(screen.getByTestId('overlaps').textContent).toContain('both edit glob-dialog.tsx');
+    expect(screen.getByTestId('dismiss-edge-s1t2')).toBeTruthy();
+    expect(screen.queryByPlaceholderText('s15t7, s15b18')).toBeNull();
   });
 
   it('offers Save and Discard once the group is edited, and Discard clears them', async () => {
@@ -140,5 +254,72 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     await userEvent.type(screen.getByLabelText('Group'), 'x');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(cb.onUpdate).toHaveBeenCalledWith({ group: 'x' });
+  });
+});
+
+describe('glob view: dismissable status messages', () => {
+  const AT = '2026-10-08T10:00:00.000Z';
+  const failed = (patch: Partial<GlobView> = {}) =>
+    view({
+      status: 'failed',
+      failure: { reason: 'Could not reproduce the bug: a whole paragraph of detail', at: AT },
+      implementer: 'dev@example.com',
+      allowedActions: ['pick_up'],
+      ...patch,
+    });
+  const buttons = () => screen.getAllByRole('button').map((b) => b.textContent);
+
+  it('shows the long failure with a dismiss x that stores failure.at through onDismiss', async () => {
+    const cb = renderGlob(failed());
+    expect(screen.getByTestId('status-line').textContent).toContain('whole paragraph');
+    await userEvent.click(screen.getByTestId('dismiss-message'));
+    expect(cb.onDismiss).toHaveBeenCalledWith(`failure:${AT}`, true);
+  });
+
+  it('collapses a dismissed failure to the short label, keeps the main action, and expands on demand', async () => {
+    renderGlob(failed());
+    const before = buttons().filter((b) => b !== '' && !/Got it/.test(b));
+    cleanup();
+    renderGlob(failed({ dismissedKeys: [`failure:${AT}`] }));
+    const line = screen.getByTestId('status-line');
+    expect(line.getAttribute('data-dismissed')).toBe('true');
+    expect(line.textContent).toContain('Run failed');
+    expect(document.body.textContent).not.toContain('whole paragraph');
+    expect(before.length).toBeGreaterThan(0);
+    expect(buttons().filter((b) => b !== '' && b !== 'Show again' && b !== 'show details')).toEqual(before);
+    await userEvent.click(screen.getByTestId('show-details'));
+    expect(document.body.textContent).toContain('whole paragraph');
+  });
+
+  it('shows a new failure again, undismissed', () => {
+    renderGlob(failed({ dismissedKeys: [`failure:${AT}`], failure: { reason: 'A newer failure', at: '2026-10-09T09:00:00.000Z' } }));
+    expect(screen.getByTestId('status-line').textContent).toContain('A newer failure');
+    expect(screen.getByTestId('status-line').getAttribute('data-dismissed')).toBeNull();
+  });
+
+  it('undoes a dismissal with Show again', async () => {
+    const cb = renderGlob(failed({ dismissedKeys: [`failure:${AT}`] }));
+    await userEvent.click(screen.getByTestId('show-again'));
+    expect(cb.onDismiss).toHaveBeenCalledWith(`failure:${AT}`, false);
+  });
+
+  it('handover Got it stores the brief key through the same onDismiss, and a dismissed brief is collapsed', async () => {
+    const brief = { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: [] };
+    const turn = (patch: Partial<GlobView> = {}) =>
+      view({
+        status: 'pr_open',
+        pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+        implementer: 'dev@example.com',
+        allowedActions: ['pick_up'],
+        move: { holder: 'you', reason: 'Merge', since: null, who: 'dev@example.com' },
+        handover: brief,
+        ...patch,
+      });
+    const cb = renderGlob(turn());
+    await userEvent.click(within(screen.getByTestId('handover-box')).getByRole('button', { name: /Got it/ }));
+    expect(cb.onDismiss).toHaveBeenCalledWith(handoverKey(brief), true);
+    cleanup();
+    renderGlob(turn({ dismissedKeys: [handoverKey(brief)] }));
+    expect(within(screen.getByTestId('handover-box')).queryByRole('button', { name: /^Got it/ })).toBeNull();
   });
 });

@@ -35,6 +35,8 @@ export type DecisionOrigin =
   | { readonly kind: 'extracted'; readonly decisionId: number }
   /** An unverified replacement: "did choice `newId` replace choice `oldId`?" (decision numbers, not glob IDs). */
   | { readonly kind: 'replacement'; readonly oldId: number; readonly newId: number }
+  /** A file that keeps conflicting: "should it be refactored?" (accepting creates the refactor glob). */
+  | { readonly kind: 'hotspot'; readonly path: string }
   | { readonly kind: 'manual' };
 
 /** How the proposal reached the board: an agent, slop's mining, the inbox, a person, or the backfill. */
@@ -185,8 +187,12 @@ const validateOrigin = (value: unknown): Result<DecisionOrigin> => {
       const valid = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0;
       return valid(oldId) && valid(newId) ? ok({ kind: 'replacement', oldId, newId }) : invalidInput('origin.oldId and origin.newId must be decision numbers');
     }
+    case 'hotspot': {
+      const path = oneLine(value['path'], 'origin.path');
+      return path.ok ? ok({ kind: 'hotspot', path: path.value }) : path;
+    }
     default:
-      return invalidInput('origin.kind must be submitted, mined, inbox, extracted, replacement or manual');
+      return invalidInput('origin.kind must be submitted, mined, inbox, extracted, replacement, hotspot or manual');
   }
 };
 

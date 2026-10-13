@@ -359,6 +359,18 @@ export const humanSteps = pgTable(
   (t) => [index('human_steps_glob_idx').on(t.globId), index('human_steps_board_idx').on(t.boardId, t.state)],
 );
 
+/** The status messages a person has acknowledged on a glob (the card's line, the Now panel); the key names the situation, so a new one shows again. */
+export const statusDismissals = pgTable(
+  'status_dismissals',
+  {
+    userEmail: text('user_email').notNull(),
+    globId: text('glob_id').notNull(),
+    key: text('key').notNull(),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userEmail, t.globId, t.key] })],
+);
+
 /** Reviews queued for splitting into findings: a local review artifact. */
 export const reviewSources = pgTable(
   'review_sources',

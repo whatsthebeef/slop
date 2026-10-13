@@ -89,6 +89,20 @@ describe('file attachments on Postgres', () => {
     expect(versions.map((v) => v.file?.state)).toEqual(['pending', 'stored']);
   });
 
+  it('lists file attachments in the glob view in every state, with their file facts', async () => {
+    const pending = unwrap(await attachments.createUpload(DEV, globId, { fileName: 'listed-pending.png' }));
+    const stored = unwrap(await attachments.createUpload(DEV, globId, { fileName: 'listed-stored.png' }));
+    await attachments.objectArrived(stored.artifact.file?.key ?? '', { size: 321, contentType: 'image/png' });
+    expect(pending.artifact.file?.state).toBe('pending');
+    const view = unwrap(await globs.get(DEV, globId));
+    const listed = (label: string) => view.artifacts.find((a) => a.kind === 'attachment' && a.label === label);
+    expect(listed('listed-pending.png')).toMatchObject({ file: { state: 'pending', fileName: 'listed-pending.png' } });
+    expect(listed('listed-stored.png')).toMatchObject({ versions: 2, file: { state: 'stored', size: 321, contentType: 'image/png' } });
+    // A name already in use is refused with the version it holds.
+    const again = await attachments.createUpload(DEV, globId, { fileName: 'listed-stored.png' });
+    expect(again.ok ? '' : again.error.message).toContain('(version 2)');
+  });
+
   it('leaves text attachments without a file field', async () => {
     const text = await store.transaction((tx) =>
       tx.insertArtifact({ globId, kind: 'attachment', label: 'note', content: 'hi', link: null, commitSha: null, provenance: { by: 'human', actor: DEV, runId: null, agentSetVersion: null }, createdAt: new Date().toISOString() }),

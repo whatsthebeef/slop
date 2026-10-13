@@ -63,6 +63,9 @@ export const namesExclusivePath = (policy: MergePolicy, plan: string): boolean =
   });
 };
 
+/** Whether a plan's Tasks or Files sections name the file (a mention in prose elsewhere predicts nothing). */
+export const plannedChangesName = (plan: string, path: string): boolean => changeSections(plan).includes(path);
+
 /** Whether a person dismissed this edge for the plan as it is now: a changed plan lets it be inferred again. */
 export const isDismissedFor = (edge: ImpliedAfter, planHash: string): boolean =>
   edge.overridden === true && edge.dismissedPlanHash === planHash;
@@ -75,4 +78,28 @@ export const mergeImplied = (
   const kept = [...(existing ?? [])];
   for (const hold of added) if (!kept.some((k) => k.id === hold.id)) kept.push(hold);
   return kept;
+};
+
+/**
+ * An edge slop inferred (not one a person set) that the next inference may replace. Dismissed for this plan, or kept by Start
+ * now, it stays as it is; one dismissed for an older plan is replaceable, so a changed plan may infer it again.
+ */
+export const isReplaceableInferred = (edge: ImpliedAfter, planHash: string): boolean =>
+  edge.source === 'inferred' && !(edge.overridden === true && (edge.dismissedPlanHash === undefined || edge.dismissedPlanHash === planHash));
+
+/**
+ * A glob's recorded edges after an inference: every edge that is not a replaceable inferred one stays, and `fresh` (the
+ * inferred edges now) replaces the rest. A fresh edge to a glob already in `after` or already recorded is dropped, so a
+ * person's or a learned edge wins and a dismissal holds until the plan changes.
+ */
+export const mergeInferred = (
+  existing: readonly ImpliedAfter[] | undefined,
+  fresh: readonly ImpliedAfter[],
+  after: readonly string[],
+  planHash: string,
+): ImpliedAfter[] => {
+  const kept = (existing ?? []).filter((e) => !isReplaceableInferred(e, planHash));
+  const next = [...kept];
+  for (const edge of fresh) if (!after.includes(edge.id) && !next.some((k) => k.id === edge.id)) next.push(edge);
+  return next;
 };

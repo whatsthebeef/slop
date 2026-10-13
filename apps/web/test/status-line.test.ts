@@ -253,7 +253,7 @@ describe('position indicator', () => {
 
   it('puts merging when checks pass ahead of the plain checks wait', () => {
     const armed = prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'] });
-    expect(positionOf(armed, NOW)).toMatchObject({ holder: 'waiting', text: 'merging when checks pass', spinning: true });
+    expect(positionOf(armed, NOW)).toMatchObject({ holder: 'waiting', text: `merging when checks pass · ${head.slice(0, 7)}`, spinning: true });
     expect(waitingFor(armed, armed.allowedActions ?? [], 'dev')).toEqual([]);
     const settled = { ...armed, headChecks: { sha: head, state: 'passed' as const } };
     expect(positionOf(settled, NOW)).toMatchObject({ holder: 'machine', text: 'merging' });
