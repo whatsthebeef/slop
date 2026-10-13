@@ -30,10 +30,11 @@ export const mainAction = (
   glob: Subject,
   decision = false,
   stepFirst = false,
+  viewer?: string,
 ): Action | null => {
   const candidate = (action: Action): boolean => {
     if (!available.includes(action) || NEVER_MAIN.includes(action)) return false;
-    return actionPresentation(action, glob, decision).placement === 'main';
+    return actionPresentation(action, glob, decision, viewer).placement === 'main';
   };
   return (stepFirst ? FIXES : [...FIXES, ...NEXT_STEPS]).find(candidate) ?? null;
 };

@@ -824,11 +824,22 @@ const setEnvironment = (b: Builder, environment: string | null): Builder => {
 /** Whether the glob's PR was left by an ended auto-fix run: ready for review, a failure on the card, nobody working on it. */
 const canRetryAutofix = (glob: Glob): boolean => {
   const run = currentRun(glob);
+  if (
+    glob.status !== 'pr_open' ||
+    glob.type === 'super' ||
+    glob.implementer !== null ||
+    glob.pr === null
+  )
+    return false;
+  // Failed checks of this glob's own change with nothing watching them: always fixable, whatever ended the earlier run.
+  if (
+    glob.pr.state === 'ready' &&
+    glob.conflict == null &&
+    headChecksFailed(glob) &&
+    glob.headChecks?.inheritedFrom === undefined
+  )
+    return true;
   return (
-    glob.status === 'pr_open' &&
-    glob.type !== 'super' &&
-    glob.implementer === null &&
-    glob.pr !== null &&
     glob.failure !== null &&
     glob.failure.kind === undefined &&
     run?.state === 'ended' &&
@@ -2712,8 +2723,9 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     !hasBusyRun(glob) &&
     (glob.status === 'planning' ||
       glob.status === 'failed' ||
-      ((glob.status === 'in_progress' || glob.status === 'pr_open') &&
-        glob.implementer !== actor.email));
+      glob.status === 'in_progress' ||
+      glob.status === 'pr_open');
+  // The glob's own implementer is offered it too (row 8: a no-op that reopens their session), so their own glob is never a dead end.
   if (canPickUp) actions.push('pick_up');
   if (
     !restricted &&
