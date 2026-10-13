@@ -361,6 +361,13 @@ export class ArtifactService {
       sizeCheck?: SizeAssessor;
       /** Acts on a stored investigation (escalate, oversize flag) before the save returns. */
       investigation?: InvestigationReactor;
+      /** `GlobService.reconcileRollout`: turns a stored implementation record's `## Rollout` section into the glob's rollout steps. */
+      rollout?: (
+        email: string,
+        globId: string,
+        record: string,
+        source: { readonly commitSha: string | null; readonly runId: string | null; readonly agentSetVersion: number | null },
+      ) => Promise<void>;
     },
   ) {}
 
@@ -640,6 +647,10 @@ export class ArtifactService {
       if (kind === 'local_review') this.deps.notifier.publish({ kind: 'glob.findings', boardId, globId });
       // Awaited: slop flags the glob before the run goes on to implement.
       if (kind === 'investigation') await this.deps.investigation?.react(email, globId, options.runId, content);
+      // Awaited: the record's rollout steps are on the glob when the save returns, so a merge right after finds them.
+      if (kind === 'implementation_plan') {
+        await this.deps.rollout?.(email, globId, content, { commitSha: options.commitSha, runId: options.runId, agentSetVersion: options.agentSetVersion });
+      }
     }
     return ok(artifact);
   }

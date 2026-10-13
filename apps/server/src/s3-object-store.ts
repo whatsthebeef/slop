@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, NotFound } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, NotFound } from '@aws-sdk/client-s3';
 import type { S3Client } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -78,6 +78,16 @@ export class S3ObjectStore implements ObjectStore {
     } catch (error) {
       if (error instanceof NotFound) return null;
       throw error;
+    }
+  }
+
+  /** Whether the bucket answers a HEAD request now (it exists and the role may reach it). Never throws. */
+  async reachable(signal?: AbortSignal): Promise<boolean> {
+    try {
+      await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }), signal === undefined ? {} : { abortSignal: signal });
+      return true;
+    } catch {
+      return false;
     }
   }
 

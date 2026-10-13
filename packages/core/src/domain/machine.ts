@@ -2478,7 +2478,9 @@ export const merged = (
     .status('reviewing')
     .effect({ kind: 'flag_conflicts', globId: glob.id, generation: glob.generation })
     // Only the final merge releases the globs waiting for this one (a Merge and continue leaves it open).
-    .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation });
+    .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation })
+    // Likewise: a Merge and continue is not the change that is rolled out.
+    .effect({ kind: 'check_rollout_paths', globId: glob.id, generation: glob.generation, sha: merge.sha });
   // A sub merges without human review, so its one review runs after the merge (a same or super was reviewed before it).
   if (glob.type === 'sub')
     b.effect({

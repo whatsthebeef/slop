@@ -195,6 +195,7 @@ export const ARTIFACT_KINDS = [
   'outcome',
   'effect_check',
   'attachment',
+  'rollout_script',
 ] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
@@ -216,6 +217,8 @@ export const ARTIFACT_ROLE: Record<ArtifactKind, ArtifactRole> = {
   outcome: 'special',
   effect_check: 'special',
   attachment: 'attachment',
+  // A rollout step's script body: listed with the glob, shown through its step.
+  rollout_script: 'special',
 };
 export const isSpecialKind = (kind: ArtifactKind): boolean => ARTIFACT_ROLE[kind] === 'special';
 

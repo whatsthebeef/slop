@@ -11,6 +11,8 @@ import type { LearningWire } from '../src/domain/kb.js';
 import { isAgentSetKind } from '../src/domain/knowledge.js';
 import {
   checkMergePolicy,
+  DEFAULT_ROLLOUT_PATHS,
+  rolloutPathsOf,
   MERGE_POLICY_PATH_MAX,
   MERGE_POLICY_PATHS_MAX,
   parseMergePolicy,
@@ -280,5 +282,34 @@ describe('the merge policy through the KB', () => {
     expect(view).toMatchObject({ policy: null, version: 4 });
     expect(view.problem).toContain('version 4');
     expect(await store.transaction((tx) => readMergePolicy(tx, boardId))).toEqual({});
+  });
+});
+
+describe('rolloutPaths', () => {
+  it('round-trips through parse and render, after the other lists', () => {
+    const policy = unwrap(parseMergePolicy('{"rolloutPaths": [" infra/** ", "infra/**", "deploy/*.sh"], "exclusivePaths": ["db/**"]}'));
+    expect(policy).toEqual({ exclusivePaths: ['db/**'], rolloutPaths: ['infra/**', 'deploy/*.sh'] });
+    const text = renderMergePolicy(policy);
+    expect(text.indexOf('exclusivePaths')).toBeLessThan(text.indexOf('rolloutPaths'));
+    expect(unwrap(parseMergePolicy(text))).toEqual(policy);
+    expect(renderMergePolicy({})).toBe('{}\n');
+  });
+
+  it('uses the defaults when the policy has none, and its own list when it has one', () => {
+    expect(rolloutPathsOf(null)).toBe(DEFAULT_ROLLOUT_PATHS);
+    expect(rolloutPathsOf({})).toBe(DEFAULT_ROLLOUT_PATHS);
+    expect(rolloutPathsOf({ rolloutPaths: [] })).toBe(DEFAULT_ROLLOUT_PATHS);
+    expect(rolloutPathsOf({ rolloutPaths: ['ops/**'] })).toEqual(['ops/**']);
+    expect(DEFAULT_ROLLOUT_PATHS).toEqual(['infra/**', 'apps/server/src/config.ts', '.github/workflows/**', '**/drizzle/**']);
+  });
+
+  it.each([
+    ['a non-array', '{"rolloutPaths": "infra/**"}', 'must be a list'],
+    ['a non-string entry', '{"rolloutPaths": [1]}', 'only strings'],
+    ['an absolute path', '{"rolloutPaths": ["/infra/**"]}', 'relative to the repo root'],
+    ['a parent path', '{"rolloutPaths": ["../x"]}', 'relative to the repo root'],
+    ['an empty entry', '{"rolloutPaths": [""]}', 'empty entry'],
+  ])('refuses %s', (_name, text, message) => {
+    expect(errorOf(parseMergePolicy(text))?.message).toContain(message);
   });
 });
