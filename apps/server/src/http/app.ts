@@ -325,7 +325,7 @@ export const createApp = (deps: AppDeps) => {
         const now = new Date().toISOString();
         const thresholds = stallThresholds(m.board);
         const stalled = list.filter(
-          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), new Map(), now, { viewer, thresholds }).holder === 'stalled',
+          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), new Map(), now, { viewer, thresholds, complete: false }).holder === 'stalled',
         ).length;
         const yourTurn = (everyone.ok ? everyone.value : []).reduce(
           (n, { glob, artifacts }) =>
@@ -464,15 +464,15 @@ export const createApp = (deps: AppDeps) => {
         const view = globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain, glob.waiting != null && oversized.has(glob.id), steps.get(glob.id));
         // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
         // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
-        const machine = machineSteps(glob);
-        const human = humanSteps(glob, {}, steps.get(glob.id) ?? []);
-        const move = whoseMove(glob, human, machine, dependencies, now, { viewer, thresholds });
+        const facts = machineSteps(glob);
+        const human = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }) }, steps.get(glob.id) ?? []);
+        const move = whoseMove(glob, human, facts, dependencies, now, { viewer, thresholds, complete: false });
         return {
           ...view,
           // A stalled glob also hands a step to its implementer (or planner).
           humanSteps: withUnstick(human, move, glob, { allowed: view.allowedActions ?? [], session: glob.runs.some((r) => r.state !== 'ended' && r.sessionUrl != null) }).map(compactStep),
           move,
-          machineSteps: machine,
+          machineSteps: facts,
           ...splitField(splits.get(glob.id)),
           ...(oversized.has(glob.id) ? { oversized: true } : {}),
         };

@@ -6,8 +6,8 @@ import { groupFromTitle } from '../domain/group.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
-import { humanSteps } from '../domain/human-steps.js';
-import type { HumanStep, StoredHumanStep } from '../domain/human-steps.js';
+import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, humanSteps, isHumanStepDue, storedBlockProgress } from '../domain/human-steps.js';
+import type { HumanStep, HumanStepBlock, HumanStepKind, HumanStepScript, StoredHumanStep } from '../domain/human-steps.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
@@ -205,6 +205,21 @@ const byKind = (a: ArtifactSummary, b: ArtifactSummary): number =>
 
 type Step = (glob: Glob, ctx: Context, board: Board, facts: ActionFacts) => Result<Transition>;
 
+/** The placeholder the investigator leaves when it predicts a rollout: the implementer replaces it with the real steps. */
+export const PREDICTED_ROLLOUT_TITLE = 'Rollout: steps to be written';
+
+/** A work step as a person or agent writes it; what is left out gets the kind's defaults. */
+export interface NewHumanStep {
+  readonly title: string;
+  readonly kind?: HumanStepKind;
+  readonly detail?: string;
+  readonly who?: string;
+  readonly due?: string;
+  readonly blocks?: readonly HumanStepBlock[];
+  readonly check?: string;
+  readonly script?: HumanStepScript;
+}
+
 interface CommandOptions {
   /** Read the facts some actions depend on (the latest implementation record); other steps get none. */
   readonly facts?: boolean;
@@ -212,6 +227,8 @@ interface CommandOptions {
   readonly dependencies?: boolean;
   /** Read the glob's whole blocking chain into `facts.chain`. */
   readonly chain?: boolean;
+  /** Read the work steps holding back sign-off into `facts.rollout`. */
+  readonly rollout?: boolean;
   /** Runs before the step: checks input against the store, and returns more glob IDs whose state the step needs. */
   readonly prepare?: (tx: Tx, glob: Glob) => Promise<Result<readonly string[]>>;
   /** A system step that starts a run on someone's behalf: the glob's creator triggers it. */
@@ -314,6 +331,142 @@ export class GlobService {
     return byGlob;
   }
 
+  /**
+   * Adds a work step to a glob (members only; version-checked when a version is given, and the glob's version is left
+   * alone). A rollout step defaults to falling due after the merge and holding back sign-off and dependants.
+   */
+  async addHumanStep(email: string, id: string, version: number | null, input: NewHumanStep, origin = 'person'): Promise<Result<StoredHumanStep>> {
+    const title = input.title.trim();
+    if (title === '') return invalidInput('A step needs a title');
+    const kind = input.kind ?? 'rollout';
+    if (!HUMAN_STEP_KINDS.includes(kind)) return invalidInput(`Unknown step kind ${kind}`);
+    const due = input.due ?? (kind === 'rollout' ? 'after_merge' : 'now');
+    if (!isHumanStepDue(due)) return invalidInput(`Unknown due ${due}: use now, after_merge or after_deploy:<env>`);
+    const blocks = input.blocks ?? (kind === 'rollout' ? ['sign_off', 'dependants'] : []);
+    const unknown = blocks.find((b) => !HUMAN_STEP_BLOCKS.includes(b));
+    if (unknown !== undefined) return invalidInput(`Unknown block ${unknown}: use ${HUMAN_STEP_BLOCKS.join(', ')}`);
+    const who = (input.who ?? 'anyone').trim();
+    if (who === '') return invalidInput('A step needs someone it is for (or anyone)');
+    const result = await this.deps.store.transaction(async (tx): Promise<Result<StoredHumanStep>> => {
+      const glob = await tx.getGlob(id);
+      if (glob === null) return notFound(`No glob ${id}`);
+      const actor = await this.actorFor(tx, email, glob.boardId);
+      if (!actor.ok) return actor;
+      if (version !== null && glob.version !== version) return err({ code: 'version_conflict', message: 'The glob has changed', current: glob });
+      const now = this.deps.clock.now();
+      const step: StoredHumanStep = {
+        id: `hs_${this.deps.ids.runId()}`,
+        boardId: glob.boardId,
+        globId: id,
+        kind,
+        title,
+        detail: input.detail?.trim() || null,
+        who,
+        due,
+        state: 'open',
+        blocks: [...new Set(blocks)],
+        check: input.check ?? null,
+        script: input.script ?? null,
+        origin,
+        createdBy: email,
+        createdAt: now,
+        doneBy: null,
+        doneAt: null,
+        dismissedReason: null,
+      };
+      await tx.saveHumanSteps([step]);
+      await tx.appendEvents([{ type: 'HumanStepChanged', globId: id, actor: email, at: now, data: { step: step.id, kind, title, change: 'added' } }]);
+      return ok(step);
+    });
+    if (result.ok) this.deps.notifier.publish({ kind: 'glob.changed', boardId: result.value.boardId, globId: id, version: version ?? 0 });
+    return result;
+  }
+
+  /** Ticks a work step (records who and when), then lets the glob move on if it was the last one holding it back. */
+  completeHumanStep(email: string, id: string, stepId: string, version: number | null): Promise<Result<StoredHumanStep>> {
+    return this.closeHumanStep(email, id, stepId, version, 'done', null);
+  }
+
+  /** Dismisses a wrong step with the reason; the glob moves on if nothing else holds it back. */
+  dismissHumanStep(email: string, id: string, stepId: string, reason: string, version: number | null): Promise<Result<StoredHumanStep>> {
+    if (reason.trim() === '') return Promise.resolve(invalidInput('Dismissing a step needs a reason'));
+    return this.closeHumanStep(email, id, stepId, version, 'dismissed', reason.trim());
+  }
+
+  private async closeHumanStep(
+    email: string,
+    id: string,
+    stepId: string,
+    version: number | null,
+    to: 'done' | 'dismissed',
+    reason: string | null,
+  ): Promise<Result<StoredHumanStep>> {
+    const closed = await this.deps.store.transaction(async (tx): Promise<Result<StoredHumanStep>> => {
+      const glob = await tx.getGlob(id);
+      if (glob === null) return notFound(`No glob ${id}`);
+      const actor = await this.actorFor(tx, email, glob.boardId);
+      if (!actor.ok) return actor;
+      if (version !== null && glob.version !== version) return err({ code: 'version_conflict', message: 'The glob has changed', current: glob });
+      const found = (await tx.listHumanSteps(glob.boardId, [id])).find((s) => s.id === stepId);
+      if (found === undefined) return notFound(`No step ${stepId} on ${id}`);
+      if (found.state !== 'open') return ok(found);
+      const now = this.deps.clock.now();
+      const step: StoredHumanStep = to === 'done' ? { ...found, state: 'done', doneBy: email, doneAt: now } : { ...found, state: 'dismissed', dismissedReason: reason };
+      await tx.saveHumanSteps([step]);
+      await tx.appendEvents([{ type: 'HumanStepChanged', globId: id, actor: email, at: now, data: { step: step.id, kind: step.kind, title: step.title, change: to } }]);
+      return ok(step);
+    });
+    if (!closed.ok) return closed;
+    await this.afterStepsChanged(id);
+    return closed;
+  }
+
+  /**
+   * Steps changed: a merged glob whose last sign-off blocker cleared and whose labels are approved moves to Signed off,
+   * and the globs waiting for its rollout are released. Both are no-ops while a step is still open.
+   */
+  private async afterStepsChanged(id: string): Promise<void> {
+    const settled = await this.command(null, id, null, (glob, ctx, _board, facts) => machine.rolloutSettled(glob, facts.rollout ?? { open: 0, total: 0 }, ctx), { rollout: true });
+    const glob = settled.ok ? settled.value : await this.deps.store.transaction((tx) => tx.getGlob(id));
+    if (glob === null) return;
+    this.deps.notifier.publish({ kind: 'glob.changed', boardId: glob.boardId, globId: id, version: glob.version });
+    if (listOf(glob.status) === 'reviewing' || listOf(glob.status) === 'signed_off') await this.releaseDependents(id, glob.boardId);
+  }
+
+  /** The investigator predicted a rollout: adds the placeholder step once (a person's dismissal of it stands). */
+  async predictRollout(id: string): Promise<void> {
+    const glob = await this.deps.store.transaction((tx) => tx.getGlob(id));
+    if (glob === null) return;
+    const added = await this.deps.store.transaction(async (tx) => {
+      const steps = await tx.listHumanSteps(glob.boardId, [id]);
+      if (steps.some((s) => s.origin === 'investigation' || (s.kind === 'rollout' && s.state === 'open'))) return false;
+      await tx.saveHumanSteps([
+        {
+          id: `hs_${this.deps.ids.runId()}`,
+          boardId: glob.boardId,
+          globId: id,
+          kind: 'rollout',
+          title: PREDICTED_ROLLOUT_TITLE,
+          detail: null,
+          who: 'anyone',
+          due: 'after_merge',
+          state: 'open',
+          blocks: ['sign_off', 'dependants'],
+          check: null,
+          script: null,
+          origin: 'investigation',
+          createdBy: 'investigation',
+          createdAt: this.deps.clock.now(),
+          doneBy: null,
+          doneAt: null,
+          dismissedReason: null,
+        },
+      ]);
+      return true;
+    });
+    if (added) this.deps.notifier.publish({ kind: 'glob.changed', boardId: glob.boardId, globId: id, version: glob.version });
+  }
+
   /** The globs on a board whose oversized flag nobody has answered yet, for the card's chip. */
   async oversizedOf(boardId: number): Promise<Set<string>> {
     const [checks, planning] = await this.deps.store.transaction(async (tx) => [await tx.listSizeChecks(boardId), await tx.listGlobs(boardId, { status: ['planning'] })] as const);
@@ -372,7 +525,8 @@ export class GlobService {
       // The chain only matters where a run could be started (Planning) or started again (failed).
       const blocked = globs.filter((g) => (g.status === 'planning' || g.status === 'failed') && g.type !== 'super' && dependencyIds(g).length > 0);
       const reach = blocked.length === 0 ? new Map<string, Glob>() : await this.closure(tx, blocked.flatMap((g) => dependencyIds(g)));
-      const chains = new Map(blocked.map((g) => [g.id, blockingChain(g.id, g, (gid) => reach.get(gid))]));
+      const held = blocked.length === 0 ? undefined : await this.heldDependants(tx, boardId);
+      const chains = new Map(blocked.map((g) => [g.id, blockingChain(g.id, g, (gid) => reach.get(gid), held)]));
       return ok(
         globs.map((glob) => ({
           glob,
@@ -923,12 +1077,17 @@ export class GlobService {
 
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel(email: string, id: string, version: number, name: LabelName, command: LabelCommand) {
-    return this.command(email, id, version, (glob, ctx) => machine.reviewLabel(glob, name, command, ctx));
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.reviewLabel(glob, name, command, ctx, facts.rollout ?? null), {
+      rollout: true,
+    });
   }
 
   /** Decision globs: sign off an accepted decision (Reviewing to Signed off). */
   signOffDecision(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx) => machine.signOffDecision(glob, ctx), { applies: 'decision' });
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.signOffDecision(glob, ctx, facts.rollout ?? null), {
+      applies: 'decision',
+      rollout: true,
+    });
   }
 
   /** Decision globs: take an accepted decision back to Doing, its outcome cleared. */
@@ -1191,14 +1350,22 @@ export class GlobService {
   private async dependencyStates(tx: Tx, ids: readonly string[]): Promise<Map<string, DependencyState>> {
     const found = ids.length === 0 ? [] : await tx.getGlobs(ids);
     const byId = new Map(found.map((g) => [g.id, g]));
-    return new Map(ids.map((id) => [id, dependencyState(byId.get(id))]));
+    const held = new Set<string>();
+    for (const boardId of new Set(found.map((g) => g.boardId))) for (const id of await this.heldDependants(tx, boardId)) held.add(id);
+    return new Map(ids.map((id) => [id, dependencyState(byId.get(id), held)]));
+  }
+
+  /** The globs on a board whose open work steps hold back their dependants (a rollout): merged, but still awaited. */
+  private async heldDependants(tx: Tx, boardId: number): Promise<Set<string>> {
+    const open = await tx.listOpenHumanSteps(boardId);
+    return new Set(open.filter((s) => s.blocks.includes('dependants')).map((s) => s.globId));
   }
 
   /** What the glob is blocked by: its unmerged prerequisites and theirs in turn. */
   private async chainOf(tx: Tx, glob: Glob): Promise<BlockingChain> {
     if (glob.type === 'super') return NO_CHAIN;
     const reach = await this.closure(tx, dependencyIds(glob));
-    return blockingChain(glob.id, glob, (id) => reach.get(id));
+    return blockingChain(glob.id, glob, (id) => reach.get(id), await this.heldDependants(tx, glob.boardId));
   }
 
   /** The chain of a glob by ID, for the routine executor's last check before a session is spent. */
@@ -1267,7 +1434,11 @@ export class GlobService {
             ? { dependencies: await this.dependencyStates(tx, [...new Set([...dependencyIds(glob), ...extraIds])]) }
             : {};
         const chain = options.chain === true ? { chain: await this.chainOf(tx, glob) } : {};
-        const facts: ActionFacts = { ...record, ...dependencies, ...chain };
+        const rollout =
+          options.rollout === true
+            ? { rollout: storedBlockProgress(await tx.listHumanSteps(glob.boardId, [glob.id]), 'sign_off') }
+            : {};
+        const facts: ActionFacts = { ...record, ...dependencies, ...chain, ...rollout };
         const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);
         const transition = step(glob, ctx, board, facts);
         if (!transition.ok) return transition;

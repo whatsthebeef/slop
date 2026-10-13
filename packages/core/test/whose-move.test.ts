@@ -127,6 +127,15 @@ describe('whoseMove: stalled', () => {
     expect(move(glob({ status: 'reviewing', labels: {} }), { effects: [{ kind: 'commit_agent_set', state: 'failed', since: NOW }] }).holder).toBe('stalled');
   });
 
+  it('with incomplete facts, a glob nobody is on is idle, while failures and quiet runs still stall', () => {
+    const partial = (g: Glob): Move => whoseMove(g, humanSteps(g, {}, []), machineSteps(g, {}), new Map(), NOW, { viewer, complete: false });
+    expect(partial(glob({ status: 'in_progress', type: 'sub', updatedAt: minutesAgo(3) }))).toMatchObject({ holder: 'idle', reason: 'Not enough facts to say' });
+    expect(partial(glob({ status: 'implementing', implementer: dev.email, updatedAt: minutesAgo(90) })).holder).toBe('idle');
+    expect(partial(glob({ status: 'failed', failure: { reason: 'run gave up', at: NOW } }))).toMatchObject({ holder: 'stalled', cause: 'failed' });
+    const quiet = glob({ status: 'in_progress', runs: [run({ startedAt: minutesAgo(300), lastProgressAt: minutesAgo(90) })] });
+    expect(partial(quiet)).toMatchObject({ holder: 'stalled', cause: 'quiet' });
+  });
+
   it('a due human step beats a stall', () => {
     expect(move(ready({ failure: null, runs: [run({ state: 'watching' })] })).holder).toBe('you');
   });

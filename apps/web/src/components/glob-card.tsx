@@ -13,7 +13,7 @@ import type { StatusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
-import { actionTiers } from '@/lib/action-style';
+import { mainAction } from '@/lib/main-action';
 import { workingLabel } from '@/lib/card-pending';
 import { splitChip } from '@/lib/split-chip';
 import { activityClick, CONFIRM_MS, clickTip, prUrl, statusClick, turnStep, yourTurnClick } from '@/lib/chip-actions';
@@ -838,7 +838,7 @@ export const GlobCard = ({
               move={move}
               hot={move.action === previewing}
               disabled={pending !== undefined}
-              primary={actionTiers(all.map((m) => m.action)).get(move.action) === 'primary'}
+              primary={mainAction(all.map((m) => m.action), glob, decision) === move.action}
               onPreview={onPreview}
               onMove={onMove}
             />

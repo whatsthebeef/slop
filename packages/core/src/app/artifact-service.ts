@@ -16,6 +16,8 @@ import type { GlobAttributes } from '../domain/attributes.js';
 import { recheckOverlapsEffect } from '../domain/events.js';
 import { handoverBrief, openFindings, resumePhase } from '../domain/handover.js';
 import type { Handover } from '../domain/handover.js';
+import { humanSteps } from '../domain/human-steps.js';
+import type { HumanStep } from '../domain/human-steps.js';
 import { currentRun } from '../domain/machine.js';
 import type { SearchHit } from '../domain/search.js';
 import type { Glob } from '../domain/types.js';
@@ -101,6 +103,8 @@ export interface GlobContext {
   readonly handover: Handover | null;
   /** Which source wins when sources disagree (the spec's order of authority). */
   readonly authority: string;
+  /** Everything only a person can do on the glob (the machine's steps and stored work steps), most pressing first. */
+  readonly humanSteps: readonly HumanStep[];
   /** Present when intake judged the glob: the oversized flag, its reasons and the proposed split (apply it with split_glob). */
   readonly size?: SizeContext;
   readonly fetch: string;
@@ -562,6 +566,7 @@ export class ArtifactService {
         inbox,
         handover: await handoverOf(tx, this.deps.clock, glob),
         authority: AUTHORITY_STATEMENT,
+        humanSteps: humanSteps(glob, {}, await tx.listHumanSteps(glob.boardId, [globId])),
         ...(sizeCheck === null ? {} : { size: sizeContext(sizeCheck) }),
         fetch:
           "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'all']). Inbox items are attached notes: their text is cut at 12000 characters (truncated: true); search_text finds the rest.",

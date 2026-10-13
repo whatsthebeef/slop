@@ -19,7 +19,7 @@ export type CardList = 'planning' | 'doing' | 'reviewing' | 'signed_off';
 
 /**
  * The actions the card offers for a glob in Planning, in order: the one common action, or for a same both Start and
- * Pick up. Start now (start_anyway), Retry and Take over stay in the glob view's More menu, and Pick up covers take_over.
+ * Pick up. Start now (start_anyway), Retry and take_over stay in the glob view's More menu, and Pick up covers take_over.
  */
 export const cardActions = (glob: Pick<GlobView, 'type' | 'list' | 'allowedActions' | 'provisioning' | 'status' | 'implementer' | 'pr'>): Action[] => {
   // No moves while slop is still creating the glob's branch and PR: a second action then would race the setup.

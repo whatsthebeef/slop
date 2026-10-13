@@ -26,7 +26,7 @@ export const handoverOneLine = (brief: Handover): string => {
   return rest.length === 0 ? first : `${first} (+${String(rest.length)} more)`;
 };
 
-/** Said in the Pick up / Take over / Start confirmation: "You're taking over because …". */
+/** Said in the Pick up (take_over included) / Start confirmation: "You're taking over because …". */
 export const handoverConfirmation = (action: Action, brief: Handover): string => {
   const verb = action === 'take_over' ? 'taking over' : action === 'pick_up' ? 'picking this up' : 'starting this';
   return `You're ${verb} because: ${brief.why.join(' ')} First: ${brief.next}`;
