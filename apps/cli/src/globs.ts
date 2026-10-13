@@ -174,7 +174,7 @@ function liveRun(glob: GlobView): GlobView['currentRun'] {
   return run !== null && LIVE_RUN_STATES.has(run.state) ? run : null;
 }
 
-function summary(glob: GlobView): Record<string, unknown> {
+function globJson(glob: GlobView): Record<string, unknown> {
   return {
     id: glob.id,
     title: glob.title,
@@ -206,14 +206,14 @@ function printJson(deps: GlobDeps, value: unknown): void {
   deps.stdout(`${JSON.stringify(value)}\n`);
 }
 
-/** `slop glob <id>`: the glob's summary. */
+/** `slop glob <id>`: print a glob's status, branch, implementer, run and PR. */
 export async function globCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
   const { flags, positionals } = parseArgs(args, ['--json'], GLOB_USAGE);
   const [id] = positionals;
   if (id === undefined || positionals.length !== 1)
     throw new UsageError(`usage: slop ${GLOB_USAGE}`);
   const glob = await getGlob(deps, requireGlobId(id, GLOB_USAGE));
-  if (flags.has('--json')) printJson(deps, summary(glob));
+  if (flags.has('--json')) printJson(deps, globJson(glob));
   else deps.stdout(`${describeGlob(glob)}\n`);
 }
 
@@ -256,7 +256,7 @@ export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Pr
   );
   const ready = await waitForBranch(deps, picked);
   deps.log(`slop: picked up ${ready.id} (${ready.status})`);
-  if (flags.has('--json')) printJson(deps, summary(ready));
+  if (flags.has('--json')) printJson(deps, globJson(ready));
   else deps.stdout(`${ready.branch}\n`);
 }
 
@@ -474,7 +474,7 @@ export async function mergeCommand(args: readonly string[], deps: GlobDeps): Pro
   const glob = await getGlob(deps, id);
   const merged = MERGED_STATUSES.has(glob.status) ? glob : await mergeAt(deps, glob, continueAfter);
   if (flags.has('--json')) {
-    printJson(deps, summary(merged));
+    printJson(deps, globJson(merged));
     return;
   }
   const note =
