@@ -1544,6 +1544,15 @@ describe('Retry auto-fix', () => {
     expect(m.currentRun(value(m.conflictCleared(active, ctx(null))).glob)?.state).toBe('watching');
   });
 
+  it('starts a conflict-fix run watching when the conflict cleared before its first call', () => {
+    const g = glob({
+      status: 'pr_open',
+      pr: { number: 7, state: 'ready', headSha: 'a2a88c8aaaa' },
+      runs: [run({ id: 'run-0', state: 'queued', purpose: 'resolve_conflict' })],
+    });
+    expect(m.currentRun(value(m.runProgress(g, 'run-0', ctx(null))).glob)?.state).toBe('watching');
+  });
+
   it('is refused while a run is live, for merge failures and without an ended failed run', () => {
     const live = { ...stuck(), runs: [ended, run({ id: 'run-1', state: 'watching' })] };
     expect(m.allowedActions(live, dev)).not.toContain('retry_autofix');

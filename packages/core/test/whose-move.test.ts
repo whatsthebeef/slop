@@ -208,6 +208,11 @@ describe('whoseMove: a conflict or failed checks on an open PR is never "nobody"
     expect(move(ready({ implementer: null, conflict }))).toMatchObject({ reason: 'Fix conflict' });
   });
 
+  it('an in_progress glob with a human implementer keeps its pick-up / stall handling', () => {
+    const g = glob({ status: 'in_progress', implementer: dev.email, pr: { number: 49, state: 'draft', headSha: head }, conflict });
+    expect(move(g).reason).not.toBe('Fix conflict: pick up');
+  });
+
   it('failed checks with no run are a person\'s; with a watching run they are the watcher\'s', () => {
     const failedChecks = { sha: head, state: 'failed' as const, at: NOW };
     expect(move(ready({ implementer: null, headChecks: failedChecks }))).toMatchObject({ holder: 'you', reason: 'Fix checks' });

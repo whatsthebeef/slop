@@ -1935,10 +1935,10 @@ export const runProgress = (glob: Glob, runId: string, ctx: Context): Result<Tra
   if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
   return new Builder(glob, ctx)
     .updateRun({
-      // A run retried on a ready PR watches it; there is no PR to mark ready. A conflict-fix run has work to do first.
+      // A run retried on a ready PR watches it; there is no PR to mark ready. A conflict-fix run has work to do first, unless the conflict already cleared.
       state:
         run.state === 'queued'
-          ? glob.status === 'pr_open' && run.purpose !== 'resolve_conflict'
+          ? glob.status === 'pr_open' && (run.purpose !== 'resolve_conflict' || glob.conflict == null)
             ? 'watching'
             : 'active'
           : run.state,
