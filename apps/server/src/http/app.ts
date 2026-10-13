@@ -565,6 +565,19 @@ export const createApp = (deps: AppDeps) => {
     },
   } as const;
 
+  const BACKGROUND_DRAIN: ReadonlySet<keyof typeof actions> = new Set([
+    'review-now',
+    'start',
+    'start-anyway',
+    'investigate',
+    'retrigger',
+    'retry-autofix',
+    'resolve-conflict',
+    'pick-up',
+    'take-over',
+    'start-again',
+  ]);
+
   app.post('/api/globs/:id/actions/:action', async (c) => {
     const action = z.enum(Object.keys(actions) as [keyof typeof actions]).safeParse(c.req.param('action'));
     if (!action.success) return c.json({ code: 'not_found', message: 'Unknown action' }, 404);
@@ -573,8 +586,10 @@ export const createApp = (deps: AppDeps) => {
     const result = await actions[action.data](c.get('email'), c.req.param('id'), body);
     if (result.ok) {
       const drained = deps.outbox.drain(result.value.id);
-      // A review takes minutes: it runs in the background, and the glob view answers at once.
-      if (action.data === 'review-now') void drained.catch(() => undefined);
+      // A review takes minutes, and starting or handing over a glob provisions its branch and PR and fires a routine (GitHub
+      // calls, seconds): those run in the background and the glob view answers at once, with provisioning still pending.
+      // The board's live hint shows the result, and the outbox poller picks the jobs up if this drain is cut short.
+      if (BACKGROUND_DRAIN.has(action.data)) void drained.catch(() => undefined);
       else await drained;
     }
     return withView(c, result);
