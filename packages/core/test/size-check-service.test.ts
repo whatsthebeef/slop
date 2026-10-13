@@ -216,6 +216,56 @@ describe('learned size check', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('proposes again on the current plan, and records why when the model gives no split', async () => {
+    // A model that judges the plan big but gives no usable split.
+    proposed = [];
+    const glob = await create('same', BIG);
+    const first = await store.transaction((tx) => tx.getSizeCheck(glob.id));
+    expect(first).toMatchObject({ flagged: true, proposal: null });
+    expect(first?.evidence).toContain('No split was proposed: the model gave fewer than 2 usable parts');
+    // The plan changed behind the stored check's back (same hash is not required).
+    proposed = [
+      { title: 'Data and server', summary: 'a', plan: '## Tasks\n1. migration in apps/server/drizzle\n2. endpoint in apps/server/drizzle', after: [] },
+      { title: 'Web', summary: 'b', plan: '## Tasks\n3. web card', after: [0] },
+      { title: 'CLI', summary: 'c', plan: '## Tasks\n4. CLI command in apps/server/drizzle', after: [0] },
+    ];
+    clockNow = '2026-10-09T13:00:00.000Z';
+    unwrap(await service.repropose(DEV, glob.id));
+    expect(service.isReproposing(glob.id)).toBe(true);
+    // A second request while one runs is not an error.
+    unwrap(await service.repropose(DEV, glob.id));
+    await service.runRepropose(glob.id);
+    expect(service.isReproposing(glob.id)).toBe(false);
+    const again = await store.transaction((tx) => tx.getSizeCheck(glob.id));
+    expect(again).toMatchObject({ flagged: true, createdAt: first?.createdAt, updatedAt: '2026-10-09T13:00:00.000Z' });
+    expect(again?.proposal?.parts.map((p) => p.title)).toEqual(['Data and server', 'Web', 'CLI']);
+    expect(again?.evidence.join('\n')).not.toContain('No split was proposed');
+  });
+
+  it('a failed proposal keeps the flag and says the model timed out or was unavailable', async () => {
+    const glob = await create('same', BIG);
+    llmMode = 'unavailable';
+    unwrap(await service.repropose(DEV, glob.id));
+    await service.runRepropose(glob.id);
+    const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
+    // The judge failed too, so the text estimate is back and does not flag: the earlier flag is not the model's to lift silently.
+    expect(check?.proposal).toBeNull();
+    expect(check?.evidence.some((e) => e.startsWith('No split was proposed')) || check?.flagged === false).toBe(true);
+  });
+
+  it('proposing again is refused when not flagged, answered or started', async () => {
+    const small = await create('same', SMALL);
+    expect((await service.repropose(DEV, small.id)).ok).toBe(false);
+    const flagged = await create('same', BIG);
+    unwrap(await service.keepWhole(DEV, flagged.id));
+    expect((await service.repropose(DEV, flagged.id)).ok).toBe(false);
+    expect((await service.repropose('nobody@example.com', flagged.id)).ok).toBe(false);
+    const sub = await create('sub', BIG);
+    unwrap(await service.keepWhole(DEV, sub.id));
+    unwrap(await globs.release(sub.id));
+    expect((await service.repropose(DEV, sub.id)).ok).toBe(false);
+  });
+
   it('splitting a flagged glob records the decision', async () => {
     const glob = await create('same', BIG);
     const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));

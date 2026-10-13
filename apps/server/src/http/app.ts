@@ -522,6 +522,17 @@ export const createApp = (deps: AppDeps) => {
     });
   }
 
+  // Propose split again: re-runs the size check's proposal on the current plan in the background; the card refreshes when it lands.
+  if (sizeCheck !== undefined) {
+    app.post('/api/globs/:id/actions/repropose-split', async (c) => {
+      const id = c.req.param('id');
+      const asked = await sizeCheck.repropose(c.get('email'), id);
+      if (!asked.ok) return send(c, asked);
+      void sizeCheck.runRepropose(id);
+      return send(c, asked, () => ({ running: true }));
+    });
+  }
+
   app.delete('/api/globs/:id', async (c) => {
     const body = await parse(c, versionSchema);
     if (body instanceof Response) return body;
