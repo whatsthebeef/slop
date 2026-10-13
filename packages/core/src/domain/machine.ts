@@ -1307,7 +1307,7 @@ export const reviewLabel = (
   name: LabelName,
   command: LabelCommand,
   ctx: Context,
-  /** Work steps holding back sign-off: labels still change, but the glob stays in Reviewing until they are done. */
+  /** Work steps holding back sign-off: a merged glob's labels can't be approved until they are done (QA checks the change as rolled out). */
   rollout: BlockProgress | null = null,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
@@ -1368,6 +1368,7 @@ export const reviewLabel = (
     case 'approve':
       // Row 28 (and row 21 when it is the last label).
       if (from === 'approved') return unchanged(glob);
+      if (glob.status === 'reviewing' && rollout !== null && rollout.open > 0) return invalidTransition(glob, actor, rolloutPending(rollout));
       return setState('approved', { open: openItems(items) }).done();
     case 'tick': {
       // Row 29.

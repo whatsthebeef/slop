@@ -3,9 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HumanSteps } from '../src/components/human-steps';
+import { LabelReviews } from '../src/components/labels';
 import { api } from '../src/lib/api';
 import type { GlobView, ListedHumanStep } from '../src/lib/api';
 import {
+  approveHold,
   blockingTurn,
   defaultStepsOpen,
   dismissReason,
@@ -75,6 +77,26 @@ describe('rollout status line', () => {
   it('says nothing before the merge or once the steps are done', () => {
     expect(rolloutLine(glob(), steps, admin)).toBeNull();
     expect(rolloutLine(merged([]), [step({ state: 'done' })], admin)).toBeNull();
+  });
+});
+
+describe('approving while the rollout is pending', () => {
+  it('holds Approve with the first open step\'s title, and lets go once steps are done or dismissed', () => {
+    expect(approveHold(merged([step({ id: 'a', state: 'done' }), step({ id: 'b', title: 'Set the env' })]))).toBe('Waits for the rollout: Set the env');
+    expect(approveHold(merged([step({ state: 'done' })]))).toBeNull();
+    expect(approveHold(merged([step({ state: 'dismissed' })]))).toBeNull();
+    expect(approveHold(merged([step({ blocks: [] })]))).toBeNull();
+  });
+  it('does not hold before the merge', () => {
+    expect(approveHold(merged([step()], { status: 'in_progress', pr: null }))).toBeNull();
+  });
+  it('disables Approve in the sign-off section and says why', () => {
+    const g = merged([step({ title: 'Deploy the stack' })]);
+    const html = renderToStaticMarkup(createElement(LabelReviews, { glob: { ...g, labels: { QA: 'required' } }, onReview: () => Promise.resolve(true) }));
+    expect(html).toContain('Waits for the rollout: Deploy the stack');
+    expect(/<button[^>]*disabled=""[^>]*>Approve<\/button>/.test(html)).toBe(true);
+    const free = renderToStaticMarkup(createElement(LabelReviews, { glob: { ...merged([]), labels: { QA: 'required' } }, onReview: () => Promise.resolve(true) }));
+    expect(free).not.toContain('Waits for the rollout');
   });
 });
 
