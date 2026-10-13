@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Action } from '@slop/core';
 import type { GlobView } from '../src/lib/api';
-import { cardActions, cardStatus, cornerMarker, hasBlocker, turnButton } from '../src/lib/card-rows';
+import { cardStatus, cornerMarker, hasBlocker, turnButton } from '../src/lib/card-rows';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -116,26 +115,6 @@ describe('hasBlocker', () => {
     expect(hasBlocker(view({ status: 'planning', clash: { with: 's1t2', paths: ['a.ts'] } }), NOW)).toBe(false);
     expect(hasBlocker(view({ status: 'planning' }), NOW)).toBe(false);
     expect(hasBlocker(prOpen({ allowedActions: ['merge'] }), NOW)).toBe(false);
-  });
-});
-
-describe('cardActions', () => {
-  const moves = (...actions: Action[]) => actions.map((action) => ({ action }));
-  const names = (list: readonly { action: Action }[]) => list.map((m) => m.action);
-
-  it('shows Start and Pick up for a same in Planning, and drops the rest', () => {
-    const g = view({ type: 'same', status: 'planning' });
-    expect(names(cardActions(moves('start', 'start_anyway', 'pick_up', 'take_over'), g, false, false))).toEqual(['start', 'pick_up']);
-  });
-
-  it('shows the one main action otherwise', () => {
-    expect(names(cardActions(moves('start', 'pick_up'), view({ type: 'sub', status: 'planning' }), false, false))).toEqual(['start']);
-    expect(names(cardActions(moves('pick_up', 'start_anyway'), view({ type: 'super', status: 'planning' }), false, false))).toEqual(['pick_up']);
-    expect(names(cardActions(moves('start', 'retrigger'), view({ type: 'same', status: 'planning' }), false, false))).toEqual(['retrigger']);
-  });
-
-  it('shows nothing with a blocker', () => {
-    expect(cardActions(moves('start', 'pick_up'), view({ type: 'same', status: 'planning' }), false, true)).toEqual([]);
   });
 });
 

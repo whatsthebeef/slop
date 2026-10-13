@@ -5,6 +5,7 @@ import { machineSteps } from '../src/domain/machine-steps.js';
 import type { MachineFacts } from '../src/domain/machine-steps.js';
 import { stalledNotification, stalledSource } from '../src/domain/notifications.js';
 import { unstickStep, whoseMove, withUnstick } from '../src/domain/whose-move.js';
+import type { UnstickOptions } from '../src/domain/whose-move.js';
 import type { Move } from '../src/domain/whose-move.js';
 import type { Glob } from '../src/domain/types.js';
 import type { DependencyState } from '../src/domain/waiting.js';
@@ -27,7 +28,7 @@ describe('whoseMove: priority', () => {
     const pair = glob({ type: 'super', status: 'planning' });
     expect(move(pair)).toMatchObject({ holder: 'you' });
     const conflict = ready({ conflict: { base: 'main', files: [], since: null, at: NOW } });
-    expect(move(conflict, {}, { viewer: { email: other.email, role: 'dev' } })).toMatchObject({ holder: 'human', reason: 'Resolve the conflict', who: dev.email });
+    expect(move(conflict, {}, { viewer: { email: other.email, role: 'dev' } })).toMatchObject({ holder: 'human', reason: 'Resolve conflict', who: dev.email });
     expect(move(conflict, {}, { viewer: undefined })).toMatchObject({ holder: 'human' });
   });
 
@@ -128,7 +129,7 @@ describe('whoseMove: stalled', () => {
       status: 'failed',
       failure: { reason: 'Merge conflict with main in apps/web/src/a.ts, apps/web/src/b.ts', at: NOW, kind: 'merge', conflict: { base: 'main', files: ['apps/web/src/a.ts', 'apps/web/src/b.ts'] } },
     });
-    expect(move(conflict)).toMatchObject({ holder: 'stalled', label: 'stalled · merge conflict', reason: 'Merge conflict with main in apps/web/src/a.ts, apps/web/src/b.ts' });
+    expect(move(conflict)).toMatchObject({ holder: 'stalled', label: 'stalled · merge conflict', reason: 'merge conflict' });
     expect(move(glob({ status: 'failed', failure: { reason: 'run gave up', at: NOW } })).label).toBe('stalled · run failed');
     const checks = glob({ status: 'failed', failure: { reason: 'run gave up', at: NOW }, headChecks: { sha: 'a', state: 'failed' } });
     expect(move(checks).label).toBe('stalled · checks failed');
@@ -174,15 +175,36 @@ describe('whoseMove: stalled', () => {
 describe('stall hand-off', () => {
   const stalledGlob = (patch: Partial<Glob> = {}) => glob({ status: 'in_progress', implementer: dev.email, updatedAt: minutesAgo(60), ...patch });
 
-  it('adds an unstick step for the implementer, titled by cause', () => {
-    const titles = (g: Glob, facts: MachineFacts = {}) => {
-      const m = move(g, facts);
-      return unstickStep(m)?.title;
-    };
-    expect(titles(glob({ status: 'failed', failure: { reason: 'x', at: NOW } }))).toBe('Machine stopped: retry or pick up');
-    expect(titles(glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null, queuedAt: minutesAgo(25), lastProgressAt: null })] }))).toBe('Queued for 25 min: open the session');
-    expect(titles(glob({ status: 'in_progress', runs: [run({ lastProgressAt: minutesAgo(60) })] }))).toBe('No progress for 60 min: open the session');
-    expect(titles(glob({ status: 'in_progress', implementer: null, updatedAt: minutesAgo(1) }))).toBe('Nobody is on this: start, hand to machine or pick up');
+  it('adds an unstick step titled by its one action, with the cause as detail', () => {
+    const step = (g: Glob, options: UnstickOptions = {}) => unstickStep(move(g), g, options);
+    const failed = glob({ status: 'failed', failure: { reason: 'x', at: NOW } });
+    expect(step(failed)).toMatchObject({ title: 'Retry', action: 'retrigger', alternative: 'pick_up' });
+    const queued = glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null, queuedAt: minutesAgo(25), lastProgressAt: null })] });
+    expect(step(queued)).toMatchObject({ title: 'Open session', action: 'open_session', alternative: 'pick_up' });
+    expect(step(queued)?.detail).toContain('25 min');
+    const quiet = glob({ status: 'in_progress', runs: [run({ lastProgressAt: minutesAgo(60) })] });
+    expect(step(quiet)).toMatchObject({ title: 'Open session', action: 'open_session' });
+    const nobody = glob({ status: 'in_progress', implementer: null, updatedAt: minutesAgo(1) });
+    expect(step(nobody)).toMatchObject({ title: 'Start', action: 'start', alternative: 'pick_up', detail: 'nobody is on this' });
+  });
+
+  it('a person who is the implementer is offered Pick up, or Start for a hand-over', () => {
+    const g = stalledGlob({ updatedAt: minutesAgo(60) });
+    expect(unstickStep(move(g), g)).toMatchObject({ title: 'Pick up', action: 'pick_up', alternative: 'start_anyway' });
+    const failed = glob({ status: 'failed', implementer: dev.email, failure: { reason: 'x', at: NOW } });
+    const step = unstickStep(move(failed), failed);
+    expect(step).toMatchObject({ title: 'Pick up', action: 'pick_up' });
+    expect(step?.alternative).toBeUndefined();
+  });
+
+  it('uses only allowed actions: the alternative takes over, and with neither there is no step', () => {
+    const failed = glob({ status: 'failed', failure: { reason: 'x', at: NOW } });
+    expect(unstickStep(move(failed), failed, { allowed: ['pick_up'] })).toMatchObject({ action: 'pick_up' });
+    expect(unstickStep(move(failed), failed, { allowed: ['retrigger'] })).toMatchObject({ action: 'retrigger' });
+    expect(unstickStep(move(failed), failed, { allowed: ['retrigger'] })?.alternative).toBeUndefined();
+    expect(unstickStep(move(failed), failed, { allowed: ['merge'] })).toBeNull();
+    const queued = glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null, queuedAt: minutesAgo(25), lastProgressAt: null })] });
+    expect(unstickStep(move(queued), queued, { allowed: ['pick_up'], session: false })).toMatchObject({ action: 'pick_up' });
   });
 
   it('is for the implementer, or the planner while there is none', () => {

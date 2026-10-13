@@ -28,6 +28,7 @@ const callbacks = () => ({
     Promise.resolve(true),
   ),
   onReviewLabel: vi.fn(),
+  onDismissEdge: vi.fn(() => Promise.resolve(true)),
   onDecide: vi.fn(() => Promise.resolve(true)),
   onDelete: vi.fn(() => Promise.resolve()),
   onAddStep: vi.fn(() => Promise.resolve(true)),
@@ -290,7 +291,7 @@ describe('glob view: the conflict section', () => {
     );
     const facts = within(section()).getByTestId('conflict-facts');
     expect(facts.textContent).toContain('conflicts with main, since s1t9 merged');
-    expect(within(section()).getByTestId('conflict-files').textContent).toBe(files.join(''));
+    expect(within(section()).getByTestId('conflict-files').textContent).toBe(`Files changed on both sides (2)${files.join('')}`);
   });
 
   it("shows a clash with another glob and the files both change, even with no implementer", () => {

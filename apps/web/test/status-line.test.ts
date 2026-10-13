@@ -4,6 +4,7 @@ import {
   blockedLine,
   blockedParts,
   dependencySummary,
+  isDismissible,
   mergeWarning,
   statusLine,
   viewStatusLine,
@@ -30,6 +31,41 @@ const top = (g: GlobView, role: 'dev' | 'qa' = 'dev') => {
   const actions = g.allowedActions ?? [];
   return viewStatusLine(g, NOW, waitingFor(g, actions, role));
 };
+
+describe('merge conflict stall', () => {
+  const files = Array.from({ length: 8 }, (_, i) => `apps/web/src/components/long/path/file${String(i)}.tsx`);
+  const conflict = { base: 'main', files, since: 's1t2', at: NOW };
+  const stalled = () =>
+    prOpen({
+      status: 'failed',
+      list: 'doing',
+      failure: { reason: `Merge conflict with main in ${files.join(', ')}`, at: NOW, conflict },
+    });
+
+  it('keeps the card to a short line and the glob view to the full reason', () => {
+    const line = statusLine(stalled(), NOW);
+    expect(line).toMatchObject({ kind: 'failure', text: 'stalled · merge conflict', conflict: true });
+    expect(line?.full).toContain(files[0]);
+  });
+
+  it('puts no file paths in the position chip', () => {
+    const position = positionOf(stalled(), NOW);
+    expect(position?.holder).toBe('stalled');
+    expect(position?.text).toBe('stalled: merge conflict');
+    expect(position?.tip).not.toContain('file0');
+  });
+
+  it('says a flagged conflict in a few words, without the files', () => {
+    const line = statusLine(prOpen({ conflict }), NOW);
+    expect(line).toMatchObject({ kind: 'stuck', text: 'conflicts with main', conflict: true });
+  });
+
+  it('leaves other failures as they were', () => {
+    const g = view({ status: 'failed', failure: { reason: 'Routine run failed: boom', at: NOW } });
+    expect(statusLine(g, NOW)?.conflict).toBeUndefined();
+    expect(statusLine(g, NOW)?.text).toBe('Routine run failed: boom');
+  });
+});
 
 describe('needs_pairing failure', () => {
   it('says which decision needs a person, and falls back to the reason', () => {
@@ -385,9 +421,31 @@ describe('dependency summary', () => {
       }),
     );
     expect(summary?.needs).toEqual([
-      { id: 's1t1', status: 'Doing', why: 'Waits for s1t1 to merge' },
+      { id: 's1t1', status: 'Doing', why: 'Waits for s1t1 to merge', dismissible: false },
     ]);
     expect(summary?.alsoAhead.map((b) => b.id)).toEqual(['s1t0']);
+  });
+
+  it('makes recorded rows dismissible, never explicit ones, and hides dismissed overlaps', () => {
+    const summary = dependencySummary(
+      view({
+        waitingFor: [
+          { id: 's1t1', state: 'open', why: 'Waits for s1t1: it adds the endpoint' },
+          { id: 's1t2', state: 'open', why: 'Waits for s1t2 to merge' },
+        ],
+        edges: [
+          { id: 's1t1', kind: 'needs', source: 'inferred', paths: [], evidence: 'it adds the endpoint' },
+          { id: 's1t2', kind: 'needs', source: 'explicit', paths: [] },
+          { id: 's1t5', kind: 'overlaps', source: 'implied', paths: ['a.ts'] },
+          { id: 's1t6', kind: 'overlaps', source: 'inferred', paths: [], overridden: true, dismissedPlanHash: 'h' },
+        ],
+      }),
+    );
+    expect(summary?.needs.map((n) => [n.id, n.dismissible])).toEqual([
+      ['s1t1', true],
+      ['s1t2', false],
+    ]);
+    expect(summary?.overlaps.map((e) => [e.id, isDismissible(e)])).toEqual([['s1t5', true]]);
   });
 
   it('lists overlaps and waited-on-by globs', () => {
@@ -408,6 +466,26 @@ describe('dependency summary', () => {
 describe('your turn from human steps', () => {
   const dev = { email: 'dev@example.com', role: 'dev' } as const;
   const step = (patch = {}) => ({ id: 'hs-1', kind: 'rollout', title: 'Deploy the host stack', state: 'due', who: 'admin', due: 'now', blocks: [], ...patch }) as const;
+
+  it('a stalled glob shows its action as the label and the cause in the tooltip', () => {
+    const stalled = view({
+      status: 'in_progress',
+      list: 'doing',
+      move: { holder: 'stalled', cause: 'quiet', reason: 'implement: no progress for 60 min', since: null },
+      humanSteps: [step({ id: 'machine:unstick', kind: 'unstick', title: 'Open session', who: 'implementer', action: 'open_session', alternative: 'pick_up' })],
+    });
+    const line = statusLine(stalled, NOW, { email: glob().planner, role: 'dev' });
+    expect(line).toMatchObject({ kind: 'ready', text: 'Open session', turn: 'unstick', action: 'open_session' });
+    expect(line?.tip).toContain('Implement: no progress for 60 min');
+    expect(line?.tip).toContain('glob view');
+  });
+
+  it('cuts a long step title to one line for the chip, keeping the whole in the tooltip', () => {
+    const long = view({ status: 'reviewing', humanSteps: [step({ title: 'Tell the whole team about the new deploy process', who: 'admin' })] });
+    const line = statusLine(long, NOW, { email: 'admin@example.com', role: 'admin' });
+    expect(line?.text.length).toBeLessThanOrEqual(24);
+    expect(line?.tip).toBe('Tell the whole team about the new deploy process');
+  });
 
   it('shows the first due step for the viewer, with the Merge tip for a merge step', () => {
     const merge = prOpen({ headChecks: { sha: head, state: 'passed' }, humanSteps: [{ ...step({ id: 'machine:merge', kind: 'merge', title: 'Merge', who: 'anyone' }) }] });

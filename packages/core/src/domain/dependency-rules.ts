@@ -26,6 +26,7 @@ export const DEPENDENCY_CAUSES = [
   'conflicted_overlap',
   'unmerged_prerequisite',
   'start_anyway_succeeded',
+  'edge_dismissed',
   'reset',
 ] as const;
 export type DependencyCause = (typeof DEPENDENCY_CAUSES)[number];
@@ -72,7 +73,7 @@ export const defaultWeight = (pattern: string, defaults: DependencyDefaults): nu
 
 const clamp = (n: number): number => Math.min(1, Math.max(0, Math.round(n * 100) / 100));
 
-/** The rule after an outcome: weakened by a clean overlap, strengthened by any of the others. */
+/** The rule after an outcome: weakened by a clean overlap, a start anyway that held or a dismissed inferred edge, strengthened by any of the others. */
 export const movedRule = (
   boardId: number,
   pattern: string,
@@ -82,7 +83,7 @@ export const movedRule = (
   now: string,
 ): DependencyRule => {
   const weight = current?.weight ?? start;
-  const weaken = cause === 'clean_overlap' || cause === 'start_anyway_succeeded';
+  const weaken = cause === 'clean_overlap' || cause === 'start_anyway_succeeded' || cause === 'edge_dismissed';
   return {
     boardId,
     pattern,

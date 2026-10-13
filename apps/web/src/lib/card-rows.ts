@@ -1,10 +1,9 @@
 import { decisionOf } from '@slop/core';
-import type { Action, HumanStepViewer } from '@slop/core';
+import type { HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 import { cardTargets } from './card-targets';
 import { clickTip, positionClick, statusClick, yourTurnClick } from './chip-actions';
 import type { ChipClick } from './chip-actions';
-import { mainAction } from './main-action';
 import { onStandby, positionOf } from './position';
 import type { Position } from './position';
 import { blockedParts, chainTip, statusLine } from './status-line';
@@ -62,8 +61,8 @@ const conflictOf = (glob: GlobView) => glob.conflict ?? glob.failure?.conflict ?
 
 /** What a problem says on the card, in a few words; the sentence, files and advice stay in the tooltip and the glob view. */
 const shortProblem = (status: StatusLine, glob: GlobView): string => {
-  const conflict = conflictOf(glob);
-  if ((status.kind === 'stuck' || status.kind === 'failure') && conflict != null) return `conflicts with ${conflict.base}`;
+  // A merge conflict is already worded short by the status line (`conflicts with main`, or the stall label).
+  if (status.conflict === true) return status.text;
   switch (status.kind) {
     case 'provisioning':
       return 'branch not created';
@@ -180,27 +179,6 @@ export const hasBlocker = (glob: GlobView, now: string, viewer?: HumanStepViewer
   if (position?.holder === 'stalled') return true;
   if (isEscalated(glob) || status?.turn === 'decide') return true;
   return status !== null && ['provisioning', 'base-red', 'checks', 'stuck'].includes(status.kind);
-};
-
-/**
- * The move buttons the card shows: none with a blocker; a same in Planning shows Start and Pick up; otherwise the one main
- * action (Retry, Start, Pick up on a super, ...). The others stay in the glob view.
- */
-export const cardActions = <T extends { readonly action: Action }>(
-  moves: readonly T[],
-  glob: Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'>,
-  decision: boolean,
-  blocked: boolean,
-): T[] => {
-  if (blocked) return [];
-  const main = mainAction(
-    moves.map((m) => m.action),
-    glob,
-    decision,
-  );
-  if (main === null) return [];
-  const shown: Action[] = main === 'start' && glob.type === 'same' && glob.status === 'planning' ? ['start', 'pick_up'] : [main];
-  return moves.filter((m) => shown.includes(m.action));
 };
 
 /** The Your turn step the card runs itself: Merge (after a confirming click) or Done. Anything else needs input in the glob view. */

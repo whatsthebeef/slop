@@ -7,11 +7,10 @@ import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
-import type { ActionIcon } from '@/lib/action-presentation';
 import type { MoveTag } from '@/lib/board-motion';
 import type { Position } from '@/lib/position';
 import { positionOf } from '@/lib/position';
-import { cardActions, cardStatus, cornerMarker, hasBlocker, turnButton } from '@/lib/card-rows';
+import { cardStatus, cornerMarker, hasBlocker, turnButton } from '@/lib/card-rows';
 import type { CornerMarker } from '@/lib/card-rows';
 import { useTitleEdit } from '@/lib/title-edit';
 import type { EditFailure } from '@slop/core';
@@ -276,17 +275,8 @@ const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (target: Glob
   );
 };
 
-/** One move the glob can make: a state-machine action into a neighbouring list. */
-export interface CardMove {
-  readonly action: Action;
-  readonly direction: 'left' | 'right';
-  /** The verb on the button, e.g. "Pick up ▸". */
-  readonly label: string;
-  /** What it does, for screen readers and the tooltip. */
-  readonly description: string;
-  /** Who does the work, from actionPresentation; decorative, since the description says it in words. */
-  readonly icon: ActionIcon | null;
-}
+import type { CardMove } from '@/lib/card-moves';
+export type { CardMove };
 
 const MoveButton = ({
   move,
@@ -809,7 +799,8 @@ export const GlobCard = ({
   const line = cardStatus(glob, now, viewer, repo);
   const blocked = hasBlocker(glob, now, viewer);
   const turn = turnButton(glob, now, viewer, blocked);
-  const shown = cardActions(moves, glob, decision, blocked);
+  // The board hands over the glob's card moves (the one common action); a blocker hides them all.
+  const shown = blocked ? [] : moves;
   const editable = onUpdateTitle !== undefined && glob.status !== 'signed_off';
 
   return (

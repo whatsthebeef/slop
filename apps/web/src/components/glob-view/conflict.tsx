@@ -54,35 +54,24 @@ const ConflictBox = ({
   );
 };
 
-/**
- * What the conflict section says about a conflict with the base, in its own wording (the card only says "conflicts with
- * main"): the cause, the files, and for a person's glob where to resolve it.
- */
-const ConflictFacts = ({
-  base,
-  since,
-  files,
-}: {
-  base: string;
-  since: string | null;
-  files: readonly string[];
-}) => (
-  <div className="grid gap-1 text-sm" data-testid="conflict-facts">
-    <span>
-      This PR conflicts with {base}
-      {since === null ? '' : `, since ${since} merged`}.
-    </span>
-    {files.length > 0 && (
-      <ul className="list-disc pl-5 font-mono text-xs" data-testid="conflict-files">
-        {files.map((f) => (
-          <li key={f}>{f}</li>
-        ))}
-      </ul>
-    )}
-  </div>
+/** Every conflicting file; opened up to ten, then collapsed under its count. */
+const ConflictFiles = ({ files }: { files: readonly string[] }) => (
+  <details data-testid="conflict-files" open={files.length <= 10}>
+    <summary className="cursor-pointer text-xs text-muted-foreground">
+      Files changed on both sides ({files.length})
+    </summary>
+    <ul className="font-mono text-xs break-all">
+      {files.map((f) => (
+        <li key={f}>{f}</li>
+      ))}
+    </ul>
+  </details>
 );
 
-/** The conflict section: a conflict with the base branch (its files, and for a glob with an implementer how to resolve it) and a clash with another glob. */
+/**
+ * The conflict section: a conflict with the base branch (its cause and every file, and for a glob with an implementer the
+ * command to resolve it) and a clash with another glob. The card only says it in a few words, so the detail is here.
+ */
 export const ConflictSection = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {
   const open = glob.conflict ?? null;
   const conflict = glob.failure?.conflict ?? open;
@@ -91,11 +80,13 @@ export const ConflictSection = ({ ctx: { glob } }: { ctx: GlobViewContext }) => 
   return (
     <div className="grid gap-2">
       {conflict != null && (
-        <ConflictFacts
-          base={conflict.base}
-          since={open?.since ?? null}
-          files={conflict.files}
-        />
+        <div className="grid gap-1 text-sm" data-testid="conflict-facts">
+          <span>
+            This PR conflicts with {conflict.base}
+            {open?.since == null ? '' : `, since ${open.since} merged`}.
+          </span>
+          {conflict.files.length > 0 && <ConflictFiles files={conflict.files} />}
+        </div>
       )}
       {clash !== null && (
         <div className="grid gap-1 text-sm" data-testid="conflict-clash">

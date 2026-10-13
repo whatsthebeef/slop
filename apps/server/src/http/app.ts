@@ -470,7 +470,7 @@ export const createApp = (deps: AppDeps) => {
         return {
           ...view,
           // A stalled glob also hands a step to its implementer (or planner).
-          humanSteps: withUnstick(human, move).map(compactStep),
+          humanSteps: withUnstick(human, move, glob, { allowed: view.allowedActions ?? [], session: glob.runs.some((r) => r.state !== 'ended' && r.sessionUrl != null) }).map(compactStep),
           move,
           machineSteps: facts,
           ...splitField(splits.get(glob.id)),
@@ -671,6 +671,15 @@ export const createApp = (deps: AppDeps) => {
       c,
       await globs.reviewLabel(c.get('email'), c.req.param('id'), body.version, label.data, body.command),
     );
+  });
+
+  // The ✕ on a Dependencies row: the edge is not a dependency (a held glob that waited only for it then starts).
+  app.post('/api/globs/:id/edges/:edgeId/dismiss', async (c) => {
+    const body = await parse(c, versionSchema);
+    if (body instanceof Response) return body;
+    const result = await globs.dismissEdge(c.get('email'), c.req.param('id'), body.version, c.req.param('edgeId'));
+    if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
+    return withView(c, result);
   });
 
   // Human steps (the glob view's Human steps section; MCP's add/complete/dismiss_human_step). Each answers with the glob's

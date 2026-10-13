@@ -15,8 +15,9 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
-import { actionLabel, actionPresentation, haltedBy, presentedActions } from '@/lib/action-presentation';
-import { cardActions, hasBlocker } from '@/lib/card-rows';
+import { actionLabel, haltedBy } from '@/lib/action-presentation';
+import { cardMoves } from '@/lib/card-moves';
+import { hasBlocker } from '@/lib/card-rows';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { mergeOutcomeText, runCardAction } from '@/lib/card-pending';
@@ -44,42 +45,11 @@ const LIST_TITLES: Record<List, string> = {
 type Direction = 'left' | 'right';
 
 /**
- * The moves a glob can make, each a state-machine action it allows: right takes a glob from
- * Planning into Doing. Discard isn't a card move (it is in the glob view). Leaving Doing happens through the merge and signing off
- * through labels, so those lists have no moves. The same rule as the card's buttons decides which show (none with a blocker,
- * else the main action), so ← → and Enter never preview a move the card has no button for.
+ * The moves a glob can make from its card (`cardMoves`: the one common action, or Start and Pick up for a same), and none
+ * while anything blocks it. The same rule hides the card's buttons, so ← → and Enter never preview a move without a button.
  */
-const movesFor = (glob: GlobView, viewer?: HumanStepViewer): { move: CardMove; target: List }[] => {
-  // No moves while slop is still creating the glob's branch and PR: a second action then would race the setup.
-  if (glob.provisioning === 'pending') return [];
-  const allowed = presentedActions(glob.allowedActions ?? []);
-  const make = (action: Action, direction: Direction, target: List) => {
-    const { label: name, tip, icon } = actionPresentation(action, glob);
-    return {
-      target,
-      move: {
-        action,
-        direction,
-        label: direction === 'right' ? `${name} ▸` : `◂ ${name}`,
-        description: `${name} ${glob.id}: ${tip}`,
-        icon,
-      },
-    };
-  };
-  if (glob.list === 'planning') {
-    const all = (['start', 'start_anyway', 'pick_up', 'take_over', 'retrigger'] as const)
-      .filter((a) => allowed.includes(a))
-      .map((a) => make(a, 'right', 'doing'));
-    const shown = cardActions(
-      all.map((m) => m.move),
-      glob,
-      decisionOf(glob) !== null,
-      hasBlocker(glob, new Date().toISOString(), viewer),
-    );
-    return all.filter((m) => shown.includes(m.move));
-  }
-  return [];
-};
+const movesFor = (glob: GlobView, viewer?: HumanStepViewer): { move: CardMove; target: List }[] =>
+  hasBlocker(glob, new Date().toISOString(), viewer) ? [] : cardMoves(glob);
 
 /** A previewed move: its ghost piece shows in the target list where the card would land. */
 interface Preview {

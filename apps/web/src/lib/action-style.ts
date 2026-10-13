@@ -24,9 +24,14 @@ export const actionTiers = (
 const RANK: Record<ActionTier, number> = { primary: 0, secondary: 1, destructive: 2 };
 
 /** The actions in row order: primary first, then secondary, then destructive (stable within a tier). */
-export const orderActions = (available: readonly Action[], main: Action | null): Action[] => {
+export const orderActions = (
+  available: readonly Action[],
+  main: Action | null,
+  /** A stalled glob's one alternative: the first of the secondaries. */
+  alternative?: Action,
+): Action[] => {
   const tiers = actionTiers(available, main);
-  return [...available].sort(
-    (a, b) => RANK[tiers.get(a) ?? 'secondary'] - RANK[tiers.get(b) ?? 'secondary'],
-  );
+  const rank = (a: Action): number =>
+    RANK[tiers.get(a) ?? 'secondary'] - (a === alternative && tiers.get(a) === 'secondary' ? 0.5 : 0);
+  return [...available].sort((a, b) => rank(a) - rank(b));
 };

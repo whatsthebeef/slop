@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Input, Label } from '@/components/ui/input';
-import { blockedLine, dependencySummary, statusWords } from '@/lib/status-line';
+import { blockedLine, dependencySummary, isDismissible, statusWords } from '@/lib/status-line';
 import type { GlobViewContext } from './context';
 
 const GlobLink = ({ boardId, id }: { boardId: number; id: string }) => (
@@ -13,14 +13,31 @@ const GlobLink = ({ boardId, id }: { boardId: number; id: string }) => (
   </Link>
 );
 
+/** The small ✕ on a recorded dependency row: slop got it wrong, it is not a dependency. */
+const DismissEdge = ({ id, onDismiss }: { id: string; onDismiss: (edgeId: string) => Promise<boolean> }) => (
+  <button
+    type="button"
+    className="ml-2 text-xs text-muted-foreground hover:text-foreground"
+    title="Not a dependency"
+    aria-label="Not a dependency"
+    data-testid={`dismiss-edge-${id}`}
+    onClick={() => void onDismiss(id)}
+  >
+    ✕
+  </button>
+);
+
 /** What the glob waits for, overlaps with and is waited on by; the "waits for" list is editable until it has a branch. */
 export const DependenciesSection = ({
   ctx: { glob },
   onEditAfter,
+  onDismissEdge,
 }: {
   ctx: GlobViewContext;
   /** The edited "waits for" glob IDs (goes into the view's draft). */
   onEditAfter: (after: string[]) => void;
+  /** The ✕ on a needs or overlaps row: the edge to this glob is not a dependency; resolves false when it failed. */
+  onDismissEdge: (edgeId: string) => Promise<boolean>;
 }) => {
   // The globs it waits for can change until it has a branch.
   const canEditAfter =
@@ -51,6 +68,7 @@ export const DependenciesSection = ({
                   <span className="text-muted-foreground"> · {n.status}</span>
                 )}{' '}
                 <span className="text-muted-foreground">{n.why}</span>
+                {n.dismissible && <DismissEdge id={n.id} onDismiss={onDismissEdge} />}
               </li>
             ))}
           </ul>
@@ -89,6 +107,10 @@ export const DependenciesSection = ({
                 {o.paths.length > 0 && (
                   <span className="text-muted-foreground"> · {o.paths.join(', ')}</span>
                 )}
+                {o.evidence !== undefined && (
+                  <span className="text-muted-foreground"> · {o.evidence}</span>
+                )}
+                {isDismissible(o) && <DismissEdge id={o.id} onDismiss={onDismissEdge} />}
               </li>
             ))}
           </ul>

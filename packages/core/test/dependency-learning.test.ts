@@ -240,6 +240,28 @@ describe('dependency learning', () => {
     expect((await current(waiter.id)).after).toEqual([prerequisite.id]);
   });
 
+  it('a dismissed inferred edge weakens its patterns once the glob merges; Start now alone is no dismissal', async () => {
+    const other = await create({ type: 'same' });
+    const made = await create({ type: 'same' });
+    const edge = { id: other.id, paths: [MIGRATION], kind: 'overlaps' as const, source: 'inferred' as const, evidence: 'both touch the migrations' };
+    store.state.globs.set(made.id, { glob: { ...made, impliedAfter: [edge] }, creationKey: null });
+    unwrap(await globs.dismissEdge(DEV, made.id, made.version, other.id));
+    await merge(made.id);
+    const history = await store.transaction((tx) => tx.listDependencyRuleChanges(boardId));
+    expect(history.map((h) => [h.cause, h.pattern])).toEqual([['edge_dismissed', PATTERN]]);
+    expect(await weight()).toBe(0.75);
+    await learning.onMerged(made.id);
+    expect(await weight()).toBe(0.75);
+
+    const prerequisite = await create({ type: 'same' });
+    const waiter = await create({ after: [prerequisite.id] });
+    store.state.globs.set(waiter.id, { glob: { ...waiter, after: [], impliedAfter: [{ id: prerequisite.id, paths: [], kind: 'needs', source: 'inferred', evidence: 'x' }] }, creationKey: null });
+    unwrap(await globs.startAnyway(DEV, waiter.id, waiter.version));
+    await merge(waiter.id);
+    const after = await store.transaction((tx) => tx.listDependencyRuleChanges(boardId));
+    expect(after.map((h) => h.cause).sort()).toEqual(['edge_dismissed', 'start_anyway_succeeded']);
+  });
+
   it('lets an admin reset what was learned, with the reset in the history', async () => {
     await openGlob();
     await merge((await overlapping()).id);
