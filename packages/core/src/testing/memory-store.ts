@@ -668,6 +668,7 @@ export class MemoryStore implements Store {
             by: a.provenance.by,
             actor: a.provenance.actor,
             ...(a.provenance.independentReview === undefined ? {} : { review: a.provenance.independentReview }),
+            ...(a.file == null ? {} : { file: { fileName: a.file.fileName, contentType: a.file.contentType, size: a.file.size, state: a.file.state, reason: a.file.reason } }),
           });
         }
         return Promise.resolve([...summaries.entries()].filter(([key]) => !cleared.has(key)).map(([, v]) => v));
