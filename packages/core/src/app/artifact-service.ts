@@ -1,4 +1,5 @@
-import type { AttachmentFile } from '../domain/attachment-file.js';
+import { missingFileNote } from '../domain/attachment-file.js';
+import type { AttachmentFile, FileState } from '../domain/attachment-file.js';
 import { decisionViews } from '../domain/decisions.js';
 import type { DecisionView } from '../domain/decisions.js';
 import { parseInvestigation, validationNote } from '../domain/investigation.js';
@@ -52,6 +53,18 @@ export interface GlobContext {
   readonly implementationRecord: { readonly version: number; readonly commitSha: string | null; readonly content: string } | null;
   /** Attachments in full: Clarifications and Assumptions always (they carry intent), others when asked for with `include`. */
   readonly attachments: readonly { readonly label: string; readonly content: string; readonly link: string | null }[];
+  /**
+   * File attachments (images, PDFs, documents) with their state. A `stored` one can be downloaded (the MCP layer adds a
+   * fresh `downloadUrl`); `pending` ones are still being uploaded; a `missing` one carries `note`. Don't block on missing files: record the gap.
+   */
+  readonly files: readonly {
+    readonly label: string;
+    readonly fileName: string;
+    readonly contentType: string;
+    readonly size: number | null;
+    readonly state: FileState;
+    readonly note?: string;
+  }[];
   /** Every other artifact, not in full: fetch one with `get_artifact` or `include` on `get_context`. */
   readonly available: readonly ArtifactListing[];
   /**
@@ -506,10 +519,24 @@ export class ArtifactService {
         implementationRecord:
           record === null ? null : { version: record.version, commitSha: record.commitSha, content: record.content },
         attachments: artifacts
-          .filter((a) => a.kind === 'attachment' && full(a))
+          .filter((a) => a.kind === 'attachment' && full(a) && (a.file === undefined || a.file === null))
           .map((a) => ({ label: a.label, content: a.content, link: a.link })),
+        files: artifacts.flatMap((a) =>
+          a.kind !== 'attachment' || a.file === undefined || a.file === null
+            ? []
+            : [
+                {
+                  label: a.label,
+                  fileName: a.file.fileName,
+                  contentType: a.file.contentType,
+                  size: a.file.size,
+                  state: a.file.state,
+                  ...(a.file.state === 'missing' ? { note: missingFileNote(a) ?? '' } : {}),
+                },
+              ],
+        ),
         available: [
-          ...others.map((a) => ({
+          ...others.filter((a) => a.file === undefined || a.file === null).map((a) => ({
             kind: a.kind,
             label: a.label,
             version: a.version,

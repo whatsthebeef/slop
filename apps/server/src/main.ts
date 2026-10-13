@@ -14,6 +14,7 @@ import { mountKnowledge } from './http/knowledge.js';
 import { OutboxRunner } from './jobs/outbox.js';
 import { AttachmentEventsJob } from './jobs/attachment-events.js';
 import { mountAttachments } from './http/attachments.js';
+import { mountSkillZip } from './http/skill-zip.js';
 import { S3ObjectStore } from './s3-object-store.js';
 import { SqsObjectEventQueue } from './sqs-object-events.js';
 import { kbExecutors } from './kb-executors.js';
@@ -146,7 +147,7 @@ const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => 
 
 // One executor table; each runner drains only its own lane (`laneOf(kind)`).
 const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
-    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths, logError, attachmentObjects),
+    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths, logError, attachmentObjects, attachmentObjects === null ? null : (globId) => attachments?.pendingFor(globId) ?? Promise.resolve(0)),
     ...deployExecutors(
       deploys,
       new Deployers({ codebuild: new CodeBuildDeployer() }),
@@ -456,6 +457,11 @@ const app = createApp({
   },
 });
 if (attachments !== null) mountAttachments(app, { attachments });
+mountSkillZip(app, {
+  boards,
+  skillsDir: config.SKILLS_DIR,
+  uploadHost: config.ATTACHMENTS_BUCKET === undefined ? null : `${config.ATTACHMENTS_BUCKET}.s3.${config.ATTACHMENTS_REGION}.amazonaws.com`,
+});
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
 mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, contextTuning, contextReport, knowledgePage, agentSetCommit, logError });
@@ -534,6 +540,7 @@ mountMcp(app, {
   chat,
   intake,
   inbox,
+  ...(attachments === null ? {} : { attachments }),
   sizeCheck,
   publicUrl: config.PUBLIC_URL,
   publicUrlAliases: config.PUBLIC_URL_ALIASES,

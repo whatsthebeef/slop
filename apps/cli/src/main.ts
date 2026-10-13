@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
+import { ATTACH_USAGE, attachCommand } from './attach.js';
 import { accessToken, login, logout, type AuthDeps } from './auth.js';
 import { SlopClient, type ToolArguments } from './client.js';
 import { insecureUrlWarning, requireSetting, userConfigPath } from './config.js';
@@ -35,6 +36,8 @@ export interface CliContext extends AuthDeps {
   readonly git: Git;
   readonly sleep: (ms: number) => Promise<void>;
   /** Reads a file's text, or stdin for `-`; tests inject a fake. */
+  /** Reads a file's bytes (`slop attach`); tests inject a fake. */
+  readonly readBytes?: (path: string) => Promise<Uint8Array>;
   readonly readInput?: (path: string) => Promise<string>;
   /** Writes a file's text (`slop report`); tests inject a fake. */
   readonly writeFile?: (path: string, text: string) => Promise<void>;
@@ -213,6 +216,20 @@ const COMMANDS: Readonly<Record<string, Command>> = {
         client: clientFor(context),
         readInput: context.readInput ?? readInputDefault,
         stdout: context.stdout,
+      }),
+  },
+  attach: {
+    usage: ATTACH_USAGE,
+    summary: 'Upload files to a glob as attachments and wait for slop to see them',
+    run: (args, context) =>
+      attachCommand(args, {
+        client: clientFor(context),
+        fetch: context.fetch,
+        readBytes: context.readBytes ?? ((path) => readFile(path)),
+        stdout: context.stdout,
+        log: context.log,
+        now: context.now,
+        sleep: context.sleep,
       }),
   },
   import: {

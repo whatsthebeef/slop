@@ -66,7 +66,7 @@ const BoardTabs = ({
           className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:text-foreground'
           aria-label='Ask the board chat'
           aria-pressed={chatOpen}
-          title='Ask the board chat (/ or ⌘K). 1–9 switch boards.'
+          title='Ask the board chat (⌘K). 1–9 switch boards.'
           data-testid='chat-toggle'
           onClick={onChat}
         >

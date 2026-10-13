@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
 import { BoardService } from '../src/app/board-service.js';
-import { GlobService, fillPartIds } from '../src/app/glob-service.js';
+import { GlobService, fillPartIds, splitEscalations } from '../src/app/glob-service.js';
 import type { SplitInput, SplitPart } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
+import { defaultAreas } from '../src/domain/risk-area.js';
 import type { Glob } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -285,5 +286,43 @@ describe('split a glob into parts', () => {
 
   it('fills placeholders, leaving unknown parts as written', () => {
     expect(fillPartIds('{part:0} {part:1} {part:9}', ['a', 'b'])).toBe('a b {part:9}');
+  });
+});
+
+describe('splitEscalations', () => {
+  const NOW = '2026-10-13T12:00:00.000Z';
+  const areas = defaultAreas(1, NOW);
+  const AUTH = 'Change `apps/server/src/auth/token.ts`.';
+  const DOCS = 'Tidy `docs/guide/intro.md`.';
+  const original = (escalation?: Glob['escalation']): Glob =>
+    ({ id: 's1f1', type: 'same', ...(escalation === undefined ? {} : { escalation }) }) as unknown as Glob;
+  const whole = { reason: 'Whole feature', criterion: 'auth_permissions', evidence: 'risk tier high, 46 files', by: 'x', at: NOW } as const;
+
+  it('replaces the original evidence on part 0 when it matches, keeping the criterion', () => {
+    const [first] = splitEscalations(original(whole), [{ plan: AUTH, type: 'same' }, { plan: DOCS, type: 'same' }], areas, 'dev', NOW);
+    expect(first?.escalation?.criterion).toBe('auth_permissions');
+    expect(first?.escalation?.evidence).toContain('apps/server/src/auth/token.ts');
+    expect(first?.escalation?.evidence).not.toContain('46 files');
+    expect(first?.change?.kind).toBe('Escalated');
+  });
+
+  it('does not carry onto part 0 when a later part matches, and de-escalates part 0', () => {
+    const result = splitEscalations(original(whole), [{ plan: DOCS, type: 'same' }, { plan: AUTH, type: 'same' }], areas, 'dev', NOW);
+    expect(result[0]?.escalation).toBeNull();
+    expect(result[0]?.change?.kind).toBe('Deescalated');
+    expect(result[1]?.escalation?.evidence).toContain('apps/server/src/auth/token.ts');
+  });
+
+  it('leaves supers alone', () => {
+    const result = splitEscalations(original(), [{ plan: AUTH, type: 'super' }, { plan: AUTH, type: 'same' }], areas, 'dev', NOW);
+    expect(result[0]?.type).toBe('super');
+    expect(result[0]?.escalation).toBeNull();
+    expect(result[0]?.change).toBeNull();
+    expect(result[1]?.escalation).not.toBeNull();
+  });
+
+  it('changes nothing when nothing matches and nothing was escalated', () => {
+    const result = splitEscalations(original(), [{ plan: DOCS, type: 'sub' }, { plan: DOCS, type: 'sub' }], areas, 'dev', NOW);
+    expect(result.map((r) => [r.type, r.escalation, r.change])).toEqual([['sub', null, null], ['sub', null, null]]);
   });
 });

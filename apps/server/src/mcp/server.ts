@@ -1,5 +1,5 @@
-import type { ArtifactService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService, SuggestService } from '@slop/core';
-import { invalidInput, machine, notFound } from '@slop/core';
+import type { ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService, SuggestService } from '@slop/core';
+import { cleanFileName, invalidInput, machine, notFound, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
 import { ARTIFACT_KINDS, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type { Auth } from '../auth.js';
 import type { Env } from '../http/app.js';
 import { renderAgentSetFile } from '../catalog.js';
+import { MAX_CREATE_FILES, NEVER_INLINE_FILES, UPLOAD_NEXT, uploadView } from '../upload-instructions.js';
 import type { SignedLinks } from '../signed-links.js';
 import { parseLabelCommand } from '../http/labels.js';
 import { issueUploadUrl } from '../http/artifact-upload.js';
@@ -33,6 +34,8 @@ export interface McpDeps {
   readonly chat: Pick<ChatService, 'answer'>;
   readonly intake: IntakeService;
   readonly inbox: InboxService;
+  /** Upload links for file attachments; absent when no bucket is configured (then `files` is refused). */
+  readonly attachments?: Pick<AttachmentService, 'createUpload' | 'downloadUrl'>;
   /** Answers a glob's oversized flag: starting a held glob anyway keeps it whole. */
   readonly sizeCheck?: Pick<SizeCheckService, 'keepWhole'>;
   /** Refuses `mark_ready` for a branch that conflicts with its base. */
@@ -134,18 +137,18 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .positive()
           .optional()
           .describe("An inbox item of the same board to attach to the new glob in the same step (it becomes `attached` and is in the glob's context from the start). Refused when it is another board's or discarded, and nothing is created"),
-        attachments: z
+        files: z
           .array(
             z.object({
-              label: z.string().min(1),
-              text: z.string().max(100_000).optional(),
-              link: z.url().regex(/^https?:\/\//i).optional(),
+              fileName: z.string().min(1).max(255),
+              contentType: z.string().max(200).optional(),
+              label: z.string().min(1).max(200).optional(),
             }),
           )
-          .max(10)
+          .max(MAX_CREATE_FILES)
           .optional()
           .describe(
-            "Files or notes to store on the new glob in the same step, so its first run has them. Each needs a label and text or an http(s) link. To send files or notes the user shared (pasted text, a document's text, a link), pass them here: their text, not a summary. Binary files (images, PDFs) can't be stored: transcribe or describe what matters, or pass a link. One invalid item refuses the create. A retry with the same idempotency key doesn't add them again",
+            `Files (images, screenshots, PDFs, documents) the user shared or you made, to put on the new glob. Pass only each file's name and type. ${NEVER_INLINE_FILES} The reply carries an upload link and a ready curl command per file; a sub's first run waits for them (at most ${String(UPLOAD_TTL_SECONDS / 60)} minutes). A file that never arrives is noted on the glob for a person to upload. For short text notes use \`attach\` after creating the glob.`,
           ),
         start: z
           .boolean()
@@ -173,6 +176,14 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       },
     },
     async (input) => {
+      if (input.files !== undefined && input.files.length > 0) {
+        if (deps.attachments === undefined) return { ...json({ code: 'invalid_input', message: 'File attachments are not set up on this slop' }), isError: true };
+        for (const f of input.files) {
+          if (cleanFileName(f.fileName) === '' || resolveContentType(f.fileName, f.contentType) === null) {
+            return { ...json({ code: 'invalid_input', message: `${f.fileName}: this file type is not accepted` }), isError: true };
+          }
+        }
+      }
       let fields = {
         title: input.title ?? '',
         type: input.type ?? ('sub' as const),
@@ -232,14 +243,24 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
         ...(input.inboxItem === undefined ? {} : { inboxItem: input.inboxItem }),
-        ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
         ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
         ...(input.overlaps === undefined ? {} : { overlaps: input.overlaps }),
         ...(files.length === 0 ? {} : { files }),
       });
       if (!created.ok) return reply(created);
+      // The links are minted before the outbox runs, so a sub's first run sees its pending files and waits for them.
+      const uploads: ReturnType<typeof uploadView>[] = [];
+      const uploadProblems: string[] = [];
+      for (const f of input.files ?? []) {
+        const made = await deps.attachments?.createUpload(email, created.value.id, f);
+        if (made === undefined) continue;
+        if (made.ok) uploads.push(uploadView(made.value));
+        else uploadProblems.push(`${f.fileName}: ${made.error.message}`);
+      }
       await deps.outbox.drain(created.value.id);
       return reply(await globs.get(email, created.value.id), ({ glob }) => ({
+        ...(uploads.length === 0 ? {} : { uploads, next: UPLOAD_NEXT }),
+        ...(uploadProblems.length === 0 ? {} : { uploadProblems }),
         id: glob.id,
         version: glob.version,
         branch: glob.id,
@@ -769,7 +790,18 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     },
     async ({ id, runId, include }) => {
       if (runId !== undefined) await deps.globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
-      return reply(await artifacts.context(email, id, include ?? []));
+      const context = await artifacts.context(email, id, include ?? []);
+      if (!context.ok || deps.attachments === undefined) return reply(context);
+      // A stored file comes with a fresh download link (about 15 minutes), so an agent can fetch it with curl.
+      const attachments = deps.attachments;
+      const files = await Promise.all(
+        context.value.files.map(async (f) => {
+          if (f.state !== 'stored') return f;
+          const link = await attachments.downloadUrl(email, id, f.label);
+          return link.ok ? { ...f, downloadUrl: link.value.url, downloadExpiresAt: link.value.expiresAt } : f;
+        }),
+      );
+      return reply(context, (c) => ({ ...c, files }));
     },
   );
 
@@ -927,10 +959,15 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_artifact',
     {
       description:
-        "The latest version of one artifact of a glob in full: kind is 'implementation_plan' (the implementation record), 'local_review', 'independent_review' (the independent reviewer's findings) or 'attachment' (with its label).",
+        "The latest version of one artifact of a glob in full: kind is 'implementation_plan' (the implementation record), 'local_review', 'independent_review' (the independent reviewer's findings) or 'attachment' (with its label; a stored file comes with a fresh `downloadUrl`: fetch it with curl).",
       inputSchema: { id: z.string(), kind: z.enum(ARTIFACT_KINDS), label: z.string().optional() },
     },
-    async ({ id, kind, label }) => reply(await artifacts.artifact(email, id, kind, label ?? '')),
+    async ({ id, kind, label }) => {
+      const found = await artifacts.artifact(email, id, kind, label ?? '');
+      if (!found.ok || found.value.file?.state !== 'stored' || deps.attachments === undefined) return reply(found);
+      const link = await deps.attachments.downloadUrl(email, id, found.value.label);
+      return reply(found, (a) => (link.ok ? { ...a, downloadUrl: link.value.url, downloadExpiresAt: link.value.expiresAt } : a));
+    },
   );
 
   server.registerTool(
@@ -940,6 +977,23 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       inputSchema: { id: z.string(), version: z.number().int().optional() },
     },
     async ({ id, version }) => reply(await artifacts.plan(email, id, version ?? null)),
+  );
+
+  server.registerTool(
+    'attachment_upload_url',
+    {
+      description: `An upload link for a file on an existing glob: the reply has the upload url, fields and a ready curl command (fill in <path>). ${NEVER_INLINE_FILES} Slop detects the upload from storage; there is no completion call. A label that already holds a file that never arrived is filled again. Member of the board required.`,
+      inputSchema: {
+        id: z.string(),
+        fileName: z.string().min(1).max(255),
+        contentType: z.string().max(200).optional(),
+        label: z.string().min(1).max(200).optional().describe('Defaults to the file name'),
+      },
+    },
+    async ({ id, ...file }) => {
+      if (deps.attachments === undefined) return { ...json({ code: 'invalid_input', message: 'File attachments are not set up on this slop' }), isError: true };
+      return reply(await deps.attachments.createUpload(email, id, file), (made) => ({ uploads: [uploadView(made)], next: UPLOAD_NEXT }));
+    },
   );
 
   server.registerTool(

@@ -1,61 +1,36 @@
-/** The server's cap on an attachment's text (apps/server/src/http/knowledge.ts). */
-export const ATTACHMENT_TEXT_MAX = 500_000;
+import { baseType, missingFileNote } from '@slop/core';
+import type { AttachmentFile } from '@slop/core';
+import type { ArtifactView } from './api';
 
-export interface AttachmentDraft {
-  readonly label: string;
-  readonly mode: 'link' | 'text';
-  readonly link: string;
-  readonly text: string;
-}
+/** Images the browser can show as a thumbnail (svg is always a download, so it never gets one). */
+const THUMBNAIL_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+export const hasThumbnail = (file: Pick<AttachmentFile, 'contentType' | 'state'>): boolean =>
+  file.state === 'stored' && THUMBNAIL_TYPES.includes(baseType(file.contentType));
 
-export type AttachmentCheck =
-  | { readonly ok: true; readonly body: { label: string; text: string | null; link: string | null } }
-  | { readonly ok: false; readonly message: string };
-
-const isHttpUrl = (value: string) => {
-  try {
-    return ['http:', 'https:'].includes(new URL(value).protocol);
-  } catch {
-    return false;
-  }
+/** "12 KB", "1.4 MB": the size as a person reads it. */
+export const sizeText = (bytes: number | null): string => {
+  if (bytes === null) return '';
+  if (bytes < 1000) return `${String(bytes)} B`;
+  if (bytes < 1_000_000) return `${String(Math.round(bytes / 100) / 10)} KB`;
+  return `${String(Math.round(bytes / 100_000) / 10)} MB`;
 };
 
-/** Validates the form the way the server will, so the person gets a clear message before posting. */
-export const checkAttachment = (draft: AttachmentDraft): AttachmentCheck => {
-  const label = draft.label.trim();
-  if (label === '') return { ok: false, message: 'Give the attachment a label' };
-  if (draft.mode === 'link') {
-    const link = draft.link.trim();
-    if (link === '') return { ok: false, message: 'Paste a link' };
-    if (!isHttpUrl(link)) return { ok: false, message: 'The link must start with http:// or https://' };
-    return { ok: true, body: { label, text: null, link } };
+/** What the entry says about its file in the list: waiting, never arrived (with the note), or the type and size. */
+export const fileStatus = (
+  artifact: Pick<ArtifactView, 'file' | 'createdAt' | 'provenance'>,
+): { readonly text: string; readonly missing: boolean } | null => {
+  const file = artifact.file;
+  if (file === null || file === undefined) return null;
+  if (file.state === 'pending')
+    return { text: `${file.fileName}: waiting for upload`, missing: false };
+  if (file.state === 'missing') {
+    return {
+      text: missingFileNote(artifact) ?? `${file.fileName} was never uploaded`,
+      missing: true,
+    };
   }
-  if (draft.text.trim() === '') return { ok: false, message: 'Paste some text or pick a text file' };
-  if (draft.text.length > ATTACHMENT_TEXT_MAX) {
-    return { ok: false, message: `The text is over ${String(ATTACHMENT_TEXT_MAX / 1000)} KB; attach a link instead` };
-  }
-  return { ok: true, body: { label, text: draft.text, link: null } };
-};
-
-/** Reads a picked or dropped file as text; refuses binary files (a NUL byte or invalid UTF-8) and oversized ones. */
-export const readTextFile = async (
-  file: Pick<File, 'name' | 'size' | 'arrayBuffer'>,
-): Promise<{ ok: true; text: string } | { ok: false; message: string }> => {
-  if (file.size > ATTACHMENT_TEXT_MAX * 4) {
-    return { ok: false, message: `${file.name} is too large; attach a link instead` };
-  }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (bytes.includes(0)) {
-    return { ok: false, message: `${file.name} is not a text file. Images and PDFs can't be stored; attach a link instead` };
-  }
-  let text: string;
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    return { ok: false, message: `${file.name} is not a text file. Images and PDFs can't be stored; attach a link instead` };
-  }
-  if (text.length > ATTACHMENT_TEXT_MAX) {
-    return { ok: false, message: `${file.name} is over ${String(ATTACHMENT_TEXT_MAX / 1000)} KB; attach a link instead` };
-  }
-  return { ok: true, text };
+  return {
+    text: [file.fileName, sizeText(file.size)].filter((p) => p !== '').join(' · '),
+    missing: false,
+  };
 };
