@@ -204,7 +204,7 @@ describe('ContextTuningService', () => {
     await replacementCards(5, 0, daysFrom(NOW, -2));
     await service.tune(boardId, NOW);
     const view = unwrap(await service.view(DEV, boardId));
-    expect(view.settings).toHaveLength(13);
+    expect(view.settings).toHaveLength(16);
     expect(view.settings.find((s) => s.key === 'replacement_similarity')).toMatchObject({
       value: 0.725,
       default: 0.75,

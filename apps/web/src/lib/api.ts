@@ -57,6 +57,7 @@ import type {
   SlopType,
   RiskAreaView,
   EscalationView,
+  HotspotView,
   TypeLearningView,
   SubLimitChange,
   SubLimitView,
@@ -714,6 +715,8 @@ export const api = {
   escalations: (boardId: number) => request<EscalationView>('GET', `/api/boards/${boardId}/escalations`),
   /** Puts the escalation criteria back to the defaults, keeping the history (admins). */
   resetEscalations: (boardId: number) => request<EscalationView>('POST', `/api/boards/${boardId}/escalations/reset`, {}),
+  /** The files that keep conflicting inside the window, with their numbers (members). */
+  hotspots: (boardId: number) => request<HotspotView>('GET', `/api/boards/${boardId}/hotspots`),
   /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
   sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
   /** The size forecast's calibration: weights, per-area factors against the defaults, and the history with causes (members). */
