@@ -117,7 +117,10 @@ describe('status-line activity icons (s15f88)', () => {
         ...live('active'),
       });
     expect(positionOf(open('failed'), NOW)).toMatchObject({ holder: 'machine', text: 'fixing CI' });
-    expect(positionOf(open('passed'), NOW)).toMatchObject({ holder: 'machine', text: 'implementing' });
+    expect(positionOf(open('passed'), NOW)).toMatchObject({
+      holder: 'machine',
+      text: 'implementing',
+    });
   });
 
   it('marks a picked-up glob with no run as human', () => {
@@ -164,7 +167,9 @@ describe('escalation chip (s15f88)', () => {
       /<span id="[^"]+" class="sr-only">Needs a person: touches billing\. Opens the reason<\/span>/,
     );
     // The chip opens the escalation section (s15f97), so it is a button named by its label.
-    expect(html).toMatch(/<button[^>]*aria-label="Needs a person"[^>]*data-testid="escalation-chip"/);
+    expect(html).toMatch(
+      /<button[^>]*aria-label="Needs a person"[^>]*data-testid="escalation-chip"/,
+    );
     expect(html.split('Needs a person: touches billing')).toHaveLength(2);
     expect(html).toMatch(
       /<span aria-hidden="true" class="inline-flex items-center gap-1">needs a <svg[^>]*aria-hidden="true"/,
@@ -214,5 +219,36 @@ describe('card moves (s15f88)', () => {
     expect(html).toMatch(
       /data-testid="move-pick_up"[^>]*><svg[^>]*lucide-user-round[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Pick up ▸/,
     );
+  });
+});
+
+describe('a conflict-fix run that went to standby (s15b86)', () => {
+  const fixed = (state: 'active' | 'watching') =>
+    view({
+      status: 'pr_open',
+      type: 'sub',
+      implementer: null,
+      conflict: null,
+      pr: { number: 1, state: 'ready', headSha: 'abc1234' },
+      headChecks: null,
+      runs: [run({ state, purpose: 'resolve_conflict' })],
+    });
+
+  it('watching: standby, never "fixing", no spinner; active: fixing with a spinner', () => {
+    const watching = positionOf(fixed('watching'), NOW);
+    expect(watching?.text ?? '').not.toMatch(/fixing/);
+    expect(watching?.spinning ?? false).toBe(false);
+    expect(card(fixed('watching'))).toContain('data-testid="standby"');
+    expect(positionOf(fixed('active'), NOW)).toMatchObject({
+      holder: 'machine',
+      text: 'fixing the conflict',
+      spinning: true,
+    });
+  });
+
+  it('checks pending after the fix: "checks running", not fixing', () => {
+    const g = view({ ...fixed('watching'), headChecks: { sha: 'abc1234', state: 'pending' } });
+    expect(positionOf(g, NOW)).toMatchObject({ holder: 'waiting' });
+    expect(positionOf(g, NOW)?.text).toContain('checks running on abc1234');
   });
 });

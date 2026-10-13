@@ -113,6 +113,12 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.getByTestId('escalation-chip').getAttribute('aria-describedby')).not.toBeNull();
   });
 
+  it('shows the chip only in Planning, as on the card: a pr_open escalated glob keeps the disclosure but no chip', () => {
+    renderGlob({ ...escalated(), status: 'pr_open', list: 'doing' });
+    expect(screen.queryByTestId('escalation-chip')).toBeNull();
+    expect(screen.getByTestId('escalation-note').textContent).toContain('Touches auth');
+  });
+
   it('leaves the chip and the disclosure out without an escalation', () => {
     renderGlob(view());
     expect(screen.queryByTestId('escalation-chip')).toBeNull();
