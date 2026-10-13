@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { globPath, globQuery, globTargetOf, parseGlobTarget } from '@/lib/glob-section';
+import { boardGlobHref, globPath, globQuery, globTargetOf, parseGlobTarget } from '@/lib/glob-section';
 
 const parse = (query: string) => parseGlobTarget(new URLSearchParams(query));
 
@@ -37,5 +37,17 @@ describe('globTargetOf', () => {
   it('passes section, artifact and label on and drops unknown sections', () => {
     expect(globTargetOf(new URLSearchParams('glob=s1t1&section=labels&label=CR&x=1'))).toEqual({ section: 'labels', label: 'CR' });
     expect(globTargetOf(new URLSearchParams('glob=s1t1&section=nope'))).toEqual({});
+  });
+});
+
+describe('boardGlobHref', () => {
+  it('stays a plain glob link without a target', () => {
+    expect(boardGlobHref(3, 's3f1')).toBe('/boards/3?glob=s3f1');
+  });
+  it('adds the section, artifact and label to the board redirect', () => {
+    expect(boardGlobHref(3, 's3f1', { section: 'artifacts', artifact: 'attachment', label: 'Notes' })).toBe(
+      '/boards/3?glob=s3f1&section=artifacts&artifact=attachment&label=Notes',
+    );
+    expect(boardGlobHref(3, 's3f1', { section: 'size' })).toBe('/boards/3?glob=s3f1&section=size');
   });
 });
