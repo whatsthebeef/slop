@@ -629,6 +629,24 @@ describe('runs on failed globs (s15b83)', () => {
     expect(t.events.find((e) => e.type === 'RunEnded')?.data).toMatchObject({ cause: 'take_over' });
   });
 
+  it('checks failing after the branch update end an active or queued run, like any other failure', () => {
+    for (const state of ['active', 'queued'] as const) {
+      const pr = { number: 7, state: 'ready' as const, headSha: 'aaa' };
+      const g = glob({ status: 'merging', pr, runs: [run({ state })] });
+      const t = value(m.checksCompleted(g, { sha: 'aaa', passed: false }, ctx(null)));
+      expect(t.glob.status).toBe('failed');
+      expect(m.hasLiveRun(t.glob)).toBe(false);
+    }
+  });
+
+  it('picking up a failed glob supersedes a queued run and ends a watching one', () => {
+    for (const state of ['queued', 'watching'] as const) {
+      const t = value(m.pickUp(failed({ runs: [run({ state })] }), ctx(), board, { takeOver: false }));
+      expect(t.glob.status).toBe('in_progress');
+      expect(m.hasLiveRun(t.glob)).toBe(false);
+    }
+  });
+
   it('the run watch ends a quiet run on a failed glob after 30 minutes (the backfill for s15b78)', () => {
     const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
     const at = (minutes: number) => new Date(Date.parse(NOW) + minutes * 60_000).toISOString();
