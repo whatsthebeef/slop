@@ -3,17 +3,20 @@ import type { ArtifactKind, Investigation } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ClipboardCheck, FileCheck, FileText, Microscope, Paperclip, Plus, SearchCheck } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { api, RequestError } from '@/lib/api';
-import type { ArtifactSummaryView } from '@/lib/api';
-import { checkAttachment, readTextFile } from '@/lib/attachment';
+import type { ArtifactSummaryView, ArtifactView } from '@/lib/api';
+import { fileStatus, hasThumbnail } from '@/lib/attachment';
 import { inboxLinkTarget, isInboxLink } from '@/lib/inbox';
 import { artifactKey, globsKey, inboxKey } from '@/lib/live';
 import { listedArtifacts } from '@/lib/plan-text';
+import { attachFile, checkFile, FILE_ACCEPT } from '@/lib/upload';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
 import { Button } from './ui/button';
+import { FileDropZone, UploadRows } from './file-drop';
+import type { UploadRow } from './file-drop';
 import { MarkdownView } from './markdown-view';
 
 export const ARTIFACT_META: Record<
@@ -88,7 +91,7 @@ export const ArtifactsSection = ({
         </Button>
       </div>
       {adding && (
-        <AddAttachmentForm
+        <AddAttachmentPanel
           globId={globId}
           boardId={boardId}
           onClose={() => setAdding(false)}
@@ -121,13 +124,54 @@ export const ArtifactsSection = ({
           );
         })}
       </div>
-      {current !== undefined && <ArtifactViewer globId={globId} summary={current} />}
+      {listed
+        .filter((a) => a.kind === 'attachment')
+        .map((a) => (
+          <FileNote key={a.label} globId={globId} boardId={boardId} summary={a} />
+        ))}
+      {current !== undefined && <ArtifactViewer globId={globId} boardId={boardId} summary={current} />}
     </div>
   );
 };
 
-/** The form behind "Add attachment": a label plus a link, pasted text or a text file read in the browser. */
-const AddAttachmentForm = ({
+/** Uploads files to a glob, one row each with its progress; slop sees each file arrive on its own. */
+const useGlobUploads = (globId: string, boardId: number, onUploaded?: (label: string) => void) => {
+  const client = useQueryClient();
+  const toast = useToast();
+  const [rows, setRows] = useState<UploadRow[]>([]);
+  const next = useRef(0);
+  const patch = (id: number, change: Partial<UploadRow>) => setRows((all) => all.map((r) => (r.id === id ? { ...r, ...change } : r)));
+
+  const refresh = (label: string) => {
+    void client.invalidateQueries({ queryKey: globsKey(boardId) });
+    void client.invalidateQueries({ queryKey: artifactKey(globId, 'attachment', label) });
+  };
+
+  const add = (files: readonly File[], label?: string) => {
+    for (const file of files) {
+      next.current += 1;
+      const id = next.current;
+      setRows((all) => [...all, { id, name: file.name, progress: 0, error: null, done: false }]);
+      attachFile(globId, file, { ...(label === undefined ? {} : { label }), onProgress: (progress) => patch(id, { progress }) })
+        .then((outcome) => {
+          patch(id, { progress: 1, done: true });
+          refresh(outcome.label);
+          toast(`${file.name} uploaded`);
+          onUploaded?.(outcome.label);
+          setTimeout(() => setRows((all) => all.filter((r) => r.id !== id)), 4000);
+        })
+        .catch((e: unknown) => {
+          // The link may already have made a pending entry; it shows in the list as waiting, then as missing.
+          refresh(label ?? file.name);
+          patch(id, { error: e instanceof Error ? e.message : 'The upload failed' });
+        });
+    }
+  };
+  return { rows, add, dismiss: (id: number) => setRows((all) => all.filter((r) => r.id !== id)) };
+};
+
+/** The panel behind "Add attachment": pick, drop or paste files; each uploads straight to storage with a progress bar. */
+const AddAttachmentPanel = ({
   globId,
   boardId,
   onClose,
@@ -138,115 +182,146 @@ const AddAttachmentForm = ({
   onClose: () => void;
   onAdded: (label: string) => void;
 }) => {
-  const client = useQueryClient();
-  const toast = useToast();
-  const [label, setLabel] = useState('');
-  const [mode, setMode] = useState<'link' | 'text'>('link');
-  const [link, setLink] = useState('');
-  const [text, setText] = useState('');
+  const uploads = useGlobUploads(globId, boardId, onAdded);
   const [error, setError] = useState<string | null>(null);
-
-  const add = useMutation({
-    mutationFn: (body: { label: string; text: string | null; link: string | null }) => api.attach(globId, body),
-    onSuccess: (artifact) => {
-      void client.invalidateQueries({ queryKey: globsKey(boardId) });
-      void client.invalidateQueries({ queryKey: artifactKey(globId, 'attachment', artifact.label) });
-      toast('Attachment added');
-      onAdded(artifact.label);
-    },
-    onError: (e) => setError(e instanceof RequestError ? e.body.message : 'Something went wrong'),
-  });
-
-  const pickFile = async (file: File | undefined) => {
-    if (file === undefined) return;
-    const read = await readTextFile(file);
-    if (!read.ok) {
-      setError(read.message);
-      return;
-    }
-    setError(null);
-    setMode('text');
-    setText(read.text);
-    if (label.trim() === '') setLabel(file.name);
-  };
-
-  const submit = () => {
-    const checked = checkAttachment({ label, mode, link, text });
-    if (!checked.ok) {
-      setError(checked.message);
-      return;
-    }
-    setError(null);
-    add.mutate(checked.body);
-  };
-
   return (
-    <div
-      className="grid gap-2 rounded border p-3 text-xs"
-      data-testid="add-attachment-form"
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault();
-        void pickFile(e.dataTransfer.files[0]);
-      }}
-    >
-      <input
-        className="rounded border bg-background px-2 py-1"
-        placeholder="Label"
-        aria-label="Label"
-        value={label}
-        onChange={(e) => setLabel(e.target.value)}
+    <div className='grid gap-2 rounded border p-3 text-xs' data-testid='add-attachment-form'>
+      <FileDropZone
+        onFiles={(files) => {
+          const problems = files.flatMap((f) => {
+            const problem = checkFile(f);
+            return problem === null ? [] : [problem];
+          });
+          setError(problems.length === 0 ? null : problems.join('. '));
+          uploads.add(files.filter((f) => checkFile(f) === null));
+        }}
       />
-      <div className="flex gap-1.5">
-        {(['link', 'text'] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            className={cn('rounded border px-2 py-0.5 hover:bg-muted', mode === m && 'border-foreground bg-muted')}
-            aria-pressed={mode === m}
-            onClick={() => setMode(m)}
-          >
-            {m === 'link' ? 'Link' : 'Text'}
-          </button>
-        ))}
-      </div>
-      {mode === 'link' ? (
-        <input
-          className="rounded border bg-background px-2 py-1"
-          placeholder="https://…"
-          aria-label="Link"
-          value={link}
-          onChange={(e) => setLink(e.target.value)}
-        />
-      ) : (
-        <>
-          <textarea
-            className="min-h-24 rounded border bg-background px-2 py-1 font-mono"
-            placeholder="Paste text, or drop a text file here"
-            aria-label="Text"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-          />
-          <input type="file" aria-label="Text file" onChange={(e) => void pickFile(e.target.files?.[0])} />
-        </>
-      )}
-      <p className="text-muted-foreground">
-        Text files only (.md, .txt, .json, .csv, .log, code). Images and PDFs can't be stored: attach a link instead. Using an existing
-        label adds a new version.
-      </p>
       {error !== null && (
-        <p className="text-destructive" role="alert">
+        <p className='text-destructive' role='alert'>
           {error}
         </p>
       )}
-      <div className="flex gap-2">
-        <Button size="sm" disabled={add.isPending} onClick={submit}>
-          Add
-        </Button>
-        <Button size="sm" variant="ghost" onClick={onClose}>
-          Cancel
+      <UploadRows rows={uploads.rows} onDismiss={uploads.dismiss} />
+      <div>
+        <Button size='sm' variant='ghost' onClick={onClose}>
+          Close
         </Button>
       </div>
+    </div>
+  );
+};
+
+/** What a file attachment is doing: waiting for its upload, or never arrived (with the note and an Upload button). */
+const FileNote = ({ globId, boardId, summary }: { globId: string; boardId: number; summary: ArtifactSummaryView }) => {
+  const versions = useQuery({
+    queryKey: artifactKey(globId, summary.kind, summary.label),
+    queryFn: () => api.artifactVersions(globId, summary.kind, summary.label),
+    // A pending file turns stored (or missing) without anyone touching the page.
+    refetchInterval: (query) => (query.state.data?.at(-1)?.file?.state === 'pending' ? 5000 : false),
+  });
+  const latest = versions.data?.at(-1);
+  const status = latest === undefined ? null : fileStatus(latest);
+  if (latest === undefined || status === null || latest.file?.state === 'stored') return null;
+  return (
+    <p className='flex flex-wrap items-center gap-2 text-xs' data-testid={status.missing ? 'file-missing' : 'file-pending'}>
+      <span className={cn(status.missing ? 'text-destructive' : 'text-muted-foreground')}>{status.text}</span>
+      {status.missing && <UploadForEntry globId={globId} boardId={boardId} label={summary.label} />}
+    </p>
+  );
+};
+
+/** The Upload button on a missing file: it fills the same entry. */
+const UploadForEntry = ({ globId, boardId, label }: { globId: string; boardId: number; label: string }) => {
+  const uploads = useGlobUploads(globId, boardId);
+  const input = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <>
+      <Button size='sm' variant='outline' onClick={() => input.current?.click()}>
+        Upload
+      </Button>
+      <input
+        ref={input}
+        type='file'
+        hidden
+        accept={FILE_ACCEPT}
+        aria-label={`Upload ${label}`}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file === undefined) return;
+          const problem = checkFile(file);
+          setError(problem);
+          if (problem === null) uploads.add([file], label);
+        }}
+      />
+      {error !== null && (
+        <span className='text-destructive' role='alert'>
+          {error}
+        </span>
+      )}
+      <UploadRows rows={uploads.rows} onDismiss={uploads.dismiss} />
+    </>
+  );
+};
+
+/** A stored file in the viewer: an image shows as a thumbnail that opens full size; anything else opens or downloads in a new tab. */
+const StoredFile = ({ globId, boardId, view }: { globId: string; boardId: number; view: ArtifactView }) => {
+  const client = useQueryClient();
+  const toast = useToast();
+  const file = view.file;
+  const link = useQuery({
+    queryKey: ['file-link', globId, view.label, view.version],
+    queryFn: () => api.fileDownload(globId, view.label),
+    enabled: file?.state === 'stored',
+    // The link lasts ~15 minutes; ask again before it can run out.
+    staleTime: 10 * 60 * 1000,
+  });
+  const remove = useMutation({
+    mutationFn: () => api.deleteFile(globId, view.label),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: globsKey(boardId) });
+      void client.invalidateQueries({ queryKey: artifactKey(globId, 'attachment', view.label) });
+      toast('File removed');
+    },
+    onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Something went wrong'),
+  });
+  if (file === null || file === undefined) return null;
+  const status = fileStatus(view);
+  return (
+    <div className='grid gap-2' data-testid='file-attachment'>
+      {file.state === 'stored' && link.data !== undefined && (
+        <a href={link.data.url} target='_blank' rel='noreferrer' className='w-fit text-sm underline'>
+          {hasThumbnail(file) ? (
+            <img
+              src={link.data.url}
+              alt={file.fileName}
+              className='max-h-48 max-w-full rounded border object-contain'
+              data-testid='file-thumbnail'
+            />
+          ) : (
+            `Open ${file.fileName}`
+          )}
+        </a>
+      )}
+      {file.state === 'stored' && link.isError && <p className='text-sm text-red'>Could not get a link to this file.</p>}
+      {status !== null && <p className={cn('text-xs', status.missing ? 'text-destructive' : 'text-muted-foreground')}>{status.text}</p>}
+      {file.state === 'missing' && (
+        <div className='flex flex-wrap items-center gap-2'>
+          <UploadForEntry globId={globId} boardId={boardId} label={view.label} />
+        </div>
+      )}
+      <Button
+        size='sm'
+        variant='outline'
+        className='w-fit'
+        disabled={remove.isPending}
+        onClick={() => {
+          if (window.confirm(`Remove ${file.fileName} from ${globId}? The file is deleted.`)) remove.mutate();
+        }}
+      >
+        Remove
+      </Button>
     </div>
   );
 };
@@ -285,7 +360,7 @@ const DetachInboxItem = ({ globId, link, label }: { globId: string; link: string
   );
 };
 
-const ArtifactViewer = ({ globId, summary }: { globId: string; summary: ArtifactSummaryView }) => {
+const ArtifactViewer = ({ globId, boardId, summary }: { globId: string; boardId: number; summary: ArtifactSummaryView }) => {
   const versions = useQuery({
     queryKey: artifactKey(globId, summary.kind, summary.label),
     queryFn: () => api.artifactVersions(globId, summary.kind, summary.label),
@@ -353,7 +428,11 @@ const ArtifactViewer = ({ globId, summary }: { globId: string; summary: Artifact
           {shown.kind === 'investigation' && (
             <InvestigationFields content={shown.content} validation={shown.provenance.validation} />
           )}
-          <MarkdownView content={shown.content} />
+          {shown.file === null || shown.file === undefined ? (
+            <MarkdownView content={shown.content} />
+          ) : (
+            <StoredFile globId={globId} boardId={boardId} view={shown} />
+          )}
         </>
       )}
     </div>

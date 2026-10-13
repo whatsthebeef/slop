@@ -361,6 +361,7 @@ const Card = ({
             });
             toast(`Created ${glob.id} with this item attached`);
             onChanged();
+            return glob;
           }}
         />
       )}
