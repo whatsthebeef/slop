@@ -17,6 +17,8 @@ import { ACTION_LABELS, ACTION_PATHS, api, isTransient, RequestError } from '@/l
 import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
+import { runCardAction } from '@/lib/card-pending';
+import type { CardPending } from '@/lib/card-pending';
 import { activeCount, matchesFilters, parseFilters, writeFilters } from '@/lib/board-filters';
 import { browserStore, clearFilterMemory, hasFilterParams, loadFilterMemory, saveFilterMemory } from '@/lib/board-filter-memory';
 import type { FilterValues } from '@/lib/board-filters';
@@ -371,6 +373,8 @@ export const BoardPage = () => {
   };
 
   const copyCommand = useSstorCopy();
+  const inFlight = useRef(new Set<string>());
+  const [pending, setPending] = useState<CardPending>({});
   const mutation = useMutation({
     mutationFn: (work: () => Promise<GlobView | null>) => work(),
     onSuccess: (glob) => {
@@ -403,14 +407,25 @@ export const BoardPage = () => {
   /** Drops the card: the action runs and, once the board updates, the card steps into place. */
   const commit = async (glob: GlobView, action: Action) => {
     setPreview(null);
+    // One action in flight per glob: a repeat click, drop or key while one is pending does nothing.
+    if (inFlight.current.has(glob.id)) return;
     motion.markLocal(glob.id);
-    await act(glob, action);
+    await runCardAction(
+      inFlight.current,
+      glob.id,
+      action,
+      () => act(glob, action),
+      (id, pendingAction) =>
+        setPending((p) => (pendingAction === null ? Object.fromEntries(Object.entries(p).filter(([k]) => k !== id)) : { ...p, [id]: pendingAction })),
+      () => toast(`${glob.id} is still working; refresh if it doesn't move.`),
+    );
     // If nothing moved (the action failed), a later move made elsewhere mustn't look like ours.
     setTimeout(() => motion.forgetLocal(glob.id), 1000);
   };
 
   /** Runs a move, asking first when it would halt work in progress. */
   const runMove = (glob: GlobView, move: CardMove, target: List) => {
+    if (inFlight.current.has(glob.id)) return;
     const halts = haltedBy(glob, move.action);
     if (halts.length > 0) setHaltConfirm({ glob, target, action: move.action, halts });
     else void commit(glob, move.action);
@@ -496,6 +511,7 @@ export const BoardPage = () => {
                       onOpenArtifact={(kind) => openGlob(glob.id, { artifact: kind })}
                       onReviewLabel={reviewLabel(glob)}
                       moves={moves.map((m) => m.move)}
+                      pending={pending[glob.id]}
                       previewing={preview?.glob.id === glob.id ? preview.move.action : null}
                       onPreview={(move) => {
                         const target = moves.find((m) => m.move.action === move?.action)?.target;
