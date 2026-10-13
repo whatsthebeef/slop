@@ -1,5 +1,7 @@
 import type {
   AttachmentFile,
+  HumanStepBlock,
+  HumanStepScript,
   GlobOutcome,
   SizeEstimate,
   SizeCalibration,
@@ -31,7 +33,7 @@ import type {
   SignalFigures,
   TypeSignals,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, CONTEXT_SETTING_KEYS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, KNOWLEDGE_PAGE_VERDICTS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
+import { AGENT_KB_APPROVALS, CONTEXT_SETTING_KEYS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, HUMAN_STEP_KINDS, STORED_STEP_STATES, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, KNOWLEDGE_PAGE_VERDICTS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -327,6 +329,34 @@ export const deploys = pgTable(
     uniqueIndex('deploys_one_running_idx').on(t.boardId, t.environment).where(sql`${t.state} = 'running'`),
     uniqueIndex('deploys_one_waiting_idx').on(t.boardId, t.environment).where(sql`${t.state} = 'waiting'`),
   ],
+);
+
+/** Work steps: what a person must do on a glob that the state machine doesn't imply (a rollout, a step someone added). */
+export const humanSteps = pgTable(
+  'human_steps',
+  {
+    id: text('id').primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    globId: text('glob_id').notNull(),
+    kind: text('kind', { enum: HUMAN_STEP_KINDS }).notNull(),
+    title: text('title').notNull(),
+    detail: text('detail'),
+    who: text('who').notNull(),
+    due: text('due').notNull(),
+    state: text('state', { enum: STORED_STEP_STATES }).notNull(),
+    blocks: jsonb('blocks').$type<readonly HumanStepBlock[]>().notNull(),
+    check: text('check'),
+    script: jsonb('script').$type<HumanStepScript>(),
+    origin: text('origin').notNull(),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    doneBy: text('done_by'),
+    doneAt: timestamp('done_at', { withTimezone: true }),
+    dismissedReason: text('dismissed_reason'),
+  },
+  (t) => [index('human_steps_glob_idx').on(t.globId), index('human_steps_board_idx').on(t.boardId, t.state)],
 );
 
 /** Reviews queued for splitting into findings: a local review artifact. */
