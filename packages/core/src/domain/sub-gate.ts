@@ -6,6 +6,8 @@ export interface DiffSummary {
   readonly files: readonly string[];
   /** Lines changed per file, when the code host gave them: what leaves generated files out of the size. */
   readonly fileLines?: Readonly<Record<string, number>>;
+  /** Each file's unified diff, when the code host gave it (GitHub leaves it out for binary and very large files). */
+  readonly patches?: Readonly<Record<string, string>>;
 }
 
 /**

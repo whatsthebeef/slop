@@ -292,6 +292,74 @@ describe('glob view: a decision in Doing', () => {
   });
 });
 
+describe('a due rollout step is the main action, never a scroll-only button', () => {
+  const dueStep = (patch: Record<string, unknown> = {}) =>
+    ({
+      id: 'hs_1',
+      kind: 'rollout',
+      title: 'Add SLOP_X to the server env',
+      state: 'due',
+      who: 'anyone',
+      due: 'after_merge',
+      blocks: ['sign_off', 'dependants'],
+      detail: null,
+      script: null,
+      check: null,
+      source: 'work',
+      doneBy: null,
+      doneAt: null,
+      ...patch,
+    }) as NonNullable<GlobView['humanSteps']>[number];
+  const renderMerged = (step: ReturnType<typeof dueStep>) => {
+    const cb = callbacks();
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <GlobDetail
+            board={{ ...board, role: 'admin' }}
+            glob={view({ status: 'reviewing', list: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'abc' }, humanSteps: [step] })}
+            initialArtifact={null}
+            email="admin@example.com"
+            {...cb}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return cb;
+  };
+
+  it('a setting step is Mark done, which ticks the step', async () => {
+    const user = userEvent.setup();
+    const cb = renderMerged(dueStep({ kind: 'rollout', detail: 'Set it in prod' }));
+    const main = screen.getByTestId('main-action');
+    expect(main.textContent).toContain('Mark done');
+    expect(screen.getByTestId('main-action-note').textContent).toContain('Set it in prod');
+    await user.click(main);
+    expect(cb.onCompleteStep).toHaveBeenCalledWith('hs_1');
+  });
+
+  it('a script step is Copy rollout command, then Mark done', async () => {
+    const user = userEvent.setup();
+    const cb = renderMerged(dueStep({ script: { path: 'infra/deploy/host-deploy.sh' } }));
+    const write = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: write }, configurable: true });
+    expect(screen.getByTestId('main-action').textContent).toContain('Copy rollout command');
+    await user.click(screen.getByTestId('main-action'));
+    expect(write).toHaveBeenCalledWith('infra/deploy/host-deploy.sh');
+    await waitFor(() => expect(screen.getByTestId('main-action').textContent).toContain('Mark done'));
+    await user.click(screen.getByTestId('main-action'));
+    expect(cb.onCompleteStep).toHaveBeenCalledWith('hs_1');
+  });
+
+  it('a step with a capability check is disabled, with the reason', () => {
+    const cb = renderMerged(dueStep({ check: 'fileAttachments' }));
+    const main = screen.getByTestId('main-action');
+    expect((main as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('main-action-note').textContent).toContain('waits for fileAttachments to turn on; slop ticks this itself');
+    expect(cb.onCompleteStep).not.toHaveBeenCalled();
+  });
+});
+
 describe('glob view: the conflict section', () => {
   const section = () => document.querySelector('[data-section="conflict"]') as HTMLElement;
 
