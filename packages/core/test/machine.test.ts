@@ -561,9 +561,82 @@ describe('PR and merge events (rows 11–16)', () => {
     expect(m.hasLiveRun(t.glob)).toBe(false);
   });
 
-  it('row 16: a failed merge leaves an active run alone', () => {
-    const t = value(m.mergeFailed(glob({ status: 'merging', runs: [run({ state: 'active' })] }), 'conflict', ctx(null)));
-    expect(m.currentRun(t.glob)).toMatchObject({ state: 'active' });
+  it('row 16: a failed merge ends an active or queued run as superseded, so nothing is left that cannot be ended (s15b83)', () => {
+    for (const state of ['active', 'queued'] as const) {
+      const t = value(m.mergeFailed(glob({ status: 'merging', runs: [run({ state })] }), 'refused', ctx(null)));
+      expect(t.glob.status).toBe('failed');
+      expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'superseded', failureReason: 'failed: refused' });
+      expect(t.events.find((e) => e.type === 'RunEnded')?.data).toMatchObject({ cause: 'glob_failed' });
+    }
+  });
+
+  it('row 16: a merge conflict leaves the glob in pr_open with the conflict flagged, not failed (s15b73, s15b83)', () => {
+    const conflict = { base: 'main', files: ['a.ts'] };
+    const pr = { number: 7, state: 'ready' as const, headSha: 'aaa' };
+    const t = value(m.mergeFailed(glob({ status: 'merging', pr }), 'Merge conflict with main in a.ts', ctx(null), conflict));
+    expect(t.glob.status).toBe('pr_open');
+    expect(t.glob.failure).toBeNull();
+    expect(t.glob.conflict).toMatchObject({ base: 'main', files: ['a.ts'] });
+    expect(t.events.find((e) => e.type === 'MergeFailed')?.data).toMatchObject({ conflict: true });
+  });
+
+  it('row 16: a conflict keeps the conflict-fix run that was already queued for it', () => {
+    const fix = run({ state: 'queued', startedAt: null, purpose: 'resolve_conflict' });
+    const pr = { number: 7, state: 'ready' as const, headSha: 'aaa' };
+    const t = value(m.mergeFailed(glob({ status: 'merging', pr, runs: [fix] }), 'conflict', ctx(null), { base: 'main', files: [] }));
+    expect(t.glob.status).toBe('pr_open');
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'queued', purpose: 'resolve_conflict' });
+  });
+
+  it('a conflict-fix run kept on a glob that failed with a conflict can end itself with report_failure (legacy failed + conflict)', () => {
+    const fix = run({ state: 'active', purpose: 'resolve_conflict' });
+    const failure = { reason: 'Merge conflict', at: NOW, kind: 'merge' as const, conflict: { base: 'main', files: [] } };
+    const g = glob({ status: 'failed', failure, runs: [fix] });
+    const t = value(m.reportFailure(g, { reason: 'could not resolve', runId: 'run-0' }, ctx(null)));
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'failed', failureReason: 'could not resolve' });
+    expect(t.glob.status).toBe('failed');
+    expect(t.glob.failure).toEqual(failure);
+  });
+});
+
+describe('runs on failed globs (s15b83)', () => {
+  const failed = (patch: Partial<Glob> = {}) =>
+    glob({ status: 'failed', failure: { reason: 'Merge conflict', at: NOW, kind: 'merge' }, runs: [run({ state: 'active' })], ...patch });
+
+  it('report_failure with the live run ID ends the run instead of being ignored', () => {
+    const t = value(m.reportFailure(failed(), { reason: 'gave up', runId: 'run-0' }, ctx(null)));
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'failed', failureReason: 'gave up' });
+    expect(t.glob.status).toBe('failed');
+    expect(t.glob.failure?.reason).toBe('Merge conflict');
+  });
+
+  it('report_failure from a run that is not the current one is still ignored', () => {
+    const t = value(m.reportFailure(failed(), { reason: 'gave up', runId: 'other' }, ctx(null)));
+    expect(m.currentRun(t.glob)?.state).toBe('active');
+  });
+
+  it('take_over is offered on a failed glob with a live run, and not without one', () => {
+    expect(m.allowedActions(failed(), dev)).toContain('take_over');
+    expect(m.allowedActions(failed({ runs: [] }), dev)).not.toContain('take_over');
+  });
+
+  it('taking over a failed glob ends the run and puts the person in charge of the glob in progress', () => {
+    const t = value(m.pickUp(failed(), ctx(), board, { takeOver: true }));
+    expect(t.glob.status).toBe('in_progress');
+    expect(t.glob.implementer).toBe(dev.email);
+    expect(t.glob.failure).toBeNull();
+    expect(m.hasLiveRun(t.glob)).toBe(false);
+    expect(t.events.find((e) => e.type === 'RunEnded')?.data).toMatchObject({ cause: 'take_over' });
+  });
+
+  it('the run watch ends a quiet run on a failed glob after 30 minutes (the backfill for s15b78)', () => {
+    const limits = { runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30 };
+    const at = (minutes: number) => new Date(Date.parse(NOW) + minutes * 60_000).toISOString();
+    const g = failed({ runs: [run({ state: 'active', lastProgressAt: NOW })] });
+    expect(m.runTimeoutReason(g, limits, at(29))).toBeNull();
+    expect(m.runTimeoutReason(g, limits, at(30))).toMatch(/No progress for 30 minutes on a failed glob/);
+    const watching = failed({ runs: [run({ state: 'watching', lastProgressAt: NOW })] });
+    expect(m.runTimeoutReason(watching, limits, at(30))).toMatch(/failed glob/);
   });
 });
 
