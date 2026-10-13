@@ -328,6 +328,12 @@ const ProposedChange = ({ globId }: { globId: string }) => {
               Stale draft: the target changed since it was drafted; it is being drafted again
             </span>
           )}
+          {preview.duplicateSections.length > 0 && (
+            <span className='w-fit rounded bg-amber-500/15 px-1.5 text-xs text-amber-800 dark:text-amber-200' data-testid='duplicate-sections'>
+              Target document has duplicate sections ({preview.duplicateSections.join(', ')}): the draft is of the last copy, and approving it is
+              refused until the document is cleaned up
+            </span>
+          )}
           <DiffView lines={preview.diff} />
         </>
       )}

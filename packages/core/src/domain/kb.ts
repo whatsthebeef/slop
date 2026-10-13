@@ -126,6 +126,8 @@ export interface DraftPreview {
   readonly version: number;
   readonly stale: boolean;
   readonly diff: readonly ContextDiffLine[];
+  /** Headings repeated in the target: the draft is of the last copy, and approving it is refused until the document is cleaned up. */
+  readonly duplicateSections: readonly string[];
 }
 
 /**

@@ -32,10 +32,14 @@ export const markdownHeadings = (markdown: string): Heading[] => {
 /** Headings match ignoring case and surrounding space (as the drafter or an admin may write them). */
 export const sameHeading = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-/** The section under `heading` (its heading line to the next heading of the same or a higher level), or null. */
-export const sectionText = (markdown: string, heading: string): string | null => {
+/**
+ * The section under `heading` (its heading line to the next heading of the same or a higher level), or null.
+ * When the heading appears more than once, the first copy; `last` takes the last one instead.
+ */
+export const sectionText = (markdown: string, heading: string, last = false): string | null => {
   const headings = markdownHeadings(markdown);
-  const index = headings.findIndex((h) => sameHeading(h.text, heading.replace(/^#+\s*/, '')));
+  const matches = (h: Heading) => sameHeading(h.text, heading.replace(/^#+\s*/, ''));
+  const index = last ? headings.findLastIndex(matches) : headings.findIndex(matches);
   const found = headings[index];
   if (found === undefined) return null;
   const next = headings.slice(index + 1).find((h) => h.level <= found.level);
@@ -55,6 +59,39 @@ export const spliceHeadings = (text: string): Heading[] => {
   return headings.some((h) => h.level > 1) ? headings.filter((h) => h.level > 1) : headings;
 };
 
+/** The headings (as first written) that appear more than once among those a section can be spliced at. */
+export const duplicateHeadings = (markdown: string): string[] => {
+  const seen: string[] = [];
+  const repeated: string[] = [];
+  for (const { text } of spliceHeadings(markdown)) {
+    if (!seen.some((s) => sameHeading(s, text))) seen.push(text);
+    else if (!repeated.some((r) => sameHeading(r, text))) repeated.push(text);
+  }
+  return repeated;
+};
+
+/**
+ * Why replacing `section` of `text` with `content` must be refused, or null. A section that
+ * appears more than once has no single copy to replace; and content that holds a heading of the
+ * section's own level or higher besides its first would duplicate the sections that follow it.
+ * Content that doesn't replace an existing section is a new-section append, which may bring its
+ * own headings but not ones the text already has.
+ */
+export const spliceProblem = (text: string, section: string | null, content: string, allowRepeated = false): string | null => {
+  const wanted = section?.replace(/^#+\s*/, '');
+  const spliceable = spliceHeadings(text);
+  const matches = wanted === undefined ? [] : spliceable.filter((h) => sameHeading(h.text, wanted));
+  if (matches.length > 1 && !allowRepeated) return `The heading "${matches[0]?.text}" appears ${matches.length} times in the target; clean the document up first`;
+  const own = matches.at(-1);
+  const inContent = markdownHeadings(content.trim());
+  if (own === undefined) {
+    const known = inContent.find((h) => spliceable.some((e) => e.level === h.level && sameHeading(e.text, h.text)));
+    return known === undefined ? null : `The new section would repeat the existing heading "${known.text}"`;
+  }
+  const other = inContent.slice(1).find((h) => h.level <= own.level);
+  return other === undefined ? null : `The section "${own.text}" holds another heading, "${other.text}"; a section replaces one heading`;
+};
+
 /**
  * `text` with one section replaced by `content` (its heading line through to the next heading of
  * the same or a higher level, so nested subsections go with it), or with `content` appended as a
@@ -67,10 +104,11 @@ export const spliceSection = (text: string, section: string | null, content: str
   const lines = text.split(/\r?\n/);
   const headings = markdownHeadings(text);
   const spliceable = new Set(spliceHeadings(text).map((h) => h.line));
+  // The last copy when the heading repeats (drafting targets it; approving refuses, see `spliceProblem`).
   const index =
     section === null
       ? -1
-      : headings.findIndex((h) => spliceable.has(h.line) && sameHeading(h.text, section.replace(/^#+\s*/, '')));
+      : headings.findLastIndex((h) => spliceable.has(h.line) && sameHeading(h.text, section.replace(/^#+\s*/, '')));
   const found = headings[index];
   if (found === undefined) {
     if (text.trim() === '') return body.join(eol) + eol;

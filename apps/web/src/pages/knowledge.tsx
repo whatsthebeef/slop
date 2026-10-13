@@ -118,6 +118,14 @@ export const KnowledgePage = () => {
                     <span className='text-xs text-muted-foreground'>always for: {d.audience.join(', ')}</span>
                   )}
                 </button>
+                {(d.duplicateSections ?? []).length > 0 && (
+                  <span
+                    className='mx-2 mb-2 w-fit rounded bg-amber-500/15 px-1.5 text-xs text-amber-800 dark:text-amber-200'
+                    data-testid={`duplicate-sections-${d.name}`}
+                  >
+                    Repeated headings: {(d.duplicateSections ?? []).join(', ')}. Drafts into this document can't be approved until it is cleaned up
+                  </span>
+                )}
                 {update !== undefined && (
                   <button
                     type='button'
