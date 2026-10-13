@@ -15,7 +15,6 @@ const glob = (id: string, boardId: number): Glob => ({
   id,
   boardId,
   title: id,
-  summary: '',
   type: 'same',
   category: 'task',
   group: null,

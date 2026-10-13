@@ -211,7 +211,7 @@ describe('KB items become decision globs (migration 0049)', () => {
       return [ids[0] ?? 0, ids[1] ?? 0];
     });
     workGlob = unwrap(
-      await globs.create(DEV, { boardId, title: 'Work', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+      await globs.create(DEV, { boardId, title: 'Work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
     ).id;
     // The old table's rows, and what else referred to them by ID.
     await database.db.insert(kbProposals).values(rows().map(kbProposalRow));

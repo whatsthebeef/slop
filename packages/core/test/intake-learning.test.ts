@@ -50,7 +50,6 @@ const snapshot = (over: Partial<IntakeSnapshot> & { globId: string }): IntakeSna
   boardId: 1,
   request: 'request',
   title: 'title',
-  summary: 'summary',
   plan: 'plan',
   creator: 'dev@example.com',
   source: 'web',
@@ -137,9 +136,9 @@ describe('collectOutcome', () => {
         { severity: 'in_scope', class: null },
       ],
       bugs: [
-        { id: 's1b1', title: 'Regression from s1t2', summary: '', createdAt: '2026-10-05T00:00:00.000Z' },
-        { id: 's1b2', title: 'Regression from s1t20', summary: '', createdAt: '2026-10-05T00:00:00.000Z' },
-        { id: 's1b3', title: 'Late, s1t2', summary: '', createdAt: '2026-12-05T00:00:00.000Z' },
+        { id: 's1b1', title: 'Regression from s1t2', createdAt: '2026-10-05T00:00:00.000Z' },
+        { id: 's1b2', title: 'Regression from s1t20', createdAt: '2026-10-05T00:00:00.000Z' },
+        { id: 's1b3', title: 'Late, s1t2', createdAt: '2026-12-05T00:00:00.000Z' },
       ],
     });
     expect(outcome.corrections.subConverted).toBe('size');
@@ -252,7 +251,6 @@ describe('intake learning through the services', () => {
       await globs.create(DEV, {
         boardId,
         title: request.slice(0, 30),
-        summary: request,
         plan: `${request}\n\nDone when: it works.`,
         type: 'same',
         category: 'feature',
@@ -282,10 +280,10 @@ describe('intake learning through the services', () => {
       features: { doneWhenLines: 1 },
     });
     expect(store.state.intakeSnapshots[0]?.embedding).toHaveLength(1024);
-    // Without intake the summary is the request and the source defaults to api; a failing embedder doesn't stop creation.
+    // Without intake the plan is the request and the source defaults to api; a failing embedder doesn't stop creation.
     embedder.unavailable = new LlmUnavailable('down', 'fix');
     const plain = await create('Another thing');
-    expect((await snapshots()).find((x) => x.globId === plain.id)).toMatchObject({ request: 'Another thing', source: 'api', decisions: { categoryConfidence: null, promptVersion: null } });
+    expect((await snapshots()).find((x) => x.globId === plain.id)).toMatchObject({ request: 'Another thing\n\nDone when: it works.', source: 'api', decisions: { categoryConfidence: null, promptVersion: null } });
     expect(store.state.intakeSnapshots.find((r) => r.snapshot.globId === plain.id)?.embedding).toBeNull();
   });
 

@@ -44,7 +44,6 @@ describe('split a glob (MCP and REST, on Postgres)', () => {
       await globs.create(DEV, {
         boardId,
         title,
-        summary: 'Everything',
         type: 'same',
         category: 'task',
         group: 'grp',

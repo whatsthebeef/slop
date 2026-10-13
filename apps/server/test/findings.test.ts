@@ -35,7 +35,6 @@ describe('Review findings in Postgres', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Work',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,

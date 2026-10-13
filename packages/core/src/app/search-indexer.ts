@@ -1,7 +1,7 @@
 import { chunkDocument, contentHash } from '../domain/chunking.js';
 import type { ChunkInput } from '../domain/chunking.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
-import { learningDecision, learningDocument, learningEvidence, learningFacts, learningStatus } from '../domain/learning.js';
+import { learningDecision, learningDocument, learningEvidence, learningFacts, learningStatement, learningStatus } from '../domain/learning.js';
 import { parseFrontmatter } from '../domain/knowledge.js';
 import type { Artifact, ArtifactKind } from '../domain/knowledge.js';
 import { PIPELINE_OWNED_SOURCES, SOURCE_TYPES } from '../domain/search.js';
@@ -259,19 +259,6 @@ export class SearchIndexer {
       const text = d.text.trim().slice(0, TEXT_LIMIT);
       if (text !== '') out.push({ ...d, text });
     };
-    for (const glob of globs) {
-      push({
-        sourceType: 'glob_summary',
-        externalRef: `glob:${glob.id}:summary`,
-        title: `${glob.id} ${glob.title}`,
-        occurredAt: glob.createdAt,
-        authority: authorityOf('glob_summary'),
-        globIds: [glob.id],
-        globGroup: glob.group,
-        externalUrl: globLink(board.id, glob.id),
-        text: glob.summary,
-      });
-    }
     for (const artifact of await tx.listLatestArtifacts(board.id)) {
       const glob = byId.get(artifact.globId);
       if (glob === undefined) continue;
@@ -298,14 +285,14 @@ export class SearchIndexer {
       push({
         sourceType: 'learning',
         externalRef: `learning:${glob.id}`,
-        title: firstLine(glob.summary, 80),
+        title: firstLine(learningStatement(glob, artifacts), 80),
         occurredAt: learningDecision(glob, artifacts).at ?? glob.createdAt,
         authority: authorityOf('learning'),
         // Only globs still on the board: a deleted glob's link is dropped with it.
         globIds: facts.sourceGlobIds.filter((id) => byId.has(id)),
         globGroup: null,
         externalUrl: `/boards/${String(board.id)}/knowledge`,
-        text: `${glob.summary}\n\nEvidence: ${learningEvidence(glob, artifacts)}`,
+        text: `${learningStatement(glob, artifacts)}\n\nEvidence: ${learningEvidence(glob, artifacts)}`,
       });
     }
     return out;
@@ -385,7 +372,7 @@ export class SearchIndexer {
         this.deps.llm,
         {
           system: CHANGE_SUMMARY_SYSTEM,
-          prompt: summaryPrompt(item.title, context.glob?.summary ?? '', context.plan, diff),
+          prompt: summaryPrompt(item.title, context.plan, diff),
           maxTokens: SUMMARY_MAX_TOKENS,
           spend: { boardId: item.boardId, source: 'search_index', globId: item.globIds[0] ?? null },
         },
@@ -445,13 +432,11 @@ export class SearchIndexer {
 
 const summaryPrompt = (
   title: string,
-  summary: string,
   plan: string,
   diff: { readonly changedLines: number; readonly files: readonly string[] } | null,
 ): string =>
   [
     `Change: ${title}`,
-    summary.trim() === '' ? '' : `Task summary: ${summary.trim()}`,
     '',
     `Plan:\n<<<\n${plan.trim() === '' ? '(none)' : plan.slice(0, PLAN_PROMPT_LIMIT)}\n>>>`,
     '',

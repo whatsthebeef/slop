@@ -124,7 +124,7 @@ describe('Choices that keep mattering', () => {
       for (let i = 1; i <= 6; i++) {
         const id = `s${String(board.id)}t${String(i)}`;
         globIds.push(id);
-        await tx.insertGlob(glob({ id, boardId: board.id, title: `Retry backoff job ${String(i)}`, summary: 'retry backoff' }), null);
+        await tx.insertGlob(glob({ id, boardId: board.id, title: `Retry backoff job ${String(i)}` }), null);
       }
     });
   });

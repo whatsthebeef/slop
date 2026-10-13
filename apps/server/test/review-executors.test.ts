@@ -12,7 +12,6 @@ const glob = (patch: Partial<Glob> = {}): Glob => ({
   id: 's1t1',
   boardId: 1,
   title: 'Work',
-  summary: '',
   type: 'same',
   category: 'task',
   group: null,

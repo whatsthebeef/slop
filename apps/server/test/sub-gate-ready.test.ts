@@ -94,7 +94,6 @@ describe('a sub whose PR is ready', () => {
       await globs.create(DEV, {
         boardId: 1,
         title: 'Sub glob',
-        summary: '',
         type: 'sub',
         category: 'task',
         group: null,

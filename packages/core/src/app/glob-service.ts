@@ -17,9 +17,8 @@ import type { AwaitedDependency, BlockingChain, DependencyState } from '../domai
 import type { InboxItem } from '../domain/inbox.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
-import { applicableDecisions, DECISIONS_LABEL, decisionsAttachment, scopedDecision } from '../domain/decision-glob.js';
-import type { ScopedDecision } from '../domain/decision-glob.js';
-import { addArtifact } from './artifact-service.js';
+import { DECISIONS_LABEL, decisionsAttachment } from '../domain/decision-glob.js';
+import { addArtifact, governingDecisions } from './artifact-service.js';
 import { fileKeysOf } from './attachment-service.js';
 import { DECISION_SYSTEM_ACTOR } from './decision-glob.js';
 import { AttachConflict, linkInboxItem } from './inbox-service.js';
@@ -50,10 +49,15 @@ export interface GlobServiceDeps {
   readonly log?: (task: string, message: string) => void;
 }
 
+/** plan.md v1 of a new glob: the caller's plan, else what intake was given, else the title. */
+const planOf = (input: Pick<CreateGlobInput, 'plan' | 'title' | 'intake'>): string => {
+  for (const text of [input.plan, input.intake?.request]) if (text !== undefined && text !== null && text.trim() !== '') return text;
+  return input.title.trim();
+};
+
 export interface CreateGlobInput {
   readonly boardId: number;
   readonly title: string;
-  readonly summary: string;
   readonly type: SlopType;
   readonly category: Category;
   readonly group: string | null;
@@ -63,8 +67,8 @@ export interface CreateGlobInput {
   readonly start?: boolean;
   readonly idempotencyKey: string | null;
   /**
-   * plan.md v1, stored verbatim with the glob: the caller passes `plan`, else the summary as given, else the intake
-   * input. Empty or missing stores no plan (get_plan then falls back to the summary, as it always has).
+   * plan.md v1, stored verbatim with the glob: the caller passes `plan`, else the intake input, else the title. A glob
+   * always has a plan.
    */
   readonly plan?: string | null;
   /** Who is creating it, for the plan's provenance (default: a person). */
@@ -115,7 +119,6 @@ const validAttachments = (items: readonly NewGlobAttachment[]): Result<null> => 
 /** One part of a split. Part 0 is the original glob (it keeps its ID); the others become new globs in its group. */
 export interface SplitPart {
   readonly title: string;
-  readonly summary: string;
   /** This part's share of plan.md (Markdown). `{part:N}` stands for part N's glob ID. */
   readonly plan: string;
   /** Default: the original's category. */
@@ -243,12 +246,6 @@ const CLOSURE_LIMIT = 200;
 /** Integration events retry a few times on concurrent writes; they carry no client version. */
 const EVENT_RETRIES = 5;
 
-/** The accepted decisions that govern a work glob, as the `Decisions` attachment lists them. */
-const governingDecisions = async (tx: Tx, glob: Glob): Promise<ScopedDecision[]> =>
-  applicableDecisions(await tx.listGlobs(glob.boardId, { include: 'decisions' }), glob)
-    .map(scopedDecision)
-    .filter((d): d is ScopedDecision => d !== null);
-
 /**
  * Application service for globs. Every entry point (REST, MCP, webhooks, jobs) calls these
  * methods, so every change goes through the same authorisation, state machine and outbox.
@@ -305,6 +302,11 @@ export class GlobService {
   /** Integrations' read of one glob, with no signed-in person. */
   async peek(id: string): Promise<Glob | null> {
     return this.deps.store.transaction((tx) => tx.getGlob(id));
+  }
+
+  /** Integrations' read of a glob's plan.md (its latest version), with no signed-in person; empty when it has none. */
+  async peekPlan(id: string): Promise<string> {
+    return this.deps.store.transaction(async (tx) => (await tx.listArtifacts(id, 'plan'))[0]?.content ?? '');
   }
 
   /** Integrations' read of a board's globs, with no signed-in person. */
@@ -383,15 +385,15 @@ export class GlobService {
     if ((input.type === 'sub' || (input.type === 'same' && input.autoTrigger)) && this.deps.branchFiles !== undefined) {
       const board = await this.deps.store.transaction((tx) => tx.getBoard(input.boardId));
       if (board !== null) {
-        const candidate = { id: null, plan: input.plan ?? input.summary, ...(input.files === undefined ? {} : { files: input.files }) };
+        const candidate = { id: null, plan: planOf(input), ...(input.files === undefined ? {} : { files: input.files }) };
         holds = await findHolds(this.deps.store, this.deps.branchFiles, board, candidate, new Set(input.after ?? []), await this.deps.dependencyLearning?.prediction(board.id));
       }
     }
     // The snapshot's embedding is computed here, outside the transaction (it calls a model).
-    const embedding = await embedRequest(this.deps.embedder, input.intake?.request ?? input.summary);
+    const embedding = await embedRequest(this.deps.embedder, input.intake?.request ?? planOf(input));
     // The size check asks a model too, so it is made here as well; a failing model leaves the text estimate.
-    const planText = input.plan ?? input.summary;
-    const size = this.deps.sizeCheck === undefined ? null : await this.deps.sizeCheck.assess(input.boardId, planText, { summaryOnly: (input.plan ?? '').trim() === '' });
+    const planText = planOf(input);
+    const size = this.deps.sizeCheck === undefined ? null : await this.deps.sizeCheck.assess(input.boardId, planText);
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Transition>> => {
       const board = await tx.getBoard(input.boardId);
       if (board === null) return notFound(`No board ${input.boardId}`);
@@ -439,30 +441,27 @@ export class GlobService {
       await tx.appendEvents(transition.value.events);
       await tx.enqueueEffects(transition.value.effects);
       // The frozen record of what intake saw and decided (spec, Intake): written with the glob, never edited.
-      await tx.insertIntakeSnapshot(snapshotOf(glob, input.plan ?? input.summary, input.intake ?? null, input.source ?? 'api'), embedding);
+      await tx.insertIntakeSnapshot(snapshotOf(glob, planText, input.intake ?? null, input.source ?? 'api'), embedding);
       if (size !== null) await tx.upsertSizeCheck(checkFrom(glob.id, board.id, size, null, this.deps.clock.now()));
-      const plan = input.plan ?? '';
-      if (plan.trim() !== '') {
-        const artifact = await tx.insertArtifact({
+      const artifact = await tx.insertArtifact({
+        globId: glob.id,
+        kind: 'plan',
+        label: '',
+        content: planText,
+        link: null,
+        commitSha: null,
+        provenance: { by: input.planBy ?? 'human', actor: email, runId: null, agentSetVersion: null },
+        createdAt: this.deps.clock.now(),
+      });
+      await tx.appendEvents([
+        {
+          type: 'ArtifactAdded',
           globId: glob.id,
-          kind: 'plan',
-          label: '',
-          content: plan,
-          link: null,
-          commitSha: null,
-          provenance: { by: input.planBy ?? 'human', actor: email, runId: null, agentSetVersion: null },
-          createdAt: this.deps.clock.now(),
-        });
-        await tx.appendEvents([
-          {
-            type: 'ArtifactAdded',
-            globId: glob.id,
-            actor: email,
-            at: this.deps.clock.now(),
-            data: { kind: 'plan', label: '', version: artifact.version, commitSha: null, runId: null, agentSetVersion: null },
-          },
-        ]);
-      }
+          actor: email,
+          at: this.deps.clock.now(),
+          data: { kind: 'plan', label: '', version: artifact.version, commitSha: null, runId: null, agentSetVersion: null },
+        },
+      ]);
       // Accepted decisions that govern the new glob travel with it as one attachment (IDs and one-line statements, not inline).
       const governing = await governingDecisions(tx, glob);
       if (governing.length > 0) {
@@ -613,7 +612,6 @@ export class GlobService {
       const firstType = firstEscalation?.type ?? first.type;
       const changes: FieldChanges = {
         title: first.title,
-        summary: fillPartIds(first.summary, ids),
         ...(first.category === undefined ? {} : { category: first.category }),
         ...(firstType === undefined || (first.type === undefined && firstType === original.type) ? {} : { type: firstType }),
       };
@@ -653,7 +651,6 @@ export class GlobService {
             id: partId,
             boardId: board.id,
             title: part.title,
-            summary: fillPartIds(part.summary, ids),
             type: escalations[index]?.type ?? part.type ?? original.type,
             category: part.category ?? original.category,
             group: original.group,
@@ -1056,7 +1053,7 @@ export class GlobService {
       if (board === null) return null;
       const globs = await tx.listGlobs(boardId, {});
       const plans = new Map<string, string>();
-      for (const glob of globs) plans.set(glob.id, (await tx.listArtifacts(glob.id, 'plan'))[0]?.content ?? glob.summary);
+      for (const glob of globs) plans.set(glob.id, (await tx.listArtifacts(glob.id, 'plan'))[0]?.content ?? '');
       return { board, globs, plans };
     });
     if (read === null) return [];
@@ -1088,7 +1085,7 @@ export class GlobService {
         this.deps.store,
         cached,
         read.board,
-        { id: glob.id, plan: read.plans.get(glob.id) ?? glob.summary, ...(files === undefined ? {} : { files }) },
+        { id: glob.id, plan: read.plans.get(glob.id) ?? '', ...(files === undefined ? {} : { files }) },
         skip,
         prediction,
       );
@@ -1145,7 +1142,7 @@ export class GlobService {
       if (board === null) return null;
       const states = await this.dependencyStates(tx, dependencyIds(glob));
       if (waitingFor(glob, states).length > 0) return null;
-      const plan = (await tx.listArtifacts(id, 'plan'))[0]?.content ?? glob.summary;
+      const plan = (await tx.listArtifacts(id, 'plan'))[0]?.content ?? '';
       return { glob, board, plan };
     });
     if (read === null) return [];

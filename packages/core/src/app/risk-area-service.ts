@@ -143,7 +143,7 @@ export class RiskAreaService {
         (b) =>
           Date.parse(b.createdAt) >= mergedMs &&
           Date.parse(b.createdAt) <= mergedMs + SUB_LIMIT_WINDOW_DAYS * DAY_MS &&
-          namesGlob(`${b.title}\n${b.summary}`, glob.id),
+          namesGlob(b.title, glob.id),
       );
       if (blamed) continue;
       if (await this.record(boardId, { kind: 'clean', globId: glob.id, paths: await pathsOf(glob.id), at: now })) changed++;

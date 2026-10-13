@@ -169,7 +169,7 @@ describe('suggest', () => {
     });
     boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
-    workId = unwrap(await globs.create(ADMIN, { boardId, title: 'Existing work', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null })).id;
+    workId = unwrap(await globs.create(ADMIN, { boardId, title: 'Existing work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null })).id;
     unwrap(await knowledge.importDocuments(ADMIN, boardId, [{ fileName: 'build_test_lint.md', content: BUILD_DOC }], 'upload'));
   });
 
@@ -206,14 +206,14 @@ describe('suggest', () => {
     it('picks merged work since the learning was submitted whose title or summary overlaps its area', async () => {
       const made = await drafted('Lint with warnings as errors', 'Run eslint --max-warnings 0.');
       const self = await glob(made.id);
-      const work = (id: string, title: string, summary: string, updatedAt: string): Glob => ({ ...self, id, category: 'task', title, summary, updatedAt, status: 'signed_off' });
+      const work = (id: string, title: string, summary: string, updatedAt: string): Glob => ({ ...self, id, category: 'task', title, updatedAt, status: 'signed_off' });
       const after = '2026-10-06T00:00:00.000Z';
       const merged = [
         work('s1t7', 'Make eslint run in the lint section', 'Warnings now fail the build_test_lint run', after),
         work('s1t8', 'Rename the login button', 'Styling only', after),
         work('s1t9', 'Old eslint change', 'eslint lint warnings', '2026-10-01T00:00:00.000Z'),
       ];
-      const picked = overlappingMerges(self, ['build_test_lint', 'Lint', self.summary], merged);
+      const picked = overlappingMerges(self, ['build_test_lint', 'Lint', self.title], merged);
       expect(picked.map((m) => m.id)).toEqual(['s1t7']);
       expect(overlappingMerges(self, [], merged)).toEqual([]);
     });

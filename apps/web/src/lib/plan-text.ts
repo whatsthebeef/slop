@@ -1,9 +1,8 @@
-/** The text plan.md shows: the draft, else the saved plan, else the glob's summary (its starting text). */
-export const planText = (draft: string | null, saved: string | null, summary: string): string =>
-  draft ?? saved ?? summary;
+/** The text plan.md shows: the draft, else the saved plan. */
+export const planText = (draft: string | null, saved: string | null): string => draft ?? saved ?? '';
 
 /** What a draft is compared against: Save is offered only once the text differs from it. */
-export const planBaseline = (saved: string | null, summary: string): string => saved ?? summary;
+export const planBaseline = (saved: string | null): string => saved ?? '';
 
 /** Copy text to the clipboard; if it is refused or missing, select the text so the user can copy it by hand. */
 export const copyOrSelect = async (

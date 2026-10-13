@@ -19,6 +19,8 @@ const commitStats = z.object({
 
 /** How long the App's own settings are reused: readiness is read on every settings view. */
 const APP_SETTINGS_TTL_MS = 5 * 60_000;
+/** How much of a glob's plan.md a PR body carries. */
+const PR_BODY_PLAN_CHARS = 4000;
 
 const status = (error: unknown): number | null =>
   typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number'
@@ -134,7 +136,7 @@ export class GitHub implements CodeHost, CommitGraph {
    * Creates the glob's branch with an empty `<id>: start` commit and opens its draft PR with
    * labels. Idempotent: an existing branch or open PR is reused, so retries are safe.
    */
-  async provision(repo: Repo, glob: Glob): Promise<{ branch: string; pr: { number: number; headSha: string } }> {
+  async provision(repo: Repo, glob: Glob, plan: string): Promise<{ branch: string; pr: { number: number; headSha: string } }> {
     const gh = await this.octokit(repo);
     const r = { owner: repo.owner, repo: repo.name };
     let headSha = await this.branchHead(repo, glob.id);
@@ -164,13 +166,13 @@ export class GitHub implements CodeHost, CommitGraph {
       }
     }
 
-    const pr = await this.openDraftPr(repo, glob);
+    const pr = await this.openDraftPr(repo, glob, plan);
     // The start commit means there is always something to merge.
     if (pr === null) throw new Error(`GitHub refused a draft PR for ${glob.id}`);
     return { branch: glob.id, pr };
   }
 
-  async openDraftPr(repo: Repo, glob: Glob): Promise<{ number: number; headSha: string } | null> {
+  async openDraftPr(repo: Repo, glob: Glob, plan: string): Promise<{ number: number; headSha: string } | null> {
     const gh = await this.octokit(repo);
     let pr = await this.openPr(repo, glob.id);
     if (pr === null) {
@@ -182,7 +184,7 @@ export class GitHub implements CodeHost, CommitGraph {
           head: glob.id,
           base: repo.base,
           draft: true,
-          body: this.prBody(glob),
+          body: this.prBody(glob, plan),
         });
         pr = { number: data.number, headSha: data.head.sha };
       } catch (error) {
@@ -872,10 +874,11 @@ export class GitHub implements CodeHost, CommitGraph {
     return pr === undefined ? null : { number: pr.number, headSha: pr.head.sha };
   }
 
-  private prBody(glob: Glob): string {
-    const summary = glob.summary.trim();
+  /** The PR body: the glob's plan.md (its opening when long), then what the glob is. */
+  private prBody(glob: Glob, plan: string): string {
+    const text = plan.trim();
     return [
-      summary === '' ? '_No summary yet._' : summary,
+      text === '' ? glob.title : text.length > PR_BODY_PLAN_CHARS ? `${text.slice(0, PR_BODY_PLAN_CHARS).trimEnd()}\n\n…` : text,
       '',
       `Slop glob **${glob.id}** (${glob.type}, ${glob.category}). Merge from the glob or here; squash merge only.`,
     ].join('\n');

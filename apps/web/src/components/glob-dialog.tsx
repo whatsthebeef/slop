@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
-import { Input, Label, Select, Textarea } from '@/components/ui/input';
+import { Input, Label, Select } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { ACTION_LABELS } from '@/lib/api';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
@@ -574,10 +574,6 @@ export const GlobDetail = ({
               Title
               <Input value={merged.title} onChange={(e) => edit({ title: e.target.value })} />
             </Label>
-            <Label>
-              Summary
-              <Textarea value={merged.summary} onChange={(e) => edit({ summary: e.target.value })} />
-            </Label>
             <div className='grid grid-cols-2 items-end gap-3 sm:grid-cols-3'>
               {!decision && (
               <Label>
@@ -682,7 +678,6 @@ export const GlobDetail = ({
 
           <PlanEditor
             globId={glob.id}
-            summary={glob.summary}
             onHistory={glob.status === 'signed_off' ? undefined : () => setArtifact({ kind: 'plan', label: '' })}
           />
 

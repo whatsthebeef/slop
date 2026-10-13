@@ -100,7 +100,7 @@ describe('decision globs', () => {
     unwrap(await boards.setMember(ADMIN, boardId, PO, 'po'));
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     sourceGlobId = unwrap(
-      await globs.create(DEV, { boardId, title: 'Source', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+      await globs.create(DEV, { boardId, title: 'Source', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
     ).id;
     const server = buildServer({ globs, knowledge } as unknown as McpDeps, DEV, 'http://localhost');
     const [a, b] = InMemoryTransport.createLinkedPair();
@@ -146,7 +146,7 @@ describe('decision globs', () => {
 
     it('round-trips attributes and filters decisions out of the default list', async () => {
       const { globId } = await submit('Round trip the attributes');
-      const work = unwrap(await globs.create(DEV, { boardId, title: 'Work', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+      const work = unwrap(await globs.create(DEV, { boardId, title: 'Work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
       const ids = async (include?: 'work' | 'decisions' | 'all') =>
         (await store.transaction((tx) => tx.listGlobs(boardId, include === undefined ? {} : { include }))).map((g) => g.id);
       expect(await ids()).toContain(work.id);
@@ -258,7 +258,7 @@ describe('decision globs', () => {
     it('needs work links a work glob and moves to Reviewing when the release_waiting executor sees it merge', async () => {
       const { globId } = await submit('Needs work first');
       await pickUp(globId);
-      const work = unwrap(await globs.create(ADMIN, { boardId, title: 'Do the work', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+      const work = unwrap(await globs.create(ADMIN, { boardId, title: 'Do the work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
       const waiting = await json<View>(await decide(globId, { outcome: 'needs_work', linkedGlobId: work.id }));
       expect(waiting).toMatchObject({ status: 'in_progress', attributes: { outcome: { kind: 'needs_work' } } });
       const executors = codeHostExecutors(new FakeCodeHost(), (id) => store.transaction((tx) => tx.getBoard(id)), new FileRoutines('/nonexistent/routines.json'), new BoardService({ store, notifier: hub }));
@@ -270,7 +270,7 @@ describe('decision globs', () => {
 
     it('refuses decision commands on a work glob and work commands on a decision', async () => {
       const { globId } = await submit('Wrong commands');
-      const work = unwrap(await globs.create(ADMIN, { boardId, title: 'Plain work', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+      const work = unwrap(await globs.create(ADMIN, { boardId, title: 'Plain work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
       expect((await decide(work.id, { outcome: 'reject', reason: 'x' })).status).toBe(422);
       const start = await call(ADMIN, 'POST', `/api/globs/${globId}/actions/start`, { version: 1 });
       expect(start.status).toBe(409);
@@ -316,7 +316,7 @@ describe('decision globs', () => {
       const response = await call(DEV, 'GET', `/api/globs/${globId}/diff`);
       expect(response.status).toBe(200);
       expect(await json<{ preview: unknown }>(response)).toMatchObject({ preview: null });
-      const work = unwrap(await globs.create(ADMIN, { boardId, title: 'Not a decision', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+      const work = unwrap(await globs.create(ADMIN, { boardId, title: 'Not a decision', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
       expect((await call(DEV, 'GET', `/api/globs/${work.id}/diff`)).status).toBe(422);
     });
 

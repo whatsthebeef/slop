@@ -119,7 +119,7 @@ const globs = new GlobService({
   // Embeds a new glob's request for its intake snapshot; `embedder` exists by the time the first glob is created.
   embedder: { model: config.EMBED_MODEL, dimensions: 1024, embed: (texts, signal) => embedder.embed(texts, signal) },
   // Judges a new glob's size; `sizeCheck` exists by the time the first glob is created.
-  sizeCheck: { assess: (boardId, plan, options): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan, options), refresh: (globId) => sizeCheck.refresh(globId) },
+  sizeCheck: { assess: (boardId, plan): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan), refresh: (globId) => sizeCheck.refresh(globId) },
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.
 let awsSignInEnabled = false;

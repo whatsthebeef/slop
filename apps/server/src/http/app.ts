@@ -118,7 +118,6 @@ const settingsSchema = z.object({
 
 export const createGlobSchema = z.object({
   title: z.string().min(1),
-  summary: z.string().default(''),
   type: z.enum(SLOP_TYPES).default('same'),
   category: z.enum(WORK_CATEGORIES).default('task'),
   group: z.string().min(1).nullable().default(null),
@@ -163,7 +162,6 @@ export const splitGlobSchema = z.object({
     .array(
       z.object({
         title: z.string().min(1),
-        summary: z.string().default(''),
         plan: z.string().min(1),
         category: z.enum(WORK_CATEGORIES).optional(),
         type: z.enum(SLOP_TYPES).optional(),
@@ -179,7 +177,6 @@ export const splitGlobSchema = z.object({
 const updateGlobSchema = z.object({
   version: z.number().int(),
   title: z.string().min(1).optional(),
-  summary: z.string().optional(),
   type: z.enum(SLOP_TYPES).optional(),
   category: z.enum(WORK_CATEGORIES).optional(),
   group: z.string().min(1).nullable().optional(),
@@ -464,7 +461,6 @@ export const createApp = (deps: AppDeps) => {
       ...(needs === undefined && fields.after === undefined ? {} : { after: needs ?? fields.after ?? [] }),
       source: 'web',
       ...(intake === undefined ? {} : { intake: { ...intake, source: 'web' } }),
-      plan: body.plan ?? body.summary,
       boardId: Number(c.req.param('b')),
     });
     if (!created.ok) return send(c, created);

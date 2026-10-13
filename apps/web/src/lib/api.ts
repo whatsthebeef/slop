@@ -317,9 +317,7 @@ const askChatStream = async (boardId: number, input: ChatQuestion, stream: ChatS
 
 export interface NewGlob {
   title: string;
-  /** One or two sentences for the card. */
-  summary: string;
-  /** plan.md v1, when it is more than the summary (intake's write-up of the request). */
+  /** plan.md v1 (intake's write-up of the request); without it the glob's plan starts as its title. */
   plan?: string;
   type: SlopType;
   category: Category;
@@ -364,7 +362,6 @@ export type IntakeProposalView = NewGlob & {
 
 export interface SplitPartInput {
   title: string;
-  summary: string;
   plan: string;
   category?: Category;
   type?: SlopType;
@@ -374,7 +371,7 @@ export interface SplitPartInput {
   overlaps?: number[];
 }
 
-export type GlobChanges = Partial<Pick<Glob, 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'after'>> & {
+export type GlobChanges = Partial<Pick<Glob, 'title' | 'type' | 'category' | 'group' | 'environment' | 'after'>> & {
   /** A decision's scope, the only attribute a person edits. */
   attributes?: { scope: DecisionScope };
 };

@@ -58,6 +58,16 @@ export const evidenceOfPayload = (statement: string, payload: string): string =>
     ? payload.slice(statement.length + EVIDENCE_HEADING.length)
     : payload;
 
+/**
+ * A learning's statement: the text before the evidence heading in its plan.md payload (`proposalText` writes it so). A
+ * payload a person rewrote without the heading, a document proposal and a learning with no plan yet fall back to the title.
+ */
+export const learningStatement = (glob: Pick<Glob, 'title'>, a: Pick<LearningArtifacts, 'plan'>): string => {
+  const payload = a.plan?.content;
+  const at = payload?.indexOf(EVIDENCE_HEADING) ?? -1;
+  return payload === undefined || at < 0 ? glob.title : payload.slice(0, at);
+};
+
 /** The attachment labels a learning uses. */
 export const MERGE_NOTE_LABEL = 'merge_note';
 /** A document proposal's submission evidence (its payload is the document). */
@@ -205,7 +215,7 @@ export const learningDocument = (
   a: Pick<LearningArtifacts, 'plan'>,
 ): ProposedDocument | null => {
   const meta = attributesOf(glob)?.document;
-  return meta === undefined ? null : { ...meta, content: a.plan?.content ?? glob.summary };
+  return meta === undefined ? null : { ...meta, content: a.plan?.content ?? '' };
 };
 
 /** The submission's evidence: from a statement's payload, or a document proposal's evidence attachment. */
@@ -214,7 +224,7 @@ export const learningEvidence = (
   a: Pick<LearningArtifacts, 'plan' | 'documentEvidence'>,
 ): string =>
   attributesOf(glob)?.document === undefined
-    ? evidenceOfPayload(glob.summary, a.plan?.content ?? glob.summary)
+    ? evidenceOfPayload(learningStatement(glob, a), a.plan?.content ?? '')
     : (a.documentEvidence?.content ?? '');
 
 /** Evidence near-duplicates added, in the order it was added. */

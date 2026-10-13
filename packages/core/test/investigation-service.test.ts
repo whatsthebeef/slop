@@ -55,7 +55,6 @@ describe('acting on an investigation', () => {
       await globs.create(DEV, {
         boardId,
         title: 'T',
-        summary: 's',
         type,
         category: 'task',
         group: null,
@@ -225,7 +224,6 @@ describe('oversizeOf and proposalFromParts', () => {
       'Split titles 1/2: Add the schema',
       'Split titles 2/2: Show it',
     ]);
-    expect(built.map((p) => p.summary)).toEqual(['Schema first.', 'Show the parts.']);
     expect(built[0]?.plan).toContain('Schema.');
     expect(built[0]?.plan).not.toContain('UI.');
     expect(built[1]?.plan).toContain('## Why');
@@ -237,7 +235,6 @@ describe('oversizeOf and proposalFromParts', () => {
       oversizeOf(read({ ...BLOCK, parts: THREE }), DEFAULT_SIZE_THRESHOLD, PLAN, 'Orig')?.proposal
         ?.parts ?? [];
     expect(built[0]?.title).toBe('Orig 1/3: core');
-    expect(built[0]?.summary).toBe('core part of Orig. Files: packages/core/src/x.ts');
     expect(built[0]?.plan).toContain('Fix the label on the card.');
   });
 

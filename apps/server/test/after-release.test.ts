@@ -72,7 +72,6 @@ describe('start after: a merged webhook releases a waiting sub through the outbo
       await globs.create(DEV, {
         boardId: 1,
         title: `A ${type}`,
-        summary: '',
         type,
         category: 'task',
         group: null,
@@ -171,7 +170,6 @@ describe('start after: a merged webhook releases a waiting sub through the outbo
     const refused = await globs.create(DEV, {
       boardId: 1,
       title: 'x',
-      summary: '',
       type: 'sub',
       category: 'task',
       group: null,

@@ -42,7 +42,6 @@ describe('exclusive paths', () => {
   const input = (patch: Partial<CreateGlobInput> = {}): CreateGlobInput => ({
     boardId,
     title: 'Work',
-    summary: '',
     type: 'sub',
     category: 'task',
     group: null,
@@ -223,7 +222,6 @@ describe('clash warning', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Work',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,

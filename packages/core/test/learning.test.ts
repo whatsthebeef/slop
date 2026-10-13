@@ -19,6 +19,7 @@ import {
   learningMergeNote,
   learningOutcome,
   learningStaleness,
+  learningStatement,
   learningStatus,
   learningTarget,
   pipelineState,
@@ -64,7 +65,7 @@ const helpersOf = ({ glob, artifacts, jobs }: LearningRead) => {
   return {
     id: glob.id,
     boardId: glob.boardId,
-    statement: glob.summary,
+    statement: learningStatement(glob, artifacts),
     submittedBy: glob.creator,
     createdAt: glob.createdAt,
     version: glob.version,

@@ -151,6 +151,9 @@ export class SubLimitService {
       const since = new Date(Date.parse(mergedSince) - GATE_LOOKBACK_DAYS * DAY_MS).toISOString();
       const events = await tx.listBoardEvents(boardId, since, SUB_LIMIT_EVENT_TYPES);
       const globs = await tx.listGlobs(boardId, {});
+      const bugIds = new Set(globs.filter((g) => g.category === 'bug').map((g) => g.id));
+      const plans = new Map<string, string>();
+      for (const a of await tx.listLatestArtifacts(boardId)) if (a.kind === 'plan' && bugIds.has(a.globId)) plans.set(a.globId, a.content);
       const recorded = new Set(
         (await tx.listSubLimitChanges(boardId)).map((c) => outcomeKey(c.globId, c.outcome)),
       );
@@ -159,7 +162,7 @@ export class SubLimitService {
       return {
         board,
         ignoredPaths,
-        candidates: subLimitCandidates({ events, globs, recorded, mergedSince, now }),
+        candidates: subLimitCandidates({ events, globs, plans, recorded, mergedSince, now }),
         memory,
         recorded,
       };

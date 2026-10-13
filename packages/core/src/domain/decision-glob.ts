@@ -104,14 +104,18 @@ export interface ScopedDecision {
   readonly outcome: string;
 }
 
-export const scopedDecision = (decision: Glob): ScopedDecision | null => {
+/** A decision's one-line statement: the first line of its plan.md, or its title while it has none. */
+export const decisionStatement = (decision: Pick<Glob, 'title'>, plan: string | undefined): string =>
+  firstLine(plan ?? '', 300) || decision.title;
+
+export const scopedDecision = (decision: Glob, plan: string | undefined): ScopedDecision | null => {
   const attributes = decisionOf(decision);
   if (attributes === null) return null;
   return {
     id: decision.id,
     title: decision.title,
     scope: attributes.scope,
-    statement: firstLine(decision.summary, 300),
+    statement: decisionStatement(decision, plan),
     outcome: attributes.outcome?.kind ?? 'open',
   };
 };

@@ -29,7 +29,6 @@ const EMBED_CHARS = 1_500;
 /** Suggestions are a bonus: a slow embedder only costs the semantic arm. */
 const EMBED_TIMEOUT_MS = 5_000;
 const EVIDENCE_CHARS = 500;
-const CANDIDATE_SUMMARY_CHARS = 300;
 
 export const INBOX_SYSTEM = `You file one pasted text (meeting notes, a chat thread or a document) into a software team's board. You read the text and a numbered list of candidate globs (units of work), and answer with one JSON object and nothing else:
 {"title": string, "kind": "meeting" | "thread" | "doc", "summary": string, "suggestions": [{"globId": string, "reason": string}]}
@@ -61,7 +60,6 @@ const promptOf = (item: InboxItem, candidates: readonly InboxCandidate[]): strin
     ...candidates.map((c) =>
       [
         `[${c.globId}] ${defang(c.title)}`,
-        defang(c.summary),
         `Related text: <<<${defang(c.evidence)}>>>`,
       ]
         .filter((l) => l.trim() !== '')
@@ -218,7 +216,6 @@ export class InboxPipeline {
       out.push({
         globId,
         title: glob.title,
-        summary: glob.summary.trim().slice(0, CANDIDATE_SUMMARY_CHARS),
         evidence: c.text.slice(0, EVIDENCE_CHARS),
       });
       if (out.length >= limit) break;

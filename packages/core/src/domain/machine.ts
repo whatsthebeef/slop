@@ -337,7 +337,6 @@ export interface CreateInput {
   readonly id: string;
   readonly boardId: number;
   readonly title: string;
-  readonly summary: string;
   readonly type: SlopType;
   readonly category: Category;
   /** Decisions: the full attributes (scope, source, channel); validated by `create`. Work globs: none. */
@@ -395,7 +394,6 @@ export const create = (
     id: input.id,
     boardId: input.boardId,
     title: input.title.trim(),
-    summary: input.summary,
     type: input.type,
     category: input.category,
     group: input.group,
@@ -1063,7 +1061,6 @@ export const reviewLabel = (
 
 export interface FieldChanges {
   readonly title?: string;
-  readonly summary?: string;
   readonly type?: SlopType;
   readonly category?: Category;
   readonly group?: string | null;
@@ -1115,7 +1112,7 @@ export const changeFields = (
 
   const patch: { -readonly [K in keyof Omit<FieldChanges, 'attributes'>]: FieldChanges[K] } = {};
   const diff: { [key: string]: JsonValue } = {};
-  for (const key of ['title', 'summary', 'type', 'category', 'group', 'environment'] as const) {
+  for (const key of ['title', 'type', 'category', 'group', 'environment'] as const) {
     const value = key === 'title' ? changes.title?.trim() : changes[key];
     if (value !== undefined && value !== glob[key]) {
       Object.assign(patch, { [key]: value });
@@ -2133,7 +2130,6 @@ const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<
     id: input.id,
     boardId: input.boardId,
     title: input.title.trim(),
-    summary: input.summary,
     type: 'same',
     category: 'decision',
     attributes: attributes.value,

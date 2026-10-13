@@ -83,7 +83,6 @@ describe('a glob whose branch cannot be created', () => {
       await globs.create(DEV, {
         boardId: 1,
         title,
-        summary: '',
         type: 'sub',
         category: 'bug',
         group: null,

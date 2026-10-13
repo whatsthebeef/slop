@@ -28,7 +28,6 @@ describe('start after', () => {
   const input = (patch: Partial<CreateGlobInput> = {}): CreateGlobInput => ({
     boardId,
     title: 'Add a migration',
-    summary: '',
     type: 'same',
     category: 'task',
     group: null,
@@ -77,7 +76,7 @@ describe('start after', () => {
     expect(second.provisioning).toBe('none');
     expect(second.runs).toEqual([]);
     expect(kinds()).toEqual([]);
-    expect(store.state.events.filter((e) => e.globId === second.id).map((e) => e.type)).toEqual(['GlobCreated', 'Waiting']);
+    expect(store.state.events.filter((e) => e.globId === second.id).map((e) => e.type)).toEqual(['GlobCreated', 'Waiting', 'ArtifactAdded']);
     const view = unwrap(await globs.get(DEV, second.id));
     expect(view.waitingFor.map((w) => w.why)).toEqual([`Waits for ${first.id} to merge (it is in Planning)`]);
     expect(view.allowedActions).toContain('start_anyway');

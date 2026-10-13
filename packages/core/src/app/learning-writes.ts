@@ -46,6 +46,7 @@ import {
   learningLinks,
   learningMergeNote,
   learningOutcome,
+  learningStatement,
   learningStatus,
   learningStatusFrom,
   learningStep,
@@ -219,7 +220,7 @@ const learningArtifactState = ({ glob, artifacts }: LearningRead): LearningArtif
       source: facts.source,
       agentSetVersion: facts.agentSetVersion,
     },
-    payload: proposalText({ statement: glob.summary, evidence, document }),
+    payload: proposalText({ statement: learningStatement(glob, artifacts), evidence, document }),
     documentEvidence: document === null ? null : evidence,
     draft: drafted?.draft ?? null,
     draftedAgainstVersion: drafted?.targetVersion ?? null,
@@ -468,7 +469,6 @@ export const createLearning = async (
       id,
       boardId,
       title: decisionGlobTitle(statement),
-      summary: statement,
       type: 'same',
       category: 'decision',
       attributes,
@@ -597,12 +597,12 @@ const editLearning = async (
   );
   if (conflicts.length === 0) delete changed.conflictsWith;
   else changed.conflictsWith = conflicts;
-  const statement = edit.statement ?? glob.summary;
+  const previousStatement = learningStatement(glob, artifacts);
+  const statement = edit.statement ?? previousStatement;
   const next: Glob = {
     ...moved,
     // A person may have retitled the decision: only a new statement gives it a new title.
-    title: statement === glob.summary ? moved.title : decisionGlobTitle(statement),
-    summary: statement,
+    title: statement === previousStatement ? moved.title : decisionGlobTitle(statement),
     attributes: changed,
     links,
     version: expectedVersion + 1,

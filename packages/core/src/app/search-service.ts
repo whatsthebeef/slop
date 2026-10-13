@@ -112,14 +112,15 @@ export class SearchService {
 
   /**
    * The related section of `get_context`, inside its transaction (the caller has checked membership): what the board
-   * already knows about this glob's title and summary, current mode, without the glob's own items. The keyword arm
-   * uses the title alone, because a whole summary as a keyword query would have to match every word of it. Current
+   * already knows about this glob's title and plan, current mode, without the glob's own items. The keyword arm
+   * uses the title alone, because a whole plan as a keyword query would have to match every word of it. Current
    * decisions on the topic come first (up to the board's `related_choices`), then the other hits, where a superseded decision
    * appears labelled as history; the glob's own decisions are returned separately (`decisions` of the bundle).
    */
   async related(tx: Tx, glob: Glob): Promise<readonly SearchHit[]> {
     const settings = await tx.getContextSettings(glob.boardId);
-    const text = `${glob.title}\n${glob.summary}`.trim().slice(0, MAX_QUERY_LENGTH);
+    const plan = (await tx.listArtifacts(glob.id, 'plan'))[0]?.content ?? '';
+    const text = `${glob.title}\n${plan}`.trim().slice(0, MAX_QUERY_LENGTH);
     const q: SearchQuery = { boardId: glob.boardId, query: glob.title, mode: 'current' };
     let embedding: number[] | null = null;
     try {

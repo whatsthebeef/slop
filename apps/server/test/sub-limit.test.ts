@@ -145,7 +145,6 @@ describe('The learned sub limit in Postgres', () => {
     id,
     boardId,
     title: `Change ${id}`,
-    summary: '',
     type: 'sub',
     category: 'task',
     group: null,

@@ -74,7 +74,6 @@ describe('GitHub webhook deliveries', () => {
       await globs.create(DEV, {
         boardId: 1,
         title: 'Webhook glob',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,
@@ -265,7 +264,6 @@ describe('GitHub webhook deliveries', () => {
         await globs.create(DEV, {
           boardId: 1,
           title: 'Other glob',
-          summary: '',
           type: 'same',
           category: 'task',
           group: null,
