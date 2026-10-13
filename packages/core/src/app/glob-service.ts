@@ -32,6 +32,7 @@ import { recordTypeCorrection } from './type-learning-service.js';
 import type { DependencyLearningService } from './dependency-learning-service.js';
 import { embedRequest, snapshotOf } from './intake-learning-service.js';
 import { checkFrom } from './size-check-service.js';
+import { hash } from './text-hash.js';
 import type { SizeAssessor } from './size-check-service.js';
 import { needsInvestigation, unresolved } from '../domain/size-check.js';
 import type { SizeCheck } from '../domain/size-check.js';
@@ -991,6 +992,24 @@ export class GlobService {
     });
     if (result.ok) this.publishHandover(wrote, result.value);
     return result;
+  }
+
+  /**
+   * A person says a recorded edge is not a dependency (the ✕ on a Dependencies row). The plan's hash is kept with it so a
+   * changed plan may infer it again. A held glob that waited only for that edge starts, as when its last dependency merges.
+   */
+  async dismissEdge(email: string, id: string, version: number, edgeId: string) {
+    const planHash = { value: '' };
+    const result = await this.command(email, id, version, (glob, ctx) => machine.dismissEdge(glob, edgeId, planHash.value, ctx), {
+      applies: 'any',
+      prepare: async (tx: Tx, glob: Glob): Promise<Result<readonly string[]>> => {
+        planHash.value = hash((await tx.artifactVersions(glob.id, 'plan', '')).at(-1)?.content ?? '');
+        return ok([]);
+      },
+    });
+    if (!result.ok || result.value.status !== 'planning' || result.value.waiting == null) return result;
+    const released = await this.release(id);
+    return released.ok ? released : result;
   }
 
   /** `environment` (optional) is chosen at pick-up; leaving it out keeps the glob's environment. */

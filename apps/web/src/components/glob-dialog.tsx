@@ -36,6 +36,7 @@ import {
   blockedLine,
   chainTip,
   dependencySummary,
+  isDismissible,
   statusWords,
   viewStatusLine,
   waitingFor,
@@ -202,6 +203,7 @@ export const GlobDetail = ({
   onReload,
   onAction,
   onReviewLabel,
+  onDismissEdge,
   onDecide,
   onDelete,
 }: {
@@ -222,6 +224,8 @@ export const GlobDetail = ({
   /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
+  /** The ✕ on a needs or overlaps row: the edge to this glob is not a dependency; resolves false when it failed. */
+  onDismissEdge: (edgeId: string) => Promise<boolean>;
   /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
   onDecide: (input: DecideInput) => Promise<boolean>;
   onDelete: () => Promise<void>;
@@ -637,6 +641,7 @@ export const GlobDetail = ({
                           <span className="text-muted-foreground"> · {n.status}</span>
                         )}{' '}
                         <span className="text-muted-foreground">{n.why}</span>
+                        {n.dismissible && <DismissEdge id={n.id} onDismiss={onDismissEdge} />}
                       </li>
                     ))}
                   </ul>
@@ -677,6 +682,10 @@ export const GlobDetail = ({
                         {o.paths.length > 0 && (
                           <span className="text-muted-foreground"> · {o.paths.join(', ')}</span>
                         )}
+                        {o.evidence !== undefined && (
+                          <span className="text-muted-foreground"> · {o.evidence}</span>
+                        )}
+                        {isDismissible(o) && <DismissEdge id={o.id} onDismiss={onDismissEdge} />}
                       </li>
                     ))}
                   </ul>
@@ -1329,6 +1338,20 @@ export const GlobDetail = ({
     </article>
   );
 };
+
+/** The small ✕ on a recorded dependency row: slop got it wrong, it is not a dependency. */
+const DismissEdge = ({ id, onDismiss }: { id: string; onDismiss: (edgeId: string) => Promise<boolean> }) => (
+  <button
+    type="button"
+    className="ml-2 text-xs text-muted-foreground hover:text-foreground"
+    title="Not a dependency"
+    aria-label="Not a dependency"
+    data-testid={`dismiss-edge-${id}`}
+    onClick={() => void onDismiss(id)}
+  >
+    ✕
+  </button>
+);
 
 const GlobLink = ({ boardId, id }: { boardId: number; id: string }) => (
   <Link

@@ -4,6 +4,7 @@ import {
   blockedLine,
   blockedParts,
   dependencySummary,
+  isDismissible,
   mergeWarning,
   statusLine,
   viewStatusLine,
@@ -385,9 +386,31 @@ describe('dependency summary', () => {
       }),
     );
     expect(summary?.needs).toEqual([
-      { id: 's1t1', status: 'Doing', why: 'Waits for s1t1 to merge' },
+      { id: 's1t1', status: 'Doing', why: 'Waits for s1t1 to merge', dismissible: false },
     ]);
     expect(summary?.alsoAhead.map((b) => b.id)).toEqual(['s1t0']);
+  });
+
+  it('makes recorded rows dismissible, never explicit ones, and hides dismissed overlaps', () => {
+    const summary = dependencySummary(
+      view({
+        waitingFor: [
+          { id: 's1t1', state: 'open', why: 'Waits for s1t1: it adds the endpoint' },
+          { id: 's1t2', state: 'open', why: 'Waits for s1t2 to merge' },
+        ],
+        edges: [
+          { id: 's1t1', kind: 'needs', source: 'inferred', paths: [], evidence: 'it adds the endpoint' },
+          { id: 's1t2', kind: 'needs', source: 'explicit', paths: [] },
+          { id: 's1t5', kind: 'overlaps', source: 'implied', paths: ['a.ts'] },
+          { id: 's1t6', kind: 'overlaps', source: 'inferred', paths: [], overridden: true, dismissedPlanHash: 'h' },
+        ],
+      }),
+    );
+    expect(summary?.needs.map((n) => [n.id, n.dismissible])).toEqual([
+      ['s1t1', true],
+      ['s1t2', false],
+    ]);
+    expect(summary?.overlaps.map((e) => [e.id, isDismissible(e)])).toEqual([['s1t5', true]]);
   });
 
   it('lists overlaps and waited-on-by globs', () => {

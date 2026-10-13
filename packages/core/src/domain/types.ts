@@ -209,8 +209,11 @@ export interface BehindBase {
 
 /** What an edge between two globs means: `needs` (the code must be on main; blocks start) or `overlaps` (same files; orders merges only). */
 export type EdgeKind = 'needs' | 'overlaps';
-/** Who set an edge: a person or a split (`explicit`), path prediction (`implied`), or slop's learning from outcomes (`learned`). */
-export type EdgeSource = 'explicit' | 'implied' | 'learned';
+/**
+ * Who set an edge: a person or a split (`explicit`), path prediction (`implied`), slop's learning from outcomes (`learned`),
+ * or inference from the plan and the other globs (`inferred`, the reason in `evidence`).
+ */
+export type EdgeSource = 'explicit' | 'implied' | 'learned' | 'inferred';
 
 /**
  * An edge slop recorded beside `after` (the explicit needs): the board's merge policy predicted that both globs may change
@@ -227,6 +230,8 @@ export interface ImpliedAfter {
   readonly evidence?: string;
   /** Set when a person chose Start now: kept for display, no longer holds. */
   readonly overridden?: true;
+  /** Set with `overridden` when a person said it is not a dependency: the hash of the plan then, so a changed plan may infer it again. */
+  readonly dismissedPlanHash?: string;
 }
 
 /**

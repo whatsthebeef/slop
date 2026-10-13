@@ -910,6 +910,7 @@ const DEPENDENCY_CAUSE_TEXT: Record<DependencyCause, string> = {
   conflicted_overlap: 'An overlap conflicted or needed a rebase',
   unmerged_prerequisite: 'A run failed because a prerequisite was not merged',
   start_anyway_succeeded: 'A need was started anyway and merged without it',
+  edge_dismissed: 'A person dismissed an inferred dependency as wrong',
   reset: 'An admin reset the rule',
 };
 

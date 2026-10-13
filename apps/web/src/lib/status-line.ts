@@ -395,7 +395,16 @@ export interface NeedRow {
   /** The status word ("Doing", "PR open", ...); the board's own words, from the blocking chain. */
   readonly status: string | null;
   readonly why: string;
+  /** A recorded edge a person may dismiss with the ✕ (not one they set themselves). */
+  readonly dismissible: boolean;
 }
+
+/**
+ * Whether a row's ✕ ("Not a dependency") applies: a recorded edge (implied, learned or inferred), not one a person set and
+ * not one already dismissed.
+ */
+export const isDismissible = (edge: Edge | undefined): boolean =>
+  edge !== undefined && edge.source !== 'explicit' && edge.dismissedPlanHash === undefined;
 
 /** What the glob view's Dependencies section shows. */
 export interface DependencySummary {
@@ -413,10 +422,11 @@ export const dependencySummary = (glob: GlobView): DependencySummary | null => {
   const chain = glob.blockedBy ?? [];
   const needs = (glob.waitingFor ?? []).map((w) => {
     const ahead = chain.find((b) => b.id === w.id);
-    return { id: w.id, status: ahead === undefined ? null : statusWords(ahead.status), why: w.why };
+    const edge = (glob.edges ?? []).find((e) => e.id === w.id);
+    return { id: w.id, status: ahead === undefined ? null : statusWords(ahead.status), why: w.why, dismissible: isDismissible(edge) };
   });
   const alsoAhead = chain.filter((b) => b.depth > 1).sort((a, b) => a.depth - b.depth);
-  const overlaps = (glob.edges ?? []).filter((e) => e.kind === 'overlaps');
+  const overlaps = (glob.edges ?? []).filter((e) => e.kind === 'overlaps' && e.dismissedPlanHash === undefined);
   const waitedOnBy = glob.waitedOnBy ?? [];
   if (
     needs.length + alsoAhead.length + overlaps.length + waitedOnBy.length === 0 &&

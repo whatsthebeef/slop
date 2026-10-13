@@ -673,6 +673,15 @@ export const createApp = (deps: AppDeps) => {
     );
   });
 
+  // The ✕ on a Dependencies row: the edge is not a dependency (a held glob that waited only for it then starts).
+  app.post('/api/globs/:id/edges/:edgeId/dismiss', async (c) => {
+    const body = await parse(c, versionSchema);
+    if (body instanceof Response) return body;
+    const result = await globs.dismissEdge(c.get('email'), c.req.param('id'), body.version, c.req.param('edgeId'));
+    if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
+    return withView(c, result);
+  });
+
   /** Responds with the updated glob and the actions now open to the caller. */
   const withView = async (c: Context<Env>, result: Awaited<ReturnType<GlobService['start']>>) => {
     if (!result.ok) return send(c, result);
