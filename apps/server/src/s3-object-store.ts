@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, NotFound } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, NotFound } from '@aws-sdk/client-s3';
 import type { S3Client } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -81,13 +81,18 @@ export class S3ObjectStore implements ObjectStore {
     }
   }
 
-  /** Whether the bucket answers a HEAD request now (it exists and the role may reach it). Never throws. */
-  async reachable(signal?: AbortSignal): Promise<boolean> {
+  /**
+   * Why the bucket can't be reached now, or null when it can. Lists one key under `boards/`, the one bucket-level call the
+   * server's policy allows (`s3:ListBucket` is conditioned on that prefix; HeadBucket carries none and is denied). Never throws.
+   */
+  async unreachableReason(signal?: AbortSignal): Promise<string | null> {
     try {
-      await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }), signal === undefined ? {} : { abortSignal: signal });
-      return true;
-    } catch {
-      return false;
+      await this.client.send(new ListObjectsV2Command({ Bucket: this.bucket, Prefix: 'boards/', MaxKeys: 1 }), signal === undefined ? {} : { abortSignal: signal });
+      return null;
+    } catch (error) {
+      if (signal?.aborted === true) return 'timeout';
+      const name = error instanceof Error ? error.name : 'unknown error';
+      return `bucket denied: ${name}`;
     }
   }
 

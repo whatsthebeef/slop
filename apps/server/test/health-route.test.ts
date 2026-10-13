@@ -63,7 +63,7 @@ describe('GET /api/health', () => {
       outbox: new OutboxRunner(db, { globs }, {}, () => undefined),
       onBoardCreated: () => Promise.resolve(),
     });
-    mountHealth(app, { llm: health, boards, integrations: registry, signIn, capabilities: { read: () => Promise.resolve({ fileAttachments: true, attachmentEvents: false, slack: false }) } });
+    mountHealth(app, { llm: health, boards, integrations: registry, signIn, capabilities: { read: () => Promise.resolve({ fileAttachments: true, attachmentEvents: false, slack: false }), reasons: () => Promise.resolve({ slack: 'not set' }) } });
     await store.transaction((tx) => tx.upsertUser({ email: 'member@example.com', name: 'Member', active: true }));
     const created = await boards.create('member@example.com', { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
     if (!created.ok) throw new Error(created.error.message);
@@ -116,8 +116,12 @@ describe('GET /api/health', () => {
   });
 
   it('reports the capabilities slop can verify, as on or off', async () => {
-    const body = (await (await get({ authorization: 'Bearer dev:member@example.com' })).json()) as { capabilities: Record<string, boolean> };
+    const body = (await (await get({ authorization: 'Bearer dev:member@example.com' })).json()) as {
+      capabilities: Record<string, boolean>;
+      capabilityReasons: Record<string, string>;
+    };
     expect(body.capabilities).toEqual({ fileAttachments: true, attachmentEvents: false, slack: false });
+    expect(body.capabilityReasons).toEqual({ slack: 'not set' });
   });
 
   describe('POST /api/aws-sign-in', () => {
