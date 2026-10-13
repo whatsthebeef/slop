@@ -19,6 +19,7 @@ import { LabelReviews } from './labels';
 import type { ReviewLabel } from './labels';
 import { OversizedGlob } from './oversized-glob';
 import { SplitGlob, canSplit } from './split-glob';
+import { HumanSteps } from './human-steps';
 import { GlobActions, GlobReset, useGlobActions } from './glob-view/actions';
 import { ArtifactsPanel } from './glob-view/artifacts';
 import { ChoicesPanel } from './glob-view/choices';
@@ -108,7 +109,9 @@ const NowRow = ({ glob }: { glob: GlobView }) => {
       ? 'Your turn'
       : position === null
         ? ''
-        : { human: 'Their turn', machine: 'Machine', waiting: 'Waiting', stalled: 'Stalled' }[position.holder];
+        : { human: 'Their turn', machine: 'Machine', waiting: 'Waiting', stalled: 'Stalled' }[
+            position.holder
+          ];
   const minutes = position?.minutes ?? null;
   return (
     <div className="text-sm" data-testid="now-row" data-holder={move.holder}>
@@ -128,7 +131,8 @@ const NowRow = ({ glob }: { glob: GlobView }) => {
           <ul className="mt-1 space-y-0.5 text-xs">
             {steps.map((step) => (
               <li key={step.id} data-kind={step.kind} data-state={step.state}>
-                {stepLabel(step)} <span className="text-muted-foreground">{stepWords(step, now)}</span>
+                {stepLabel(step)}{' '}
+                <span className="text-muted-foreground">{stepWords(step, now)}</span>
                 {step.detail !== null && /^https?:\/\//.test(step.detail) && (
                   <>
                     {' '}
@@ -155,6 +159,10 @@ export const GlobDetail = ({
   onClose,
   onUpdate,
   onReload,
+  email,
+  onAddStep,
+  onCompleteStep,
+  onDismissStep,
   onAction,
   onReviewLabel,
   onDecide,
@@ -173,6 +181,17 @@ export const GlobDetail = ({
   onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
   /** Loads the glob's latest values into the view (after a version conflict). */
   onReload: () => Promise<void>;
+  /** Who is looking, for the steps that are theirs (unknown until /api/me has answered). */
+  email?: string;
+  /** Human steps: each resolves false when it failed (the page shows why); the glob is replaced afterwards. */
+  onAddStep: (step: {
+    title: string;
+    detail?: string;
+    who?: string;
+    due?: string;
+  }) => Promise<boolean>;
+  onCompleteStep: (stepId: string) => Promise<boolean>;
+  onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
   /** Resolves false when the action failed. */
   /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
@@ -181,8 +200,14 @@ export const GlobDetail = ({
   onDecide: (input: DecideInput) => Promise<boolean>;
   onDelete: () => Promise<void>;
 }) => {
-  const actionState = useGlobActions({ board, glob, onAction, onUpdate });
-  const { decision, busy, run, oversized, disabled } = actionState;
+  const actionState = useGlobActions({
+    board,
+    glob,
+    onAction,
+    onUpdate,
+    ...(email === undefined ? {} : { email }),
+  });
+  const { decision, busy, run, oversized, disabled, viewer, stepsSignal } = actionState;
   const [draft, setDraft] = useState<GlobChanges>({});
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
   // Suggest's Apply: the decision form opens pre-filled; reset when another glob opens.
@@ -270,7 +295,6 @@ export const GlobDetail = ({
     return () => document.removeEventListener('keydown', onKey);
   }, []);
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
-
 
   return (
     <article className="mx-auto w-full max-w-[63rem] p-5" data-testid="glob-page">
@@ -619,6 +643,19 @@ export const GlobDetail = ({
 
         <Anchor name="tests">
           <TestsPanel ctx={ctx} />
+        </Anchor>
+
+        <Anchor name="human-steps">
+          <HumanSteps
+            glob={glob}
+            {...(viewer === undefined ? {} : { viewer })}
+            canAdd
+            startOpen={section === 'human-steps'}
+            openSignal={stepsSignal}
+            onAdd={onAddStep}
+            onComplete={onCompleteStep}
+            onDismiss={onDismissStep}
+          />
         </Anchor>
 
         <Anchor name="artifacts">
