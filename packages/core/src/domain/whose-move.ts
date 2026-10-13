@@ -133,6 +133,24 @@ export const whoseMove = (
     return { holder: options.viewer !== undefined && (glob.implementer ?? glob.planner) === options.viewer.email ? 'you' : 'human', reason: person, since: null, who: glob.implementer ?? glob.planner };
   }
 
+  // 4a. A person's turn by escalation. It never outranks a machine step (step 2) or a watcher answering failed checks (4b below);
+  // it does outrank the open-PR next steps (conflict, failed checks nobody answers, 'merges by itself').
+  const escalation = escalationReason(glob);
+  const watcherAnswers =
+    glob.pr !== null &&
+    glob.status === 'pr_open' &&
+    glob.headChecks?.state === 'failed' &&
+    glob.headChecks.inheritedFrom === undefined &&
+    machineSteps.some((s) => s.state === 'standby');
+  if (escalation !== null && failed.length === 0 && quiet.length === 0 && !watcherAnswers) {
+    return {
+      holder: options.viewer !== undefined && (glob.implementer ?? glob.planner) === options.viewer.email ? 'you' : 'human',
+      reason: escalation,
+      since: null,
+      who: glob.implementer ?? glob.planner,
+    };
+  }
+
   // 4b. An open PR with a conflict or failing checks and nothing working on it has a next step: never "nobody".
   if (failed.length === 0 && quiet.length === 0 && glob.pr !== null && glob.status === 'pr_open') {
     const mover = (reason: string): Move => ({
@@ -153,17 +171,6 @@ export const whoseMove = (
       if (standby !== undefined) return { holder: 'machine', reason: 'fix checks', since: checks.at ?? null };
       return mover('Fix checks');
     }
-  }
-
-  // 4c. A person's turn by escalation: only after the machine had its say above (a run working, a watcher answering failed checks).
-  const escalation = escalationReason(glob);
-  if (escalation !== null && failed.length === 0 && quiet.length === 0) {
-    return {
-      holder: options.viewer !== undefined && (glob.implementer ?? glob.planner) === options.viewer.email ? 'you' : 'human',
-      reason: escalation,
-      since: null,
-      who: glob.implementer ?? glob.planner,
-    };
   }
 
   // 5. Idle: a Planning glob nobody started.

@@ -86,8 +86,11 @@ describe('whoseMove: priority', () => {
     expect(move(fixing)).toMatchObject({ holder: 'machine', reason: 'fix checks' });
     const working = glob({ status: 'implementing', type: 'same', escalation, runs: [run()] });
     expect(move(working).holder).toBe('machine');
-    // with nothing on it, the escalation is still the person's turn
-    expect(move(ready({ type: 'same', escalation, headChecks: failedChecks }))).toMatchObject({ holder: 'you', reason: 'Fix checks' });
+    // with nothing on it, the escalation is still the person's turn, ahead of the open-PR next steps
+    expect(move(ready({ type: 'same', escalation, headChecks: failedChecks }))).toMatchObject({ holder: 'you', reason: 'Needs a human: touches auth' });
+    const conflict = { base: 'main', files: [], since: null, at: NOW };
+    expect(move(ready({ type: 'same', escalation, conflict, implementer: null }))).toMatchObject({ reason: 'Needs a human: touches auth' });
+    expect(move(ready({ type: 'sub', escalation, implementer: null }))).toMatchObject({ reason: 'Needs a human: touches auth' });
     expect(move(glob({ status: 'implementing', type: 'same', runs: [], escalation }))).toMatchObject({ holder: 'you', reason: 'Needs a human: touches auth' });
   });
 
