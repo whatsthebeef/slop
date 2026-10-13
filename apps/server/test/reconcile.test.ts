@@ -21,9 +21,11 @@ const unwrap = <T>(result: Result<T>): T => {
 
 class FakeHost extends FakeCodeHost {
   pr: PrSnapshot = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
-  mergeStateNow: 'passed' | 'pending' | 'failed' = 'passed';
+  mergeStateNow: 'passed' | 'pending' | 'failed' | 'conflict' = 'passed';
   override prState = () => Promise.resolve(this.pr);
   override mergeState = () => Promise.resolve({ sha: this.pr.headSha, state: this.mergeStateNow });
+  override conflictFiles = () => Promise.resolve(['a.ts']);
+  override commitChecks = () => Promise.resolve({ state: 'pending' as const, failure: null });
 }
 
 describe('reconcile: catching up on webhooks slop missed', () => {
@@ -94,6 +96,22 @@ describe('reconcile: catching up on webhooks slop missed', () => {
     await run(id, 'refresh_checks');
     return outcomes;
   };
+
+  it('repairs a conflict recorded as empty failed checks', async () => {
+    host.pr = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
+    host.mergeStateNow = 'conflict';
+    const id = await newOpenGlob('Conflict as failed checks', { state: 'ready', headSha: 'h1' });
+    await store.transaction(async (tx) => {
+      const g = await tx.getGlob(id);
+      if (g === null) throw new Error('missing');
+      await tx.updateGlob({ ...g, headChecks: { sha: 'h1', state: 'failed', at: '2026-10-09T11:00:00Z' }, conflict: { base: 'main', files: ['a.ts'], since: null, at: '2026-10-09T11:00:00Z' }, version: g.version + 1 }, g.version);
+    });
+    await reconcile(id);
+    const after = await current(id);
+    expect(after.headChecks).toBeNull();
+    expect(after.conflict).toMatchObject({ base: 'main' });
+    host.mergeStateNow = 'passed';
+  });
 
   it('records passed checks on a ready PR that has none, and a second run changes nothing', async () => {
     host.pr = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
