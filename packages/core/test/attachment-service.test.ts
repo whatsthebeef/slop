@@ -147,6 +147,20 @@ describe('file attachments', () => {
       expect(await fileOf('shot.png')).toMatchObject({ state: 'stored', size: 20 });
     });
 
+    it('says how long pending files can still arrive, and nothing once they have arrived or expired', async () => {
+      expect(await service.pendingFor(globId)).toBe(0);
+      const made = await request();
+      expect(await service.pendingFor(globId)).toBe(15 * 60_000);
+      advance(60_000);
+      expect(await service.pendingFor(globId)).toBe(14 * 60_000);
+      objects.put(made.artifact.file?.key ?? '', { size: 20, contentType: 'image/png' });
+      expect(await service.pendingFor(globId)).toBe(0);
+      await request('later.png');
+      advance(16 * 60_000);
+      expect(await service.pendingFor(globId)).toBe(0);
+      expect((await fileOf('later.png')).state).toBe('missing');
+    });
+
     it('finds the object by head in the sweep', async () => {
       const made = await request();
       objects.put(made.artifact.file?.key ?? '', { size: 20, contentType: 'image/png' });

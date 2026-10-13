@@ -1,4 +1,4 @@
-import { ArtifactService, FakeEmbedder, GlobService, InboxService, IntakeService, SearchService, vectorOf } from '@slop/core';
+import { ArtifactService, AttachmentService, FakeEmbedder, FakeObjectStore, GlobService, InboxService, IntakeService, SearchService, vectorOf } from '@slop/core';
 import type { Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -32,6 +32,7 @@ describe('MCP get_context include and get_artifact', () => {
   let globId: string;
   let store: PgStore;
   let boardId: number;
+  let objects: FakeObjectStore;
 
   beforeAll(async () => {
     ({ database, drop } = await createTestDatabase('mcp_context'));
@@ -124,7 +125,10 @@ describe('MCP get_context include and get_artifact', () => {
     });
     const inbox = new InboxService(deps);
     const outbox = { drain: () => Promise.resolve() };
-    const server = buildServer({ artifacts, globs, intake, outbox, inbox } as unknown as McpDeps, DEV, 'http://localhost');
+    objects = new FakeObjectStore();
+    let ids = 0;
+    const attachments = new AttachmentService({ ...deps, objects, newId: () => `id-${String(++ids)}` });
+    const server = buildServer({ artifacts, globs, intake, outbox, inbox, attachments } as unknown as McpDeps, DEV, 'http://localhost');
     const [a, b] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test', version: '0' });
     await Promise.all([server.connect(a), client.connect(b)]);
@@ -246,26 +250,47 @@ describe('MCP get_context include and get_artifact', () => {
     expect(bad.isError).toBe(true);
   });
 
-  it('create_glob stores attachments with the glob, refuses a bad one and does not duplicate them on retry', async () => {
-    const args = {
-      board: boardId,
-      title: 'With files',
-      category: 'task',
-      type: 'same',
-      idempotencyKey: 'with-attachments',
-      attachments: [{ label: 'Notes', text: 'pasted notes' }, { label: 'Spec', link: 'https://example.com/spec' }],
-    };
-    const made = (await call('create_glob', args)).body as unknown as { id: string };
-    const ctx = (await call('get_context', { id: made.id, include: ['all'] })).body as unknown as { attachments: { label: string; content: string; link: string | null }[] };
-    const mine = ctx.attachments.filter((a) => ['Notes', 'Spec'].includes(a.label));
-    expect(mine.find((a) => a.label === 'Notes')).toMatchObject({ content: 'pasted notes', link: null });
-    expect(mine.find((a) => a.label === 'Spec')).toMatchObject({ link: 'https://example.com/spec' });
-    const again = (await call('create_glob', args)).body as unknown as { id: string };
-    expect(again.id).toBe(made.id);
-    const stored = await store.transaction((tx) => tx.listArtifacts(made.id, 'attachment'));
-    expect(stored.filter((x) => x.label === 'Notes').map((x) => x.version)).toEqual([1]);
-    const bad = await call('create_glob', { ...args, title: 'Bad', idempotencyKey: 'bad-attachment', attachments: [{ label: 'Empty' }] });
+  it('create_glob takes files and replies with upload links and ready curl commands; the old attachments field is gone', async () => {
+    const args = { board: boardId, title: 'With files', category: 'task', type: 'same', idempotencyKey: 'with-files', files: [{ fileName: 'shot.png' }, { fileName: 'notes.txt', label: 'Notes file' }] };
+    const made = (await call('create_glob', args)).body as unknown as { id: string; next: string; uploads: { fileName: string; label: string; url: string; fields: Record<string, string>; curl: string }[] };
+    expect(made.uploads.map((u) => [u.fileName, u.label])).toEqual([['shot.png', 'shot.png'], ['notes.txt', 'Notes file']]);
+    expect(made.next).toContain('Run each curl command now');
+    const [shot] = made.uploads;
+    expect(shot?.curl).toContain('curl -sS -f -X POST');
+    expect(shot?.curl).toContain(`-F 'key=${shot?.fields.key ?? ''}'`);
+    expect(shot?.curl).toContain("-F 'Content-Type=image/png'");
+    expect(shot?.curl.indexOf('-F file=@<path>')).toBeGreaterThan(shot?.curl.indexOf('Content-Type') ?? 0);
+    expect(shot?.curl.endsWith(`'${shot.url}'`)).toBe(true);
+    const ctx = (await call('get_context', { id: made.id })).body as unknown as { files: { label: string; state: string; downloadUrl?: string }[] };
+    expect(ctx.files.map((f) => [f.label, f.state]).sort()).toEqual([['Notes file', 'pending'], ['shot.png', 'pending']]);
+    const bad = await call('create_glob', { ...args, title: 'Bad', idempotencyKey: 'bad-file', files: [{ fileName: 'tool.exe' }] });
     expect(bad.isError).toBe(true);
-    expect(await store.transaction((tx) => tx.findGlobByCreationKey(boardId, 'bad-attachment'))).toBeNull();
+    expect(await store.transaction((tx) => tx.findGlobByCreationKey(boardId, 'bad-file'))).toBeNull();
+    const withOld = await call('create_glob', { board: boardId, title: 'Old', category: 'task', type: 'same', idempotencyKey: 'old-field', attachments: [{ label: 'x', text: 'y' }] });
+    const stored = await store.transaction((tx) => tx.listArtifacts((withOld.body as unknown as { id: string }).id, 'attachment'));
+    expect(stored.filter((a) => a.label === 'x')).toEqual([]);
+  });
+
+  it('attachment_upload_url mints a link for an existing glob and refuses a label that already holds a file', async () => {
+    const first = (await call('attachment_upload_url', { id: globId, fileName: 'diagram.pdf' })).body as unknown as { uploads: { attachmentId: number; curl: string }[]; next: string };
+    expect(first.uploads).toHaveLength(1);
+    expect(first.uploads[0]?.curl).toContain("-F 'Content-Type=application/pdf'");
+    expect(first.next).toContain('no further call is needed');
+    const again = await call('attachment_upload_url', { id: globId, fileName: 'diagram.pdf' });
+    expect(again.isError).toBe(true);
+    expect((await call('attachment_upload_url', { id: globId, fileName: 'a.exe' })).isError).toBe(true);
+  });
+
+  it('get_context and get_artifact give a stored file a fresh download link, and a missing one a note', async () => {
+    const made = (await call('attachment_upload_url', { id: globId, fileName: 'stored.png' })).body as unknown as { uploads: { fields: { key: string } }[] };
+    objects.put(made.uploads[0]?.fields.key ?? '', { size: 5, contentType: 'image/png' });
+    const attachments = new AttachmentService({ store, notifier: { publish: () => undefined }, clock: { now: () => new Date().toISOString() }, objects, newId: () => 'x' });
+    await attachments.objectArrived(made.uploads[0]?.fields.key ?? '');
+    const ctx = (await call('get_context', { id: globId })).body as unknown as { files: { label: string; state: string; downloadUrl?: string }[] };
+    const file = ctx.files.find((f) => f.label === 'stored.png');
+    expect(file).toMatchObject({ state: 'stored' });
+    expect(file?.downloadUrl).toContain('fake-bucket');
+    const artifact = (await call('get_artifact', { id: globId, kind: 'attachment', label: 'stored.png' })).body as unknown as { downloadUrl?: string };
+    expect(artifact.downloadUrl).toContain('fake-bucket');
   });
 });
