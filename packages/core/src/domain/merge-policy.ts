@@ -8,13 +8,23 @@ import type { Result } from './errors.js';
  *
  * - `exclusivePaths`: path globs that only one open glob may change at a time (e.g. a migrations directory).
  * - `sizeIgnoredPaths`: path globs left out when a sub's size is measured (read by the sub gate, not here).
+ * - `rolloutPaths`: path globs whose change usually needs a person after the merge (infrastructure, server settings):
+ *   a merge touching one with no `## Rollout` in its implementation record is flagged (`rolloutPathsOf` has the defaults).
  *
  * `{}` is a valid policy: it exists, and nothing is configured.
  */
 export interface MergePolicy {
   readonly exclusivePaths?: readonly string[];
   readonly sizeIgnoredPaths?: readonly string[];
+  readonly rolloutPaths?: readonly string[];
 }
+
+/** The rollout paths a board gets when its policy lists none: what the image deploy alone doesn't ship. */
+export const DEFAULT_ROLLOUT_PATHS: readonly string[] = ['infra/**', 'apps/server/src/config.ts', '.github/workflows/**', '**/drizzle/**'];
+
+/** The path globs whose merge asks for a rollout: the policy's own list, or the defaults when it has none. */
+export const rolloutPathsOf = (policy: { readonly rolloutPaths?: readonly string[] } | null | undefined): readonly string[] =>
+  policy?.rolloutPaths !== undefined && policy.rolloutPaths.length > 0 ? policy.rolloutPaths : DEFAULT_ROLLOUT_PATHS;
 
 /** The one row's name. */
 export const MERGE_POLICY_NAME = 'merge-policy';
@@ -23,7 +33,7 @@ export const MERGE_POLICY_PATH_MAX = 200;
 /** Most globs in one list. */
 export const MERGE_POLICY_PATHS_MAX = 50;
 
-const KEYS = ['exclusivePaths', 'sizeIgnoredPaths'] as const;
+const KEYS = ['exclusivePaths', 'sizeIgnoredPaths', 'rolloutPaths'] as const;
 type PolicyKey = (typeof KEYS)[number];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -58,9 +68,12 @@ export const checkMergePolicy = (value: unknown): Result<MergePolicy> => {
   if (!exclusive.ok) return exclusive;
   const ignored = pathList(value, 'sizeIgnoredPaths');
   if (!ignored.ok) return ignored;
+  const rollout = pathList(value, 'rolloutPaths');
+  if (!rollout.ok) return rollout;
   return ok({
     ...(exclusive.value === undefined ? {} : { exclusivePaths: exclusive.value }),
     ...(ignored.value === undefined ? {} : { sizeIgnoredPaths: ignored.value }),
+    ...(rollout.value === undefined ? {} : { rolloutPaths: rollout.value }),
   });
 };
 
@@ -81,6 +94,7 @@ export const renderMergePolicy = (policy: MergePolicy): string =>
     {
       ...(policy.exclusivePaths === undefined ? {} : { exclusivePaths: policy.exclusivePaths }),
       ...(policy.sizeIgnoredPaths === undefined ? {} : { sizeIgnoredPaths: policy.sizeIgnoredPaths }),
+      ...(policy.rolloutPaths === undefined ? {} : { rolloutPaths: policy.rolloutPaths }),
     },
     null,
     2,

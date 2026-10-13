@@ -96,6 +96,7 @@ const artifactSource = (kind: ArtifactKind): SourceType => {
     case 'outcome':
     case 'effect_check':
     case 'attachment':
+    case 'rollout_script':
       return 'attachment';
   }
 };

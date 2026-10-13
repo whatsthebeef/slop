@@ -12,6 +12,7 @@ import type {
   BoardSession,
   BoardJob,
   BoardJobStatus,
+  Capabilities,
   ContextReport,
   ContextSettingsView,
   CatalogUpdate,
@@ -436,6 +437,8 @@ export type ActionPath =
 
 /** What the board's banner shows: each integration that needs a person, and the in-app AWS sign-in (local development only). */
 export interface IntegrationHealthView {
+  /** What slop can verify about its own deployment; absent on an older API, and a name it can't tell is left out. */
+  readonly capabilities?: Capabilities;
   readonly integrations: readonly {
     readonly id: string;
     readonly name: string;
