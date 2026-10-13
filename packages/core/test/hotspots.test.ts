@@ -228,6 +228,20 @@ describe('hotspot service', () => {
     expect(view.hotspots).toMatchObject([{ path: 'gone.ts', merges: null, lines: null }]);
   });
 
+  it('compares commit dates as instants, not text', async () => {
+    await seed(
+      ['s1t1', 's1t2', 's1t3'],
+      ['s1t1', 's1t2', 's1t3'].flatMap((g) => flagged(g, day(11), ['hot.ts'])),
+    );
+    // The window starts 2026-10-06T12:00Z: 13:00+02:00 is 11:00Z (outside) although its text sorts after the start.
+    history['hot.ts'] = ['2026-10-06T13:00:00+02:00', '2026-10-06T14:00:00+00:00'];
+    const view = await new HotspotService({ store, clock: { now: () => NOW }, codeView }).hotspots(
+      boardId,
+      NOW,
+    );
+    expect(view.hotspots[0]?.merges).toBe(1);
+  });
+
   it('is clear once the window is quiet', async () => {
     await seed(
       ['s1t1', 's1t2', 's1t3'],

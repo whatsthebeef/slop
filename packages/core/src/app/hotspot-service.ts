@@ -14,6 +14,8 @@ export type HotspotsResult = Extract<BoardJobResult, { kind: 'hotspots' }>;
 const HISTORY_LIMIT = 100;
 /** The files a job result names. */
 const RESULT_FILES = 10;
+/** The most files the view reads merges and lines for (the hottest first); the rest are listed without them. */
+const ENRICHED_FILES = 10;
 
 /**
  * Conflict hotspots (spec, Conflict hotspots): files that keep conflicting. They are worked out from the board's conflict
@@ -30,8 +32,8 @@ export class HotspotService {
     },
   ) {}
 
-  /** The board's hotspots at `now`, with merges and lines where the code host can say. */
-  async hotspots(boardId: number, now: string): Promise<HotspotView> {
+  /** The board's hotspots at `now`; the hottest files get merges and lines where the code host can say (`enrich` false: none, as the job needs). */
+  async hotspots(boardId: number, now: string, enrich = true): Promise<HotspotView> {
     const settings = hotspotSettingsOf(
       await this.deps.store.transaction((tx) => tx.getContextSettings(boardId)),
     );
@@ -40,7 +42,13 @@ export class HotspotService {
       tx.listBoardEvents(boardId, from, CONFLICT_EVENT_TYPES),
     );
     const found = detectHotspots(conflictRecords(events), now, settings);
-    const hotspots = await Promise.all(found.map((h) => this.enrich(boardId, h, from)));
+    const hotspots = enrich
+      ? await Promise.all(
+          found.map((h, i) =>
+            i < ENRICHED_FILES ? this.enrich(boardId, h, from) : Promise.resolve(h),
+          ),
+        )
+      : found;
     return { windowDays: settings.windowDays, hotspots };
   }
 
@@ -57,7 +65,7 @@ export class HotspotService {
 
   /** The hotspots job: what is hot at `now`, for the Knowledge page's last-run line. */
   async run(boardId: number, now: string): Promise<HotspotsResult> {
-    const { hotspots } = await this.hotspots(boardId, now);
+    const { hotspots } = await this.hotspots(boardId, now, false);
     return {
       kind: 'hotspots',
       hot: hotspots.length,
@@ -73,7 +81,7 @@ export class HotspotService {
     if (codeView === undefined) return hotspot;
     const [merges, lines] = await Promise.all([
       codeView.history(boardId, hotspot.path, HISTORY_LIMIT).then(
-        (commits) => commits.filter((c) => c.date >= from).length,
+        (commits) => commits.filter((c) => Date.parse(c.date) >= Date.parse(from)).length,
         () => null,
       ),
       codeView.read(boardId, null, hotspot.path).then(
