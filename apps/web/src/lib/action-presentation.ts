@@ -94,7 +94,7 @@ export const actionPresentation = (action: Action, glob: Subject): ActionPresent
       return {
         label: 'Fix conflict',
         icon: 'machine',
-        tip: 'The GitHub App merges the base branch and resolves the conflicts (once per conflict)',
+        tip: 'A machine run merges the base branch into this branch, resolves the conflicts and pushes; a failed attempt can be tried again',
         placement: 'main',
       };
     case 'retry_merge':

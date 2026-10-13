@@ -1,5 +1,5 @@
 import { decisionOf, isValidCombination, machine } from '@slop/core';
-import type { Action, Category, EditFailure, SuggestionPrefill } from '@slop/core';
+import type { Action, Category, EditFailure, LabelName, SuggestionPrefill } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ArrowLeft, Loader2 } from 'lucide-react';
@@ -136,6 +136,7 @@ export const GlobDetail = ({
   glob,
   initialArtifact,
   section = null,
+  openLabel = null,
   onClose,
   onUpdate,
   onReload,
@@ -150,6 +151,8 @@ export const GlobDetail = ({
   initialArtifact: ArtifactRef | null;
   /** The section to scroll to once it has rendered (from `?section=`); unknown or null stays at the top. */
   section?: GlobSection | null;
+  /** The sign-off label whose review to bring into view (from `?section=labels&label=`). */
+  openLabel?: LabelName | null;
   onClose: () => void;
   /** Saves the edits; resolves null when saved, or why the server refused them. */
   onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
@@ -529,7 +532,7 @@ export const GlobDetail = ({
         </Anchor>
 
         <Anchor name="labels">
-          {!decision && <LabelReviews glob={glob} onReview={onReviewLabel} />}
+          {!decision && <LabelReviews glob={glob} onReview={onReviewLabel} openLabel={openLabel} />}
         </Anchor>
 
         <Anchor name="prerequisites">
@@ -1092,6 +1095,7 @@ export const GlobDetail = ({
               >
                 <span>
                   {run.purpose === 'investigate' && 'Investigation · '}
+                  {run.purpose === 'resolve_conflict' && 'Conflict fix · '}
                   {run.state === 'ended' ? (run.outcome ?? 'ended') : run.state} · owner{' '}
                   {run.routineOwner}
                   {run.sessionUrl !== null && (

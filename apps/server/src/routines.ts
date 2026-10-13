@@ -197,3 +197,33 @@ export const investigateInstructions = (
     "Start by calling slop's get_glob and get_context for the glob, passing the run ID.",
     'If you cannot finish, call report_failure with the run ID.',
   ].join('\n');
+
+/**
+ * The text of a conflict-resolving run: the glob's PR conflicts with the base branch. The run merges the base in on the
+ * glob's branch, resolves what is additive, checks and pushes; a real clash of behaviour goes back to a person.
+ */
+export const conflictInstructions = (
+  glob: { id: string; title: string },
+  runId: string,
+  repo: string | null,
+  baseBranch: string | null,
+  conflict: { base: string; files: readonly string[] } | null,
+): string => {
+  const base = conflict?.base ?? baseBranch ?? 'the base branch';
+  return [
+    `Slop glob ${glob.id}: ${glob.title}`,
+    `Run ID: ${runId}`,
+    ...(repo === null
+      ? []
+      : [
+          `Repository: ${repo}. Work in that repository's checkout. If this session doesn't have it, or can't push to it, call slop's report_failure with the run ID saying so (the routine's environment needs ${repo} and the Claude GitHub App installed on it); don't work in another repository.`,
+        ]),
+    '',
+    `This is a RESOLVE-CONFLICT run. The open PR of ${glob.id} conflicts with ${base}${conflict === null || conflict.files.length === 0 ? '' : ` (files changed on both sides: ${conflict.files.join(', ')})`}. Don't run the phases, don't change the glob's scope and don't call mark_ready.`,
+    `Run \`git fetch origin ${glob.id} && git checkout -B ${glob.id} origin/${glob.id}\`, then merge: \`git fetch origin ${base} && git merge origin/${base}\` (never rebase or reset the branch). Push only to ${glob.id} (\`git push origin ${glob.id}\`); never create or push a claude/ branch, and never open a new PR.`,
+    `Resolve the conflicts as .claude/agents/orchestrator.md's "Merge conflicts when merging the base branch" says: keep both sides of additive conflicts, and renumber migrations the way it describes. Then run the board's fast checks (type check, lint, tests; install dependencies first, see "Routine runs") on the merged result and fix what the merge broke.`,
+    `If both sides changed the same logic differently, run \`git merge --abort\` and call slop's report_failure with the run ID, naming the files and the decision a person has to make; don't guess. Otherwise commit the merge as \`${glob.id}: Merge ${base}\` with the Slop-Run: ${runId} trailer.`,
+    `Before pushing, call slop's get_glob with the run ID and stop without pushing if your run is no longer current, a human implementer is recorded or the glob is merged. Push, then follow orchestrator.md's "Auto-fix (watching the PR)" section: subscribe to the PR's activity and fix failed checks of this glob.`,
+    "Start by calling slop's get_glob for the glob, passing the run ID. If you cannot finish, call report_failure with the run ID.",
+  ].join('\n');
+};
