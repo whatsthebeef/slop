@@ -721,6 +721,9 @@ export const api = {
     request<{ parts: GlobView[] }>('POST', `/api/globs/${id}/split`, { version, idempotencyKey, parts }),
   savePlan: (id: string, content: string) => request<ArtifactView>('PUT', `/api/globs/${id}/plan`, { content }),
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
+  /** Adds an attachment (a link and/or text) to a glob; the same label again adds a version. */
+  attach: (id: string, input: { label: string; text: string | null; link: string | null }) =>
+    request<ArtifactView>('POST', `/api/globs/${id}/attachments`, input),
   artifactVersions: (id: string, kind: ArtifactKind, label: string) =>
     request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts/${kind}?label=${encodeURIComponent(label)}`),
   /** Decision globs: the outcome of a decision in Doing. */
