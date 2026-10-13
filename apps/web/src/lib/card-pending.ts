@@ -18,11 +18,24 @@ const WORKING: Partial<Record<Action, string>> = {
   merge: 'Merging…',
   merge_continue: 'Merging…',
   retry_merge: 'Merging…',
+  cancel_merge: 'Cancelling…',
   mark_ready: 'Marking done…',
 };
 
 /** The present participle shown on a card whose action is in flight. */
 export const workingLabel = (action: Action): string => WORKING[action] ?? 'Working…';
+
+/** What a merge action did, as a toast: merged, armed to merge when the checks pass, cancelled, or why it can't. Null for other actions. */
+export const mergeOutcomeText = (
+  action: Action,
+  glob: { status: string; mergeMode?: string | null; failure?: { reason: string } | null },
+): string | null => {
+  if (action === 'cancel_merge') return 'Merge cancelled';
+  if (action !== 'merge' && action !== 'merge_continue' && action !== 'retry_merge') return null;
+  if (glob.mergeMode === 'when_green' && glob.status === 'pr_open') return 'Will merge when checks pass';
+  if (glob.status === 'failed') return `Can't merge: ${glob.failure?.reason ?? 'the merge failed'}`;
+  return glob.status === 'reviewing' ? 'Merged' : 'Merging…';
+};
 
 /** The moves in flight, by glob ID. */
 export type CardPending = Readonly<Record<string, Action>>;

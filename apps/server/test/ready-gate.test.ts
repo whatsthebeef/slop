@@ -1,6 +1,6 @@
 import type { Board, Glob } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { readyGate } from '../src/ready-gate.js';
+import { mergeGate, readyGate } from '../src/ready-gate.js';
 import { FakeCodeHost } from './support/fake-codehost.js';
 
 const glob = { id: 's1t1', boardId: 1, status: 'implementing', pr: { number: 7 } } as unknown as Glob;
@@ -63,5 +63,47 @@ describe('the check before mark_ready', () => {
     host.conflictState = () => Promise.reject(new Error('down'));
     expect(await gateFor(host)('dev', 's1t1')).toEqual({ ok: true, value: {} });
     expect((await gateFor(new Host(), false)('x', 's1t1')).ok).toBe(false);
+  });
+});
+
+const agentSet = {
+  id: 's1t3',
+  boardId: 1,
+  title: 'Agent set v59',
+  category: 'task',
+  type: 'same',
+  implementer: 'slop',
+  status: 'implementing',
+  pr: { number: 9, headSha: 'abc' },
+} as unknown as Glob;
+const member = { get: () => Promise.resolve({ ok: true, value: { board, role: 'dev' } }) } as never;
+const manifest = (version: number) => JSON.stringify({ board: 1, version, files: [] });
+
+describe("the checks on slop's agent-set glob", () => {
+  it('refuses mark_ready until the branch holds the manifest for the title version', async () => {
+    const host = new Host();
+    const gate = readyGate(host, { peek: () => Promise.resolve(agentSet) }, member, () => Promise.resolve());
+    // The branch was cut from main at the old version, or has no manifest at all.
+    host.readFile = () => Promise.resolve(manifest(58));
+    const old = await gate('dev', 's1t3');
+    expect(!old.ok && old.error.message).toBe("slop hasn't committed agent set v59 yet");
+    host.readFile = () => Promise.resolve(null);
+    expect((await gate('dev', 's1t3')).ok).toBe(false);
+    host.readFile = () => Promise.reject(new Error('down'));
+    expect((await gate('dev', 's1t3')).ok).toBe(false);
+    host.readFile = () => Promise.resolve(manifest(59));
+    expect((await gate('dev', 's1t3')).ok).toBe(true);
+  });
+
+  it('refuses merge on an empty diff only', async () => {
+    const host = new Host();
+    const gate = mergeGate(host, { peek: () => Promise.resolve(agentSet) }, member);
+    const empty = await gate('dev', 's1t3');
+    expect(!empty.ok && empty.error.message).toBe("slop hasn't committed agent set v59 yet");
+    host.diffSummary = () => Promise.resolve({ changedLines: 4, files: ['.claude/slop-agent-set.json'] });
+    expect((await gate('dev', 's1t3')).ok).toBe(true);
+    // Any other glob is the machine's to judge.
+    host.diffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
+    expect((await mergeGate(host, { peek: () => Promise.resolve(glob) }, member)('dev', 's1t1')).ok).toBe(true);
   });
 });

@@ -855,6 +855,11 @@ export class GlobService {
     );
   }
 
+  /** Cancel merge: disarms "merge when checks pass". */
+  cancelMerge(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.cancelMerge(glob, ctx));
+  }
+
   /** Retry merge: a failed merge (not a conflict) goes back to merging at the head, which already passed. */
   retryMerge(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx) => machine.retryMerge(glob, ctx));

@@ -8,7 +8,7 @@ import { z } from 'zod';
 import type { Auth } from '../auth.js';
 import { SESSION_COOKIE, SESSION_DAYS } from '../auth.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
-import type { ReadyGate } from '../ready-gate.js';
+import type { MergeGate, ReadyGate } from '../ready-gate.js';
 import type { HintHub } from '../notifier.js';
 import type { SignedLinks } from '../signed-links.js';
 import { labelCommandSchema } from './labels.js';
@@ -34,6 +34,8 @@ export interface AppDeps {
   readonly spend?: SpendService;
   /** Refuses Ready for review for a branch that conflicts with its base. */
   readonly readyGate?: ReadyGate;
+  /** Refuses Merge on an agent-set PR whose diff is empty. */
+  readonly mergeGate?: MergeGate;
   /** Signs the board sign-in `state`. */
   readonly links: SignedLinks;
   /** Reopens a decision: one the KB pipeline closed through the Knowledge page's reopen; absent: only accepted ones (row D9). */
@@ -574,9 +576,13 @@ export const createApp = (deps: AppDeps) => {
     'pick-up': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, false, b.environment),
     'take-over': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, true, b.environment),
     'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),
-    merge: (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version),
+    merge: async (email: string, id: string, b: ActionBody) => {
+      const gate = await deps.mergeGate?.(email, id);
+      return gate !== undefined && !gate.ok ? gate : globs.merge(email, id, b.version);
+    },
     deescalate: (email: string, id: string, b: ActionBody) => globs.deescalate(email, id, b.version),
     'make-super': (email: string, id: string, b: ActionBody) => globs.makeSuper(email, id, b.version),
+    'cancel-merge': (email: string, id: string, b: ActionBody) => globs.cancelMerge(email, id, b.version),
     'retry-merge': (email: string, id: string, b: ActionBody) => globs.retryMerge(email, id, b.version),
     // Supers: row 31, and the board's Ready for review (both need the latest postplan at the head).
     'merge-continue': (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version, true),

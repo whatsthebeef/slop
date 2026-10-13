@@ -418,6 +418,7 @@ export type ActionPath =
   | 'start-again'
   | 'merge'
   | 'retry-merge'
+  | 'cancel-merge'
   | 'deescalate'
   | 'make-super'
   | 'merge-continue'
@@ -812,6 +813,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   start_again: 'start-again',
   merge: 'merge',
   retry_merge: 'retry-merge',
+  cancel_merge: 'cancel-merge',
   deescalate: 'deescalate',
   make_super: 'make-super',
   merge_continue: 'merge-continue',
