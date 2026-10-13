@@ -46,6 +46,8 @@ You will receive:
 
 **Bugs:** identify the root cause location, the correct behaviour and the changes needed to fix it without regressions.
 
+**Hotspots:** the `hotspots` field of `get_context` lists the files that keep conflicting on this board (path, conflicts, globs, merges, size). Check it against the files you plan to touch. If one is hot, say so in the investigation (under `## Risks / Unknowns`) with its numbers. If a refactor glob is open or proposed for it, recommend `needs` on that glob, so this one starts once the file is quiet; if none exists, recommend keeping the edit to the hotspot minimal and putting new code in a new module.
+
 ### 3. Produce proposals
 
 Write one or more **high-level proposals** to the output path. If only one approach makes sense, present just that one. If there are meaningfully different approaches (not minor variations), present up to 3. Always include a recommendation: in unattended mode it is the one that will be implemented.

@@ -63,6 +63,10 @@ When the change needs anything done by a person after it merges (infrastructure 
 - Where they fit, use the repo's own scripts: `infra/deploy/host-deploy.sh` to deploy the host and `infra/deploy/server-env.sh` to change the server's environment, instead of raw `aws` commands.
 - **Never run a step that changes paid infrastructure or IAM** (deploys, stack changes, role or policy changes, anything that creates or resizes billable resources), and never put credentials in a step. Write it for a person to run. Local checks and read-only commands are fine.
 
+## Hotspot files
+
+A **hotspot** is a file that keeps conflicting between parallel globs (`get_context` lists them in `hotspots`; the investigation names the ones this glob touches). When you change a hotspot, don't grow it: put the new code in a new module (a new component, helper or file) and keep the edit to the hotspot minimal, such as an import and one line that uses it. Don't refactor the hotspot yourself unless the plan says to; a refactor glob handles that.
+
 ## Coding guidelines
 
 - **Follow the board's conventions docs and existing patterns.** Match code style, naming, formatting and architecture. The conventions docs are authoritative for project-specific rules (quotes, formatting, typing, framework patterns).

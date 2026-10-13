@@ -36,6 +36,17 @@ describe('catalog agent-set hash', () => {
     expect(set.files.map((f) => f.path)).toContain('agents/orchestrator.md');
     expect(set.hash).toBe(hashAgentSet(set.files));
   });
+
+  it('tells the investigator, implementer and change reviewer about hotspots', async () => {
+    const set = await new FsCatalog(new URL('../../../catalog', import.meta.url).pathname).agentSet();
+    const text = (name: string): string => set.files.find((f) => f.path === `agents/${name}.md`)?.content ?? '';
+    expect(text('investigator')).toMatch(/hotspots/);
+    expect(text('investigator')).toMatch(/`needs`/);
+    expect(text('implementer')).toMatch(/hotspot/i);
+    expect(text('implementer')).toMatch(/new module/);
+    expect(text('change_reviewer')).toMatch(/hotspot/i);
+    expect(text('change_reviewer')).toMatch(/SUGGESTION/);
+  });
 });
 
 describe('layered agent set in Postgres', () => {
