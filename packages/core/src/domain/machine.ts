@@ -6,6 +6,7 @@
 import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from './errors.js';
 import type { Result } from './errors.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
+import type { ConflictKind, ConflictResolvedBy } from './conflict-record.js';
 import type { ArtifactSummary } from './knowledge.js';
 import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
@@ -968,12 +969,27 @@ export const behindChecked = (
     .done();
 };
 
-/** The open PR no longer conflicts with the base branch. */
-export const conflictCleared = (glob: Glob, ctx: Context): Result<Transition> => {
+/**
+ * The open PR no longer conflicts with the base branch. The event records what was resolved (files, the causing glob)
+ * and how: `by` is the conflict-fix run when that was the glob's latest run, else a person; `kind` is what the code
+ * host could tell about the resolution (`unknown` when it could not).
+ */
+export const conflictCleared = (
+  glob: Glob,
+  ctx: Context,
+  kind: ConflictKind = 'unknown',
+): Result<Transition> => {
   if (glob.conflict == null) return unchanged(glob);
+  const by: ConflictResolvedBy = currentRun(glob)?.purpose === 'resolve_conflict' ? 'run' : 'human';
   return new Builder(glob, ctx)
     .set({ conflict: null })
-    .event('ConflictCleared', { base: glob.conflict.base })
+    .event('ConflictCleared', {
+      base: glob.conflict.base,
+      files: [...glob.conflict.files],
+      since: glob.conflict.since,
+      by,
+      kind,
+    })
     .done();
 };
 
@@ -1066,13 +1082,18 @@ export interface MergeOptions {
 }
 
 /** "Merge when checks pass" is armed: the human step is done and slop merges once the head's checks pass. */
-export const isMergeArmed = (glob: Glob): boolean => glob.status === 'pr_open' && glob.mergeMode === 'when_green';
+export const isMergeArmed = (glob: Glob): boolean =>
+  glob.status === 'pr_open' && glob.mergeMode === 'when_green';
 
 const headChecksPassed = (glob: Glob): boolean =>
-  glob.pr?.headSha != null && glob.headChecks?.sha === glob.pr.headSha && glob.headChecks.state === 'passed';
+  glob.pr?.headSha != null &&
+  glob.headChecks?.sha === glob.pr.headSha &&
+  glob.headChecks.state === 'passed';
 
 const headChecksFailed = (glob: Glob): boolean =>
-  glob.pr?.headSha != null && glob.headChecks?.sha === glob.pr.headSha && glob.headChecks.state === 'failed';
+  glob.pr?.headSha != null &&
+  glob.headChecks?.sha === glob.pr.headSha &&
+  glob.headChecks.state === 'failed';
 
 /** Why Merge can't be pressed on a ready same or super right now (not armed, no conflict, checks not failed), or null. */
 const mergeBlocker = (glob: Glob): string | null => {
@@ -1105,7 +1126,8 @@ export const requestMerge = (
   if (options.continue) {
     if (glob.type !== 'super')
       return invalidTransition(glob, actor, 'Only a super can merge and continue');
-    if (!passed) return invalidTransition(glob, actor, 'Required checks have not passed on the current head');
+    if (!passed)
+      return invalidTransition(glob, actor, 'Required checks have not passed on the current head');
     if (!recordAtHead(glob, options.facts ?? {}))
       return invalidTransition(glob, actor, RECORD_NOT_AT_HEAD);
   }
@@ -2033,13 +2055,20 @@ export const checksCompleted = (
     if (checks.conflict !== undefined || !passed) {
       return withConflict(b, checks.conflict, ctx)
         .set({ mergeMode: null })
-        .event('MergeDisarmed', { reason: checks.conflict !== undefined ? 'conflict' : 'checks failed' })
+        .event('MergeDisarmed', {
+          reason: checks.conflict !== undefined ? 'conflict' : 'checks failed',
+        })
         .done();
     }
     return b
       .set({ mergeMode: null })
       .status('merging')
-      .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: checks.sha })
+      .effect({
+        kind: 'squash_merge',
+        globId: glob.id,
+        generation: glob.generation,
+        sha: checks.sha,
+      })
       .done();
   }
   // Slop updated the branch while merging: the checks on the new head decide (rows 12, 14, 16).
@@ -2988,13 +3017,18 @@ export const decisionWorkLanded = (glob: Glob, ctx: Context): Result<Transition>
 };
 
 /** Row D8: sign off an accepted decision. */
-export const signOffDecision = (glob: Glob, ctx: Context, rollout: BlockProgress | null = null): Result<Transition> => {
+export const signOffDecision = (
+  glob: Glob,
+  ctx: Context,
+  rollout: BlockProgress | null = null,
+): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.category !== 'decision') return notDecision(glob, actor);
   if (!mayDecide(actor)) return forbidden('Only admins and POs can sign off a decision');
   if (glob.status !== 'reviewing')
     return invalidTransition(glob, actor, 'Only a decision in Reviewing can be signed off');
-  if (rollout !== null && rollout.open > 0) return invalidTransition(glob, actor, rolloutPending(rollout));
+  if (rollout !== null && rollout.open > 0)
+    return invalidTransition(glob, actor, rolloutPending(rollout));
   return new Builder(glob, ctx).set({ signedOffAt: ctx.now }).status('signed_off').done();
 };
 
@@ -3002,10 +3036,19 @@ export const signOffDecision = (glob: Glob, ctx: Context, rollout: BlockProgress
  * The last work step holding back sign-off was done or dismissed: a merged glob whose labels are all approved moves on to
  * Signed off (one still short of approvals just stays in Reviewing, and now shows there). A no-op while any step is open.
  */
-export const rolloutSettled = (glob: Glob, rollout: BlockProgress, ctx: Context): Result<Transition> => {
-  if (rollout.open > 0 || glob.category === 'decision' || glob.status !== 'reviewing') return unchanged(glob);
+export const rolloutSettled = (
+  glob: Glob,
+  rollout: BlockProgress,
+  ctx: Context,
+): Result<Transition> => {
+  if (rollout.open > 0 || glob.category === 'decision' || glob.status !== 'reviewing')
+    return unchanged(glob);
   if (!Object.values(glob.labels).every((s) => s === 'approved')) return unchanged(glob);
-  return new Builder(glob, ctx).set({ signedOffAt: ctx.now }).event('RolloutDone', {}).status('signed_off').done();
+  return new Builder(glob, ctx)
+    .set({ signedOffAt: ctx.now })
+    .event('RolloutDone', {})
+    .status('signed_off')
+    .done();
 };
 
 /** Row D9: an accepted decision goes back to Doing, its outcome cleared, to be chosen again. */
