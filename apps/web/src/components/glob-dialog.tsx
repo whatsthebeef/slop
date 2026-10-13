@@ -79,7 +79,7 @@ const ACTION_TIPS: Partial<Record<Action, string>> = {
   retry_autofix:
     'Starts a new routine run that watches this PR and fixes its failed checks on the same branch',
   resolve_conflict:
-    'Asks the Claude GitHub App, in a PR comment, to merge the base branch into this branch and resolve the conflicts',
+    'Starts a routine run that merges the base branch into this branch, resolves the conflicts and pushes; a failed attempt can be tried again',
 };
 
 /** The glob view: a page in the board's main area (never a modal), with a back arrow to the board. */
@@ -994,6 +994,7 @@ export const GlobDetail = ({
               >
                 <span>
                   {run.purpose === 'investigate' && 'Investigation · '}
+                  {run.purpose === 'resolve_conflict' && 'Conflict fix · '}
                   {run.state === 'ended' ? (run.outcome ?? 'ended') : run.state} · owner{' '}
                   {run.routineOwner}
                   {run.sessionUrl !== null && (

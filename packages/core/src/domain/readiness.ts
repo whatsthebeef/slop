@@ -180,9 +180,7 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     facts.claudeWorkflow === null
       ? item('claude_workflow', claudeTitle, 'unknown', "slop can't read the repo yet", null)
       : facts.claudeWorkflow
-        ? facts.slopBot !== null && facts.claudeAllowsSlop === false
-          ? item('claude_workflow', claudeTitle, 'missing', `A workflow runs ${CLAUDE_ACTION}, but it ignores slop's @claude comments (merge-conflict requests) because slop's App is not allowed to trigger it. Add this under \`with:\`: allowed_bots: "${facts.slopBot}"`, null)
-          : item('claude_workflow', claudeTitle, 'ok', `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so @claude comments get a response (it also needs the Claude GitHub App)`, null)
+        ? item('claude_workflow', claudeTitle, 'ok', `A workflow on ${board.baseBranch} runs ${CLAUDE_ACTION}, so people's @claude mentions get a response (it also needs the Claude GitHub App). Conflict and CI fixes run as routines and don't depend on it`, null)
         : item('claude_workflow', claudeTitle, 'missing', claudeWorkflowFix(repo), {
             kind: 'link',
             label: 'Add the workflow',
@@ -262,15 +260,11 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
     const fix = failure === undefined ? null : routineFailureFix(failure.reason);
     // One run that never started can be a hiccup; repeats point at the routine itself.
     const neverStarted = key === 'routines' ? facts.recentFailures.filter((f) => /^Routine run never started/.test(f.reason)) : [];
-    const unreacted = key === 'claude_app' ? facts.unreactedCheckFailures[0] : undefined;
-    const noWorkflow = facts.claudeWorkflow === false ? ' and the repo has no Claude workflow (see the "Claude workflow" item)' : '';
     items.push(
       failure !== undefined && fix !== null
         ? item(key, MANUAL[key], 'failing', `${failure.globId} failed: ${failure.reason}. ${fix.fix}`, settings)
         : neverStarted.length >= 2
           ? item(key, MANUAL[key], 'failing', `${neverStarted.length} routine runs never started (latest ${neverStarted[0]?.globId ?? ''}): check the routine's fire URL and token, and that its session can reach slop`, settings)
-        : unreacted !== undefined
-          ? item(key, MANUAL[key], 'failing', `${unreacted}'s checks failed and its routine run hasn't reacted: auto-fix depends on the Claude GitHub App, so check it is installed on the repo${noWorkflow}`, settings)
         : facts.ticks[key] === true
           ? item(key, MANUAL[key], 'ok', 'Ticked by an admin', null)
           : item(key, MANUAL[key], 'missing', "slop can't check this: tick it in board settings once it's done", settings),
@@ -314,14 +308,11 @@ const minutesUnreacted = (glob: Glob, now: string): number | null => {
 export const unreactedCheckFailures = (globs: readonly Glob[], now: string): string[] =>
   globs.filter((g) => (minutesUnreacted(g, now) ?? 0) >= STUCK_MINUTES).map((g) => g.id);
 
-/** How long after asking the Claude GitHub App to resolve a conflict the card suggests resolving it locally. */
-const CONFLICT_FIX_MINUTES = 15;
-
 /**
  * A conflict flagged on an open PR. A human implementer resolves it locally from the start; for the rest the card
- * suggests that once the Claude GitHub App was asked and the PR still conflicts after a while.
+ * suggests that once a Resolve conflict run gave up and the PR still conflicts.
  */
-const conflictHint = (glob: Glob, now: string): string | null => {
+const conflictHint = (glob: Glob): string | null => {
   const conflict = glob.conflict;
   if (conflict == null) return null;
   const shown = conflict.files.slice(0, 5).join(', ');
@@ -329,10 +320,10 @@ const conflictHint = (glob: Glob, now: string): string | null => {
   const files = conflict.files.length === 0 ? '' : `: ${shown}${more}`;
   const cause = conflict.since === null ? '' : ` since ${conflict.since} merged`;
   const hint = `Conflicts with ${conflict.base}${cause}${files}`;
-  const waited =
-    conflict.requestedAt !== undefined &&
-    (Date.parse(now) - Date.parse(conflict.requestedAt)) / 60_000 >= CONFLICT_FIX_MINUTES;
-  return glob.implementer !== null || waited ? `${hint}. Resolve locally: sstor --glob ${glob.id} --resolve` : hint;
+  if (glob.implementer !== null) return `${hint}. Resolve locally: sstor --glob ${glob.id} --resolve`;
+  const run = glob.runs.at(-1);
+  const gaveUp = run?.purpose === 'resolve_conflict' && run.state === 'ended' && run.outcome === 'failed';
+  return gaveUp ? `${hint}. Resolve the conflict: sstor --glob ${glob.id} --take-over` : hint;
 };
 
 /**
@@ -362,7 +353,7 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
     const fix = routineFailureFix(glob.failure.reason);
     if (fix !== null) return fix.fix;
   }
-  const conflict = conflictHint(glob, now);
+  const conflict = conflictHint(glob);
   if (conflict !== null) return conflict;
   const unreacted = minutesUnreacted(glob, now);
   if (unreacted !== null && unreacted >= STUCK_MINUTES) {

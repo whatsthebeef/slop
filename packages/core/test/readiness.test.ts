@@ -51,12 +51,9 @@ describe('Claude workflow readiness', () => {
     expect(runsClaudeAction('steps:\n  - uses: actions/checkout@v4\n')).toBe(false);
   });
 
-  it("warns with the exact line when the workflow does not allow slop's App", () => {
-    const warned = readiness({ ...ready, claudeAllowsSlop: false }).find((i) => i.key === 'claude_workflow');
-    expect(warned).toMatchObject({ state: 'missing' });
-    expect(warned?.detail).toContain('allowed_bots: "slop[bot]"');
+  it("doesn't ask the workflow to allow slop's App: conflict fixes run as routines", () => {
+    expect(readiness({ ...ready, claudeAllowsSlop: false }).find((i) => i.key === 'claude_workflow')).toMatchObject({ state: 'ok' });
     expect(readiness({ ...ready, claudeAllowsSlop: null }).find((i) => i.key === 'claude_workflow')).toMatchObject({ state: 'ok' });
-    expect(readiness({ ...ready, slopBot: null, claudeAllowsSlop: false }).find((i) => i.key === 'claude_workflow')).toMatchObject({ state: 'ok' });
   });
 
   it('reads allowed_bots from a workflow', () => {
@@ -71,9 +68,9 @@ describe('Claude workflow readiness', () => {
     expect(allowsBot('steps: []', 'slop[bot]')).toBe(false);
   });
 
-  it('names the missing workflow when checks failed and the run has not reacted', () => {
+  it('does not blame the Claude GitHub App when checks failed and the run has not reacted', () => {
     const claudeApp = readiness({ ...ready, claudeWorkflow: false, unreactedCheckFailures: ['s1t1'] }).find((i) => i.key === 'claude_app');
-    expect(claudeApp?.detail).toMatch(/no Claude workflow/);
+    expect(claudeApp).toMatchObject({ state: 'ok' });
   });
 });
 
@@ -165,10 +162,15 @@ describe('stuck hints on cards', () => {
     const open = sub({ status: 'in_progress', conflict });
     expect(stuckHint(open, NOW)).toBe('Conflicts with main since s1t2 merged: a.ts, b.ts');
     expect(stuckHint(sub({ conflict: { ...conflict, since: null, files: [] } }), NOW)).toBe('Conflicts with main');
-    // Asked the Claude GitHub App, and the PR still conflicts later.
-    const asked = sub({ conflict: { ...conflict, requestedAt: NOW } });
-    expect(stuckHint(asked, NOW)).not.toMatch(/Resolve locally/);
-    expect(stuckHint(asked, later)).toMatch(/Resolve locally: sstor --glob s1t1 --resolve/);
+    // A conflict-fixing run gave up and the PR still conflicts: a person takes over.
+    const gaveUp = {
+      id: 'r1', state: 'ended' as const, outcome: 'failed' as const, generation: 1, triggeredBy: 'a', routineOwner: 'a',
+      queuedAt: NOW, startedAt: NOW, lastProgressAt: NOW, endedAt: NOW, failureReason: 'x', sessionId: null, sessionUrl: null,
+      purpose: 'resolve_conflict' as const,
+    };
+    const tried = sub({ conflict, runs: [gaveUp] });
+    expect(stuckHint(sub({ conflict, runs: [{ ...gaveUp, state: 'watching', outcome: null }] }), later)).not.toMatch(/take-over/);
+    expect(stuckHint(tried, NOW)).toMatch(/Resolve the conflict: sstor --glob s1t1 --take-over/);
     // A human implementer resolves locally from the start; a cleared conflict shows nothing.
     expect(stuckHint(sub({ conflict, implementer: 'dev@example.com' }), NOW)).toMatch(/Resolve locally/);
     expect(stuckHint(sub({ conflict: null }), NOW)).toBeNull();
@@ -215,10 +217,10 @@ describe('watching run that ignores failed checks', () => {
     expect(stuckHint(watched({ type: 'same', headChecks: { sha: 'old', state: 'failed', at: failedAt } }), at(20))).toBeNull();
   });
 
-  it('counts toward the Claude GitHub App readiness item', () => {
+  it('no longer counts toward the Claude GitHub App readiness item', () => {
     expect(unreactedCheckFailures([watched(), watched({ id: 's1t2', headChecks: null })], at(20))).toEqual(['s1t1']);
     const items = readiness({ ...ready, unreactedCheckFailures: ['s1t1'] });
-    expect(items.find((i) => i.key === 'claude_app')).toMatchObject({ state: 'failing' });
+    expect(items.find((i) => i.key === 'claude_app')).toMatchObject({ state: 'ok' });
   });
 });
 
