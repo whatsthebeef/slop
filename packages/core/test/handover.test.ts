@@ -334,6 +334,7 @@ describe('openFindings', () => {
     path: null,
     line: null,
     text: 't',
+    resolved: false,
     fingerprint: `f${String(id)}`,
     class: 'other',
     classNote: null,
@@ -357,5 +358,15 @@ describe('openFindings', () => {
     ];
     expect(openFindings(findings, [source(1), source(2)])).toBe(2);
     expect(openFindings(findings, [])).toBe(0);
+  });
+
+  it('does not count findings the review reports as fixed (s15b94)', () => {
+    const findings = [
+      finding(1, 1, { resolved: true }),
+      finding(2, 1, { resolved: true }),
+      finding(3, 1),
+    ];
+    expect(openFindings(findings, [source(1)])).toBe(1);
+    expect(openFindings(findings.slice(0, 2), [source(1)])).toBe(0);
   });
 });

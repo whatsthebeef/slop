@@ -60,6 +60,7 @@ describe('Review findings in Postgres', () => {
   });
 
   const newFinding = (globId: string, sourceId: number, text: string): NewFinding => ({
+    resolved: false,
     boardId,
     globId,
     sourceId,
