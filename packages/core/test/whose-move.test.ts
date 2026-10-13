@@ -131,6 +131,7 @@ describe('whoseMove: stalled', () => {
     });
     expect(move(conflict)).toMatchObject({ holder: 'stalled', label: 'stalled · merge conflict', reason: 'merge conflict' });
     expect(move(glob({ status: 'failed', failure: { reason: 'run gave up', at: NOW } })).label).toBe('stalled · run failed');
+    expect(move(glob({ status: 'failed', failure: { reason: 'needs a call', at: NOW, kind: 'needs_pairing', decision: 'CSV or report?' } })).label).toBe('stalled · needs your decision');
     const checks = glob({ status: 'failed', failure: { reason: 'run gave up', at: NOW }, headChecks: { sha: 'a', state: 'failed' } });
     expect(move(checks).label).toBe('stalled · checks failed');
     const queued = glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null, queuedAt: minutesAgo(25), lastProgressAt: null })] });
