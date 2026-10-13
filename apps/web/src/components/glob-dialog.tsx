@@ -25,16 +25,10 @@ import {
   statusWords,
   viewStatusLine,
   waitingFor,
+  mergeWarning,
 } from '@/lib/status-line';
-import {
-  categoryOptions,
-  saveCategory,
-  subConfirmation,
-  typeActionChanges,
-  typeActions,
-  typeChangeBlocker,
-} from '@/lib/type-change';
-import type { TypeAction } from '@/lib/type-change';
+import { categoryOptions, saveCategory, typeOptions } from '@/lib/type-change';
+import type { TypeOption } from '@/lib/type-change';
 import { ArtifactsSection } from './artifacts';
 import { DecisionAssessment, DecisionSection } from './decision-section';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
@@ -50,6 +44,7 @@ import { GlobTitle } from './glob-title';
 import { ReviewFindings } from './review-findings';
 import { cn } from '@/lib/utils';
 import { Tip } from './ui/tip';
+import { TypePopover } from './type-popover';
 
 const STATUS_TEXT: Record<GlobView['status'], string> = {
   planning: 'Planning',
@@ -193,7 +188,6 @@ export const GlobDetail = ({
     setDraft({});
     setFailure(null);
     setConfirmingAgain(false);
-    setConfirmingType(null);
     setTypeFailure(null);
     setCategoryNote(null);
   }, [glob.id]);
@@ -202,12 +196,10 @@ export const GlobDetail = ({
     setDraft((d) => ({ ...d, ...changes }));
     setFailure(null);
   };
-  // Type changes are actions that say what follows; a feature can only be a sub as a task, so that confirms first.
   const [confirmingRetrigger, setConfirmingRetrigger] = useState(false);
-  const [confirmingType, setConfirmingType] = useState<TypeAction | null>(null);
+  // The type chip's popover says what follows before it changes the type.
   const [typeFailure, setTypeFailure] = useState<EditFailure | null>(null);
-  const typeButtons = typeActions(glob, board.role);
-  const typeBlocker = typeChangeBlocker(glob, board.role);
+  const typeChoices = typeOptions(glob, board.role);
   // Category saves when it changes, and says so with an Undo.
   const [categoryNote, setCategoryNote] = useState<{ undo: Category } | null>(null);
   const changeCategory = async (to: Category, from: Category) => {
@@ -220,9 +212,13 @@ export const GlobDetail = ({
       setCategoryNote(null);
     }
   };
-  const changeType = async (action: TypeAction) => {
-    setConfirmingType(null);
-    setTypeFailure(await onUpdate(typeActionChanges(action)));
+  const changeType = async (option: TypeOption) => {
+    setTypeFailure(null);
+    if (option.via === 'update') {
+      setTypeFailure(await onUpdate({ type: option.to }));
+    } else if (option.via !== null && !(await onAction(option.via))) {
+      setTypeFailure({ message: `Could not make it a ${option.to}`, conflict: false });
+    }
   };
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
   // Once per navigation (glob or section), not on the live refreshes that re-render the page.
@@ -252,7 +248,10 @@ export const GlobDetail = ({
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   useEffect(() => setConfirmingOversized(null), [glob.id]);
   // Decide has its own panel with the five outcomes.
-  const allActions = (glob.allowedActions ?? []).filter((a) => a !== 'delete' && a !== 'decide');
+  // deescalate and make_super are reached through the type popover.
+  const allActions = (glob.allowedActions ?? []).filter(
+    (a) => a !== 'delete' && a !== 'decide' && actionPresentation(a, glob).placement !== 'none',
+  );
   const actions = orderActions(allActions);
   const tiers = actionTiers(allActions);
   const disabled = waitingFor(glob, actions, board.role);
@@ -277,7 +276,7 @@ export const GlobDetail = ({
     return () => observer.disconnect();
   }, []);
   // Esc goes back to the board, unless typing, an overlay or an inline confirmation owns it.
-  const confirming = confirmDelete || confirmingAgain || confirmingType !== null || splitting;
+  const confirming = confirmDelete || confirmingAgain || splitting;
   const escapeRef = useRef({ onClose, confirming });
   escapeRef.current = { onClose, confirming };
   useEffect(() => {
@@ -321,6 +320,7 @@ export const GlobDetail = ({
   const renderActions = (list: Action[]) =>
     list.map((action) => {
       const shown = actionPresentation(action, glob);
+      const warning = action === 'merge' ? mergeWarning(glob) : null;
       const button = (
         <Button
           key={action}
@@ -381,7 +381,7 @@ export const GlobDetail = ({
         </Button>
       );
       return (
-        <Tip key={action} text={shown.tip}>
+        <Tip key={action} text={warning === null ? shown.tip : `${shown.tip}\n${warning}`}>
           {button}
         </Tip>
       );
@@ -426,11 +426,13 @@ export const GlobDetail = ({
               decision
             </span>
           ) : (
-            <Tip text={typeBlocker ?? `This is a ${glob.type}`}>
-              <span className="rounded border px-2 py-0.5 text-xs" data-testid="glob-type">
-                {glob.type}
-              </span>
-            </Tip>
+            <TypePopover
+              type={glob.type}
+              options={typeChoices}
+              busy={busy}
+              failure={typeFailure}
+              onChange={(option) => run(() => changeType(option))}
+            />
           )}
           <ActivityLabel glob={glob} />
           {glob.group !== null && <GroupChip name={glob.group} />}
@@ -660,26 +662,10 @@ export const GlobDetail = ({
         </Anchor>
 
         <Anchor name="actions">
-          {actions.length + disabled.length + typeButtons.length > 0 && (
+          {actions.length + disabled.length > 0 && (
             <div className="grid gap-1">
               <div className="flex flex-wrap gap-2">
                 {renderActions(actions.filter((a) => tiers.get(a) !== 'destructive'))}
-                {(decision ? [] : typeButtons).map((action) => (
-                  <Tip key={action.to} text={action.tip}>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busy}
-                      data-testid={`type-${action.to}`}
-                      onClick={() => {
-                        if (action.to === 'sub') setConfirmingType(action);
-                        else void run(() => changeType(action));
-                      }}
-                    >
-                      {action.label}
-                    </Button>
-                  </Tip>
-                ))}
                 {disabled.map(({ action, label, icon, tip }) => (
                   <Tip key={action} text={tip}>
                     <Button variant="outline" size="sm" disabled>
@@ -690,32 +676,6 @@ export const GlobDetail = ({
                 ))}
                 {renderActions(actions.filter((a) => tiers.get(a) === 'destructive'))}
               </div>
-              {confirmingType !== null && (
-                <div
-                  role="alert"
-                  className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-                >
-                  <span className="flex-1" data-testid="type-says">
-                    {subConfirmation(confirmingType)}
-                  </span>
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmingType(null)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={busy}
-                    data-testid="confirm-type"
-                    onClick={() => void run(() => changeType(confirmingType))}
-                  >
-                    Make it a sub
-                  </Button>
-                </div>
-              )}
-              {typeFailure !== null && (
-                <p role="alert" className="text-xs text-red" data-testid="type-failure">
-                  {typeFailure.message}
-                </p>
-              )}
               {confirmingReady && (
                 <div
                   role="alert"

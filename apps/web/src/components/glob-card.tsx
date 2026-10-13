@@ -1,9 +1,9 @@
 import { decisionOf, findingsLabel, reviewOutdated, scopeLabel } from '@slop/core';
-import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
+import type { Action, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
 import { Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { ActionIcon } from '@/lib/action-presentation';
@@ -15,6 +15,8 @@ import { OUTCOME_TEXT } from './decision-section';
 import { actionTiers } from '@/lib/action-style';
 import { workingLabel } from '@/lib/card-pending';
 import { splitChip } from '@/lib/split-chip';
+import { cardTargets } from '@/lib/card-targets';
+import type { GlobTarget } from '@/lib/glob-section';
 import { Tip } from './ui/tip';
 import { LabelPopover } from './labels';
 import type { ReviewLabel } from './labels';
@@ -109,8 +111,77 @@ export const ActivityLabel = ({ glob }: { glob: GlobView }) => {
   );
 };
 
-/** Small icons for the artifacts the glob has; each opens the glob view on that artifact. */
-const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (kind: ArtifactKind) => void }) => {
+/** A button on the card that stops its click and key from reaching the card, which opens the glob at the top. */
+const CardButton = ({
+  onOpen,
+  className,
+  testId,
+  ariaLabel,
+  'aria-describedby': describedBy,
+  children,
+}: {
+  onOpen: () => void;
+  className: string;
+  testId: string;
+  ariaLabel?: string;
+  /** Set by a wrapping `Tip`, which clones its child to link the tooltip text as the button's description. */
+  'aria-describedby'?: string;
+  children: ReactNode;
+}) => (
+  <button
+    type='button'
+    className={className}
+    aria-label={ariaLabel}
+    aria-describedby={describedBy}
+    data-testid={testId}
+    onClick={(e) => {
+      e.stopPropagation();
+      onOpen();
+    }}
+    onKeyDown={(e) => e.stopPropagation()}
+  >
+    {children}
+  </button>
+);
+
+/** A chip that opens the glob view at its section. Without `onOpen` (a chip shown outside the board) it is plain text. */
+export const ChipButton = ({
+  onOpen,
+  className,
+  testId,
+  ariaLabel,
+  'aria-describedby': describedBy,
+  children,
+}: {
+  onOpen?: () => void;
+  className: string;
+  testId: string;
+  /** The button's name, for chips whose visible words are hidden from screen readers. */
+  ariaLabel?: string;
+  'aria-describedby'?: string;
+  children: ReactNode;
+}) =>
+  onOpen === undefined ? (
+    <span className={className} data-testid={testId} aria-describedby={describedBy}>
+      {children}
+    </span>
+  ) : (
+    <CardButton
+      onOpen={onOpen}
+      className={cn(className, 'cursor-pointer rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring')}
+      testId={testId}
+      ariaLabel={ariaLabel}
+      aria-describedby={describedBy}
+    >
+      {children}
+    </CardButton>
+  );
+
+/**
+ * Small icons for the artifacts the glob has; each opens the glob view on that artifact. An independent review's finding
+ * count is its own button beside the icon and opens the findings.
+ */
+const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (target: GlobTarget) => void }) => {
   const present = CARD_ARTIFACT_KINDS.flatMap((kind) => {
     const artifact = glob.artifacts?.find((a) => a.kind === kind);
     return artifact === undefined ? [] : [artifact];
@@ -123,22 +194,29 @@ const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (kind: Artifa
         // An independent review shows its finding count, and says so when a later push left it behind.
         const status = a.review === undefined ? null : `${findingsLabel(a.review.findings)}${reviewOutdated(a.review, glob.pr?.headSha ?? null) ? ' (outdated)' : ''}`;
         return (
-          <Tip key={a.kind} text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}${status === null ? '' : `: ${status}`}`}>
-          <button
-            type='button'
-            className='inline-flex items-center rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
-            aria-label={title}
-            data-testid={`artifact-icon-${a.kind}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpen(a.kind);
-            }}
-            onKeyDown={(e) => e.stopPropagation()}
-          >
-            <Icon className='h-3.5 w-3.5' />
-            {status !== null && <span className='ml-0.5 font-mono text-[10px]' data-testid='review-status'>{status}</span>}
-          </button>
-          </Tip>
+          <span key={a.kind} className='inline-flex items-center'>
+            <Tip text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}: opens it in the artifacts`}>
+              <CardButton
+                onOpen={() => onOpen(cardTargets.artifact(a.kind))}
+                className='inline-flex items-center rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
+                ariaLabel={title}
+                testId={`artifact-icon-${a.kind}`}
+              >
+                <Icon className='h-3.5 w-3.5' />
+              </CardButton>
+            </Tip>
+            {status !== null && (
+              <Tip text={`${title}: ${status}. Opens the findings`}>
+                <CardButton
+                  onOpen={() => onOpen(cardTargets.findings())}
+                  className='rounded-sm px-0.5 font-mono text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground'
+                  testId='review-status'
+                >
+                  {status}
+                </CardButton>
+              </Tip>
+            )}
+          </span>
         );
       })}
     </span>
@@ -200,7 +278,7 @@ const MoveButton = ({
 );
 
 /** The glob's deploy state on its card: deploying, live, failed, or replaced by another glob. */
-export const DeployChip = ({ deploy }: { deploy: DeployIndicator }) => {
+export const DeployChip = ({ deploy, onOpen }: { deploy: DeployIndicator; onOpen?: () => void }) => {
   const env = deploy.environment;
   const [text, tip, tone] =
     deploy.state === 'deploying'
@@ -215,11 +293,11 @@ export const DeployChip = ({ deploy }: { deploy: DeployIndicator }) => {
           ? [`${env}: deploy failed`, `Deploy to ${env} failed: ${deploy.error ?? 'no reason given'}`, 'text-red']
           : [`${env}: replaced`, `${deploy.by} has been deployed to ${env} since`, 'text-muted-foreground'];
   return (
-    <Tip text={tip}>
-      <span className={cn('inline-flex items-center gap-1 font-mono text-[11px]', tone)} data-testid='deploy-chip'>
+    <Tip text={onOpen === undefined ? tip : `${tip}. Opens the deploys`}>
+      <ChipButton onOpen={onOpen} className={cn('inline-flex items-center gap-1 font-mono text-[11px]', tone)} testId='deploy-chip'>
         {deploy.state === 'deploying' && !deploy.waiting && <Loader2 className='h-3 w-3 animate-spin' />}
         {text}
-      </span>
+      </ChipButton>
     </Tip>
   );
 };
@@ -318,13 +396,16 @@ const GlobLinks = ({ boardId, ids }: { boardId: number; ids: readonly string[] }
  * A glob held for others to merge: "waits for s15t7", or the reason when the board's merge policy held it. Each ID opens
  * that glob on the board.
  */
-export const AfterChip = ({ glob }: { glob: GlobView }) => {
+export const AfterChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) => {
   const blocked = blockedParts(glob);
   if (blocked !== null) {
     return (
-      <Tip text={`Waits for, in order: ${chainTip(glob)}`}>
+      <Tip text={`Waits for, in order: ${chainTip(glob)}${onOpen === undefined ? '' : `. "blocked by" opens this glob's prerequisites; each ID opens that glob`}`}>
         <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
-          blocked by <GlobLinks boardId={glob.boardId} ids={blocked.ids} />
+          <ChipButton onOpen={onOpen} className='font-mono' testId='after-chip-open'>
+            blocked by
+          </ChipButton>{' '}
+          <GlobLinks boardId={glob.boardId} ids={blocked.ids} />
           {blocked.more > 0 && ` +${String(blocked.more)}`}
           {blocked.next !== null && (
             <>
@@ -343,9 +424,14 @@ export const AfterChip = ({ glob }: { glob: GlobView }) => {
   if (ids.length === 0) return null;
   const reason = learned.map((i) => `${i.id}: ${i.evidence ?? 'a run failed without it'}`).join('; ');
   return (
-    <Tip text={reason === '' ? `Waits for ${ids.join(', ')} to merge` : `Waits for ${reason}`}>
+    <Tip
+      text={`${reason === '' ? `Waits for ${ids.join(', ')} to merge` : `Waits for ${reason}`}${onOpen === undefined ? '' : `. "waits for" opens this glob's prerequisites; each ID opens that glob`}`}
+    >
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
-        waits for <GlobLinks boardId={glob.boardId} ids={ids} />
+        <ChipButton onOpen={onOpen} className='font-mono' testId='after-chip-open'>
+          waits for
+        </ChipButton>{' '}
+        <GlobLinks boardId={glob.boardId} ids={ids} />
       </span>
     </Tip>
   );
@@ -382,23 +468,25 @@ export const OverlapChip = ({ glob }: { glob: GlobView }) => {
 };
 
 /** The size check's flag: the glob looks like more than one PR's worth of work and nobody has answered it yet. */
-export const OversizedChip = ({ glob }: { glob: GlobView }) =>
+export const OversizedChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) =>
   glob.oversized === true ? (
     <Tip text='Intake judged this more than one PR of work. Open it to split it as proposed, edit the split, or keep it whole'>
-      <span className='font-mono text-[11px] font-semibold text-required' data-testid='oversized-chip'>
+      <ChipButton onOpen={onOpen} className='font-mono text-[11px] font-semibold text-required' testId='oversized-chip'>
         Oversized
-      </span>
+      </ChipButton>
     </Tip>
   ) : null;
 
 /** "split from <source>" on a part after the first, with the part number and the other parts in the tooltip. */
-export const SplitChip = ({ glob }: { glob: GlobView }) => {
+export const SplitChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) => {
   const chip = splitChip(glob);
   if (chip === null) return null;
   return (
-    <Tip text={chip.tip}>
+    <Tip text={onOpen === undefined ? chip.tip : `${chip.tip}. "split from" opens this glob's split; ${chip.source} opens that glob`}>
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='split-chip'>
-        {'split from '}
+        <ChipButton onOpen={onOpen} className='font-mono' testId='split-chip-open'>
+          split from
+        </ChipButton>{' '}
         <Link
           to={boardGlobHref(glob.boardId, chip.source, { section: 'size' })}
           className='underline-offset-2 hover:underline'
@@ -416,30 +504,31 @@ export const SplitChip = ({ glob }: { glob: GlobView }) => {
  * A decision glob's chips: what it applies to, what was decided (the outcome so far) and, when it contradicts a decision of
  * broader scope, which one. Nothing for a work glob.
  */
-export const DecisionChips = ({ glob }: { glob: GlobView }) => {
+export const DecisionChips = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) => {
   const attributes = decisionOf(glob);
   if (attributes === null) return null;
   const { outcome } = attributes;
   const conflicts = attributes.conflictsWith ?? [];
+  const opens = onOpen === undefined ? '' : '. Opens the decision';
   return (
     <>
-      <Tip text={`Applies to ${scopeLabel(attributes.scope)}`}>
-        <span className='rounded-sm border px-1.5 font-mono text-[10px] text-muted-foreground' data-testid='scope-chip'>
+      <Tip text={`Applies to ${scopeLabel(attributes.scope)}${opens}`}>
+        <ChipButton onOpen={onOpen} className='rounded-sm border px-1.5 font-mono text-[10px] text-muted-foreground' testId='scope-chip'>
           {attributes.scope.kind === 'glob' ? attributes.scope.ref : attributes.scope.kind.replace('_', ' ')}
-        </span>
+        </ChipButton>
       </Tip>
       {outcome !== null && (
-        <Tip text={`${OUTCOME_TEXT[outcome.kind]} by ${outcome.by}${outcome.reason === undefined ? '' : `: ${outcome.reason}`}`}>
-          <span className='font-mono text-[11px] text-signal-strong' data-testid='outcome-chip'>
+        <Tip text={`${OUTCOME_TEXT[outcome.kind]} by ${outcome.by}${outcome.reason === undefined ? '' : `: ${outcome.reason}`}${opens}`}>
+          <ChipButton onOpen={onOpen} className='font-mono text-[11px] text-signal-strong' testId='outcome-chip'>
             {OUTCOME_TEXT[outcome.kind].toLowerCase()}
-          </span>
+          </ChipButton>
         </Tip>
       )}
       {conflicts.length > 0 && (
-        <Tip text={`Contradicts ${conflicts.join(', ')}, which apply more broadly and win where they disagree`}>
-          <span className='font-mono text-[11px] text-required' data-testid='conflict-chip'>
+        <Tip text={`Contradicts ${conflicts.join(', ')}, which apply more broadly and win where they disagree${opens}`}>
+          <ChipButton onOpen={onOpen} className='font-mono text-[11px] text-required' testId='conflict-chip'>
             conflicts with {conflicts.join(', ')}
-          </span>
+          </ChipButton>
         </Tip>
       )}
     </>
@@ -453,7 +542,7 @@ const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', str
 export const GlobCard = ({
   glob,
   onOpen,
-  onOpenArtifact,
+  onOpenSection,
   onReviewLabel,
   moves,
   pending,
@@ -470,7 +559,8 @@ export const GlobCard = ({
 }: {
   glob: GlobView;
   onOpen: () => void;
-  onOpenArtifact: (kind: ArtifactKind) => void;
+  /** Opens the glob at the section (and artifact or label) a chip or icon points to; `onOpen` opens it at the top. */
+  onOpenSection: (target: GlobTarget) => void;
   onReviewLabel: ReviewLabel;
   /** Only the moves this glob can make; none means no buttons at all. */
   moves: readonly CardMove[];
@@ -550,30 +640,24 @@ export const GlobCard = ({
       <div className='mt-1 leading-snug font-medium break-words'>{glob.title}</div>
       <div className='mt-2 flex flex-wrap items-center gap-1.5'>
         {glob.group !== null && <GroupChip name={glob.group} />}
-        {decision ? <DecisionChips glob={glob} /> : <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={onOpen} />}
-        <ArtifactIcons glob={glob} onOpen={onOpenArtifact} />
-        <AfterChip glob={glob} />
+        {decision ? (
+          <DecisionChips glob={glob} onOpen={() => onOpenSection(cardTargets.decision())} />
+        ) : (
+          <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
+        )}
+        <ArtifactIcons glob={glob} onOpen={onOpenSection} />
+        <AfterChip glob={glob} onOpen={() => onOpenSection(cardTargets.prerequisites())} />
         <OverlapChip glob={glob} />
-        <SplitChip glob={glob} />
-        <OversizedChip glob={glob} />
-        {glob.escalation != null && glob.status === 'planning' && (
-          // The Tip's hidden description reads "Needs a person: <reason>" once; the visible words are hidden.
-          <Tip text={`Needs a person: ${glob.escalation.reason}`}>
-            <span className='inline-flex items-center gap-1 font-mono text-[11px] text-required' data-testid='escalation-chip'>
-              <span aria-hidden className='inline-flex items-center gap-1'>
-                needs a <HumanIcon className='h-3 w-3' decorative />
-              </span>
-            </span>
-          </Tip>
-        )}
+        <SplitChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
+        <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
         {glob.clash != null && (
-          <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict`}>
-            <span className='font-mono text-[11px] text-required' data-testid='clash-chip'>
+          <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict. Opens the conflict`}>
+            <ChipButton onOpen={() => onOpenSection(cardTargets.conflict())} className='font-mono text-[11px] text-required' testId='clash-chip'>
               clashes with {glob.clash.with}
-            </span>
+            </ChipButton>
           </Tip>
         )}
-        {deploy !== undefined && <DeployChip deploy={deploy} />}
+        {deploy !== undefined && <DeployChip deploy={deploy} onOpen={() => onOpenSection(cardTargets.deploys())} />}
         {environments !== undefined && <EnvironmentChips environments={environments} />}
         {atf !== undefined && <AtfChip runs={atf} />}
         {status !== null && !decision && (
@@ -608,6 +692,21 @@ export const GlobCard = ({
           </Tip>
         )}
         <span className='ml-auto inline-flex items-center gap-1'>
+          {glob.escalation != null && glob.status === 'planning' && (
+            // The visible words are hidden: the button's label names it and the Tip's description gives the reason.
+            <Tip text={`Needs a person: ${glob.escalation.reason}. Opens the reason`}>
+              <ChipButton
+                onOpen={() => onOpenSection(cardTargets.escalation())}
+                className='inline-flex items-center gap-1 font-mono text-[11px] text-required'
+                testId='escalation-chip'
+                ariaLabel='Needs a person'
+              >
+                <span aria-hidden className='inline-flex items-center gap-1'>
+                  needs a <HumanIcon className='h-3 w-3' decorative />
+                </span>
+              </ChipButton>
+            </Tip>
+          )}
           {pending !== undefined && (
             <span className='inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
               <Loader2 className='size-3 animate-spin' aria-hidden />
