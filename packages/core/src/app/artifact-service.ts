@@ -401,6 +401,8 @@ export class ArtifactService {
       hotspots?: (boardId: number, now: string) => Promise<{ readonly windowDays: number; readonly hotspots: readonly Hotspot[] }>;
       /** Re-judges a glob's size when its plan.md is saved in Planning. */
       sizeCheck?: SizeAssessor;
+      /** Re-infers a glob's needs and overlaps after its plan or investigation changed; never throws. */
+      dependencyInference?: { refresh(globId: string): Promise<void> };
       /** Acts on a stored investigation (escalate, oversize flag) before the save returns. */
       investigation?: InvestigationReactor;
       /** `GlobService.reconcileRollout`: turns a stored implementation record's `## Rollout` section into the glob's rollout steps. */
@@ -696,6 +698,8 @@ export class ArtifactService {
       this.deps.notifier.publish({ kind: 'glob.artifacts', boardId, globId });
       // Not awaited: the model's judgement must not hold up a save. It never throws and publishes when it has written.
       if (kind === 'plan') void this.deps.sizeCheck?.refresh(globId);
+      // Likewise the dependency tree: a changed plan (or an investigation that read the code) may change what the glob needs.
+      if (kind === 'plan' || kind === 'investigation') void this.deps.dependencyInference?.refresh(globId);
       // A queued review shows as being read in an open glob view straight away.
       if (kind === 'local_review') this.deps.notifier.publish({ kind: 'glob.findings', boardId, globId });
       // Awaited: slop flags the glob before the run goes on to implement.

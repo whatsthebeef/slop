@@ -105,6 +105,7 @@ export const GlobPage = () => {
       }}
       onReviewLabel={(label: LabelName, command: LabelCommand) => change(() => api.reviewLabel(open.id, label, command, open.version))}
       onDismissEdge={(edgeId: string) => change(() => api.dismissEdge(open.id, edgeId, open.version))}
+      onDismiss={(key, dismiss) => change(() => api.setDismissed(open.id, key, dismiss))}
       onDecide={(input) => change(() => api.decide(open.id, open.version, input))}
       onUpdate={async (changes: GlobChanges) => {
         try {

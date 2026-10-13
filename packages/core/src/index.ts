@@ -128,6 +128,7 @@ export { FakeEmbedder, vectorOf } from './testing/fake-embedder.js';
 export { FakeObjectStore } from './testing/fake-object-store.js';
 export * from './app/intake-learning-service.js';
 export * from './app/size-check-service.js';
+export * from './app/dependency-inference-service.js';
 export * from './app/context-tuning-service.js';
 export * from './app/context-report-service.js';
 export * from './domain/independent-review.js';

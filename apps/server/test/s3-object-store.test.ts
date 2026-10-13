@@ -62,3 +62,27 @@ describe('helpers', () => {
     expect(contentDisposition('inline', 'é.png')).toContain('filename="_.png"');
   });
 });
+
+describe('S3ObjectStore.unreachableReason', () => {
+  const sending = (send: (command: unknown) => Promise<unknown>) => {
+    const sent: { input: unknown; name: string }[] = [];
+    const fake = { send: (command: { input: unknown; constructor: { name: string } }) => (sent.push({ input: command.input, name: command.constructor.name }), send(command)) };
+    return { store: new S3ObjectStore(fake as unknown as S3Client, 'attachments-bucket'), sent };
+  };
+
+  it('lists one key under boards/ (the call the policy allows) and is null when it answers', async () => {
+    const { store: probing, sent } = sending(() => Promise.resolve({}));
+    expect(await probing.unreachableReason()).toBeNull();
+    expect(sent).toEqual([{ name: 'ListObjectsV2Command', input: { Bucket: 'attachments-bucket', Prefix: 'boards/', MaxKeys: 1 } }]);
+  });
+
+  it('names the error when the bucket denies the call', async () => {
+    const { store: probing } = sending(() => Promise.reject(Object.assign(new Error('denied'), { name: 'AccessDenied' })));
+    expect(await probing.unreachableReason()).toBe('bucket denied: AccessDenied');
+  });
+
+  it('says timeout when the probe was aborted', async () => {
+    const { store: probing } = sending(() => Promise.reject(new Error('aborted')));
+    expect(await probing.unreachableReason(AbortSignal.abort())).toBe('timeout');
+  });
+});
