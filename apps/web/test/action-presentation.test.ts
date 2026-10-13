@@ -57,7 +57,16 @@ describe('actionPresentation', () => {
     expect(actionPresentation('retry_autofix', g).label).toBe('Fix checks');
     expect(actionPresentation('resolve_conflict', g).label).toBe('Fix conflict');
     expect(actionPresentation('mark_ready', g)).toMatchObject({ label: 'Done', icon: 'human' });
-    expect(actionPresentation('merge', g).tip).toBe('Squash-merges PR #63');
+    const passed = { ...g, headChecks: { sha: 'abc', state: 'passed' as const } };
+    expect(actionPresentation('merge', passed)).toMatchObject({ label: 'Merge', tip: 'Squash-merges PR #63' });
+    for (const headChecks of [{ sha: 'abc', state: 'pending' as const }, null, { sha: 'old', state: 'passed' as const }]) {
+      expect(actionPresentation('merge', { ...g, headChecks })).toMatchObject({
+        label: 'Merge when checks pass',
+        placement: 'main',
+        tip: 'Slop merges automatically if the checks on abc go green; it stops and tells you if they fail or the branch conflicts',
+      });
+    }
+    expect(actionPresentation('cancel_merge', g)).toMatchObject({ label: 'Cancel merge', placement: 'more' });
     expect(actionPresentation('merge_continue', g)).toMatchObject({
       label: 'Merge & keep working',
       placement: 'more',
