@@ -10,7 +10,7 @@ import { actionPresentation } from '../src/lib/action-presentation';
 import type { GlobView } from '../src/lib/api';
 import { handoverKey, statusKey } from '../src/lib/dismissals';
 import { statusLine } from '../src/lib/status-line';
-import { NOW, glob } from '../../../packages/core/test/fixtures';
+import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 afterEach(cleanup);
 
@@ -89,6 +89,37 @@ describe('card rows', () => {
     expect(corner?.className).toContain('max-w-[45%]');
     expect(corner?.className).not.toMatch(/text-center|justify-center/);
     expect(root.querySelectorAll('[data-testid="corner-marker"]')).toHaveLength(1);
+  });
+
+  it('puts the category icon last in the header, the status marker just before it, and the ID on the left', () => {
+    const root = dom(markup(stalledByConflict()));
+    const header = root.querySelector('[data-testid="card-header"]');
+    const corner = header?.querySelector('[data-testid="card-corner"]');
+    expect(header?.lastElementChild).toBe(corner);
+    expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('task');
+    expect(corner?.lastElementChild?.previousElementSibling?.getAttribute('data-testid')).toBe('corner-marker');
+    expect(header?.firstElementChild?.getAttribute('data-testid')).toBe('card-id');
+    expect(header?.firstElementChild?.className).toContain('truncate');
+    expect(header?.querySelectorAll('[role="img"]')).toHaveLength(1);
+  });
+
+  describe('avatar', () => {
+    const avatar = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-bottom"]');
+    it('sits at the bottom-right for a person-implemented glob', () => {
+      const bottom = avatar(prOpen({ implementer: 'john.bower@x.com' }));
+      expect(bottom?.lastElementChild?.textContent).toContain('JB');
+      expect(bottom?.className).toContain('justify-between');
+      expect(bottom?.textContent).toContain('Implementer: john.bower@x.com');
+    });
+    it('shows the planner while unassigned', () => {
+      const g = view({ implementer: null, planner: 'ann@x.com', runs: [] });
+      expect(avatar(g)?.lastElementChild?.textContent).toContain('AN');
+      expect(avatar(g)?.textContent).toContain('Planner');
+    });
+    it('shows nothing when the machine is implementing', () => {
+      const bottom = avatar(view({ implementer: null, generation: 1, runs: [run()] }));
+      expect(bottom?.textContent).not.toMatch(/Planner|Implementer/);
+    });
   });
 
   describe('dismissing', () => {
