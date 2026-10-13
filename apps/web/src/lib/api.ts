@@ -1,5 +1,6 @@
 import type {
   Action,
+  AttachmentFile,
   AwaitedDependency,
   BlockedBy,
   AgentSetEntry,
@@ -164,6 +165,18 @@ export interface ArtifactView {
   readonly commitSha: string | null;
   readonly createdAt: string;
   readonly provenance: { readonly by: string; readonly actor: string; readonly validation?: string };
+  /** File attachments: the stored file's facts (state, name, type, size). */
+  readonly file?: AttachmentFile | null;
+}
+
+/** What slop answers to a request for an upload link: the pending attachment and the presigned POST for its bytes. */
+export interface FileUploadLink {
+  readonly attachmentId: number;
+  readonly label: string;
+  readonly file: AttachmentFile;
+  readonly url: string;
+  readonly fields: Readonly<Record<string, string>>;
+  readonly expiresAt: string;
 }
 
 export interface ApiError {
@@ -722,6 +735,23 @@ export const api = {
     request<{ parts: GlobView[] }>('POST', `/api/globs/${id}/split`, { version, idempotencyKey, parts }),
   savePlan: (id: string, content: string) => request<ArtifactView>('PUT', `/api/globs/${id}/plan`, { content }),
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
+  /** An upload link for a file on a glob (refills the `missing` file with `label`); the bytes then go straight to storage. */
+  requestFileUpload: (id: string, input: { fileName: string; contentType?: string; label?: string }) =>
+    request<FileUploadLink>('POST', `/api/globs/${id}/attachment-files`, input),
+  /** A fresh link (about 15 minutes) to a stored file. */
+  fileDownload: (id: string, label: string) =>
+    request<{ url: string; fileName: string; contentType: string; expiresAt: string }>(
+      'GET',
+      `/api/globs/${id}/attachment-files/download?label=${encodeURIComponent(label)}`,
+    ),
+  /** Removes a file attachment (and its object). */
+  deleteFile: async (id: string, label: string) => {
+    const response = await fetch(`/api/globs/${id}/attachment-files?label=${encodeURIComponent(label)}`, { method: 'DELETE', credentials: 'same-origin' });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as ApiError | null;
+      throw new RequestError(response.status, body ?? { code: 'internal', message: `Could not remove the file (${String(response.status)})` });
+    }
+  },
   /** Adds an attachment (a link and/or text) to a glob; the same label again adds a version. */
   attach: (id: string, input: { label: string; text: string | null; link: string | null }) =>
     request<ArtifactView>('POST', `/api/globs/${id}/attachments`, input),

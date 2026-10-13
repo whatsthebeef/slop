@@ -504,6 +504,7 @@ export const BoardPage = () => {
             throw error instanceof RequestError ? new Error(error.body.message) : error;
           });
           store(glob);
+          return glob;
         }}
       />
 
