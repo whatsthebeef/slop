@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { MemoryRouter } from 'react-router';
-import { ActivityLabel, GlobCard } from '../src/components/glob-card';
+import { GlobCard, PositionLabel } from '../src/components/glob-card';
 import type { CardMove } from '../src/components/glob-card';
 import { HumanIcon, MachineIcon } from '../src/components/actor-icons';
 import { actionPresentation } from '../src/lib/action-presentation';
-import { activityLabel } from '../src/lib/status-line';
+import { positionOf } from '../src/lib/position';
 import type { GlobView } from '../src/lib/api';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
@@ -95,17 +95,20 @@ describe('actionPresentation state variants (s15f88)', () => {
 
 describe('status-line activity icons (s15f88)', () => {
   const head = 'd16d563aaaa';
-  const live = (state: 'queued' | 'active' | 'watching') => ({ currentRun: run({ state }) });
+  const live = (state: 'queued' | 'active' | 'watching') => {
+    const r = run({ state });
+    return { runs: [r], currentRun: r };
+  };
 
   it('marks the run states as machine work and drops the word Routine', () => {
-    for (const state of ['active', 'watching', 'queued'] as const) {
-      const a = activityLabel(view(live(state)), NOW);
-      expect(a?.icon, state).toBe('machine');
+    for (const state of ['active', 'queued'] as const) {
+      const a = positionOf(view({ status: 'in_progress', ...live(state) }), NOW);
+      expect(a?.holder, state).toBe('machine');
       expect(a?.text, state).not.toMatch(/routine/i);
     }
   });
 
-  it('says what a run on an open PR is fixing, with the machine icon', () => {
+  it('says what a run on an open PR is fixing', () => {
     const open = (state: 'passed' | 'failed') =>
       view({
         status: 'pr_open',
@@ -113,40 +116,38 @@ describe('status-line activity icons (s15f88)', () => {
         headChecks: { sha: head, state },
         ...live('active'),
       });
-    expect(activityLabel(open('failed'), NOW)).toMatchObject({
-      kind: 'working',
-      text: 'fixing CI',
-      icon: 'machine',
-    });
-    expect(activityLabel(open('passed'), NOW)).toMatchObject({
-      kind: 'working',
-      text: 'answering review',
-      icon: 'machine',
-    });
+    expect(positionOf(open('failed'), NOW)).toMatchObject({ holder: 'machine', text: 'fixing CI' });
+    expect(positionOf(open('passed'), NOW)).toMatchObject({ holder: 'machine', text: 'implementing' });
   });
 
   it('marks a picked-up glob with no run as human', () => {
-    const later = new Date(Date.parse(NOW) + 30 * 60_000).toISOString();
+    const later = new Date(Date.parse(NOW) + 5 * 60_000).toISOString();
     const picked = view({
       status: 'in_progress',
       implementer: 'dev@example.com',
       updatedAt: NOW,
       currentRun: null,
+      runs: [],
     });
-    expect(activityLabel(picked, later)).toMatchObject({
-      kind: 'picked_up',
+    expect(positionOf(picked, later)).toMatchObject({
+      holder: 'human',
       text: 'picked up, no machine run',
-      icon: 'human',
     });
   });
 
-  it('renders the activity icon as decorative beside the text', () => {
+  it('renders the standby marker with a decorative icon beside the text', () => {
     const html = renderToStaticMarkup(
-      createElement(ActivityLabel, { glob: view(live('watching')) }),
+      createElement(PositionLabel, { glob: view({ status: 'pr_open', ...live('watching') }) }),
     );
     expect(html).toContain('standby');
     expect(html).toContain('aria-hidden="true"');
     expect(html).not.toContain('aria-label="machine"');
+  });
+
+  it('shows exactly one position indicator on a card, with the standby marker beside it', () => {
+    const html = card(view({ status: 'in_progress', ...live('active') }));
+    expect(html.split('data-testid="position"')).toHaveLength(2);
+    expect(html).not.toContain('data-testid="standby"');
   });
 });
 

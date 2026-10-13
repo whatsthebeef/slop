@@ -6,6 +6,7 @@
 import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from './errors.js';
 import type { Result } from './errors.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
+import type { ConflictKind, ConflictResolvedBy } from './conflict-record.js';
 import type { ArtifactSummary } from './knowledge.js';
 import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
@@ -996,12 +997,27 @@ const returnToReview = (b: Builder, sha: string): Builder => {
   return b;
 };
 
-/** The open PR no longer conflicts with the base branch. */
-export const conflictCleared = (glob: Glob, ctx: Context): Result<Transition> => {
+/**
+ * The open PR no longer conflicts with the base branch. The event records what was resolved (files, the causing glob)
+ * and how: `by` is the conflict-fix run when the glob's latest run is a resolve_conflict run that is still live or
+ * completed, else a person; `kind` is what the code host could tell about the resolution (`unknown` when it could not).
+ */
+export const conflictCleared = (
+  glob: Glob,
+  ctx: Context,
+  kind: ConflictKind = 'unknown',
+): Result<Transition> => {
   if (glob.conflict == null) return unchanged(glob);
-  const b = new Builder(glob, ctx)
-    .set({ conflict: null })
-    .event('ConflictCleared', { base: glob.conflict.base });
+  const run = currentRun(glob);
+  const by: ConflictResolvedBy =
+    run?.purpose === 'resolve_conflict' && (run.state !== 'ended' || run.outcome === 'completed') ? 'run' : 'human';
+  const b = new Builder(glob, ctx).set({ conflict: null }).event('ConflictCleared', {
+    base: glob.conflict.base,
+    files: [...glob.conflict.files],
+    since: glob.conflict.since,
+    by,
+    kind,
+  });
   if (backToReview(glob) && glob.pr?.headSha != null) returnToReview(b, glob.pr.headSha);
   return b.done();
 };

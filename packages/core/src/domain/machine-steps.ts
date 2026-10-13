@@ -165,6 +165,17 @@ export const machineSteps = (glob: Glob, facts: MachineFacts = {}): MachineStep[
   // Checks run by the code host: Waiting, not Machine.
   if (glob.pr !== null && glob.headChecks?.state === 'pending') {
     steps.push(step('checks', 'running', { detail: short(glob.headChecks.sha), startedAt: glob.headChecks.at ?? null }));
+  } else if (
+    glob.pr !== null &&
+    glob.pr.state === 'ready' &&
+    glob.status === 'pr_open' &&
+    glob.pr.headSha !== null &&
+    glob.failure === null &&
+    glob.conflict == null &&
+    glob.headChecks?.sha !== glob.pr.headSha
+  ) {
+    // The PR is ready and no check has reported on its head yet: the code host hasn't started them.
+    steps.push(step('checks', 'queued', { detail: short(glob.pr.headSha) }));
   }
   // Merge pressed before the checks passed: slop merges the moment they do. Until then the checks hold the ball.
   if (glob.mergeMode === 'when_green') {
