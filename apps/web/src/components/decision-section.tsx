@@ -17,7 +17,7 @@ import {
   WatchSignal,
   watching,
 } from '@/components/decision-learning';
-import { MarkdownView } from '@/components/markdown-view';
+import { CollapsibleMarkdown } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
@@ -411,7 +411,7 @@ export const DecisionAssessment = ({
         <p className='text-sm text-muted-foreground'>{has ? 'Loading…' : 'Not assessed yet.'}</p>
       ) : (
         <div className='rounded border p-3'>
-          <MarkdownView content={latest.content} />
+          <CollapsibleMarkdown content={latest.content} />
         </div>
       )}
       {canSuggest && state === 'working' && (
