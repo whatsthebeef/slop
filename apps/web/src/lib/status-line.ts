@@ -3,6 +3,8 @@ import {
   behindWarning,
   checksExplanation,
   chainSummary,
+  agentSetVersionOfTitle,
+  isAgentSetGlob,
   machine,
   readyStatus,
   stuckHint,
@@ -306,7 +308,7 @@ export const viewStatusLine = (
 
 /** What slop or a routine is doing on its own, in one label: the card's chip and the glob view's, from the same function. */
 export interface Activity {
-  readonly kind: 'merging' | 'checks' | 'investigating' | 'working' | 'watching' | 'queued' | 'picked_up';
+  readonly kind: 'merging' | 'checks' | 'investigating' | 'working' | 'watching' | 'queued' | 'picked_up' | 'agent_set';
   readonly text: string;
   /** The detail: session link, owner, who triggered it, the queued notice. */
   readonly tip: string;
@@ -363,14 +365,36 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
       spinning: running,
     };
   }
+  if (live === null && isAgentSetGlob(glob)) {
+    // Slop's own agent-set glob has no run or session: slop commits the set, a person reviews and merges.
+    const version = agentSetVersionOfTitle(glob.title);
+    if (glob.status === 'pr_open') {
+      if (glob.headChecks?.state === 'failed' || glob.failure !== null) return null;
+      return {
+        kind: 'agent_set',
+        text: `Slop committed agent set v${String(version)}: review and merge`,
+        tip: 'Slop committed the agent set to this branch. Review the diff, then merge once the checks pass.',
+        spinning: false,
+      };
+    }
+    if (glob.status === 'in_progress' || glob.status === 'implementing') {
+      return {
+        kind: 'agent_set',
+        text: "Waiting for slop's commit",
+        tip: 'Slop commits the agent set to this branch shortly after the board changes it, then marks the PR ready. Nobody works on it.',
+        spinning: false,
+      };
+    }
+    return null;
+  }
   if (live === null) {
     // Picked up, and nothing has touched the glob since: say so, with the way out.
     const idle = Math.floor((Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000);
     if (glob.status === 'in_progress' && glob.implementer !== null && glob.type !== 'super' && idle >= PICKED_UP_IDLE_MINUTES) {
       return {
         kind: 'picked_up',
-        text: 'Picked up, no session yet',
-        tip: `${glob.implementer} picked this up and no routine run is working on it. Hand to routine starts one.`,
+        text: 'Picked up, no routine run',
+        tip: `${glob.implementer} picked this up and no routine run is working on it. A local session isn't visible to slop. Hand to routine starts a run.`,
         spinning: false,
       };
     }

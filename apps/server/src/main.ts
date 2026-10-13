@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { serve } from '@hono/node-server';
-import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, kbJobHint } from '@slop/core';
+import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -183,7 +183,9 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
   // Suggest on a decision glob (the `llm` lane); `suggestService` is built below and only called once a job runs.
   ...suggestExecutors({ run: (globId) => suggestService.run(globId) }),
   // The agent set's commit to its glob's branch; `agentSetCommit` is built below and only called once a job runs.
-  ...agentSetExecutors({ prepare: (boardId) => agentSetCommit.prepare(boardId) }, github, (id) => store.transaction((tx) => tx.getGlob(id))),
+  ...agentSetExecutors({ prepare: (boardId) => agentSetCommit.prepare(boardId) }, github, (id) => store.transaction((tx) => tx.getGlob(id)), (id) =>
+    globs.applyEvent(id, (g, ctx) => machine.readyRequested(g, null, ctx)),
+  ),
 };
 // `default` carries every effect but the slow model calls, which go in `llm` so they never hold up the others.
 // `decisionGlobs` is built below, after the knowledge service it needs; it is only called once an effect runs.

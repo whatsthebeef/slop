@@ -12,6 +12,7 @@ import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
 import { isDecisionAttributes, sameScope, validateAttributes, validateScopeEdit } from './attributes.js';
 import type { DecisionAttributes, DecisionClosedAs, DecisionOutcome, DecisionOutcomeKind, DecisionScope, GlobAttributes } from './attributes.js';
+import { isAgentSetGlob } from './agent-set.js';
 import { CLOSING_EDGE_KINDS, SLOP_TYPES } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { mergeImplied } from './exclusive-paths.js';
@@ -1671,9 +1672,11 @@ export const readyRequested = (
   }
   if (glob.pr === null) return invalidTransition(glob, ctx.actor, 'The glob has no PR yet');
   if (source.from === 'board') {
-    if (glob.type !== 'super') return invalidTransition(glob, ctx.actor, 'Only a super is marked ready from the board');
+    const agentSet = isAgentSetGlob(glob);
+    if (glob.type !== 'super' && !agentSet) return invalidTransition(glob, ctx.actor, 'Only a super is marked ready from the board');
     if (restrictedFrom(requireActor(ctx), glob)) return forbidden('QA and PO members cannot mark a super ready');
-    if (!recordAtHead(glob, source.facts)) return invalidTransition(glob, ctx.actor, RECORD_NOT_AT_HEAD);
+    // An agent-set glob has no implementation record: slop's commit is the work.
+    if (!agentSet && !recordAtHead(glob, source.facts)) return invalidTransition(glob, ctx.actor, RECORD_NOT_AT_HEAD);
   }
   const run = currentRun(glob);
   if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
@@ -1991,6 +1994,7 @@ export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
 
 export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}): Action[] => {
   if (glob.category === 'decision') return decisionActions(glob, actor);
+  if (isAgentSetGlob(glob)) return agentSetActions(glob, actor);
   const actions: Action[] = [];
   const restricted = restrictedFrom(actor, glob);
   // Held: waiting for another glob to merge. Without the dependencies loaded, the glob's own mark says it.
@@ -2054,6 +2058,22 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     actions.push('deescalate');
   }
   if (actor.role !== 'qa' && actor.role !== 'po' && needsPairing(glob) && !hasBusyRun(glob)) actions.push('make_super');
+  actions.push('delete');
+  return actions;
+};
+
+/**
+ * Slop's own "Agent set vN" glob: nobody works on it (slop commits the set), so no pick up, hand to routine or start
+ * again. A person reviews the diff, marks the PR ready when slop hasn't yet, and merges once the checks pass.
+ */
+const agentSetActions = (glob: Glob, actor: Actor): Action[] => {
+  const actions: Action[] = [];
+  const restricted = restrictedFrom(actor, glob);
+  if (canReviewNow(glob)) actions.push('review_now');
+  if (!restricted && (glob.status === 'in_progress' || glob.status === 'implementing') && glob.pr?.state === 'draft') actions.push('mark_ready');
+  if (glob.status === 'pr_open' && glob.pr?.headSha != null && glob.headChecks?.sha === glob.pr.headSha && glob.headChecks.state === 'passed') {
+    actions.push('merge');
+  }
   actions.push('delete');
   return actions;
 };
