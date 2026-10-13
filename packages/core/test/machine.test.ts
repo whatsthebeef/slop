@@ -1269,7 +1269,24 @@ describe('conflicts flagged after a merge', () => {
 
     const cleared = value(m.conflictCleared(flagged.glob, ctx(null)));
     expect(cleared.glob.conflict).toBeNull();
+    expect(cleared.events[0]?.data).toEqual({
+      base: found.base,
+      files: [...found.files],
+      since: found.since,
+      by: 'human',
+      kind: 'unknown',
+    });
     expect(value(m.conflictCleared(cleared.glob, ctx(null))).changed).toBe(false);
+  });
+
+  it('attributes a cleared conflict to the run only while its conflict-fix run is live or completed', () => {
+    const by = (r: Partial<Parameters<typeof run>[0]>) => {
+      const g = glob({ status: 'in_progress', pr, conflict: { ...found, at: NOW }, runs: [run({ purpose: 'resolve_conflict', ...r })] });
+      return value(m.conflictCleared(g, ctx(null))).events[0]?.data;
+    };
+    expect(by({ state: 'watching' })).toMatchObject({ by: 'run' });
+    expect(by({ state: 'ended', outcome: 'completed' })).toMatchObject({ by: 'run' });
+    expect(by({ state: 'ended', outcome: 'superseded' })).toMatchObject({ by: 'human' });
   });
 
   it('a push rechecks a flagged conflict; merging clears it', () => {
