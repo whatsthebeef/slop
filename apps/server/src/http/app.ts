@@ -416,9 +416,10 @@ export const createApp = (deps: AppDeps) => {
     );
     const splits = await globs.splitsOf(boardId);
     const oversized = await globs.oversizedOf(boardId);
+    const steps = await globs.humanStepsOf(boardId);
     return send(c, result, (list) =>
       list.map(({ glob, artifacts, dependencies, chain }) => ({
-        ...globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain, glob.waiting != null && oversized.has(glob.id)),
+        ...globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain, glob.waiting != null && oversized.has(glob.id), steps.get(glob.id)),
         ...splitField(splits.get(glob.id)),
         ...(oversized.has(glob.id) ? { oversized: true } : {}),
       })),

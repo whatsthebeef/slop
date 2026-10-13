@@ -1,0 +1,291 @@
+import { isDecisionAttributes } from './attributes.js';
+import type { Glob, Role } from './types.js';
+
+/**
+ * Human steps: everything only a person can do on a glob, as one list. Two sources feed it. Steps the state machine
+ * implies (merge a ready same, decide or sign off a decision, resolve a conflict nobody else will, pair on a super,
+ * upload a missing file) are derived from the glob on every read and never stored. Work steps (a rollout, or a step a
+ * person adds) are stored, and `humanSteps` merges both. The card, the glob view and Your turn all read that one result.
+ */
+
+export const HUMAN_STEP_KINDS = [
+  'resolve_conflict',
+  'merge',
+  'done',
+  'upload_file',
+  'decide',
+  'sign_off',
+  'pair',
+  'rollout',
+  'review_label',
+] as const;
+export type HumanStepKind = (typeof HUMAN_STEP_KINDS)[number];
+
+/** Who a step is for: a role, `anyone`, or one person's email. `admin` means anyone who may decide (an admin or the PO). */
+export const HUMAN_STEP_ROLES = ['implementer', 'admin', 'po', 'qa', 'anyone'] as const;
+export type HumanStepWho = string;
+
+/** When a step falls due. `after_deploy:<env>` is modelled only: nothing makes it due yet, so it stays pending. */
+export type HumanStepDue = 'now' | 'after_merge' | `after_deploy:${string}`;
+
+export const isHumanStepDue = (value: string): value is HumanStepDue =>
+  value === 'now' || value === 'after_merge' || (value.startsWith('after_deploy:') && value.length > 'after_deploy:'.length);
+
+export const HUMAN_STEP_STATES = ['pending', 'due', 'done', 'dismissed'] as const;
+export type HumanStepState = (typeof HUMAN_STEP_STATES)[number];
+
+/** What an open step holds back. */
+export const HUMAN_STEP_BLOCKS = ['sign_off', 'reviewing', 'dependants'] as const;
+export type HumanStepBlock = (typeof HUMAN_STEP_BLOCKS)[number];
+
+/** A script a step points at: an artifact of the glob (by label) or a path in the repo. */
+export type HumanStepScript = { readonly artifact: string } | { readonly path: string };
+
+export interface HumanStep {
+  readonly id: string;
+  readonly kind: HumanStepKind;
+  /** Short: the action ("Merge", "Roll out the host stack"). */
+  readonly title: string;
+  /** Markdown, when the title isn't enough. */
+  readonly detail: string | null;
+  readonly who: HumanStepWho;
+  readonly due: HumanStepDue;
+  readonly state: HumanStepState;
+  readonly blocks: readonly HumanStepBlock[];
+  /** A capability slop can verify (checked in a later part); null for steps only a person can confirm. */
+  readonly check: string | null;
+  readonly script: HumanStepScript | null;
+  /** `machine`: derived from the glob's state; `work`: stored (added by an agent or a person). */
+  readonly source: 'machine' | 'work';
+  readonly doneBy: string | null;
+  readonly doneAt: string | null;
+}
+
+/** What a stored work step is in the database: open until it is ticked or dismissed; due-ness is worked out on read. */
+export const STORED_STEP_STATES = ['open', 'done', 'dismissed'] as const;
+export type StoredStepState = (typeof STORED_STEP_STATES)[number];
+
+export interface StoredHumanStep {
+  readonly id: string;
+  readonly boardId: number;
+  readonly globId: string;
+  readonly kind: HumanStepKind;
+  readonly title: string;
+  readonly detail: string | null;
+  readonly who: HumanStepWho;
+  readonly due: HumanStepDue;
+  readonly state: StoredStepState;
+  readonly blocks: readonly HumanStepBlock[];
+  readonly check: string | null;
+  readonly script: HumanStepScript | null;
+  /** What wrote it (`rollout-section`, `investigation`, `person`), so a later write can replace its own steps only. */
+  readonly origin: string;
+  readonly createdBy: string;
+  readonly createdAt: string;
+  readonly doneBy: string | null;
+  readonly doneAt: string | null;
+  readonly dismissedReason: string | null;
+}
+
+/** What `derivedSteps` can't read from the glob itself. */
+export interface HumanStepFacts {
+  /** A super's latest implementation record is at its PR's head (Done is open). */
+  readonly recordAtHead?: boolean;
+  /** File attachments that never arrived, for the upload step. */
+  readonly missingUploads?: readonly { readonly key: string; readonly fileName: string }[];
+}
+
+/** The person looking: their email and role on the board. */
+export interface HumanStepViewer {
+  readonly email: string;
+  readonly role: Role;
+}
+
+/** Whether a merge is open to a person: a same or super whose PR head has passed checks and has no conflict. */
+export const canMerge = (glob: Glob): boolean =>
+  glob.status === 'pr_open' &&
+  glob.type !== 'sub' &&
+  glob.conflict == null &&
+  glob.pr?.headSha != null &&
+  glob.headChecks?.sha === glob.pr.headSha &&
+  glob.headChecks.state === 'passed';
+
+/** Whether the glob's change is on the base branch: its PR merged, or it moved on to review. */
+export const isMerged = (glob: Glob): boolean =>
+  glob.pr?.state === 'merged' || glob.status === 'reviewing' || glob.status === 'signed_off';
+
+const derived = (
+  kind: HumanStepKind,
+  title: string,
+  who: HumanStepWho,
+  rest: Partial<Pick<HumanStep, 'detail' | 'blocks' | 'id'>> = {},
+): HumanStep => ({
+  id: rest.id ?? `machine:${kind}`,
+  kind,
+  title,
+  detail: rest.detail ?? null,
+  who,
+  due: 'now',
+  state: 'due',
+  blocks: rest.blocks ?? [],
+  check: null,
+  script: null,
+  source: 'machine',
+  doneBy: null,
+  doneAt: null,
+});
+
+/** Steps the machine implies for the glob right now. Pure: the glob and the facts in, the steps out. */
+export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[] => {
+  const steps: HumanStep[] = [];
+  if (glob.category === 'decision') {
+    const outcome =
+      glob.attributes !== undefined && isDecisionAttributes(glob.attributes) ? glob.attributes.outcome : null;
+    if (glob.status === 'in_progress' && (outcome === null || outcome.kind === 'needs_work'))
+      steps.push(derived('decide', 'Decide', 'admin'));
+    if (glob.status === 'reviewing') steps.push(derived('sign_off', 'Sign off', 'admin'));
+    return steps;
+  }
+  const hasOpenPr =
+    glob.pr !== null &&
+    (glob.pr.state === 'draft' || glob.pr.state === 'ready') &&
+    (glob.status === 'pr_open' || glob.status === 'in_progress');
+  // A person who implements the glob fixes its conflict or failed merge themselves: no routine run will.
+  const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null;
+  if (glob.implementer !== null && ((hasOpenPr && glob.conflict != null) || personMergeFailure))
+    steps.push(derived('resolve_conflict', 'Resolve the conflict', 'implementer'));
+  const run = glob.runs[glob.runs.length - 1];
+  // Merge as the card says it: the button's conditions, and nothing failed or being fixed by a run.
+  if (canMerge(glob) && glob.failure === null && run?.state !== 'active') {
+    steps.push(
+      derived('merge', 'Merge', 'anyone', {
+        detail: `Sames and supers are merged by a person: Merge here or sstor -i ${glob.id} --merge.`,
+        blocks: ['reviewing'],
+      }),
+    );
+  }
+  if (glob.status === 'in_progress' && glob.pr?.state === 'draft' && facts.recordAtHead === true)
+    steps.push(derived('done', 'Mark ready', 'implementer'));
+  for (const file of facts.missingUploads ?? [])
+    steps.push(derived('upload_file', `Upload ${file.fileName}`, 'anyone', { id: `machine:upload_file:${file.key}` }));
+  if (glob.type === 'super' && glob.status === 'planning') steps.push(derived('pair', 'Pair on this super', 'anyone'));
+  return steps;
+};
+
+const stateOf = (glob: Glob, step: StoredHumanStep): HumanStepState => {
+  if (step.state === 'done') return 'done';
+  if (step.state === 'dismissed') return 'dismissed';
+  if (step.due === 'now') return 'due';
+  return step.due === 'after_merge' && isMerged(glob) ? 'due' : 'pending';
+};
+
+const fromStored = (glob: Glob, s: StoredHumanStep): HumanStep => ({
+  id: s.id,
+  kind: s.kind,
+  title: s.title,
+  detail: s.detail,
+  who: s.who,
+  due: s.due,
+  state: stateOf(glob, s),
+  blocks: s.blocks,
+  check: s.check,
+  script: s.script,
+  source: 'work',
+  doneBy: s.doneBy,
+  doneAt: s.doneAt,
+});
+
+const STATE_RANK: Readonly<Record<HumanStepState, number>> = { due: 0, pending: 1, done: 2, dismissed: 3 };
+
+/**
+ * Every step on the glob, derived and stored, most pressing first: due before pending before done, a step that blocks
+ * before one that doesn't, then by kind. Dismissed steps are kept (the glob view shows them struck through).
+ */
+export const humanSteps = (
+  glob: Glob,
+  facts: HumanStepFacts = {},
+  stored: readonly StoredHumanStep[] = [],
+): HumanStep[] => {
+  const all = [...derivedSteps(glob, facts), ...stored.filter((s) => s.globId === glob.id).map((s) => fromStored(glob, s))];
+  return all
+    .map((step, index) => ({ step, index }))
+    .sort(
+      (a, b) =>
+        STATE_RANK[a.step.state] - STATE_RANK[b.step.state] ||
+        Number(b.step.blocks.length > 0) - Number(a.step.blocks.length > 0) ||
+        HUMAN_STEP_KINDS.indexOf(a.step.kind) - HUMAN_STEP_KINDS.indexOf(b.step.kind) ||
+        a.index - b.index,
+    )
+    .map(({ step }) => step);
+};
+
+/** Steps still to do: due or pending. */
+export const isOpenStep = (step: Pick<HumanStep, 'state'>): boolean => step.state === 'due' || step.state === 'pending';
+
+/** Whether a step's `who` includes the viewer. The glob says who its implementer is (the planner, while nobody is). */
+export const isForViewer = (
+  step: Pick<HumanStep, 'who'>,
+  glob: Pick<Glob, 'implementer' | 'planner'>,
+  viewer: HumanStepViewer,
+): boolean => {
+  switch (step.who) {
+    case 'anyone':
+      return true;
+    case 'implementer':
+      return (glob.implementer ?? glob.planner) === viewer.email;
+    case 'admin':
+      return viewer.role === 'admin' || viewer.role === 'po';
+    case 'po':
+      return viewer.role === 'po';
+    case 'qa':
+      return viewer.role === 'qa';
+    default:
+      return step.who.toLowerCase() === viewer.email.toLowerCase();
+  }
+};
+
+/** The steps that are the viewer's to do. */
+export const stepsForViewer = <T extends Pick<HumanStep, 'who'>>(
+  steps: readonly T[],
+  glob: Pick<Glob, 'implementer' | 'planner'>,
+  viewer: HumanStepViewer,
+): T[] => steps.filter((s) => isForViewer(s, glob, viewer));
+
+/** Your turn: the first due step for the viewer (the list is already most pressing first), or null. */
+export const yourTurn = <T extends Pick<HumanStep, 'who' | 'state'>>(
+  steps: readonly T[],
+  glob: Pick<Glob, 'implementer' | 'planner'>,
+  viewer: HumanStepViewer,
+): T | null => steps.find((s) => s.state === 'due' && isForViewer(s, glob, viewer)) ?? null;
+
+/** What the card's muted marker says while steps are still pending: their kinds, deduped, and how many steps in all. */
+export interface UpcomingSteps {
+  readonly kinds: readonly HumanStepKind[];
+  readonly count: number;
+}
+
+export const upcomingSteps = (steps: readonly Pick<HumanStep, 'kind' | 'state'>[]): UpcomingSteps | null => {
+  const pending = steps.filter((s) => s.state === 'pending');
+  if (pending.length === 0) return null;
+  return { kinds: [...new Set(pending.map((s) => s.kind))], count: pending.length };
+};
+
+/** The compact form on board and glob views: enough for the card, the filters and the status line, without detail text. */
+export type CompactHumanStep = Pick<HumanStep, 'id' | 'kind' | 'title' | 'state' | 'who' | 'due' | 'blocks'>;
+
+export const compactStep = ({ id, kind, title, state, who, due, blocks }: HumanStep): CompactHumanStep => ({
+  id,
+  kind,
+  title,
+  state,
+  who,
+  due,
+  blocks,
+});
+
+/** When a pending step falls due, in words (for tooltips). */
+export const dueText = (due: HumanStepDue): string => {
+  if (due === 'now') return 'now';
+  if (due === 'after_merge') return 'after the merge';
+  return `after the deploy to ${due.slice('after_deploy:'.length)}`;
+};

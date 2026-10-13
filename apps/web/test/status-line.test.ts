@@ -401,3 +401,28 @@ describe('dependency summary', () => {
     expect(summary?.waitedOnBy).toEqual(['s1t9']);
   });
 });
+
+describe('your turn from human steps', () => {
+  const dev = { email: 'dev@example.com', role: 'dev' } as const;
+  const step = (patch = {}) => ({ id: 'hs-1', kind: 'rollout', title: 'Deploy the host stack', state: 'due', who: 'admin', due: 'now', blocks: [], ...patch }) as const;
+
+  it('shows the first due step for the viewer, with the Merge tip for a merge step', () => {
+    const merge = prOpen({ headChecks: { sha: head, state: 'passed' }, humanSteps: [{ ...step({ id: 'machine:merge', kind: 'merge', title: 'Merge', who: 'anyone' }) }] });
+    const line = statusLine(merge, NOW, dev);
+    expect(line).toMatchObject({ kind: 'ready', text: 'Merge' });
+    expect(line?.tip).toContain('checks passed');
+    const rollout = view({ status: 'reviewing', humanSteps: [step({ who: 'admin' }), step({ id: 'hs-2', who: 'implementer', title: 'Tell the team' })] });
+    expect(statusLine(rollout, NOW, { email: glob().planner, role: 'dev' })).toMatchObject({ kind: 'ready', text: 'Tell the team' });
+    expect(statusLine(rollout, NOW, { email: 'admin@example.com', role: 'admin' })).toMatchObject({ kind: 'ready', text: 'Deploy the host stack' });
+  });
+
+  it('is not your turn for a pending step or one that is for someone else', () => {
+    expect(statusLine(view({ humanSteps: [step({ state: 'pending' })] }), NOW, dev)).toBeNull();
+    expect(statusLine(view({ humanSteps: [step({ who: 'admin' })] }), NOW, dev)).toBeNull();
+  });
+
+  it('falls back to the Merge turn when the API sends no steps', () => {
+    const merge = prOpen({ headChecks: { sha: head, state: 'passed' } });
+    expect(statusLine(merge, NOW, dev)).toMatchObject({ kind: 'ready', text: 'Merge' });
+  });
+});

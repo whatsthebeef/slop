@@ -236,6 +236,8 @@ export const BoardPage = () => {
 
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId), ...KEEP_TRYING });
   const globs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId), ...KEEP_TRYING });
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });
+  const viewer = me.data === undefined || board.data === undefined ? undefined : { email: me.data.email, role: board.data.role };
   const signedOffTotal = useQuery({ queryKey: signedOffCountKey(boardId), queryFn: () => api.signedOffCount(boardId), ...KEEP_TRYING });
   // The Signed Off column keeps the latest few (older ones stay on the Signed off tab), so the cache can hold more than it shows.
   const shown = useMemo(
@@ -521,6 +523,7 @@ export const BoardPage = () => {
                       deploy={deployState.data?.indicators[glob.id]}
                       environments={deployState.data?.environments?.[glob.id]}
                       atf={deployState.data?.atf?.[glob.id]}
+                      viewer={viewer}
                     />
                   );
                 })}

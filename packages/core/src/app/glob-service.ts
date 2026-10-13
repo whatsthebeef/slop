@@ -5,6 +5,8 @@ import { validateScopeEdit } from '../domain/attributes.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
+import { humanSteps } from '../domain/human-steps.js';
+import type { HumanStep, StoredHumanStep } from '../domain/human-steps.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
@@ -188,6 +190,8 @@ export interface GlobView {
   readonly chain: BlockingChain;
   /** The size check (flag, estimate, proposed split); null when none was made. */
   readonly sizeCheck: SizeCheck | null;
+  /** Everything a person must do on the glob: steps the machine implies and stored work steps, most pressing first. */
+  readonly humanSteps: readonly HumanStep[];
 }
 
 /** Artifacts in a stable order: by kind (plan first), then label. */
@@ -238,6 +242,7 @@ export class GlobService {
       const sizeCheck = await tx.getSizeCheck(glob.id);
       const sizeHeld = glob.status === 'planning' && glob.waiting != null && unresolved(sizeCheck);
       const facts = { recordSha: machine.recordShaOf(artifacts), dependencies, sizeHeld };
+      const stored = await tx.listHumanSteps(glob.boardId, [glob.id]);
       const waiting = await tx.listGlobs(glob.boardId, { status: ['planning'] });
       return ok({
         glob,
@@ -247,6 +252,7 @@ export class GlobService {
         waitedOnBy: waiting.filter((g) => waitsFor(g, glob.id)).map((g) => g.id),
         chain: await this.chainOf(tx, glob),
         sizeCheck,
+        humanSteps: humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts) }, stored),
       });
     });
   }
@@ -261,6 +267,14 @@ export class GlobService {
       found.set(e.globId, { source, part, parts: parts.filter((p): p is string => typeof p === 'string') });
     }
     return found;
+  }
+
+  /** A board's open work steps by glob ID, for the board list's human-step summaries. */
+  async humanStepsOf(boardId: number): Promise<Map<string, StoredHumanStep[]>> {
+    const steps = await this.deps.store.transaction((tx) => tx.listOpenHumanSteps(boardId));
+    const byGlob = new Map<string, StoredHumanStep[]>();
+    for (const step of steps) byGlob.set(step.globId, [...(byGlob.get(step.globId) ?? []), step]);
+    return byGlob;
   }
 
   /** The globs on a board whose oversized flag nobody has answered yet, for the card's chip. */

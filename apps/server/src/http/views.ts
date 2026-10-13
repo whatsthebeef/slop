@@ -1,5 +1,5 @@
-import type { Action, ArtifactSummary, AwaitedDependency, BlockingChain, DependencyState, DomainError, Glob, Role, SizeCheck } from '@slop/core';
-import { checksExplanation, edgesOf, listOf, machine, unresolved } from '@slop/core';
+import type { Action, ArtifactSummary, AwaitedDependency, BlockingChain, DependencyState, CompactHumanStep, DomainError, Glob, HumanStep, Role, SizeCheck, StoredHumanStep } from '@slop/core';
+import { checksExplanation, compactStep, edgesOf, humanSteps, listOf, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /**
@@ -14,6 +14,8 @@ export const globView = (
   waits: { readonly waitingFor: readonly AwaitedDependency[]; readonly waitedOnBy: readonly string[] } | null = null,
   /** The chain of unmerged prerequisites ahead of the glob; nothing is added while it is empty. */
   chain: BlockingChain | null = null,
+  /** What a person must do on the glob (the compact form on lists, the full steps on a single read); absent where not computed. */
+  steps: readonly CompactHumanStep[] | null = null,
 ) => ({
   ...glob,
   // Every dependency edge with its kind (needs block the start, overlaps only order merges), source and evidence.
@@ -27,12 +29,13 @@ export const globView = (
   ...(artifacts === null ? {} : { artifacts: artifacts.map(artifactView) }),
   ...(waits === null ? {} : { waitingFor: waits.waitingFor, waitedOnBy: waits.waitedOnBy }),
   ...(chain === null || chain.blockedBy.length === 0 ? {} : { blockedBy: chain.blockedBy, nextStartable: chain.nextStartable }),
+  ...(steps === null ? {} : { humanSteps: steps }),
 });
 
 /** A glob read through the service: its view with the actions open to the caller and what it waits for. */
-export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; chain: BlockingChain; sizeCheck?: SizeCheck | null }) =>
+export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; chain: BlockingChain; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[] }) =>
   ({
-    ...globView(v.glob, v.allowedActions, v.artifacts, v, v.chain),
+    ...globView(v.glob, v.allowedActions, v.artifacts, v, v.chain, v.humanSteps ?? null),
     waitingFor: v.waitingFor,
     waitedOnBy: v.waitedOnBy,
     // The size check: the flag, why, the estimate's evidence and the proposed split (get_glob carries it to routines).
@@ -62,6 +65,8 @@ export const globViewFor = (
   chain: BlockingChain | null = null,
   /** Held in Planning for an unanswered oversized flag: nothing unmerged is awaited, yet Start now applies. */
   sizeHeld = false,
+  /** The board's open work steps for this glob (the list reads them for the whole board at once). */
+  stored: readonly StoredHumanStep[] = [],
 ) =>
   globView(
     glob,
@@ -73,6 +78,7 @@ export const globViewFor = (
     artifacts,
     null,
     chain,
+    humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts ?? []) }) }, stored).map(compactStep),
   );
 
 export const statusOf = (error: DomainError): ContentfulStatusCode => {

@@ -25,6 +25,7 @@ import type {
   GlobAttributes,
 } from './attributes.js';
 import { isAgentSetGlob } from './agent-set.js';
+import { canMerge } from './human-steps.js';
 import { CLOSING_EDGE_KINDS, SLOP_TYPES } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { mergeImplied } from './exclusive-paths.js';
@@ -2590,14 +2591,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (!restricted && !hasLiveRun(glob) && canRetryMerge(glob)) actions.push('retry_merge');
   if (canRequestConflictFix(glob)) actions.push('resolve_conflict');
   if (glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
-  if (
-    glob.status === 'pr_open' &&
-    glob.type !== 'sub' &&
-    glob.conflict == null &&
-    glob.pr?.headSha != null &&
-    glob.headChecks?.sha === glob.pr.headSha &&
-    glob.headChecks.state === 'passed'
-  ) {
+  if (canMerge(glob)) {
     actions.push('merge');
     if (recordAtHead(glob, facts)) actions.push('merge_continue');
   }

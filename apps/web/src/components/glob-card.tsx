@@ -1,5 +1,5 @@
-import { decisionOf, findingsLabel, reviewOutdated, scopeLabel } from '@slop/core';
-import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator } from '@slop/core';
+import { decisionOf, dueText, findingsLabel, reviewOutdated, scopeLabel, upcomingSteps } from '@slop/core';
+import type { Action, ArtifactKind, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
 import { Bug, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
@@ -446,6 +446,27 @@ export const DecisionChips = ({ glob }: { glob: GlobView }) => {
   );
 };
 
+/** The muted marker for work still to come that only a person can do (a rollout): shown from the moment it is known, in every column. */
+const UpcomingStepsChip = ({ glob }: { glob: GlobView }) => {
+  const steps = glob.humanSteps ?? [];
+  const upcoming = upcomingSteps(steps);
+  if (upcoming === null) return null;
+  const [first, ...more] = upcoming.kinds;
+  const tip = steps
+    .filter((s) => s.state === 'pending')
+    .map((s) => `${s.title}: due ${dueText(s.due)}`)
+    .join('\n');
+  return (
+    <Tip text={tip}>
+      <span className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' data-testid='upcoming-steps-chip'>
+        <HumanIcon className='h-3 w-3' decorative />
+        {first?.replace(/_/g, ' ')}
+        {more.length > 0 && ` +${String(more.length)}`}
+      </span>
+    </Tip>
+  );
+};
+
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -467,6 +488,7 @@ export const GlobCard = ({
   deploy,
   environments,
   atf,
+  viewer,
 }: {
   glob: GlobView;
   onOpen: () => void;
@@ -493,11 +515,13 @@ export const GlobCard = ({
   environments?: readonly EnvironmentIndicator[];
   /** Its ATF results (a flag only). */
   atf?: readonly AtfRun[];
+  /** Who is looking: Your turn shows the steps that are theirs. */
+  viewer?: HumanStepViewer;
 }) => {
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
-  const status = statusLine(glob, new Date().toISOString());
+  const status = statusLine(glob, new Date().toISOString(), viewer);
   const preview = moves.find((m) => m.action === previewing);
   // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status.
   const decision = decisionOf(glob) !== null;
@@ -556,6 +580,7 @@ export const GlobCard = ({
         <OverlapChip glob={glob} />
         <SplitChip glob={glob} />
         <OversizedChip glob={glob} />
+        <UpcomingStepsChip glob={glob} />
         {glob.escalation != null && glob.status === 'planning' && (
           // The Tip's hidden description reads "Needs a person: <reason>" once; the visible words are hidden.
           <Tip text={`Needs a person: ${glob.escalation.reason}`}>

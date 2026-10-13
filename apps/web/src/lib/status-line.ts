@@ -7,8 +7,9 @@ import {
   machine,
   readyStatus,
   stuckHint,
+  yourTurn,
 } from '@slop/core';
-import type { Action, BlockedBy, Edge, Role } from '@slop/core';
+import type { Action, BlockedBy, Edge, HumanStepViewer, Role } from '@slop/core';
 import type { GlobView } from './api';
 import { actionPresentation, type ActionIcon } from './action-presentation';
 
@@ -66,7 +67,7 @@ const ALSO = {
 } as const;
 
 /** The one problem a glob shows, in plain words, most important first; the rest go in its tooltip. */
-export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
+export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer): StatusLine | null => {
   const hint = stuckHint(glob, now);
   const checks = checksExplanation(glob);
   const failed = glob.status === 'failed' || glob.failure !== null;
@@ -175,13 +176,20 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
   if (candidates.length === 0) {
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha);
+    // Your turn is the first due step for the viewer; an API without human steps (or no viewer) still has the Merge turn.
+    const turn =
+      glob.humanSteps !== undefined && viewer !== undefined
+        ? yourTurn(glob.humanSteps, glob, viewer)
+        : ready?.kind === 'ready'
+          ? { kind: 'merge', title: ready.text }
+          : null;
     // Waiting for checks is activity, not a problem or a next step: the activity label carries it.
-    if (ready !== null && ready.kind === 'ready')
+    if (turn !== null)
       return make({
-        kind: ready.kind,
-        full: ready.text,
+        kind: 'ready',
+        full: turn.title,
         tone: 'text-signal-strong',
-        tip: ready.tip,
+        tip: turn.kind === 'merge' && ready?.kind === 'ready' ? ready.tip : turn.title,
       });
   }
   const [top, ...rest] = candidates;
