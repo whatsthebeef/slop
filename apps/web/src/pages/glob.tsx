@@ -84,6 +84,7 @@ export const GlobPage = () => {
       board={board.data}
       glob={open}
       initialArtifact={initialArtifact}
+      section={target.section}
       onClose={toBoard}
       onAction={(action: Action, anyway?: boolean) => {
         const path = ACTION_PATHS[action];
