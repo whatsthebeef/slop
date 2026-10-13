@@ -28,6 +28,7 @@ const callbacks = () => ({
     Promise.resolve(true),
   ),
   onReviewLabel: vi.fn(),
+  onDismissEdge: vi.fn(() => Promise.resolve(true)),
   onDecide: vi.fn(() => Promise.resolve(true)),
   onDelete: vi.fn(() => Promise.resolve()),
   onAddStep: vi.fn(() => Promise.resolve(true)),

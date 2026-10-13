@@ -42,6 +42,8 @@ export interface StatusLine {
   readonly turn?: HumanStepKind;
   /** For `ready`: the due step is a stored work step (a rollout), done in the Human steps section. */
   readonly work?: true;
+  /** The problem is a merge conflict: the card says it in a few words and the glob view lists the files. */
+  readonly conflict?: true;
 }
 
 /** True for an investigate-only run: it never started the glob (`purpose` is absent on implementing runs). */
@@ -147,7 +149,17 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
   }
   if (failed && !provisioningFailed) {
     const tip = `${reason}${/^(Routine run never started|The run's session never reached slop)/.test(glob.failure?.reason ?? '') && session !== null ? `\nSession: ${session}` : ''}`;
-    candidates.push(make({ kind: 'failure', full: reason, tone: 'text-red', tip }));
+    candidates.push(
+      make({
+        kind: 'failure',
+        full: reason,
+        tone: 'text-red',
+        tip,
+        ...(failure?.conflict === undefined
+          ? {}
+          : { text: 'Stalled: merge conflict', conflict: true as const }),
+      }),
+    );
   }
   // An investigation is an artifact, not the glob's work: its failure is a note, never the red failure of an implementation.
   if (investigationFailed) {
@@ -162,10 +174,20 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
       }),
     );
   }
-  if (hint !== null)
+  if (hint !== null) {
+    const flagged = failure === null ? glob.conflict : null;
     candidates.push(
-      make({ kind: 'stuck', full: hintSentence(hint), tone: 'text-required', tip: hint }),
+      make({
+        kind: 'stuck',
+        full: hintSentence(hint),
+        tone: 'text-required',
+        tip: hint,
+        ...(flagged == null
+          ? {}
+          : { text: `Merge conflict with ${flagged.base}`, conflict: true as const }),
+      }),
     );
+  }
   const behind = behindWarning(glob);
   if (behind !== null) {
     candidates.push(
@@ -410,7 +432,16 @@ export interface NeedRow {
   /** The status word ("Doing", "PR open", ...); the board's own words, from the blocking chain. */
   readonly status: string | null;
   readonly why: string;
+  /** A recorded edge a person may dismiss with the ✕ (not one they set themselves). */
+  readonly dismissible: boolean;
 }
+
+/**
+ * Whether a row's ✕ ("Not a dependency") applies: a recorded edge (implied, learned or inferred), not one a person set and
+ * not one already dismissed.
+ */
+export const isDismissible = (edge: Edge | undefined): boolean =>
+  edge !== undefined && edge.source !== 'explicit' && edge.dismissedPlanHash === undefined;
 
 /** What the glob view's Dependencies section shows. */
 export interface DependencySummary {
@@ -428,10 +459,11 @@ export const dependencySummary = (glob: GlobView): DependencySummary | null => {
   const chain = glob.blockedBy ?? [];
   const needs = (glob.waitingFor ?? []).map((w) => {
     const ahead = chain.find((b) => b.id === w.id);
-    return { id: w.id, status: ahead === undefined ? null : statusWords(ahead.status), why: w.why };
+    const edge = (glob.edges ?? []).find((e) => e.id === w.id);
+    return { id: w.id, status: ahead === undefined ? null : statusWords(ahead.status), why: w.why, dismissible: isDismissible(edge) };
   });
   const alsoAhead = chain.filter((b) => b.depth > 1).sort((a, b) => a.depth - b.depth);
-  const overlaps = (glob.edges ?? []).filter((e) => e.kind === 'overlaps');
+  const overlaps = (glob.edges ?? []).filter((e) => e.kind === 'overlaps' && e.dismissedPlanHash === undefined);
   const waitedOnBy = glob.waitedOnBy ?? [];
   if (
     needs.length + alsoAhead.length + overlaps.length + waitedOnBy.length === 0 &&
