@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boardGlobHref, globPath, globQuery, globTargetOf, parseGlobTarget } from '@/lib/glob-section';
+import { boardGlobHref, globPath, globQuery, globTargetOf, labelToOpen, parseGlobTarget } from '@/lib/glob-section';
 
 const parse = (query: string) => parseGlobTarget(new URLSearchParams(query));
 
@@ -49,5 +49,20 @@ describe('boardGlobHref', () => {
       '/boards/3?glob=s3f1&section=artifacts&artifact=attachment&label=Notes',
     );
     expect(boardGlobHref(3, 's3f1', { section: 'size' })).toBe('/boards/3?glob=s3f1&section=size');
+  });
+});
+
+describe('labelToOpen', () => {
+  const open = (query: string) => labelToOpen(parse(query));
+  it('is the label for labels+label', () => {
+    expect(open('section=labels&label=CR')).toBe('CR');
+  });
+  it('is none when an artifact is present', () => {
+    expect(open('section=labels&artifact=attachment&label=CR')).toBeNull();
+  });
+  it('is none for an unknown label, another section or no label', () => {
+    expect(open('section=labels&label=XX')).toBeNull();
+    expect(open('section=plan&label=CR')).toBeNull();
+    expect(open('section=labels')).toBeNull();
   });
 });

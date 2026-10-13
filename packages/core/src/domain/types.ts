@@ -81,12 +81,13 @@ export interface Run {
   readonly autoRetry?: true;
   /**
    * `investigate`: an investigate-only run on a glob in Planning (orchestrator Phases 1–2, no branch, no commits). It ends
-   * when its investigation is pushed; absent on every implementing run.
+   * when its investigation is pushed. `resolve_conflict`: a run on an open PR that merges the base branch in and pushes.
+   * Absent on every implementing run.
    */
   readonly purpose?: RunPurpose;
 }
 
-export const RUN_PURPOSES = ['investigate'] as const;
+export const RUN_PURPOSES = ['investigate', 'resolve_conflict'] as const;
 export type RunPurpose = (typeof RUN_PURPOSES)[number];
 
 export type PrState = 'draft' | 'ready' | 'closed' | 'merged';
@@ -190,8 +191,6 @@ export interface OpenConflict extends MergeConflict {
   /** The glob whose merge caused it; null when not known (a failed merge). */
   readonly since: string | null;
   readonly at: string;
-  /** When Resolve conflict asked the Claude GitHub App to fix it; one request per conflict. */
-  readonly requestedAt?: string;
 }
 
 /** How far a glob's branch is behind the base branch, read from the code host before any conflict exists. */

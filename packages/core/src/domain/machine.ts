@@ -94,7 +94,7 @@ export type Action =
   | 'retrigger'
   /** A PR whose auto-fix ended without fixing it: a new routine run on the same branch, keeping the PR. */
   | 'retry_autofix'
-  /** A merge conflict with no human implementer: ask the Claude GitHub App, in a PR comment, to resolve it on the same branch. */
+  /** A merge conflict with no human implementer: a routine run merges the base branch into the glob's branch and pushes. */
   | 'resolve_conflict'
   | 'start_again'
   | 'merge'
@@ -808,7 +808,8 @@ const canRetryAutofix = (glob: Glob): boolean => {
     glob.failure !== null &&
     glob.failure.kind === undefined &&
     run?.state === 'ended' &&
-    run.outcome === 'failed'
+    run.outcome === 'failed' &&
+    run.purpose !== 'resolve_conflict'
   );
 };
 
@@ -858,15 +859,14 @@ const hasOpenPr = (glob: Glob): boolean =>
   (glob.status === 'pr_open' || glob.status === 'in_progress');
 
 /**
- * A conflict slop could ask the Claude GitHub App to fix: nobody implements the glob, no routine run is working on it
- * and it hasn't asked yet. A watching run doesn't count as working: it never merges the base branch, and the @claude
- * comment runs in the GitHub App, not in the routine (so a conflict on a watched PR isn't a dead end).
+ * A conflict a routine run could fix: nobody implements the glob and no run is queued or working on it. A watching run
+ * doesn't count as working: Resolve conflict ends it and starts the fix. Allowed again after a failed attempt.
  */
 const canRequestConflictFix = (glob: Glob): boolean =>
   glob.type !== 'super' &&
   glob.implementer === null &&
   !hasWorkingRun(glob) &&
-  ((hasOpenPr(glob) && glob.conflict != null && glob.conflict.requestedAt === undefined) ||
+  ((hasOpenPr(glob) && glob.conflict != null) ||
     (glob.status === 'failed' &&
       glob.failure?.conflict !== undefined &&
       glob.pr?.state === 'ready'));
@@ -960,9 +960,10 @@ export const conflictCleared = (glob: Glob, ctx: Context): Result<Transition> =>
 };
 
 /**
- * Resolve conflict (rows 16 and 20a): a conflicting PR nobody is implementing gets one PR comment asking the Claude
- * GitHub App to merge the base branch in and push; no routine run starts. A glob failed by a merge conflict goes back
- * to review with the conflict flagged. A human implementer resolves locally (`sstor --glob <id>`; others `sstor --glob <id> --take-over`).
+ * Resolve conflict (rows 16 and 20a): a conflicting PR nobody is implementing gets a routine run that merges the base
+ * branch in, resolves the conflicts and pushes (the Claude GitHub App's workflow can't run git). A run on standby is
+ * ended and replaced; a failed attempt can be tried again. A glob failed by a merge conflict goes back to review with
+ * the conflict flagged. A human implementer resolves locally (`sstor --glob <id>`; others `sstor --glob <id> --take-over`).
  */
 export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
@@ -973,8 +974,7 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
       'A glob with a human implementer resolves its conflict locally',
     );
   }
-  if (hasWorkingRun(glob)) return runActive('A routine run is already queued or active');
-  if (glob.conflict?.requestedAt !== undefined) return unchanged(glob);
+  if (hasWorkingRun(glob)) return runActive('A routine run is already queued or working');
   if (!canRequestConflictFix(glob)) {
     return invalidTransition(
       glob,
@@ -982,28 +982,20 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
       'Only a glob whose PR conflicts with the base branch can resolve it',
     );
   }
-  const request = {
-    kind: 'request_conflict_fix',
-    globId: glob.id,
-    generation: glob.generation,
-  } as const;
   const b = new Builder(glob, ctx);
   const failed = glob.status === 'failed' ? glob.failure?.conflict : undefined;
   if (failed !== undefined) {
     // The failed merge left a ready PR: return it to review while the conflict is fixed.
-    b.set({
-      failure: null,
-      headChecks: null,
-      conflict: { ...failed, since: null, at: ctx.now, requestedAt: ctx.now },
-    })
+    b.set({ failure: null, headChecks: null, conflict: { ...failed, since: null, at: ctx.now } })
       .status('pr_open')
       .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
-  } else if (glob.conflict != null) {
-    b.set({ conflict: { ...glob.conflict, requestedAt: ctx.now } });
+  } else {
+    b.set({ failure: null });
   }
   return b
     .event('ConflictFixRequested', { base: (failed ?? glob.conflict)?.base ?? null })
-    .effect(request)
+    .endRun('superseded', null, { cause: 'resolve_conflict' })
+    .queueRun(actor.email, undefined, false, 'resolve_conflict')
     .done();
 };
 
@@ -1810,7 +1802,7 @@ export const runTimeoutReason = (
     return `No progress for ${String(board.runNoProgressHours)} hours`;
   }
   // An investigate-only run never marks a PR ready.
-  if (run.purpose === 'investigate') return null;
+  if (run.purpose !== undefined) return null;
   if (hours(run.startedAt ?? run.queuedAt) >= board.runReadyHours) {
     return `PR not marked ready within ${String(board.runReadyHours)} hours`;
   }
@@ -2492,6 +2484,16 @@ export const reportFailure = (
       .endRun('failed', report.reason, { agentSetVersion })
       .set({ failure })
       .status('failed')
+      .done();
+  }
+  if (
+    run.purpose === 'resolve_conflict' &&
+    (glob.status === 'pr_open' || glob.status === 'in_progress')
+  ) {
+    // A conflict-resolving run gave up: the conflict stays flagged and Resolve conflict is offered again, with the reason.
+    return new Builder(glob, ctx)
+      .endRun('failed', report.reason, { agentSetVersion })
+      .set({ failure })
       .done();
   }
   if (glob.status === 'pr_open' && run.state === 'watching') {
