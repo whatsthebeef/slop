@@ -80,6 +80,7 @@ export const MERGE_CONFLICT_STALL_LABEL = 'stalled · merge conflict';
 /** Why a failed step stopped, in a few words, from the glob's recorded conflict, checks or run, not from the step's text. */
 const failedLabel = (glob: Glob, step: MachineStep): string => {
   if (glob.failure?.conflict !== undefined || glob.conflict != null) return MERGE_CONFLICT_STALL_LABEL;
+  if (glob.failure?.kind === 'needs_pairing') return 'stalled · needs your decision';
   if (step.kind === 'fix_checks' || (glob.headChecks?.state === 'failed' && glob.headChecks.inheritedFrom === undefined)) return 'stalled · checks failed';
   return 'stalled · run failed';
 };

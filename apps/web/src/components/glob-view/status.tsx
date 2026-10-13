@@ -14,6 +14,19 @@ import type { GlobActionsState } from './actions';
 const headlineReason = (reason: string): string =>
   /^Needs a human\b/.test(reason) ? 'Needs a person' : reason;
 
+/**
+ * The brief's lines the panel already shows through the status line: the failure's reason when that line is the reason
+ * itself, and the decision (the status line says it as "Needs a person: <decision>").
+ */
+const shownElsewhere = (glob: GlobView, problem: { readonly kind: string } | null): string[] => {
+  const failure = glob.failure;
+  if (failure == null || problem?.kind !== 'failure') return [];
+  const decision = failure.kind === 'needs_pairing' ? failure.decision?.trim() : undefined;
+  return [
+    ...(decision === undefined || decision === '' ? [`Failed: ${failure.reason}`] : [`Decision needed: ${decision}`]),
+  ];
+};
+
 const capitalised = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** The small × ("Got it") beside a message: the viewer has read it, so its long text collapses. */
@@ -107,8 +120,8 @@ export const NowPanel = ({
         <span className="text-muted-foreground">Now: </span>
         {position.holder === 'machine' && <MachineIcon className="mr-1 inline" decorative />}
         {position.holder === 'human' && 'Their turn · '}
-        {position.holder === 'stalled' && seen?.dismissed === true
-          ? `Stalled · ${seen.label}`
+        {position.holder === 'stalled'
+          ? capitalised(position.label)
           : capitalised(headlineReason(position.text))}
         {minutes !== null && minutes > 0 && (
           <span className="font-normal text-muted-foreground"> · {minutes} min</span>
@@ -186,7 +199,7 @@ export const NowPanel = ({
                 )}
               </p>
             )}
-            {brief !== null && <HandoverBrief state={actions} brief={brief} />}
+            {brief !== null && <HandoverBrief state={actions} brief={brief} omit={shownElsewhere(glob, problem)} />}
             {listed && (
               <details data-testid="machine-steps">
                 <summary className="cursor-pointer text-xs text-muted-foreground">
