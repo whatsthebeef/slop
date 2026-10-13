@@ -36,7 +36,8 @@ const THREE = [
   { name: 'server', files: ['apps/server/src/y.ts'], needs: ['core'] },
   { name: 'web', files: ['apps/web/src/z.tsx'], needs: [] },
 ];
-const wrap = (value: unknown): string => `# Investigation\n\n\`\`\`investigation\n${JSON.stringify(value)}\n\`\`\`\n`;
+const wrap = (value: unknown): string =>
+  `# Investigation\n\n\`\`\`investigation\n${JSON.stringify(value)}\n\`\`\`\n`;
 const read = (value: unknown): Investigation => {
   const parsed = parseInvestigation(wrap(value));
   if (!parsed.ok) throw new Error(parsed.errors.join('; '));
@@ -66,7 +67,13 @@ describe('acting on an investigation', () => {
     );
   const submit = async (glob: Glob, value: unknown): Promise<void> => {
     const run = glob.runs.at(-1)?.id ?? null;
-    unwrap(await artifacts.putArtifact(DEV, glob.id, 'investigation', wrap(value), { commitSha: null, runId: run, agentSetVersion: null }));
+    unwrap(
+      await artifacts.putArtifact(DEV, glob.id, 'investigation', wrap(value), {
+        commitSha: null,
+        runId: run,
+        agentSetVersion: null,
+      }),
+    );
   };
   const get = async (id: string): Promise<Glob> => {
     const g = await globs.peek(id);
@@ -79,21 +86,43 @@ describe('acting on an investigation', () => {
     const notifier = new RecordingNotifier();
     const clock = { now: () => '2026-10-11T12:00:00.000Z' };
     let runs = 0;
-    globs = new GlobService({ store, notifier, clock, ids: { runId: () => `run-${++runs}` }, routines: { hasRoutine: () => Promise.resolve(true) } });
-    const investigation = new InvestigationService({ store, clock, notifier, escalate: (email, id, input) => globs.escalateToSame(email, id, input) });
+    globs = new GlobService({
+      store,
+      notifier,
+      clock,
+      ids: { runId: () => `run-${++runs}` },
+      routines: { hasRoutine: () => Promise.resolve(true) },
+    });
+    const investigation = new InvestigationService({
+      store,
+      clock,
+      notifier,
+      escalate: (email, id, input) => globs.escalateToSame(email, id, input),
+    });
     artifacts = new ArtifactService({ store, clock, notifier, investigation });
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
     const boards = new BoardService({ store, notifier });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(
+      await boards.create(ADMIN, {
+        name: 'demo',
+        repo: null,
+        baseBranch: 'main',
+        timeZone: 'UTC',
+        environments: [],
+      }),
+    ).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
   it('escalates a sub when the investigation needs a human, with the reason', async () => {
     const sub = await create('sub');
     expect(sub.type).toBe('sub');
-    await submit(sub, { ...BLOCK, needsHuman: { needed: true, reason: 'The plan leaves the retention period open' } });
+    await submit(sub, {
+      ...BLOCK,
+      needsHuman: { needed: true, reason: 'The plan leaves the retention period open' },
+    });
     const after = await get(sub.id);
     expect(after.type).toBe('same');
     expect(after.escalation?.reason).toContain('retention period');
@@ -124,29 +153,109 @@ describe('acting on an investigation', () => {
     expect(check).toMatchObject({ flagged: true, decision: null });
     expect(check?.reasons[0]).toContain('3 independent parts');
     // Each part after the ones it needs: stable order, server after core; web is free.
-    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['core', 'server', 'web']);
+    expect(check?.proposal?.parts.map((p) => p.title)).toEqual([
+      'T 1/3: core',
+      'T 2/3: server',
+      'T 3/3: web',
+    ]);
     expect(check?.proposal?.parts.map((p) => p.after)).toEqual([[], [0], []]);
   });
 
   it('keeps a person’s answer to the flag, and ignores a single part', async () => {
     const one = await create('sub');
     await submit(one, { ...BLOCK, parts: [THREE[0]] });
-    expect(await store.transaction((tx) => tx.getSizeCheck(one.id))).toSatisfy((c: { flagged: boolean } | null) => c === null || !c.flagged);
+    expect(await store.transaction((tx) => tx.getSizeCheck(one.id))).toSatisfy(
+      (c: { flagged: boolean } | null) => c === null || !c.flagged,
+    );
     const sub = await create('sub');
     await submit(sub, { ...BLOCK, parts: THREE });
     await store.transaction(async (tx) => {
       const check = await tx.getSizeCheck(sub.id);
-      if (check !== null) await tx.upsertSizeCheck({ ...check, decision: 'kept_whole', decidedBy: DEV, decidedAt: check.updatedAt });
+      if (check !== null)
+        await tx.upsertSizeCheck({
+          ...check,
+          decision: 'kept_whole',
+          decidedBy: DEV,
+          decidedAt: check.updatedAt,
+        });
     });
-    await submit(sub, { ...BLOCK, parts: [...THREE, { name: 'cli', files: ['apps/cli/x.ts'], needs: [] }] });
-    expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.reasons[0]).toContain('3 independent parts');
+    await submit(sub, {
+      ...BLOCK,
+      parts: [...THREE, { name: 'cli', files: ['apps/cli/x.ts'], needs: [] }],
+    });
+    expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.reasons[0]).toContain(
+      '3 independent parts',
+    );
   });
 });
 
 describe('oversizeOf and proposalFromParts', () => {
   it('flags at the board limit, not below it', () => {
-    expect(oversizeOf(read({ ...BLOCK, parts: THREE.slice(0, 2) }), DEFAULT_SIZE_THRESHOLD, PLAN)).toBeNull();
-    expect(oversizeOf(read({ ...BLOCK, parts: THREE }), DEFAULT_SIZE_THRESHOLD, PLAN)?.proposal?.parts).toHaveLength(3);
+    expect(
+      oversizeOf(read({ ...BLOCK, parts: THREE.slice(0, 2) }), DEFAULT_SIZE_THRESHOLD, PLAN),
+    ).toBeNull();
+    expect(
+      oversizeOf(read({ ...BLOCK, parts: THREE }), DEFAULT_SIZE_THRESHOLD, PLAN)?.proposal?.parts,
+    ).toHaveLength(3);
+  });
+
+  it('titles new-style parts after the original glob and gives each its own summary and plan', () => {
+    const plan = `${PLAN}\n## Why\nThe cards are unreadable.\n`;
+    const parts = [
+      {
+        name: 'core',
+        title: 'Add the schema',
+        summary: 'Schema first.',
+        plan: '## Tasks\n- [ ] Schema.\nDone when: it parses.',
+        files: ['a'],
+        needs: [],
+      },
+      {
+        name: 'web',
+        title: 'Show it',
+        summary: 'Show the parts.',
+        plan: '## Tasks\n- [ ] UI.\nDone when: shown.',
+        files: ['b'],
+        needs: ['core'],
+      },
+    ];
+    const built =
+      proposalFromParts(read({ ...BLOCK, parts }).parts, plan, 'Split titles')?.parts ?? [];
+    expect(built.map((p) => p.title)).toEqual([
+      'Split titles 1/2: Add the schema',
+      'Split titles 2/2: Show it',
+    ]);
+    expect(built.map((p) => p.summary)).toEqual(['Schema first.', 'Show the parts.']);
+    expect(built[0]?.plan).toContain('Schema.');
+    expect(built[0]?.plan).not.toContain('UI.');
+    expect(built[1]?.plan).toContain('## Why');
+    expect(built[1]?.after).toEqual([0]);
+  });
+
+  it('falls back to the name and the whole plan for old-style parts', () => {
+    const built =
+      oversizeOf(read({ ...BLOCK, parts: THREE }), DEFAULT_SIZE_THRESHOLD, PLAN, 'Orig')?.proposal
+        ?.parts ?? [];
+    expect(built[0]?.title).toBe('Orig 1/3: core');
+    expect(built[0]?.summary).toBe('core part of Orig. Files: packages/core/src/x.ts');
+    expect(built[0]?.plan).toContain('Fix the label on the card.');
+  });
+
+  it('truncates a long original title', () => {
+    const built = proposalFromParts(
+      read({ ...BLOCK, parts: THREE }).parts,
+      PLAN,
+      'x'.repeat(200),
+    ) ?? { parts: [] };
+    expect(built.parts[0]?.title.length).toBeLessThanOrEqual(120);
+    expect(built.parts[0]?.title.endsWith(' 1/3: core')).toBe(true);
+  });
+
+  it('accepts parts with and without the new fields and rejects non-string ones', () => {
+    expect(parseInvestigation(wrap({ ...BLOCK, parts: THREE })).ok).toBe(true);
+    expect(parseInvestigation(wrap({ ...BLOCK, parts: [{ ...THREE[0], title: 3 }] })).ok).toBe(
+      false,
+    );
   });
 
   it('gives no proposal for parts that need each other in a circle', () => {
