@@ -1,6 +1,6 @@
-import type { Capabilities, GlobService } from '@slop/core';
+import type { Capabilities, CapabilityName, GlobService } from '@slop/core';
 
-/** How long a bucket probe's answer is reused: /api/health is read often, and a HEAD request is a paid call. */
+/** How long a bucket probe's answer is reused: /api/health is read often, and a bucket request is a paid call. */
 const PROBE_TTL_MS = 60_000;
 /** How long a probe may take before the bucket counts as unreachable. */
 const PROBE_TIMEOUT_MS = 3_000;
@@ -8,7 +8,7 @@ const PROBE_TIMEOUT_MS = 3_000;
 /** What the server has switched on, as read from its configuration (the bucket is probed, the rest is configuration). */
 export interface CapabilitySwitches {
   /** The attachments bucket; null when none is configured. */
-  readonly bucket: { reachable(signal?: AbortSignal): Promise<boolean> } | null;
+  readonly bucket: { unreachableReason(signal?: AbortSignal): Promise<string | null> } | null;
   readonly attachmentQueueConfigured: boolean;
   readonly slackConfigured: boolean;
   /** The code index's job is running on this server. */
@@ -21,7 +21,7 @@ export interface CapabilitySwitches {
  * configured and answers; the answer is cached for a minute and a failing probe means off, never an error.
  */
 export class CapabilityReader {
-  private probe: { readonly at: number; readonly on: boolean } | null = null;
+  private probe: { readonly at: number; readonly reason: string | null } | null = null;
 
   constructor(
     private readonly switches: CapabilitySwitches,
@@ -30,7 +30,7 @@ export class CapabilityReader {
 
   async read(): Promise<Capabilities> {
     return {
-      fileAttachments: await this.bucketReachable(),
+      fileAttachments: (await this.bucketReason()) === null,
       attachmentEvents: this.switches.attachmentQueueConfigured,
       slack: this.switches.slackConfigured,
       codeIndex: this.switches.codeIndexRuns,
@@ -38,13 +38,19 @@ export class CapabilityReader {
     };
   }
 
-  private async bucketReachable(): Promise<boolean> {
+  /** Why a capability is off, for those that can say (a false "off" is hard to diagnose without it). */
+  async reasons(): Promise<Partial<Record<CapabilityName, string>>> {
+    const reason = await this.bucketReason();
+    return reason === null ? {} : { fileAttachments: reason };
+  }
+
+  private async bucketReason(): Promise<string | null> {
     const { bucket } = this.switches;
-    if (bucket === null) return false;
-    if (this.probe !== null && this.now() - this.probe.at < PROBE_TTL_MS) return this.probe.on;
-    const on = await bucket.reachable(AbortSignal.timeout(PROBE_TIMEOUT_MS)).catch(() => false);
-    this.probe = { at: this.now(), on };
-    return on;
+    if (bucket === null) return 'bucket not configured';
+    if (this.probe !== null && this.now() - this.probe.at < PROBE_TTL_MS) return this.probe.reason;
+    const reason = await bucket.unreachableReason(AbortSignal.timeout(PROBE_TIMEOUT_MS)).catch(() => 'timeout');
+    this.probe = { at: this.now(), reason };
+    return reason;
   }
 }
 

@@ -95,7 +95,7 @@ export class AttachmentService {
       if (!actor.ok) return actor;
       await tx.lockGlobArtifacts(globId);
       const existing = (await tx.listArtifacts(globId, 'attachment')).find((a) => a.label === label);
-      if (existing !== undefined && existing.file?.state !== 'missing') return invalidInput(`${globId} already has an attachment labelled "${label}"`);
+      if (existing !== undefined && existing.file?.state !== 'missing') return invalidInput(`${globId} already has an attachment labelled "${label}" (version ${String(existing.version)}); remove it or give this one another label`);
       const key = fileKey(glob.boardId, glob.id, this.deps.newId());
       const expiresAt = this.plus(UPLOAD_TTL_SECONDS);
       const upload = await this.deps.objects.presignUpload({

@@ -40,6 +40,7 @@ export const GlobDetail = ({
   onAction,
   onReviewLabel,
   onDismissEdge,
+  onDismiss,
   onDecide,
   onDelete,
 }: {
@@ -73,6 +74,8 @@ export const GlobDetail = ({
   onReviewLabel: ReviewLabel;
   /** The ✕ on a needs or overlaps row: the edge to this glob is not a dependency; resolves false when it failed. */
   onDismissEdge: (edgeId: string) => Promise<boolean>;
+  /** "Got it" / ×: dismisses a status message for the viewer (`dismiss` false is Show again); resolves false when it failed. */
+  onDismiss: (key: string, dismiss: boolean) => Promise<boolean>;
   /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
   onDecide: (input: DecideInput) => Promise<boolean>;
   onDelete: () => Promise<void>;
@@ -82,6 +85,7 @@ export const GlobDetail = ({
     glob,
     onAction,
     onUpdate,
+    onDismiss,
     ...(email === undefined ? {} : { email }),
   });
   const { decision, busy, disabled } = actionState;

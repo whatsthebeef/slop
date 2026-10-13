@@ -206,7 +206,12 @@ export interface GlobView {
   readonly humanSteps: readonly HumanStep[];
   /** Why a person is needed on the glob and what to do first; null when nothing is wrong. */
   readonly handover: Handover | null;
+  /** The status messages the reader dismissed on this glob (their keys); other people's are never shown. */
+  readonly dismissedKeys: readonly string[];
 }
+
+/** A dismissal key is opaque to the server; the web builds it from the situation (see `lib/dismissals.ts`). */
+const DISMISSAL_KEY = /^[\w:.+@/-]{1,200}$/;
 
 /** Artifacts in a stable order: by kind (plan first), then label. */
 const byKind = (a: ArtifactSummary, b: ArtifactSummary): number =>
@@ -287,7 +292,33 @@ export class GlobService {
         sizeCheck,
         humanSteps: humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts) }, stored),
         handover: await handoverOf(tx, this.deps.clock, glob),
+        dismissedKeys: (await tx.listStatusDismissals(email, glob.boardId)).filter((d) => d.globId === glob.id).map((d) => d.key),
       });
+    });
+  }
+
+  /** The viewer's dismissed message keys on each of the board's globs, for the board list. */
+  async dismissedKeysOf(email: string, boardId: number): Promise<Map<string, string[]>> {
+    const rows = await this.deps.store.transaction((tx) => tx.listStatusDismissals(email, boardId));
+    const byGlob = new Map<string, string[]>();
+    for (const { globId, key } of rows) byGlob.set(globId, [...(byGlob.get(globId) ?? []), key]);
+    return byGlob;
+  }
+
+  /**
+   * The viewer says they have read a status message on the glob (its key names the situation). Per person; a glob's own
+   * state and version are left alone, and `dismiss: false` undoes it ("Show again").
+   */
+  async setStatusDismissed(email: string, id: string, key: string, dismiss: boolean): Promise<Result<{ globId: string }>> {
+    if (!DISMISSAL_KEY.test(key)) return invalidInput('A message key is 1 to 200 letters, digits or : . + @ / - _');
+    return this.deps.store.transaction(async (tx): Promise<Result<{ globId: string }>> => {
+      const glob = await tx.getGlob(id);
+      if (glob === null) return notFound(`No glob ${id}`);
+      const actor = await this.actorFor(tx, email, glob.boardId);
+      if (!actor.ok) return actor;
+      if (dismiss) await tx.addStatusDismissal(email, id, key, this.deps.clock.now());
+      else await tx.removeStatusDismissal(email, id, key);
+      return ok({ globId: id });
     });
   }
 
