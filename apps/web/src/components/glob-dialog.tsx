@@ -245,6 +245,7 @@ export const GlobDetail = ({
 
   const renderActions = (list: Action[]) =>
     list.map((action) => {
+      const shown = actionPresentation(action, glob);
       const button = (
         <Button
           key={action}
@@ -298,14 +299,14 @@ export const GlobDetail = ({
             </>
           ) : (
             <>
-              <ActorIcon actor={actionPresentation(action, glob).icon} decorative />
-              {actionPresentation(action, glob).label}
+              <ActorIcon actor={shown.icon} decorative />
+              {shown.label}
             </>
           )}
         </Button>
       );
       return (
-        <Tip key={action} text={actionPresentation(action, glob).tip}>
+        <Tip key={action} text={shown.tip}>
           {button}
         </Tip>
       );
@@ -595,10 +596,11 @@ export const GlobDetail = ({
                   </Button>
                 </Tip>
               ))}
-              {disabled.map(({ action, tip }) => (
+              {disabled.map(({ action, label, icon, tip }) => (
                 <Tip key={action} text={tip}>
                   <Button variant="outline" size="sm" disabled>
-                    {actionPresentation(action, glob).label}
+                    <ActorIcon actor={icon} decorative />
+                    {label}
                   </Button>
                 </Tip>
               ))}
@@ -979,7 +981,7 @@ export const GlobDetail = ({
 
         {glob.runs.length > 0 && (
           <div className="grid gap-1">
-            <h3 className="text-xs font-semibold text-muted-foreground">Routine runs</h3>
+            <h3 className="text-xs font-semibold text-muted-foreground">Machine runs</h3>
             {[...glob.runs].reverse().map((run) => (
               <div
                 key={run.id}

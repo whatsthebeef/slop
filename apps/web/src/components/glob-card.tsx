@@ -6,6 +6,7 @@ import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
+import type { ActionIcon } from '@/lib/action-presentation';
 import type { MoveTag } from '@/lib/board-motion';
 import { activityLabel, blockedParts, chainTip, statusLine } from '@/lib/status-line';
 import { cn, groupSticker } from '@/lib/utils';
@@ -152,6 +153,8 @@ export interface CardMove {
   readonly label: string;
   /** What it does, for screen readers and the tooltip. */
   readonly description: string;
+  /** Who does the work, from actionPresentation; decorative, since the description says it in words. */
+  readonly icon: ActionIcon | null;
 }
 
 const MoveButton = ({
@@ -173,7 +176,7 @@ const MoveButton = ({
   <button
     type='button'
     className={cn(
-      'rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
+      'inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
       hot ? 'border-foreground bg-lcd text-lcd-foreground' : primary ? 'border-primary bg-primary text-primary-foreground hover:opacity-90' : 'border-foreground/70 bg-card text-foreground hover:bg-muted',
       'disabled:pointer-events-none disabled:opacity-50',
     )}
@@ -190,6 +193,7 @@ const MoveButton = ({
     }}
     onKeyDown={(e) => e.stopPropagation()}
   >
+    <ActorIcon actor={move.icon} className='h-3 w-3' decorative />
     {move.label}
   </button>
   </Tip>
@@ -553,9 +557,9 @@ export const GlobCard = ({
         <SplitChip glob={glob} />
         <OversizedChip glob={glob} />
         {glob.escalation != null && glob.status === 'planning' && (
+          // The Tip's hidden description reads "Needs a person: <reason>" once; the visible words are hidden.
           <Tip text={`Needs a person: ${glob.escalation.reason}`}>
             <span className='inline-flex items-center gap-1 font-mono text-[11px] text-required' data-testid='escalation-chip'>
-              <span className='sr-only'>Needs a person: {glob.escalation.reason}</span>
               <span aria-hidden className='inline-flex items-center gap-1'>
                 needs a <HumanIcon className='h-3 w-3' decorative />
               </span>

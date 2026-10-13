@@ -52,14 +52,15 @@ const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
   if (glob.provisioning === 'pending') return [];
   const allowed = glob.allowedActions ?? [];
   const make = (action: Action, direction: Direction, target: List) => {
-    const { label: name, tip } = actionPresentation(action, glob);
+    const { label: name, tip, icon } = actionPresentation(action, glob);
     return {
       target,
       move: {
         action,
         direction,
         label: direction === 'right' ? `${name} ▸` : `◂ ${name}`,
-        description: `${name} ${glob.id}: ${action === 'pick_up' && glob.type === 'super' ? 'you pair on it with the product owner' : tip}`,
+        description: `${name} ${glob.id}: ${tip}`,
+        icon,
       },
     };
   };
@@ -445,6 +446,7 @@ export const BoardPage = () => {
   // A rejected or closed decision (archived) never shows.
   const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters));
   const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
+  const haltLabel = haltConfirm === null ? '' : actionLabel(haltConfirm.action, haltConfirm.glob);
 
   return (
     <div className='flex h-full flex-col' data-testid='board' data-live={live}>
@@ -546,7 +548,7 @@ export const BoardPage = () => {
       {haltConfirm !== null && (
         <Dialog open onOpenChange={(o) => !o && setHaltConfirm(null)}>
           <DialogContent
-            title={`${actionLabel(haltConfirm.action, haltConfirm.glob)}: move ${haltConfirm.glob.id} to ${LIST_TITLES[haltConfirm.target]}?`}
+            title={`${haltLabel}: move ${haltConfirm.glob.id} to ${LIST_TITLES[haltConfirm.target]}?`}
             className='max-w-sm'
           >
             {haltConfirm.action === 'start_again' && (
@@ -572,7 +574,7 @@ export const BoardPage = () => {
                   void commit(haltConfirm.glob, haltConfirm.action);
                 }}
               >
-                {actionLabel(haltConfirm.action, haltConfirm.glob)}
+                {haltLabel}
               </Button>
             </div>
           </DialogContent>

@@ -31,7 +31,12 @@ const discardTip = (glob: Subject, then: string): string =>
 export const actionPresentation = (action: Action, glob: Subject): ActionPresentation => {
   switch (action) {
     case 'start':
-      return { label: 'Start', icon: 'machine', tip: 'The machine implements it', placement: 'main' };
+      return {
+        label: 'Start',
+        icon: 'machine',
+        tip: 'The machine implements it',
+        placement: 'main',
+      };
     case 'start_anyway':
       // On a glob a person picked up, it is a hand-over to the machine; in Planning it jumps what the glob waits for.
       return glob.status === 'in_progress'
@@ -52,7 +57,10 @@ export const actionPresentation = (action: Action, glob: Subject): ActionPresent
         ? {
             label: 'Pick up',
             icon: 'human',
-            tip: 'You implement it in your own session',
+            tip:
+              glob.type === 'super'
+                ? 'You pair on it with the product owner'
+                : 'You implement it in your own session',
             placement: glob.type === 'super' ? 'main' : 'more',
           }
         : {
@@ -62,11 +70,26 @@ export const actionPresentation = (action: Action, glob: Subject): ActionPresent
             placement: 'more',
           };
     case 'take_over':
-      return { label: 'Pick up', icon: 'human', tip: 'Stops the machine; you continue on its branch', placement: 'more' };
+      return {
+        label: 'Pick up',
+        icon: 'human',
+        tip: 'Stops the machine; you continue on its branch',
+        placement: 'more',
+      };
     case 'retrigger':
-      return { label: 'Retry', icon: 'machine', tip: 'A new machine run on the same branch', placement: 'main' };
+      return {
+        label: 'Retry',
+        icon: 'machine',
+        tip: 'A new machine run on the same branch',
+        placement: 'main',
+      };
     case 'retry_autofix':
-      return { label: 'Fix checks', icon: 'machine', tip: 'The machine watches the PR and fixes the failed checks', placement: 'main' };
+      return {
+        label: 'Fix checks',
+        icon: 'machine',
+        tip: 'The machine watches the PR and fixes the failed checks',
+        placement: 'main',
+      };
     case 'resolve_conflict':
       return {
         label: 'Fix conflict',
@@ -75,7 +98,12 @@ export const actionPresentation = (action: Action, glob: Subject): ActionPresent
         placement: 'main',
       };
     case 'retry_merge':
-      return { label: 'Retry merge', icon: 'machine', tip: 'Tries the merge again', placement: 'main' };
+      return {
+        label: 'Retry merge',
+        icon: 'machine',
+        tip: 'Tries the merge again',
+        placement: 'main',
+      };
     case 'mark_ready':
       return {
         label: 'Done',
@@ -84,7 +112,12 @@ export const actionPresentation = (action: Action, glob: Subject): ActionPresent
         placement: 'main',
       };
     case 'merge':
-      return { label: 'Merge', icon: 'machine', tip: `Squash-merges ${prRef(glob)}`, placement: 'main' };
+      return {
+        label: 'Merge',
+        icon: 'machine',
+        tip: `Squash-merges ${prRef(glob)}`,
+        placement: 'main',
+      };
     case 'merge_continue':
       return {
         label: 'Merge & keep working',
@@ -115,24 +148,56 @@ export const actionPresentation = (action: Action, glob: Subject): ActionPresent
           placement: 'reset',
         };
       }
-      return glob.type === 'same'
-        ? { label: 'Discard & back to Planning', icon: null, tip: discardTip(glob, ''), placement: 'reset' }
-        : { label: 'Discard & start over', icon: 'human', tip: discardTip(glob, '; it stays with you'), placement: 'reset' };
+      // A same already in Planning stays there: the label mustn't say it goes back.
+      if (glob.type === 'same')
+        return {
+          label: glob.status === 'planning' ? 'Discard & start over' : 'Discard & back to Planning',
+          icon: null,
+          tip: discardTip(glob, ''),
+          placement: 'reset',
+        };
+      return {
+        label: 'Discard & start over',
+        icon: 'human',
+        tip: discardTip(glob, '; it stays with you'),
+        placement: 'reset',
+      };
     case 'delete':
       return { label: 'Delete', icon: null, tip: 'Deletes the glob', placement: 'reset' };
     case 'decide':
-      return { label: 'Decide', icon: 'human', tip: 'Records the outcome of this decision', placement: 'main' };
+      return {
+        label: 'Decide',
+        icon: 'human',
+        tip: 'Records the outcome of this decision',
+        placement: 'main',
+      };
     case 'sign_off':
-      return { label: 'Sign off', icon: 'human', tip: 'Confirms the decision is final; it moves to Signed Off', placement: 'main' };
+      return {
+        label: 'Sign off',
+        icon: 'human',
+        tip: 'Confirms the decision is final; it moves to Signed Off',
+        placement: 'main',
+      };
     case 'reopen':
       return { label: 'Reopen', icon: null, tip: 'Reopens the decision', placement: 'more' };
     // Replaced by the type popover.
     case 'deescalate':
-      return { label: 'Make it a sub', icon: 'machine', tip: 'Clears "needs a human"; the machine merges it itself', placement: 'none' };
+      return {
+        label: 'Make it a sub',
+        icon: 'machine',
+        tip: 'Clears "needs a human"; the machine merges it itself',
+        placement: 'none',
+      };
     case 'make_super':
-      return { label: 'Pair on it', icon: 'human', tip: 'A human pairs with the machine', placement: 'none' };
+      return {
+        label: 'Pair on it',
+        icon: 'human',
+        tip: 'A human pairs with the machine',
+        placement: 'none',
+      };
   }
 };
 
 /** An action's name for this glob. */
-export const actionLabel = (action: Action, glob: Subject): string => actionPresentation(action, glob).label;
+export const actionLabel = (action: Action, glob: Subject): string =>
+  actionPresentation(action, glob).label;

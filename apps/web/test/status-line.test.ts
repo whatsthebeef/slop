@@ -138,7 +138,9 @@ describe('shared status line', () => {
       headChecks: { sha: head, state: 'passed' },
       allowedActions: ['merge'],
     });
-    expect(top(g)?.full).toBe('Merge & keep working waits for the implementation record at the head');
+    expect(top(g)?.full).toBe(
+      'Merge & keep working waits for the implementation record at the head',
+    );
   });
 
   it('gives QA and PO no wait', () => {
@@ -183,7 +185,10 @@ describe('activity label', () => {
       currentRun: null,
     });
     expect(activityLabel(picked, NOW)).toBeNull();
-    expect(activityLabel(picked, later)).toMatchObject({ kind: 'picked_up', text: 'picked up, no run' });
+    expect(activityLabel(picked, later)).toMatchObject({
+      kind: 'picked_up',
+      text: 'picked up, no machine run',
+    });
     expect(activityLabel({ ...picked, ...live('active') }, later)?.kind).toBe('working');
   });
 
@@ -240,6 +245,8 @@ describe('activity label', () => {
     const later = new Date(Date.parse(NOW) + 25 * 60_000).toISOString();
     const g = view(live('queued', { queuedAt: NOW }));
     expect(activityLabel(g, later)?.text).toBe('queued for 25 min');
+    expect(activityLabel(g, later)?.tip).toMatch(/^Machine run queued for 25 min/);
+    expect(activityLabel(view(live('queued')), NOW)?.tip).toMatch(/^Machine run queued/);
   });
 
   it('shows nothing once the checks have settled, and leaves problems to the status line', () => {

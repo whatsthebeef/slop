@@ -10,6 +10,7 @@ import {
 } from '@slop/core';
 import type { Action, BlockedBy, Edge, Role } from '@slop/core';
 import type { GlobView } from './api';
+import { actionPresentation, type ActionIcon } from './action-presentation';
 
 /** One problem on a glob, in plain words: what the card shows in a line and the glob view shows in full. */
 export interface StatusLine {
@@ -192,6 +193,9 @@ export const statusLine = (glob: GlobView, now: string): StatusLine | null => {
 /** An action the glob is heading for but can't take yet: a short tooltip for its disabled button and the sentence's tail. */
 export interface Waiting {
   readonly action: Action;
+  /** The action's name and actor, from actionPresentation. */
+  readonly label: string;
+  readonly icon: ActionIcon | null;
   /** Short, for the disabled button's tooltip. */
   readonly tip: string;
   /** What it waits for, finishing "Merge waits …". */
@@ -199,12 +203,6 @@ export interface Waiting {
   /** True when it only waits for checks that are still running: shown as activity, not on the status line. */
   readonly running?: true;
 }
-
-const MERGE_WAIT_LABELS: Partial<Record<Action, string>> = {
-  merge: 'Merge',
-  merge_continue: 'Merge & keep working',
-  mark_ready: 'Done',
-};
 
 const failedWhy = (glob: GlobView, head: string): string => {
   const short = head.slice(0, 7);
@@ -226,6 +224,10 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
   // QA and PO can't take these actions at all, so a reason would mislead them.
   if (role === 'qa' || role === 'po') return [];
   const waiting: Waiting[] = [];
+  const named = (action: Action): Pick<Waiting, 'action' | 'label' | 'icon'> => {
+    const { label, icon } = actionPresentation(action, glob);
+    return { action, label, icon };
+  };
   if (glob.status === 'pr_open' && glob.type !== 'sub' && !actions.includes('merge')) {
     const head = glob.pr?.headSha ?? null;
     const checks = glob.headChecks;
@@ -245,8 +247,8 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
               why: `for the checks on ${head.slice(0, 7)}`,
               running: true,
             };
-    waiting.push({ action: 'merge', ...wait });
-    if (glob.type === 'super') waiting.push({ action: 'merge_continue', ...wait });
+    waiting.push({ ...named('merge'), ...wait });
+    if (glob.type === 'super') waiting.push({ ...named('merge_continue'), ...wait });
   }
   if (glob.type !== 'super') return waiting;
   const record = {
@@ -254,13 +256,13 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
     why: 'for the implementation record at the head',
   };
   if (actions.includes('merge') && !actions.includes('merge_continue'))
-    waiting.push({ action: 'merge_continue', ...record });
+    waiting.push({ ...named('merge_continue'), ...record });
   if (
     glob.status === 'in_progress' &&
     glob.pr?.state === 'draft' &&
     !actions.includes('mark_ready')
   ) {
-    waiting.push({ action: 'mark_ready', ...record });
+    waiting.push({ ...named('mark_ready'), ...record });
   }
   return waiting;
 };
@@ -268,9 +270,7 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
 /** "Merge waits for the checks on d16d563", one sentence per distinct reason. */
 export const waitingSentences = (waiting: readonly Waiting[]): string[] =>
   [...new Set(waiting.map((w) => w.why))].map((why) => {
-    const labels = waiting
-      .filter((w) => w.why === why)
-      .map((w) => MERGE_WAIT_LABELS[w.action] ?? w.action);
+    const labels = waiting.filter((w) => w.why === why).map((w) => w.label);
     const subject = labels.length > 1 ? `${labels.join(' and ')} wait` : `${labels[0] ?? ''} waits`;
     return `${subject}${why.startsWith(':') ? '' : ' '}${why}`;
   });
@@ -410,7 +410,7 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     ) {
       return {
         kind: 'picked_up',
-        text: 'picked up, no run',
+        text: 'picked up, no machine run',
         icon: 'human',
         tip: `${glob.implementer} picked this up and no machine run is working on it. A local session isn't visible to slop. Start hands it to the machine.`,
         spinning: false,
@@ -448,8 +448,8 @@ export const activityLabel = (glob: GlobView, now: string): Activity | null => {
     icon: 'machine',
     tip: [
       long
-        ? `Routine run queued for ${String(minutes)} min: ${live.sessionUrl === null ? 'no session yet' : 'open the session'}`
-        : 'Routine run queued',
+        ? `Machine run queued for ${String(minutes)} min: ${live.sessionUrl === null ? 'no session yet' : 'open the session'}`
+        : 'Machine run queued',
       ...runDetail,
     ].join('\n'),
     spinning: false,
