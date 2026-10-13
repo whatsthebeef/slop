@@ -1,6 +1,23 @@
+import { HumanIcon, MachineIcon } from '@/components/actor-icons';
 import type { GlobViewContext } from './context';
 
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
+
+/** A person's email with the human icon, or "Machine" with the robot head; "—" when nobody. */
+const Actor = ({ who, title }: { who: string | null; title?: string }) =>
+  who === null ? (
+    <>—</>
+  ) : who === 'slop' ? (
+    <span className="inline-flex items-center gap-1" title={title}>
+      <MachineIcon decorative />
+      Machine
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1">
+      <HumanIcon decorative />
+      {who}
+    </span>
+  );
 
 /** Planner, implementer, creation date and pull requests. */
 export const GlobMeta = ({
@@ -10,12 +27,23 @@ export const GlobMeta = ({
   ctx: GlobViewContext;
   decision: boolean;
 }) => {
+  const machineRun = glob.runs.find(
+    (r) => r.generation === glob.generation && r.purpose !== 'investigate',
+  );
+  const implementer = glob.implementer ?? (machineRun === undefined ? null : 'slop');
   return (
     <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
       <dt>Planner</dt>
-      <dd>{glob.planner}</dd>
+      <dd>
+        <Actor who={glob.planner} />
+      </dd>
       <dt>Implementer</dt>
-      <dd>{glob.implementer ?? '—'}</dd>
+      <dd>
+        <Actor
+          who={implementer}
+          title={machineRun === undefined ? undefined : `Routine run by ${machineRun.routineOwner}`}
+        />
+      </dd>
       <dt>Created</dt>
       <dd>{when(glob.createdAt)}</dd>
       {!decision && (
