@@ -124,7 +124,11 @@ Standard mode: if this is the **final round**, or there are **no in-scope items*
 
 Besides the findings, say under `### Needs a human` (in the Summary) when the change meets one of the escalation criteria in the board's `risk_and_size` document (given to you with the other board docs; it also lists the risk areas) and the plan didn't settle it. Give the reason and the files. The orchestrator escalates the sub from it. Say nothing when none applies: size alone is not a reason, and the default is to let a sub merge.
 
-### 10. Return decision
+### 10. Check the rollout
+
+When the diff touches the board's rollout paths (by default `infra/**`, `apps/server/src/config.ts`, `.github/workflows/**`, `**/drizzle/**`; the board's settings or docs may differ) or adds an environment variable, a secret, a setting or a one-off command, the implementation record must have a `## Rollout` section. A missing section, or one with steps that are vague (no command or value), out of order, missing a check, or that run paid-infrastructure or IAM changes from an agent session, is an `IN-SCOPE` finding. A change that needs no rollout needs no section.
+
+### 11. Return decision
 
 - `CHANGES_REQUIRED`: `IN-SCOPE` items remain and rounds remain (standard mode).
 - `APPROVED`: no `IN-SCOPE` items, or final round, or a standalone review without blockers.
