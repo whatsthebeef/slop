@@ -26,7 +26,7 @@ describe('lifecycle with open blocking steps (pure)', () => {
     fixture({ status: 'reviewing', labels: { CR: 'required' }, pr: { number: 1, state: 'merged', headSha: 'a' }, ...patch });
   const approve = (g: Glob, rollout: BlockProgress | null) => unwrap(machine.reviewLabel(g, 'CR', { kind: 'approve' }, ctx(po), rollout));
 
-  it('approving the last label signs off, unless work steps still hold sign-off back', () => {
+  it('approving the last label signs off once no work steps are open', () => {
     expect(approve(reviewing(), null).glob.status).toBe('signed_off');
     expect(approve(reviewing(), { open: 0, total: 2 }).glob.status).toBe('signed_off');
   });
