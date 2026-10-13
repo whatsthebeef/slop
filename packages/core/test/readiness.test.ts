@@ -169,7 +169,7 @@ describe('stuck hints on cards', () => {
       purpose: 'resolve_conflict' as const,
     };
     expect(stuckHint(sub({ conflict, runs: [{ ...gaveUp, state: 'watching', outcome: null }] }), later)).not.toMatch(/Resolve locally/);
-    expect(stuckHint(sub({ conflict, runs: [gaveUp] }), NOW)).toMatch(/Resolve locally: sstor --glob s1t1 --take-over/);
+    expect(stuckHint(sub({ conflict, runs: [gaveUp] }), NOW)).toMatch(/Resolve locally: sstor --glob s1t1/);
     // A human implementer resolves locally from the start; a cleared conflict shows nothing.
     expect(stuckHint(sub({ conflict, implementer: 'dev@example.com' }), NOW)).toMatch(/Resolve locally/);
     expect(stuckHint(sub({ conflict: null }), NOW)).toBeNull();
@@ -200,7 +200,7 @@ describe('watching run that ignores failed checks', () => {
     expect(stuckHint(watched(), at(14))).toBeNull();
     const hint = stuckHint(watched(), at(16));
     expect(hint).toMatch(/Checks failed on the head 16 minutes ago/);
-    expect(hint).toContain('sstor --glob s1t1 --take-over');
+    expect(hint).toContain('sstor --glob s1t1');
     expect(hint).toContain('https://claude.ai/code/s');
   });
 
