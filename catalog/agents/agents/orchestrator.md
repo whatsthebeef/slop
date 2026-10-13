@@ -58,7 +58,7 @@ When a run ID is given:
 
 ## Interactive start
 
-In an interactive session, call `pick_up(id, version)` before Phase 1. If you are already the implementer this is a no-op. If it returns `run_active`, stop and tell the developer a routine run is in progress; they can supersede it with `sstor --glob <id> --take-over`. Do not pass `takeOver` yourself unless the developer explicitly asks.
+In an interactive session, call `pick_up(id, version)` before Phase 1. If you are already the implementer this is a no-op. If it returns `run_active`, stop and tell the developer a routine run is in progress; they can run `sstor --glob <id>`, which asks before stopping an active run. Do not pass `takeOver` yourself unless the developer explicitly asks.
 
 ## Board knowledge
 

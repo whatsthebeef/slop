@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
 import { SlopError, UsageError } from '../src/errors.js';
 import {
   PROVISION_TIMEOUT_MS,
@@ -186,18 +187,71 @@ describe('slop pick-up', () => {
     expect(run.out).toEqual(['s1t4\n']);
   });
 
-  it('refuses a queued run without --take-over (sstor only checked active and watching)', async () => {
+  it('takes over a queued or standby run silently and says so on stderr', async () => {
+    for (const state of ['queued', 'watching']) {
+      const run = setup({
+        get_glob: () => glob({ status: 'implementing', currentRun: { id: 'r1', state } }),
+        pick_up: () => glob({ status: 'in_progress', provisioning: 'ok' }),
+      });
+      run.git.remoteBranches.add('s1t4');
+      await pickUpCommand(['s1t4'], run.deps);
+      expect(run.slop.calls[1]?.args).toEqual({ id: 's1t4', version: 3, takeOver: true });
+      expect(run.logs).toContain(`slop: took over s1t4 from its ${state} run (nothing unpushed)`);
+      expect(run.out).toEqual(['s1t4\n']);
+    }
+  });
+
+  const activeRun = { id: 'r1', state: 'active', purpose: 'implementing', lastProgressAt: 't0' };
+
+  it('asks before stopping an active run: y takes over, anything else stops', async () => {
+    const questions: string[] = [];
+    const answer = (reply: string) => {
+      const run = setup({
+        get_glob: () => glob({ status: 'implementing', currentRun: activeRun }),
+        pick_up: () => glob({ status: 'in_progress', provisioning: 'ok' }),
+      });
+      run.git.remoteBranches.add('s1t4');
+      const deps = {
+        ...run.deps,
+        ask: (q: string) => {
+          questions.push(q);
+          return Promise.resolve(reply);
+        },
+      };
+      return { run, result: pickUpCommand(['s1t4'], deps) };
+    };
+    const yes = answer('y');
+    await yes.result;
+    expect(yes.run.slop.calls[1]?.args).toEqual({ id: 's1t4', version: 3, takeOver: true });
+    expect(yes.run.out).toEqual(['s1t4\n']);
+    expect(questions[0]).toBe(
+      "s1t4's machine run is working (implementing, last progress t0); unpushed work will be lost. Take over? [y/N] ",
+    );
+    const no = answer('');
+    await expect(no.result).rejects.toThrow(/not taken over/);
+    expect(no.run.slop.tools()).toEqual(['get_glob']);
+  });
+
+  it('refuses an active run without a terminal, naming --take-over', async () => {
     const run = setup({
-      get_glob: () =>
-        glob({
-          status: 'implementing',
-          currentRun: { id: 'r1', state: 'queued', routineOwner: 'bob@x.test' },
-        }),
+      get_glob: () => glob({ status: 'implementing', currentRun: activeRun }),
     });
     await expect(pickUpCommand(['s1t4'], run.deps)).rejects.toThrow(
-      /run queued \(owner bob@x.test\).*--take-over/,
+      /machine run is working.*unpushed work will be lost.*rerun with --take-over/,
     );
     expect(run.slop.tools()).toEqual(['get_glob']);
+  });
+
+  it('--take-over skips the prompt on an active run', async () => {
+    const run = setup({
+      get_glob: () => glob({ status: 'implementing', currentRun: activeRun }),
+      pick_up: () => glob({ status: 'in_progress', provisioning: 'ok' }),
+    });
+    run.git.remoteBranches.add('s1t4');
+    const ask = vi.fn(() => Promise.resolve('n'));
+    await pickUpCommand(['s1t4', '--take-over'], { ...run.deps, ask });
+    expect(ask).not.toHaveBeenCalled();
+    expect(run.slop.calls[1]?.args).toEqual({ id: 's1t4', version: 3, takeOver: true });
   });
 
   it('takes over a live run with --take-over', async () => {
@@ -610,5 +664,20 @@ describe('slop handover', () => {
     const { deps } = setup({});
     await expect(handoverCommand([], deps)).rejects.toBeInstanceOf(UsageError);
     await expect(handoverCommand(['main'], deps)).rejects.toBeInstanceOf(UsageError);
+  });
+});
+
+describe('pick-up advice', () => {
+  it('never tells people to add --take-over to sstor: slop and the CLI decide (s15b79)', () => {
+    const root = new URL('../../../', import.meta.url);
+    for (const file of [
+      'packages/core/src/domain/readiness.ts',
+      'catalog/agents/claude_md.md',
+      'catalog/agents/agents/orchestrator.md',
+    ]) {
+      expect(readFileSync(new URL(file, root), 'utf8'), file).not.toMatch(
+        /sstor --glob \S+ --take-over/,
+      );
+    }
   });
 });

@@ -46,6 +46,8 @@ export interface CliContext extends AuthDeps {
   readonly writeFile?: (path: string, text: string) => Promise<void>;
   /** The process environment (the import's Jira and Google credentials); empty when not given. */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** Asks a question on the terminal (stderr, so stdout stays machine-readable); used only when `canPrompt`. */
+  readonly ask?: (question: string) => Promise<string>;
 }
 
 async function readInputDefault(path: string): Promise<string> {
@@ -84,6 +86,7 @@ function globDeps(context: CliContext): GlobDeps {
     now: context.now,
     sleep: context.sleep,
     newIdempotencyKey: randomUUID,
+    ...(context.canPrompt && context.ask !== undefined ? { ask: context.ask } : {}),
   };
 }
 
