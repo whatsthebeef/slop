@@ -54,6 +54,9 @@ describe('defaults', () => {
       promotion_min_returns: 5,
       promotion_discussion_min_returns: 10,
       promotion_min_globs: 3,
+      hotspot_window_days: 7,
+      hotspot_min_globs: 3,
+      hotspot_min_real: 2,
     });
   });
 
