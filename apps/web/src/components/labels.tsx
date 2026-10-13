@@ -111,7 +111,7 @@ export const LabelPopover = ({
                     {stateText(state, itemsOf(glob, name))}
                   </span>
                 </span>
-                <span className="flex items-center gap-1">
+                <span className="flex shrink-0 items-center gap-1">
                   <Button size="sm" variant="ghost" onClick={() => onOpenReview(name)}>
                     Open review
                   </Button>

@@ -110,28 +110,66 @@ export const ActivityLabel = ({ glob }: { glob: GlobView }) => {
   );
 };
 
-/**
- * A chip that opens the glob view at its section. Without `onOpen` (a chip shown outside the board) it is plain text.
- * It stops the click and key from reaching the card, which opens the glob at the top.
- */
-const ChipButton = ({ onOpen, className, testId, children }: { onOpen?: () => void; className: string; testId: string; children: ReactNode }) =>
+/** A button on the card that stops its click and key from reaching the card, which opens the glob at the top. */
+const CardButton = ({
+  onOpen,
+  className,
+  testId,
+  ariaLabel,
+  'aria-describedby': describedBy,
+  children,
+}: {
+  onOpen: () => void;
+  className: string;
+  testId: string;
+  ariaLabel?: string;
+  /** Set by a wrapping `Tip`, which clones its child to link the tooltip text as the button's description. */
+  'aria-describedby'?: string;
+  children: ReactNode;
+}) => (
+  <button
+    type='button'
+    className={className}
+    aria-label={ariaLabel}
+    aria-describedby={describedBy}
+    data-testid={testId}
+    onClick={(e) => {
+      e.stopPropagation();
+      onOpen();
+    }}
+    onKeyDown={(e) => e.stopPropagation()}
+  >
+    {children}
+  </button>
+);
+
+/** A chip that opens the glob view at its section. Without `onOpen` (a chip shown outside the board) it is plain text. */
+export const ChipButton = ({
+  onOpen,
+  className,
+  testId,
+  'aria-describedby': describedBy,
+  children,
+}: {
+  onOpen?: () => void;
+  className: string;
+  testId: string;
+  'aria-describedby'?: string;
+  children: ReactNode;
+}) =>
   onOpen === undefined ? (
-    <span className={className} data-testid={testId}>
+    <span className={className} data-testid={testId} aria-describedby={describedBy}>
       {children}
     </span>
   ) : (
-    <button
-      type='button'
+    <CardButton
+      onOpen={onOpen}
       className={cn(className, 'cursor-pointer rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring')}
-      data-testid={testId}
-      onClick={(e) => {
-        e.stopPropagation();
-        onOpen();
-      }}
-      onKeyDown={(e) => e.stopPropagation()}
+      testId={testId}
+      aria-describedby={describedBy}
     >
       {children}
-    </button>
+    </CardButton>
   );
 
 /**
@@ -153,34 +191,24 @@ const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (target: Glob
         return (
           <span key={a.kind} className='inline-flex items-center'>
             <Tip text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}: opens it in the artifacts`}>
-              <button
-                type='button'
+              <CardButton
+                onOpen={() => onOpen(cardTargets.artifact(a.kind))}
                 className='inline-flex items-center rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
-                aria-label={title}
-                data-testid={`artifact-icon-${a.kind}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpen(cardTargets.artifact(a.kind));
-                }}
-                onKeyDown={(e) => e.stopPropagation()}
+                ariaLabel={title}
+                testId={`artifact-icon-${a.kind}`}
               >
                 <Icon className='h-3.5 w-3.5' />
-              </button>
+              </CardButton>
             </Tip>
             {status !== null && (
               <Tip text={`${title}: ${status}. Opens the findings`}>
-                <button
-                  type='button'
+                <CardButton
+                  onOpen={() => onOpen(cardTargets.findings())}
                   className='rounded-sm px-0.5 font-mono text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground'
-                  data-testid='review-status'
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpen(cardTargets.findings());
-                  }}
-                  onKeyDown={(e) => e.stopPropagation()}
+                  testId='review-status'
                 >
                   {status}
-                </button>
+                </CardButton>
               </Tip>
             )}
           </span>
@@ -364,7 +392,7 @@ export const AfterChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => voi
   const blocked = blockedParts(glob);
   if (blocked !== null) {
     return (
-      <Tip text={`Waits for, in order: ${chainTip(glob)}`}>
+      <Tip text={`Waits for, in order: ${chainTip(glob)}${onOpen === undefined ? '' : `. "blocked by" opens this glob's prerequisites; each ID opens that glob`}`}>
         <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
           <ChipButton onOpen={onOpen} className='font-mono' testId='after-chip-open'>
             blocked by
@@ -388,7 +416,9 @@ export const AfterChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => voi
   if (ids.length === 0) return null;
   const reason = learned.map((i) => `${i.id}: ${i.evidence ?? 'a run failed without it'}`).join('; ');
   return (
-    <Tip text={reason === '' ? `Waits for ${ids.join(', ')} to merge` : `Waits for ${reason}`}>
+    <Tip
+      text={`${reason === '' ? `Waits for ${ids.join(', ')} to merge` : `Waits for ${reason}`}${onOpen === undefined ? '' : `. "waits for" opens this glob's prerequisites; each ID opens that glob`}`}
+    >
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='after-chip'>
         <ChipButton onOpen={onOpen} className='font-mono' testId='after-chip-open'>
           waits for
@@ -444,7 +474,7 @@ export const SplitChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => voi
   const chip = splitChip(glob);
   if (chip === null) return null;
   return (
-    <Tip text={chip.tip}>
+    <Tip text={onOpen === undefined ? chip.tip : `${chip.tip}. "split from" opens this glob's split; ${chip.source} opens that glob`}>
       <span className='font-mono text-[11px] text-muted-foreground' data-testid='split-chip'>
         <ChipButton onOpen={onOpen} className='font-mono' testId='split-chip-open'>
           split from
@@ -471,22 +501,23 @@ export const DecisionChips = ({ glob, onOpen }: { glob: GlobView; onOpen?: () =>
   if (attributes === null) return null;
   const { outcome } = attributes;
   const conflicts = attributes.conflictsWith ?? [];
+  const opens = onOpen === undefined ? '' : '. Opens the decision';
   return (
     <>
-      <Tip text={`Applies to ${scopeLabel(attributes.scope)}`}>
+      <Tip text={`Applies to ${scopeLabel(attributes.scope)}${opens}`}>
         <ChipButton onOpen={onOpen} className='rounded-sm border px-1.5 font-mono text-[10px] text-muted-foreground' testId='scope-chip'>
           {attributes.scope.kind === 'glob' ? attributes.scope.ref : attributes.scope.kind.replace('_', ' ')}
         </ChipButton>
       </Tip>
       {outcome !== null && (
-        <Tip text={`${OUTCOME_TEXT[outcome.kind]} by ${outcome.by}${outcome.reason === undefined ? '' : `: ${outcome.reason}`}`}>
+        <Tip text={`${OUTCOME_TEXT[outcome.kind]} by ${outcome.by}${outcome.reason === undefined ? '' : `: ${outcome.reason}`}${opens}`}>
           <ChipButton onOpen={onOpen} className='font-mono text-[11px] text-signal-strong' testId='outcome-chip'>
             {OUTCOME_TEXT[outcome.kind].toLowerCase()}
           </ChipButton>
         </Tip>
       )}
       {conflicts.length > 0 && (
-        <Tip text={`Contradicts ${conflicts.join(', ')}, which apply more broadly and win where they disagree`}>
+        <Tip text={`Contradicts ${conflicts.join(', ')}, which apply more broadly and win where they disagree${opens}`}>
           <ChipButton onOpen={onOpen} className='font-mono text-[11px] text-required' testId='conflict-chip'>
             conflicts with {conflicts.join(', ')}
           </ChipButton>
