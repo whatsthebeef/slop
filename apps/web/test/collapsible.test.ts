@@ -21,7 +21,9 @@ describe('clamped box', () => {
     for (const c of [barClass(true), boxClass(true), boxClass(false)]) expect(c).not.toMatch(/gradient|fade/);
   });
 
-  it('adds no border for short content', () => {
-    expect(boxClass(false)).toBe('');
+  it('adds no border for short content, and the box always carries the solid background', () => {
+    expect(boxClass(false)).not.toContain('border');
+    expect(boxClass(true)).toContain('bg-muted');
+    expect(boxClass(false)).toContain('bg-muted');
   });
 });
