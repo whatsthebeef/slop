@@ -1,3 +1,4 @@
+import type { AttachmentFile } from '../domain/attachment-file.js';
 import { decisionViews } from '../domain/decisions.js';
 import type { DecisionView } from '../domain/decisions.js';
 import { parseInvestigation, validationNote } from '../domain/investigation.js';
@@ -226,6 +227,8 @@ interface NewArtifact {
   readonly reviewStats: ReviewStats | null;
   /** Who produced it, when the kind and run don't say (decision globs' plan.md from a channel). */
   readonly by?: Provenance['by'];
+  /** File attachments: the stored file's facts. */
+  readonly file?: AttachmentFile;
 }
 
 /**
@@ -253,7 +256,17 @@ export const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: strin
     ...(parsed !== null && !parsed.ok && { validation: validationNote(parsed.errors) }),
   };
   const now = clock.now();
-  const artifact = await tx.insertArtifact({ globId, kind, label, content, link, commitSha: input.commitSha, provenance, createdAt: now });
+  const artifact = await tx.insertArtifact({
+    globId,
+    kind,
+    label,
+    content,
+    link,
+    commitSha: input.commitSha,
+    provenance,
+    createdAt: now,
+    ...(input.file === undefined ? {} : { file: input.file }),
+  });
   // Queued for the findings pipeline in the same transaction; nothing is parsed or asked here.
   if (kind === 'local_review') {
     await tx.insertReviewSource({

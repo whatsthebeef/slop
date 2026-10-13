@@ -1,4 +1,5 @@
 import type {
+  AttachmentFile,
   GlobOutcome,
   SizeEstimate,
   SizeCalibration,
@@ -287,8 +288,13 @@ export const artifacts = pgTable(
     commitSha: text('commit_sha'),
     provenance: jsonb('provenance').$type<Provenance>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    /** File attachments: the stored file's facts (`AttachmentFile`); null on every other artifact. */
+    file: jsonb('file').$type<AttachmentFile>(),
   },
-  (t) => [uniqueIndex('artifacts_version_idx').on(t.globId, t.kind, t.label, t.version)],
+  (t) => [
+    uniqueIndex('artifacts_version_idx').on(t.globId, t.kind, t.label, t.version),
+    index('artifacts_file_key_idx').using('btree', sql`(${t.file}->>'key')`).where(sql`${t.file} is not null`),
+  ],
 );
 
 /** Branch deploys: one row per request, queued per environment (one running, one waiting). */

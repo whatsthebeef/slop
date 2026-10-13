@@ -1,6 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { S3Client } from '@aws-sdk/client-s3';
+import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, kbJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -10,6 +12,10 @@ import { connect, PgStore, runMigrations } from './db/store.js';
 import { createApp } from './http/app.js';
 import { mountKnowledge } from './http/knowledge.js';
 import { OutboxRunner } from './jobs/outbox.js';
+import { AttachmentEventsJob } from './jobs/attachment-events.js';
+import { mountAttachments } from './http/attachments.js';
+import { S3ObjectStore } from './s3-object-store.js';
+import { SqsObjectEventQueue } from './sqs-object-events.js';
 import { kbExecutors } from './kb-executors.js';
 import { knowledgePageExecutors } from './knowledge-page-executors.js';
 import { suggestExecutors } from './suggest-executors.js';
@@ -99,6 +105,8 @@ const branchFiles = new HostBranchFiles(() => github, logError);
 const catalog = new FsCatalog(config.CATALOG_DIR);
 // Which dependency edges are real on each board: predicts overlaps from learned weights, learns needs from failed runs.
 const dependencyLearning = new DependencyLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, catalog });
+// File attachments live in a private bucket; without one configured the feature (routes and job) is off.
+const attachmentObjects = config.ATTACHMENTS_BUCKET === undefined ? null : new S3ObjectStore(new S3Client({ region: config.ATTACHMENTS_REGION }), config.ATTACHMENTS_BUCKET);
 const globs = new GlobService({
   store,
   dependencyLearning,
@@ -138,7 +146,7 @@ const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => 
 
 // One executor table; each runner drains only its own lane (`laneOf(kind)`).
 const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
-    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths, logError),
+    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths, logError, attachmentObjects),
     ...deployExecutors(
       deploys,
       new Deployers({ codebuild: new CodeBuildDeployer() }),
@@ -351,6 +359,10 @@ const chat = new ChatService({
 // An arriving investigation escalates a sub that needs a human and raises the oversize flag with a fan-out proposal.
 const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input) });
 const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, investigation });
+const attachments =
+  attachmentObjects === null
+    ? null
+    : new AttachmentService({ store, clock, notifier: hub, objects: attachmentObjects, newId: () => randomUUID(), maxBytes: () => config.ATTACHMENT_MAX_BYTES, log: logError });
 const searchSync = new SearchSync(searchIndexer, logError);
 // Decisions (spec, Decisions and supersession): extracted from the board's plans and records with the search model,
 // checked against earlier decisions for a replacement; the people on the board confirm or undo a replacement.
@@ -437,11 +449,13 @@ const app = createApp({
   outbox,
   sizeCheck,
   spend,
+  ...(attachments === null ? {} : { attachments }),
   onBoardCreated: async (email, boardId) => {
     const adopted = await knowledge.adoptCatalogAgentSet(email, boardId);
     if (!adopted.ok) logError('board created', `Adopting the catalog agent set failed for board ${boardId}: ${adopted.error.message}`);
   },
 });
+if (attachments !== null) mountAttachments(app, { attachments });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
 mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, contextTuning, contextReport, knowledgePage, agentSetCommit, logError });
@@ -612,6 +626,16 @@ const followWatch =
     ? null
     : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, config.SLOP_FOLLOW_ENVIRONMENT, notifications, (d) => environments.recordDeploy(d), logError);
 if (runs('follow')) followWatch?.start();
+// Arrivals come from the bucket's events (when a queue is set) and the sweep, which also expires links nobody used.
+const attachmentEvents =
+  attachments === null
+    ? null
+    : new AttachmentEventsJob(
+        attachments,
+        config.ATTACHMENTS_QUEUE_URL === undefined ? null : new SqsObjectEventQueue(new SQSClient({ region: config.ATTACHMENTS_REGION }), config.ATTACHMENTS_QUEUE_URL),
+        logError,
+      );
+if (runs('attachments')) attachmentEvents?.start();
 const readinessWatch = new ReadinessWatch(store, { globs, store, host: github, log: logError }, notifications, logError);
 if (runs('readiness')) readinessWatch.start();
 const reconcileWatch = new ReconcileWatch(store, globs, logError);
@@ -639,6 +663,7 @@ const shutdown = () => {
   tunnelWatch?.stop();
   followWatch?.stop();
   readinessWatch.stop();
+  attachmentEvents?.stop();
   server.close();
   void database.close();
 };

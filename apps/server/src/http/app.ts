@@ -1,4 +1,4 @@
-import type { BoardService, DecisionGlobService, Glob, GlobService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
+import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
 import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -24,6 +24,8 @@ export interface AppDeps {
   readonly outbox: OutboxRunner;
   /** Keep whole on a flagged glob; absent: its route isn't mounted. */
   readonly sizeCheck?: SizeCheckService;
+  /** Looks at a glob's pending files when it is read (the fallback for a lost storage event); absent: file attachments are off. */
+  readonly attachments?: Pick<AttachmentService, 'refreshGlob'>;
   /** The board's LLM spend line; absent: its route isn't mounted. */
   readonly spend?: SpendService;
   /** Refuses Ready for review for a branch that conflicts with its base. */
@@ -474,6 +476,8 @@ export const createApp = (deps: AppDeps) => {
   app.get('/api/globs/:id', async (c) => {
     const view = await globs.get(c.get('email'), c.req.param('id'));
     if (!view.ok) return send(c, view);
+    // A member's read looks at the glob's pending files (best effort); a change reaches the page by its live hint.
+    await deps.attachments?.refreshGlob(view.value.glob.id).catch(() => undefined);
     const split = (await globs.splitsOf(view.value.glob.boardId)).get(view.value.glob.id);
     return send(c, view, (v) => ({ ...globViewOf(v), ...splitField(split) }));
   });

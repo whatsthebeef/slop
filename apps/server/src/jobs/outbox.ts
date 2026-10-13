@@ -36,6 +36,8 @@ const NOT_GENERATION_CHECKED: readonly EffectKind[] = [
   // moves on; the deploy executor handles both.
   'delete_glob_data',
   'start_deploy',
+  // The glob may be gone (a deleted glob's files); the key is all the executor needs.
+  'delete_object',
   // Board-wide effects have no glob.
   'refresh_base_checks',
   'recheck_overlaps',

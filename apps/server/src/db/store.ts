@@ -294,11 +294,17 @@ const toKnowledge = (row: typeof schema.knowledge.$inferSelect): KnowledgeDoc =>
   updatedAt: row.updatedAt.toISOString(),
 });
 
-const toArtifact = (row: typeof schema.artifacts.$inferSelect): Artifact => ({
+const toArtifact = ({ file, ...row }: typeof schema.artifacts.$inferSelect): Artifact => ({
   ...row,
   kind: oneOf(ARTIFACT_KINDS, row.kind),
   createdAt: row.createdAt.toISOString(),
+  // Absent (not null) on text and link attachments, so those artifacts read as before.
+  ...(file === null ? {} : { file }),
 });
+
+/** Keeps only the latest version of each artifact (per glob, kind and label). */
+const latestVersion = (a: typeof schema.artifacts) =>
+  sql`not exists (select 1 from artifacts newer where newer.glob_id = ${a.globId} and newer.kind = ${a.kind} and newer.label = ${a.label} and newer.version > ${a.version})`;
 
 const toReviewSource = (row: typeof schema.reviewSources.$inferSelect): ReviewSource => ({
   ...row,
@@ -1182,6 +1188,25 @@ export class PgStore implements Store {
           .where(and(...conditions))
           .orderBy(schema.artifacts.kind, schema.artifacts.label, desc(schema.artifacts.version));
         return rows.map(toArtifact).filter((a) => !isClearedAttachment(a)).sort((a, b) => b.id - a.id);
+      },
+      lockGlobArtifacts: async (globId) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${globId}))`);
+      },
+      findFileArtifact: async (key) => {
+        const [row] = await t
+          .select()
+          .from(schema.artifacts)
+          .where(and(sql`${schema.artifacts.file}->>'key' = ${key}`, latestVersion(schema.artifacts)));
+        return row === undefined ? null : toArtifact(row);
+      },
+      listPendingFileArtifacts: async (globId) => {
+        const a = schema.artifacts;
+        const rows = await t
+          .select()
+          .from(a)
+          .where(and(sql`${a.file}->>'state' = 'pending'`, latestVersion(a), globId === undefined ? undefined : eq(a.globId, globId)))
+          .orderBy(asc(a.id));
+        return rows.map(toArtifact);
       },
       artifactVersions: async (globId, kind, label) => {
         const rows = await t

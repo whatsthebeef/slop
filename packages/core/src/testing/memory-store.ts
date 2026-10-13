@@ -211,6 +211,13 @@ const clone = (state: State): State => ({
 const knowledgeKey = (boardId: number, kind: string, name: string) => `${boardId}:${kind}:${name}`;
 
 /** An in-memory Store for core tests. A transaction commits only if `work` resolves. */
+/** The latest version of each attachment (per glob and label), oldest first. */
+const latestAttachments = (all: readonly Artifact[]): Artifact[] => {
+  const latest = new Map<string, Artifact>();
+  for (const a of all) if (a.kind === 'attachment') latest.set(`${a.globId}:${a.label}`, a);
+  return [...latest.values()].sort((a, b) => a.id - b.id);
+};
+
 export class MemoryStore implements Store {
   state: State = {
     globs: new Map(),
@@ -619,6 +626,14 @@ export class MemoryStore implements Store {
         }
         return Promise.resolve([...latest.values()].filter((a) => !isClearedAttachment(a)).sort((a, b) => b.id - a.id));
       },
+      // Transactions here never interleave, so there is nothing to wait for.
+      lockGlobArtifacts: () => Promise.resolve(),
+      findFileArtifact: (key) => {
+        const hit = latestAttachments(s.artifacts).find((a) => a.file?.key === key);
+        return Promise.resolve(hit ?? null);
+      },
+      listPendingFileArtifacts: (globId) =>
+        Promise.resolve(latestAttachments(s.artifacts).filter((a) => a.file?.state === 'pending' && (globId === undefined || a.globId === globId))),
       artifactVersions: (globId, kind, label) =>
         Promise.resolve(s.artifacts.filter((a) => a.globId === globId && a.kind === kind && a.label === label)),
       listArtifactSummaries: (boardId, globIds) => {

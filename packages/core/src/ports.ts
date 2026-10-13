@@ -217,6 +217,15 @@ export interface Tx {
   insertArtifact(artifact: Omit<Artifact, 'id' | 'version'>): Promise<Artifact>;
   /** Latest version of each artifact (per kind and label), optionally of one kind. */
   listArtifacts(globId: string, kind?: ArtifactKind): Promise<Artifact[]>;
+  /**
+   * Takes the glob's artifact lock for the rest of the transaction (the one `insertArtifact` takes). A state change of a
+   * file takes it first and then reads the file's latest version, so it decides on what is committed, not on a stale read.
+   */
+  lockGlobArtifacts(globId: string): Promise<void>;
+  /** The latest version of the file attachment whose object key this is (null when none, or when a later upload replaced the key). */
+  findFileArtifact(key: string): Promise<Artifact | null>;
+  /** The latest versions of file attachments still `pending`, oldest first; one glob's when `globId` is given. */
+  listPendingFileArtifacts(globId?: string): Promise<Artifact[]>;
   artifactVersions(globId: string, kind: ArtifactKind, label: string): Promise<Artifact[]>;
   /** Content-free summaries of the latest version of each artifact on the given globs of a board. */
   listArtifactSummaries(boardId: number, globIds: readonly string[]): Promise<ArtifactSummary[]>;
@@ -574,6 +583,42 @@ export interface BranchFiles {
 export interface AgentSetRepo {
   /** The version in `.claude/slop-agent-set.json`; null when the file is missing or isn't valid. Throws when the host can't be read. */
   committedVersion(board: Board): Promise<number | null>;
+}
+
+/** A presigned POST: the form action and the fields to send before the file (S3 enforces the policy behind them). */
+export interface PresignedUpload {
+  readonly url: string;
+  readonly fields: Readonly<Record<string, string>>;
+}
+
+/** What storage knows about an object. */
+export interface ObjectInfo {
+  readonly size: number;
+  readonly contentType: string;
+}
+
+/** Object storage for file attachments (S3 in the server). Only slop picks keys; nothing here lists or reads bytes. */
+export interface ObjectStore {
+  /**
+   * A presigned POST for `key`. The policy limits the size to 1..`maxBytes` bytes and requires a `Content-Type` that
+   * starts with the common prefix of `contentTypes`; it expires after `ttlSeconds`.
+   */
+  presignUpload(input: {
+    readonly key: string;
+    readonly maxBytes: number;
+    readonly contentTypes: readonly string[];
+    readonly ttlSeconds: number;
+  }): Promise<PresignedUpload>;
+  /** A GET link for `key`; `fileName` and `disposition` set how a browser treats it. */
+  presignDownload(
+    key: string,
+    ttlSeconds: number,
+    options?: { readonly fileName?: string; readonly disposition?: 'inline' | 'attachment' },
+  ): Promise<string>;
+  /** The object's size and type, or null when it isn't there. */
+  head(key: string): Promise<ObjectInfo | null>;
+  /** Removes the object; fine when it isn't there. */
+  delete(key: string): Promise<void>;
 }
 
 export interface Clock {

@@ -2,7 +2,7 @@ import { isValidTimeZone } from '@slop/core';
 import { z } from 'zod';
 
 /** The background jobs a server starts; `SLOP_JOBS` picks them. */
-export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'llm', 'findings', 'search', 'decisions', 'inbox', 'learning', 'tunnel', 'follow', 'readiness', 'reconcile', 'code'] as const;
+export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'llm', 'findings', 'search', 'decisions', 'inbox', 'learning', 'tunnel', 'follow', 'readiness', 'reconcile', 'code', 'attachments'] as const;
 export type Job = (typeof JOBS)[number];
 const isJob = (name: string): name is Job => JOBS.some((job) => job === name);
 
@@ -153,6 +153,13 @@ const schema = z.object({
   CODE_DIR: z.string().default('.slop-code'),
   /** How many MB one board's clone may use before its on-demand refs are dropped and its history is cut back. */
   CODE_CAP_MB: z.coerce.number().int().min(1).default(2048),
+  /** The private bucket file attachments are uploaded to; file attachments (and the `attachments` job) are off without it. */
+  ATTACHMENTS_BUCKET: z.string().optional(),
+  /** The SQS queue URL the bucket's object-created events arrive on; without it only the sweep detects arrivals. */
+  ATTACHMENTS_QUEUE_URL: z.string().optional(),
+  ATTACHMENTS_REGION: z.string().default('us-east-1'),
+  /** The most one attached file may weigh, in bytes (10 MiB). */
+  ATTACHMENT_MAX_BYTES: z.coerce.number().int().min(1).default(10 * 1024 * 1024),
   BEDROCK_REGION: z.string().default('us-east-1'),
   /** Haiku 4.5 for intake and classification. */
   INTAKE_MODEL: z.string().default('global.anthropic.claude-haiku-4-5-20251001-v1:0'),

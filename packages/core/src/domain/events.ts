@@ -208,7 +208,12 @@ export type Effect =
    * Board-wide like `recheck_overlaps` (`globId` is `board-<id>`, not generation-checked); the outbox keeps one unclaimed job
    * per board and pushes its `runAfter` out on every bump (a trailing debounce), so a batch of approvals makes one commit.
    */
-  | { readonly kind: 'commit_agent_set'; readonly globId: string; readonly boardId: number };
+  | { readonly kind: 'commit_agent_set'; readonly globId: string; readonly boardId: number }
+  /**
+   * Remove a file attachment's object from storage (a detached file, a deleted glob's files, a refused or orphaned upload).
+   * `globId` is the glob the key was under, which may be gone; not generation-checked. Deleting a missing key succeeds.
+   */
+  | { readonly kind: 'delete_object'; readonly globId: string; readonly key: string };
 
 export type ReviewStage = 'pre_merge' | 'post_merge';
 
@@ -285,6 +290,9 @@ export interface OutboxJob {
 
 /** The board's overlap recheck: its `globId` is `board-<id>`, as for the other board-wide effects. */
 export const recheckOverlapsEffect = (boardId: number): Effect => ({ kind: 'recheck_overlaps', globId: `board-${String(boardId)}`, boardId });
+
+/** Remove an attachment's object from storage; queued in the transaction that stops referring to it. */
+export const deleteObjectEffect = (globId: string, key: string): Effect => ({ kind: 'delete_object', globId, key });
 
 /** Suggest for a decision glob (an on-demand model recommendation). */
 export const suggestEffect = (globId: string): Effect => ({ kind: 'suggest_decision', globId });
