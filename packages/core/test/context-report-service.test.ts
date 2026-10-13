@@ -95,7 +95,7 @@ describe('ContextReportService', () => {
       inbox: { attachedViaSuggestion: 0, attachedElsewhere: 0, kept: 0, discarded: 0 },
       conflicts: [],
     });
-    expect(empty.settings).toHaveLength(13);
+    expect(empty.settings).toHaveLength(16);
     expect(empty.history).toEqual([]);
     expect(empty.conflictsNote).not.toBe('');
   });

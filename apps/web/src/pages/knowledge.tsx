@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Link, useParams } from 'react-router';
 import { AgentSetFiles, LineDiff } from '@/components/agent-set-files';
+import { Hotspots } from '@/components/hotspots';
 import { AgentSetHistory, KnowledgePageView } from '@/components/knowledge-page-view';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -231,6 +232,8 @@ export const KnowledgePage = () => {
           <pre className='overflow-x-auto rounded border p-2 text-xs'>{kb.data.mergePolicy.content}</pre>
         )}
       </section>
+
+      <Hotspots boardId={boardId} admin={admin} />
 
       {viewing !== null && (
         <Dialog open onOpenChange={(o) => !o && setViewing(null)}>
