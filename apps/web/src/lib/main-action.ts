@@ -31,7 +31,10 @@ export const mainAction = (
   decision = false,
   stepFirst = false,
   viewer?: string,
+  /** The action a stalled glob's step names: it leads whatever the usual order says. */
+  preferred?: Action,
 ): Action | null => {
+  if (preferred !== undefined && available.includes(preferred)) return preferred;
   const candidate = (action: Action): boolean => {
     if (!available.includes(action) || NEVER_MAIN.includes(action)) return false;
     return actionPresentation(action, glob, decision, viewer).placement === 'main';

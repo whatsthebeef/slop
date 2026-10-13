@@ -1,5 +1,5 @@
 import { decisionOf, machine } from '@slop/core';
-import type { Action, EditFailure } from '@slop/core';
+import type { Action, EditFailure, Handover } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -32,6 +32,7 @@ import type { TypeOption } from '@/lib/type-change';
 import { isOversized } from '../oversized-glob';
 import { Tip } from '../ui/tip';
 import { TypePopover } from '../type-popover';
+import type { GlobView } from '@/lib/api';
 import type { GlobViewContext } from './context';
 
 /**
@@ -123,8 +124,11 @@ export const useGlobActions = ({
   // A due blocking step for the viewer (a rollout) is the next thing to do, ahead of the state's next step but not a recovery.
   const stepTurn = mainStep(glob, viewer);
   const [stepsSignal, setStepsSignal] = useState(0);
-  const main = mainAction(shownActions, glob, decision, stepTurn !== null, email);
-  const actions = orderActions(allActions, main);
+  // A stalled glob's step names the one action to lead with and one alternative to follow it.
+  const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
+  const leading = stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
+  const main = mainAction(shownActions, glob, decision, stepTurn !== null, email, leading);
+  const actions = orderActions(allActions, main, stall?.alternative);
   const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
   const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
@@ -268,13 +272,20 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
   />
 );
 
-/** Why the viewer is needed: the full box until acknowledged, then one line. */
-const HandoverBox = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) => {
-  const { brief, briefRead, briefOpen } = state;
-  if (brief === null) return null;
+/** Why the viewer is needed, inside the Now panel's details: the full brief until acknowledged, then one line. */
+export const HandoverBrief = ({
+  glob,
+  state,
+  brief,
+}: {
+  glob: GlobView;
+  state: GlobActionsState;
+  brief: Handover;
+}) => {
+  const { briefRead, briefOpen } = state;
   return (
     <div
-      className="mb-2 grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-sm"
+      className="grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-sm"
       data-testid="handover-box"
     >
       {briefRead && !briefOpen ? (
@@ -315,7 +326,7 @@ const HandoverBox = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsS
               variant="ghost"
               data-testid="handover-acknowledge"
               onClick={() => {
-                writeHandoverAcknowledged(ctx.glob.id, brief);
+                writeHandoverAcknowledged(glob.id, brief);
                 state.setBriefRead(true);
                 state.setBriefOpen(false);
               }}
@@ -351,7 +362,6 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
   const { confirmingOversized } = state;
   return (
     <>
-      <HandoverBox ctx={ctx} state={state} />
       {(main !== null || actions.length + disabled.length > 0 || stepTurn !== null) && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">

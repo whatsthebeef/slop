@@ -95,6 +95,7 @@ export * from './app/dependency-learning-service.js';
 export * from './domain/dependency-rules.js';
 export * from './app/risk-area-service.js';
 export * from './app/escalation-learning-service.js';
+export * from './app/hotspot-decisions.js';
 export * from './app/hotspot-service.js';
 export * from './app/type-learning-service.js';
 export * from './app/learning-jobs.js';
