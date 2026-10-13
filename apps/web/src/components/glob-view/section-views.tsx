@@ -67,13 +67,9 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     !actions.decision && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />
     ),
-  prerequisites: ({ ctx, actions, edits, onDismissEdge }) =>
+  prerequisites: ({ ctx, actions, onDismissEdge }) =>
     !actions.decision && (
-      <DependenciesSection
-        ctx={ctx}
-        onEditAfter={(after) => edits.edit({ after })}
-        onDismissEdge={onDismissEdge}
-      />
+      <DependenciesSection ctx={ctx} onDismissEdge={onDismissEdge} />
     ),
   size: ({ ctx, actions, splitting, onSplitting, onClose }) => (
     <SizeSection

@@ -18,10 +18,12 @@ import { HANDOVER_LABEL, handoverMarkdown } from '../domain/handover.js';
 import type { Handover } from '../domain/handover.js';
 import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
+import { toImplied } from './dependency-inference-service.js';
+import type { DependencyInferenceService, InferredEdge } from './dependency-inference-service.js';
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect } from '../domain/events.js';
 import type { DomainEvent } from '../domain/events.js';
 import { defaultAreas, matchRiskAreas, splitEvidence } from '../domain/risk-area.js';
-import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
+import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, reaches, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
 import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
 import type { InboxItem } from '../domain/inbox.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
@@ -55,6 +57,8 @@ export interface GlobServiceDeps {
   readonly sizeCheck?: SizeAssessor;
   /** Which dependency edges are real on this board: predicts overlaps from its learned weights and learns needs from failures. */
   readonly dependencyLearning?: DependencyLearningService;
+  /** Infers a new glob's needs and overlaps from its plan and the open globs; without it a glob has only the edges it was given. */
+  readonly inference?: Pick<DependencyInferenceService, 'infer'>;
   /** Where a best-effort side task reports its failure (the server's error log). */
   readonly log?: (task: string, message: string) => void;
 }
@@ -719,6 +723,11 @@ export class GlobService {
     // The size check asks a model too, so it is made here as well; a failing model leaves the text estimate.
     const planText = planOf(input);
     const size = this.deps.sizeCheck === undefined ? null : await this.deps.sizeCheck.assess(input.boardId, planText);
+    // Slop builds the dependency tree: needs and overlaps against the open globs, with a reason each (a person's edges win).
+    const inferred =
+      this.deps.inference === undefined || input.type === 'super'
+        ? []
+        : await this.deps.inference.infer({ boardId: input.boardId, plan: planText, selfId: null, title: input.title, ...(input.files === undefined ? {} : { files: input.files }) });
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Transition>> => {
       const board = await tx.getBoard(input.boardId);
       if (board === null) return notFound(`No board ${input.boardId}`);
@@ -754,9 +763,13 @@ export class GlobService {
         overlaps = explicitOverlaps(checked.value.filter((id) => !after.includes(id)));
       }
       const sizeHold = size !== null && size.flagged ? `Oversized: ${size.reasons.join('; ')}. Split it or keep it whole to start it` : undefined;
-      const createInput: CreateInput = { ...input, id: formatId(board.id, letter, n), after, impliedAfter: mergeImplied(overlaps, holds), ...(sizeHold === undefined ? {} : { sizeHold }) };
+      // Inferred edges come last: an explicit, predicted or learned edge to the same glob wins. A glob that went away since is dropped.
+      const known = inferred.length === 0 ? new Map<string, Glob>() : new Map((await tx.getGlobs(inferred.map((i) => i.id))).map((g) => [g.id, g]));
+      const inferredHere = inferred.filter((i) => known.get(i.id)?.boardId === board.id && dependencyState(known.get(i.id)) !== 'merged' && !after.includes(i.id));
+      const implied = mergeImplied(mergeImplied(overlaps, holds), inferredHere);
+      const createInput: CreateInput = { ...input, id: formatId(board.id, letter, n), after, impliedAfter: implied, ...(sizeHold === undefined ? {} : { sizeHold }) };
       const ctx = await this.context(actor.value, board);
-      const awaitedIds = [...after, ...holds.map((h) => h.id)];
+      const awaitedIds = [...after, ...implied.filter((h) => h.kind === 'needs').map((h) => h.id), ...holds.map((h) => h.id)];
       const transition = machine.create(createInput, board, ctx, await this.dependencyStates(tx, awaitedIds));
       if (!transition.ok) return transition;
       const glob = { ...transition.value.glob, version: 1 };
@@ -1474,6 +1487,34 @@ export class GlobService {
       if (result.ok && result.value.version !== glob.version) changed.push(glob.id);
     }
     return changed;
+  }
+
+  /**
+   * Writes the edges slop inferred for a glob (from its plan and investigation, `refresh` of the inference service): the
+   * ones that would make a cycle are dropped and said so in the event's notes, the rest replace the glob's earlier inferred
+   * edges (see `mergeInferred`). A held glob that waited only for an edge now gone starts. A no-op when nothing changed.
+   */
+  async applyInferred(id: string, edges: readonly InferredEdge[], planHash: string): Promise<void> {
+    const read = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      if (glob === null) return null;
+      return { glob, reach: await this.closure(tx, edges.filter((e) => e.kind === 'needs').map((e) => e.id)) };
+    });
+    if (read === null) return;
+    const notes: string[] = [];
+    const usable: ImpliedAfter[] = [];
+    for (const edge of edges) {
+      if (edge.id === id) continue;
+      if (edge.kind === 'needs' && reaches(edge.id, id, (other) => read.reach.get(other))) {
+        notes.push(`Dropped the need on ${edge.id}: it already waits for ${id}, so that would be a cycle`);
+        continue;
+      }
+      usable.push(toImplied(edge));
+    }
+    const result = await this.command(null, id, null, (g, ctx) => machine.edgesInferred(g, { edges: usable, notes, planHash }, ctx));
+    if (!result.ok || result.value.version === read.glob.version) return;
+    // A needs edge that went away may have been all a held glob waited for.
+    if (result.value.status === 'planning' && result.value.waiting != null) await this.release(id);
   }
 
   /** Starts one held glob if everything it waits for has merged and the merge policy still lets it. */

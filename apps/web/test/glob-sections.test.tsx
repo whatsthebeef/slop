@@ -119,11 +119,24 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.queryByTestId('escalation-note')).toBeNull();
   });
 
-  it('lets a glob in Planning edit what it waits for', async () => {
+  it('has no Waits for input: a glob in Planning shows only the edges slop inferred, with a ✕ to dismiss one', () => {
     renderGlob(view({ status: 'planning', provisioning: 'none' }));
-    expect(screen.getByTestId('dependencies')).toBeTruthy();
-    await userEvent.type(screen.getByPlaceholderText('s15t7, s15b18'), 's1t2');
-    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+    expect(screen.queryByTestId('dependencies')).toBeNull();
+    expect(screen.queryByPlaceholderText('s15t7, s15b18')).toBeNull();
+    expect(screen.queryByText('Waits for (glob IDs)')).toBeNull();
+  });
+
+  it('lists an inferred edge with its reason and a ✕, and never an input', () => {
+    renderGlob(
+      view({
+        status: 'planning',
+        provisioning: 'none',
+        edges: [{ id: 's1t2', kind: 'overlaps', source: 'inferred', paths: [], evidence: 'both edit glob-dialog.tsx' }],
+      }),
+    );
+    expect(screen.getByTestId('overlaps').textContent).toContain('both edit glob-dialog.tsx');
+    expect(screen.getByTestId('dismiss-edge-s1t2')).toBeTruthy();
+    expect(screen.queryByPlaceholderText('s15t7, s15b18')).toBeNull();
   });
 
   it('offers Save and Discard once the group is edited, and Discard clears them', async () => {

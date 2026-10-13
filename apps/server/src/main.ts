@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, kbJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -124,6 +124,8 @@ const globs = new GlobService({
   embedder: { model: config.EMBED_MODEL, dimensions: 1024, embed: (texts, signal) => embedder.embed(texts, signal) },
   // Judges a new glob's size; `sizeCheck` exists by the time the first glob is created.
   sizeCheck: { assess: (boardId, plan): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan), refresh: (globId) => sizeCheck.refresh(globId) },
+  // Infers a new glob's needs and overlaps from its plan; `dependencyInference` exists by the time the first glob is created.
+  inference: { infer: (input) => dependencyInference.infer(input) },
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.
 let awsSignInEnabled = false;
@@ -316,6 +318,13 @@ const codeIndex = new CodeIndex(db);
 const codeView = new GitCodeView({ clones: codeClones, index: codeIndex, board: boardOf, host: github });
 // The size check: the intake model judges a plan's independent parts and proposes a split; a failing model leaves the text estimate.
 const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, codeView, embedder, onRechecked: (id): Promise<void> => globs.reconcileSizeHold(id) });
+// Slop builds each glob's dependency tree with the intake model: at create, and again when a plan is saved or an investigation pushed.
+const dependencyInference = new DependencyInferenceService({
+  store,
+  llm: intakeLlm,
+  apply: (globId, edges, planHash): Promise<void> => globs.applyInferred(globId, edges, planHash),
+  log: logError,
+});
 const intake = new IntakeService({
   store,
   llm: intakeLlm,
@@ -364,7 +373,7 @@ const chat = new ChatService({
 });
 // An arriving investigation escalates a sub that needs a human and raises the oversize flag with a fan-out proposal.
 const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input), predictRollout: (id) => globs.predictRollout(id) });
-const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, investigation, hotspots: (board, now) => hotspots.hotspots(board, now, false), rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, dependencyInference, investigation, hotspots: (board, now) => hotspots.hotspots(board, now, false), rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
 const attachments =
   attachmentObjects === null
     ? null
