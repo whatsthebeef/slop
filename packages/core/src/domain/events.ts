@@ -179,6 +179,11 @@ export type Effect =
    * glob is its own version-checked write, so a retry or a second delivery changes nothing.
    */
   | { readonly kind: 'release_waiting'; readonly globId: string; readonly generation: number }
+  /**
+   * A glob merged for good: read the merge commit's files and, when they touch the board's rollout paths while the
+   * implementation record has no `## Rollout`, add the "Rollout steps not written" step. Once only; a failed read flags nothing.
+   */
+  | { readonly kind: 'check_rollout_paths'; readonly globId: string; readonly generation: number; readonly sha: string }
   /** Read which exclusive paths the glob's branch changes and whether another open glob changes them too. */
   | { readonly kind: 'check_exclusive_paths'; readonly globId: string; readonly generation: number }
   /**

@@ -220,3 +220,16 @@ export const presentedActions = <A extends string>(allowed: readonly A[]): A[] =
 /** An action's name for this glob. */
 export const actionLabel = (action: Action, glob: Subject): string =>
   actionPresentation(action, glob).label;
+
+/** What an action would stop, so the board can ask first; empty when nothing is halted. */
+export const haltedBy = (glob: Pick<GlobView, 'currentRun' | 'pr' | 'branch' | 'implementer'>, action: Action): string[] => {
+  const runLive = glob.currentRun !== null && glob.currentRun.state !== 'ended';
+  // A queued or standby run holds nothing unpushed, so only an active one is worth asking about.
+  if (action === 'take_over') return glob.currentRun?.state === 'active' ? ['the machine run in progress'] : [];
+  if (action !== 'start_again') return [];
+  return [
+    ...(runLive ? ['the machine run in progress'] : []),
+    ...(glob.pr !== null ? [`PR #${glob.pr.number} (closed) and the ${glob.branch} branch (deleted)`] : []),
+    ...(glob.implementer !== null ? [`${glob.implementer} as implementer`] : []),
+  ];
+};

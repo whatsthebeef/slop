@@ -11,8 +11,8 @@ describe('sstorCommand', () => {
     expect(sstorCommand('pick_up', 's15t72')).toBe('sstor --glob s15t72');
   });
 
-  it('adds --take-over for Take over', () => {
-    expect(sstorCommand('take_over', 's15t72')).toBe('sstor --glob s15t72 --take-over');
+  it('is the same plain command for Take over (the click already picked the glob up)', () => {
+    expect(sstorCommand('take_over', 's15t72')).toBe('sstor --glob s15t72');
   });
 
   it('is null for any other action', () => {
@@ -32,7 +32,7 @@ describe('copySstorCommand', () => {
   it('reports not copied when the clipboard refuses', async () => {
     const writeText = vi.fn(() => Promise.reject(new Error('denied')));
     await expect(copySstorCommand('take_over', 's1t1', { writeText })).resolves.toEqual({
-      command: 'sstor --glob s1t1 --take-over',
+      command: 'sstor --glob s1t1',
       copied: false,
     });
   });
@@ -51,8 +51,8 @@ describe('copySstorCommand', () => {
 });
 
 describe('conflict advice', () => {
-  it('shows the take-over command, the same one Take over copies', () => {
-    expect(conflictCommand('s1t1', true)).toBe('sstor --glob s1t1 --take-over');
+  it('shows the plain command for a viewer who can take over, the same one Take over copies', () => {
+    expect(conflictCommand('s1t1', true)).toBe('sstor --glob s1t1');
     expect(conflictCommand('s1t1', true)).toBe(sstorCommand('take_over', 's1t1'));
   });
 

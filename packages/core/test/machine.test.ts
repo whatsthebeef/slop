@@ -246,11 +246,23 @@ describe('pick up (rows 6–10)', () => {
     expect(t.glob.implementer).toBe(other.email);
   });
 
-  it('is refused while a run is active or watching', () => {
-    for (const state of ['active', 'watching'] as const) {
-      const g = glob({ status: 'pr_open', runs: [run({ state })] });
-      expect(errorCode(m.pickUp(g, ctx(), board, { takeOver: false }))).toBe('run_active');
-    }
+  it('is refused without takeOver while a run is active', () => {
+    const g = glob({ status: 'pr_open', runs: [run({ state: 'active' })] });
+    expect(errorCode(m.pickUp(g, ctx(), board, { takeOver: false }))).toBe('run_active');
+    expect(value(m.pickUp(g, ctx(), board, { takeOver: true })).glob.implementer).toBe(dev.email);
+  });
+
+  it('supersedes a queued or standby run without takeOver (nothing unpushed can be lost)', () => {
+    const queued = glob({ status: 'implementing', runs: [run({ state: 'queued', startedAt: null })] });
+    const queuedPick = value(m.pickUp(queued, ctx(), board, { takeOver: false }));
+    expect(queuedPick.glob.status).toBe('in_progress');
+    expect(queuedPick.glob.implementer).toBe(dev.email);
+    expect(m.currentRun(queuedPick.glob)?.outcome).toBe('superseded');
+    const standby = glob({ status: 'pr_open', runs: [run({ state: 'watching' })] });
+    const standbyPick = value(m.pickUp(standby, ctx(), board, { takeOver: false }));
+    expect(standbyPick.glob.status).toBe('pr_open');
+    expect(standbyPick.glob.generation).toBe(standby.generation + 1);
+    expect(standbyPick.glob.implementer).toBe(dev.email);
   });
 
   it('row 10: take over supersedes the run and bumps the generation', () => {
@@ -662,7 +674,7 @@ describe('re-trigger, start again, delete (rows 20, 23, 24)', () => {
     const cause = (t: Transition) => t.events.find((e) => e.type === 'RunEnded')?.data;
     const queued = run({ state: 'queued', startedAt: null });
     expect(cause(value(m.pickUp(glob({ runs: [queued] }), ctx(), board, { takeOver: false })))).toMatchObject({ outcome: 'superseded', cause: 'pick_up' });
-    expect(cause(value(m.pickUp(glob({ status: 'pr_open', runs: [queued] }), ctx(), board, { takeOver: false })))).toMatchObject({ cause: 'pick_up' });
+    expect(cause(value(m.pickUp(glob({ status: 'pr_open', runs: [queued] }), ctx(), board, { takeOver: false })))).toMatchObject({ cause: 'take_over' });
     expect(cause(value(m.prClosed(glob({ status: 'pr_open', runs: [run({ state: 'watching' })] }), ctx(null))))).toMatchObject({ outcome: 'superseded', cause: 'pr_closed' });
     expect(cause(value(m.remove(glob({ status: 'implementing', runs: [run()] }), ctx())))).toMatchObject({ outcome: 'superseded', cause: 'deleted' });
   });
@@ -1250,7 +1262,7 @@ describe('conflicts flagged after a merge', () => {
 
   it('a merge queues the recheck of other globs with an open PR only', () => {
     const merged = value(m.merged(glob({ status: 'pr_open' }), { sha: 'm1' }, ctx(null)));
-    expect(effectKinds(merged)).toEqual(['flag_conflicts', 'release_waiting']);
+    expect(effectKinds(merged)).toEqual(['flag_conflicts', 'release_waiting', 'check_rollout_paths']);
     const open = value(m.baseMerged(glob({ status: 'in_progress', pr }), { since: 's1t2' }, ctx(null)));
     expect(open.effects).toEqual([{ kind: 'check_conflict', globId: 's1t1', generation: 1, since: 's1t2' }]);
     expect(value(m.baseMerged(glob({ status: 'in_progress', pr: null }), { since: 's1t2' }, ctx(null))).effects).toEqual([]);

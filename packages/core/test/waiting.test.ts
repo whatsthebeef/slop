@@ -451,12 +451,14 @@ describe('waiting transitions', () => {
   it('only the final merge queues release_waiting, not Merge and continue', () => {
     const plain = machine.merged(fixture({ status: 'pr_open', type: 'same' }), { sha: 'abc1234' }, ctx(null));
     expect(plain.ok && plain.value.effects.map((e) => e.kind)).toContain('release_waiting');
+    expect(plain.ok && plain.value.effects).toContainEqual({ kind: 'check_rollout_paths', globId: 's1t1', generation: 1, sha: 'abc1234' });
     const keepGoing = machine.merged(
       fixture({ status: 'merging', type: 'super', mergeMode: 'continue' }),
       { sha: 'abc1234', number: 7 },
       ctx(null),
     );
     expect(keepGoing.ok && keepGoing.value.effects.map((e) => e.kind)).not.toContain('release_waiting');
+    expect(keepGoing.ok && keepGoing.value.effects.map((e) => e.kind)).not.toContain('check_rollout_paths');
   });
 
   it('released does nothing for a glob that is not held, or still waits', () => {
