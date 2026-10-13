@@ -1,6 +1,7 @@
-import type { ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, ContextReportService, ContextTuningService, SubLimitService, DependencyLearningService } from '@slop/core';
+import type { AgentSetCommitService, ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, TypeLearningService, SizeCheckService, ContextReportService, ContextTuningService, SubLimitService, DependencyLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
+import { readCommittedAgentSetVersion } from '../agent-set-executors.js';
 import { ARTIFACT_KINDS, WORK_CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
 import { parseFrontmatter } from '@slop/core';
 import type { Context, Hono } from 'hono';
@@ -100,6 +101,8 @@ export const mountKnowledge = (
     intakeLearning?: IntakeLearningService;
     /** The generated knowledge page; absent: its routes aren't mounted. */
     knowledgePage?: KnowledgePageService;
+    /** The "Agent set vN" glob slop commits the set through; absent: the index doesn't name it. */
+    agentSetCommit?: Pick<AgentSetCommitService, 'openGlobId'>;
     /** The server's error log (console and the `errors` table), for Run now's background run. */
     logError: (task: string, message: string) => void;
   },
@@ -137,6 +140,10 @@ export const mountKnowledge = (
     if (!localRun.ok) return send(c, localRun);
     if (!mergePolicy.ok) return send(c, mergePolicy);
     const { version, entries } = set.value;
+    // What the repo holds of the set, and the glob that will bring it to `version`. Best effort: a host that can't be read gives null.
+    const board = await deps.boards.get(email, boardId);
+    const committedVersion = board.ok ? await readCommittedAgentSetVersion(deps.host, board.value.board).catch(() => null) : null;
+    const openGlobId = (await deps.agentSetCommit?.openGlobId(boardId).catch(() => null)) ?? null;
     // `files`: the paths served (orphaned overlays aren't); `entries`: every path with how it is served.
     const files = entries.filter((e) => e.status !== 'orphaned').map((e) => e.path);
     // `catalogUpdates`: documents forked from a catalog entry that has moved on (shown, never applied).
@@ -144,7 +151,7 @@ export const mountKnowledge = (
     // `mergePolicy`: which paths clash between globs, read-only here too.
     return c.json({
       documents: index.value,
-      agentSet: { version, files, entries },
+      agentSet: { version, files, entries, committedVersion, openGlobId },
       catalogUpdates: updates.value,
       localRun: localRun.value,
       mergePolicy: mergePolicy.value,

@@ -69,6 +69,13 @@ export interface BehindBase {
   readonly files: readonly string[];
 }
 
+/** A file to commit to a branch; `executable` sets the mode 100755 (hooks run as commands). */
+export interface BranchFile {
+  readonly path: string;
+  readonly content: string;
+  readonly executable?: boolean;
+}
+
 /** What the host's integration is subscribed to, read with its own credentials. */
 export interface AppSettings {
   readonly slug: string;
@@ -157,6 +164,11 @@ export interface CodeHost {
   listDir(repo: Repo, ref: string, dir: string, signal?: AbortSignal): Promise<{ name: string; type: 'file' | 'dir' }[] | null>;
   /** A short-lived read-only token for fetching the repo with git (the reviewer's temporary clone). Never log it. */
   readToken(repo: Repo): Promise<string>;
+  /**
+   * Commits `files` (written whole) and removes `deletions` on `branch` as one commit on its head, as the integration.
+   * `changed` is false, and nothing is committed, when the result has the head's tree already. Never forces the ref.
+   */
+  commitToBranch(repo: Repo, branch: string, files: readonly BranchFile[], deletions: readonly string[], message: string): Promise<{ sha: string; changed: boolean }>;
   /** The files commit `sha` changed against its first parent (mined signals read its dependency manifests). */
   commitFiles(repo: Repo, sha: string, signal?: AbortSignal): Promise<CommitFiles>;
   /**

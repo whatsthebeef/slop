@@ -345,6 +345,8 @@ export class MemoryStore implements Store {
           [...s.globs.values()].find((r) => r.glob.boardId === boardId && r.creationKey === key)?.glob ??
             null,
         ),
+      findGlobsByCreationKeyPrefix: (boardId, prefix) =>
+        Promise.resolve([...s.globs.values()].filter((r) => r.glob.boardId === boardId && r.creationKey?.startsWith(prefix) === true).map((r) => r.glob)),
       listGlobs: (boardId, filter: GlobFilter) =>
         Promise.resolve(
           [...s.globs.values()]
@@ -1277,6 +1279,8 @@ export class MemoryStore implements Store {
               continue;
             }
           }
+          // One unclaimed agent-set commit per board (the debounce's runAfter isn't modelled here).
+          if (effect.kind === 'commit_agent_set' && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;
           // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running, or
           // backing off) gets a sibling, so a change it may not have seen still gets its step.
           if ((effect.kind === 'kb_route' || effect.kind === 'kb_draft') && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;

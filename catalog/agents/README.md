@@ -31,7 +31,7 @@ Agent definitions hold short rules that always apply to that agent; bulky or sit
 - Phase 6 commits as `<id>: <title>`, pushes the glob branch and marks the PR ready with slop's `mark_ready` (routines, and interactive sessions once the developer agrees). Agents never run `sstor`; the developer runs `sstor --ready` from a terminal.
 - `qa` is renamed `tester`. The OpenAI cross-review, the Codex mirrors (`.codex/`, `AGENTS.md`) and the Google Sheet memory are dropped.
 - Project rules (quotes, template formatting, typing, package manager commands) left the agents; each board's knowledge base holds them.
-- The agent set is board knowledge in slop, fetched by `sstor init` (`get_agent_set`, with sstor's own slop sign-in) and committed in each project repo, so cloud checkouts register it at startup. Routines refresh it at the start of each run; changes show up as small diffs in whichever glob's commit picks them up.
+- The agent set is board knowledge in slop, fetched by `sstor init` (`get_agent_set`, with sstor's own slop sign-in) and committed in each project repo, so cloud checkouts register it at startup. When the board's set changes, slop opens one "Agent set vN" glob and commits the new files to its branch; merging it updates the repo. Runs only compare versions and note a difference; they never write agent-set files.
 - Every artifact, failure and learning records the agent-set version (`.claude/slop-agent-set.json`), so slop can check whether a change to the agents helped.
 - The slop MCP server is declared in `.mcp.json`. Claude Code ignores `mcpServers` in `.claude/settings.json`, where sessionator used to merge them.
 

@@ -273,3 +273,41 @@ export const contextDiff = (diff: readonly DiffLine[], context = 3): ContextDiff
   flush();
   return out;
 };
+
+/** The agent-set files that live in the repo's `.claude/` folder; settings, `.mcp.json` and CLAUDE.md are merged by `slop init` instead. */
+const MANAGED_PREFIXES = ['agents/', 'commands/', 'hooks/'] as const;
+
+/** Where the repo records which agent-set version it holds, and which managed files came with it. */
+export const AGENT_SET_MANIFEST_PATH = '.claude/slop-agent-set.json';
+
+/** A file for the repo: hooks run as commands, so they are committed executable. */
+export interface RepoFile {
+  readonly path: string;
+  readonly content: string;
+  readonly executable: boolean;
+}
+
+/** The served files `slop init` would put under `.claude/`, as the repo holds them, sorted by path. */
+export const managedRepoFiles = (files: readonly { readonly path: string; readonly content: string }[]): RepoFile[] =>
+  files
+    .filter((f) => MANAGED_PREFIXES.some((prefix) => f.path.startsWith(prefix)))
+    .map((f) => ({ path: `.claude/${f.path}`, content: f.content, executable: f.path.startsWith('hooks/') }))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+/** The manifest's text, in the shape `slop init` writes (two-space JSON and a final newline). */
+export const agentSetManifest = (board: number, version: number, files: readonly RepoFile[], fetchedAt: string): string =>
+  `${JSON.stringify({ board, version, files: files.map((f) => f.path), fetchedAt: fetchedAt.replace(/\.\d{3}Z$/, 'Z') }, null, 2)}\n`;
+
+/** The version and managed paths a manifest records; null when it isn't valid JSON of that shape. */
+export const parseAgentSetManifest = (text: string): { readonly version: number; readonly files: readonly string[] } | null => {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (typeof value !== 'object' || value === null) return null;
+    const version: unknown = Reflect.get(value, 'version');
+    const files: unknown = Reflect.get(value, 'files');
+    if (typeof version !== 'number' || !Number.isInteger(version)) return null;
+    return { version, files: Array.isArray(files) ? files.filter((f): f is string => typeof f === 'string') : [] };
+  } catch {
+    return null;
+  }
+};

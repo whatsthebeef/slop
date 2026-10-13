@@ -124,6 +124,10 @@ export interface KnowledgeIndex {
     readonly files: readonly string[];
     /** Every path with how it is served, orphaned overlays included. */
     readonly entries: readonly AgentSetEntry[];
+    /** The version the repo's base branch holds (`.claude/slop-agent-set.json`); null when unknown or none. */
+    readonly committedVersion?: number | null;
+    /** The open "Agent set vN" glob that brings the repo to the board's version; null when none is open. */
+    readonly openGlobId?: string | null;
   };
   /** Documents forked from a catalog entry that has a newer version (shown for copying by hand, never applied). */
   readonly catalogUpdates: readonly CatalogUpdate[];
