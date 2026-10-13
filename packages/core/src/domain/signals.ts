@@ -1117,6 +1117,8 @@ export type BoardJobResult =
       /** Files that are conflict hotspots after the run, and the hottest of them (most conflicts first, at most 10). */
       readonly hot: number;
       readonly files: readonly { readonly path: string; readonly conflicts: number; readonly globs: number }[];
+      /** Decision globs raised this run, one per newly hot file (absent when none). */
+      readonly raised?: readonly string[];
     }
   /**
    * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.

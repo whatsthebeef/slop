@@ -1403,6 +1403,21 @@ export class GlobService {
   }
 
   /**
+   * The open work globs on the board whose branch changes `path` right now (a hotspot refactor waits for them). A glob in
+   * Planning has no branch; one whose branch can't be read is left out, as for every hold.
+   */
+  async openGlobsTouching(boardId: number, path: string): Promise<string[]> {
+    const branchFiles = this.deps.branchFiles;
+    if (branchFiles === undefined) return [];
+    const read = await this.deps.store.transaction(async (tx) => ({ board: await tx.getBoard(boardId), globs: await tx.listGlobs(boardId, {}) }));
+    const { board } = read;
+    if (board === null) return [];
+    const open = read.globs.filter((g) => listOf(g.status) === 'doing' && g.type !== 'super' && g.provisioning !== 'none');
+    const files = await Promise.all(open.map((g) => branchFiles.filesOf(board, g).catch(() => null)));
+    return open.filter((_, i) => files[i]?.includes(path) === true).map((g) => g.id);
+  }
+
+  /**
    * Recomputes the predicted overlap edges of every open glob (Planning or Doing) on the board and replaces the stale
    * ones (`recheck_overlaps`). An edge to a glob that went back to Planning, failed without a branch, was deleted, merged
    * or no longer changes an exclusive path drops off; a new one is added when a branch or plan now shows it. Explicit
