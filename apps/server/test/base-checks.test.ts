@@ -190,7 +190,7 @@ describe('a red base branch', () => {
     // The board's bar says what failed and who caused it.
     const raised = unwrap(await notifications.list(DEV, 1));
     expect(raised).toHaveLength(1);
-    expect(raised[0]).toMatchObject({ source: 'main-red', severity: 'critical', title: expect.stringContaining('main is red since m1 (s1f5)'), clears: { kind: 'condition' }, link: typecheck.url });
+    expect(raised[0]).toMatchObject({ source: 'main-red', severity: 'critical', title: expect.stringContaining('main is red since m1 (s1f5)') as unknown, clears: { kind: 'condition' }, link: typecheck.url });
     expect(raised[0]?.detail).toContain('error TS2739');
     expect(raised[0]?.detail).toContain('Globs failing the same way are waiting');
 

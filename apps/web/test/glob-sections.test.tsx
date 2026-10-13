@@ -323,3 +323,53 @@ describe('glob view: dismissable status messages', () => {
     expect(within(screen.getByTestId('handover-box')).queryByRole('button', { name: /^Got it/ })).toBeNull();
   });
 });
+
+describe('glob view: Now panel for a stalled failure', () => {
+  const AT = '2026-10-13T21:00:00.000Z';
+  const REASON = `Needs a decision before it can go on. MARKER ${'The plan names infrastructure that does not exist. '.repeat(6)}`;
+  const DECISION = 'Should the export be a CSV download or a stored report?';
+  const stalledView = (failure: GlobView['failure'], brief: GlobView['handover'], label: string) =>
+    view({
+      status: 'failed',
+      failure,
+      implementer: 'dev@example.com',
+      allowedActions: ['pick_up'],
+      move: { holder: 'stalled', reason: REASON, label, since: AT, cause: 'failed' },
+      handover: brief,
+    });
+
+  it('headlines a needs_pairing failure with the short label and shows the decision and the reason once', () => {
+    renderGlob(
+      stalledView(
+        { reason: REASON, at: AT, kind: 'needs_pairing', decision: DECISION },
+        {
+          why: [`Failed: ${REASON}`],
+          next: 'Answer the decision (ask the developer), then continue from phase 1.',
+          detail: [`Decision needed: ${DECISION}`],
+        },
+        'stalled · needs your decision',
+      ),
+    );
+    const headline = screen.getByTestId('now-headline').textContent;
+    expect(headline).toContain('Stalled · needs your decision');
+    expect(headline).not.toContain('Needs a decision before');
+    const panel = screen.getByTestId('now-panel').textContent;
+    expect(panel.split(DECISION).length - 1).toBe(1);
+    expect(panel).not.toContain('Decision needed:');
+    expect(panel.split('MARKER').length - 1).toBe(1);
+    expect(screen.getByTestId('clamp-toggle').textContent).toBe('show more');
+  });
+
+  it('shows a plain run failure once, not in the status line and the brief both', () => {
+    renderGlob(
+      stalledView(
+        { reason: 'Could not reproduce the bug', at: AT },
+        { why: ['Failed: Could not reproduce the bug'], next: 'Fix the cause, then continue from phase 1.', detail: [] },
+        'stalled · run failed',
+      ),
+    );
+    expect(screen.getByTestId('now-headline').textContent).toContain('Stalled · run failed');
+    const panel = screen.getByTestId('now-panel').textContent;
+    expect(panel.split('Could not reproduce the bug').length - 1).toBe(1);
+  });
+});
