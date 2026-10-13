@@ -650,21 +650,6 @@ export const GlobCard = ({
         <OverlapChip glob={glob} />
         <SplitChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
         <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
-        {glob.escalation != null && glob.status === 'planning' && (
-          // The visible words are hidden: the button's label names it and the Tip's description gives the reason.
-          <Tip text={`Needs a person: ${glob.escalation.reason}. Opens the reason`}>
-            <ChipButton
-              onOpen={() => onOpenSection(cardTargets.escalation())}
-              className='inline-flex items-center gap-1 font-mono text-[11px] text-required'
-              testId='escalation-chip'
-              ariaLabel='Needs a person'
-            >
-              <span aria-hidden className='inline-flex items-center gap-1'>
-                needs a <HumanIcon className='h-3 w-3' decorative />
-              </span>
-            </ChipButton>
-          </Tip>
-        )}
         {glob.clash != null && (
           <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict. Opens the conflict`}>
             <ChipButton onOpen={() => onOpenSection(cardTargets.conflict())} className='font-mono text-[11px] text-required' testId='clash-chip'>
@@ -707,6 +692,21 @@ export const GlobCard = ({
           </Tip>
         )}
         <span className='ml-auto inline-flex items-center gap-1'>
+          {glob.escalation != null && glob.status === 'planning' && (
+            // The visible words are hidden: the button's label names it and the Tip's description gives the reason.
+            <Tip text={`Needs a person: ${glob.escalation.reason}. Opens the reason`}>
+              <ChipButton
+                onOpen={() => onOpenSection(cardTargets.escalation())}
+                className='inline-flex items-center gap-1 font-mono text-[11px] text-required'
+                testId='escalation-chip'
+                ariaLabel='Needs a person'
+              >
+                <span aria-hidden className='inline-flex items-center gap-1'>
+                  needs a <HumanIcon className='h-3 w-3' decorative />
+                </span>
+              </ChipButton>
+            </Tip>
+          )}
           {pending !== undefined && (
             <span className='inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
               <Loader2 className='size-3 animate-spin' aria-hidden />
