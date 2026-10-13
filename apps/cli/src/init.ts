@@ -93,6 +93,19 @@ export interface InitDeps {
   readonly now: () => number;
   readonly log: (message: string) => void;
   readonly stdout: (text: string) => void;
+  /** `--committed`: leave a git-tracked agent set alone (see runInit). */
+  readonly committed?: boolean;
+  /** Whether git tracks the path in the checkout; only asked with `committed`. */
+  readonly isTracked?: (root: string, path: string) => Promise<boolean>;
+}
+
+/** Whether git tracks `path` in the checkout at `root` (`git ls-files --error-unmatch`). */
+export function isGitTracked(root: string, path: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('git', ['ls-files', '--error-unmatch', '--', path], { cwd: root }, (error) => {
+      resolve(error === null);
+    });
+  });
 }
 
 /** The board from the argument, then SLOP_BOARD (environment, then the config files). */
@@ -158,6 +171,18 @@ export async function runInit(deps: InitDeps): Promise<void> {
       `could not fetch the agent set from slop and nothing is installed yet: ${describeError(error)}`,
     );
   }
+  if (deps.committed === true && (await deps.isTracked?.(deps.root, MANIFEST_PATH)) === true) {
+    await installLocalOnly(deps, bundle);
+    const committed = (await readManifest(join(deps.root, MANIFEST_PATH)))?.version;
+    const state =
+      committed === bundle.version
+        ? 'it is current'
+        : `board has v${bundle.version}; it arrives through the agent-set glob`;
+    deps.stdout(
+      `slop init: agent set v${committed ?? '?'} is committed in this checkout (${state})${localRunSummary(bundle)}\n`,
+    );
+    return;
+  }
   const written = await installAgentSet(deps, bundle);
   deps.stdout(
     `slop init: board ${deps.board} agent set v${bundle.version}: ${written.length} files, settings, CLAUDE.md${localRunSummary(bundle)}\n`,
@@ -173,6 +198,37 @@ function localRunSummary(bundle: AgentSetBundle): string {
 function renderLocalRun(spec: NonNullable<AgentSetBundle['localRun']>): string {
   const ordered = spec.build === undefined ? { launch: spec.launch } : { build: spec.build, launch: spec.launch };
   return `${JSON.stringify(ordered, null, 2)}\n`;
+}
+
+/**
+ * The untracked parts only: the local-run spec and the MCP server entry. No managed file, settings,
+ * CLAUDE.md section, manifest or legacy removal is touched.
+ */
+async function installLocalOnly(deps: InstallDeps, bundle: AgentSetBundle): Promise<void> {
+  const paths = await CheckoutPaths.open(deps.root);
+  const incomingMcp = optionalJsonObject(
+    bundle.files.find((file) => file.path === 'mcp.json')?.content,
+    'mcp.json',
+  );
+  if (bundle.localRunProblem !== undefined) {
+    deps.log(
+      `slop init: warning: the board's local-run spec in slop is invalid (${bundle.localRunProblem}); keeping ${LOCAL_RUN_PATH} as it is, so sessions launch the previous spec. A board admin should fix it on the Knowledge page.`,
+    );
+  }
+  const localRun = bundle.localRunProblem === undefined ? bundle.localRun : undefined;
+  if (incomingMcp !== undefined && !(await deps.isMcpServerConfigured(deps.server, deps.root))) {
+    const target = await paths.writable('.mcp.json');
+    const write = jsonWrite('.mcp.json', mergeMcp(await readJsonObject(target), incomingMcp));
+    if ((await readText(target)) !== write.content) await writeFileAtomic(target, write.content);
+  }
+  if (localRun === null) {
+    const removal = await paths.removal(LOCAL_RUN_PATH);
+    if (removal.kind === 'remove') await rm(removal.path, { force: true });
+  } else if (localRun !== undefined) {
+    const target = await paths.writable(LOCAL_RUN_PATH);
+    const content = renderLocalRun(localRun);
+    if ((await readText(target)) !== content) await writeFileAtomic(target, content);
+  }
 }
 
 type InstallDeps = Pick<
