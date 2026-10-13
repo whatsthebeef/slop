@@ -1,7 +1,7 @@
 import { decisionOf, isAgentSetKind, KNOWLEDGE_KINDS, SCOPE_KINDS, scopeLabel } from '@slop/core';
 import type { DecisionAttributes, DecisionLearning, DecisionOutcomeKind, DecisionScope, EditFailure, KbTarget, KnowledgeKind, ScopeKind, SuggestionPrefill } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { DiffView } from '@/components/diff-view';
 import {
@@ -23,7 +23,7 @@ import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
-import { applyPrefill, SUGGEST_POLL_MS, SUGGESTION_ACTION_TEXT, suggestionState } from '@/lib/suggestion';
+import { APPLY_HINT_TEXT, applyPrefill, SUGGEST_POLL_MS, SUGGESTION_ACTION_TEXT, suggestionState } from '@/lib/suggestion';
 import { artifactKey, globDecisionsKey, globDiffKey } from '@/lib/live';
 import { useToast } from '@/toast';
 import { Tip } from './ui/tip';
@@ -446,7 +446,7 @@ export const DecisionAssessment = ({
               <Button size='sm' data-testid='apply-suggestion' onClick={() => onApply(prefill)}>
                 {stored.action === 'merge_into' ? `Apply: reject, merged into ${stored.mergeInto ?? 'another learning'}` : 'Apply'}
               </Button>
-              <span className='text-xs text-muted-foreground'>Opens the decision below, filled in. You confirm it.</span>
+              <span className='text-xs text-muted-foreground'>{APPLY_HINT_TEXT}</span>
             </div>
           )}
         </div>
@@ -630,6 +630,17 @@ export const DecisionSection = ({
   useEffect(() => {
     if (applied != null) setChoice(applied.outcome);
   }, [applied]);
+  // Apply comes from the assessment below this section: bring the opened form into view, once per Apply press.
+  const formRef = useRef<HTMLDivElement>(null);
+  const scrolledFor = useRef<SuggestionPrefill | null>(null);
+  useEffect(() => {
+    if (applied == null || choice !== applied.outcome || scrolledFor.current === applied) return;
+    scrolledFor.current = applied;
+    const form = formRef.current;
+    if (form === null) return;
+    form.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    form.querySelector<HTMLElement>('textarea, input, select, button:not(:disabled)')?.focus({ preventScroll: true });
+  }, [applied, choice]);
   const diff = useQuery({
     queryKey: globDiffKey(glob.id),
     queryFn: () => api.globDiff(glob.id),
@@ -737,6 +748,7 @@ export const DecisionSection = ({
             <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={learning} busy={busy} />
           )}
           {choice !== null && (
+            <div ref={formRef}>
             <OutcomeForm
               key={`${choice}-${applied?.outcome === choice ? 'applied' : 'plain'}`}
               choice={choice}
@@ -750,6 +762,7 @@ export const DecisionSection = ({
               onCancel={() => setChoice(null)}
               onDecide={onDecide}
             />
+            </div>
           )}
         </div>
       )}

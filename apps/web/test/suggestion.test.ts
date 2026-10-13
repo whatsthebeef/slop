@@ -1,6 +1,6 @@
 import type { SuggestionView } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { applyPrefill, suggestionState } from '../src/lib/suggestion';
+import { APPLY_HINT_TEXT, applyPrefill, suggestionState } from '../src/lib/suggestion';
 
 const view = (patch: Partial<SuggestionView> = {}): SuggestionView => ({
   suggestion: {
@@ -28,5 +28,12 @@ describe('the Suggest card', () => {
     expect(applyPrefill(undefined)).toBeNull();
     expect(applyPrefill(view({ suggestion: null }))).toBeNull();
     expect(applyPrefill(view())).toEqual({ outcome: 'accept_with_edits', editedDraft: 'Shorter text' });
+  });
+});
+
+describe('APPLY_HINT_TEXT', () => {
+  it('does not claim the form is below the assessment', () => {
+    expect(APPLY_HINT_TEXT).not.toMatch(/below/i);
+    expect(APPLY_HINT_TEXT).toMatch(/above/);
   });
 });
