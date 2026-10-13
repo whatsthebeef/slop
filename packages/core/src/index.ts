@@ -27,6 +27,7 @@ export * from './domain/attention.js';
 export * from './domain/core-docs.js';
 export * from './domain/readiness.js';
 export * from './domain/human-steps.js';
+export * from './domain/handover.js';
 export * from './domain/findings.js';
 export * from './domain/signals.js';
 export * from './domain/effect-check.js';

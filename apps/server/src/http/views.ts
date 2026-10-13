@@ -1,4 +1,4 @@
-import type { Action, ArtifactSummary, AwaitedDependency, BlockingChain, DependencyState, CompactHumanStep, DomainError, Glob, HumanStep, Role, SizeCheck, StoredHumanStep } from '@slop/core';
+import type { Action, ArtifactSummary, AwaitedDependency, BlockingChain, DependencyState, CompactHumanStep, DomainError, Glob, Handover, HumanStep, Role, SizeCheck, StoredHumanStep } from '@slop/core';
 import { checksExplanation, compactStep, edgesOf, humanSteps, listOf, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -33,11 +33,13 @@ export const globView = (
 });
 
 /** A glob read through the service: its view with the actions open to the caller and what it waits for. */
-export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; chain: BlockingChain; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[] }) =>
+export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; chain: BlockingChain; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; handover?: Handover | null }) =>
   ({
     ...globView(v.glob, v.allowedActions, v.artifacts, v, v.chain, v.humanSteps ?? null),
     waitingFor: v.waitingFor,
     waitedOnBy: v.waitedOnBy,
+    // Why a person is needed and what to do first (null when nothing is wrong); the card and `sstor --glob` show it.
+    handover: v.handover ?? null,
     // The size check: the flag, why, the estimate's evidence and the proposed split (get_glob carries it to routines).
     ...(v.sizeCheck == null ? {} : { sizeCheck: v.sizeCheck, oversized: v.glob.status === 'planning' && unresolved(v.sizeCheck) }),
   });
