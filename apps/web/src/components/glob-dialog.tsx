@@ -15,6 +15,7 @@ import { Input, Label, Select } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { actionPresentation, presentedActions } from '@/lib/action-presentation';
 import { mainAction } from '@/lib/main-action';
+import { mainStep } from '@/lib/human-steps';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
@@ -44,6 +45,7 @@ import {
 import { categoryOptions, saveCategory, typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { ArtifactsSection } from './artifacts';
+import { HumanSteps } from './human-steps';
 import { DecisionAssessment, DecisionSection } from './decision-section';
 import { DeploysSection, EnvironmentsSection, TestsSection } from './deploys';
 import type { ArtifactRef } from './artifacts';
@@ -149,6 +151,10 @@ export const GlobDetail = ({
   onClose,
   onUpdate,
   onReload,
+  email,
+  onAddStep,
+  onCompleteStep,
+  onDismissStep,
   onAction,
   onReviewLabel,
   onDecide,
@@ -167,6 +173,12 @@ export const GlobDetail = ({
   onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
   /** Loads the glob's latest values into the view (after a version conflict). */
   onReload: () => Promise<void>;
+  /** Who is looking, for the steps that are theirs (unknown until /api/me has answered). */
+  email?: string;
+  /** Human steps: each resolves false when it failed (the page shows why); the glob is replaced afterwards. */
+  onAddStep: (step: { title: string; detail?: string; who?: string; due?: string }) => Promise<boolean>;
+  onCompleteStep: (stepId: string) => Promise<boolean>;
+  onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
   /** Resolves false when the action failed. */
   /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
@@ -268,7 +280,11 @@ export const GlobDetail = ({
   // Decide has its own panel with the five outcomes: it can be the main button (which goes to
   // the panel), never a More entry.
   const allActions = shownActions.filter((a) => a !== 'decide');
-  const main = mainAction(shownActions, glob, decision);
+  const viewer = email === undefined ? undefined : { email, role: board.role };
+  // A due blocking step for the viewer (a rollout) is the next thing to do, ahead of the state's next step but not a recovery.
+  const stepTurn = mainStep(glob, viewer);
+  const [stepsSignal, setStepsSignal] = useState(0);
+  const main = mainAction(shownActions, glob, decision, stepTurn !== null);
   const actions = orderActions(allActions, main);
   const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
@@ -748,9 +764,25 @@ export const GlobDetail = ({
               )}
             </div>
           )}
-          {actions.length + disabled.length > 0 && (
+          {(actions.length + disabled.length > 0 || stepTurn !== null) && (
             <div className="grid gap-1">
               <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
+                {main === null && stepTurn !== null && (
+                  <Tip text={`${stepTurn.step.title}: a person does this, then ticks it in Human steps`}>
+                    <Button
+                      size="sm"
+                      data-testid="main-action"
+                      data-step={stepTurn.step.id}
+                      onClick={() => {
+                        setStepsSignal((n) => n + 1);
+                        findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' });
+                      }}
+                    >
+                      <HumanIcon decorative />
+                      {stepTurn.label}
+                    </Button>
+                  </Tip>
+                )}
                 {main !== null && (
                   <Tip text={tipOf(main)}>
                     <Button
@@ -1063,6 +1095,19 @@ export const GlobDetail = ({
             </Anchor>
           </>
         )}
+
+        <Anchor name="human-steps">
+          <HumanSteps
+            glob={glob}
+            {...(viewer === undefined ? {} : { viewer })}
+            canAdd
+            startOpen={section === 'human-steps'}
+            openSignal={stepsSignal}
+            onAdd={onAddStep}
+            onComplete={onCompleteStep}
+            onDismiss={onDismissStep}
+          />
+        </Anchor>
 
         <Anchor name="artifacts">
           <ArtifactsSection

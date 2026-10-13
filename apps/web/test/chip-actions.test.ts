@@ -35,6 +35,12 @@ describe('Your turn click', () => {
     expect(yourTurnClick(turn('sign_off'), {})).toEqual({ kind: 'section', target: { section: 'labels' } });
   });
 
+  it('opens the Human steps section for a due work step, whatever its kind', () => {
+    expect(yourTurnClick({ ...turn('rollout'), work: true }, {})).toEqual({ kind: 'section', target: { section: 'human-steps' } });
+    expect(yourTurnClick({ ...turn('merge'), work: true }, { allowedActions: ['merge'] }).kind).toBe('section');
+    expect(statusClick({ ...turn(undefined), kind: 'rollout' })).toEqual({ kind: 'section', target: { section: 'human-steps' } });
+  });
+
   it('does not run Merge when the glob view would not offer it', () => {
     expect(yourTurnClick(turn('merge'), { allowedActions: [] }).kind).toBe('section');
   });

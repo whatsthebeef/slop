@@ -9,6 +9,7 @@ import {
   stuckHint,
   yourTurn,
 } from '@slop/core';
+import { rolloutLine } from './human-steps';
 import type { Action, BlockedBy, Edge, HumanStepKind, HumanStepViewer, Role } from '@slop/core';
 import type { GlobView } from './api';
 import { actionPresentation, type ActionIcon } from './action-presentation';
@@ -24,6 +25,7 @@ export interface StatusLine {
     | 'stuck'
     | 'behind'
     | 'ready'
+    | 'rollout'
     | 'merge-waits';
   /** One line, cut short: the card's text. */
   readonly text: string;
@@ -40,6 +42,8 @@ export interface StatusLine {
   readonly sessionUrl: string | null;
   /** For `ready` (Your turn): the kind of step it is, so the card can run it or open where it is done. */
   readonly turn?: HumanStepKind;
+  /** For `ready`: the due step is a stored work step (a rollout), done in the Human steps section. */
+  readonly work?: true;
 }
 
 /** True for an investigate-only run: it never started the glob (`purpose` is absent on implementing runs). */
@@ -65,6 +69,7 @@ const ALSO = {
   stuck: 'looks stuck',
   behind: 'the branch is behind the base',
   ready: '',
+  rollout: '',
   'merge-waits': '',
 } as const;
 
@@ -178,6 +183,16 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
   if (candidates.length === 0) {
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha);
+    // Merged with its rollout still open: how far it is, and whose turn.
+    const rollout = glob.humanSteps === undefined ? null : rolloutLine(glob, glob.humanSteps, viewer);
+    if (rollout !== null)
+      return make({
+        kind: rollout.turn === null ? 'rollout' : 'ready',
+        full: rollout.text,
+        ...(rollout.turn === null ? {} : { turn: rollout.turn.kind, work: true as const }),
+        tone: rollout.turn === null ? 'text-muted-foreground' : 'text-signal-strong',
+        tip: rollout.tip,
+      });
     // Your turn is the first due step for the viewer; an API without human steps (or no viewer) still has the Merge turn.
     const turn =
       glob.humanSteps !== undefined && viewer !== undefined
