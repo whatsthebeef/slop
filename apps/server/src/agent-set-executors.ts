@@ -23,6 +23,8 @@ export const agentSetExecutors = (
   commit: Pick<AgentSetCommitService, 'prepare'>,
   host: Pick<CodeHost, 'readFile' | 'commitToBranch'>,
   globOf: (id: string) => Promise<Glob | null>,
+  /** Asks slop to mark the glob's draft PR ready, so its checks run; resolves whether or not the glob could be marked. */
+  requestReady: (id: string) => Promise<unknown> = () => Promise.resolve(),
 ): Partial<Record<EffectKind, Executor>> => ({
   commit_agent_set: async (effect) => {
     if (effect.kind !== 'commit_agent_set') return 'dropped';
@@ -33,13 +35,19 @@ export const agentSetExecutors = (
     if (repo === null) return 'dropped';
     const branch = prepared.glob.id;
     const previous = parseAgentSetManifest((await host.readFile(repo, branch, AGENT_SET_MANIFEST_PATH)) ?? '');
-    if (previous?.version === prepared.version) return 'done';
+    if (previous?.version === prepared.version) {
+      // A retry after a commit whose ready request was lost.
+      if (prepared.glob.pr?.state === 'draft') await requestReady(branch);
+      return 'done';
+    }
     // Merged or closed since `prepare` looked: a retry finds no open glob and opens the next one.
     const current = await globOf(branch);
     if (current === null || !isAgentSetGlobOpen(current)) return { state: 'pending', retryAfterMs: WAIT_MS, reason: `${branch} is no longer open` };
     const paths = new Set(prepared.files.map((f) => f.path));
     const deletions = (previous?.files ?? []).filter((path) => !paths.has(path));
     await host.commitToBranch(repo, branch, prepared.files, deletions, messageOf(prepared.board, prepared.version, previous?.version ?? null, prepared.files.length - 1));
+    // Slop's commit is the whole change: open the PR for review so the checks run and the card offers Merge.
+    if (current.pr?.state === 'draft') await requestReady(branch);
     return 'done';
   },
 });
