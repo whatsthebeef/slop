@@ -7,9 +7,18 @@ export const needsCollapse = (naturalPx: number, remPx: number): boolean => natu
 /** The bar's text: "Show more" while clipped, "Show less" once expanded. */
 export const barLabel = (expanded: boolean): string => (expanded ? 'Show less' : 'Show more');
 
-/** The box's classes: a long one gets a border, square bottom corners at the join with the bar, and clips its content; no fade. */
+/** The last ~1.5 lines of a clipped box fade from full opacity to 35%: a mask, so it works on any background and in dark mode. */
+export const FADE_STYLE = {
+  maskImage: 'linear-gradient(to bottom, black calc(100% - 1.5em), rgb(0 0 0 / 0.35))',
+  WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 1.5em), rgb(0 0 0 / 0.35))',
+} as const;
+
+/** The box's classes: a long one gets a border, square bottom corners at the join with the bar, and clips its content. */
 export const boxClass = (long: boolean): string => (long ? 'overflow-hidden rounded-t border border-b-0' : '');
 
 /** The full-width bar joined to the box's bottom: shared border, matching bottom radius, muted button hover and focus states. */
-export const BAR_CLASS =
+const BAR_BASE =
   'flex w-full items-center justify-center gap-1 rounded-b border bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
+/** The bar's classes: while clipped its top border (the separator under the text) is fainter than the box's outer border. */
+export const barClass = (clipped: boolean): string => (clipped ? `${BAR_BASE} border-t-border/40` : BAR_BASE);
