@@ -171,7 +171,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .max(20)
           .optional()
           .describe(
-            'Alias of `needs`: IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the summary',
+            'Alias of `needs`: IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the plan',
           ),
       },
     },
@@ -359,7 +359,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   server.registerTool(
     'list_globs',
     {
-      description: 'Glob summaries on a board, optionally filtered.',
+      description: 'Globs on a board (ID, title, status), optionally filtered.',
       inputSchema: {
         board: z.number().int(),
         status: z.array(z.enum(STATUSES)).optional(),
