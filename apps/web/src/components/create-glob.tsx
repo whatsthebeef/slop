@@ -129,7 +129,8 @@ export const CreateGlobDialog = ({
       const created = await onCreate({
         ...form,
         ...(fromInbox === undefined ? {} : { inboxItem: fromInbox.id, idempotencyKey: fromInbox.key }),
-        group: form.group?.trim() === '' ? null : form.group,
+        // A blank group after intake means none; typed by hand with no request, it is left for slop to choose.
+        ...((form.group ?? '').trim() === '' ? (insight === null ? { group: undefined } : { group: null }) : { group: form.group ?? null }),
         ...(after.length === 0 ? {} : { after }),
         ...(insight === null
           ? {}
