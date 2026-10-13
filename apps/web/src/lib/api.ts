@@ -49,6 +49,7 @@ import type {
   Run,
   SearchHit,
   SizeCheck,
+  Handover,
   SizeThresholdView,
   SizeCalibrationView,
   SlopType,
@@ -86,6 +87,8 @@ export interface GlobView extends Glob {
   readonly oversized?: boolean;
   /** The size check: why it was flagged, its evidence and the proposed split (single-glob reads only). */
   readonly sizeCheck?: SizeCheck;
+  /** Why a person is needed and what to do first; null when nothing is wrong, absent on an older API (single-glob reads only). */
+  readonly handover?: Handover | null;
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
   readonly humanSteps?: readonly CompactHumanStep[];
 }
@@ -96,6 +99,8 @@ export interface BoardView extends Board {
   readonly role: Role;
   /** Globs on the board waiting on a person (from /api/me only). */
   readonly attention?: number;
+  /** Due human steps on the board that are yours to do (from /api/me only). */
+  readonly yourTurn?: number;
   /** Globs on the board with a routine run in progress (from /api/me only). */
   readonly running?: number;
   /** Your supers in Doing on the board (from /api/me only); a person drives them, so they aren't runs. */

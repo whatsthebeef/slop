@@ -448,7 +448,7 @@ export const BoardPage = () => {
   }
 
   // A rejected or closed decision (archived) never shows.
-  const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters));
+  const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters, viewer));
   const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
   const haltLabel = haltConfirm === null ? '' : actionLabel(haltConfirm.action, haltConfirm.glob);
 
@@ -518,6 +518,8 @@ export const BoardPage = () => {
                         const target = moves.find((m) => m.move.action === move.action)?.target;
                         if (target !== undefined) runMove(glob, move, target);
                       }}
+                      onAct={(action) => void commit(glob, action)}
+                      repo={board.data.repo ?? undefined}
                       onArrow={(direction) => arrow(glob, direction)}
                       lock={motion.locks[glob.id]}
                       bump={bumps[glob.id]}

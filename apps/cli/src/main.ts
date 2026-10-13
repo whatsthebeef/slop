@@ -9,11 +9,13 @@ import { SlopError, UsageError } from './errors.js';
 import type { Git } from './git.js';
 import {
   GLOB_USAGE,
+  HANDOVER_USAGE,
   MERGE_USAGE,
   NEW_USAGE,
   PICK_UP_USAGE,
   READY_USAGE,
   globCommand,
+  handoverCommand,
   mergeCommand,
   newCommand,
   pickUpCommand,
@@ -193,6 +195,11 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     usage: GLOB_USAGE,
     summary: "Print a glob's status (status, branch, implementer, run, PR)",
     run: (args, context) => globCommand(args, globDeps(context)),
+  },
+  handover: {
+    usage: HANDOVER_USAGE,
+    summary: "Print why a person is needed on a glob and what to do first (its hand-over brief)",
+    run: (args, context) => handoverCommand(args, globDeps(context)),
   },
   'pick-up': {
     usage: PICK_UP_USAGE,

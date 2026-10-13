@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, IntakeService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
-import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, needsHuman } from '@slop/core';
+import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, humanSteps, latestSignedOff, listOf, machine, needsHuman, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -316,9 +316,24 @@ export const createApp = (deps: AppDeps) => {
             }).length,
           ]),
         );
+        // Your turn: the due steps that are yours to do, over every open glob on the board (not only your own).
+        const everyone = await globs.listWithArtifacts(email, m.board.id, { status: open, include: 'all' });
+        const stored = await globs.humanStepsOf(m.board.id);
+        const viewer = { email, role: m.role };
+        const yourTurn = (everyone.ok ? everyone.value : []).reduce(
+          (n, { glob, artifacts }) =>
+            n +
+            stepsForViewer(
+              humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }) }, stored.get(glob.id) ?? []).filter((s) => s.state === 'due'),
+              glob,
+              viewer,
+            ).length,
+          0,
+        );
         return {
           ...m.board,
           role: m.role,
+          yourTurn,
           // Your board bar: the board's place in it (null: not in it) and when you last opened it. Yours only.
           position: m.position,
           lastViewedAt: m.lastViewedAt,

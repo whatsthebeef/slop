@@ -19,6 +19,8 @@ export const cardTargets = {
   label: (name?: LabelName): GlobTarget => (name === undefined ? { section: 'labels' } : { section: 'labels', label: name }),
   /** A decision glob's scope, outcome and conflict chips. */
   decision: (): GlobTarget => ({ section: 'decision' }),
+  /** The status chips and Your turn steps that need input: the glob view's actions. */
+  actions: (): GlobTarget => ({ section: 'actions' }),
   /** The deploy indicator. */
   deploys: (): GlobTarget => ({ section: 'deploys' }),
 } as const;
