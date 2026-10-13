@@ -28,7 +28,11 @@ const discardTip = (glob: Subject, then: string): string =>
  * and every hint say the same thing. A few actions mean different things by glob state: Start now vs Start
  * (start_anyway), three kinds of Pick up, and three kinds of Discard.
  */
-export const actionPresentation = (action: Action, glob: Subject): ActionPresentation => {
+export const actionPresentation = (
+  action: Action,
+  glob: Subject,
+  decision = false,
+): ActionPresentation => {
   switch (action) {
     case 'start':
       return {
@@ -61,7 +65,8 @@ export const actionPresentation = (action: Action, glob: Subject): ActionPresent
               glob.type === 'super'
                 ? 'You pair on it with the product owner'
                 : 'You implement it in your own session',
-            placement: glob.type === 'super' ? 'main' : 'more',
+            // A super is paired on and a decision is decided by a person, so picking it up is the next step.
+            placement: glob.type === 'super' || decision ? 'main' : 'more',
           }
         : {
             label: 'Pick up',
