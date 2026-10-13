@@ -81,19 +81,44 @@ const Avatar = ({ email, planner }: { email: string; planner: boolean }) => (
   </Tip>
 );
 
-/** A group's label: a curated sticker colour, the only shiny thing on the board. */
-export const GroupChip = ({ name }: { name: string }) => {
+/**
+ * A group's label: a curated sticker colour, the only shiny thing on the board. With `onFilter` (on the board's cards) it is a
+ * button that filters the board to the group without opening the card; with `to` (the glob view) it links to that filtered board.
+ */
+export const GroupChip = ({ name, onFilter, to }: { name: string; onFilter?: (name: string) => void; to?: string }) => {
   const { hi, base, lo } = groupSticker(name);
   const colours: CSSProperties & Record<'--st-hi' | '--st-base' | '--st-lo', string> = {
     '--st-hi': hi,
     '--st-base': base,
     '--st-lo': lo,
   };
+  const className = 'sticker max-w-full truncate whitespace-nowrap rounded-sm px-1.5 font-mono text-[10px] font-semibold';
   return (
-    <Tip text={`Group: ${name}`}>
-      <span className='sticker max-w-full truncate whitespace-nowrap rounded-sm px-1.5 font-mono text-[10px] font-semibold' style={colours}>
-        {name}
-      </span>
+    <Tip text={onFilter !== undefined || to !== undefined ? `Show only group: ${name}` : `Group: ${name}`}>
+      {onFilter !== undefined ? (
+        <button
+          type='button'
+          className={cn(className, 'cursor-pointer')}
+          style={colours}
+          aria-label={`Show only group ${name}`}
+          data-testid='group-chip'
+          onClick={(e) => {
+            e.stopPropagation();
+            onFilter(name);
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {name}
+        </button>
+      ) : to !== undefined ? (
+        <Link to={to} className={className} style={colours} data-testid='group-chip'>
+          {name}
+        </Link>
+      ) : (
+        <span className={className} style={colours}>
+          {name}
+        </span>
+      )}
     </Tip>
   );
 };
@@ -651,9 +676,12 @@ export const GlobCard = ({
   environments,
   atf,
   viewer,
+  onFilterGroup,
 }: {
   glob: GlobView;
   onOpen: () => void;
+  /** Filters the board to a group (the card's group tag); without it the tag is plain. */
+  onFilterGroup?: (name: string) => void;
   /** Opens the glob at the section (and artifact or label) a chip or icon points to; `onOpen` opens it at the top. */
   onOpenSection: (target: GlobTarget) => void;
   onReviewLabel: ReviewLabel;
@@ -790,7 +818,7 @@ export const GlobCard = ({
       <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
         <div className='flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden'>
           <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
-            {glob.group !== null && <GroupChip name={glob.group} />}
+            {glob.group !== null && <GroupChip name={glob.group} onFilter={onFilterGroup} />}
             {decision ? (
               <DecisionChips glob={glob} onOpen={() => onOpenSection(cardTargets.decision())} />
             ) : (
