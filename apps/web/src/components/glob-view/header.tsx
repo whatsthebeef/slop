@@ -9,6 +9,7 @@ import { Tip } from '../ui/tip';
 import type { GlobView } from '@/lib/api';
 import type { GlobViewContext } from './context';
 import { TypeChip } from './actions';
+import { EscalationChip } from './escalation';
 import type { GlobActionsState } from './actions';
 
 const STATUS_TEXT: Record<GlobView['status'], string> = {
@@ -106,6 +107,7 @@ export const GlobChips = ({
       ) : (
         <TypeChip ctx={ctx} state={actions} />
       )}
+      <EscalationChip ctx={ctx} />
       {glob.group !== null && <GroupChip name={glob.group} />}
       {!decision && <LabelChips glob={glob} />}
       <span className="ml-auto text-xs text-muted-foreground">

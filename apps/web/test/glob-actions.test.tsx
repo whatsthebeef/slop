@@ -28,8 +28,12 @@ const callbacks = () => ({
     Promise.resolve(true),
   ),
   onReviewLabel: vi.fn(),
+  onDismissEdge: vi.fn(() => Promise.resolve(true)),
   onDecide: vi.fn(() => Promise.resolve(true)),
   onDelete: vi.fn(() => Promise.resolve()),
+  onAddStep: vi.fn(() => Promise.resolve(true)),
+  onCompleteStep: vi.fn(() => Promise.resolve(true)),
+  onDismissStep: vi.fn(() => Promise.resolve(true)),
 });
 
 /** Renders the glob view with stubbed callbacks; the server is never reached (every fetch fails and the queries stay empty). */

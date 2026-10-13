@@ -572,7 +572,7 @@ export const DecisionChips = ({ glob, onOpen }: { glob: GlobView; onOpen?: () =>
 };
 
 /** The muted marker for work still to come that only a person can do (a rollout): shown from the moment it is known, in every column. */
-const UpcomingStepsChip = ({ glob }: { glob: GlobView }) => {
+const UpcomingStepsChip = ({ glob, onOpen }: { glob: GlobView; onOpen: () => void }) => {
   const steps = glob.humanSteps ?? [];
   const upcoming = upcomingSteps(steps);
   if (upcoming === null) return null;
@@ -583,11 +583,11 @@ const UpcomingStepsChip = ({ glob }: { glob: GlobView }) => {
     .join('\n');
   return (
     <Tip text={tip}>
-      <span className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' data-testid='upcoming-steps-chip'>
+      <ChipButton onOpen={onOpen} className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' testId='upcoming-steps-chip'>
         <HumanIcon className='h-3 w-3' decorative />
         {first?.replace(/_/g, ' ')}
         {more.length > 0 && ` +${String(more.length)}`}
-      </span>
+      </ChipButton>
     </Tip>
   );
 };
@@ -732,6 +732,8 @@ export const GlobCard = ({
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
   const status = statusLine(glob, new Date().toISOString(), viewer);
+  // A stalled conflict is already said, briefly, by the position chip: say it once on the card.
+  const conflictSaid = status?.conflict === true && positionOf(glob, new Date().toISOString(), viewer)?.holder === 'stalled';
   const preview = moves.find((m) => m.action === previewing);
   // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status.
   const decision = decisionOf(glob) !== null;
@@ -794,7 +796,7 @@ export const GlobCard = ({
         <OverlapChip glob={glob} />
         <SplitChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
         <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
-        <UpcomingStepsChip glob={glob} />
+        <UpcomingStepsChip glob={glob} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
         {glob.clash != null && (
           <Tip text={`${glob.clash.with} also changes ${glob.clash.paths.join(', ')}; whichever merges second will conflict. Opens the conflict`}>
             <ChipButton onOpen={() => onOpenSection(cardTargets.conflict())} className='font-mono text-[11px] text-required' testId='clash-chip'>
@@ -808,7 +810,7 @@ export const GlobCard = ({
         {status !== null && !decision && status.kind === 'ready' && (
           <YourTurnChip glob={glob} status={status} pending={pending} onAct={(action) => onAct?.(action)} onOpenSection={onOpenSection} />
         )}
-        {status !== null && !decision && status.kind !== 'ready' && (
+        {status !== null && !decision && status.kind !== 'ready' && !conflictSaid && (
           <Tip text={`${status.tip}\n${clickTip(statusClick(status))}`}>
             <ChipButton
               onOpen={() => runChip(statusClick(status), () => undefined, onOpenSection)}

@@ -32,6 +32,7 @@ export const GlobPage = () => {
   useLiveBoard(boardId);
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
   const glob = useQuery({ queryKey: globKey(globId), queryFn: () => api.glob(globId), refetchInterval: REFRESH_MS });
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const view = glob.data;
   const state = view === undefined ? undefined : view.status === 'failed' || view.failure !== null ? 'failed' : view.status === 'signed_off' || view.pr?.state === 'merged' ? 'merged' : 'open';
   usePageContext({ type: 'glob', id: globId, ...(state === undefined ? {} : { state }), ...(view === undefined ? {} : { title: view.title }) });
@@ -62,6 +63,7 @@ export const GlobPage = () => {
     client.setQueryData(globKey(next.id), next);
     client.setQueryData<GlobView[]>(globsKey(next.boardId), (list) => withGlob(list, next, next.boardId));
   };
+  const viewerEmail = me.data?.email;
   const reload = async () => {
     store(await api.glob(open.id));
   };
@@ -102,6 +104,7 @@ export const GlobPage = () => {
         });
       }}
       onReviewLabel={(label: LabelName, command: LabelCommand) => change(() => api.reviewLabel(open.id, label, command, open.version))}
+      onDismissEdge={(edgeId: string) => change(() => api.dismissEdge(open.id, edgeId, open.version))}
       onDecide={(input) => change(() => api.decide(open.id, open.version, input))}
       onUpdate={async (changes: GlobChanges) => {
         try {
@@ -113,6 +116,10 @@ export const GlobPage = () => {
         }
       }}
       onReload={reload}
+      {...(viewerEmail === undefined ? {} : { email: viewerEmail })}
+      onAddStep={(step) => change(() => api.addHumanStep(open.id, step))}
+      onCompleteStep={(stepId) => change(() => api.completeHumanStep(open.id, stepId))}
+      onDismissStep={(stepId, reason) => change(() => api.dismissHumanStep(open.id, stepId, reason))}
       onDelete={async () => {
         try {
           await api.deleteGlob(open.id, open.version);

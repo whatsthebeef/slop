@@ -55,6 +55,18 @@ Full test runs and coverage are the **tester**'s job; don't run the full suite.
 
 You can't call slop, so say so in your summary under `## Needs a human`, with the reason and evidence, whenever you hit one of the escalation criteria in the board's `risk_and_size` document (read it if the orchestrator gave you its path). The orchestrator escalates the sub from it. Leave the section out when none applies; size alone is not a reason.
 
+## Write the rollout
+
+When the change needs anything done by a person after it merges (infrastructure or host deploy, environment variables or secrets, a setting in another product, a one-off command, an install), end your summary with `## Rollout`. The orchestrator copies it into the implementation record, and slop turns it into human steps that hold back the sign-off until each is done. Leave the section out when nothing is needed.
+
+- One step per line, in order, each concrete enough to follow without reading the code: the exact command or the exact setting and value. Mark each as a script (a command or file a person runs), a setting (a value to change somewhere) or manual, and say how to check it worked.
+- Where they fit, use the repo's own scripts: `infra/deploy/host-deploy.sh` to deploy the host and `infra/deploy/server-env.sh` to change the server's environment, instead of raw `aws` commands.
+- **Never run a step that changes paid infrastructure or IAM** (deploys, stack changes, role or policy changes, anything that creates or resizes billable resources), and never put credentials in a step. Write it for a person to run. Local checks and read-only commands are fine.
+
+## Hotspot files
+
+A **hotspot** is a file that keeps conflicting between parallel globs (`get_context` lists them in `hotspots`; the investigation names the ones this glob touches). When you change a hotspot, don't grow it: put the new code in a new module (a new component, helper or file) and keep the edit to the hotspot minimal, such as an import and one line that uses it. Don't refactor the hotspot yourself unless the plan says to; a refactor glob handles that.
+
 ## Coding guidelines
 
 - **Follow the board's conventions docs and existing patterns.** Match code style, naming, formatting and architecture. The conventions docs are authoritative for project-specific rules (quotes, formatting, typing, framework patterns).
@@ -76,3 +88,15 @@ You can't call slop, so say so in your summary under `## Needs a human`, with th
 ### Prettier check before reporting
 
 Before reporting (Mode A or B), run `npx prettier --check` on every new file. Run it also on every changed file that already matched Prettier on origin/main. Test that with `git show origin/main:<path> | npx prettier --check --stdin-filepath <path>`. Format any of these files that fail. Leave changed files that didn't match Prettier on main unformatted, so their diffs stay in scope.
+
+### Paid infrastructure and IAM changes
+
+Never run a step that changes paid infrastructure or IAM, whether unattended or interactive. That covers CDK or stack deploys, role or policy edits, and creating billable resources. A person runs these steps: write each one, with its exact command, under `## Rollout` in your summary. If such a command is refused, don't work around the refusal. Leave the step to the person and note it under `## Rollout`.
+
+### Unit tests that bypass the caller's filter
+
+When a component filters its input before calling a pure, unit-tested function, check that every branch the tests cover can still be reached through that filter. Either test through the same filter or move the filter into the function. A test that feeds the raw list can pass while the branch is dead in the UI. For example, `mainAction`'s tests expected Decide for a decision in Doing, but `GlobDetail` filtered `decide` out before calling it, so the button never showed.
+
+### Hotspot files
+
+`glob-dialog.tsx` is a known hotspot on this board: it changed in 17 merges in 8 hours on 2026-10-13. Treat it as one even when `get_context` or the investigation doesn't name it. Put new dialog sections, hooks or helpers in their own files next to it, and keep the edit to `glob-dialog.tsx` to the import and the line that renders or calls them.

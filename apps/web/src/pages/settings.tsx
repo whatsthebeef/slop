@@ -9,7 +9,8 @@ import { JobStatus } from '@/components/job-status';
 import { ReadinessChecklist } from '@/components/readiness';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
-import { api, RequestError } from '@/lib/api';
+import { api, healthKey, RequestError } from '@/lib/api';
+import { capabilityRows } from '@/lib/capabilities';
 import { MAX_REVIEW_TOOL_CAP, REVIEW_SEVERITY_CHOICES, reviewFormOf, reviewSettingsOfForm, toolCapInvalid } from '@/lib/review-settings';
 import type { ReviewForm } from '@/lib/review-settings';
 import { usePageContext } from '@/lib/page-context';
@@ -377,6 +378,8 @@ export const SettingsPage = () => {
       </section>
 
       <TimeReports boardId={boardId} />
+
+      <SystemCapabilities />
 
       <section className='grid gap-3'>
         <h2 className='text-sm font-semibold'>Members</h2>
@@ -748,6 +751,27 @@ const TimeReports = ({ boardId }: { boardId: number }) => {
   );
 };
 
+const CAPABILITY_STATE_TEXT = { on: 'On', off: 'Off', unknown: 'Not reported' } as const;
+
+/** What slop can verify about its own deployment; a human step with `check: <name>` is ticked once its capability is on. */
+const SystemCapabilities = () => {
+  const health = useQuery({ queryKey: healthKey, queryFn: api.health });
+  if (health.data === undefined) return null;
+  return (
+    <section className='grid gap-2' data-testid='system-capabilities'>
+      <h2 className='text-sm font-semibold'>System</h2>
+      <ul className='grid gap-1 text-sm'>
+        {capabilityRows(health.data.capabilities).map((row) => (
+          <li key={row.name} className='flex items-baseline gap-2' data-testid={`capability-${row.name}`}>
+            <span className={row.state === 'on' ? 'font-medium' : 'text-muted-foreground'}>{CAPABILITY_STATE_TEXT[row.state]}</span>
+            <span>{row.text}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+};
+
 const rate = (value: number | null): string => (value === null ? '-' : `${Math.round(value * 100)}%`);
 const median = (value: number | null, unit: string): string => (value === null ? '-' : `${Math.round(value * 10) / 10} ${unit}`);
 
@@ -910,6 +934,7 @@ const DEPENDENCY_CAUSE_TEXT: Record<DependencyCause, string> = {
   conflicted_overlap: 'An overlap conflicted or needed a rebase',
   unmerged_prerequisite: 'A run failed because a prerequisite was not merged',
   start_anyway_succeeded: 'A need was started anyway and merged without it',
+  edge_dismissed: 'A person dismissed an inferred dependency as wrong',
   reset: 'An admin reset the rule',
 };
 

@@ -14,6 +14,7 @@ import type {
   BoardSession,
   BoardJob,
   BoardJobStatus,
+  Capabilities,
   ContextReport,
   ContextSettingsView,
   CatalogUpdate,
@@ -57,16 +58,21 @@ import type {
   SlopType,
   RiskAreaView,
   EscalationView,
+  HotspotView,
   TypeLearningView,
   SubLimitChange,
   SubLimitView,
   CompactHumanStep,
+  HumanStep,
   DependencyRulesView,
   Edge,
   TargetChange,
 } from '@slop/core';
 import type { PageContext } from './page-context';
 import { takeSseEvents } from './sse';
+
+/** A step on the board list is compact; a single-glob read adds the rest (read each with `?.`). */
+export type ListedHumanStep = CompactHumanStep & Partial<Pick<HumanStep, 'detail' | 'script' | 'check' | 'source' | 'doneBy' | 'doneAt'>>;
 
 export interface GlobView extends Glob {
   readonly list: List;
@@ -92,7 +98,7 @@ export interface GlobView extends Glob {
   /** Why a person is needed and what to do first; null when nothing is wrong, absent on an older API (single-glob reads only). */
   readonly handover?: Handover | null;
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
-  readonly humanSteps?: readonly CompactHumanStep[];
+  readonly humanSteps?: readonly ListedHumanStep[];
   /** Whose move it is, derived on every read (board list only; absent on an older API). */
   readonly move?: Move;
   /** What slop is doing for the glob (board list only). */
@@ -444,6 +450,8 @@ export type ActionPath =
 
 /** What the board's banner shows: each integration that needs a person, and the in-app AWS sign-in (local development only). */
 export interface IntegrationHealthView {
+  /** What slop can verify about its own deployment; absent on an older API, and a name it can't tell is left out. */
+  readonly capabilities?: Capabilities;
   readonly integrations: readonly {
     readonly id: string;
     readonly name: string;
@@ -642,6 +650,15 @@ export const api = {
     request<GlobView>('POST', `/api/boards/${boardId}/globs`, { ...input, idempotencyKey: input.idempotencyKey ?? crypto.randomUUID() }),
   updateGlob: (id: string, version: number, changes: GlobChanges) =>
     request<GlobView>('PATCH', `/api/globs/${id}`, { ...changes, version }),
+  /** Human steps answer with the glob's view, steps included. A step change leaves the glob's version alone. */
+  addHumanStep: (id: string, step: { title: string; detail?: string; who?: string; due?: string }) =>
+    request<GlobView>('POST', `/api/globs/${id}/human-steps`, step),
+  completeHumanStep: (id: string, stepId: string) => request<GlobView>('POST', `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/complete`, {}),
+  dismissHumanStep: (id: string, stepId: string, reason: string) =>
+    request<GlobView>('POST', `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/dismiss`, { reason }),
+  /** A script artifact's text, or null when there is none (the kind is served from a later part). */
+  rolloutScript: (id: string, label: string) =>
+    request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts/rollout_script?label=${encodeURIComponent(label)}`).then((v) => v.at(-1)?.content ?? null),
   deleteGlob: (id: string, version: number) => request<object>('DELETE', `/api/globs/${id}`, { version }),
   action: (id: string, action: ActionPath, version: number, anyway?: boolean) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, anyway === true ? { version, anyway } : { version }),
@@ -714,6 +731,8 @@ export const api = {
   escalations: (boardId: number) => request<EscalationView>('GET', `/api/boards/${boardId}/escalations`),
   /** Puts the escalation criteria back to the defaults, keeping the history (admins). */
   resetEscalations: (boardId: number) => request<EscalationView>('POST', `/api/boards/${boardId}/escalations/reset`, {}),
+  /** The files that keep conflicting inside the window, with their numbers (members). */
+  hotspots: (boardId: number) => request<HotspotView>('GET', `/api/boards/${boardId}/hotspots`),
   /** The board's learned size threshold (oversized flag), its bounds and its history (members). */
   sizeThreshold: (boardId: number) => request<SizeThresholdView>('GET', `/api/boards/${boardId}/size-threshold`),
   /** The size forecast's calibration: weights, per-area factors against the defaults, and the history with causes (members). */
@@ -814,6 +833,9 @@ export const api = {
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel: (id: string, label: LabelName, command: LabelCommand, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/labels/${label}`, { command, version }),
+  /** The ✕ on a Dependencies row: the edge to `edgeId` is not a dependency. */
+  dismissEdge: (id: string, edgeId: string, version: number) =>
+    request<GlobView>('POST', `/api/globs/${id}/edges/${edgeId}/dismiss`, { version }),
 };
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {

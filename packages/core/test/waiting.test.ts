@@ -5,6 +5,7 @@ import type { CreateGlobInput } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
 import * as machine from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
+import { isDismissedFor, mergeImplied } from '../src/domain/exclusive-paths.js';
 import { blockingChain, chainRefusal, checkAfter, dependencyState, edgesOf, overlapIds, waitingFor } from '../src/domain/waiting.js';
 import type { DependencyState } from '../src/domain/waiting.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -308,6 +309,58 @@ describe('start after', () => {
     // Same value: nothing to refuse.
     expect((await globs.update(DEV, second.id, second.version, { after: [] })).ok).toBe(true);
   });
+
+  describe('dismissing an edge', () => {
+    const seed = (glob: Glob, edges: NonNullable<Glob['impliedAfter']>, after?: string[]): Glob => {
+      const withEdges = { ...glob, impliedAfter: edges, ...(after === undefined ? {} : { after }) };
+      store.state.globs.set(glob.id, { glob: withEdges, creationKey: null });
+      return withEdges;
+    };
+    const inferredNeed = (id: string) => ({ id, paths: [], kind: 'needs' as const, source: 'inferred' as const, evidence: 'it adds the endpoint this uses' });
+
+    it('marks a recorded edge overridden with the plan hash, logs EdgeDismissed and unblocks a sub that waited only for it', async () => {
+      const first = await create();
+      const sub = await create({ type: 'sub', after: [first.id] });
+      const waiting = seed(sub, [inferredNeed(first.id)], []);
+      expect(waiting.status).toBe('planning');
+      expect(unwrap(await globs.get(DEV, waiting.id)).waitingFor.map((w) => w.id)).toEqual([first.id]);
+
+      const dismissed = unwrap(await globs.dismissEdge(DEV, waiting.id, waiting.version, first.id));
+      expect(dismissed.impliedAfter?.[0]).toMatchObject({ id: first.id, overridden: true });
+      expect(dismissed.impliedAfter?.[0]?.dismissedPlanHash).toMatch(/^[0-9a-f]+$/);
+      expect(dismissed.status).toBe('implementing');
+      expect(dismissed.runs).toHaveLength(1);
+      const event = store.state.events.find((e) => e.globId === waiting.id && e.type === 'EdgeDismissed');
+      expect(event?.data).toMatchObject({ edgeId: first.id, kind: 'needs', source: 'inferred', planHash: dismissed.impliedAfter?.[0]?.dismissedPlanHash });
+      expect(store.state.events.some((e) => e.globId === waiting.id && e.type === 'HoldOverridden')).toBe(false);
+    });
+
+    it('refuses a stale version and an explicit edge, and a repeat changes nothing', async () => {
+      const first = await create();
+      const other = await create();
+      const second = await create({ after: [first.id] });
+      const seeded = seed(second, [...(second.impliedAfter ?? []), inferredNeed(other.id)]);
+      const stale = await globs.dismissEdge(DEV, seeded.id, seeded.version + 1, other.id);
+      expect(!stale.ok && stale.error.code).toBe('version_conflict');
+      const explicit = await globs.dismissEdge(DEV, seeded.id, seeded.version, first.id);
+      expect(!explicit.ok && explicit.error.code).toBe('invalid_input');
+      const unknown = await globs.dismissEdge(DEV, seeded.id, seeded.version, 's1t999');
+      expect(!unknown.ok && unknown.error.code).toBe('invalid_input');
+      const once = unwrap(await globs.dismissEdge(DEV, seeded.id, seeded.version, other.id));
+      const twice = unwrap(await globs.dismissEdge(DEV, seeded.id, once.version, other.id));
+      expect(twice.version).toBe(once.version);
+      expect(store.state.events.filter((e) => e.type === 'EdgeDismissed')).toHaveLength(1);
+    });
+
+    it('refuses an explicit overlap in the machine', () => {
+      const g = fixture({ id: 's1t5', impliedAfter: [{ id: 's1t2', paths: [], kind: 'overlaps', source: 'explicit' }] });
+      const refused = machine.dismissEdge(g, 's1t2', 'h', ctx(dev));
+      expect(!refused.ok && refused.error.code).toBe('invalid_input');
+      const implied = fixture({ id: 's1t5', impliedAfter: [{ id: 's1t2', paths: ['a'] }] });
+      const done = machine.dismissEdge(implied, 's1t2', 'h', ctx(dev));
+      expect(done.ok && done.value.glob.impliedAfter).toEqual([{ id: 's1t2', paths: ['a'], overridden: true, dismissedPlanHash: 'h' }]);
+    });
+  });
 });
 
 describe('waiting (pure)', () => {
@@ -370,6 +423,26 @@ describe('waiting (pure)', () => {
     const many = Array.from({ length: 21 }, (_, i) => `s1t${String(i + 100)}`);
     expect(checkAfter(null, many, 1, () => undefined).ok).toBe(false);
   });
+
+  it('words an inferred need by its reason, and a dismissed one no longer waits', () => {
+    const states = new Map<string, DependencyState>([['s1t2', 'open']]);
+    const inferred = { id: 's1t2', paths: [], kind: 'needs' as const, source: 'inferred' as const, evidence: 'the plan builds on s1t2\'s new endpoint' };
+    expect(waitingFor({ impliedAfter: [inferred] }, states).map((a) => a.why)).toEqual(["Waits for s1t2: the plan builds on s1t2's new endpoint"]);
+    const dismissed = { ...inferred, overridden: true as const, dismissedPlanHash: 'h1' };
+    expect(waitingFor({ impliedAfter: [dismissed] }, states)).toEqual([]);
+    expect(edgesOf({ impliedAfter: [dismissed] })).toEqual([
+      expect.objectContaining({ id: 's1t2', source: 'inferred', evidence: inferred.evidence, overridden: true, dismissedPlanHash: 'h1' }),
+    ]);
+  });
+
+  it('a dismissal suppresses re-inference only while the plan hash is unchanged', () => {
+    const edge = { id: 's1t2', paths: [], kind: 'needs' as const, source: 'inferred' as const, overridden: true as const, dismissedPlanHash: 'h1' };
+    expect(isDismissedFor(edge, 'h1')).toBe(true);
+    expect(isDismissedFor(edge, 'h2')).toBe(false);
+    expect(isDismissedFor({ ...edge, dismissedPlanHash: undefined }, 'h1')).toBe(false);
+    const fresh = { id: 's1t2', paths: [], kind: 'needs' as const, source: 'inferred' as const };
+    expect(mergeImplied([edge], [fresh])).toEqual([edge]);
+  });
 });
 
 describe('waiting transitions', () => {
@@ -378,12 +451,14 @@ describe('waiting transitions', () => {
   it('only the final merge queues release_waiting, not Merge and continue', () => {
     const plain = machine.merged(fixture({ status: 'pr_open', type: 'same' }), { sha: 'abc1234' }, ctx(null));
     expect(plain.ok && plain.value.effects.map((e) => e.kind)).toContain('release_waiting');
+    expect(plain.ok && plain.value.effects).toContainEqual({ kind: 'check_rollout_paths', globId: 's1t1', generation: 1, sha: 'abc1234' });
     const keepGoing = machine.merged(
       fixture({ status: 'merging', type: 'super', mergeMode: 'continue' }),
       { sha: 'abc1234', number: 7 },
       ctx(null),
     );
     expect(keepGoing.ok && keepGoing.value.effects.map((e) => e.kind)).not.toContain('release_waiting');
+    expect(keepGoing.ok && keepGoing.value.effects.map((e) => e.kind)).not.toContain('check_rollout_paths');
   });
 
   it('released does nothing for a glob that is not held, or still waits', () => {

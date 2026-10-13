@@ -46,12 +46,13 @@ export interface MoveOptions {
   readonly complete?: boolean;
 }
 
-/** Two states a person is the one to move in, whatever steps say: sign-off labels asked for, an escalation. */
-const personReason = (glob: Glob): string | null => {
-  if (glob.status === 'reviewing' && Object.values(glob.labels).some((l) => l === 'required' || l === 'added')) return 'Review needed';
-  if (glob.escalation != null && glob.status !== 'signed_off' && glob.status !== 'failed') return `Needs a human: ${glob.escalation.reason}`;
-  return null;
-};
+/** A state a person is the one to move in, whatever steps say: sign-off labels asked for. */
+const personReason = (glob: Glob): string | null =>
+  glob.status === 'reviewing' && Object.values(glob.labels).some((l) => l === 'required' || l === 'added') ? 'Review needed' : null;
+
+/** An escalation is a person's turn only when nothing else holds the ball: it never outranks a machine step (see `whoseMove`). */
+const escalationReason = (glob: Glob): string | null =>
+  glob.escalation != null && glob.status !== 'signed_off' && glob.status !== 'failed' ? `Needs a human: ${glob.escalation.reason}` : null;
 
 const holderOf = (who: string, glob: Pick<Glob, 'implementer' | 'planner'>): string =>
   who === 'implementer' ? (glob.implementer ?? glob.planner) : who;
@@ -126,11 +127,51 @@ export const whoseMove = (
     return { holder: 'waiting', reason: `waiting for ${first?.title ?? 'a step'}`, since: null, waitingOn: rollouts.map((s) => s.id) };
   }
 
-  // 4. A person's turn by state: sign-off asked for, an escalation. Nothing failed.
+  // 4. A person's turn by state: sign-off asked for. Nothing failed.
   const person = personReason(glob);
   const failed = machineSteps.filter((s) => s.state === 'failed');
   if (person !== null && failed.length === 0 && quiet.length === 0) {
     return { holder: options.viewer !== undefined && (glob.implementer ?? glob.planner) === options.viewer.email ? 'you' : 'human', reason: person, since: null, who: glob.implementer ?? glob.planner };
+  }
+
+  // 4a. A person's turn by escalation. It never outranks a machine step (step 2) or a watcher answering failed checks (4b below);
+  // it does outrank the open-PR next steps (conflict, failed checks nobody answers, 'merges by itself').
+  const escalation = escalationReason(glob);
+  const watcherAnswers =
+    glob.pr !== null &&
+    glob.status === 'pr_open' &&
+    glob.headChecks?.state === 'failed' &&
+    glob.headChecks.inheritedFrom === undefined &&
+    machineSteps.some((s) => s.state === 'standby');
+  if (escalation !== null && failed.length === 0 && quiet.length === 0 && !watcherAnswers) {
+    return {
+      holder: options.viewer !== undefined && (glob.implementer ?? glob.planner) === options.viewer.email ? 'you' : 'human',
+      reason: escalation,
+      since: null,
+      who: glob.implementer ?? glob.planner,
+    };
+  }
+
+  // 4b. An open PR with a conflict or failing checks and nothing working on it has a next step: never "nobody".
+  if (failed.length === 0 && quiet.length === 0 && glob.pr !== null && glob.status === 'pr_open') {
+    const mover = (reason: string): Move => ({
+      holder: options.viewer !== undefined && (glob.implementer ?? glob.planner) === options.viewer.email ? 'you' : 'human',
+      reason,
+      since: null,
+      who: glob.implementer ?? glob.planner,
+    });
+    const standby = machineSteps.find((s) => s.state === 'standby');
+    if (glob.conflict != null) return mover(glob.implementer !== null ? 'Fix conflict: pick up' : 'Fix conflict');
+    const checks = glob.headChecks;
+    // A sub with passing checks merges by itself: slop is about to do it.
+    if (glob.type === 'sub' && glob.conflict == null && checks?.state === 'passed' && checks.sha === glob.pr.headSha) {
+      return { holder: 'waiting', reason: 'merges by itself', since: checks.at ?? null, waitingOn: ['merge'] };
+    }
+    if (checks?.state === 'failed' && checks.inheritedFrom === undefined) {
+      // A watching run is about to answer failed checks; otherwise it is a person's.
+      if (standby !== undefined) return { holder: 'machine', reason: 'fix checks', since: checks.at ?? null };
+      return mover('Fix checks');
+    }
   }
 
   // 5. Idle: a Planning glob nobody started.

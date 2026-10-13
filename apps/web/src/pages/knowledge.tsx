@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Link, useParams } from 'react-router';
 import { AgentSetFiles, LineDiff } from '@/components/agent-set-files';
+import { Hotspots } from '@/components/hotspots';
 import { AgentSetHistory, KnowledgePageView } from '@/components/knowledge-page-view';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -222,7 +223,7 @@ export const KnowledgePage = () => {
           Merge policy{kb.data.mergePolicy.version === null ? '' : ` · version ${kb.data.mergePolicy.version}`}
         </h2>
         <p className='text-xs text-muted-foreground'>
-          Which paths only one open glob may change at a time (<code>exclusivePaths</code>: globs that would both change one wait for each other) and which are left out when a sub is sized (<code>sizeIgnoredPaths</code>). It changes only through an approved proposal (target: Merge policy).
+          Which paths only one open glob may change at a time (<code>exclusivePaths</code>: globs that would both change one wait for each other) and which are left out when a sub is sized (<code>sizeIgnoredPaths</code>), and which need a rollout step when merged without a Rollout section in the implementation record (<code>rolloutPaths</code>; defaults to <code>infra/**</code>, <code>apps/server/src/config.ts</code>, <code>.github/workflows/**</code> and <code>**/drizzle/**</code>). It changes only through an approved proposal (target: Merge policy).
         </p>
         {kb.data.mergePolicy.problem !== null && <p className='text-xs text-destructive'>{kb.data.mergePolicy.problem}; it isn't used.</p>}
         {kb.data.mergePolicy.content === null ? (
@@ -231,6 +232,8 @@ export const KnowledgePage = () => {
           <pre className='overflow-x-auto rounded border p-2 text-xs'>{kb.data.mergePolicy.content}</pre>
         )}
       </section>
+
+      <Hotspots boardId={boardId} admin={admin} />
 
       {viewing !== null && (
         <Dialog open onOpenChange={(o) => !o && setViewing(null)}>

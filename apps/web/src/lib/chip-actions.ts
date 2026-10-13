@@ -31,6 +31,8 @@ export const checksUrl = (repo: string | undefined, glob: Pick<GlobView, 'pr'>):
  */
 export const yourTurnClick = (status: StatusLine, glob: Pick<GlobView, 'allowedActions'> & Partial<Pick<GlobView, 'currentRun'>>): ChipClick => {
   const allowed = glob.allowedActions ?? [];
+  // A stored work step (a rollout) is ticked in the Human steps section, whatever its kind.
+  if (status.work === true) return { kind: 'section', target: cardTargets.humanSteps() };
   // A step that names its action runs it (or opens the run's session); the action is only used while the glob view still offers it.
   if (status.action === 'open_session') {
     const session = glob.currentRun?.state === 'ended' ? null : (glob.currentRun?.sessionUrl ?? null);
@@ -67,6 +69,7 @@ export const positionClick = (position: Position, glob: GlobView, repo: string |
 
 /** What clicking a problem on the status line does: its failing check, its session, or the section it is about. */
 export const statusClick = (status: StatusLine): ChipClick => {
+  if (status.kind === 'rollout') return { kind: 'section', target: cardTargets.humanSteps() };
   if (status.url !== null) return { kind: 'link', url: status.url };
   if (status.sessionUrl !== null) return { kind: 'link', url: status.sessionUrl };
   return { kind: 'section', target: cardTargets.actions() };

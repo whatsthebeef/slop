@@ -8,6 +8,7 @@ import {
   yourTurn,
 } from '@slop/core';
 import type { Action, BlockedBy, Edge, HumanStepKind, HumanStepViewer, Role, StepAction } from '@slop/core';
+import { rolloutLine } from './human-steps';
 import type { GlobView } from './api';
 import { actionPresentation, type ActionIcon } from './action-presentation';
 
@@ -22,6 +23,7 @@ export interface StatusLine {
     | 'stuck'
     | 'behind'
     | 'ready'
+    | 'rollout'
     | 'merge-waits';
   /** One line, cut short: the card's text. */
   readonly text: string;
@@ -40,6 +42,10 @@ export interface StatusLine {
   readonly turn?: HumanStepKind;
   /** For `ready` (Your turn): the one action the step's chip runs; absent when the step needs input in the glob view. */
   readonly action?: StepAction;
+  /** For `ready`: the due step is a stored work step (a rollout), done in the Human steps section. */
+  readonly work?: true;
+  /** The problem is a merge conflict: the card says it in a few words and the glob view lists the files. */
+  readonly conflict?: true;
 }
 
 /** The longest label a Your turn chip shows: one or two words; the step's full title goes in the tooltip. */
@@ -68,6 +74,7 @@ const ALSO = {
   stuck: 'looks stuck',
   behind: 'the branch is behind the base',
   ready: '',
+  rollout: '',
   'merge-waits': '',
 } as const;
 
@@ -147,7 +154,17 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
   }
   if (failed && !provisioningFailed) {
     const tip = `${reason}${/^(Routine run never started|The run's session never reached slop)/.test(glob.failure?.reason ?? '') && session !== null ? `\nSession: ${session}` : ''}`;
-    candidates.push(make({ kind: 'failure', full: reason, tone: 'text-red', tip }));
+    candidates.push(
+      make({
+        kind: 'failure',
+        full: reason,
+        tone: 'text-red',
+        tip,
+        ...(failure?.conflict === undefined
+          ? {}
+          : { text: 'Stalled: merge conflict', conflict: true as const }),
+      }),
+    );
   }
   // An investigation is an artifact, not the glob's work: its failure is a note, never the red failure of an implementation.
   if (investigationFailed) {
@@ -162,10 +179,20 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
       }),
     );
   }
-  if (hint !== null)
+  if (hint !== null) {
+    const flagged = failure === null ? glob.conflict : null;
     candidates.push(
-      make({ kind: 'stuck', full: hintSentence(hint), tone: 'text-required', tip: hint }),
+      make({
+        kind: 'stuck',
+        full: hintSentence(hint),
+        tone: 'text-required',
+        tip: hint,
+        ...(flagged == null
+          ? {}
+          : { text: `Merge conflict with ${flagged.base}`, conflict: true as const }),
+      }),
     );
+  }
   const behind = behindWarning(glob);
   if (behind !== null) {
     candidates.push(
@@ -181,6 +208,16 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
   if (candidates.length === 0) {
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha);
+    // Merged with its rollout still open: how far it is, and whose turn.
+    const rollout = glob.humanSteps === undefined ? null : rolloutLine(glob, glob.humanSteps, viewer);
+    if (rollout !== null)
+      return make({
+        kind: rollout.turn === null ? 'rollout' : 'ready',
+        full: rollout.text,
+        ...(rollout.turn === null ? {} : { turn: rollout.turn.kind, work: true as const }),
+        tone: rollout.turn === null ? 'text-muted-foreground' : 'text-signal-strong',
+        tip: rollout.tip,
+      });
     // Your turn is the first due step for the viewer; an API without human steps (or no viewer) still has the Merge turn.
     const turn =
       glob.humanSteps !== undefined && viewer !== undefined
@@ -412,7 +449,16 @@ export interface NeedRow {
   /** The status word ("Doing", "PR open", ...); the board's own words, from the blocking chain. */
   readonly status: string | null;
   readonly why: string;
+  /** A recorded edge a person may dismiss with the ✕ (not one they set themselves). */
+  readonly dismissible: boolean;
 }
+
+/**
+ * Whether a row's ✕ ("Not a dependency") applies: a recorded edge (implied, learned or inferred), not one a person set and
+ * not one already dismissed.
+ */
+export const isDismissible = (edge: Edge | undefined): boolean =>
+  edge !== undefined && edge.source !== 'explicit' && edge.dismissedPlanHash === undefined;
 
 /** What the glob view's Dependencies section shows. */
 export interface DependencySummary {
@@ -430,10 +476,11 @@ export const dependencySummary = (glob: GlobView): DependencySummary | null => {
   const chain = glob.blockedBy ?? [];
   const needs = (glob.waitingFor ?? []).map((w) => {
     const ahead = chain.find((b) => b.id === w.id);
-    return { id: w.id, status: ahead === undefined ? null : statusWords(ahead.status), why: w.why };
+    const edge = (glob.edges ?? []).find((e) => e.id === w.id);
+    return { id: w.id, status: ahead === undefined ? null : statusWords(ahead.status), why: w.why, dismissible: isDismissible(edge) };
   });
   const alsoAhead = chain.filter((b) => b.depth > 1).sort((a, b) => a.depth - b.depth);
-  const overlaps = (glob.edges ?? []).filter((e) => e.kind === 'overlaps');
+  const overlaps = (glob.edges ?? []).filter((e) => e.kind === 'overlaps' && e.dismissedPlanHash === undefined);
   const waitedOnBy = glob.waitedOnBy ?? [];
   if (
     needs.length + alsoAhead.length + overlaps.length + waitedOnBy.length === 0 &&

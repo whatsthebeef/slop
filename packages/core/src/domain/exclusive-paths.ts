@@ -63,7 +63,11 @@ export const namesExclusivePath = (policy: MergePolicy, plan: string): boolean =
   });
 };
 
-/** Adds holds to a glob's, one per awaited glob; an existing hold (even an overridden one) is kept as it is. */
+/** Whether a person dismissed this edge for the plan as it is now: a changed plan lets it be inferred again. */
+export const isDismissedFor = (edge: ImpliedAfter, planHash: string): boolean =>
+  edge.overridden === true && edge.dismissedPlanHash === planHash;
+
+/** Adds holds to a glob's, one per awaited glob; an existing hold (even an overridden or dismissed one) is kept as it is. */
 export const mergeImplied = (
   existing: readonly ImpliedAfter[] | undefined,
   added: readonly ImpliedAfter[],

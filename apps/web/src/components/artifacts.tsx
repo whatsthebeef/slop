@@ -1,7 +1,20 @@
 import { parseInvestigation } from '@slop/core';
 import type { ArtifactKind, Investigation } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ClipboardCheck, FileCheck, FileText, Microscope, Paperclip, Plus, SearchCheck } from 'lucide-react';
+import {
+  Activity,
+  FileText,
+  Gavel,
+  Hammer,
+  ListChecks,
+  Microscope,
+  Paperclip,
+  PencilLine,
+  Plus,
+  Scale,
+  SearchCheck,
+  Terminal,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
@@ -24,18 +37,19 @@ export const ARTIFACT_META: Record<
   { readonly title: string; readonly icon: LucideIcon }
 > = {
   plan: { title: 'plan.md', icon: FileText },
-  implementation_plan: { title: 'Implementation record', icon: FileCheck },
+  implementation_plan: { title: 'Implementation record', icon: Hammer },
   // Legacy rows only: postplans were migrated into the record and writes to the kind land there.
-  postplan: { title: 'Postplan (old)', icon: FileCheck },
-  local_review: { title: 'Local review', icon: ClipboardCheck },
+  postplan: { title: 'Postplan (old)', icon: Hammer },
+  local_review: { title: 'Local review', icon: ListChecks },
   independent_review: { title: 'Independent review', icon: SearchCheck },
   investigation: { title: 'Investigation', icon: Microscope },
-  assessment: { title: 'Assessment', icon: ClipboardCheck },
+  assessment: { title: 'Assessment', icon: Scale },
   // A KB learning's pipeline output (JSON), shown by the decision section rather than as files.
-  draft: { title: 'Draft', icon: FileText },
-  outcome: { title: 'Outcome', icon: FileCheck },
-  effect_check: { title: 'Effect check', icon: SearchCheck },
+  draft: { title: 'Draft', icon: PencilLine },
+  outcome: { title: 'Outcome', icon: Gavel },
+  effect_check: { title: 'Effect check', icon: Activity },
   attachment: { title: 'Attachment', icon: Paperclip },
+  rollout_script: { title: 'Rollout script', icon: Terminal },
 };
 
 /** The kinds shown as icons on a card, in this order. */
@@ -53,7 +67,7 @@ export interface ArtifactRef {
 }
 
 const titleOf = (a: ArtifactRef) =>
-  a.kind === 'attachment' ? a.label : ARTIFACT_META[a.kind].title;
+  a.kind === 'attachment' || a.kind === 'rollout_script' ? a.label : ARTIFACT_META[a.kind].title;
 const when = (iso: string) => new Date(iso).toLocaleString();
 const shortSha = (sha: string) => sha.slice(0, 7);
 

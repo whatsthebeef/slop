@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, IntakeService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
-import { AGENT_KB_APPROVALS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
+import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -671,6 +671,50 @@ export const createApp = (deps: AppDeps) => {
       c,
       await globs.reviewLabel(c.get('email'), c.req.param('id'), body.version, label.data, body.command),
     );
+  });
+
+  // The ✕ on a Dependencies row: the edge is not a dependency (a held glob that waited only for it then starts).
+  app.post('/api/globs/:id/edges/:edgeId/dismiss', async (c) => {
+    const body = await parse(c, versionSchema);
+    if (body instanceof Response) return body;
+    const result = await globs.dismissEdge(c.get('email'), c.req.param('id'), body.version, c.req.param('edgeId'));
+    if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
+    return withView(c, result);
+  });
+
+  // Human steps (the glob view's Human steps section; MCP's add/complete/dismiss_human_step). Each answers with the glob's
+  // view, steps included, so the page replaces its state. A step change leaves the glob's version alone, so it is optional.
+  const stepVersion = z.number().int().optional();
+  const afterStep = async (c: Context<Env>, result: Awaited<ReturnType<GlobService['addHumanStep']>>) =>
+    result.ok ? send(c, await globs.get(c.get('email'), result.value.globId), globViewOf) : send(c, result);
+
+  app.post('/api/globs/:id/human-steps', async (c) => {
+    const body = await parse(
+      c,
+      z.object({
+        version: stepVersion,
+        title: z.string().min(1),
+        kind: z.enum(HUMAN_STEP_KINDS).optional(),
+        detail: z.string().optional(),
+        who: z.string().optional(),
+        due: z.string().optional(),
+      }),
+    );
+    if (body instanceof Response) return body;
+    const { version, ...step } = body;
+    return afterStep(c, await globs.addHumanStep(c.get('email'), c.req.param('id'), version ?? null, step, 'person'));
+  });
+
+  app.post('/api/globs/:id/human-steps/:stepId/complete', async (c) => {
+    const body = await parse(c, z.object({ version: stepVersion }));
+    if (body instanceof Response) return body;
+    return afterStep(c, await globs.completeHumanStep(c.get('email'), c.req.param('id'), c.req.param('stepId'), body.version ?? null));
+  });
+
+  app.post('/api/globs/:id/human-steps/:stepId/dismiss', async (c) => {
+    const body = await parse(c, z.object({ version: stepVersion, reason: z.string().min(1) }));
+    if (body instanceof Response) return body;
+    return afterStep(c, await globs.dismissHumanStep(c.get('email'), c.req.param('id'), c.req.param('stepId'), body.reason, body.version ?? null));
   });
 
   /** Responds with the updated glob and the actions now open to the caller. */

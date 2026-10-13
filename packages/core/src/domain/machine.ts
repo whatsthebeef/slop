@@ -305,14 +305,17 @@ class Builder {
   }
 
   /**
-   * Ends the current run only when it is watching the PR (a failure the watcher can't act on, e.g. a merge failure, would
-   * otherwise leave it blocking Pick up, Retrigger and Resolve conflict). A working (`active`) run is left alone: its next
-   * `get_glob` check stops it.
+   * The glob just failed: a queued, active or watching run it leaves behind could never be ended (report_failure and
+   * Pick up refuse it), so end it as superseded. A conflict-fix run queued for the very conflict that failed the glob is
+   * kept (`report_failure` from it is accepted on a failed glob).
    */
-  endWatchingRun(failureReason: string): this {
-    return currentRun(this.glob)?.state === 'watching'
-      ? this.endRun('failed', failureReason)
-      : this;
+  endRunsOnFailure(reason: string, failure: Failure): this {
+    const run = currentRun(this.glob);
+    if (run === null || run.state === 'ended') return this;
+    if (run.purpose === 'resolve_conflict' && failure.conflict !== undefined && run.state !== 'watching') return this;
+    return run.state === 'watching'
+      ? this.endRun('failed', reason)
+      : this.endRun('superseded', `failed: ${reason}`, { cause: 'glob_failed' });
   }
 
   updateRun(patch: Partial<Run>): this {
@@ -675,6 +678,26 @@ export const startAnyway = (
 };
 
 /**
+ * A person says a recorded edge (implied, learned or inferred) is not a dependency: it stops holding and `planHash` is
+ * kept so a changed plan may infer it again. Explicit edges (`after`, explicit overlaps) are never dismissed. A repeat
+ * on an edge already dismissed is a no-op.
+ */
+export const dismissEdge = (glob: Glob, edgeId: string, planHash: string, ctx: Context): Result<Transition> => {
+  requireActor(ctx);
+  if ((glob.after ?? []).includes(edgeId)) return invalidInput(`${edgeId} was set as a dependency by a person; change it in Waits for`);
+  const edge = (glob.impliedAfter ?? []).find((i) => i.id === edgeId);
+  if (edge === undefined) return invalidInput(`${glob.id} has no recorded edge to ${edgeId}`);
+  if (edge.source === 'explicit') return invalidInput(`The edge to ${edgeId} was set by a person and cannot be dismissed`);
+  if (edge.overridden === true && edge.dismissedPlanHash !== undefined) return unchanged(glob);
+  return new Builder(glob, ctx)
+    .set({
+      impliedAfter: (glob.impliedAfter ?? []).map((i) => (i.id === edgeId ? { ...i, overridden: true as const, dismissedPlanHash: planHash } : i)),
+    })
+    .event('EdgeDismissed', { edgeId, kind: edge.kind ?? 'overlaps', source: edge.source ?? 'implied', planHash })
+    .done();
+};
+
+/**
  * Row 33: a glob this one waited for merged. When everything it waits for has merged, it starts as a fresh sub (or
  * auto-started same) would: branch cut from the current base, run queued for whoever created it. Anything else, or a
  * second call, changes nothing, so the outbox can deliver it any number of times.
@@ -755,21 +778,23 @@ export const pickUp = (
     run.state !== 'active' &&
     run.state !== 'ended' &&
     glob.type !== 'super' &&
-    (glob.status === 'implementing' || glob.status === 'pr_open');
+    (glob.status === 'implementing' || glob.status === 'pr_open' || glob.status === 'failed');
   if (options.takeOver || idleRun) {
     // Row 10.
     if (!hasLiveRun(glob) || glob.type === 'super') {
       return invalidTransition(glob, actor, 'There is no routine run to pick up from');
     }
-    if (glob.status !== 'implementing' && glob.status !== 'pr_open') {
-      return invalidTransition(glob, actor, 'Pick up applies to implementing or pr_open globs');
+    if (glob.status !== 'implementing' && glob.status !== 'pr_open' && glob.status !== 'failed') {
+      return invalidTransition(glob, actor, 'Pick up applies to implementing, pr_open or failed globs');
     }
     const b = new Builder(glob, ctx)
       .endRun('superseded', null, { cause: 'take_over' })
       .bumpGeneration()
       .set({ implementer: actor.email })
       .event('PickedUp', { takeOver: true });
-    if (glob.status === 'implementing') b.status('in_progress');
+    // A failed glob is the person's to fix now, as when a failed glob is picked up (row 6).
+    if (glob.status === 'failed') b.set({ failure: null });
+    if (glob.status === 'implementing' || glob.status === 'failed') b.status('in_progress');
     if (environmentChanged) setEnvironment(b, environment);
     return b.done();
   }
@@ -824,11 +849,22 @@ const setEnvironment = (b: Builder, environment: string | null): Builder => {
 /** Whether the glob's PR was left by an ended auto-fix run: ready for review, a failure on the card, nobody working on it. */
 const canRetryAutofix = (glob: Glob): boolean => {
   const run = currentRun(glob);
+  if (
+    glob.status !== 'pr_open' ||
+    glob.type === 'super' ||
+    glob.implementer !== null ||
+    glob.pr === null
+  )
+    return false;
+  // Failed checks of this glob's own change with nothing watching them: always fixable, whatever ended the earlier run.
+  if (
+    glob.pr.state === 'ready' &&
+    glob.conflict == null &&
+    headChecksFailed(glob) &&
+    glob.headChecks?.inheritedFrom === undefined
+  )
+    return true;
   return (
-    glob.status === 'pr_open' &&
-    glob.type !== 'super' &&
-    glob.implementer === null &&
-    glob.pr !== null &&
     glob.failure !== null &&
     glob.failure.kind === undefined &&
     run?.state === 'ended' &&
@@ -1026,6 +1062,9 @@ export const conflictCleared = (
     by,
     kind,
   });
+  // The fix is pushed and nothing is left for the run: it now watches the PR's checks like any run on a ready PR.
+  if (run?.purpose === 'resolve_conflict' && run.state === 'active' && glob.status === 'pr_open')
+    b.updateRun({ state: 'watching', lastProgressAt: ctx.now });
   if (backToReview(glob) && glob.pr?.headSha != null) returnToReview(b, glob.pr.headSha);
   return b.done();
 };
@@ -1854,6 +1893,9 @@ export const SESSION_NEVER_REACHED_SLOP_MINUTES = 5;
 const SESSION_NEVER_REACHED_SLOP =
   "The run's session never reached slop (the Slop connector may not have attached). Discard & restart.";
 
+/** How long a live run on a failed glob may go without progress before the run watch ends it. */
+export const FAILED_RUN_QUIET_MINUTES = 30;
+
 /** The reason `runTimeoutReason` gives a watching run that ignored failed checks. */
 const GAVE_UP = /^Auto-fix didn't respond/;
 
@@ -1906,6 +1948,12 @@ export const runTimeoutReason = (
   const hours = (from: string | null) =>
     from === null ? 0 : (Date.parse(now) - Date.parse(from)) / 3_600_000;
   const lastProgress = run.lastProgressAt ?? run.startedAt ?? run.queuedAt;
+  // A run on a failed glob has nothing left to do and no way to be ended by anyone else: a quiet one is ended early.
+  if (glob.status === 'failed') {
+    return minutesSince(lastProgress, now) >= FAILED_RUN_QUIET_MINUTES
+      ? `No progress for ${String(FAILED_RUN_QUIET_MINUTES)} minutes on a failed glob`
+      : null;
+  }
   if (run.state === 'watching') {
     const failed = ownFailedHead(glob);
     if (failed?.at === undefined) return null;
@@ -1932,9 +1980,13 @@ export const runProgress = (glob: Glob, runId: string, ctx: Context): Result<Tra
   if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
   return new Builder(glob, ctx)
     .updateRun({
-      // A run retried on a ready PR watches it; there is no PR to mark ready.
+      // A run retried on a ready PR watches it; there is no PR to mark ready. A conflict-fix run has work to do first, unless the conflict already cleared.
       state:
-        run.state === 'queued' ? (glob.status === 'pr_open' ? 'watching' : 'active') : run.state,
+        run.state === 'queued'
+          ? glob.status === 'pr_open' && (run.purpose !== 'resolve_conflict' || glob.conflict == null)
+            ? 'watching'
+            : 'active'
+          : run.state,
       startedAt: run.startedAt ?? ctx.now,
       lastProgressAt: ctx.now,
     })
@@ -2110,12 +2162,10 @@ export const checksCompleted = (
     }
     if (!passed) {
       const reason = `Checks failed after updating the branch${failure === undefined ? '' : `: ${failureSummary(failure)}`}`;
+      const mergeFailure: Failure = { reason, at: ctx.now, kind: 'merge' };
       return b
-        .endWatchingRun(reason)
-        .set({
-          failure: { reason, at: ctx.now, kind: 'merge' },
-          mergeMode: null,
-        })
+        .endRunsOnFailure(reason, mergeFailure)
+        .set({ failure: mergeFailure, mergeMode: null })
         .event('MergeFailed', { reason: 'checks failed after update' })
         .status('failed')
         .done();
@@ -2478,7 +2528,9 @@ export const merged = (
     .status('reviewing')
     .effect({ kind: 'flag_conflicts', globId: glob.id, generation: glob.generation })
     // Only the final merge releases the globs waiting for this one (a Merge and continue leaves it open).
-    .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation });
+    .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation })
+    // Likewise: a Merge and continue is not the change that is rolled out.
+    .effect({ kind: 'check_rollout_paths', globId: glob.id, generation: glob.generation, sha: merge.sha });
   // A sub merges without human review, so its one review runs after the merge (a same or super was reviewed before it).
   if (glob.type === 'sub')
     b.effect({
@@ -2491,7 +2543,11 @@ export const merged = (
   return b.done();
 };
 
-/** Row 16: slop's own merge failed (conflict, or checks failed after updating the branch). */
+/**
+ * Row 16: slop's own merge failed. A conflict is an ordinary "merge the base into the branch" job, not a failure: the
+ * glob stays in pr_open with the conflict flagged (the same as when the conflict shows on the updated head's checks), and
+ * a conflict-fix run already queued carries on. Anything else fails the glob.
+ */
 export const mergeFailed = (
   glob: Glob,
   reason: string,
@@ -2499,17 +2555,15 @@ export const mergeFailed = (
   conflict?: MergeConflict,
 ): Result<Transition> => {
   if (glob.status !== 'merging') return unchanged(glob);
+  if (conflict !== undefined) {
+    return withConflict(new Builder(glob, ctx).set({ mergeMode: null }).status('pr_open'), conflict, ctx)
+      .event('MergeFailed', { reason, conflict: true })
+      .done();
+  }
+  const failure: Failure = { reason, at: ctx.now, kind: 'merge' };
   return new Builder(glob, ctx)
-    .endWatchingRun(reason)
-    .set({
-      failure: {
-        reason,
-        at: ctx.now,
-        kind: 'merge',
-        ...(conflict === undefined ? {} : { conflict }),
-      },
-      mergeMode: null,
-    })
+    .endRunsOnFailure(reason, failure)
+    .set({ failure, mergeMode: null })
     .event('MergeFailed', { reason })
     .status('failed')
     .done();
@@ -2649,6 +2703,11 @@ export const reportFailure = (
     }
     return b.set({ failure }).done();
   }
+  if (glob.status === 'failed') {
+    // A live run on a failed glob (a conflict fix queued for the failure, or a run that went quiet) must be endable by its own
+    // report: it ends and says why, and the glob keeps the failure it already shows.
+    return new Builder(glob, ctx).endRun('failed', report.reason, { agentSetVersion }).done();
+  }
   return invalidTransition(glob, ctx.actor, `Run failure ignored: glob is ${glob.status}`);
 };
 
@@ -2703,14 +2762,15 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     !hasBusyRun(glob) &&
     (glob.status === 'planning' ||
       glob.status === 'failed' ||
-      ((glob.status === 'in_progress' || glob.status === 'pr_open') &&
-        glob.implementer !== actor.email));
+      glob.status === 'in_progress' ||
+      glob.status === 'pr_open');
+  // The glob's own implementer is offered it too (row 8: a no-op that reopens their session), so their own glob is never a dead end.
   if (canPickUp) actions.push('pick_up');
   if (
     !restricted &&
     glob.type !== 'super' &&
     hasLiveRun(glob) &&
-    (glob.status === 'implementing' || glob.status === 'pr_open')
+    (glob.status === 'implementing' || glob.status === 'pr_open' || glob.status === 'failed')
   ) {
     actions.push('take_over');
   }
