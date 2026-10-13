@@ -41,8 +41,8 @@ Every write to slop that takes a `version` must use the version you most recentl
 When a run ID is given:
 
 - Never call `AskUserQuestion` and never wait for a person. Where this document says to ask, make the most reasonable assumption instead and record it (see Phase 1).
-- **Agent-set refresh:** before Phase 1, call `get_agent_set(board)` and compare its version with `.claude/slop-agent-set.json`. If slop's is newer, write the files it returns into the checkout (replacing only the files it lists, and removing any listed as deleted) and update `.claude/slop-agent-set.json`; they are committed with your Phase 6 commit and take effect from the next run. Carry on with the instructions already loaded. **Only on the glob's branch:** if `git branch --show-current` is `<base>` (a session started in the main checkout), do not write any files: say that a newer agent set exists and that it arrives with the next glob's commit, or `sstor init` on a branch. Uncommitted agent-set files on `<base>` make `dev.sh follow` hold.
-- If the fire text says **INVESTIGATE-ONLY**, follow **Investigate-only runs** instead of the rest of this section and of the Workflow: no agent-set refresh, no branch checkout, no commits.
+- **Agent-set check:** before Phase 1, call `get_agent_set(board)` and compare its version with `.claude/slop-agent-set.json`. If they differ, carry on with the committed set and **write nothing**: no agent-set files, no manifest. In a routine, record both versions in the `Assumptions` attachment ("board's agent set is vN, repo has vM"); in a local session, say so in the output. A newer set reaches the repo through the "Agent set vN" glob slop opens and commits itself, and `sstor init` installs one in a checkout.
+- If the fire text says **INVESTIGATE-ONLY**, follow **Investigate-only runs** instead of the rest of this section and of the Workflow: no agent-set check, no branch checkout, no commits.
 - Do **not** call `pick_up`: routines never record a human implementer.
 - Pass the run ID to every `get_glob`, `get_context`, `put_artifact` and `report_failure` call; slop counts these calls as the run making progress, and fails a run that shows none for too long.
 - Every commit carries the trailer `Slop-Run: <runId>`.
@@ -59,7 +59,7 @@ In an interactive session, call `pick_up(id, version)` before Phase 1. If you ar
 
 Everything specific to the board and its project (build commands, conventions, review checklists, architecture, approved learnings) lives in the board's knowledge base in slop. Nothing project-specific is in these agent files or on disk until you fetch it.
 
-1. In Phase 1, call `get_conventions(board)` with no area. It returns the board's knowledge index: each document's title, area, description and **audience** (the agents it must always be given), plus the approved decisions, gotchas and patterns from earlier globs.
+1. In Phase 1, call `get_conventions(board)` with no area. It returns the board's knowledge index: each document's title, area, description and **audience** (the agents it must always be given), plus the approved gotchas and patterns from earlier globs.
 2. Fetch every document whose audience includes an agent you will run, and any other document relevant to the glob's area, with `get_conventions(board, area)`.
 3. Save each fetched document as `.reviews/<id>-docs/<name>.md` (never committed) and the approved learnings as `.reviews/<id>-docs/learnings.md`. Pass the paths to sub-agents, so they don't fetch the same knowledge again.
 
@@ -67,7 +67,7 @@ Everything specific to the board and its project (build commands, conventions, r
 
 - Give each sub-agent every document whose audience includes it.
 - Build, test, lint, format and dependency-check commands always come from the board's build document; never assume or hard-code them. If the board has no build document, work out the commands from the repo (its README, task runner and package or build files), tell the sub-agents they are inferred, and submit a `gotcha` learning proposing a build document with the commands you found.
-- Give the learnings file to every sub-agent, telling it these are approved decisions, gotchas and patterns from earlier globs.
+- Give the learnings file to every sub-agent, telling it these are approved gotchas and patterns from earlier globs.
 
 Use `search_text(board, query, mode?, from?, to?, glob?, group?, sourceTypes?)` for exact words, names and file paths, `search_semantic` (same parameters) when you don't know the words used, `search_changes(board, query or path, from?, to?)` for why a file or area changed, and `ask_board(board, question, globId?)` for a plain-words question answered from the board's records with citations ("why did we decide X"); `mode` is `current` (default) or `all_time`. Results are cited and labelled when superseded or legacy. `get_context` also returns a `related` section: the board's existing material on the glob's title and summary.
 
@@ -114,7 +114,7 @@ Spend agent effort where it finds problems: reading the change. Don't repeat wor
 - **Checks.** If the board's build doc separates fast and full checks, sub-agents run the fast checks on every round, and the full checks run once, before the Phase 6 commit (or are left to CI where the build doc says so). Without that split, treat the targeted tests for the changed code plus lint and type checks as fast. Every agent records the exact commands it ran and the pass counts, not logs, and uses quiet reporters, reading output only on failure.
 - **No re-running.** The tester and change_reviewer rely on the results the implementer (and tester) recorded. They re-run a check only when a result looks wrong or a finding depends on it.
 - **No new end-to-end or browser tests** unless the board's docs or the developer ask for one. Cover behaviour with unit and integration tests.
-- **Precise briefs.** Give sub-agents the files and functions to start from, the acceptance criteria and the decisions already made, so they don't explore what you already know.
+- **Precise briefs.** Give sub-agents the files and functions to start from, the acceptance criteria and the choices already made, so they don't explore what you already know.
 
 ## Implementation record
 
@@ -125,7 +125,7 @@ Keep it in `.reviews/<id>-record.md` and use this format:
 ```
 # Implementation record: <id> — <title>
 ## Approach         what we're doing and why (the chosen proposal; for supers, as agreed so far)
-## Decisions        each: **Decision.** Why … Rejected: … Trade-off: … (who decided, when a person did)
+## Decisions        (slop extracts these as the glob's choices) each: **Decision.** Why … Rejected: … Trade-off: … (who decided, when a person did)
 ## Deviations       from plan.md, with reasons
 ## What was built   by area, with commits
 ## Traps            what went wrong or would surprise the next person, and how it was handled
@@ -148,7 +148,7 @@ Don't escalate for size alone, for a plan that was followed, or "to be safe" (th
 
 An *Investigate* action (or slop itself, for a glob intake flagged big) fires a routine run on a glob that is still in **Planning**. It has no branch and no PR. The run does Phases 1–2 and nothing else, so a person (or the later implementing run) has the investigation before work starts.
 
-1. Stay on `<base>` (`git fetch origin <base>`; the checkout may start there). **Never** create a branch, commit, push, write agent-set files, open a PR, call `pick_up` or call `mark_ready`.
+1. Stay on `<base>` (`git fetch origin <base>`; the checkout may start there). **Never** create a branch, commit, push, open a PR, call `pick_up` or call `mark_ready`.
 2. Call `get_glob(id, runId)` and `get_context(id, runId)`, and fetch the board knowledge as in Phase 1 steps 1–4. Write the context file as there. Ambiguities become `## Assumptions` in the context file (and an `Assumptions` attachment); don't ask. Skip the size check's split step: if the work is too big, say so under `## Size` in the plan file with the parts you would cut.
 3. Run Phase 2 steps 1–4: the investigator writes `.reviews/<id>-plan.md` ending with the `investigation` block (plan hash and base commit as in step 2), and you push it with `put_artifact(id, kind: 'investigation', …, runId, agentSetVersion)`. **Do not skip the investigator**, even when plan.md looks settled: the investigation is the product of this run. If the glob already has an investigation that is still current (Phase 2, *Reuse or refresh*), push nothing and say so.
 4. A reply without a `validation` note ends the run: slop closes it when the investigation is stored, and the glob stays in Planning. If the block did not validate, have it fixed once and push again; if it still does not validate, call `report_failure(id, reason, runId)`.
@@ -162,7 +162,7 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 ### Phase 1: Context
 
-1. Call `get_context(id)`. It returns a cited bundle: plan.md, attachments, active decisions, linked meeting excerpts, related past globs with change summaries, current test results and relevant conventions.
+1. Call `get_context(id)`. It returns a cited bundle: plan.md, attachments, active choices, linked meeting excerpts, related past globs with change summaries, current test results and relevant conventions.
    - The bundle carries plan.md, the implementation record (once one exists) and any Clarifications or Assumptions attachments in full, and only **lists** the other artifacts (local reviews, other attachments) with kind, label, version, commitSha, size and a one-line description. Don't fetch them by default.
    - **Resuming** (`--from`) **or revisiting** a glob that already has work on it: the record is already in the bundle: save it as `.reviews/<id>-record.md` and carry on from it. Fetch any other listed artifact you need (`attachment:<label>`, `local_review`) with `get_context(id, include: [...])` or `get_artifact`. Add what you fetch to the context file.
 2. If the glob has a group, call `list_globs(board, group)` for its siblings (key, title, status, type). The group replaces the old epic; siblings replace sibling tasks.
@@ -194,14 +194,14 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 - `validation` is null (the block parsed);
 - `planHash` equals the `sha256sum` of the plan text in `.reviews/<id>-context.md`'s plan section (computed as in step 2) — a changed plan means a different task;
 - the base moved little in the investigation's relevant files: after `git fetch origin <base>`, `git diff --stat <investigation.baseCommit> origin/<base> -- <files from investigation.files>` shows none of those files deleted or renamed and fewer than about 30 changed lines in total (a commit that is not in the base's history counts as moved a lot);
-- its `needsHuman` is not `true` unless a person has since answered it (an Assumptions or Clarifications attachment, or a decision, that addresses its reason).
+- its `needsHuman` is not `true` unless a person has since answered it (an Assumptions or Clarifications attachment, or a decision glob, that addresses its reason).
 
 *Reuse:* fetch the investigation text (`get_artifact(id, 'investigation')`), write it to `.reviews/<id>-plan.md`, skip the investigator and the push (step 4), go to step 5 with the investigation's recommended proposal and note "investigation reused (version N)" in the plan file. *Refresh:* run the investigator as below, giving it the earlier investigation as a starting point (it must still read the code), and push the new one in step 4: it becomes the latest version and supersedes the old. Either way, say which and why (plan hash changed / these files changed by N lines / reused with no relevant change) in the plan file and, when you start the record in step 7, in its `## Decisions` ("Investigation reused" or "Investigation refreshed: …"), so reuse vs refresh is recorded.
 
 1. Read `.reviews/<id>-context.md`. **Skip the investigator** when plan.md and the context already settle the approach (a decided approach, precise acceptance criteria, or an earlier analysis to follow): write `.reviews/<id>-plan.md` yourself with the approach, the files to change and the risk tier, note "investigation skipped" and why, and go to step 6.
 2. Invoke the **investigator** with:
    - plan.md (acceptance criteria, or the bug fields for bugs);
-   - the `## Context` section, with the reminder: "Decisions in the context bundle are team decisions. If they settle an approach, recommend it rather than proposing alternatives";
+   - the `## Context` section, with the reminder: "Choices in the context bundle are team choices. If they settle an approach, recommend it rather than proposing alternatives";
    - the group siblings, so it builds on what exists and avoids duplication;
    - clarifications or assumptions, verbatim (they override conflicting assumptions);
    - the learnings file path and the relevant board doc paths;
@@ -223,8 +223,8 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 1. Read the context file, the plan file (with the selected proposal) and the record so far.
 2. Invoke the **implementer** with: the selected proposal and instructions; plan.md's acceptance criteria (or bug fields, stating this is a bug fix and the root cause must be fixed, not the symptom); the context section; group siblings; clarifications or assumptions verbatim; the learnings file path; the board's build doc and relevant board doc paths; the output path `.reviews/<id>-implementation.md`.
-3. The implementer writes its summary (files changed, root cause for bugs, decisions made).
-4. **Update the record:** add the implementer's decisions (with rejected alternatives and trade-offs), deviations and traps to `.reviews/<id>-record.md` (`## Decisions`, `## Deviations`, `## Traps`). Condense; don't paste the summary.
+3. The implementer writes its summary (files changed, root cause for bugs, choices made).
+4. **Update the record:** add the implementer's choices (with rejected alternatives and trade-offs), deviations and traps to `.reviews/<id>-record.md` (`## Decisions`, `## Deviations`, `## Traps`). Condense; don't paste the summary.
 
 ### Phase 4: Testing
 
@@ -244,7 +244,7 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
 2. The reviewer reviews all changes on the branch against `origin/<base>` (after `git fetch origin <base>`), classifies each finding as `IN-SCOPE` or `SUGGESTION`, appends to the review document and returns its verdict.
 3. If the reviewer's verdict names an escalation, or in-scope items are still open after the last round, call `escalate_to_same` (see Escalating a sub). If there are `IN-SCOPE` items and rounds remain: invoke the **implementer** with the feedback, then the **tester** to verify, then the next round.
 4. Otherwise the cycle ends.
-5. After each round, fold in what the reviewer's findings and the implementer's fixes changed: a decision the review overturned goes in `## Decisions` or `## Deviations`, a surprise in `## Traps`.
+5. After each round, fold in what the reviewer's findings and the implementer's fixes changed: a choice the review overturned goes in `## Decisions` or `## Deviations`, a surprise in `## Traps`.
 
 ### Phase 6: Finalise
 
@@ -271,7 +271,8 @@ The maximum depends on the risk tier: **high** 3 rounds, **normal** 2, **low** 1
 6. **Full checks**: run the board's full checks once on the merged result (or the fast checks where its build doc leaves full checks to CI). If something fails, hand it to the implementer, re-run the failed check, note it in the review document and commit the fix as `<id>: <what was fixed>`.
 7. **Local review:** push `.reviews/<id>-review.md` followed by `.reviews/<id>-tests.md` as one artifact: `put_artifact(id, kind: 'local_review', content, commitSha: <HEAD sha>, reviewStats: { riskTier, reviewRounds, maxReviewRounds, testFailRounds })`, with the run ID if unattended. `reviewStats` gives the risk tier, the Phase 5 rounds run and allowed, and how many Phase 4 FAIL → fix loops there were. Slop stores it verbatim and shows it under the card's local review icon.
 8. **Learnings:** extract what a developer working on related code should know, from the implementation summary, review document and test report:
-   - `decision` — a choice made and why;
+   Learning types are only `gotcha`, `pattern` and `agent-behaviour`; there is no `decision` type. Choices made in the work (with rejected alternatives) belong in the record's `## Decisions` section, which slop extracts as the glob's "choices"; learnings are guidance for future work.
+
    - `gotcha` — an unexpected issue and how it was resolved;
    - `pattern` — a new pattern future work should follow;
    - `agent-behaviour` — something an instruction would have prevented or should keep doing: a review finding the implementer should never have produced, a test pass that failed because of how the code was written, a plan that needed heavy amendment, and above all **any time the developer corrected you or a sub-agent** in the session (quote the correction). Name the agent concerned.
@@ -376,12 +377,19 @@ In s15f11, s15f14 was in planning with "Start only after s15t18 has merged" in i
 Routine runs too often end with a person starting the run again or taking it over, often within the first hour. To make each unattended run either finish or hand over cleanly:
 
 - **Check the Slop tools first.** If neither the `mcp__slop__*` nor the `mcp__claude_ai_Slop__*` tools are in the session, you can't call `get_glob` or `report_failure`. Don't work around it: don't try the `slop` CLI, curl or the phases. Say in your final message that the Slop connector is missing, with the glob ID and run ID, and stop. Slop fails such a run after 5 minutes. In s15f20 a run started without the connector and sat Queued for 14 minutes.
+  - If the connector fails to connect with a 5xx (e.g. `502 CLIENT_HTTP_NOT_IMPLEMENTED`), slop is probably restarting: each merge to main triggers a deploy that restarts slop's single server for a minute or so, and several subs merging together can line restarts up with a new run's start. Retry `get_glob` every 30 seconds or so for about two minutes before giving up. In s15t77, run 53841fdd got a 502 at 01:01 and stopped without calling any slop tool; three merges had triggered deploys at 00:56–00:59, and slop answered normally by 01:04:55.
+- **Install dependencies before any check.** A routine's checkout has no `node_modules`, and corepack can't fetch pnpm there. Install pnpm with npm at the version the repo pins (`packageManager` in `package.json`): `npm i pnpm@<version> --prefix <dir>`, then run `<dir>/node_modules/.bin/pnpm install --frozen-lockfile` before the first type check, lint or test. In s15f38 (run 2a863870), tsc and eslint failed with missing modules until pnpm was installed this way.
 - **Leave a trail early.** Upload the Phase 2 plan as soon as it exists. Add an `Assumptions` attachment before Phase 3. A restarted run or a person can then resume with `--from` instead of starting from nothing.
+- **Don't mint new identifier schemes on an assumption.** An ID letter, prefix or URL shape spreads into plans, records, KB sources, search and commit messages, and is costly to undo. When wrapping or migrating an entity, reuse its existing scheme. If an assumption still introduces or changes a scheme, list it first in the `Assumptions` attachment, so a person can overturn it before it spreads. In s15f36, run 22d6ea09 assumed decision globs would use a new ID letter `d`; the developer kept `k`, and a second run had to rework `ids.ts`, `decision-glob.ts`, the backfill and about 15 test files.
 - **Merge `<base>` again right before the push.** `<base>` often moves while a run implements: one run's branch was cut 17 seconds before another glob merged a migration with the same number. The run then pushed without merging `<base>`, and its PR conflicted in 9 files.
   - Run `git fetch origin <base> && git merge origin/<base>` immediately before the Phase 6 push, after the full checks and learnings, not only at step 4.
-  - Resolve conflicts as in Phase 6 step 4. If new commits came in, re-run the fast checks.
+  - Resolve conflicts as in Phase 6 step 4 and the Merge conflicts section. If new commits came in, re-run the fast checks.
   - Never push or call `mark_ready` on a branch that is missing commits from `origin/<base>`.
-  - If the change adds a Drizzle migration, compare its number with the latest migration on `<base>` after the merge. If `<base>` already uses that number or a higher one, renumber yours to come after `<base>`'s latest. Change the file name, its journal entry and its snapshot, and leave `<base>`'s migrations as they are. Then re-run the migration checks.
+  - If the change adds a Drizzle migration, compare its number with the latest migration on `<base>` after the merge. If `<base>` already uses that number or a higher one, renumber yours to come after `<base>`'s latest with `scripts/dev.sh renumber-migrations origin/<base>`, and re-run the migration checks.
+- **Ship default-only migrations.** The routine environment's permission check blocks a migration that UPDATEs every board's existing values (for example, raising `sub_max_changed_lines` on all boards) as a change to shared data. Change only the column default. Don't add the UPDATE, and don't look for another way round the check. Leave the data update to a person: put the exact statement under the record's `## Open items`. In s15f48, appending `UPDATE "boards" SET sub_max_changed_lines …` to migration 0039 was denied, and the migration shipped default-only.
+- **When the sandbox blocks the agent-set refresh or the upload link.** The auto mode classifier can refuse writes to `.claude/` files from `get_agent_set` ("[Self-Modification]"), and the egress proxy blocks the host of `artifact_upload_url`'s link (`curl: (56) CONNECT tunnel failed, response 403`). Both are known; don't retry, don't bypass the sandbox, and don't submit a learning repeating them.
+  - Skip the refresh and carry on with the agent set already loaded. Note in the `Assumptions` attachment that the refresh was skipped, with both versions.
+  - Send records with inline `put_artifact`, and check the stored size as under Uploading artifacts.
 - **Checks failing after slop updates the branch** (it merged `<base>` or re-ran checks). First rule out an inherited failure as the catalog describes. If it is not inherited, the failure comes from the merge with `<base>`.
   - Fetch the branch again (`git fetch origin <id> && git checkout -B <id> origin/<id>`).
   - Run the failing check's exact CI command locally.
@@ -414,7 +422,7 @@ Purely additive conflicts are yours to resolve, even in an interactive session. 
 - methods, including methods on test fakes such as a fake `CodeHost`;
 - settings or defaults entries;
 - list entries;
-- Drizzle migrations that `<base>` has overtaken. Renumber yours as described under Routine runs.
+- Drizzle migrations that `<base>` has overtaken (see **Migrations** below).
 
 To resolve them:
 
@@ -432,6 +440,21 @@ In s15f8, two merges of main conflicted only in additive ways. Keeping both side
 - `board-service.ts` settings and `memory-store.ts` defaults;
 - the fake `CodeHost`s in the server tests;
 - the drizzle journal and snapshots.
+
+**Migrations.** When `<base>` and your branch both added a migration with the same number, the drizzle journal and snapshot conflict (the snapshot as add/add). Don't merge those files by hand, and don't rename by hand:
+
+1. Take `<base>`'s versions: `git checkout origin/<base> -- apps/server/drizzle/meta/_journal.json apps/server/drizzle/meta/<NNNN>_snapshot.json`. This also clears conflict markers; a snapshot left with markers makes the script's drift check fail with `Unexpected token '<', "<<<<<<< HE"... is not valid JSON`.
+2. Run `scripts/dev.sh renumber-migrations origin/<base>`. It renames your migration to follow `<base>`'s latest and rebuilds the journal and snapshot. Its drift check should end with "drizzle-kit reports no schema changes".
+3. If the drift check still fails:
+   - *The renumbered snapshot lacks `<base>`'s schema changes:* rebuild it from `<base>`'s latest snapshot plus your own schema change. Keep the snapshot's own `id` and set `prevId` to `<base>`'s latest snapshot id.
+   - *The script says "nothing to renumber":* your snapshot was committed under a number `<base>` later used. Restore all of `<base>`'s snapshot files under `apps/server/drizzle/meta/` byte for byte (`git checkout origin/<base> -- <files>`), number your snapshot after `<base>`'s latest, and make `_journal.json` match.
+   - As a last resort, delete your migration SQL and its snapshot, run `drizzle-kit generate` against `<base>`'s latest snapshot, and make the regenerated SQL idempotent.
+
+   Then re-run `drizzle-kit generate` until it prints "No schema changes".
+
+Board 15 hit each case: s15f28 (`0033_size_check` against main's `0033_board_sessions`, renumbered cleanly), s15t42 (conflict markers left in `0032_snapshot.json`), s15f53 (the renumbered `0044_snapshot.json` lacked main's size tables; rebuilt in 444e7d8), s15f36 (three merges colliding on 0042 and 0045; "nothing to renumber") and s15f23 (regenerated as 0031).
+
+**Long globs: merge `<base>` again after the review rounds.** `<base>` can move more than once while a glob is in review. After the last review round, and before the Phase 6 full checks, fetch and merge `origin/<base>` again. If `<base>` changed the same rules your change touches, re-check your logic against `<base>`'s version, not only the conflict markers. In s15f50, a split-rule change (s15f47) overlapped the same flag code, and the second merge collided on migration 0042.
 
 **When `<base>` changed files under `.claude/`.** The sandbox refuses writes under `.claude/`, so `git merge origin/<base>` fails before it writes anything. Don't retry it, and don't disable the sandbox. Build the merge without touching `.claude/` in the working tree:
 
@@ -483,6 +506,15 @@ In s15f8, strand 2's local review was given to helper agents twice:
 
 Direct uploads checked by md5 matched the file (artifacts 68, 69, 76 and 77).
 
+**When `slop put-artifact` fails in a local session.** Inside the sandbox it can fail in two ways:
+
+- When its token needs refreshing, it fails with "could not save the slop login to the Keychain (security exited 161)". This happens even with the Cognito host in allowed_domains.
+- The installed CLI may reject the kind, for example `--kind investigation`.
+
+Don't retry it outside the sandbox. Call `artifact_upload_url`, then run `curl --data-binary @<file> '<url>'` with the slop host in allowed_domains. This route needs no Keychain access and accepts every kind. (In routines the proxy blocks that link; use inline `put_artifact` there, as under Routine runs.)
+
+In s15t72, `slop put-artifact --kind investigation` gave "--kind must be one of implementation_plan, postplan, local_review". A later `--kind local_review` upload first hit a sandbox deny on the Cognito host, then the Keychain error. `artifact_upload_url` plus curl stored artifacts 971, 977 and 978.
+
 ### Checks that could not be run
 
 A check that was skipped has not passed. If a fast check (lint, type check, tests) can't run, for example because a dependency is missing, don't push and don't call `mark_ready` with that check still unrun:
@@ -492,3 +524,57 @@ A check that was skipped has not passed. If a fast check (lint, type check, test
 - "Not checked" in a report is never a reason to go ahead with the Phase 6 push or an auto-fix push.
 
 In s15t12, the run said "I couldn't run eslint because @eslint/js isn't installed in this environment". It still pushed b462e02 and marked PR #50 ready. CI Lint then failed with 18 errors in `apps/server/test/renumber-migrations.test.ts`.
+
+### Choosing sub or same for new globs
+
+Define "sub" broadly, especially early in a project. Any self-contained change is a sub if one routine can finish it in one PR and it needs no human design decision. That includes:
+
+- bug fixes;
+- UI/UX tweaks;
+- follow-ups to a merged glob;
+- small features in one area;
+- test or doc work.
+
+Only these are sames:
+
+- large slices or features that span several areas;
+- changes to agent instructions, or anything else that needs a human review;
+- work that overlaps an open glob (see Overlapping side globs).
+
+When you create a glob (a side glob, a follow-up or a handover from a super), pass `type: sub` for such work, or leave the type unset so intake decides. Don't pass an explicit `type: same` by default. Afterwards, check the type with `get_glob`. Intake's `validate` turns an invalid type/category combination into `same`, so a sub can silently become a same.
+
+On board 15, intake made s15t30–s15t40 and s15b24–s15b27 subs overnight. From about 03:30 on 2026-10-09, sessions created every glob (s15f25–s15f30, s15t42–s15t44) with an explicit `type: same`, which bypassed intake. The developer asked "Why is nothing getting set as sub anymore?" and added that "at the beginning of the project it makes more sense that more stuff is sub".
+
+### Escalating subs to sames
+
+On this board, a concrete reason to want a human that fits none of the named criteria is still a reason to escalate. Don't push it through because it isn't on the list: call `escalate_to_same` with `criterion: 'other'`, a reason a person can act on, and the evidence. Subs with such a reason have needed a person here. Escalated ones got changes asked for or were reverted. Unescalated ones were reverted or caused bugs. The catalog's limits still apply: size alone, a plan that was followed, or "to be safe" is not a concrete reason.
+
+s15b1 had such a reason but merged as a sub without escalation. s15b2 then reported a bug naming it.
+
+### Splitting oversized globs
+
+`split_glob` is refused once a glob has a run and a branch, even with no commits beyond the start commit. Split an oversized glob before it starts:
+
+- When intake flags a glob you create or start as oversized (`oversized` / `sizeCheck`), split it with `split_glob` while it is still in Planning. Don't start it whole and plan to split it in Phase 1.
+- If a run's `split_glob` returns "has started, so it can no longer be split", treat it as a glob that has already started work, not as an unclear cut. Don't call `report_failure` for it. Finish part 1's scope and create the rest as follow-ups, as the catalog describes.
+
+In s15f51, sizeCheck flagged 4 independent parts, but the glob was started anyway. `split_glob` was then refused with "has started, so it can no longer be split". The run shipped T1 only and created s15f52, s15f53 and s15f54 as follow-ups with `create_glob`.
+
+### Specs that name missing infrastructure
+
+When plan.md or the spec names infrastructure that doesn't exist (e.g. "store it via the existing upload storage port / S3"), don't build it and don't create a side glob for it:
+
+- Propose the simplest design that meets the "Done when" lines first, such as computing the result on demand or storing a Postgres row.
+- Ask the developer before going further. In a routine, take the simplest design and record it as an assumption.
+- Mention the missing piece as an option the developer can choose, not as a follow-up glob.
+
+In s15f25, the investigator found there was no object-store port. The orchestrator created s15t41 (a central S3 bucket) and chose a reports table filled by a scheduled job. The developer corrected it: "Really, all we need to do for now is export a csv file. The s3 stuff actually isn't necessary for this task." The table, migration 0032, the job and the rebuild endpoint were built and then removed, and s15t41 was deleted.
+
+### Creating several globs that change the database
+
+Globs created together that each extend the same table run in parallel: sharing the migrations directory only makes them overlaps, which order their merges and never hold a start. Each then invents its own column or table for the same idea, and the later ones conflict at merge.
+
+- When a glob will add or change a database column or table, say so explicitly in its plan: "adds a migration for …", naming the table and column.
+- Parts that build on the same new table or column need `after` (needs) on the glob that creates it, so they share one design. Globs that merely add unrelated migrations don't: they're overlaps, and the one merged second renumbers its migration (see Merge conflicts).
+
+On 2026-10-09, s15f22, s15f23 and s15f24 ran at once after s15f21. Each added its own 0031 migration for the same inbox source idea: `source_ref` with integration tokens (f22), `source_ref` (f23) and a nullable `source_key` (f24). f23 and f24 then conflicted with main in 10 and 9 files and had to be moved onto f22's column by hand.

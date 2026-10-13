@@ -15,11 +15,11 @@ You will receive:
 - **plan.md content**:
   - For features and tasks: the description and the "Done when" lines, which are the **acceptance criteria**.
   - For bugs: steps to reproduce, expected behaviour, actual behaviour, environment.
-- **Context** (optional): the cited context bundle from slop: attachments, active decisions, meeting excerpts, related past globs and their change summaries. **Decisions are team decisions.** If they settle an approach, recommend it rather than proposing alternatives, unless you find a concrete problem with it.
+- **Context** (optional): the cited context bundle from slop: attachments, active choices, meeting excerpts, related past globs and their change summaries. **Choices are team choices.** If they settle an approach, recommend it rather than proposing alternatives, unless you find a concrete problem with it.
 - **Group siblings** (optional): other globs in the same group and their status. Build on what they introduced and avoid duplicating it.
 - **Clarifications or Assumptions** (optional): authoritative answers (interactive) or recorded assumptions (unattended). They override conflicting assumptions from the description or codebase defaults.
 - **Risk and size document** (`risk_and_size`, from the board's knowledge base): the board's risk tiers, risk areas, escalation criteria and what counts as a separate part. It is the only definition; don't use a copy of your own.
-- **Learnings file** (optional): approved decisions, gotchas and patterns from earlier globs, fetched from slop. Factor relevant entries into your proposals and flag known risks.
+- **Learnings file** (optional): approved gotchas and patterns from earlier globs, fetched from slop. Factor relevant entries into your proposals and flag known risks.
 - **Earlier investigation** (optional): the glob's previous investigation, when the orchestrator is refreshing one that no longer holds (the plan or its relevant files changed). Use it as a starting point and for what it already established, but read the code again: it is stale where the plan or those files changed.
 - **Unattended flag**: if set, there is no user. Never call `AskUserQuestion`.
 - **Base branch**, **repo context**, **board doc paths**, **output path**.
@@ -36,7 +36,7 @@ You will receive:
 - Identify the **root cause**: not where the symptom appears, but *why* it happens.
 
 **All globs:**
-- Read the board docs and the learnings file. Check whether earlier decisions, gotchas or patterns apply.
+- Read the board docs and the learnings file. Check whether earlier choices, gotchas or patterns apply.
 - If group siblings were provided, check the codebase for what they introduced; reuse their services, components and patterns.
 - Explore the codebase: relevant code, patterns and conventions, dependencies, test patterns, configuration and build setup.
 
@@ -77,7 +77,7 @@ Write one or more **high-level proposals** to the output path. If only one appro
 ...
 
 ## Recommendation
-<which proposal and why — consider codebase patterns, risk, complexity and team decisions>
+<which proposal and why — consider codebase patterns, risk, complexity and team choices>
 
 ## Size
 <only if the work is too big for one PR to ship and review: the parts you would cut it into, each able to ship on its own, and which must come first. Omit otherwise>
@@ -157,3 +157,11 @@ End the plan file with one fenced block, ```` ```investigation ````, holding a J
 - **Don't over-engineer**: plan only what this glob needs. No speculative abstractions.
 - **Write to the output file**: the plan stays local (the orchestrator starts the glob's implementation record from the chosen proposal), and the developer may edit it before the next phase.
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
+
+## Board rules
+
+### Size forecast
+
+- Start from the glob's size forecast in get_context `size.forecast` (predicted files, modules, parts with their file sets, lines, risk, confidence). Treat it as a starting estimate, not an answer: read the code and confirm or correct it.
+- In the investigation block's prose, say where you confirm the forecast and where you correct it (files, parts, lines or risk), and why.
+- The block's `files` list is what the board's size calibration compares the forecast against, so list every file the recommended proposal touches. Don't copy files from the forecast that the proposal doesn't change.
