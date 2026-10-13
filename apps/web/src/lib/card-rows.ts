@@ -139,6 +139,10 @@ export const cardStatus = (glob: GlobView, now: string, viewer?: HumanStepViewer
     const click: ChipClick = turn.kind === 'act' ? { kind: 'section', target: cardTargets.actions() } : turn;
     head = { kind: 'ready', text: `Your turn · ${status.text}`, tone: status.tone, click };
     tips.push(status.tip);
+  } else if (status !== null && position?.holder === 'machine' && (status.conflict === true || status.kind === 'checks' || status.kind === 'stuck')) {
+    // Someone is on the problem: say what the machine is doing ("fixing the conflict"), with the problem in the tooltip.
+    head = { kind: 'machine', text: position.label, tone: position.tone, click: positionClick(position, glob, repo) };
+    tips.push(position.tip, status.tip);
   } else if (status !== null) {
     const click = statusClick(status);
     head = { kind: status.kind, text: shortProblem(status, glob), tone: status.tone, click };
