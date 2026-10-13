@@ -104,6 +104,9 @@ if (flag('secrets') || wantsHost) {
       deployProjects: csv('deployProjects', []),
       // A custom domain in front of the distribution (-c domainName=slopmux.example.com -c certificateArn=arn:aws:acm:us-east-1:...).
       customDomain: customDomain(),
+      // Prod only (required there): the running instance's AMI and its data volume; see infra/deploy/HOST.md.
+      amiId: (app.node.tryGetContext('hostAmiId') as string | undefined) || undefined,
+      dataVolumeId: (app.node.tryGetContext('hostDataVolumeId') as string | undefined) || undefined,
       tags: { project: 'slop', stage },
     });
   }
