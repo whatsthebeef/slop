@@ -844,11 +844,22 @@ const setEnvironment = (b: Builder, environment: string | null): Builder => {
 /** Whether the glob's PR was left by an ended auto-fix run: ready for review, a failure on the card, nobody working on it. */
 const canRetryAutofix = (glob: Glob): boolean => {
   const run = currentRun(glob);
+  if (
+    glob.status !== 'pr_open' ||
+    glob.type === 'super' ||
+    glob.implementer !== null ||
+    glob.pr === null
+  )
+    return false;
+  // Failed checks of this glob's own change with nothing watching them: always fixable, whatever ended the earlier run.
+  if (
+    glob.pr.state === 'ready' &&
+    glob.conflict == null &&
+    headChecksFailed(glob) &&
+    glob.headChecks?.inheritedFrom === undefined
+  )
+    return true;
   return (
-    glob.status === 'pr_open' &&
-    glob.type !== 'super' &&
-    glob.implementer === null &&
-    glob.pr !== null &&
     glob.failure !== null &&
     glob.failure.kind === undefined &&
     run?.state === 'ended' &&
@@ -1046,6 +1057,9 @@ export const conflictCleared = (
     by,
     kind,
   });
+  // The fix is pushed and nothing is left for the run: it now watches the PR's checks like any run on a ready PR.
+  if (run?.purpose === 'resolve_conflict' && run.state === 'active' && glob.status === 'pr_open')
+    b.updateRun({ state: 'watching', lastProgressAt: ctx.now });
   if (backToReview(glob) && glob.pr?.headSha != null) returnToReview(b, glob.pr.headSha);
   return b.done();
 };
@@ -1952,9 +1966,13 @@ export const runProgress = (glob: Glob, runId: string, ctx: Context): Result<Tra
   if (run === null || run.id !== runId || run.state === 'ended') return unchanged(glob);
   return new Builder(glob, ctx)
     .updateRun({
-      // A run retried on a ready PR watches it; there is no PR to mark ready.
+      // A run retried on a ready PR watches it; there is no PR to mark ready. A conflict-fix run has work to do first, unless the conflict already cleared.
       state:
-        run.state === 'queued' ? (glob.status === 'pr_open' ? 'watching' : 'active') : run.state,
+        run.state === 'queued'
+          ? glob.status === 'pr_open' && (run.purpose !== 'resolve_conflict' || glob.conflict == null)
+            ? 'watching'
+            : 'active'
+          : run.state,
       startedAt: run.startedAt ?? ctx.now,
       lastProgressAt: ctx.now,
     })
@@ -2725,8 +2743,9 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     !hasBusyRun(glob) &&
     (glob.status === 'planning' ||
       glob.status === 'failed' ||
-      ((glob.status === 'in_progress' || glob.status === 'pr_open') &&
-        glob.implementer !== actor.email));
+      glob.status === 'in_progress' ||
+      glob.status === 'pr_open');
+  // The glob's own implementer is offered it too (row 8: a no-op that reopens their session), so their own glob is never a dead end.
   if (canPickUp) actions.push('pick_up');
   if (
     !restricted &&

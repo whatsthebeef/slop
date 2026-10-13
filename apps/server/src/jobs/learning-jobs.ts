@@ -40,6 +40,8 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
         ...result.moves.map((m) => `${m.key} ${m.outcome.replace(/_/g, ' ')}: ${m.before} to ${m.after}`),
         `${result.held} left as they were`,
       ].join('; ');
+    case 'hotspots':
+      return `${result.hot} hot ${result.hot === 1 ? 'file' : 'files'}${result.files.map((f) => `; ${f.path} ${f.conflicts} conflicts across ${f.globs} globs`).join('')}`;
     case 'skipped':
       return `skipped (${result.reason}); the next check tries again`;
   }

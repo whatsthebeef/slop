@@ -16,6 +16,7 @@ export const GLOB_VIEW_SECTIONS: readonly GlobSection[] = [
   'deploys',
   'environments',
   'tests',
+  'human-steps',
   'artifacts',
   'choices',
   'assessment',

@@ -63,4 +63,10 @@ describe('mainAction', () => {
     expect(pick([])).toBeNull();
     expect(pick(['investigate', 'review_now', 'merge_continue'])).toBeNull();
   });
+
+  it('leaves only recoveries ahead of a due blocking step', () => {
+    expect(mainAction(['merge', 'resolve_conflict'], glob({ status: 'pr_open', pr: pr('ready') }), false, true)).toBe('resolve_conflict');
+    expect(mainAction(['merge'], glob({ status: 'pr_open', pr: pr('ready') }), false, true)).toBeNull();
+    expect(mainAction(['merge'], glob({ status: 'pr_open', pr: pr('ready') }))).toBe('merge');
+  });
 });

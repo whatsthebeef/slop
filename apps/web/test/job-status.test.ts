@@ -40,6 +40,13 @@ describe('a board job in a few words', () => {
   });
 
   it('labels every job the board runs', () => {
-    expect(Object.keys(JOB_LABELS).sort()).toEqual(['consolidation', 'context_tuning', 'effect_check', 'intake_outcome', 'mining', 'size_threshold', 'sub_limit']);
+    expect(Object.keys(JOB_LABELS).sort()).toEqual(['consolidation', 'context_tuning', 'effect_check', 'hotspots', 'intake_outcome', 'mining', 'size_threshold', 'sub_limit']);
+  });
+});
+
+describe('conflict hotspots', () => {
+  it('summarises a hotspots run', () => {
+    expect(jobSummary({ kind: 'hotspots', hot: 2, files: [] })).toBe('2 conflict hotspots');
+    expect(jobSummary({ kind: 'hotspots', hot: 1, files: [] })).toBe('1 conflict hotspot');
   });
 });
