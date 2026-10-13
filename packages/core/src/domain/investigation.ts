@@ -43,6 +43,8 @@ export interface Investigation {
   readonly riskAreas: readonly string[];
   readonly needsHuman: { readonly needed: boolean; readonly reason: string | null };
   readonly confidence: InvestigationConfidence;
+  /** The investigator predicts the change needs a rollout (a person's steps after the merge); absent when not said. */
+  readonly needsRollout?: boolean;
   /** sha256 (hex) of plan.md as it was when the investigation was made. */
   readonly planHash: string;
   /** The base branch commit the code was read at. */
@@ -164,6 +166,7 @@ export const parseInvestigation = (content: string): InvestigationParse => {
 
   if (!INVESTIGATION_CONFIDENCES.includes(raw.confidence as InvestigationConfidence))
     errors.push(`confidence must be one of ${INVESTIGATION_CONFIDENCES.join(', ')}`);
+  if (raw.needsRollout !== undefined && typeof raw.needsRollout !== 'boolean') errors.push('needsRollout must be a boolean when given');
   if (typeof raw.planHash !== 'string' || raw.planHash.trim() === '')
     errors.push('planHash is required');
   if (typeof raw.baseCommit !== 'string' || raw.baseCommit.trim() === '')
@@ -184,6 +187,7 @@ export const parseInvestigation = (content: string): InvestigationParse => {
         reason: (human as { reason: string | null }).reason,
       },
       confidence: raw.confidence as InvestigationConfidence,
+      ...(raw.needsRollout === true ? { needsRollout: true } : {}),
       planHash: raw.planHash as string,
       baseCommit: raw.baseCommit as string,
     },
