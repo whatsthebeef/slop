@@ -114,7 +114,7 @@ function setup(
 }
 
 describe('slop glob', () => {
-  it('prints the summary, or JSON with --json', async () => {
+  it('prints the status line, or JSON with --json', async () => {
     const view = glob({
       status: 'in_progress',
       implementer: 'ann@x.test',
@@ -333,7 +333,6 @@ describe('slop new', () => {
     category: 'task',
     group: null,
     environment: null,
-    summary: '',
     ...patch,
   });
 
