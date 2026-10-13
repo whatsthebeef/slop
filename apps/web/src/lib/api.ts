@@ -833,6 +833,9 @@ export const api = {
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel: (id: string, label: LabelName, command: LabelCommand, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/labels/${label}`, { command, version }),
+  /** The ✕ on a Dependencies row: the edge to `edgeId` is not a dependency. */
+  dismissEdge: (id: string, edgeId: string, version: number) =>
+    request<GlobView>('POST', `/api/globs/${id}/edges/${edgeId}/dismiss`, { version }),
 };
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {

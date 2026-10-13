@@ -42,6 +42,7 @@ export interface SectionProps {
   onClose: () => void;
   onReload: () => Promise<void>;
   onReviewLabel: ReviewLabel;
+  onDismissEdge: (edgeId: string) => Promise<boolean>;
   onDecide: (input: DecideInput) => Promise<boolean>;
   onAddStep: (step: {
     title: string;
@@ -66,9 +67,13 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     !actions.decision && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />
     ),
-  prerequisites: ({ ctx, actions, edits }) =>
+  prerequisites: ({ ctx, actions, edits, onDismissEdge }) =>
     !actions.decision && (
-      <DependenciesSection ctx={ctx} onEditAfter={(after) => edits.edit({ after })} />
+      <DependenciesSection
+        ctx={ctx}
+        onEditAfter={(after) => edits.edit({ after })}
+        onDismissEdge={onDismissEdge}
+      />
     ),
   size: ({ ctx, actions, splitting, onSplitting, onClose }) => (
     <SizeSection

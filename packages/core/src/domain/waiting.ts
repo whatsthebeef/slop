@@ -43,6 +43,8 @@ export interface Edge {
   readonly evidence?: string;
   /** Set when a person chose Start now on it. */
   readonly overridden?: true;
+  /** Set when a person dismissed it as not a dependency (with the plan hash then). */
+  readonly dismissedPlanHash?: string;
 }
 
 /** Every edge of the glob: explicit needs, then the recorded implied and learned ones. An explicit need wins over a recorded edge to the same glob. */
@@ -57,6 +59,7 @@ export const edgesOf = (glob: Dependent): Edge[] => {
       paths: i.paths,
       ...(i.evidence === undefined ? {} : { evidence: i.evidence }),
       ...(i.overridden === true ? { overridden: true as const } : {}),
+      ...(i.dismissedPlanHash === undefined ? {} : { dismissedPlanHash: i.dismissedPlanHash }),
     });
   }
   return edges;
@@ -89,6 +92,7 @@ export const waitingFor = (glob: Dependent, states: ReadonlyMap<string, Dependen
 export const waitNote = (id: string, state: Exclude<DependencyState, 'merged'>, implied?: ImpliedAfter): string => {
   if (implied !== undefined && state === 'open') {
     if (implied.source === 'learned') return `Waits for ${id}: ${implied.evidence ?? 'a run failed without it'}`;
+    if (implied.source === 'inferred') return `Waits for ${id}: ${implied.evidence ?? 'it looks like a dependency'}`;
     return `Waits for ${id}: both may change ${implied.paths.slice(0, 3).join(', ')}${implied.paths.length > 3 ? ' and more' : ''}`;
   }
   switch (state) {
