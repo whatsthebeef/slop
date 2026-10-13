@@ -110,6 +110,8 @@ export interface ReviewFinding {
   /** A line or a range (`256-268`). */
   readonly line: string | null;
   readonly text: string;
+  /** The review itself reports the problem as fixed or resolved, so it is no longer open (it still counts as a finding). */
+  readonly resolved: boolean;
   /** Dedupes a finding repeated across versions and rounds of a glob's reviews (`fingerprint`). */
   readonly fingerprint: string;
   readonly class: FindingClass | null;
@@ -136,6 +138,8 @@ export interface SplitFinding {
   readonly path: string | null;
   readonly line: string | null;
   readonly text: string;
+  /** The review says this problem was fixed or resolved. */
+  readonly resolved: boolean;
 }
 
 /** The longest finding text kept; longer items are cut. */
@@ -211,7 +215,7 @@ export const splitReview = (markdown: string): { structured: boolean; findings: 
     const flush = () => {
       if (current === null) return;
       const text = itemText(current.first, current.continuation);
-      if (text !== '') findings.push({ severity, round, ...location(text), text });
+      if (text !== '') findings.push({ severity, round, ...location(text), text, resolved: false });
       current = null;
     };
     for (let i = heading.line + 1; i < end; i++) {
@@ -292,6 +296,7 @@ export const globFindings = (findings: readonly ReviewFinding[], sources: readon
         path: f.path,
         line: f.line,
         text: f.text,
+        resolved: f.resolved,
         class: f.class,
         classNote: f.classNote,
         state: f.state,

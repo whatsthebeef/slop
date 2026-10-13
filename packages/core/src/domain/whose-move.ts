@@ -24,6 +24,11 @@ export interface Move {
   readonly holder: Holder;
   /** One line a card can show after the holder: the step's title, what it waits on, or why it stalled. */
   readonly reason: string;
+  /**
+   * A few words (about four) for a card's single line, derived from the cause, never cut from `reason`: "stalled · merge conflict".
+   * Set for a stall and for an escalation; absent otherwise, where `reason` is already short. `reason` keeps the full text for tooltips.
+   */
+  readonly label?: string;
   /** When the holder took the ball, where slop knows. */
   readonly since: string | null;
   /** `you` and `human`: whom the step is for (the viewer's email, or the step's role or email). */
@@ -57,9 +62,10 @@ const escalationReason = (glob: Glob): string | null =>
 const holderOf = (who: string, glob: Pick<Glob, 'implementer' | 'planner'>): string =>
   who === 'implementer' ? (glob.implementer ?? glob.planner) : who;
 
-const stalled = (cause: StallCause, reason: string, since: string | null, minutes?: number): Move => ({
+const stalled = (cause: StallCause, reason: string, label: string, since: string | null, minutes?: number): Move => ({
   holder: 'stalled',
   reason,
+  label,
   since,
   cause,
   ...(minutes === undefined ? {} : { minutes }),
@@ -67,6 +73,16 @@ const stalled = (cause: StallCause, reason: string, since: string | null, minute
 
 const earliest = (steps: readonly MachineStep[]): string | null =>
   steps.map((s) => s.startedAt).filter((t): t is string => t !== null).sort()[0] ?? null;
+
+/** The short stall label for a merge conflict: the card's one wording, also the status line's text for a failed merge. */
+export const MERGE_CONFLICT_STALL_LABEL = 'stalled · merge conflict';
+
+/** Why a failed step stopped, in a few words, from the glob's recorded conflict, checks or run, not from the step's text. */
+const failedLabel = (glob: Glob, step: MachineStep): string => {
+  if (glob.failure?.conflict !== undefined || glob.conflict != null) return MERGE_CONFLICT_STALL_LABEL;
+  if (step.kind === 'fix_checks' || (glob.headChecks?.state === 'failed' && glob.headChecks.inheritedFrom === undefined)) return 'stalled · checks failed';
+  return 'stalled · run failed';
+};
 
 /** What a quiet step says about itself, in a few words. */
 const quietReason = (s: MachineStep, minutes: number): string => {
@@ -147,6 +163,7 @@ export const whoseMove = (
     return {
       holder: options.viewer !== undefined && (glob.implementer ?? glob.planner) === options.viewer.email ? 'you' : 'human',
       reason: escalation,
+      label: 'Needs a human',
       since: null,
       who: glob.implementer ?? glob.planner,
     };
@@ -180,20 +197,27 @@ export const whoseMove = (
 
   // 6. Stalled: something failed, something went quiet, or nobody is on it.
   const gone = failed[0];
-  if (gone !== undefined) return stalled('failed', gone.detail ?? 'the machine stopped', gone.startedAt);
+  if (gone !== undefined) return stalled('failed', gone.detail ?? 'the machine stopped', failedLabel(glob, gone), gone.startedAt);
   const slow = quiet[0];
   if (slow !== undefined) {
     const minutes = quietMinutes(slow, now) ?? 0;
-    return stalled(slow.state === 'queued' ? 'queued' : 'quiet', quietReason(slow, minutes), slow.lastProgressAt ?? slow.startedAt, minutes);
+    const queued = slow.state === 'queued';
+    return stalled(
+      queued ? 'queued' : 'quiet',
+      quietReason(slow, minutes),
+      queued ? `stalled · queued ${String(minutes)} min` : `stalled · no progress ${String(minutes)} min`,
+      slow.lastProgressAt ?? slow.startedAt,
+      minutes,
+    );
   }
   if (glob.implementer !== null && (glob.status === 'implementing' || glob.status === 'in_progress')) {
     if (options.complete === false) return { holder: 'idle', reason: 'Not enough facts to say', since: null };
     const minutes = Math.max(0, Math.floor((Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000));
     if (minutes < thresholds.pickedUp) return { holder: 'human', reason: 'Picked up', since: glob.updatedAt, who: glob.implementer };
-    return stalled('nobody', `picked up ${String(minutes)} min ago, no session`, glob.updatedAt, minutes);
+    return stalled('nobody', `picked up ${String(minutes)} min ago, no session`, 'stalled · nobody on it', glob.updatedAt, minutes);
   }
   if (options.complete === false) return { holder: 'idle', reason: 'Not enough facts to say', since: null };
-  return stalled('nobody', 'nobody is on this', glob.updatedAt);
+  return stalled('nobody', 'nobody is on this', 'stalled · nobody on it', glob.updatedAt);
 };
 
 /** The short label a stall step's action carries as its title: one or two words, the cause goes in `detail`. */

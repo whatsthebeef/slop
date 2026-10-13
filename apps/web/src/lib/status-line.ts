@@ -4,6 +4,7 @@ import {
   checksExplanation,
   machine,
   readyStatus,
+  MERGE_CONFLICT_STALL_LABEL,
   stuckHint,
   yourTurn,
 } from '@slop/core';
@@ -162,7 +163,7 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
         tip,
         ...(failure?.conflict === undefined
           ? {}
-          : { text: 'Stalled: merge conflict', conflict: true as const }),
+          : { text: MERGE_CONFLICT_STALL_LABEL, conflict: true as const }),
       }),
     );
   }
@@ -189,7 +190,7 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
         tip: hint,
         ...(flagged == null
           ? {}
-          : { text: `Merge conflict with ${flagged.base}`, conflict: true as const }),
+          : { text: `conflicts with ${flagged.base}`, conflict: true as const }),
       }),
     );
   }

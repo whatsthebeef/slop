@@ -29,7 +29,7 @@ export const HANDOVER_LABEL = 'Handover';
 /** Where a glob's findings are listed, relative to its page. */
 const FINDINGS_LINK = '?section=findings';
 
-/** The newest local review's findings that are in scope and classified: the review comments still to fix. */
+/** The newest local review's findings that are in scope and classified and that the review doesn't report as fixed: the review comments still to fix. */
 export const openFindings = (
   findings: readonly ReviewFinding[],
   sources: readonly ReviewSource[],
@@ -40,7 +40,11 @@ export const openFindings = (
   );
   if (newest === null) return 0;
   return findings.filter(
-    (f) => f.sourceId === newest.id && f.severity === 'in_scope' && f.state === 'classified',
+    (f) =>
+      f.sourceId === newest.id &&
+      f.severity === 'in_scope' &&
+      f.state === 'classified' &&
+      !f.resolved,
   ).length;
 };
 

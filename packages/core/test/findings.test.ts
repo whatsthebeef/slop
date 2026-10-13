@@ -71,8 +71,8 @@ describe('splitReview', () => {
     const { structured, findings } = splitReview(review);
     expect(structured).toBe(true);
     expect(findings).toEqual([
-      { severity: 'suggestion', round: null, path: null, line: null, text: 'Rename `x` to `count`.' },
-      { severity: 'suggestion', round: null, path: 'a/b.ts', line: '3', text: '**[a/b.ts:3]** Drop the unused import.' },
+      { severity: 'suggestion', round: null, path: null, line: null, resolved: false, text: 'Rename `x` to `count`.' },
+      { severity: 'suggestion', round: null, path: 'a/b.ts', line: '3', resolved: false, text: '**[a/b.ts:3]** Drop the unused import.' },
     ]);
   });
 
@@ -239,6 +239,7 @@ describe('globFindings', () => {
     path: null,
     line: null,
     text: 'x',
+    resolved: false,
     fingerprint: 'x',
     class: null,
     classNote: null,

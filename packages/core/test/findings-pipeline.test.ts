@@ -9,6 +9,7 @@ import type { Llm, LlmRequest } from '../src/app/intake-service.js';
 import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from '../src/app/kb-pipeline.js';
 import type { Result } from '../src/domain/errors.js';
 import type { ReviewFinding, ReviewSource } from '../src/domain/findings.js';
+import { openFindings } from '../src/domain/handover.js';
 import { LLM_WAITING_PREFIX } from '../src/domain/kb.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -236,6 +237,35 @@ describe('Findings pipeline', () => {
       { severity: 'suggestion', path: null, line: null, text: 'nothing tests the retry path' },
       { severity: 'unknown', path: null, line: null, text: 'Not a problem, but quoted.' },
     ]);
+  });
+
+  it('marks findings the review reports as fixed, so only the open ones are open (s15b94)', async () => {
+    const review =
+      'Round 1 (change_reviewer): CHANGES_REQUIRED, 4 in-scope findings, 4 suggestions. All 4 in-scope findings are fixed (ab92ec1) and covered by new tests; none are open.\n\n' +
+      '1. The discard action is mislabelled on a same.\n2. A leftover label table contradicts the plan.\n\nStill open: the retry path has no timeout.';
+    await putReview(review);
+    llm.answer(
+      json({
+        findings: [
+          { severity: 'in_scope', path: null, line: null, quote: 'The discard action is mislabelled on a same.', text: 'Mislabelled.', resolved: true },
+          { severity: 'in_scope', path: null, line: null, quote: 'A leftover label table contradicts the plan.', text: 'Leftover table.', resolved: true },
+          { severity: 'in_scope', path: null, line: null, quote: 'the retry path has no timeout', text: 'No timeout.' },
+        ],
+      }),
+    );
+    expect(llm.calls).toHaveLength(0);
+    await pipeline.processNext();
+    expect(llm.calls[0]?.system).toContain('resolved');
+    expect((await stored()).map((f) => [f.text, f.resolved])).toEqual([
+      ['Mislabelled.', true],
+      ['Leftover table.', true],
+      ['No timeout.', false],
+    ]);
+    await drain();
+    const all = await stored();
+    const sourcesNow = await sources();
+    expect(openFindings(all, sourcesNow)).toBe(1);
+    expect(openFindings(all.filter((f) => f.resolved), sourcesNow)).toBe(0);
   });
 
   it('stores a finding repeated in a later version of the review only once', async () => {

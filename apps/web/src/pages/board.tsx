@@ -1,5 +1,5 @@
-import { LISTS, bySignedOffNewest, decisionOf, latestSignedOff } from '@slop/core';
-import type { Action, LabelCommand, LabelName, List } from '@slop/core';
+import { LISTS, bySignedOffNewest, decisionOf, describeEditFailure, latestSignedOff } from '@slop/core';
+import type { Action, HumanStepViewer, LabelCommand, LabelName, List } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -14,9 +14,10 @@ import type { BoardShellContext } from '@/components/board-shell';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
-import type { GlobView, NewGlob } from '@/lib/api';
+import type { GlobChanges, GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, haltedBy } from '@/lib/action-presentation';
 import { cardMoves } from '@/lib/card-moves';
+import { hasBlocker } from '@/lib/card-rows';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { mergeOutcomeText, runCardAction } from '@/lib/card-pending';
@@ -43,7 +44,12 @@ const LIST_TITLES: Record<List, string> = {
 
 type Direction = 'left' | 'right';
 
-const movesFor = cardMoves;
+/**
+ * The moves a glob can make from its card (`cardMoves`: the one common action, or Start and Pick up for a same), and none
+ * while anything blocks it. The same rule hides the card's buttons, so ← → and Enter never preview a move without a button.
+ */
+const movesFor = (glob: GlobView, viewer?: HumanStepViewer): { move: CardMove; target: List }[] =>
+  hasBlocker(glob, new Date().toISOString(), viewer) ? [] : cardMoves(glob);
 
 /** A previewed move: its ghost piece shows in the target list where the card would land. */
 interface Preview {
@@ -338,18 +344,6 @@ export const BoardPage = () => {
     onError: fail,
   });
 
-  // The card's ×: store the viewer's dismissal, then show the keys the server answers with (the rest of the card is kept).
-  const dismissMessage = async (glob: GlobView, key: string, dismiss: boolean) => {
-    try {
-      const { dismissedKeys } = await api.setDismissed(glob.id, key, dismiss);
-      client.setQueryData<GlobView[]>(globsKey(glob.boardId), (list) =>
-        list?.map((g) => (g.id === glob.id ? { ...g, ...(dismissedKeys === undefined ? {} : { dismissedKeys }) } : g)),
-      );
-    } catch {
-      toast("Couldn't save that; try again");
-    }
-  };
-
   /** Runs an action; false when it failed (the failure is already shown). */
   const act = async (glob: GlobView, action: Action): Promise<boolean> => {
     const path = ACTION_PATHS[action];
@@ -402,7 +396,7 @@ export const BoardPage = () => {
 
   /** ← / → on a focused card: cycle its moves that way, or bump the wall when there are none. */
   const arrow = (glob: GlobView, direction: Direction) => {
-    const options = movesFor(glob).filter((m) => m.move.direction === direction);
+    const options = movesFor(glob, viewer).filter((m) => m.move.direction === direction);
     if (options.length === 0) {
       setBumps((b) => ({ ...b, [glob.id]: direction }));
       setTimeout(() => setBumps((b) => Object.fromEntries(Object.entries(b).filter(([id]) => id !== glob.id))), 210);
@@ -472,7 +466,7 @@ export const BoardPage = () => {
             return (
               <Column key={list} list={list} count={items.length} total={total} boardId={boardId} ghost={preview?.target === list ? preview : null} filtered={filtering > 0}>
                 {items.map((glob) => {
-                  const moves = movesFor(glob);
+                  const moves = movesFor(glob, viewer);
                   return (
                     <GlobCard
                       key={glob.id}
@@ -501,7 +495,16 @@ export const BoardPage = () => {
                       environments={deployState.data?.environments?.[glob.id]}
                       atf={deployState.data?.atf?.[glob.id]}
                       viewer={viewer}
-                      onDismiss={(key, dismiss) => void dismissMessage(glob, key, dismiss)}
+                      onUpdateTitle={async (changes: GlobChanges) => {
+                        try {
+                          store(await api.updateGlob(glob.id, glob.version, changes));
+                          return null;
+                        } catch (error) {
+                          // The card keeps the draft and shows why; a version conflict is reloaded on request.
+                          return describeEditFailure(error instanceof RequestError ? error.body : { message: 'Something went wrong' });
+                        }
+                      }}
+                      onReload={() => api.glob(glob.id).then(store).then(() => undefined)}
                     />
                   );
                 })}

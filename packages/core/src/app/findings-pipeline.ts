@@ -34,10 +34,11 @@ const CLASS_NOTE_LIMIT = 200;
 export const SPLIT_SYSTEM = `You extract the distinct problems a code reviewer reported. Include issues that were fixed later; skip checks that passed, praise, plans and status tables.
 
 Respond with one JSON object and nothing else:
-{"findings": [{"severity": "in_scope" | "suggestion" | "unknown", "path": string | null, "line": string | null, "quote": string, "text": string}]}
+{"findings": [{"severity": "in_scope" | "suggestion" | "unknown", "path": string | null, "line": string | null, "quote": string, "text": string, "resolved": boolean}]}
 - quote: a phrase copied word for word from the review that states the problem.
 - text: the problem in one or two sentences.
 - severity: in_scope for a problem the reviewer required fixing, suggestion for an optional improvement, unknown when the review doesn't say.
+- resolved: true when the review itself says this problem was fixed, resolved or addressed (even in a later round); false when it is still open or the review doesn't say.
 - path and line: the file and line (or range) the problem is in, when the review names them; otherwise null.
 Report each problem once, even if the review repeats it. No problems: {"findings": []}.`;
 
@@ -84,6 +85,7 @@ const parseSplit = (answer: string, shown: string): SplitFinding[] | null => {
           path: location(field(entry, 'path')),
           line: location(field(entry, 'line')),
           text: (said === '' ? quote : said).slice(0, FINDING_TEXT_LIMIT),
+          resolved: field(entry, 'resolved') === true,
         },
       ];
     })

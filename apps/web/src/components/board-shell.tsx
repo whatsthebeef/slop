@@ -10,6 +10,7 @@ import { barRows, sessionForKey } from '@/lib/board-bar';
 import { isChatShortcut, WIDE_QUERY } from '@/lib/chat';
 import { spendBreakdown, spendLine } from '@/lib/review-settings';
 import { newCount } from '@/lib/inbox';
+import { MAIN_AREA_CLASS } from '@/lib/main-area';
 import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
 import type { PageContext } from '@/lib/page-context';
 import { inboxKey } from '@/lib/live';
@@ -160,7 +161,7 @@ export const BoardShell = () => {
       {isBoard && <NotificationBar boardId={boardId} />}
       {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={toggleChat} chatOpen={showChat} />}
       <div className='flex min-h-0 flex-1'>
-        <div className='min-h-0 min-w-0 flex-1 overflow-auto' inert={showChat && fullScreen} data-testid='main-area'>
+        <div className={MAIN_AREA_CLASS} inert={showChat && fullScreen} data-testid='main-area'>
           <Outlet context={{ headerActions } satisfies BoardShellContext} />
         </div>
         {isBoard && mounted && (
