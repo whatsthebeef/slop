@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobView, NewGlob } from '@/lib/api';
-import { actionLabel, actionPresentation } from '@/lib/action-presentation';
+import { actionLabel, actionPresentation, presentedActions } from '@/lib/action-presentation';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { mergeOutcomeText, runCardAction } from '@/lib/card-pending';
@@ -50,7 +50,7 @@ type Direction = 'left' | 'right';
 const movesFor = (glob: GlobView): { move: CardMove; target: List }[] => {
   // No moves while slop is still creating the glob's branch and PR: a second action then would race the setup.
   if (glob.provisioning === 'pending') return [];
-  const allowed = glob.allowedActions ?? [];
+  const allowed = presentedActions(glob.allowedActions ?? []);
   const make = (action: Action, direction: Direction, target: List) => {
     const { label: name, tip, icon } = actionPresentation(action, glob);
     return {

@@ -78,7 +78,7 @@ export const actionPresentation = (
       return {
         label: 'Pick up',
         icon: 'human',
-        tip: 'Stops the machine; you continue on its branch',
+        tip: 'Stops the machine run; you continue on its branch',
         placement: 'more',
       };
     case 'retrigger':
@@ -209,6 +209,13 @@ export const actionPresentation = (
       };
   }
 };
+
+/**
+ * The actions a glob offers, as the glob view, the card moves and the chips show them. pick_up and take_over are both
+ * labelled Pick up; when both are allowed a run is live, so only take_over (which stops it) is offered.
+ */
+export const presentedActions = <A extends string>(allowed: readonly A[]): A[] =>
+  allowed.filter((a) => !(a === ('pick_up' as string) && allowed.includes('take_over' as A)));
 
 /** An action's name for this glob. */
 export const actionLabel = (action: Action, glob: Subject): string =>

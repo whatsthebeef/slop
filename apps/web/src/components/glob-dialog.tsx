@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input, Label, Select } from '@/components/ui/input';
 import { actionTiers, orderActions } from '@/lib/action-style';
-import { actionPresentation } from '@/lib/action-presentation';
+import { actionPresentation, presentedActions } from '@/lib/action-presentation';
 import { mainAction } from '@/lib/main-action';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
@@ -262,7 +262,7 @@ export const GlobDetail = ({
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   useEffect(() => setConfirmingOversized(null), [glob.id]);
   // deescalate and make_super are reached through the type popover.
-  const shownActions = (glob.allowedActions ?? []).filter(
+  const shownActions = presentedActions(glob.allowedActions ?? []).filter(
     (a) => a !== 'delete' && actionPresentation(a, glob).placement !== 'none',
   );
   // Decide has its own panel with the five outcomes: it can be the main button (which goes to
