@@ -419,6 +419,30 @@ describe('PR and merge events (rows 11–16)', () => {
     expect(m.allowedActions(passing, dev)).toContain('merge');
   });
 
+  it('row 14: Merge is withheld and refused while a conflict with the base is recorded', () => {
+    const conflict = { base: 'main', files: ['a.ts'], since: 's1t2', at: NOW };
+    const passing = {
+      ...glob({ status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } }),
+      headChecks: { sha: 'bbb', state: 'passed' as const },
+    };
+    const conflicted = { ...passing, conflict };
+    expect(m.allowedActions(conflicted, dev)).not.toContain('merge');
+    expect(m.allowedActions(conflicted, dev)).toContain('resolve_conflict');
+    const refused = m.requestMerge(conflicted, ctx());
+    expect(errorCode(refused)).toBe('invalid_transition');
+    expect(conflicted.status).toBe('pr_open');
+    // A push that merges the base clears the conflict; Merge is offered again.
+    const cleared = { ...passing, conflict: null };
+    expect(m.allowedActions(cleared, dev)).toContain('merge');
+    expect(value(m.requestMerge(cleared, ctx())).glob.status).toBe('merging');
+    // Merge and continue (supers) is withheld the same way.
+    const superConflicted = { ...conflicted, type: 'super' as const };
+    expect(m.allowedActions(superConflicted, dev, { recordSha: 'bbb' })).not.toContain('merge_continue');
+    expect(errorCode(m.requestMerge(superConflicted, ctx(), { continue: true, facts: { recordSha: 'bbb' } }))).toBe(
+      'invalid_transition',
+    );
+  });
+
   it('row 15: a merge sets labels Required by type and ends the run', () => {
     const sub = value(m.merged(glob({ type: 'sub', status: 'merging', runs: [run({ state: 'watching' })] }), { sha: 'm' }, ctx(null)));
     expect(sub.glob.status).toBe('reviewing');

@@ -255,11 +255,9 @@ export class BedrockLlm implements Llm {
 }
 
 /**
- * The independent reviewer's LLM on a board's chosen Bedrock model (temperature 0, so a re-review of the same
- * change gives the same findings). Created per review, because the model is a per-board setting.
+ * The independent reviewer's LLM on a board's chosen Bedrock model. Created per review, because the model is a per-board
+ * setting. Other models run at temperature 0, so a re-review of the same change gives the same findings; Claude models
+ * get no temperature, because Sonnet and Opus 5.5 refuse non-default sampling values.
  */
-export const reviewerLlm = (
-  modelId: string,
-  region: string,
-  onUsage?: UsageListener,
-): BedrockLlm => new BedrockLlm({ id: modelId, configKey: 'REVIEW_MODEL' }, region, onUsage, 0);
+export const reviewerLlm = (modelId: string, region: string, onUsage?: UsageListener): BedrockLlm =>
+  new BedrockLlm({ id: modelId, configKey: 'REVIEW_MODEL' }, region, onUsage, modelId.includes('anthropic.claude') ? null : 0);

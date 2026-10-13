@@ -140,6 +140,16 @@ describe('split a glob into parts', () => {
     expect(await store.transaction((tx) => tx.listGlobs(boardId, {}))).toHaveLength(1);
   });
 
+  it('splits a glob whose earlier run was discarded back to Planning, and names what started one that is still going', async () => {
+    const running = unwrap(await globs.start(DEV, original.id, original.version));
+    const refused = await globs.split(DEV, original.id, running.version, input([part(), part()]));
+    expect(!refused.ok && refused.error.message).toMatch(/has started \(.*run run-\d+ started/);
+    const again = unwrap(await globs.startAgain(DEV, original.id, running.version));
+    expect(again.status).toBe('planning');
+    const parts = unwrap(await globs.split(DEV, original.id, again.version, input([part(), part()])));
+    expect(parts).toHaveLength(2);
+  });
+
   it('refuses a glob with a run', async () => {
     const running = unwrap(await globs.start(DEV, original.id, original.version));
     const result = await globs.split(DEV, original.id, running.version, input([part(), part()]));

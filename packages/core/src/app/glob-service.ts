@@ -529,8 +529,18 @@ export class GlobService {
       if (original.version !== version) {
         return err({ code: 'version_conflict', message: 'The glob has changed', current: original });
       }
-      if (original.status !== 'planning' || original.provisioning !== 'none' || original.runs.some((r) => r.purpose !== 'investigate') || original.pr !== null) {
-        return invalidInput(`${id} has started, so it can no longer be split: finish it and create the rest as follow-ups`);
+      // Only the current generation counts: Discard & back to Planning starts a new one, so earlier runs and PRs are history.
+      const startedBy: string[] = [];
+      if (original.status !== 'planning') startedBy.push(`it is ${original.status}`);
+      if (original.provisioning !== 'none') startedBy.push('its branch exists');
+      if (original.pr !== null) startedBy.push(`PR #${original.pr.number} is open`);
+      for (const run of original.runs) {
+        if (run.generation === original.generation && run.purpose !== 'investigate') startedBy.push(`run ${run.id} started`);
+      }
+      if (startedBy.length > 0) {
+        return invalidInput(
+          `${id} has started (${startedBy.join('; ')}), so it can no longer be split: finish it and create the rest as follow-ups`,
+        );
       }
       const board = await tx.getBoard(original.boardId);
       if (board === null) return notFound(`No board ${original.boardId}`);

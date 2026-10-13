@@ -28,4 +28,24 @@ The data disk is also snapshotted weekly (the newest four kept) by a Data Lifecy
    the lock (`exec 9>&-`, or end the shell). Drop `slop_old` once satisfied. Remove `/var/lib/slop/restore.dump`.
    (`cutover-remote.sh swap` does the same steps with a rollback; it is written for the cutover's `slop_restore` and counts file.)
 6. Losing the instance: attach the newest snapshot's volume (or the retained data disk) to a new instance as its data disk;
-   the setup script mounts an existing filesystem as it is.
+   the setup script mounts an existing filesystem as it is. See [HOST.md](HOST.md) for deploying without replacing it.
+
+## Losing the instance
+
+What happened on 2026-10-13, when a replaced instance came up with an empty data disk and Postgres was initialised on it.
+Production's data was on the old volume, which was detached but kept (`deleteOnTermination: false`).
+
+1. Find the orphaned volume: `aws ec2 describe-volumes --filters Name=status,Values=available Name=size,Values=30`
+   (or look at the replaced instance's old block device mapping in CloudTrail). Check its tags and creation time.
+2. Snapshot it first and wait for it to complete: `aws ec2 create-snapshot --volume-id <old>`. Work from the snapshot
+   if you can: `aws ec2 create-volume --snapshot-id <snap> --availability-zone <instance az> --volume-type gp3`.
+3. Stop the app and Postgres on the new instance: `docker stop slop-app-1 slop-postgres-1` (hold the deploy lock as in step 5 above
+   so a push can't restart them).
+4. Swap the volumes: `umount /var/lib/slop`, detach the empty data volume, attach the recovered one as `/dev/sdf`
+   (`aws ec2 attach-volume --volume-id <vol> --instance-id <id> --device /dev/sdf`).
+5. Fix `/etc/fstab`: it names the empty disk's filesystem by UUID. Replace that line with the recovered disk's
+   (`blkid` shows it): `UUID=<uuid> /var/lib/slop xfs defaults,nofail 0 2`, then `mount -a`.
+6. Redeploy (re-run the CodeBuild project) so `app.env` gets the recovered disk's database password, and check
+   `curl -fsS localhost:3000/auth/config` and the boards.
+7. Keep the empty volume until satisfied, then delete it. Afterwards make sure the stack's `hostDataVolumeId` names the
+   volume now attached.

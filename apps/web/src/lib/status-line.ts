@@ -234,6 +234,11 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
     const wait: Pick<Waiting, 'tip' | 'why' | 'running'> =
       head === null
         ? { tip: 'Waiting for the PR head', why: 'for the PR head', running: true }
+        : glob.conflict != null
+          ? {
+              tip: `Conflicts with ${glob.conflict.base}: merge it into the branch and push`,
+              why: `: conflicts with ${glob.conflict.base}`,
+            }
         : checks?.sha === head && checks.state === 'failed'
           ? {
               tip:
